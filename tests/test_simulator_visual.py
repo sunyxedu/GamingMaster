@@ -166,9 +166,25 @@ class InteractiveVisualizer:
         op_land = self.result['info_opLand'][self.current_turn]
 
         self.ax.set_title(
-            f'Turn {self.current_turn}/{self.total_turns-1} | {self.player_name}\n'
-            f'My: {my_army} army, {my_land} land | Enemy: {op_army} army, {op_land} land',
+            f'Turn {self.current_turn}/{self.total_turns-1}',
             fontsize=12, fontweight='bold'
+        )
+
+        # Player stats overlay in top-right corner (like generals.io UI)
+        opponent_name = [n for n in self.replay_data['usernames'] if n != self.player_name][0]
+        stats_text = (
+            f"{'Player':<12} {'Army':>5} {'Land':>5}\n"
+            f"{self.player_name:<12} {my_army:>5} {my_land:>5}\n"
+            f"{opponent_name:<12} {op_army:>5} {op_land:>5}"
+        )
+        self.ax.text(
+            0.99, 0.99, stats_text,
+            transform=self.ax.transAxes,
+            fontsize=10,
+            fontfamily='monospace',
+            verticalalignment='top',
+            horizontalalignment='right',
+            bbox=dict(boxstyle='round,pad=0.4', facecolor='white', alpha=0.85, edgecolor='gray'),
         )
 
         # Legend
