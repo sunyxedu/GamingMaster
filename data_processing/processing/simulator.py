@@ -8,38 +8,7 @@ including fog of war, visible units, and actions taken.
 import json
 import math
 from typing import List, Dict, Any, Tuple, Optional
-from dataclasses import dataclass, field
-
-
-@dataclass
-class Tile:
-    """Represents a single map tile."""
-    terrain: int  # 0: blank, 1: city, 2: general, 3: mountain
-    army: int
-    occupied: int  # -1: unoccupied, 0-N: player index
-
-
-@dataclass
-class Player:
-    """Represents a player state."""
-    land: List[int] = field(default_factory=list)  # List of tile indices
-    army: int = 0
-    vision: List[List[int]] = field(default_factory=list)  # 0: unseen, 1: owned, 2: visible
-
-
-@dataclass
-class Turn:
-    """Represents game state at a turn."""
-    turn: int = 0
-    state: List[List[int]] = field(default_factory=list)  # Map state (terrain + ownership)
-    army: List[List[int]] = field(default_factory=list)  # Army counts
-    start: int = -1  # Move start position
-    end: int = -1  # Move end position
-    is50: int = -1  # Whether move is 50%
-    myLand: int = 0
-    myArmy: int = 0
-    opLand: int = 0
-    opArmy: int = 0
+from data_processing.processing.models import Tile, Player, Turn
 
 
 class ReplaySimulator:
@@ -93,11 +62,12 @@ class ReplaySimulator:
         # Initialize players
         self.players = [
             Player(
+                name=self.usernames[i],
                 land=[],
                 army=0,
                 vision=[[0 for _ in range(self.map_width)] for _ in range(self.map_height)]
             )
-            for _ in range(len(self.usernames))
+            for i in range(len(self.usernames))
         ]
         
         # Place generals
@@ -119,21 +89,25 @@ class ReplaySimulator:
             col = mountain % self.map_width
             self.map[row][col] = Tile(3, 0, -1)
     
-    def process_move(self, move: Dict[str, Any]):
-        """Process a single move."""
+    def _execute_single_move(self, move: Dict[str, Any]):
+        """Execute a single move on the map."""
         start_idx = move["start"]
         end_idx = move["end"]
         player_idx = move["index"]
         is_50 = move["is50"]
-        
+
         start_row = start_idx // self.map_width
         start_col = start_idx % self.map_width
         end_row = end_idx // self.map_width
         end_col = end_idx % self.map_width
-        
+
         start_tile = self.map[start_row][start_col]
         end_tile = self.map[end_row][end_col]
-        
+
+        # Validate move: must own the start tile and have army > 1
+        if start_tile.occupied != player_idx or start_tile.army <= 1:
+            return
+
         # Calculate armies to move
         if is_50:
             army_to_move = start_tile.army // 2
@@ -141,8 +115,8 @@ class ReplaySimulator:
         else:
             army_to_move = start_tile.army - 1
             army_remaining = 1
-        
-        # Check if attacking own territory or enemy
+
+        # Check if moving to own territory or attacking
         if end_tile.occupied == player_idx:
             # Moving to own territory
             end_tile.army += army_to_move
@@ -153,8 +127,9 @@ class ReplaySimulator:
                 # Successful capture
                 if end_tile.occupied != -1:
                     # Remove from previous owner
-                    self.players[end_tile.occupied].land.remove(end_idx)
-                
+                    if end_idx in self.players[end_tile.occupied].land:
+                        self.players[end_tile.occupied].land.remove(end_idx)
+
                 # Add to current player
                 self.players[player_idx].land.append(end_idx)
                 end_tile.occupied = player_idx
@@ -162,8 +137,124 @@ class ReplaySimulator:
             else:
                 # Failed attack
                 end_tile.army -= army_to_move
-            
+
             start_tile.army = army_remaining
+
+    def _is_chase_move(self, chaser: Dict[str, Any], target: Dict[str, Any]) -> bool:
+        """Check if chaser is chasing target (chaser.end == target.start and not swapping)."""
+        return chaser["end"] == target["start"] and chaser["start"] != target["end"]
+
+    def _is_defensive_move(self, move: Dict[str, Any]) -> bool:
+        """Check if move is defensive (friendly->friendly)."""
+        end_row = move["end"] // self.map_width
+        end_col = move["end"] % self.map_width
+        end_tile = self.map[end_row][end_col]
+        return end_tile.occupied == move["index"]
+
+    def _is_attacking_general(self, move: Dict[str, Any]) -> bool:
+        """Check if move is attacking a general."""
+        return move["end"] in self.generals
+
+    def check_winner(self) -> Optional[int]:
+        """
+        Check if the game has a winner.
+
+        A player wins by capturing an opponent's general.
+        Returns the winner's player index, or None if game is ongoing.
+        """
+        for i, general in enumerate(self.generals):
+            row = general // self.map_width
+            col = general % self.map_width
+            tile = self.map[row][col]
+            # If someone else owns this general tile, that player wins
+            if tile.occupied != -1 and tile.occupied != i:
+                return tile.occupied
+        return None
+
+    def _get_start_tile_army(self, move: Dict[str, Any]) -> int:
+        """Get the army count at the start tile of a move."""
+        start_row = move["start"] // self.map_width
+        start_col = move["start"] % self.map_width
+        return self.map[start_row][start_col].army
+
+    def _get_move_priority(self, move: Dict[str, Any], other_move: Optional[Dict[str, Any]], original_index: int) -> Tuple[int, int, int, int, int]:
+        """
+        Calculate move priority tuple for sorting.
+        Lower values = higher priority (executed first).
+
+        Priority order:
+        1. Chase moves (highest priority) - priority 0
+        2. Defensive moves - priority 1
+        3. Non-general-attacking moves by army size (larger first) - priority 2
+        4. General-attacking moves by army size (larger first) - priority 3
+        5. Original order as final tiebreaker
+
+        Returns: (chase_priority, defense_priority, attack_priority, army_tiebreak, original_index)
+        """
+        # Priority 1: Chase moves (chasing the other move)
+        chase_priority = 1
+        if other_move is not None and self._is_chase_move(move, other_move):
+            chase_priority = 0
+
+        # Priority 2: Defensive moves
+        defense_priority = 1
+        if self._is_defensive_move(move):
+            defense_priority = 0
+
+        # Priority 3: Larger tiles first, but general attacks come last
+        attacking_general = self._is_attacking_general(move)
+        army = self._get_start_tile_army(move)
+
+        if attacking_general:
+            # General attacks have lower priority (higher number)
+            attack_priority = 1
+        else:
+            attack_priority = 0
+
+        # Negative army so larger armies sort first
+        army_tiebreak = -army
+
+        return chase_priority, defense_priority, attack_priority, army_tiebreak, original_index
+
+    def process_moves(self, move1: Optional[Dict[str, Any]], move2: Optional[Dict[str, Any]]):
+        """
+        Process moves for a turn with proper priority ordering.
+
+        Priority rules:
+        1. Chase moves - highest priority (catch fleeing target in 1 move)
+        2. Defensive moves (friendly->friendly) - beat attackers to friendly tiles
+        3. Larger tile first (affects general capture tiebreaks), general attacks last
+        4. General trades between players = tie (not implemented yet)
+        5. Original move order as final tiebreaker
+        """
+        moves = []
+        if move1 is not None:
+            moves.append((move1, 0))
+        if move2 is not None:
+            moves.append((move2, 1))
+
+        if len(moves) == 0:
+            return
+
+        if len(moves) == 1:
+            self._execute_single_move(moves[0][0])
+            return
+
+        # Two moves - determine order based on priority
+        m1, idx1 = moves[0]
+        m2, idx2 = moves[1]
+
+        # Calculate priorities
+        priority1 = self._get_move_priority(m1, m2, idx1)
+        priority2 = self._get_move_priority(m2, m1, idx2)
+
+        # Sort by priority (lower = first)
+        if priority1 <= priority2:
+            self._execute_single_move(m1)
+            self._execute_single_move(m2)
+        else:
+            self._execute_single_move(m2)
+            self._execute_single_move(m1)
     
     def update_vision(self):
         """Update vision for all players."""
@@ -255,20 +346,24 @@ class ReplaySimulator:
     
     def increment_armies(self, turn: int):
         """Increment armies based on game rules."""
-        # Cities and generals increment every 2 turns
+        # No increment on turn 0
+        if turn == 0:
+            return
+
+        # Cities and generals increment every 2 turns (turn 2, 4, 6, ...)
         if turn % 2 == 0:
             for city in self.cities:
                 row = city // self.map_width
                 col = city % self.map_width
                 if self.map[row][col].occupied != -1:
                     self.map[row][col].army += 1
-            
+
             for general in self.generals:
                 row = general // self.map_width
                 col = general % self.map_width
                 self.map[row][col].army += 1
-        
-        # All land increments every 50 turns
+
+        # All land increments every 50 turns (turn 50, 100, 150, ...)
         if turn % 50 == 0:
             for player in self.players:
                 for tile_idx in player.land:
@@ -302,30 +397,38 @@ class ReplaySimulator:
         
         move_idx = 0
         
-        for turn in range(max_turn + 1):
+        for turn in range(0, max_turn + 2):
             # Process moves for this turn
             player_move_start = -1
             player_move_end = -1
             player_move_is_50 = -1
-            
-            while move_idx < len(self.moves) and self.moves[move_idx]["turn"] == turn:
+
+            turn_moves = [None, None]
+            cnt = 0
+            while move_idx < len(self.moves) and self.moves[move_idx]["turn"] + 1 == turn:
                 move = self.moves[move_idx]
-                
+
                 # Record the move if it's from our player
                 if move["index"] == self.player_id:
                     player_move_start = move["start"]
                     player_move_end = move["end"]
                     player_move_is_50 = move["is50"]
-                
-                self.process_move(move)
+                if cnt < 2:
+                    turn_moves[cnt] = move
+                cnt += 1
                 move_idx += 1
-            
+
+            self.process_moves(turn_moves[0], turn_moves[1])
+
+            # Increment armies at end of turn
+            self.increment_armies(turn)
+
             # Update vision and stats
             self.update_vision()
             
             # Get state encoding
             state, army = self.get_state_encoding(self.player_id)
-            
+
             # Pad to 25x25
             padded_state = [[-1 for _ in range(25)] for _ in range(25)]
             padded_army = [[-1 for _ in range(25)] for _ in range(25)]
@@ -334,7 +437,7 @@ class ReplaySimulator:
                 for j in range(min(self.map_width, 25)):
                     padded_state[i][j] = state[i][j]
                     padded_army[i][j] = army[i][j]
-            
+
             # Calculate stats
             my_player = self.players[self.player_id]
             opponent_idx = 1 - self.player_id if len(self.players) == 2 else None
@@ -373,10 +476,12 @@ class ReplaySimulator:
                 move_end.append([-1, -1])
             
             move_is_50.append(player_move_is_50)
-            
-            # Increment armies at end of turn
-            self.increment_armies(turn)
-        
+
+            winner = self.check_winner()
+            if winner is not None:
+                print(f"Winner: {self.players[winner].name} at turn {turn}")
+                break
+
         return {
             "id": self.data["id"],
             "player": self.player_name,
