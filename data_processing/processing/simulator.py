@@ -13,27 +13,42 @@ from data_processing.processing.models import Tile, Player, Turn
 
 class ReplaySimulator:
     """Simulates a generals.io replay from a player's perspective."""
-    
+
+    # Standard map size for neural network input
+    TARGET_SIZE = 25
+
     def __init__(self, replay_data: Dict[str, Any], player_name: str):
         """
         Initialize the simulator.
-        
+
         Args:
             replay_data: Deserialized replay data
             player_name: Name of the player to simulate from perspective of
         """
         self.data = replay_data
         self.player_name = player_name
-        
-        # Map dimensions
-        self.map_width = replay_data["mapWidth"]
-        self.map_height = replay_data["mapHeight"]
-        
-        # Map features
-        self.cities = replay_data["cities"]
+
+        # Original map dimensions (for index conversion)
+        self.orig_width = replay_data["mapWidth"]
+        self.orig_height = replay_data["mapHeight"]
+
+        # Padded map dimensions (25x25)
+        self.map_width = self.TARGET_SIZE
+        self.map_height = self.TARGET_SIZE
+
+        # Convert flat indices from original to padded coordinates
+        def convert_idx(flat_idx: int) -> int:
+            row = flat_idx // self.orig_width
+            col = flat_idx % self.orig_width
+            return row * self.TARGET_SIZE + col
+
+        self._convert_idx = convert_idx
+
+        # Map features (converted to 25x25 coordinates)
+        self.cities = [convert_idx(c) for c in replay_data["cities"]]
         self.city_armies = replay_data["cityArmies"]
-        self.generals = replay_data["generals"]
-        self.mountains = replay_data["mountains"]
+        self.generals = [convert_idx(g) for g in replay_data["generals"]]
+        self.mountains = [convert_idx(m) for m in replay_data["mountains"]]
         
         # Game data
         self.moves = replay_data["moves"]
@@ -91,8 +106,9 @@ class ReplaySimulator:
     
     def _execute_single_move(self, move: Dict[str, Any]):
         """Execute a single move on the map."""
-        start_idx = move["start"]
-        end_idx = move["end"]
+        # Convert from original coordinates to padded 25x25 coordinates
+        start_idx = self._convert_idx(move["start"])
+        end_idx = self._convert_idx(move["end"])
         player_idx = move["index"]
         is_50 = move["is50"]
 
@@ -142,18 +158,21 @@ class ReplaySimulator:
 
     def _is_chase_move(self, chaser: Dict[str, Any], target: Dict[str, Any]) -> bool:
         """Check if chaser is chasing target (chaser.end == target.start and not swapping)."""
+        # Compare in original coordinates (no need to convert for equality check)
         return chaser["end"] == target["start"] and chaser["start"] != target["end"]
 
     def _is_defensive_move(self, move: Dict[str, Any]) -> bool:
         """Check if move is defensive (friendly->friendly)."""
-        end_row = move["end"] // self.map_width
-        end_col = move["end"] % self.map_width
+        end_idx = self._convert_idx(move["end"])
+        end_row = end_idx // self.map_width
+        end_col = end_idx % self.map_width
         end_tile = self.map[end_row][end_col]
         return end_tile.occupied == move["index"]
 
     def _is_attacking_general(self, move: Dict[str, Any]) -> bool:
         """Check if move is attacking a general."""
-        return move["end"] in self.generals
+        end_idx = self._convert_idx(move["end"])
+        return end_idx in self.generals
 
     def check_winner(self) -> Optional[int]:
         """
@@ -173,8 +192,9 @@ class ReplaySimulator:
 
     def _get_start_tile_army(self, move: Dict[str, Any]) -> int:
         """Get the army count at the start tile of a move."""
-        start_row = move["start"] // self.map_width
-        start_col = move["start"] % self.map_width
+        start_idx = self._convert_idx(move["start"])
+        start_row = start_idx // self.map_width
+        start_col = start_idx % self.map_width
         return self.map[start_row][start_col].army
 
     def _get_move_priority(self, move: Dict[str, Any], other_move: Optional[Dict[str, Any]], original_index: int) -> Tuple[int, int, int, int, int]:
@@ -426,17 +446,8 @@ class ReplaySimulator:
             # Update vision and stats
             self.update_vision()
             
-            # Get state encoding
+            # Get state encoding (already 25x25)
             state, army = self.get_state_encoding(self.player_id)
-
-            # Pad to 25x25
-            padded_state = [[-1 for _ in range(25)] for _ in range(25)]
-            padded_army = [[-1 for _ in range(25)] for _ in range(25)]
-            
-            for i in range(min(self.map_height, 25)):
-                for j in range(min(self.map_width, 25)):
-                    padded_state[i][j] = state[i][j]
-                    padded_army[i][j] = army[i][j]
 
             # Calculate stats
             my_player = self.players[self.player_id]
@@ -455,21 +466,23 @@ class ReplaySimulator:
                            (self.player_id == 1 and turn % 2 == 1) else 0
             
             first.append(is_first)
-            map_info.append(padded_state)
-            armies_num.append(padded_army)
+            map_info.append(state)
+            armies_num.append(army)
             info_myArmy.append(my_player.army)
             info_myLand.append(len(my_player.land))
             info_opArmy.append(op_army)
             info_opLand.append(op_land)
             
-            # Store move info
+            # Store move info (convert to 25x25 coordinates)
             if player_move_start != -1:
-                mx = player_move_start // self.map_width
-                my = player_move_start % self.map_width
+                converted_start = self._convert_idx(player_move_start)
+                mx = converted_start // self.map_width
+                my = converted_start % self.map_width
                 move_start.append([mx, my])
-                
-                mx = player_move_end // self.map_width
-                my = player_move_end % self.map_width
+
+                converted_end = self._convert_idx(player_move_end)
+                mx = converted_end // self.map_width
+                my = converted_end % self.map_width
                 move_end.append([mx, my])
             else:
                 move_start.append([-1, -1])

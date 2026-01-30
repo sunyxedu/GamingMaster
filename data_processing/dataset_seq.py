@@ -83,24 +83,35 @@ class SeqReplayDataset(Dataset):
     Loads JSON files in gio format with grid_seq, globals_seq, and action targets.
     """
     
-    def __init__(self, root, file_extension='.json', max_sequence_length=None):
+    def __init__(self, root, file_extension='.json', max_sequence_length=None, recursive=True):
         """
         Initialize dataset.
-        
+
         Args:
             root: Directory containing JSON replay files
             file_extension: File extension to filter (default: '.json')
             max_sequence_length: Optional max length to truncate sequences
+            recursive: If True, search subdirectories recursively (default: True)
         """
         self.root = root
         self.max_seq_len = max_sequence_length
-        self.paths = [
-            os.path.join(root, f) 
-            for f in os.listdir(root) 
-            if f.endswith(file_extension)
-        ]
+
+        if recursive:
+            # Search recursively in all subdirectories
+            self.paths = []
+            for dirpath, dirnames, filenames in os.walk(root):
+                for f in filenames:
+                    if f.endswith(file_extension):
+                        self.paths.append(os.path.join(dirpath, f))
+        else:
+            # Only search in root directory
+            self.paths = [
+                os.path.join(root, f)
+                for f in os.listdir(root)
+                if f.endswith(file_extension)
+            ]
         self.paths.sort()
-        
+
         if len(self.paths) == 0:
             print(f"Warning: No {file_extension} files found in {root}")
     

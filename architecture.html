@@ -1,0 +1,1751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generals.io AI - Architecture Diagram</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --border-color: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-purple: #a371f7;
+            --accent-orange: #d29922;
+            --accent-red: #f85149;
+            --accent-pink: #db61a2;
+            --accent-cyan: #39c5cf;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--text-secondary);
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+
+        .section {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-size: 1.4em;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .section-title .icon {
+            font-size: 1.2em;
+        }
+
+        .flow-container {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .flow-row {
+            display: flex;
+            gap: 15px;
+            align-items: stretch;
+            flex-wrap: wrap;
+        }
+
+        .component {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .component.input { border-left: 4px solid var(--accent-blue); }
+        .component.encoder { border-left: 4px solid var(--accent-purple); }
+        .component.embedding { border-left: 4px solid var(--accent-orange); }
+        .component.backbone { border-left: 4px solid var(--accent-green); }
+        .component.policy { border-left: 4px solid var(--accent-pink); }
+        .component.value { border-left: 4px solid var(--accent-cyan); }
+        .component.training { border-left: 4px solid var(--accent-red); }
+
+        .component-title {
+            font-weight: 600;
+            font-size: 1.1em;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .component-title .badge {
+            font-size: 0.7em;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+        }
+
+        .component-content {
+            font-size: 0.9em;
+            color: var(--text-secondary);
+        }
+
+        .component-content code {
+            background: var(--bg-primary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.85em;
+            color: var(--accent-cyan);
+        }
+
+        .layer-list {
+            list-style: none;
+            margin-top: 8px;
+        }
+
+        .layer-list li {
+            padding: 4px 0;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .layer-list li:last-child {
+            border-bottom: none;
+        }
+
+        .layer-name {
+            color: var(--text-primary);
+        }
+
+        .layer-shape {
+            color: var(--accent-green);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.85em;
+        }
+
+        .arrow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            font-size: 1.5em;
+            padding: 5px 0;
+        }
+
+        .arrow.horizontal {
+            writing-mode: horizontal-tb;
+            padding: 0 10px;
+            min-width: 40px;
+        }
+
+        .subcomponent {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px;
+            margin-top: 10px;
+        }
+
+        .subcomponent-title {
+            font-weight: 500;
+            font-size: 0.95em;
+            margin-bottom: 6px;
+            color: var(--accent-blue);
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+        }
+
+        .grid-4 {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+        }
+
+        @media (max-width: 1200px) {
+            .grid-4 { grid-template-columns: repeat(2, 1fr); }
+            .grid-3 { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 768px) {
+            .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
+            .flow-row { flex-direction: column; }
+        }
+
+        .formula {
+            background: var(--bg-primary);
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.9em;
+            margin: 8px 0;
+            border-left: 3px solid var(--accent-purple);
+            overflow-x: auto;
+            white-space: pre;
+            line-height: 1.5;
+        }
+
+        .highlight {
+            color: var(--accent-orange);
+        }
+
+        .params-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        .params-table th, .params-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .params-table th {
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .params-table td:last-child {
+            text-align: right;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            color: var(--accent-green);
+        }
+
+        .tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            margin-right: 5px;
+        }
+
+        .tag.blue { background: rgba(88, 166, 255, 0.2); color: var(--accent-blue); }
+        .tag.green { background: rgba(63, 185, 80, 0.2); color: var(--accent-green); }
+        .tag.purple { background: rgba(163, 113, 247, 0.2); color: var(--accent-purple); }
+        .tag.orange { background: rgba(210, 153, 34, 0.2); color: var(--accent-orange); }
+        .tag.pink { background: rgba(219, 97, 162, 0.2); color: var(--accent-pink); }
+
+        .recursive-box {
+            border: 2px dashed var(--accent-green);
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            position: relative;
+        }
+
+        .recursive-label {
+            position: absolute;
+            top: -12px;
+            left: 20px;
+            background: var(--bg-secondary);
+            padding: 0 10px;
+            color: var(--accent-green);
+            font-size: 0.9em;
+        }
+
+        .channel-list {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 5px;
+            font-size: 0.85em;
+        }
+
+        .channel-item {
+            padding: 4px 8px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+        }
+
+        .channel-idx {
+            color: var(--accent-orange);
+            margin-right: 5px;
+        }
+
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .nav-tab {
+            padding: 10px 20px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+        }
+
+        .nav-tab:hover {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .nav-tab.active {
+            background: var(--accent-blue);
+            color: white;
+            border-color: var(--accent-blue);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .connection-line {
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+            margin: 10px 0;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .stat-card {
+            background: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+
+        .attention-diagram {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            padding: 20px;
+            background: var(--bg-primary);
+            border-radius: 8px;
+            margin: 10px 0;
+            flex-wrap: wrap;
+        }
+
+        .attention-box {
+            padding: 10px 20px;
+            border-radius: 6px;
+            text-align: center;
+            min-width: 80px;
+        }
+
+        .attention-box.q { background: rgba(88, 166, 255, 0.2); border: 1px solid var(--accent-blue); }
+        .attention-box.k { background: rgba(63, 185, 80, 0.2); border: 1px solid var(--accent-green); }
+        .attention-box.v { background: rgba(163, 113, 247, 0.2); border: 1px solid var(--accent-purple); }
+        .attention-box.op { background: rgba(210, 153, 34, 0.2); border: 1px solid var(--accent-orange); }
+
+        .attention-arrow {
+            color: var(--text-secondary);
+            font-size: 1.5em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Generals.io AI Architecture</h1>
+        <p class="subtitle">TRM (Tiny Recursive Model) + AlphaStar-style Training | ~14.2M Parameters</p>
+
+        <!-- Stats Overview -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">14.2M</div>
+                <div class="stat-label">Total Parameters</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">512</div>
+                <div class="stat-label">Model Dimension</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">3×6</div>
+                <div class="stat-label">Supervision × Inner Cycles</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">625</div>
+                <div class="stat-label">Spatial Tokens (25×25)</div>
+            </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <div class="nav-tabs" style="margin-top: 30px;">
+            <div class="nav-tab active" onclick="showTab('overview')">Overview</div>
+            <div class="nav-tab" onclick="showTab('inputs')">Inputs</div>
+            <div class="nav-tab" onclick="showTab('history')">History Encoder</div>
+            <div class="nav-tab" onclick="showTab('embedding')">Input Embedding</div>
+            <div class="nav-tab" onclick="showTab('backbone')">TRM Backbone</div>
+            <div class="nav-tab" onclick="showTab('heads')">Policy & Value Heads</div>
+            <div class="nav-tab" onclick="showTab('training')">Training</div>
+            <div class="nav-tab" onclick="showTab('inference')">Inference</div>
+        </div>
+
+        <!-- Overview Tab -->
+        <div id="overview" class="tab-content active">
+            <div class="section">
+                <div class="section-title"><span class="icon">🏗️</span> Architecture Overview</div>
+
+                <div class="flow-container">
+                    <!-- Input Layer -->
+                    <div class="flow-row">
+                        <div class="component input">
+                            <div class="component-title">Grid Sequence <span class="badge">Input</span></div>
+                            <div class="component-content">
+                                <code>[B, T, 12, 25, 25]</code><br>
+                                12-channel spatial representation
+                            </div>
+                        </div>
+                        <div class="component input">
+                            <div class="component-title">Globals Sequence <span class="badge">Input</span></div>
+                            <div class="component-content">
+                                <code>[B, T, 4]</code><br>
+                                Army & land statistics
+                            </div>
+                        </div>
+                        <div class="component input">
+                            <div class="component-title">Tick Bucket <span class="badge">Input</span></div>
+                            <div class="component-content">
+                                <code>[B, T]</code><br>
+                                Time step index (0-31)
+                            </div>
+                        </div>
+                        <div class="component input" style="border-left-color: var(--accent-cyan);">
+                            <div class="component-title">No-Masking <span class="badge">Design</span></div>
+                            <div class="component-content">
+                                <code>is_legal(grid, action)</code><br>
+                                Validity via penalty, not masking
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="arrow">↓</div>
+
+                    <!-- History Encoder -->
+                    <div class="flow-row">
+                        <div class="component encoder" style="flex: 2;">
+                            <div class="component-title">
+                                <span class="tag purple">History Encoder</span>
+                                model/history_encoder.py
+                            </div>
+                            <div class="component-content">
+                                <div class="grid-2">
+                                    <div class="subcomponent">
+                                        <div class="subcomponent-title">SpatialEncoder</div>
+                                        Conv2d(12→64→128→256) + Pool → <code>[B, 256]</code>
+                                    </div>
+                                    <div class="subcomponent">
+                                        <div class="subcomponent-title">TemporalTransformer</div>
+                                        2-layer causal attention → <code>[B, 256]</code>
+                                    </div>
+                                </div>
+                                Output: <code>history_latent [B, 256]</code>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="arrow">↓</div>
+
+                    <!-- Input Embedding -->
+                    <div class="flow-row">
+                        <div class="component embedding" style="flex: 2;">
+                            <div class="component-title">
+                                <span class="tag orange">Input Embedding</span>
+                                model/model.py
+                            </div>
+                            <div class="component-content">
+                                <div class="grid-3">
+                                    <div class="subcomponent">
+                                        <div class="subcomponent-title">Grid Embed</div>
+                                        Conv2d(12→512, k=1)
+                                    </div>
+                                    <div class="subcomponent">
+                                        <div class="subcomponent-title">Position Embed</div>
+                                        Embedding(625, 512)
+                                    </div>
+                                    <div class="subcomponent">
+                                        <div class="subcomponent-title">Global Embed</div>
+                                        Linear(4→512)
+                                    </div>
+                                    <div class="subcomponent">
+                                        <div class="subcomponent-title">History Embed</div>
+                                        Linear(256→512)
+                                    </div>
+                                    <div class="subcomponent">
+                                        <div class="subcomponent-title">Tick Embed</div>
+                                        Embedding(32, 512)
+                                    </div>
+                                </div>
+                                Output: <code>tokens [B, 625, 512]</code>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="arrow">↓</div>
+
+                    <!-- TRM Backbone -->
+                    <div class="flow-row">
+                        <div class="component backbone" style="flex: 2;">
+                            <div class="component-title">
+                                <span class="tag green">TRM Backbone</span>
+                                model/backbone.py
+                            </div>
+                            <div class="component-content">
+                                <div class="recursive-box">
+                                    <span class="recursive-label">Deep Recursion (3 supervision × 6 inner cycles)</span>
+                                    <div class="grid-2">
+                                        <div class="subcomponent">
+                                            <div class="subcomponent-title">Dual State (y, z)</div>
+                                            y = answer state, z = latent reasoning<br>
+                                            z ← net(x, y, z), y ← net(y, z)
+                                        </div>
+                                        <div class="subcomponent">
+                                            <div class="subcomponent-title">TRMLayer × 2</div>
+                                            RMSNorm → Attention(8 heads) → RMSNorm → SwiGLU FFN
+                                        </div>
+                                        <div class="subcomponent">
+                                            <div class="subcomponent-title">Cycle Embedding</div>
+                                            Embedding(18, 512) for total cycles
+                                        </div>
+                                        <div class="subcomponent">
+                                            <div class="subcomponent-title">Deep Recursion</div>
+                                            Inner cycles: no_grad (except last)<br>
+                                            Supervision: full gradients
+                                        </div>
+                                    </div>
+                                </div>
+                                Output: <code>y [B, 625, 512]</code> (answer), <code>z [B, 625, 512]</code> (latent)
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="arrow">↓</div>
+
+                    <!-- Output Heads -->
+                    <div class="flow-row">
+                        <div class="component policy" style="border-left-color: #f85149;">
+                            <div class="component-title">
+                                <span class="tag" style="background: rgba(248, 81, 73, 0.2); color: #f85149;">Move Head</span>
+                            </div>
+                            <div class="component-content">
+                                MeanPool → Linear(512→128→2)<br>
+                                <strong>0=pass, 1=move</strong><br>
+                                <code>[B, 2]</code>
+                            </div>
+                        </div>
+                        <div class="component policy">
+                            <div class="component-title">
+                                <span class="tag pink">Source Head</span>
+                            </div>
+                            <div class="component-content">
+                                Linear(512→256→1)<br>
+                                No mask (penalty-based)<br>
+                                <code>[B, 625]</code>
+                            </div>
+                        </div>
+                        <div class="component policy">
+                            <div class="component-title">
+                                <span class="tag pink">Direction Head</span>
+                            </div>
+                            <div class="component-content">
+                                Linear(512→128→4)<br>
+                                No mask (penalty-based)<br>
+                                <code>[B, 4]</code>
+                            </div>
+                        </div>
+                        <div class="component policy">
+                            <div class="component-title">
+                                <span class="tag pink">Ratio Head</span>
+                            </div>
+                            <div class="component-content">
+                                Linear(512→64→2)<br>
+                                all-but-1 / 50%<br>
+                                <code>[B, 2]</code>
+                            </div>
+                        </div>
+                        <div class="component value">
+                            <div class="component-title">
+                                <span class="tag blue">Value Head</span>
+                            </div>
+                            <div class="component-content">
+                                MeanPool → MLP → Tanh<br>
+                                Win probability<br>
+                                <code>[B] ∈ [-1, 1]</code>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TRM Key Features -->
+            <div class="section">
+                <div class="section-title"><span class="icon">🔬</span> TRM Key Features (from arXiv:2510.04871)</div>
+                <div class="grid-3">
+                    <div class="component backbone">
+                        <div class="component-title">Dual State Recursion</div>
+                        <div class="component-content">
+                            <p><strong>y</strong> = answer state (当前答案)</p>
+                            <p><strong>z</strong> = latent reasoning (思考过程)</p>
+                            <div class="formula" style="font-size: 0.85em;">
+z ← net(x, y, z)
+y ← net(y, z)</div>
+                        </div>
+                    </div>
+                    <div class="component backbone" style="border-left-color: var(--accent-orange);">
+                        <div class="component-title">Deep Recursion</div>
+                        <div class="component-content">
+                            <p><strong>3</strong> supervision steps</p>
+                            <p><strong>6</strong> inner cycles (no_grad)</p>
+                            <p><strong>18</strong> total cycles</p>
+                            <div class="formula" style="font-size: 0.85em;">
+Memory efficient:
+only last inner has grad</div>
+                        </div>
+                    </div>
+                    <div class="component backbone" style="border-left-color: var(--accent-cyan);">
+                        <div class="component-title">EMA + Halting</div>
+                        <div class="component-content">
+                            <p><strong>EMA</strong>: decay=0.999 for stable eval</p>
+                            <p><strong>Halting</strong>: BCE(halt, is_correct)</p>
+                            <div class="formula" style="font-size: 0.85em;">
+shadow = 0.999×shadow
+      + 0.001×params</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Parameter Breakdown -->
+            <div class="section">
+                <div class="section-title"><span class="icon">📊</span> Parameter Breakdown</div>
+                <table class="params-table">
+                    <thead>
+                        <tr>
+                            <th>Component</th>
+                            <th>Description</th>
+                            <th>Parameters</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>InputEmbedding</td>
+                            <td>Grid, Position, Global, History, Tick embeddings</td>
+                            <td>~0.4M</td>
+                        </tr>
+                        <tr>
+                            <td>TRM Backbone</td>
+                            <td>2 layers × (Attention + SwiGLU FFN) + Dual State + AnswerHead</td>
+                            <td>~12.0M</td>
+                        </tr>
+                        <tr>
+                            <td>HistoryEncoder</td>
+                            <td>SpatialEncoder + TemporalTransformer + GRU gates</td>
+                            <td>~1.2M</td>
+                        </tr>
+                        <tr>
+                            <td>Policy Heads</td>
+                            <td>Move (66K) + Source (130K) + Direction (66K) + Ratio (33K)</td>
+                            <td>~0.3M</td>
+                        </tr>
+                        <tr>
+                            <td>Value Head</td>
+                            <td>Spatial projection + MLP</td>
+                            <td>~0.1M</td>
+                        </tr>
+                        <tr style="font-weight: bold; background: var(--bg-tertiary);">
+                            <td>Total</td>
+                            <td></td>
+                            <td>~14.2M</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Inputs Tab -->
+        <div id="inputs" class="tab-content">
+            <div class="section">
+                <div class="section-title"><span class="icon">📥</span> Input Tensors</div>
+
+                <div class="grid-2">
+                    <div class="component input">
+                        <div class="component-title">Grid Sequence</div>
+                        <div class="component-content">
+                            <p><strong>Shape:</strong> <code>[B, T, 12, 25, 25]</code></p>
+                            <p style="margin-top: 10px;"><strong>12 Channels:</strong></p>
+                            <div class="channel-list">
+                                <div class="channel-item"><span class="channel-idx">0</span> Unseen blank</div>
+                                <div class="channel-item"><span class="channel-idx">1</span> Unseen not blank</div>
+                                <div class="channel-item"><span class="channel-idx">2</span> Seen blank</div>
+                                <div class="channel-item"><span class="channel-idx">3</span> Uncaptured city</div>
+                                <div class="channel-item"><span class="channel-idx">4</span> Mountain</div>
+                                <div class="channel-item"><span class="channel-idx">5</span> My land</div>
+                                <div class="channel-item"><span class="channel-idx">6</span> My city</div>
+                                <div class="channel-item"><span class="channel-idx">7</span> My general</div>
+                                <div class="channel-item"><span class="channel-idx">8</span> Opponent land</div>
+                                <div class="channel-item"><span class="channel-idx">9</span> Opponent city</div>
+                                <div class="channel-item"><span class="channel-idx">10</span> Opponent general</div>
+                                <div class="channel-item"><span class="channel-idx">11</span> Army count (log)</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="component input">
+                        <div class="component-title">Global Features</div>
+                        <div class="component-content">
+                            <p><strong>Shape:</strong> <code>[B, T, 4]</code></p>
+                            <p style="margin-top: 10px;"><strong>4 Features:</strong></p>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">my_army_total</span><span class="layer-shape">Normalized</span></li>
+                                <li><span class="layer-name">my_land_count</span><span class="layer-shape">Normalized</span></li>
+                                <li><span class="layer-name">opp_army_total</span><span class="layer-shape">Normalized</span></li>
+                                <li><span class="layer-name">opp_land_count</span><span class="layer-shape">Normalized</span></li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="component input">
+                        <div class="component-title">Tick Bucket</div>
+                        <div class="component-content">
+                            <p><strong>Shape:</strong> <code>[B, T]</code></p>
+                            <p style="margin-top: 10px;"><strong>Description:</strong></p>
+                            <p>Time step discretized into 32 buckets for temporal awareness. Allows model to learn time-dependent strategies.</p>
+                        </div>
+                    </div>
+
+                    <div class="component input" style="border-left-color: var(--accent-cyan);">
+                        <div class="component-title">Action Validity (No-Masking)</div>
+                        <div class="component-content">
+                            <p><strong>Function:</strong> <code>is_legal(grid, action)</code></p>
+                            <p style="margin-top: 10px;"><strong>Description:</strong></p>
+                            <p>Instead of masking illegal actions to -inf, the model learns action validity through <strong>illegal action penalty</strong>. This enables better generalization to unseen game states.</p>
+                            <p style="margin-top: 5px;"><strong>Checks:</strong> Owned tile (ch 5-7), army > 1 (ch 11), bounds, mountains (ch 4)</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- History Encoder Tab -->
+        <div id="history" class="tab-content">
+            <div class="section">
+                <div class="section-title"><span class="icon">🧠</span> History Encoder <span class="badge">model/history_encoder.py</span></div>
+
+                <div class="flow-container">
+                    <!-- Spatial Encoder -->
+                    <div class="component encoder">
+                        <div class="component-title">SpatialEncoder</div>
+                        <div class="component-content">
+                            <p>Encodes each spatial frame into a vector representation using convolutional layers.</p>
+                            <ul class="layer-list">
+                                <li>
+                                    <span class="layer-name">Conv2d(12→64, k=3, p=1) + BatchNorm + SiLU</span>
+                                    <span class="layer-shape">[B*T, 64, 25, 25]</span>
+                                </li>
+                                <li>
+                                    <span class="layer-name">Conv2d(64→128, k=3, s=2, p=1) + BatchNorm + SiLU</span>
+                                    <span class="layer-shape">[B*T, 128, 13, 13]</span>
+                                </li>
+                                <li>
+                                    <span class="layer-name">Conv2d(128→256, k=3, s=2, p=1) + BatchNorm + SiLU</span>
+                                    <span class="layer-shape">[B*T, 256, 7, 7]</span>
+                                </li>
+                                <li>
+                                    <span class="layer-name">AdaptiveAvgPool2d(1) + Flatten</span>
+                                    <span class="layer-shape">[B*T, 256]</span>
+                                </li>
+                                <li>
+                                    <span class="layer-name">Linear(256→256, no bias)</span>
+                                    <span class="layer-shape">[B, T, 256]</span>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="arrow">↓ + Global Projection Linear(4→256)</div>
+
+                    <!-- Temporal Transformer -->
+                    <div class="component encoder">
+                        <div class="component-title">TemporalTransformer</div>
+                        <div class="component-content">
+                            <p>Causal Transformer for processing temporal sequences.</p>
+
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">Position Embedding</div>
+                                <code>Embedding(512, 256)</code> - Learnable positional encoding
+                            </div>
+
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">TransformerLayer × 2</div>
+                                <ul class="layer-list">
+                                    <li><span class="layer-name">RMSNorm(256)</span></li>
+                                    <li><span class="layer-name">TRMAttention(d=256, heads=4) with CAUSAL MASK</span></li>
+                                    <li><span class="layer-name">+ Residual Connection</span></li>
+                                    <li><span class="layer-name">RMSNorm(256)</span></li>
+                                    <li><span class="layer-name">SwiGLUFFN(256→1024→256)</span></li>
+                                    <li><span class="layer-name">+ Residual Connection</span></li>
+                                </ul>
+                            </div>
+
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">Output</div>
+                                <code>RMSNorm(256)</code> → Take last hidden state → <code>[B, 256]</code>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="arrow">↓</div>
+
+                    <div class="component encoder">
+                        <div class="component-title">Output: History Latent</div>
+                        <div class="component-content">
+                            <code>[B, 256]</code> - Compressed temporal representation
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GRU Update for Inference -->
+                <div class="section" style="margin-top: 20px; background: var(--bg-tertiary);">
+                    <div class="section-title"><span class="icon">⚡</span> GRU-Style Update (Inference Mode)</div>
+                    <div class="component-content">
+                        <p>For incremental inference, instead of reprocessing the full sequence:</p>
+                        <div class="formula">
+combined = concat(latent_prev, frame_emb)  // [B, 512]
+gate = sigmoid(gate_proj(combined))         // [B, 256]
+update = tanh(update_proj(combined))        // [B, 256]
+latent_new = gate * latent_prev + (1 - gate) * update
+                        </div>
+                        <ul class="layer-list">
+                            <li><span class="layer-name">gate_proj</span><span class="layer-shape">Linear(512→256, no bias)</span></li>
+                            <li><span class="layer-name">update_proj</span><span class="layer-shape">Linear(512→256, no bias)</span></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Embedding Tab -->
+        <div id="embedding" class="tab-content">
+            <div class="section">
+                <div class="section-title"><span class="icon">🔤</span> Input Embedding <span class="badge">model/model.py</span></div>
+
+                <div class="grid-2">
+                    <div class="component embedding">
+                        <div class="component-title">Grid Embedding</div>
+                        <div class="component-content">
+                            <div class="formula">Conv2d(12 → 512, kernel=1)</div>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Input</span><span class="layer-shape">[B, 12, 25, 25]</span></li>
+                                <li><span class="layer-name">Output</span><span class="layer-shape">[B, 625, 512]</span></li>
+                            </ul>
+                            <p style="margin-top: 10px;">1×1 convolution to project each tile's 12 channels to d_model dimension, then reshape to token sequence.</p>
+                        </div>
+                    </div>
+
+                    <div class="component embedding">
+                        <div class="component-title">Position Embedding</div>
+                        <div class="component-content">
+                            <div class="formula">Embedding(625, 512)</div>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Indices</span><span class="layer-shape">0 to 624</span></li>
+                                <li><span class="layer-name">Output</span><span class="layer-shape">[625, 512]</span></li>
+                            </ul>
+                            <p style="margin-top: 10px;">Learnable spatial position embeddings for each of the 25×25 = 625 grid positions.</p>
+                        </div>
+                    </div>
+
+                    <div class="component embedding">
+                        <div class="component-title">Global Embedding</div>
+                        <div class="component-content">
+                            <div class="formula">Linear(4 → 512, no bias)</div>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Input</span><span class="layer-shape">[B, 4]</span></li>
+                                <li><span class="layer-name">Output</span><span class="layer-shape">[B, 512]</span></li>
+                            </ul>
+                            <p style="margin-top: 10px;">Projects global features and broadcasts to all 625 tokens.</p>
+                        </div>
+                    </div>
+
+                    <div class="component embedding">
+                        <div class="component-title">History Embedding</div>
+                        <div class="component-content">
+                            <div class="formula">Linear(256 → 512, no bias)</div>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Input</span><span class="layer-shape">[B, 256]</span></li>
+                                <li><span class="layer-name">Output</span><span class="layer-shape">[B, 512]</span></li>
+                            </ul>
+                            <p style="margin-top: 10px;">Projects history latent from HistoryEncoder and broadcasts to all tokens.</p>
+                        </div>
+                    </div>
+
+                    <div class="component embedding">
+                        <div class="component-title">Tick Embedding</div>
+                        <div class="component-content">
+                            <div class="formula">Embedding(32, 512)</div>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Buckets</span><span class="layer-shape">0 to 31</span></li>
+                                <li><span class="layer-name">Output</span><span class="layer-shape">[B, 512]</span></li>
+                            </ul>
+                            <p style="margin-top: 10px;">Time step embedding for temporal awareness, broadcast to all tokens.</p>
+                        </div>
+                    </div>
+
+                    <div class="component embedding" style="background: var(--bg-primary);">
+                        <div class="component-title">Combined Output</div>
+                        <div class="component-content">
+                            <div class="formula">tokens = grid + pos + global + history + tick</div>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Final Shape</span><span class="layer-shape">[B, 625, 512]</span></li>
+                            </ul>
+                            <p style="margin-top: 10px;">All embeddings are summed element-wise to create the input token sequence for TRM backbone.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TRM Backbone Tab -->
+        <div id="backbone" class="tab-content">
+            <div class="section">
+                <div class="section-title"><span class="icon">🔄</span> TRM Backbone <span class="badge">model/backbone.py</span></div>
+
+                <div class="component backbone">
+                    <div class="component-title">Configuration (from "Less is More" paper, arXiv:2510.04871)</div>
+                    <div class="component-content">
+                        <div class="grid-4">
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">d_model</div>
+                                <code>512</code>
+                            </div>
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">n_heads</div>
+                                <code>8</code>
+                            </div>
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">n_layers</div>
+                                <code>2</code>
+                            </div>
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">d_ff</div>
+                                <code>2048</code>
+                            </div>
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">n_inner_cycles</div>
+                                <code>6</code>
+                            </div>
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">n_supervision_steps</div>
+                                <code>3</code>
+                            </div>
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">total_cycles</div>
+                                <code>18 (6×3)</code>
+                            </div>
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">ema_decay</div>
+                                <code>0.999</code>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dual State Diagram -->
+                <div class="component backbone" style="margin-top: 20px; border-left-color: #a371f7;">
+                    <div class="component-title">Dual State Recursion (TRM Core Concept)</div>
+                    <div class="component-content">
+                        <div class="formula">
+// Two states that evolve together:
+y = "answer state" - what the model currently thinks the answer is
+z = "latent reasoning state" - internal reasoning/computation
+
+// At each cycle:
+z ← net(x, y, z)    // Update reasoning based on input, answer, and current reasoning
+y ← net(y, z)       // Update answer based on current reasoning
+
+// Initialization:
+y₀ = x              // Initial answer = input (start with the question)
+z₀ = zeros          // Initial reasoning = blank slate
+                        </div>
+                        <p style="margin-top: 10px; color: var(--accent-purple);">
+                            <strong>为什么双状态？</strong> y 是 "当前答案"，z 是 "思考过程"。
+                            模型可以在 z 中积累推理，然后更新 y 中的答案。这类似于人类的思考方式。
+                        </p>
+                    </div>
+                </div>
+
+                <div class="recursive-box" style="margin-top: 20px;">
+                    <span class="recursive-label">🔁 Deep Recursion (T supervision steps × n inner cycles)</span>
+
+                    <div class="component backbone" style="margin-top: 10px;">
+                        <div class="component-title">Deep Recursion Structure</div>
+                        <div class="component-content">
+                            <div class="formula">
+for t in range(n_supervision_steps):     // T = 3 supervision steps
+    for i in range(n_inner_cycles):      // n = 6 inner cycles
+
+        if i < n_inner_cycles - 1:
+            with torch.no_grad():        // No gradients for efficiency!
+                y, z = single_recursion(x, y, z, cycle_idx)
+        else:
+            y, z = single_recursion(x, y, z, cycle_idx)  // Last inner: full gradients
+
+        cycle_idx += 1
+
+    halt_prob = HaltHead(z)              // Compute halt probability
+    all_y.append(y.clone())              // Store for deep supervision
+                            </div>
+                            <p style="margin-top: 10px; color: var(--accent-green);">
+                                <strong>Deep Recursion 优势：</strong> 大部分计算在 no_grad 下进行，节省内存。
+                                只有每个 supervision step 的最后一个 inner cycle 有梯度，用于学习。
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="arrow">↓</div>
+
+                    <div class="component backbone" style="margin-top: 10px;">
+                        <div class="component-title">Cycle Embedding</div>
+                        <div class="component-content">
+                            <div class="formula">z_input = z + cycle_embedding[global_cycle_idx]</div>
+                            <code>Embedding(18, 512)</code> - Different embedding for each of the 18 total cycles
+                        </div>
+                    </div>
+
+                    <div class="arrow">↓</div>
+
+                    <div class="component backbone" style="margin-top: 10px;">
+                        <div class="component-title">XYZ Combine + TRMLayer × 2</div>
+                        <div class="component-content">
+                            <div class="formula">
+// Combine y and z for context
+yz_combined = concat(y, z + cycle_emb)  // [B, N, 2D]
+z_input = Linear(yz_combined)           // [B, N, D]
+z_input = z_input + x                   // Add input context
+                            </div>
+                            <!-- Attention Block -->
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">1. RMSNorm + Multi-Head Attention</div>
+                                <div class="attention-diagram">
+                                    <div class="attention-box q">Q<br><small>Linear(512→512)</small></div>
+                                    <div class="attention-box k">K<br><small>Linear(512→512)</small></div>
+                                    <div class="attention-box v">V<br><small>Linear(512→512)</small></div>
+                                    <span class="attention-arrow">→</span>
+                                    <div class="attention-box op">Attention<br><small>softmax(QK<sup>T</sup>/√64)V</small></div>
+                                    <span class="attention-arrow">→</span>
+                                    <div class="attention-box op">Output<br><small>Linear(512→512)</small></div>
+                                </div>
+                                <div class="formula">
+RMSNorm(x)
+Q, K, V = Wq(x), Wk(x), Wv(x)  // All Linear(512→512, no bias)
+heads = 8, head_dim = 64
+attn = softmax(QK^T / sqrt(64)) @ V
+out = Wo(attn)  // Linear(512→512, no bias)
+x = x + out  // Residual
+                                </div>
+                            </div>
+
+                            <!-- FFN Block -->
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">2. RMSNorm + SwiGLU FFN</div>
+                                <div class="formula">
+RMSNorm(x)
+gate = W_gate(x)   // Linear(512→2048, no bias)
+value = W_value(x) // Linear(512→2048, no bias)
+hidden = SiLU(gate) * value
+out = W_proj(hidden)  // Linear(2048→512, no bias)
+x = x + out  // Residual
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="arrow">↓</div>
+
+                    <div class="component backbone" style="margin-top: 10px;">
+                        <div class="component-title">AnswerHead: y ← net(y, z)</div>
+                        <div class="component-content">
+                            <div class="formula">
+// Update answer state based on reasoning
+combined = concat(y, z)         // [B, N, 2D]
+combined = Linear(combined)     // [B, N, D]
+refined = RMSNorm → Linear → SiLU → Linear
+y_new = y + refined(combined)   // Residual update
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="arrow">↓ (repeat for each cycle)</div>
+                </div>
+
+                <div class="component backbone" style="margin-top: 20px; border-left-color: #f85149;">
+                    <div class="component-title">TRM Adaptive Halting (HaltHead)</div>
+                    <div class="component-content">
+                        <div class="formula">
+// At each cycle, compute halt probability
+halt_prob = sigmoid(HaltHead(z))
+
+HaltHead:
+    Linear(512 → 128, no bias)
+    SiLU()
+    Linear(128 → 1, no bias)
+    Global mean pooling → sigmoid
+
+// Training: Learn via BCE loss
+L_halt = BCE(halt_prob, is_correct)
+// where is_correct = 1 if prediction matches target
+
+// Inference: Stop when halt_prob > 0.5
+if deterministic and halt_prob > 0.5:
+    break
+                        </div>
+                        <p style="margin-top: 10px;">
+                            <strong>工作原理:</strong> 模型学习预测 "当前答案是否正确"。
+                            如果预测正确，halt_prob 高 → 停止递归。
+                            如果预测错误，halt_prob 低 → 继续思考。
+                        </p>
+                    </div>
+                </div>
+
+                <div class="component backbone" style="margin-top: 20px;">
+                    <div class="component-title">Output</div>
+                    <div class="component-content">
+                        <div class="formula">z = RMSNorm(z)  // Final normalization</div>
+                        <code>[B, 625, 512]</code> - Token representations after recursive processing
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Policy & Value Heads Tab -->
+        <div id="heads" class="tab-content">
+            <div class="section">
+                <div class="section-title"><span class="icon">🎯</span> Policy Heads <span class="badge">model/policy_head.py</span></div>
+
+                <!-- Decision Flow -->
+                <div class="component policy" style="margin-bottom: 20px; border-left-color: #f85149; background: linear-gradient(135deg, var(--bg-tertiary) 0%, rgba(248, 81, 73, 0.1) 100%);">
+                    <div class="component-title">Hierarchical Decision Flow</div>
+                    <div class="component-content">
+                        <div class="formula">
+1. MoveHead → pass(0) / move(1)
+   │
+   ├── if pass (0): 结束，不移动
+   │
+   └── if move (1): 继续...
+       │
+       ├── 2. SourceHead → 选择源格子 [B, 625]
+       │
+       ├── 3. DirectionHead → 选择方向 [B, 4] (基于 source)
+       │
+       └── 4. RatioHead → 选择兵力比例 [B, 2] (基于 source)
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid-4" style="margin-bottom: 20px;">
+                    <div class="component policy" style="border-left-color: #f85149;">
+                        <div class="component-title">MoveHead</div>
+                        <div class="component-content">
+                            <p><strong>Purpose:</strong> 决定是否移动</p>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Mean Pool: z.mean(dim=1)</span></li>
+                                <li><span class="layer-name">Linear(512→128, no bias)</span></li>
+                                <li><span class="layer-name">RMSNorm(128)</span></li>
+                                <li><span class="layer-name">SiLU()</span></li>
+                                <li><span class="layer-name">Linear(128→2, no bias)</span></li>
+                                <li><span class="layer-name">Softmax</span></li>
+                            </ul>
+                            <div style="margin-top: 10px; font-size: 0.9em;">
+                                <span class="tag" style="background: rgba(248, 81, 73, 0.2); color: #f85149;">0</span> Pass (不动)<br>
+                                <span class="tag green">1</span> Move (移动)
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid-3">
+                    <div class="component policy">
+                        <div class="component-title">SourceHead</div>
+                        <div class="component-content">
+                            <p><strong>Purpose:</strong> Select which tile to move from</p>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Linear(512→256, no bias)</span></li>
+                                <li><span class="layer-name">RMSNorm(256)</span></li>
+                                <li><span class="layer-name">SiLU()</span></li>
+                                <li><span class="layer-name">Linear(256→1, no bias)</span></li>
+                                <li><span class="layer-name">Reshape to [B, 625]</span></li>
+                                <li><span class="layer-name" style="color: var(--accent-cyan);">No masking (penalty-based)</span></li>
+                                <li><span class="layer-name">Softmax</span></li>
+                            </ul>
+                            <p style="margin-top: 10px;"><strong>Output:</strong> <code>[B, 625]</code> probabilities</p>
+                        </div>
+                    </div>
+
+                    <div class="component policy">
+                        <div class="component-title">DirectionHead</div>
+                        <div class="component-content">
+                            <p><strong>Purpose:</strong> Select move direction</p>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Input: selected source token</span></li>
+                                <li><span class="layer-name">Linear(512→128, no bias)</span></li>
+                                <li><span class="layer-name">RMSNorm(128)</span></li>
+                                <li><span class="layer-name">SiLU()</span></li>
+                                <li><span class="layer-name">Linear(128→4, no bias)</span></li>
+                                <li><span class="layer-name" style="color: var(--accent-cyan);">No masking (penalty-based)</span></li>
+                                <li><span class="layer-name">Softmax</span></li>
+                            </ul>
+                            <div style="margin-top: 10px; font-size: 0.9em;">
+                                <span class="tag blue">0</span> Down (+row)<br>
+                                <span class="tag green">1</span> Right (+col)<br>
+                                <span class="tag purple">2</span> Up (-row)<br>
+                                <span class="tag orange">3</span> Left (-col)
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="component policy">
+                        <div class="component-title">RatioHead</div>
+                        <div class="component-content">
+                            <p><strong>Purpose:</strong> Select army split ratio</p>
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Input: selected source token</span></li>
+                                <li><span class="layer-name">Linear(512→64, no bias)</span></li>
+                                <li><span class="layer-name">RMSNorm(64)</span></li>
+                                <li><span class="layer-name">SiLU()</span></li>
+                                <li><span class="layer-name">Linear(64→2, no bias)</span></li>
+                                <li><span class="layer-name">Softmax</span></li>
+                            </ul>
+                            <div style="margin-top: 10px; font-size: 0.9em;">
+                                <span class="tag blue">0</span> All-but-1 (move all except 1)<br>
+                                <span class="tag green">1</span> 50% (move half)
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component policy" style="margin-top: 20px;">
+                    <div class="component-title">Autoregressive Sampling</div>
+                    <div class="component-content">
+                        <div class="formula">
+1. move_id ~ Categorical(softmax(move_logits))      // 0=pass, 1=move
+2. if move_id == 0: return action = (pass)          // 不动，结束
+3. source_idx ~ Categorical(softmax(source_logits))
+4. source_token = z[:, source_idx, :]               // [B, 512]
+5. dir_id ~ Categorical(softmax(DirectionHead(source_token)))
+6. ratio_id ~ Categorical(softmax(RatioHead(source_token)))
+
+action = (move_id, source_idx, dir_id, ratio_id)
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component policy" style="margin-top: 20px;">
+                    <div class="component-title">Log Probability (for RL)</div>
+                    <div class="component-content">
+                        <div class="formula">
+if move_id == 0 (pass):
+    log_prob = log P(move=0)
+
+if move_id == 1 (move):
+    log_prob = log P(move=1) + log P(source) + log P(dir|source) + log P(ratio|source)
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title"><span class="icon">💎</span> Value Head <span class="badge">model/value_head.py</span></div>
+
+                <div class="component value">
+                    <div class="component-title">ValueHead</div>
+                    <div class="component-content">
+                        <ul class="layer-list">
+                            <li><span class="layer-name">Mean Pooling: z.mean(dim=1)</span><span class="layer-shape">[B, 512]</span></li>
+                            <li><span class="layer-name">Spatial Projection</span></li>
+                            <li style="padding-left: 20px;"><span class="layer-name">Linear(512→256, no bias)</span></li>
+                            <li style="padding-left: 20px;"><span class="layer-name">RMSNorm(256)</span></li>
+                            <li style="padding-left: 20px;"><span class="layer-name">SiLU()</span><span class="layer-shape">[B, 256]</span></li>
+                            <li><span class="layer-name">Global Projection: Linear(4→64, no bias)</span><span class="layer-shape">[B, 64]</span></li>
+                            <li><span class="layer-name">Concat</span><span class="layer-shape">[B, 320]</span></li>
+                            <li><span class="layer-name">Value MLP</span></li>
+                            <li style="padding-left: 20px;"><span class="layer-name">Linear(320→128) + RMSNorm + SiLU</span></li>
+                            <li style="padding-left: 20px;"><span class="layer-name">Linear(128→64) + RMSNorm + SiLU</span></li>
+                            <li style="padding-left: 20px;"><span class="layer-name">Linear(64→1)</span></li>
+                            <li><span class="layer-name">Tanh()</span><span class="layer-shape">[B] ∈ [-1, 1]</span></li>
+                        </ul>
+
+                        <div style="margin-top: 15px; padding: 10px; background: var(--bg-primary); border-radius: 6px;">
+                            <strong>Value Interpretation:</strong><br>
+                            <span class="tag pink">-1</span> Certain loss<br>
+                            <span class="tag orange">0</span> Even / Draw<br>
+                            <span class="tag green">+1</span> Certain win
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Training Tab -->
+        <div id="training" class="tab-content">
+            <div class="section">
+                <div class="section-title"><span class="icon">📚</span> Phase 1: Imitation Learning <span class="badge">train.py</span></div>
+
+                <div class="grid-2">
+                    <div class="component training">
+                        <div class="component-title">Data Source</div>
+                        <div class="component-content">
+                            <p><strong>Dataset:</strong> SeqReplayDataset</p>
+                            <p><strong>Source:</strong> Human replay files (data/replays/*.json)</p>
+                            <p><strong>Collate:</strong> collate_variable_length_sequences</p>
+                        </div>
+                    </div>
+
+                    <div class="component training">
+                        <div class="component-title">DataLoader</div>
+                        <div class="component-content">
+                            <ul class="layer-list">
+                                <li><span class="layer-name">batch_size</span><span class="layer-shape">32</span></li>
+                                <li><span class="layer-name">shuffle</span><span class="layer-shape">True</span></li>
+                                <li><span class="layer-name">pin_memory</span><span class="layer-shape">True (CUDA)</span></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component training" style="margin-top: 15px;">
+                    <div class="component-title">ImitationLoss (with TRM Halting)</div>
+                    <div class="component-content">
+                        <div class="formula">
+L_policy = CrossEntropy(move_logits, target_move)      // pass or move
+         + CrossEntropy(source_logits, target_source)  // if move
+         + CrossEntropy(dir_logits, target_dir)        // if move
+         + CrossEntropy(ratio_logits, target_ratio)    // if move
+
+L_value = MSE(predicted_value, target_value)
+
+// TRM Halting Loss (from arXiv:2510.04871)
+// At each cycle, predict if answer is correct
+for cycle in range(n_cycles):
+    is_correct = (cycle_prediction == target)   // 0 or 1
+    L_halt += BCE(halt_prob[cycle], is_correct)
+
+L_total = L_policy + 0.5 × L_value + 0.1 × L_halt
+                        </div>
+                        <p style="margin-top: 10px; color: var(--accent-cyan);">
+                            <strong>Halting Loss 作用:</strong> 模型学习 "什么时候已经想对了"。
+                            当 cycle 的预测正确时，halt_prob 应该高（停止）；错误时应该低（继续思考）。
+                        </p>
+                    </div>
+                </div>
+
+                <div class="grid-2" style="margin-top: 15px;">
+                    <div class="component training">
+                        <div class="component-title">Optimizer</div>
+                        <div class="component-content">
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Type</span><span class="layer-shape">AdamW</span></li>
+                                <li><span class="layer-name">Learning Rate</span><span class="layer-shape">1e-4</span></li>
+                                <li><span class="layer-name">Weight Decay</span><span class="layer-shape">1e-4</span></li>
+                                <li><span class="layer-name">Gradient Clip</span><span class="layer-shape">1.0</span></li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="component training">
+                        <div class="component-title">Scheduler</div>
+                        <div class="component-content">
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Type</span><span class="layer-shape">CosineAnnealingLR</span></li>
+                                <li><span class="layer-name">T_max</span><span class="layer-shape">epochs × batches</span></li>
+                                <li><span class="layer-name">eta_min</span><span class="layer-shape">1e-6</span></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component training" style="margin-top: 15px; border-left-color: #39c5cf;">
+                    <div class="component-title">EMA (Exponential Moving Average) <span class="badge">training/ema.py</span></div>
+                    <div class="component-content">
+                        <div class="formula">
+// From TRM paper: EMA for stable evaluation
+// After each optimizer step:
+shadow = decay × shadow + (1 - decay) × current_params
+
+// Default decay = 0.999
+// shadow parameters used for evaluation
+
+// Usage:
+ema = EMA(model, decay=0.999)
+optimizer.step()
+ema.update()  // Update shadow weights
+
+// For evaluation:
+with ema.average_parameters():
+    evaluate(model)  // Uses EMA weights
+                        </div>
+                        <p style="margin-top: 10px; color: var(--accent-cyan);">
+                            <strong>EMA 作用：</strong> 维护一个平滑版本的模型权重，用于稳定评估。
+                            训练时权重会波动，但 EMA 提供了更稳定的版本。
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title"><span class="icon">🎮</span> Phase 2: Reinforcement Learning <span class="badge">training/rl_trainer.py</span></div>
+
+                <div class="component training">
+                    <div class="component-title">Self-Play Loop</div>
+                    <div class="component-content">
+                        <div class="formula">
+for each game:
+    env = GameEnv(map_size=(15, 15), max_turns=100)
+
+    for each turn:
+        obs = env.get_observation()  // grid, globals, legal_mask
+        logits, value = model(obs)
+        action = sample_from_policy(logits)  // Direct sampling, NO MCTS
+        log_prob = compute_log_prob(logits, action)
+        reward, done = env.step(action)
+
+        trajectory.append((obs, action, reward, log_prob, value))
+
+    trajectory_buffer.add(trajectory)
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component training" style="margin-top: 15px;">
+                    <div class="component-title">V-trace Computation <span class="badge">training/vtrace.py</span></div>
+                    <div class="component-content">
+                        <div class="formula">
+// Importance weight
+ρ_t = π(a_t|s_t) / μ(a_t|s_t)   // π = current policy, μ = behavior policy
+
+// Clipping
+ρ̄_t = min(ρ_t, ρ_bar)  // ρ_bar = 1.0
+c̄_t = min(ρ_t, c_bar)  // c_bar = 1.0
+
+// TD error
+δ_t = ρ̄_t × (r_t + γ × V(s_{t+1}) - V(s_t))
+
+// V-trace target (recursive)
+v_t = V(s_t) + Σ_{i=t}^{T-1} γ^{i-t} × (Π_{j=t}^{i-1} c̄_j) × δ_i
+
+// Advantage
+A_t = ρ̄_t × (r_t + γ × v_{t+1} - V(s_t))
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component training" style="margin-top: 15px;">
+                    <div class="component-title">RL Loss</div>
+                    <div class="component-content">
+                        <div class="formula">
+L_policy = -Σ A_t × log π(a_t|s_t)          // Policy gradient
+
+L_value = MSE(V(s_t), v_t)                   // Value loss
+
+H(π) = -Σ π(a) log π(a)                      // Entropy bonus (exploration)
+
+L_KL = KL(π_current || π_reference)          // Optional KL penalty
+
+L_total = L_policy + 0.5 × L_value - 0.01 × H(π) + kl_weight × L_KL
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid-2" style="margin-top: 15px;">
+                    <div class="component training">
+                        <div class="component-title">RL Hyperparameters</div>
+                        <div class="component-content">
+                            <ul class="layer-list">
+                                <li><span class="layer-name">Learning Rate</span><span class="layer-shape">1e-5</span></li>
+                                <li><span class="layer-name">Batch Size</span><span class="layer-shape">64</span></li>
+                                <li><span class="layer-name">Sequence Length</span><span class="layer-shape">16</span></li>
+                                <li><span class="layer-name">Gradient Clip</span><span class="layer-shape">1.0</span></li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="component training">
+                        <div class="component-title">V-trace Parameters</div>
+                        <div class="component-content">
+                            <ul class="layer-list">
+                                <li><span class="layer-name">γ (discount)</span><span class="layer-shape">0.99</span></li>
+                                <li><span class="layer-name">ρ_bar</span><span class="layer-shape">1.0</span></li>
+                                <li><span class="layer-name">c_bar</span><span class="layer-shape">1.0</span></li>
+                                <li><span class="layer-name">entropy_weight</span><span class="layer-shape">0.01</span></li>
+                                <li><span class="layer-name">value_loss_weight</span><span class="layer-shape">0.5</span></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component training" style="margin-top: 15px;">
+                    <div class="component-title">Reward Structure</div>
+                    <div class="component-content">
+                        <div class="grid-3">
+                            <div class="subcomponent" style="text-align: center;">
+                                <div style="font-size: 2em; color: var(--accent-green);">+1.0</div>
+                                <div>Capture enemy general</div>
+                            </div>
+                            <div class="subcomponent" style="text-align: center;">
+                                <div style="font-size: 2em; color: var(--accent-red);">-1.0</div>
+                                <div>General captured</div>
+                            </div>
+                            <div class="subcomponent" style="text-align: center;">
+                                <div style="font-size: 2em; color: var(--text-secondary);">0.0</div>
+                                <div>Normal step</div>
+                            </div>
+                        </div>
+                        <div class="formula" style="margin-top: 10px;">
+G_t = Σ_{k=0}^{∞} γ^k × r_{t+k}   // Discounted return, γ = 0.99
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Inference Tab -->
+        <div id="inference" class="tab-content">
+            <div class="section">
+                <div class="section-title"><span class="icon">⚡</span> Inference Mode</div>
+
+                <div class="component value">
+                    <div class="component-title">Game Loop</div>
+                    <div class="component-content">
+                        <div class="formula">
+// Initialize
+latent = zeros(1, 256)
+
+while not done:
+    // Get current frame
+    grid, globals, legal_mask = env.get_observation()
+
+    // Incremental history update (GRU-style)
+    latent = history_encoder.update_latent(latent, grid, globals)
+
+    // Forward pass
+    outputs = model(grid, globals, latent, tick, legal_mask)
+
+    // Hierarchical action selection
+    move_id = sample_or_argmax(outputs.move_logits)
+
+    if move_id == 0:  // Pass
+        action = None  // 不移动
+    else:             // Move
+        source_idx = sample_or_argmax(outputs.source_logits)
+        dir_id = sample_or_argmax(outputs.dir_logits)
+        ratio_id = sample_or_argmax(outputs.ratio_logits)
+        action = (source_idx, dir_id, ratio_id)
+
+    // Execute
+    reward, done = env.step(action)
+    tick += 1
+                        </div>
+                    </div>
+                </div>
+
+                <div class="component encoder" style="margin-top: 15px;">
+                    <div class="component-title">GRU-Style Latent Update</div>
+                    <div class="component-content">
+                        <p>Instead of reprocessing the full sequence through TemporalTransformer, use efficient incremental update:</p>
+                        <div class="formula">
+// Encode current frame
+spatial_emb = SpatialEncoder(current_grid)      // [B, 256]
+global_emb = Linear(current_globals)            // [B, 256]
+frame_emb = spatial_emb + global_emb            // [B, 256]
+
+// GRU-style gating
+combined = concat(latent_prev, frame_emb)       // [B, 512]
+gate = sigmoid(gate_proj(combined))             // [B, 256]
+update = tanh(update_proj(combined))            // [B, 256]
+
+// Update latent
+latent_new = gate * latent_prev + (1 - gate) * update  // [B, 256]
+                        </div>
+                        <p style="margin-top: 10px;"><strong>Complexity:</strong> O(1) per step vs O(T) for full sequence processing</p>
+                    </div>
+                </div>
+
+                <div class="grid-2" style="margin-top: 15px;">
+                    <div class="component value">
+                        <div class="component-title">Action Selection Strategies</div>
+                        <div class="component-content">
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">Greedy (Evaluation)</div>
+                                <code>action = argmax(logits)</code>
+                            </div>
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">Sampling (Training/Exploration)</div>
+                                <code>action ~ Categorical(softmax(logits))</code>
+                            </div>
+                            <div class="subcomponent">
+                                <div class="subcomponent-title">Temperature Scaling</div>
+                                <code>action ~ softmax(logits / temperature)</code>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="component value" style="border-left-color: var(--accent-cyan);">
+                        <div class="component-title">Action Validity (No-Masking)</div>
+                        <div class="component-content">
+                            <ul class="layer-list">
+                                <li><span class="layer-name">is_legal(grid, action)</span><span class="layer-shape">game_env.py</span></li>
+                                <li><span class="layer-name">is_legal_batch(...)</span><span class="layer-shape">Batch version</span></li>
+                                <li><span class="layer-name">Penalty-based learning</span><span class="layer-shape">training/loss.py</span></li>
+                            </ul>
+                            <p style="margin-top: 10px;"><strong>No masking</strong>: Model learns action validity through illegal action penalty. Enables better generalization to unseen states.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title"><span class="icon">🎮</span> Game Environment <span class="badge">data_processing/processing/game_env.py</span></div>
+
+                <div class="grid-2">
+                    <div class="component input">
+                        <div class="component-title">Game State</div>
+                        <div class="component-content">
+                            <ul class="layer-list">
+                                <li><span class="layer-name">tiles</span><span class="layer-shape">List[Tile]</span></li>
+                                <li><span class="layer-name">players</span><span class="layer-shape">List[Player]</span></li>
+                                <li><span class="layer-name">turn</span><span class="layer-shape">int</span></li>
+                                <li><span class="layer-name">width, height</span><span class="layer-shape">int, int</span></li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="component input">
+                        <div class="component-title">Tile Properties</div>
+                        <div class="component-content">
+                            <ul class="layer-list">
+                                <li><span class="layer-name">tile_type</span><span class="layer-shape">TileType enum</span></li>
+                                <li><span class="layer-name">army</span><span class="layer-shape">int</span></li>
+                                <li><span class="layer-name">owner</span><span class="layer-shape">int (-1 = neutral)</span></li>
+                                <li><span class="layer-name">is_visible</span><span class="layer-shape">bool</span></li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="component input">
+                        <div class="component-title">reset()</div>
+                        <div class="component-content">
+                            Initialize new game, place generals, generate terrain (mountains, cities)
+                        </div>
+                    </div>
+
+                    <div class="component input">
+                        <div class="component-title">step(action)</div>
+                        <div class="component-content">
+                            Execute move, update armies (every 25 turns for land, 2 for cities), check win condition
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="text-align: center; margin-top: 40px; padding: 20px; color: var(--text-secondary);">
+            <p>Generals.io AI Architecture Diagram</p>
+            <p>TRM (Tiny Recursive Model) + AlphaStar-style Training</p>
+            <p style="margin-top: 10px; font-size: 0.9em;">
+                Built with: PyTorch | ~14.2M Parameters | 3×6 Deep Recursion | EMA (0.999)
+            </p>
+            <p style="margin-top: 5px; font-size: 0.85em; color: var(--accent-purple);">
+                Based on "Less is More: Recursive Reasoning with Tiny Networks" (arXiv:2510.04871)
+            </p>
+        </div>
+    </div>
+
+    <script>
+        function showTab(tabId) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Show selected tab
+            document.getElementById(tabId).classList.add('active');
+            event.target.classList.add('active');
+        }
+    </script>
+</body>
+</html>

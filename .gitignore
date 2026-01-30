@@ -1,0 +1,57 @@
+# macOS
+.DS_Store
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Node.js
+node_modules/
+package-lock.json
+
+# ML artifacts (large files)
+checkpoints/
+data/
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.onnx
+
+# Outputs
+*.gif
+*.mp4
+*.json
+!pyproject.json
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# uv
+uv.lock
