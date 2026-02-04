@@ -14,7 +14,6 @@ def collate_variable_length_sequences(batch):
     # Get dimensions from first item
     H = batch[0]['meta']['H']
     W = batch[0]['meta']['W']
-    K = batch[0]['meta']['K']
     C = batch[0]['obs']['grid_seq'].shape[2]
     G = batch[0]['obs']['globals_seq'].shape[2]
     A = batch[0]['obs']['prev_action_seq'].shape[2]
@@ -31,20 +30,16 @@ def collate_variable_length_sequences(batch):
         },
         'tgt': {
             'count': torch.zeros(B, max_T, dtype=torch.long),
-            'src_y': torch.zeros(B, max_T, K, dtype=torch.long),
-            'src_x': torch.zeros(B, max_T, K, dtype=torch.long),
-            'dir_id': torch.zeros(B, max_T, K, dtype=torch.long),
-            'ratio_id': torch.zeros(B, max_T, K, dtype=torch.long),
+            'src_y': torch.zeros(B, max_T, dtype=torch.long),
+            'src_x': torch.zeros(B, max_T, dtype=torch.long),
+            'dir_id': torch.zeros(B, max_T, dtype=torch.long),
+            'ratio_id': torch.zeros(B, max_T, dtype=torch.long),
             'value': torch.zeros(B, max_T),
-            'enemy_heatmap': torch.zeros(B, max_T, 1, H, W),
             'next_visibility': torch.zeros(B, max_T, 1, H, W)
         },
         'meta': {
             'lengths': [],
-            'files': [],
-            # Tick features collated here for convenience (optional use)
-            'tick_seq': torch.zeros(B, max_T),
-            'tick_bucket_seq': torch.zeros(B, max_T)
+            'files': []
         }
     }
     
@@ -62,16 +57,10 @@ def collate_variable_length_sequences(batch):
         collated['tgt']['dir_id'][i, :T] = item['tgt']['dir_id'][0]
         collated['tgt']['ratio_id'][i, :T] = item['tgt']['ratio_id'][0]
         collated['tgt']['value'][i, :T] = item['tgt']['value'][0]
-        collated['tgt']['enemy_heatmap'][i, :T] = item['tgt']['enemy_heatmap'][0]
         collated['tgt']['next_visibility'][i, :T] = item['tgt']['next_visibility'][0]
         
         collated['meta']['lengths'].append(T)
         collated['meta']['files'].append(item['meta']['file'])
-        # Collate tick sequences if present in item.meta
-        if 'tick_seq' in item['meta']:
-            collated['meta']['tick_seq'][i, :T] = item['meta']['tick_seq']
-        if 'tick_bucket_seq' in item['meta']:
-            collated['meta']['tick_bucket_seq'][i, :T] = item['meta']['tick_bucket_seq']
     
     return collated
 
@@ -149,32 +138,29 @@ class SeqReplayDataset(Dataset):
             dtype=torch.bool
         )[:T]
         
-        # Action parameters
-        K = obj.get('max_actions_per_tick', 4)
-        
         # Load action targets
         count = torch.tensor(
             obj.get('count', [0] * T),
             dtype=torch.long
         )[:T]
-        
+
         src_y = torch.tensor(
-            obj.get('src_y', [[0] * K for _ in range(T)]),
+            obj.get('src_y', [0] * T),
             dtype=torch.long
         )[:T]
-        
+
         src_x = torch.tensor(
-            obj.get('src_x', [[0] * K for _ in range(T)]),
+            obj.get('src_x', [0] * T),
             dtype=torch.long
         )[:T]
-        
+
         dir_id = torch.tensor(
-            obj.get('dir_id', [[0] * K for _ in range(T)]),
+            obj.get('dir_id', [0] * T),
             dtype=torch.long
         )[:T]
-        
+
         ratio_id = torch.tensor(
-            obj.get('ratio_id', [[0] * K for _ in range(T)]),
+            obj.get('ratio_id', [0] * T),
             dtype=torch.long
         )[:T]
         
@@ -184,26 +170,11 @@ class SeqReplayDataset(Dataset):
         )[:T]
         
         # Load auxiliary targets [T, 1, H, W]
-        enemy = torch.tensor(
-            obj.get('enemy_heatmap', [[[[0.0] * W for _ in range(H)]] for _ in range(T)]),
-            dtype=torch.float32
-        )[:T]  # Already has shape [T, 1, H, W]
-        
         nextv = torch.tensor(
             obj.get('next_visibility', [[[[0.0] * W for _ in range(H)]] for _ in range(T)]),
             dtype=torch.float32
         )[:T]  # Already has shape [T, 1, H, W]
         
-        # Load tick sequences if present (from converters)
-        tick_seq = torch.tensor(
-            obj.get('tick_seq', list(range(T))),
-            dtype=torch.float32
-        )[:T]
-        tick_bucket_seq = torch.tensor(
-            obj.get('tick_bucket_seq', [int(((t % 50) + 1) // 2) for t in range(T)]),
-            dtype=torch.float32
-        )[:T]
-
         return {
             'obs': {
                 'grid_seq': grid.unsqueeze(0),              # [1, T, C, H, W]
@@ -213,22 +184,17 @@ class SeqReplayDataset(Dataset):
             },
             'tgt': {
                 'count': count.unsqueeze(0),                # [1, T]
-                'src_y': src_y.unsqueeze(0),                # [1, T, K]
-                'src_x': src_x.unsqueeze(0),                # [1, T, K]
-                'dir_id': dir_id.unsqueeze(0),              # [1, T, K]
-                'ratio_id': ratio_id.unsqueeze(0),          # [1, T, K]
+                'src_y': src_y.unsqueeze(0),                # [1, T]
+                'src_x': src_x.unsqueeze(0),                # [1, T]
+                'dir_id': dir_id.unsqueeze(0),              # [1, T]
+                'ratio_id': ratio_id.unsqueeze(0),          # [1, T]
                 'value': value.unsqueeze(0),                # [1, T]
-                'enemy_heatmap': enemy.unsqueeze(0),        # [1, T, 1, H, W]
                 'next_visibility': nextv.unsqueeze(0)       # [1, T, 1, H, W]
             },
             'meta': {
                 'H': H,
                 'W': W,
-                'K': K,
                 'T': T,
-                'file': os.path.basename(self.paths[idx]),
-                # Expose tick sequences in meta for optional consumption
-                'tick_seq': tick_seq,
-                'tick_bucket_seq': tick_bucket_seq
+                'file': os.path.basename(self.paths[idx])
             }
         }
