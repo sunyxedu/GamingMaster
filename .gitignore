@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+node_modules/
+.ruff_cache/
+checkpoints/
+*.pt
+tests/test_data/
