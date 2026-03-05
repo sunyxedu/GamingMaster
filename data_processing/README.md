@@ -43,7 +43,7 @@ uv sync
 Node.js dependency (auto-installed on first use, or manually):
 
 ```bash
-cd data_processing/download && npm install lz-string
+(cd data_processing/download && npm install lz-string)
 ```
 
 ## Quick Start

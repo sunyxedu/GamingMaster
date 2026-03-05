@@ -39,7 +39,7 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 uv sync
 
 # Node.js dependency (auto-installed on first use, or manually):
-cd data_processing/download && npm install lz-string
+(cd data_processing/download && npm install lz-string)
 ```
 
 ### 2. Visualise a Replay
