@@ -1,0 +1,38 @@
+"""Model configuration for the Generals.io neural network."""
+
+from dataclasses import dataclass
+
+
+@dataclass
+class ModelConfig:
+    # Grid dimensions
+    grid_h: int = 25
+    grid_w: int = 25
+
+    # Input channels: 11 one-hot state types + 1 army channel
+    grid_channels: int = 12
+    n_grid_types: int = 11
+    global_features: int = 4  # myArmy, myLand, opArmy, opLand
+
+    # Core model dimensions
+    d_model: int = 256
+    n_heads: int = 8
+    d_ff: int = 512  # feed-forward hidden dim
+    dropout: float = 0.1
+
+    # Transformer pondering iterations (shared weights, applied k times)
+    n_ponder_steps: int = 4
+
+    # History encoder
+    gru_layers: int = 1
+
+    # Spatial encoder
+    encoder_channels: int = 128  # intermediate conv channel count
+
+    # Action space
+    n_directions: int = 4  # down, right, up, left
+    n_split: int = 2  # all-but-1, 50%
+
+    # World model (optional, for RL)
+    use_world_model: bool = False
+    world_model_hidden: int = 256
