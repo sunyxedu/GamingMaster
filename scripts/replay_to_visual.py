@@ -1,29 +1,27 @@
 #!/usr/bin/env python3
 """
-End-to-end pipeline: download a generals.io replay → simulate → visualize.
+End-to-end pipeline: download a generals.io replay → simulate → interactive HTML viewer.
 
-Usage examples:
-    # From a replay URL
-    python3 scripts/replay_to_visual.py \
+Usage:
+    # From a replay URL (player auto-detected from URL query param)
+    python3 scripts/replay_to_visual.py \\
         --url "https://generals.io/replays/asS2S5O_y?p=%7EHemlix%7E"
 
-    # From a replay ID (auto-picks first player)
-    python3 scripts/replay_to_visual.py --id asS2S5O_y
+    # From a replay ID
+    python3 scripts/replay_to_visual.py --id asS2S5O_y --player "~Hemlix~"
 
-    # Specify player & output directory, god-view (no fog)
-    python3 scripts/replay_to_visual.py --id asS2S5O_y \
-        --player "~Hemlix~" --out /tmp/viz --god
+    # From a local JSON file
+    python3 scripts/replay_to_visual.py --file replay.json
 
-    # Render only a slice of turns
-    python3 scripts/replay_to_visual.py --id asS2S5O_y \
-        --start 100 --end 200 --step 5
+    # God-view (no fog, both players visible)
+    python3 scripts/replay_to_visual.py --id asS2S5O_y --god
 
-    # Use a local replay JSON file
-    python3 scripts/replay_to_visual.py --file /path/to/replay.json
+    # Also export PNGs
+    python3 scripts/replay_to_visual.py --id asS2S5O_y --png
 
-The script produces:
-    <out>/frames/turn_XXXX.png   – one PNG per rendered turn
-    <out>/summary.png            – 3×3 grid of key moments
+Output:
+    <out>/replay.html   – self-contained interactive viewer (← → keys)
+    <out>/frames/*.png  – (only with --png)
 """
 
 import argparse
@@ -32,79 +30,46 @@ import json
 import os
 import ssl
 import sys
+from html import escape as html_escape
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import aiohttp
-import matplotlib
+import aiohttp  # noqa: E402
 
-matplotlib.use("Agg")  # headless – must come before pyplot import
-import matplotlib.pyplot as plt
-import numpy as np
+from data_processing.download.replay_fetcher import ReplayFetcher  # noqa: E402
+from data_processing.processing.simulator import ReplaySimulator  # noqa: E402
 
-from data_processing.download.replay_fetcher import ReplayFetcher
-from data_processing.processing.simulator import ReplaySimulator
-
-# ── colour scheme (matching the original visualizer) ────────────────────
+# ---------------------------------------------------------------------------
+# Colour palette (shared between Python PNG renderer and JS template)
+# ---------------------------------------------------------------------------
 
 COLORS = {
-    -1: "#1a1a2e",  # Out of bounds / padding
-    0:  "#2d2d44",  # Unseen Blank
-    1:  "#4a4a6a",  # Unseen Obstacle (mountain / city behind fog)
-    2:  "#e8e8e8",  # Seen Blank
-    3:  "#ffd700",  # Seen Neutral City
-    4:  "#555555",  # Seen Mountain
-    5:  "#4CAF50",  # Your Land
-    6:  "#2E7D32",  # Your City
-    7:  "#1B5E20",  # Your General
-    8:  "#f44336",  # Opponent's Land
-    9:  "#c62828",  # Opponent's City
-    10: "#b71c1c",  # Opponent's General
+    -1: "#1a1a2e", 0: "#2d2d44", 1: "#4a4a6a", 2: "#e8e8e8",
+    3: "#ffd700", 4: "#555555", 5: "#4CAF50", 6: "#2E7D32",
+    7: "#1B5E20", 8: "#f44336", 9: "#c62828", 10: "#b71c1c",
 }
 
 STATE_NAMES = {
-    -1: "Padding",
-    0:  "Unseen Blank",
-    1:  "Unseen Obstacle",
-    2:  "Seen Blank",
-    3:  "Neutral City",
-    4:  "Mountain",
-    5:  "Your Land",
-    6:  "Your City",
-    7:  "Your General",
-    8:  "Enemy Land",
-    9:  "Enemy City",
-    10: "Enemy General",
+    -1: "Padding", 0: "Fog (blank)", 1: "Fog (obstacle)",
+    2: "Blank", 3: "Neutral City", 4: "Mountain",
+    5: "Your Land", 6: "Your City", 7: "Your General",
+    8: "Enemy Land", 9: "Enemy City", 10: "Enemy General",
 }
 
-# God-mode uses a simpler, ownership-centric palette
 GOD_COLORS = {
-    "blank":    "#e8e8e8",
-    "mountain": "#555555",
-    "city_n":   "#ffd700",
-    "p0":       "#4CAF50",
-    "p0_city":  "#2E7D32",
-    "p0_gen":   "#1B5E20",
-    "p1":       "#f44336",
-    "p1_city":  "#c62828",
-    "p1_gen":   "#b71c1c",
+    "blank": "#e8e8e8", "mountain": "#555555", "city_n": "#ffd700",
+    "p0": "#4CAF50", "p0_city": "#2E7D32", "p0_gen": "#1B5E20",
+    "p1": "#f44336", "p1_city": "#c62828", "p1_gen": "#b71c1c",
 }
 
-DIR_ARROWS = {0: "↓", 1: "→", 2: "↑", 3: "←"}
-DIR_DELTA  = {0: (1, 0), 1: (0, 1), 2: (-1, 0), 3: (0, -1)}
-
-
-def _hex_to_rgb(h: str) -> Tuple[float, float, float]:
-    return int(h[1:3], 16) / 255, int(h[3:5], 16) / 255, int(h[5:7], 16) / 255
-
-
-# ── download ────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Download
+# ---------------------------------------------------------------------------
 
 async def download_replay(replay_id: str, cache_dir: str) -> Dict[str, Any]:
-    """Download & cache a single replay, return the deserialised dict."""
     os.makedirs(cache_dir, exist_ok=True)
     cached = os.path.join(cache_dir, f"{replay_id}.json")
     if os.path.exists(cached):
@@ -116,193 +81,369 @@ async def download_replay(replay_id: str, cache_dir: str) -> Dict[str, Any]:
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     connector = aiohttp.TCPConnector(ssl=ctx)
-
     async with aiohttp.ClientSession(connector=connector) as session:
         data = await fetcher.fetch_replay(session, replay_id)
     if data is None:
         raise RuntimeError(f"Failed to download replay {replay_id}")
-
     with open(cached, "w") as f:
         json.dump(data, f, indent=2)
     return data
 
 
-# ── rendering helpers ───────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Simulate & collect frame data for the HTML viewer
+# ---------------------------------------------------------------------------
 
-def render_fog_frame(
-    sim_result: Dict[str, Any],
-    replay_data: Dict[str, Any],
-    turn: int,
-    player_name: str,
-    ax: plt.Axes,
-) -> None:
-    """Render one turn from the player's fog-of-war perspective."""
+def _collect_fog_frames(
+    replay_data: Dict[str, Any], player: str,
+) -> Dict[str, Any]:
+    """Run fog-of-war simulation and return compact frame data."""
+    sim = ReplaySimulator(replay_data, player)
+    result = sim.simulate()
     H = replay_data["mapHeight"]
     W = replay_data["mapWidth"]
-    state = sim_result["map"][turn]
-    army = sim_result["armies"][turn]
-    state = [row[:W] for row in state[:H]]
-    army = [row[:W] for row in army[:H]]
+    T = len(result["map"])
 
-    color_grid = np.zeros((H, W, 3))
-    for r in range(H):
-        for c in range(W):
-            color_grid[r, c] = _hex_to_rgb(COLORS.get(state[r][c], "#000000"))
-    ax.imshow(color_grid, aspect="equal")
+    states: List[List[int]] = []
+    armies: List[List[int]] = []
+    moves: List[List[int]] = []
+    stats: List[List[int]] = []
 
-    for r in range(H):
-        for c in range(W):
-            a = army[r][c]
-            if a > 0:
-                tc = "white" if state[r][c] in (5, 6, 7, 8, 9, 10) else "black"
-                fs = 7 if a < 100 else 5 if a < 1000 else 4
-                ax.text(c, r, str(a), ha="center", va="center",
-                        fontsize=fs, color=tc, fontweight="bold")
+    for t in range(T):
+        flat_s = []
+        flat_a = []
+        for r in range(H):
+            for c in range(W):
+                flat_s.append(result["map"][t][r][c])
+                flat_a.append(max(result["armies"][t][r][c], 0))
+        states.append(flat_s)
+        armies.append(flat_a)
+        ms = result["move_start"][t]
+        me = result["move_end"][t]
+        moves.append([ms[0], ms[1], me[0], me[1]])
+        stats.append([
+            result["info_myArmy"][t], result["info_myLand"][t],
+            result["info_opArmy"][t], result["info_opLand"][t],
+        ])
 
-    # draw move arrow
-    ms = sim_result["move_start"][turn]
-    me = sim_result["move_end"][turn]
-    if ms[0] >= 0:
-        ax.annotate(
-            "", xy=(me[1], me[0]), xytext=(ms[1], ms[0]),
-            arrowprops=dict(arrowstyle="->", color="yellow", lw=2),
-        )
-
-    ax.set_xticks(np.arange(-0.5, W, 1), minor=True)
-    ax.set_yticks(np.arange(-0.5, H, 1), minor=True)
-    ax.grid(which="minor", color="#333333", linewidth=0.3)
-    ax.tick_params(which="minor", size=0)
-    ax.set_xticks(range(W))
-    ax.set_yticks(range(H))
-    ax.tick_params(labelsize=5)
-
-    # stats overlay
-    my_a = sim_result["info_myArmy"][turn]
-    my_l = sim_result["info_myLand"][turn]
-    op_a = sim_result["info_opArmy"][turn]
-    op_l = sim_result["info_opLand"][turn]
-    others = [n for n in replay_data["usernames"] if n != player_name]
+    others = [n for n in replay_data["usernames"] if n != player]
     opp = others[0] if others else "?"
-    stats = (
-        f"{'Player':<12} {'Army':>5} {'Land':>5}\n"
-        f"{player_name:<12} {my_a:>5} {my_l:>5}\n"
-        f"{opp:<12} {op_a:>5} {op_l:>5}"
-    )
-    ax.text(
-        0.99, 0.99, stats, transform=ax.transAxes, fontsize=6,
-        fontfamily="monospace", va="top", ha="right",
-        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.85, ec="gray"),
-    )
-    total_turns = len(sim_result["map"])
-    ax.set_title(f"Turn {turn}/{total_turns - 1}  ({player_name})", fontsize=8)
+
+    return {
+        "mode": "fog",
+        "H": H, "W": W, "T": T,
+        "player": player, "opponent": opp,
+        "states": states, "armies": armies,
+        "moves": moves, "stats": stats,
+    }
 
 
-def render_god_frame(
-    sim: ReplaySimulator,
-    replay_data: Dict[str, Any],
-    turn: int,
-    ax: plt.Axes,
-) -> None:
-    """Render one turn from a 'god' perspective (no fog, full info)."""
-    H = sim.map_height
-    W = sim.map_width
-
-    color_grid = np.zeros((H, W, 3))
-    for r in range(H):
-        for c in range(W):
-            tile = sim.map[r][c]
-            if tile.terrain == 3:
-                color_grid[r, c] = _hex_to_rgb(GOD_COLORS["mountain"])
-            elif tile.occupied == -1:
-                if tile.terrain == 1:
-                    color_grid[r, c] = _hex_to_rgb(GOD_COLORS["city_n"])
-                else:
-                    color_grid[r, c] = _hex_to_rgb(GOD_COLORS["blank"])
-            else:
-                pid = tile.occupied
-                prefix = f"p{pid}"
-                if tile.terrain == 2:
-                    key = f"{prefix}_gen"
-                    color_grid[r, c] = _hex_to_rgb(
-                        GOD_COLORS.get(key, GOD_COLORS[prefix]),
-                    )
-                elif tile.terrain == 1:
-                    key = f"{prefix}_city"
-                    color_grid[r, c] = _hex_to_rgb(
-                        GOD_COLORS.get(key, GOD_COLORS[prefix]),
-                    )
-                else:
-                    color_grid[r, c] = _hex_to_rgb(GOD_COLORS.get(prefix, "#888888"))
-
-    ax.imshow(color_grid, aspect="equal")
-
-    for r in range(H):
-        for c in range(W):
-            tile = sim.map[r][c]
-            if tile.army > 0 and tile.terrain != 3:
-                tc = "white" if tile.occupied != -1 else "black"
-                fs = 7 if tile.army < 100 else 5 if tile.army < 1000 else 4
-                ax.text(c, r, str(tile.army), ha="center", va="center",
-                        fontsize=fs, color=tc, fontweight="bold")
-
-    ax.set_xticks(np.arange(-0.5, W, 1), minor=True)
-    ax.set_yticks(np.arange(-0.5, H, 1), minor=True)
-    ax.grid(which="minor", color="#333333", linewidth=0.3)
-    ax.tick_params(which="minor", size=0)
-    ax.set_xticks(range(W))
-    ax.set_yticks(range(H))
-    ax.tick_params(labelsize=5)
-
-    # stats
-    names = sim.usernames
-    lines = [f"{'Player':<12} {'Army':>6} {'Land':>5}"]
-    for i, p in enumerate(sim.players):
-        lines.append(f"{names[i]:<12} {p.army:>6} {len(p.land):>5}")
-    ax.text(
-        0.99, 0.99, "\n".join(lines), transform=ax.transAxes, fontsize=6,
-        fontfamily="monospace", va="top", ha="right",
-        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.85, ec="gray"),
-    )
-    ax.set_title(f"Turn {turn}  (God view)", fontsize=8)
-
-
-# ── god-mode simulator (step-by-step, recording frames) ─────────────────
-
-def simulate_god(replay_data: Dict[str, Any]):
-    """
-    Run the simulator step-by-step in god-mode and yield
-    (turn, simulator_ref) after each tick so we can render.
-    """
+def _collect_god_frames(replay_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Step-by-step god-mode simulation returning compact frame data."""
     sim = ReplaySimulator(replay_data, replay_data["usernames"][0])
     sim.init_map()
-
+    H, W = sim.map_height, sim.map_width
     max_turn = sim.moves[-1]["turn"] if sim.moves else 0
     move_idx = 0
 
+    armies: List[List[int]] = []
+    owners: List[List[int]] = []
+    terrains: List[List[int]] = []
+    pstats: List[List[int]] = []
+
     for turn in range(0, max_turn + 2):
-        turn_moves = [None, None]
+        turn_moves_arr = [None, None]
         cnt = 0
         while move_idx < len(sim.moves) and sim.moves[move_idx]["turn"] + 1 == turn:
-            move = sim.moves[move_idx]
+            m = sim.moves[move_idx]
             if cnt < 2:
-                turn_moves[cnt] = move
+                turn_moves_arr[cnt] = m
             cnt += 1
             move_idx += 1
-
-        sim.process_moves(turn_moves[0], turn_moves[1])
+        sim.process_moves(turn_moves_arr[0], turn_moves_arr[1])
         sim.increment_armies(turn)
         sim.update_vision()
 
-        yield turn, sim, turn_moves
+        flat_a: List[int] = []
+        flat_o: List[int] = []
+        flat_t: List[int] = []
+        for r in range(H):
+            for c in range(W):
+                tile = sim.map[r][c]
+                flat_a.append(tile.army)
+                flat_o.append(tile.occupied)
+                flat_t.append(tile.terrain)
+        armies.append(flat_a)
+        owners.append(flat_o)
+        terrains.append(flat_t)
+
+        row: List[int] = []
+        for p in sim.players:
+            row.extend([p.army, len(p.land)])
+        pstats.append(row)
 
         if sim.check_winner() is not None:
-            return
+            break
+
+    return {
+        "mode": "god",
+        "H": H, "W": W, "T": len(armies),
+        "players": replay_data["usernames"],
+        "armies": armies, "owners": owners, "terrains": terrains,
+        "pstats": pstats,
+    }
 
 
-# ── main pipeline ───────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# HTML template (self-contained interactive viewer)
+# ---------------------------------------------------------------------------
+
+HTML_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Generals.io Replay – TITLE_PLACEHOLDER</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;color:#eee;font-family:'Menlo','Consolas',monospace;
+     display:flex;flex-direction:column;align-items:center;padding:16px;min-height:100vh}
+h2{margin-bottom:8px;font-size:15px;color:#aaa}
+#wrap{position:relative;display:inline-block}
+canvas{display:block;image-rendering:pixelated}
+#hud{display:flex;justify-content:space-between;width:100%;margin-top:8px;font-size:13px}
+#hud .stats{background:#222;border-radius:6px;padding:6px 12px}
+#controls{margin-top:10px;font-size:12px;color:#777;text-align:center;line-height:1.7}
+#slider-row{margin-top:8px;display:flex;align-items:center;gap:8px;width:100%}
+#slider-row input[type=range]{flex:1}
+#turn-label{min-width:120px;text-align:center;font-size:13px}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;justify-content:center}
+.legend span{display:inline-flex;align-items:center;gap:3px;font-size:11px}
+.legend i{display:inline-block;width:14px;height:14px;border-radius:2px;border:1px solid #555}
+</style></head><body>
+<h2 id="title"></h2>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<div id="slider-row">
+  <button id="bprev" title="Previous turn">◀</button>
+  <input type="range" id="slider" min="0" value="0">
+  <button id="bnext" title="Next turn">▶</button>
+  <span id="turn-label">Turn 0</span>
+</div>
+<div id="hud"><div class="stats" id="stats-left"></div>
+<div class="stats" id="stats-right"></div></div>
+<div id="controls">
+  ← → &nbsp;step &nbsp;|&nbsp; Space: play/pause &nbsp;|&nbsp;
+  [ ] &nbsp;speed &nbsp;|&nbsp; Home/End: jump
+</div>
+<div class="legend" id="legend"></div>
+
+<script type="application/json" id="payload">PAYLOAD_PLACEHOLDER</script>
+<script>
+"use strict";
+const D=JSON.parse(document.getElementById("payload").textContent);
+const H=D.H,W=D.W,T=D.T;
+const CELL=Math.min(Math.floor((window.innerWidth-60)/W),
+                    Math.floor((window.innerHeight-220)/H),36);
+const cv=document.getElementById("cv");
+cv.width=W*CELL; cv.height=H*CELL;
+const ctx=cv.getContext("2d");
+
+const COLORS={"-1":"#1a1a2e","0":"#2d2d44","1":"#4a4a6a","2":"#e8e8e8",
+"3":"#ffd700","4":"#555555","5":"#4CAF50","6":"#2E7D32","7":"#1B5E20",
+"8":"#f44336","9":"#c62828","10":"#b71c1c"};
+
+const GOD_C={"blank":"#e8e8e8","mt":"#555555","cn":"#ffd700",
+"p0":"#4CAF50","p0c":"#2E7D32","p0g":"#1B5E20",
+"p1":"#f44336","p1c":"#c62828","p1g":"#b71c1c"};
+
+function fogColor(s){return COLORS[String(s)]||"#000"}
+function godColor(terrain,owner){
+  if(terrain===3) return GOD_C.mt;
+  if(owner===-1) return terrain===1?GOD_C.cn:GOD_C.blank;
+  const p="p"+owner;
+  if(terrain===2) return GOD_C[p+"g"]||GOD_C[p];
+  if(terrain===1) return GOD_C[p+"c"]||GOD_C[p];
+  return GOD_C[p]||"#888";
+}
+
+let turn=0, playing=false, speed=200;
+const slider=document.getElementById("slider");
+slider.max=T-1;
+
+function draw(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const isFog=(D.mode==="fog");
+  for(let r=0;r<H;r++) for(let c=0;c<W;c++){
+    const idx=r*W+c;
+    let col;
+    if(isFog){col=fogColor(D.states[turn][idx]);}
+    else{col=godColor(D.terrains[turn][idx],D.owners[turn][idx]);}
+    ctx.fillStyle=col;
+    ctx.fillRect(c*CELL,r*CELL,CELL,CELL);
+    // army text
+    const a=D.armies[turn][idx];
+    if(a>0){
+      let tc="#000";
+      if(isFog){const s=D.states[turn][idx]; if(s>=5&&s<=10) tc="#fff";}
+      else{if(D.owners[turn][idx]!==-1) tc="#fff";}
+      ctx.fillStyle=tc;
+      const fs=a<100?Math.round(CELL*0.42):a<1000?Math.round(CELL*0.34):Math.round(CELL*0.26);
+      ctx.font="bold "+fs+"px monospace";
+      ctx.textAlign="center";ctx.textBaseline="middle";
+      ctx.fillText(String(a),c*CELL+CELL/2,r*CELL+CELL/2);
+    }
+  }
+  // grid lines
+  ctx.strokeStyle="#33333366";ctx.lineWidth=0.5;
+  for(let r=0;r<=H;r++){ctx.beginPath();ctx.moveTo(0,r*CELL);
+    ctx.lineTo(W*CELL,r*CELL);ctx.stroke();}
+  for(let c=0;c<=W;c++){ctx.beginPath();ctx.moveTo(c*CELL,0);
+    ctx.lineTo(c*CELL,H*CELL);ctx.stroke();}
+
+  // move arrow (fog mode)
+  if(isFog && D.moves[turn]){
+    const m=D.moves[turn];
+    if(m[0]>=0){
+      const x1=m[1]*CELL+CELL/2, y1=m[0]*CELL+CELL/2;
+      const x2=m[3]*CELL+CELL/2, y2=m[2]*CELL+CELL/2;
+      ctx.strokeStyle="#ffe000";ctx.lineWidth=3;
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+      // arrowhead
+      const ang=Math.atan2(y2-y1,x2-x1);
+      const hl=CELL*0.35;
+      ctx.beginPath();
+      ctx.moveTo(x2,y2);
+      ctx.lineTo(x2-hl*Math.cos(ang-0.45),y2-hl*Math.sin(ang-0.45));
+      ctx.moveTo(x2,y2);
+      ctx.lineTo(x2-hl*Math.cos(ang+0.45),y2-hl*Math.sin(ang+0.45));
+      ctx.stroke();
+    }
+  }
+
+  // HUD
+  slider.value=turn;
+  document.getElementById("turn-label").textContent="Turn "+turn+" / "+(T-1);
+  const sl=document.getElementById("stats-left");
+  const sr=document.getElementById("stats-right");
+  if(isFog){
+    const s=D.stats[turn];
+    sl.textContent=D.player+"  Army:"+s[0]+"  Land:"+s[1];
+    sr.textContent=D.opponent+"  Army:"+s[2]+"  Land:"+s[3];
+  }else{
+    const ps=D.pstats[turn];
+    const names=D.players;
+    sl.textContent=names[0]+"  Army:"+ps[0]+"  Land:"+ps[1];
+    sr.textContent=(names[1]||"")+"  Army:"+(ps[2]||0)+"  Land:"+(ps[3]||0);
+  }
+}
+
+function setTurn(t){turn=Math.max(0,Math.min(T-1,t));draw();}
+let timer=null;
+function togglePlay(){
+  playing=!playing;
+  if(playing){timer=setInterval(()=>{if(turn<T-1)setTurn(turn+1);else{playing=false;clearInterval(timer);}},speed);}
+  else if(timer){clearInterval(timer);timer=null;}
+}
+document.addEventListener("keydown",e=>{
+  if(e.key==="ArrowLeft"||e.key==="Left") setTurn(turn-1);
+  else if(e.key==="ArrowRight"||e.key==="Right") setTurn(turn+1);
+  else if(e.key===" "){e.preventDefault();togglePlay();}
+  else if(e.key==="["){speed=Math.min(2000,speed+50);if(playing){clearInterval(timer);timer=setInterval(()=>{if(turn<T-1)setTurn(turn+1);else{playing=false;clearInterval(timer);}},speed);}}
+  else if(e.key==="]"){speed=Math.max(20,speed-50);if(playing){clearInterval(timer);timer=setInterval(()=>{if(turn<T-1)setTurn(turn+1);else{playing=false;clearInterval(timer);}},speed);}}
+  else if(e.key==="Home") setTurn(0);
+  else if(e.key==="End") setTurn(T-1);
+});
+slider.addEventListener("input",()=>setTurn(parseInt(slider.value)));
+document.getElementById("bprev").addEventListener("click",()=>setTurn(turn-1));
+document.getElementById("bnext").addEventListener("click",()=>setTurn(turn+1));
+
+// legend
+const legendEl=document.getElementById("legend");
+const LEGEND_ITEMS=D.mode==="fog"?[
+  ["#1B5E20","Your General"],["#2E7D32","Your City"],["#4CAF50","Your Land"],
+  ["#b71c1c","Enemy General"],["#c62828","Enemy City"],["#f44336","Enemy Land"],
+  ["#ffd700","Neutral City"],["#555555","Mountain"],["#e8e8e8","Blank"],
+  ["#4a4a6a","Fog (obstacle)"],["#2d2d44","Fog (blank)"]
+]:[
+  ["#1B5E20","P0 General"],["#2E7D32","P0 City"],["#4CAF50","P0 Land"],
+  ["#b71c1c","P1 General"],["#c62828","P1 City"],["#f44336","P1 Land"],
+  ["#ffd700","Neutral City"],["#555555","Mountain"],["#e8e8e8","Blank"]
+];
+LEGEND_ITEMS.forEach(([col,lab])=>{
+  const s=document.createElement("span");
+  s.innerHTML='<i style="background:'+col+'"></i>'+lab;
+  legendEl.appendChild(s);
+});
+
+document.getElementById("title").textContent=TITLE_JS;
+draw();
+</script></body></html>"""
+
+
+def _build_html(
+    frame_data: Dict[str, Any],
+    title: str,
+) -> str:
+    """Inject frame data into the HTML template."""
+    payload = json.dumps(frame_data, separators=(",", ":"))
+    html = HTML_TEMPLATE.replace("PAYLOAD_PLACEHOLDER", payload)
+    html = html.replace("TITLE_PLACEHOLDER", html_escape(title))
+    html = html.replace("TITLE_JS", json.dumps(title))
+    return html
+
+
+# ---------------------------------------------------------------------------
+# Optional PNG export (headless matplotlib)
+# ---------------------------------------------------------------------------
+
+def _hex_to_rgb(h: str) -> Tuple[float, float, float]:
+    return int(h[1:3], 16) / 255, int(h[3:5], 16) / 255, int(h[5:7], 16) / 255
+
+
+def export_pngs(
+    frame_data: Dict[str, Any],
+    out_dir: str,
+    step: int = 1,
+):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    H, W, T = frame_data["H"], frame_data["W"], frame_data["T"]
+    frames_dir = os.path.join(out_dir, "frames")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    rendered = 0
+    for t in range(0, T, step):
+        fig, ax = plt.subplots(figsize=(10, 10), dpi=100)
+        grid = np.zeros((H, W, 3))
+        for r in range(H):
+            for c in range(W):
+                idx = r * W + c
+                s = frame_data["states"][t][idx] if "states" in frame_data else 0
+                grid[r, c] = _hex_to_rgb(COLORS.get(s, "#000"))
+        ax.imshow(grid, aspect="equal")
+        for r in range(H):
+            for c in range(W):
+                a = frame_data["armies"][t][r * W + c]
+                if a > 0:
+                    s = frame_data.get("states", [[]])[t][r * W + c] if "states" in frame_data else -1
+                    tc = "white" if 5 <= s <= 10 else "black"
+                    ax.text(c, r, str(a), ha="center", va="center",
+                            fontsize=6, color=tc, fontweight="bold")
+        ax.set_title(f"Turn {t}/{T - 1}", fontsize=9)
+        ax.set_xticks([]); ax.set_yticks([])
+        path = os.path.join(frames_dir, f"turn_{t:04d}.png")
+        fig.savefig(path, bbox_inches="tight", pad_inches=0.1)
+        plt.close(fig)
+        rendered += 1
+    print(f"  Saved {rendered} PNGs to {frames_dir}/")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def run_pipeline(args):
-    # 1. Resolve replay data
+    # ── resolve replay data ──
     replay_data = None
     replay_id = None
 
@@ -318,148 +459,75 @@ def run_pipeline(args):
             qs = parse_qs(parsed.query)
             if "p" in qs and not args.player:
                 args.player = unquote(qs["p"][0])
-        elif args.id:
-            replay_id = args.id
+        elif args.replay_id:
+            replay_id = args.replay_id
 
         if not replay_id:
-            print("Error: supply --url, --id, or --file")
-            sys.exit(1)
+            print("Error: provide --url, --id, or --file"); sys.exit(1)
 
         cache = os.path.join(args.out, ".cache")
         print(f"Downloading replay {replay_id} …")
         replay_data = asyncio.run(download_replay(replay_id, cache))
 
-    print(f"Replay {replay_data.get('id', '?')}")
-    print(f"  Map  : {replay_data['mapWidth']}×{replay_data['mapHeight']}")
-    print(f"  Players: {replay_data['usernames']}")
-    print(f"  Moves: {len(replay_data['moves'])}")
+    print(f"Replay  : {replay_data.get('id', '?')}")
+    print(f"Map     : {replay_data['mapWidth']}×{replay_data['mapHeight']}")
+    print(f"Players : {replay_data['usernames']}")
+    print(f"Moves   : {len(replay_data['moves'])}")
 
-    # pick player
     player = args.player or replay_data["usernames"][0]
     if player not in replay_data["usernames"]:
-        print(f"Warning: '{player}' not in usernames {replay_data['usernames']}, "
-              f"using {replay_data['usernames'][0]}")
+        print(f"Warning: '{player}' not found, using {replay_data['usernames'][0]}")
         player = replay_data["usernames"][0]
 
-    # 2. Simulate
-    frames_dir = os.path.join(args.out, "frames")
-    os.makedirs(frames_dir, exist_ok=True)
-
+    # ── simulate ──
+    os.makedirs(args.out, exist_ok=True)
     god = args.god
 
     if god:
-        print("Running god-mode simulation …")
-        all_turns: List[Tuple[int, Any]] = []
-        for turn, sim_ref, t_moves in simulate_god(replay_data):
-            all_turns.append((turn, sim_ref, t_moves))
-
-        total = len(all_turns)
-        start = args.start or 0
-        end = min(args.end or total, total)
-        step = args.step or 1
-        render_indices = list(range(start, end, step))
-        print(f"Rendering {len(render_indices)} god-view frames "
-              f"(turns {start}..{end - 1}, step {step}) …")
-
-        # Re-simulate for real rendering (because sim_ref is mutated in-place)
-        frame_i = 0
-        rendered = set(render_indices)
-        for turn, sim_ref, t_moves in simulate_god(replay_data):
-            if turn in rendered:
-                fig, ax = plt.subplots(figsize=(10, 10), dpi=100)
-                render_god_frame(sim_ref, replay_data, turn, ax)
-                path = os.path.join(frames_dir, f"turn_{turn:04d}.png")
-                fig.savefig(path, bbox_inches="tight", pad_inches=0.2)
-                plt.close(fig)
-                frame_i += 1
-                if frame_i % 50 == 0:
-                    print(f"  {frame_i}/{len(render_indices)} frames")
-        print(f"  Saved {frame_i} frames to {frames_dir}/")
-
+        print("Simulating (god-view) …")
+        frame_data = _collect_god_frames(replay_data)
     else:
-        print(f"Simulating from {player}'s perspective …")
-        sim = ReplaySimulator(replay_data, player)
-        result = sim.simulate()
-        total = len(result["map"])
-        start = args.start or 0
-        end = min(args.end or total, total)
-        step = args.step or 1
-        render_indices = list(range(start, end, step))
-        print(f"Rendering {len(render_indices)} fog-view frames "
-              f"(turns {start}..{end - 1}, step {step}) …")
+        print(f"Simulating ({player}'s fog-of-war) …")
+        frame_data = _collect_fog_frames(replay_data, player)
 
-        for i, turn in enumerate(render_indices):
-            fig, ax = plt.subplots(figsize=(10, 10), dpi=100)
-            render_fog_frame(result, replay_data, turn, player, ax)
-            path = os.path.join(frames_dir, f"turn_{turn:04d}.png")
-            fig.savefig(path, bbox_inches="tight", pad_inches=0.2)
-            plt.close(fig)
-            if (i + 1) % 50 == 0:
-                print(f"  {i + 1}/{len(render_indices)} frames")
-        print(f"  Saved {len(render_indices)} frames to {frames_dir}/")
+    print(f"  {frame_data['T']} turns collected.")
 
-    # 3. Summary montage (pick ~9 evenly-spaced key turns)
-    print("Generating summary montage …")
-    if god:
-        n_summary = min(9, len(render_indices))
-        indices = [render_indices[i * len(render_indices) // n_summary]
-                   for i in range(n_summary)]
-        fig, axes = plt.subplots(3, 3, figsize=(24, 24), dpi=100)
-        axes = axes.flatten()
-        frame_idx = 0
-        for turn, sim_ref, _ in simulate_god(replay_data):
-            if turn in indices:
-                render_god_frame(sim_ref, replay_data, turn, axes[frame_idx])
-                frame_idx += 1
-                if frame_idx >= n_summary:
-                    break
-        for j in range(frame_idx, 9):
-            axes[j].axis("off")
-    else:
-        total = len(result["map"])
-        n_summary = min(9, total)
-        if n_summary > 1:
-            indices = [i * (total - 1) // (n_summary - 1) for i in range(n_summary)]
-        else:
-            indices = [0]
-        fig, axes = plt.subplots(3, 3, figsize=(24, 24), dpi=100)
-        axes = axes.flatten()
-        for i, turn in enumerate(indices):
-            render_fog_frame(result, replay_data, turn, player, axes[i])
-        for j in range(len(indices), 9):
-            axes[j].axis("off")
-
-    fig.suptitle(
-        f"Replay {replay_id}  |  "
-        f"{' vs '.join(replay_data['usernames'])}  |  "
-        f"Map {replay_data['mapWidth']}×{replay_data['mapHeight']}",
-        fontsize=14, fontweight="bold",
+    # ── build HTML ──
+    title = (
+        f"{replay_id}  |  {' vs '.join(replay_data['usernames'])}  |  "
+        f"{replay_data['mapWidth']}×{replay_data['mapHeight']}"
     )
-    summary_path = os.path.join(args.out, "summary.png")
-    fig.savefig(summary_path, bbox_inches="tight", pad_inches=0.3)
-    plt.close(fig)
-    print(f"Summary saved to {summary_path}")
-    print("Done!")
+    if not god:
+        title += f"  |  POV: {player}"
+
+    html_path = os.path.join(args.out, "replay.html")
+    print(f"Generating interactive HTML → {html_path}")
+    html = _build_html(frame_data, title)
+    with open(html_path, "w") as f:
+        f.write(html)
+    print(f"  Done ({len(html) / 1024 / 1024:.1f} MB). Open in your browser!")
+
+    # ── optional PNG export ──
+    if args.png:
+        print("Exporting PNGs …")
+        export_pngs(frame_data, args.out, step=args.png_step)
 
 
 def main():
     p = argparse.ArgumentParser(
-        description="Download → Simulate → Visualise a generals.io replay",
+        description="Download → Simulate → Interactive HTML viewer for generals.io",
     )
     src = p.add_mutually_exclusive_group()
-    src.add_argument("--url", help="Full replay URL from generals.io")
-    src.add_argument("--id", help="Replay ID (e.g. asS2S5O_y)")
-    src.add_argument("--file", help="Path to a local replay JSON")
+    src.add_argument("--url", help="Full replay URL")
+    src.add_argument("--id", dest="replay_id", help="Replay ID")
+    src.add_argument("--file", help="Local replay JSON path")
 
-    p.add_argument("--player", help="Player name (default: first in replay)")
+    p.add_argument("--player", help="Player name (default: first)")
     p.add_argument("--out", default="viz_output", help="Output directory")
-    p.add_argument("--god", action="store_true",
-                   help="Render god-view (no fog, full map)")
-    p.add_argument("--start", type=int, default=None, help="First turn to render")
-    p.add_argument("--end", type=int, default=None, help="Last turn (exclusive)")
-    p.add_argument("--step", type=int, default=None, help="Render every N-th turn")
+    p.add_argument("--god", action="store_true", help="God-view (no fog)")
+    p.add_argument("--png", action="store_true", help="Also export PNGs")
+    p.add_argument("--png-step", type=int, default=1, help="PNG export step")
     args = p.parse_args()
-
     run_pipeline(args)
 
 

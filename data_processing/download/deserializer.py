@@ -3,7 +3,6 @@
 import json
 import subprocess
 import tempfile
-import os
 from pathlib import Path
 
 
@@ -48,6 +47,23 @@ def deserialize_chat(serialized):
     }
 
 
+def _ensure_lz_string(script_dir: Path) -> None:
+    """Install the lz-string npm package if it is missing."""
+    if (script_dir / "node_modules" / "lz-string").exists():
+        return
+    print("lz-string not found – running npm install …")
+    result = subprocess.run(
+        ["npm", "install", "lz-string"],
+        capture_output=True, text=True, cwd=str(script_dir),
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"npm install lz-string failed:\n{result.stderr}\n"
+            "Please run  cd data_processing/download && npm install lz-string  manually."
+        )
+    print("lz-string installed successfully.")
+
+
 def deserialize_replay_nodejs(serialized_bytes: bytes) -> dict:
     """
     Deserialize using Node.js (more reliable for LZ-string).
@@ -57,19 +73,21 @@ def deserialize_replay_nodejs(serialized_bytes: bytes) -> dict:
     # Path to the Node.js decompressor script
     script_dir = Path(__file__).parent
     script_path = script_dir / "decompress.js"
-    
+
     if not script_path.exists():
         raise ValueError(f"Node.js decompressor script not found at {script_path}")
-    
+
+    _ensure_lz_string(script_dir)
+
     # Create a temporary directory for I/O files
     with tempfile.TemporaryDirectory() as tmpdir:
         # Write the binary data to a temp file
         input_file = Path(tmpdir) / "replay.gior"
         output_file = Path(tmpdir) / "replay.json"
-        
+
         with open(input_file, 'wb') as f:
             f.write(serialized_bytes)
-        
+
         # Run Node.js script from its directory (where node_modules is)
         try:
             result = subprocess.run(
@@ -79,16 +97,16 @@ def deserialize_replay_nodejs(serialized_bytes: bytes) -> dict:
                 timeout=10,
                 cwd=str(script_dir)  # Run from script directory where node_modules is
             )
-            
+
             if result.returncode != 0:
                 raise ValueError(f"Node.js decompression failed: {result.stderr}")
-            
+
             # Read the decompressed JSON
             with open(output_file, 'r') as f:
                 obj = json.load(f)
-                
+
             return obj
-            
+
         except subprocess.TimeoutExpired:
             raise ValueError("Node.js decompression timed out")
         except FileNotFoundError:
@@ -107,10 +125,10 @@ def deserialize_replay(serialized_bytes: bytes) -> dict:
     """
     # Use Node.js for reliable decompression
     obj = deserialize_replay_nodejs(serialized_bytes)
-    
+
     replay = {}
     i = 0
-    
+
     replay["version"] = obj[i]; i += 1
     replay["id"] = obj[i]; i += 1
     replay["mapWidth"] = obj[i]; i += 1
@@ -131,7 +149,7 @@ def deserialize_replay(serialized_bytes: bytes) -> dict:
     replay["chat"] = [deserialize_chat(c) for c in (obj[i] or [])]; i += 1
     replay["playerColors"] = obj[i] or list(range(len(replay["usernames"]))); i += 1
     replay["lights"] = obj[i] or []; i += 1
-    
+
     # Options
     options = obj[i] or [
         1,
@@ -144,17 +162,17 @@ def deserialize_replay(serialized_bytes: bytes) -> dict:
         Constants.DEFAULT_LOOKOUT_DENSITY_OPTION,
         Constants.DEFAULT_OBSERVATORY_DENSITY_OPTION
     ]; i += 1
-    
+
     replay["speed"] = options[0]
     replay["city_density"] = options[1]
     replay["mountain_density"] = options[2]
     replay["swamp_density"] = options[3]
     replay["modifiers"] = obj[i] or []; i += 1
-    
+
     replay["observatories"] = obj[i] or []; i += 1
     replay["lookouts"] = obj[i] or []; i += 1
     replay["deserts"] = obj[i] or []; i += 1
-    
+
     if replay["version"] > 12:
         replay["city_fairness"] = options[4]
         replay["spawn_fairness"] = options[5]
@@ -167,5 +185,5 @@ def deserialize_replay(serialized_bytes: bytes) -> dict:
         replay["desert_density"] = 0.0
         replay["lookout_density"] = 0.0
         replay["observatory_density"] = 0.0
-    
+
     return replay
