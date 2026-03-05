@@ -5,20 +5,21 @@ Tests each module independently and then the full end-to-end pipeline,
 including forward pass, backward pass, loss computation, and dataset integration.
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import torch.nn.functional as F
 
-from model.config import ModelConfig
-from model.network import GeneralsNetwork
-from model.components.encoder import ResBlock, SpatialEncoder, HistoryEncoder
-from model.components.transformer import TransformerBlock
-from model.components.heads import SourceHead, DirectionHead, SplitHead, ValueHead
+from model.components.encoder import HistoryEncoder, ResBlock, SpatialEncoder
+from model.components.heads import DirectionHead, SourceHead, SplitHead, ValueHead
+from model.components.transformer import SpatiotemporalBlock, TransformerBlock
 from model.components.world_model import WorldModel
-from model.losses import ImitationLoss, RLLoss
+from model.config import ModelConfig
+from model.losses import ImitationLoss
+from model.network import GeneralsNetwork
 
 
 def test_resblock():
@@ -100,7 +101,7 @@ def test_source_head():
     # Can still softmax
     probs = F.softmax(logits_masked, dim=-1)
     assert probs[:, 10:].sum() < 1e-6, "Masked positions have nonzero probability"
-    print(f"  Masked output ✓ (10 legal positions)")
+    print("  Masked output ✓ (10 legal positions)")
 
 
 def test_direction_head():
@@ -149,10 +150,11 @@ def test_world_model():
 
 
 def test_generals_network_forward():
-    print("\n=== GeneralsNetwork Forward ===")
+    print("\n=== GeneralsNetwork Forward (GRU mode) ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
         n_ponder_steps=2, encoder_channels=32, dropout=0.0,
+        temporal_type="gru",
     )
     model = GeneralsNetwork(cfg)
     n_params = sum(p.numel() for p in model.parameters())
@@ -178,9 +180,139 @@ def test_generals_network_forward():
     print(f"  value:            {out['value'].shape} ✓")
 
 
+def test_spatiotemporal_block():
+    print("\n=== SpatiotemporalBlock ===")
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, dropout=0.0)
+    block = SpatiotemporalBlock(cfg)
+    B, T, S, d = 2, 8, 627, 64
+    x = torch.randn(B, T, S, d)
+    causal = torch.triu(torch.full((T, T), float("-inf")), diagonal=1)
+    y = block(x, causal)
+    assert y.shape == (B, T, S, d), f"Shape: {y.shape}"
+    print(f"  Input:  {x.shape}")
+    print(f"  Output: {y.shape} ✓")
+
+    # test forward_step with cache
+    x_cur = torch.randn(B, 1, S, d)
+    out1, cache1 = block.forward_step(x_cur, None)
+    assert out1.shape == (B, 1, S, d)
+    assert cache1.shape == (B * S, 1, d)
+    out2, cache2 = block.forward_step(x_cur, cache1)
+    assert cache2.shape == (B * S, 2, d)
+    print("  forward_step: cache grows 1→2 ✓")
+
+
+def test_spatiotemporal_forward():
+    print("\n=== GeneralsNetwork Forward (spatiotemporal) ===")
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_layers=2, encoder_channels=32, dropout=0.0,
+        temporal_type="spatiotemporal",
+    )
+    model = GeneralsNetwork(cfg)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"  Model params: {n_params:,}")
+
+    B, T = 2, 8
+    grid_seq = torch.randn(B, T, 12, 25, 25)
+    globals_seq = torch.randn(B, T, 4)
+    legal_mask = torch.ones(B, T, 1, 25, 25, dtype=torch.bool)
+    source_y = torch.randint(0, 25, (B, T))
+    source_x = torch.randint(0, 25, (B, T))
+
+    out = model(grid_seq, globals_seq, legal_mask, source_y, source_x)
+
+    assert out["source_logits"].shape == (B, T, 625)
+    assert out["direction_logits"].shape == (B, T, 4)
+    assert out["split_logits"].shape == (B, T, 2)
+    assert out["value"].shape == (B, T)
+    print(f"  source_logits:    {out['source_logits'].shape} ✓")
+    print(f"  direction_logits: {out['direction_logits'].shape} ✓")
+    print(f"  split_logits:     {out['split_logits'].shape} ✓")
+    print(f"  value:            {out['value'].shape} ✓")
+
+
+def test_spatiotemporal_causal():
+    """Verify temporal attention is causal: output at t depends only on t'<=t."""
+    print("\n=== Spatiotemporal Causality ===")
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_layers=1, encoder_channels=32, dropout=0.0,
+        temporal_type="spatiotemporal",
+    )
+    model = GeneralsNetwork(cfg)
+    model.eval()
+
+    B, T = 1, 6
+    grid_seq = torch.randn(B, T, 12, 25, 25)
+    globals_seq = torch.randn(B, T, 4)
+
+    with torch.no_grad():
+        out_full = model(grid_seq, globals_seq)
+        out_prefix = model(grid_seq[:, :3], globals_seq[:, :3])
+
+    # output at t=0,1,2 should be identical whether T=6 or T=3
+    diff = (out_full["source_logits"][:, :3] - out_prefix["source_logits"]).abs().max()
+    assert diff < 1e-4, f"Causal violation: max diff = {diff:.6f}"
+    print(f"  Max diff (T=6 vs T=3, first 3 steps): {diff:.6f} ✓")
+
+
+def test_spatiotemporal_step():
+    print("\n=== Spatiotemporal Single-step Inference ===")
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_layers=2, encoder_channels=32, dropout=0.0,
+        temporal_type="spatiotemporal",
+    )
+    model = GeneralsNetwork(cfg)
+    model.eval()
+
+    B = 1
+    cache = None
+    for t in range(5):
+        grid = torch.randn(B, 12, 25, 25)
+        glob = torch.randn(B, 4)
+        with torch.no_grad():
+            out = model.step(grid, glob, st_cache=cache)
+        cache = out["st_cache"]
+        assert out["source_logits"].shape == (B, 625)
+        assert len(cache) == 2  # n_layers=2
+        assert cache[0].shape[1] == t + 1  # cache grows
+    print(f"  5 sequential steps, cache sizes = {[c.shape[1] for c in cache]} ✓")
+
+
+def test_spatiotemporal_backward():
+    print("\n=== Spatiotemporal Backward ===")
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_layers=2, encoder_channels=32,
+        temporal_type="spatiotemporal",
+    )
+    model = GeneralsNetwork(cfg)
+
+    B, T = 1, 5
+    grid_seq = torch.randn(B, T, 12, 25, 25)
+    globals_seq = torch.randn(B, T, 4)
+    source_y = torch.randint(0, 25, (B, T))
+    source_x = torch.randint(0, 25, (B, T))
+
+    out = model(grid_seq, globals_seq, source_y=source_y, source_x=source_x)
+    loss = (
+        out["source_logits"].mean()
+        + out["direction_logits"].mean()
+        + out["split_logits"].mean()
+        + out["value"].mean()
+    )
+    loss.backward()
+
+    no_grad = [n for n, p in model.named_parameters() if p.grad is None]
+    assert len(no_grad) == 0, f"No gradient: {no_grad}"
+    print(f"  All {sum(1 for _ in model.parameters())} params have gradients ✓")
+
+
 def test_generals_network_inference():
     print("\n=== GeneralsNetwork Inference (no source_y/x) ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32, temporal_type="gru")
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -193,12 +325,12 @@ def test_generals_network_inference():
 
     assert out["source_logits"].shape == (B, T, 625)
     assert out["direction_logits"].shape == (B, T, 4)
-    print(f"  Inference shapes correct ✓")
+    print("  Inference shapes correct ✓")
 
 
 def test_generals_network_step():
-    print("\n=== GeneralsNetwork Single-step ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32)
+    print("\n=== GeneralsNetwork Single-step (GRU) ===")
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32, temporal_type="gru")
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -223,7 +355,7 @@ def test_generals_network_step():
     hidden = out["hidden"]
     out2 = model.step(grid, globals_vec, legal_mask, hidden=hidden)
     assert out2["hidden"] is not None
-    print(f"  Sequential inference with hidden state ✓")
+    print("  Sequential inference with hidden state ✓")
 
 
 def test_backward_pass():
@@ -260,7 +392,7 @@ def test_backward_pass():
     if no_grad:
         print(f"  Missing gradients: {no_grad}")
     assert grad_count == total_params, f"Missing gradients for {total_params - grad_count} params"
-    print(f"  All parameters have gradients ✓")
+    print("  All parameters have gradients ✓")
 
 
 def test_imitation_loss():
@@ -297,7 +429,7 @@ def test_imitation_loss():
     tgt["count"] = torch.zeros(B, T, dtype=torch.long)
     losses_zero = criterion(pred, tgt, lengths)
     assert losses_zero["source_loss"].item() == 0.0, "Source loss should be 0 with no moves"
-    print(f"  Zero-count masking ✓")
+    print("  Zero-count masking ✓")
 
 
 def test_imitation_loss_backward():
@@ -325,9 +457,7 @@ def test_imitation_loss_backward():
 
     pred = model(grid_seq, globals_seq, legal_mask, source_y, source_x)
 
-    # Recompute loss with gradients (the 'loss' key in the dict is the total with grad)
-    total = criterion(pred, tgt)
-    # Need to recompute with grad
+    # Need to recompute with grad (criterion returns detached components)
     loss = _compute_loss_with_grad(pred, tgt, criterion)
     loss.backward()
 
@@ -338,7 +468,7 @@ def test_imitation_loss_backward():
     assert len(grad_norms) > 0, "No gradients computed"
     print(f"  Loss: {loss.item():.4f}")
     print(f"  Grad norms: min={min(grad_norms):.6f}, max={max(grad_norms):.4f}")
-    print(f"  Full IL backward pass ✓")
+    print("  Full IL backward pass ✓")
 
 
 def _compute_loss_with_grad(pred, tgt, criterion):
@@ -431,7 +561,7 @@ def test_dataset_integration():
             with torch.no_grad():
                 out = model(grid_seq, globals_seq, legal_mask, source_y, source_x)
 
-            print(f"  Batch shapes:")
+            print("  Batch shapes:")
             print(f"    grid_seq:       {grid_seq.shape}")
             print(f"    globals_seq:    {globals_seq.shape}")
             print(f"    source_logits:  {out['source_logits'].shape}")
@@ -443,7 +573,7 @@ def test_dataset_integration():
             criterion = ImitationLoss(grid_w=25)
             losses = criterion(out, tgt, lengths)
             print(f"    Loss: {losses['loss']:.4f}")
-            print(f"  Dataset integration ✓")
+            print("  Dataset integration ✓")
             break
 
 
@@ -458,8 +588,9 @@ def test_real_replay_integration():
         return
 
     import json
-    from data_processing.processing.simulator import ReplaySimulator
+
     from data_processing.parsers.generals_json import convert_simulator_to_gio
+    from data_processing.processing.simulator import ReplaySimulator
 
     with open(replay_file, "r") as f:
         replay_data = json.load(f)
@@ -491,7 +622,7 @@ def test_real_replay_integration():
     print(f"  Timesteps: {max_t}")
     print(f"  source_logits: {out['source_logits'].shape}")
     print(f"  value: {out['value'].shape}")
-    print(f"  Real replay integration ✓")
+    print("  Real replay integration ✓")
 
 
 def test_world_model_integration():
@@ -511,19 +642,23 @@ def test_world_model_integration():
 
     out = model(grid_seq, globals_seq, world_model_embed=wm_embed)
     assert out["source_logits"].shape == (B, T, 625)
-    print(f"  Forward with zero world-model embed (IL mode) ✓")
+    print("  Forward with zero world-model embed (IL mode) ✓")
 
     # With random embed (simulating RL)
     wm_embed_rl = torch.randn(B, T, 64)
     out_rl = model(grid_seq, globals_seq, world_model_embed=wm_embed_rl)
     assert out_rl["source_logits"].shape == (B, T, 625)
-    print(f"  Forward with random world-model embed (RL mode) ✓")
+    print("  Forward with random world-model embed (RL mode) ✓")
 
 
 def test_gradient_flow():
     """Verify gradients flow through all major components."""
-    print("\n=== Gradient Flow ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32)
+    print("\n=== Gradient Flow (spatiotemporal) ===")
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_layers=2, encoder_channels=32,
+        temporal_type="spatiotemporal",
+    )
     model = GeneralsNetwork(cfg)
 
     B, T = 1, 3
@@ -545,8 +680,7 @@ def test_gradient_flow():
     components = {
         "spatial_encoder": model.spatial_encoder,
         "global_proj": model.global_proj,
-        "history_encoder": model.history_encoder,
-        "transformer_block": model.transformer_block,
+        "st_blocks": model.st_blocks,
         "source_head": model.source_head,
         "direction_head": model.direction_head,
         "split_head": model.split_head,
@@ -564,14 +698,14 @@ def test_gradient_flow():
     # Check decision tokens
     assert model.hl_token.grad is not None and model.hl_token.grad.abs().sum() > 0
     assert model.ll_token.grad is not None and model.ll_token.grad.abs().sum() > 0
-    print(f"  hl_token: gradient ✓")
-    print(f"  ll_token: gradient ✓")
+    print("  hl_token: gradient ✓")
+    print("  ll_token: gradient ✓")
 
     # Check positional encodings
     assert model.row_embed.grad is not None
     assert model.col_embed.grad is not None
-    print(f"  row_embed: gradient ✓")
-    print(f"  col_embed: gradient ✓")
+    print("  row_embed: gradient ✓")
+    print("  col_embed: gradient ✓")
 
 
 def main():
@@ -599,6 +733,12 @@ def main():
         test_real_replay_integration,
         test_world_model_integration,
         test_gradient_flow,
+        # spatiotemporal tests
+        test_spatiotemporal_block,
+        test_spatiotemporal_forward,
+        test_spatiotemporal_causal,
+        test_spatiotemporal_step,
+        test_spatiotemporal_backward,
     ]
 
     passed = 0

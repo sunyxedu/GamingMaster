@@ -10,3 +10,4 @@ node_modules/
 checkpoints/
 *.pt
 tests/test_data/
+viz_*/

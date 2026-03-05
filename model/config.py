@@ -20,14 +20,20 @@ class ModelConfig:
     d_ff: int = 512  # feed-forward hidden dim
     dropout: float = 0.1
 
-    # Transformer pondering iterations (shared weights, applied k times)
-    n_ponder_steps: int = 4
+    # Number of transformer layers
+    n_layers: int = 4
 
-    # History encoder
+    # Temporal modelling
+    #   "gru"             – GRU history encoder + spatial-only TransformerBlock ×k (pondering)
+    #   "spatiotemporal"  – factored spatial+temporal attention (SpatiotemporalBlock ×n_layers)
+    temporal_type: str = "spatiotemporal"
+
+    # GRU-specific (only used when temporal_type="gru")
+    n_ponder_steps: int = 4  # shared-weight pondering iterations
     gru_layers: int = 1
 
     # Spatial encoder
-    encoder_channels: int = 128  # intermediate conv channel count
+    encoder_channels: int = 128
 
     # Action space
     n_directions: int = 4  # down, right, up, left
