@@ -13,18 +13,11 @@ import torch
 import torch.nn.functional as F
 
 from model.config import ModelConfig
-from model.network import (
-    ResBlock,
-    SpatialEncoder,
-    HistoryEncoder,
-    TransformerBlock,
-    SourceHead,
-    DirectionHead,
-    SplitHead,
-    ValueHead,
-    WorldModel,
-    GeneralsNetwork,
-)
+from model.network import GeneralsNetwork
+from model.components.encoder import ResBlock, SpatialEncoder, HistoryEncoder
+from model.components.transformer import TransformerBlock
+from model.components.heads import SourceHead, DirectionHead, SplitHead, ValueHead
+from model.components.world_model import WorldModel
 from model.losses import ImitationLoss, RLLoss
 
 
