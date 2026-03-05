@@ -36,7 +36,7 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 ### 1. Install
 
 ```bash
-pip install -e .
+uv sync
 
 # Node.js dependency (auto-installed on first use, or manually):
 cd data_processing/download && npm install lz-string
@@ -46,7 +46,7 @@ cd data_processing/download && npm install lz-string
 
 ```bash
 # From a generals.io replay URL — produces an interactive HTML file
-python3 scripts/replay_to_visual.py \
+uv run python scripts/replay_to_visual.py \
     --url "https://generals.io/replays/asS2S5O_y?p=%7EHemlix%7E"
 
 # Open in browser (← → keys to step, Space to play/pause)
@@ -56,7 +56,7 @@ open viz_output/replay.html
 ### 3. Prepare Training Data
 
 ```bash
-python3 scripts/prepare_data.py \
+uv run python scripts/prepare_data.py \
     --players MeltedToast \
     --output data/output \
     --max-replays 1000 \
@@ -66,7 +66,7 @@ python3 scripts/prepare_data.py \
 ### 4. Train (Imitation Learning)
 
 ```bash
-python3 train_il.py \
+uv run python train_il.py \
     --data_dir data/output/training/MeltedToast \
     --epochs 50 \
     --batch_size 4 \
@@ -216,7 +216,7 @@ PPO-style loss structure is ready:
 `scripts/replay_to_visual.py` provides the full pipeline from URL to interactive viewer:
 
 ```bash
-python3 scripts/replay_to_visual.py \
+uv run python scripts/replay_to_visual.py \
     --url "https://generals.io/replays/asS2S5O_y?p=%7EHemlix%7E"
 ```
 
@@ -250,7 +250,7 @@ Every component has been verified against the real replay `asS2S5O_y` (~Hemlix~ 
 Run all tests:
 
 ```bash
-python3 tests/test_verify_simulator.py   # Simulator correctness
-python3 tests/test_model.py              # 19 model unit tests
-python3 tests/test_training_e2e.py       # End-to-end training
+uv run python tests/test_verify_simulator.py   # Simulator correctness
+uv run python tests/test_model.py              # 19 model unit tests
+uv run python tests/test_training_e2e.py       # End-to-end training
 ```
