@@ -76,14 +76,14 @@ uv run python train_il.py \
 ### 5. Train (Reinforcement Learning)
 
 ```bash
-# 从 IL checkpoint 加载，用 PPO 做 fine-tune（需要交互式环境，尚未实现）
+# Load from IL checkpoint, fine-tune with PPO (requires interactive env, not yet implemented)
 uv run python train_rl.py \
     --checkpoint checkpoints/checkpoint_epoch50.pt \
     --use_world_model
 ```
 
-> RL 训练需要一个可交互的 generals.io 环境（self-play 或 vs bot），环境接口尚未实现。
-> 模型侧已支持：`model.step()` 单步推理 + KV cache、`ValueHead`、`RLLoss` (PPO)、`WorldModel` (curiosity reward)。
+> RL training requires an interactive generals.io environment (self-play or vs bot), which is not yet implemented.
+> Model-side support is ready: `model.step()` single-step inference with KV cache, `ValueHead`, `RLLoss` (PPO), `WorldModel` (curiosity reward).
 
 ---
 
@@ -229,7 +229,7 @@ All losses are masked: timesteps with no move (`count=0`) are excluded from sour
 
 **Reinforcement Learning** (`model/losses.py` — `RLLoss`)
 
-IL 训练出一个合理的初始策略后，用 RL 做 fine-tune 来超越人类 replay 的水平。整体流程：
+After IL produces a reasonable initial policy, RL fine-tunes it to surpass human replay quality. Overall flow:
 
 ```
 IL pretrained model
@@ -238,34 +238,35 @@ IL pretrained model
 ┌────────────────────────────────────────────┐
 │  RL Training Loop (PPO)                    │
 │                                            │
-│  1. model.step() 生成动作 (用 KV cache)     │
-│  2. 环境执行动作，返回 next_obs + reward     │
-│  3. 收集 trajectory (obs, action, reward)  │
-│  4. 计算 advantage (GAE)                   │
-│  5. PPO update:                            │
-│     - clipped policy gradient              │
-│     - value function loss                  │
-│     - entropy bonus                        │
-│  6. (可选) World Model prediction error    │
-│     作为 intrinsic reward                   │
+│  1. model.step() generates action (KV cache) │
+│  2. Environment executes, returns next_obs   │
+│     + reward                                 │
+│  3. Collect trajectory (obs, action, reward)  │
+│  4. Compute advantage (GAE)                   │
+│  5. PPO update:                               │
+│     - clipped policy gradient                 │
+│     - value function loss                     │
+│     - entropy bonus                           │
+│  6. (Optional) World Model prediction error   │
+│     as intrinsic reward                       │
 └────────────────────────────────────────────┘
 ```
 
-`RLLoss` 已实现 PPO 的核心组件：
+`RLLoss` implements the core PPO components:
 
-| 组件 | 说明 |
-|------|------|
-| Policy gradient | 对 source / direction / split 三个 head 的 log-prob 求和，用 clipped ratio (0.8–1.2) |
+| Component | Description |
+|-----------|-------------|
+| Policy gradient | Sum of log-probs across source / direction / split heads, clipped ratio (0.8–1.2) |
 | Value loss | MSE(predicted value, discounted returns) |
-| Entropy bonus | 鼓励探索，防止策略过早收敛 |
-| World model | 预测下一步状态 embedding，prediction error 作为 curiosity intrinsic reward |
+| Entropy bonus | Encourages exploration, prevents premature convergence |
+| World model | Predicts next-state embedding; prediction error serves as curiosity intrinsic reward |
 
-World model 的作用：generals.io 的 reward 非常稀疏（只有胜/负），world model 提供 dense 的 intrinsic reward —— 模型对未知区域的预测越差，说明那里信息越多，鼓励模型去探索迷雾区域。
+Why the world model matters: generals.io has extremely sparse reward (only win/loss at game end). The world model provides dense intrinsic reward — the worse the model's prediction for an unseen area, the more information lies there, encouraging the agent to explore through fog of war.
 
-RL 阶段需要一个可交互的 generals.io 环境（self-play 或 vs bot），这部分尚未实现。架构上模型已经支持：
-- `model.step()` 单步推理 + KV cache，适配 RL rollout
-- `ValueHead` 输出 \[-1, 1\] 的局势评估
-- `WorldModel` 可选开启 (`use_world_model=True`)
+RL training requires an interactive generals.io environment (self-play or vs bot), which is not yet implemented. On the model side, everything is ready:
+- `model.step()` single-step inference with KV cache, suitable for RL rollouts
+- `ValueHead` outputs game value in \[-1, 1\]
+- `WorldModel` can be enabled via `use_world_model=True`
 
 ### Step 4: Visualisation
 
