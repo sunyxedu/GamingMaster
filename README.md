@@ -215,13 +215,45 @@ Supervised learning from expert replays:
 
 All losses are masked: timesteps with no move (`count=0`) are excluded from source/direction/split loss; timesteps beyond the actual sequence length are excluded from all losses.
 
-**Reinforcement Learning** (`model/losses.py` — `RLLoss` placeholder)
+**Reinforcement Learning** (`model/losses.py` — `RLLoss`)
 
-PPO-style loss structure is ready:
-- Clipped policy gradient objective
-- Value function loss
-- Entropy bonus
-- World model prediction error as intrinsic reward
+IL 训练出一个合理的初始策略后，用 RL 做 fine-tune 来超越人类 replay 的水平。整体流程：
+
+```
+IL pretrained model
+  │
+  ▼
+┌────────────────────────────────────────────┐
+│  RL Training Loop (PPO)                    │
+│                                            │
+│  1. model.step() 生成动作 (用 KV cache)     │
+│  2. 环境执行动作，返回 next_obs + reward     │
+│  3. 收集 trajectory (obs, action, reward)  │
+│  4. 计算 advantage (GAE)                   │
+│  5. PPO update:                            │
+│     - clipped policy gradient              │
+│     - value function loss                  │
+│     - entropy bonus                        │
+│  6. (可选) World Model prediction error    │
+│     作为 intrinsic reward                   │
+└────────────────────────────────────────────┘
+```
+
+`RLLoss` 已实现 PPO 的核心组件：
+
+| 组件 | 说明 |
+|------|------|
+| Policy gradient | 对 source / direction / split 三个 head 的 log-prob 求和，用 clipped ratio (0.8–1.2) |
+| Value loss | MSE(predicted value, discounted returns) |
+| Entropy bonus | 鼓励探索，防止策略过早收敛 |
+| World model | 预测下一步状态 embedding，prediction error 作为 curiosity intrinsic reward |
+
+World model 的作用：generals.io 的 reward 非常稀疏（只有胜/负），world model 提供 dense 的 intrinsic reward —— 模型对未知区域的预测越差，说明那里信息越多，鼓励模型去探索迷雾区域。
+
+RL 阶段需要一个可交互的 generals.io 环境（self-play 或 vs bot），这部分尚未实现。架构上模型已经支持：
+- `model.step()` 单步推理 + KV cache，适配 RL rollout
+- `ValueHead` 输出 \[-1, 1\] 的局势评估
+- `WorldModel` 可选开启 (`use_world_model=True`)
 
 ### Step 4: Visualisation
 
