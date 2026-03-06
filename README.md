@@ -18,6 +18,7 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 │   └── components/           #   Reusable building blocks
 │       ├── encoder.py        #     SpatialEncoder, HistoryEncoder, ResBlock
 │       ├── transformer.py    #     TransformerBlock, SpatiotemporalBlock
+│       ├── trm.py            #     TRM (Tiny Recursive Model) two-state pondering
 │       ├── heads.py          #     Source / Direction / Split / Value heads
 │       └── world_model.py    #     WorldModel (for RL curiosity reward)
 ├── scripts/
@@ -25,9 +26,11 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 │   └── replay_to_visual.py   # CLI: download one replay → simulate → HTML viewer
 ├── train_il.py               # Imitation Learning training script
 ├── tests/
-│   ├── test_verify_simulator.py   # Simulator correctness (real replay)
-│   ├── test_model.py              # 24 unit tests for every model component
-│   └── test_training_e2e.py       # End-to-end training loop tests
+│   ├── test_verify_simulator.py       # Simulator correctness (real replay)
+│   ├── test_model.py                  # 26 unit tests for every model component
+│   ├── test_audit_fixes.py            # 11 bug-fix verification tests
+│   ├── test_comprehensive_audit.py    # 48 comprehensive audit tests (all modules)
+│   └── test_training_e2e.py           # End-to-end training loop tests
 └── pyproject.toml
 ```
 
@@ -146,8 +149,8 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
 
 | Mode | `temporal_type` | Description |
 |------|----------------|-------------|
-| **Spatiotemporal** (default) | `"spatiotemporal"` | Factored spatial + causal temporal attention, stacked `n_layers` times |
-| GRU + Pondering | `"gru"` | GRU history encoder → shared-weight spatial TransformerBlock ×k |
+| **Spatiotemporal** (default) | `"spatiotemporal"` | Factored spatial + causal temporal attention (`n_st_layers`) → TRM pondering |
+| GRU + TRM | `"gru"` | GRU history encoder → TRM two-state recursive pondering |
 
 ```
 Input (Grid Types 11ch + Grid Number 1ch + Globals 4-dim)
@@ -161,7 +164,7 @@ Input (Grid Types 11ch + Grid Number 1ch + Globals 4-dim)
           │ flatten to [B, T, 625, d] + append HL & LL decision tokens
           ▼
 ┌──────────────────────────────────┐
-│    SpatiotemporalBlock × n_layers │
+│  Stage 1: SpatiotemporalBlock × n_st_layers │
 │                                  │
 │  ┌─ Spatial Self-Attention ────┐ │  627 tokens within each timestep
 │  │  Add & Norm                 │ │
@@ -170,6 +173,15 @@ Input (Grid Types 11ch + Grid Number 1ch + Globals 4-dim)
 │  ├─ MLP ───────────────────────┤ │
 │  │  Add & Norm                 │ │
 │  └─────────────────────────────┘ │
+└─────────────┬────────────────────┘
+              ▼
+┌──────────────────────────────────┐
+│  Stage 2: TRM Pondering          │
+│                                  │
+│  z_H (answer), z_L (scratchpad)  │
+│  iteratively refined by shared   │
+│  reasoning module (H + L cycles) │
+│  → q_halt ∈ [0,1]               │
 └─────────────┬────────────────────┘
               │
         ┌─────┼──────────┐
@@ -208,7 +220,10 @@ Default config:
 | `d_model` | 256 |
 | `n_heads` | 8 |
 | `d_ff` | 512 |
-| `n_layers` | 4 |
+| `n_st_layers` | 2 |
+| `trm_H_cycles` | 4 |
+| `trm_L_cycles` | 4 |
+| `trm_block_layers` | 2 |
 | `encoder_channels` | 128 |
 | `temporal_type` | `"spatiotemporal"` |
 
@@ -309,7 +324,9 @@ Every component has been verified against the real replay `asS2S5O_y` (~Hemlix~ 
 Run all tests:
 
 ```bash
-uv run python tests/test_verify_simulator.py   # Simulator correctness
-uv run python tests/test_model.py              # 24 model unit tests
-uv run python tests/test_training_e2e.py       # End-to-end training
+uv run python tests/test_verify_simulator.py        # Simulator correctness
+uv run python tests/test_model.py                   # 26 model unit tests
+uv run python tests/test_audit_fixes.py             # 11 bug-fix verification tests
+uv run python tests/test_comprehensive_audit.py     # 48 comprehensive audit tests
+uv run python tests/test_training_e2e.py            # End-to-end training
 ```

@@ -21,11 +21,11 @@ def main():
         prev_action_seq = [[0.0]*8 for _ in range(args.T)]
         legal = [ [ [ [True for _ in range(args.W)] for _ in range(args.H) ] ] for _ in range(args.T) ]
         K=4
-        count = [random.randint(0,K) for _ in range(args.T)]
+        count = [random.randint(0,1) for _ in range(args.T)]
         src_y = [ [random.randint(0,args.H-1) for _ in range(K)] for _ in range(args.T) ]
         src_x = [ [random.randint(0,args.W-1) for _ in range(K)] for _ in range(args.T) ]
         dir_id = [ [random.randint(0,3) for _ in range(K)] for _ in range(args.T) ]
-        ratio_id = [ [random.randint(0,3) for _ in range(K)] for _ in range(args.T) ]
+        ratio_id = [ [random.randint(0,1) for _ in range(K)] for _ in range(args.T) ]
         value = [random.random() for _ in range(args.T)]
         enemy = [ [ [ [0.0 for _ in range(args.W)] for _ in range(args.H) ] ] for _ in range(args.T) ]
         nextv = [ [ [ [0.0 for _ in range(args.W)] for _ in range(args.H) ] ] for _ in range(args.T) ]
