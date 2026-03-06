@@ -20,16 +20,20 @@ class ModelConfig:
     d_ff: int = 512  # feed-forward hidden dim
     dropout: float = 0.1
 
-    # Number of transformer layers
-    n_layers: int = 4
+    # Stage 1: Spatiotemporal encoding (separate weights per layer)
+    n_st_layers: int = 2
+
+    # Stage 2: TRM pondering (shared weights, applied k times)
+    n_ponder_steps: int = 4
+    use_act: bool = True       # Adaptive Computation Time halting
+    act_threshold: float = 0.99
 
     # Temporal modelling
-    #   "gru"             – GRU history encoder + spatial-only TransformerBlock ×k (pondering)
-    #   "spatiotemporal"  – factored spatial+temporal attention (SpatiotemporalBlock ×n_layers)
+    #   "spatiotemporal" – Stage1: factored spatiotemporal → Stage2: spatial TRM
+    #   "gru"            – GRU history encoder → spatial TRM
     temporal_type: str = "spatiotemporal"
 
     # GRU-specific (only used when temporal_type="gru")
-    n_ponder_steps: int = 4  # shared-weight pondering iterations
     gru_layers: int = 1
 
     # Spatial encoder

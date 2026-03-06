@@ -203,11 +203,12 @@ def test_spatiotemporal_block():
 
 
 def test_spatiotemporal_forward():
-    print("\n=== GeneralsNetwork Forward (spatiotemporal) ===")
+    print("\n=== GeneralsNetwork Forward (spatiotemporal + TRM) ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_layers=2, encoder_channels=32, dropout=0.0,
-        temporal_type="spatiotemporal",
+        n_st_layers=2, n_ponder_steps=3,
+        encoder_channels=32, dropout=0.0,
+        temporal_type="spatiotemporal", use_act=False,
     )
     model = GeneralsNetwork(cfg)
     n_params = sum(p.numel() for p in model.parameters())
@@ -237,8 +238,9 @@ def test_spatiotemporal_causal():
     print("\n=== Spatiotemporal Causality ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_layers=1, encoder_channels=32, dropout=0.0,
-        temporal_type="spatiotemporal",
+        n_st_layers=1, n_ponder_steps=2,
+        encoder_channels=32, dropout=0.0,
+        temporal_type="spatiotemporal", use_act=False,
     )
     model = GeneralsNetwork(cfg)
     model.eval()
@@ -258,11 +260,12 @@ def test_spatiotemporal_causal():
 
 
 def test_spatiotemporal_step():
-    print("\n=== Spatiotemporal Single-step Inference ===")
+    print("\n=== Spatiotemporal + TRM Single-step Inference ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_layers=2, encoder_channels=32, dropout=0.0,
-        temporal_type="spatiotemporal",
+        n_st_layers=2, n_ponder_steps=3,
+        encoder_channels=32, dropout=0.0,
+        temporal_type="spatiotemporal", use_act=False,
     )
     model = GeneralsNetwork(cfg)
     model.eval()
@@ -276,17 +279,18 @@ def test_spatiotemporal_step():
             out = model.step(grid, glob, st_cache=cache)
         cache = out["st_cache"]
         assert out["source_logits"].shape == (B, 625)
-        assert len(cache) == 2  # n_layers=2
-        assert cache[0].shape[1] == t + 1  # cache grows
+        assert len(cache) == 2  # n_st_layers=2
+        assert cache[0].shape[1] == t + 1
     print(f"  5 sequential steps, cache sizes = {[c.shape[1] for c in cache]} ✓")
 
 
 def test_spatiotemporal_backward():
-    print("\n=== Spatiotemporal Backward ===")
+    print("\n=== Spatiotemporal + TRM Backward ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_layers=2, encoder_channels=32,
-        temporal_type="spatiotemporal",
+        n_st_layers=2, n_ponder_steps=3,
+        encoder_channels=32,
+        temporal_type="spatiotemporal", use_act=True,
     )
     model = GeneralsNetwork(cfg)
 
@@ -653,11 +657,12 @@ def test_world_model_integration():
 
 def test_gradient_flow():
     """Verify gradients flow through all major components."""
-    print("\n=== Gradient Flow (spatiotemporal) ===")
+    print("\n=== Gradient Flow (spatiotemporal + TRM) ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_layers=2, encoder_channels=32,
-        temporal_type="spatiotemporal",
+        n_st_layers=2, n_ponder_steps=3,
+        encoder_channels=32,
+        temporal_type="spatiotemporal", use_act=True,
     )
     model = GeneralsNetwork(cfg)
 
@@ -674,13 +679,16 @@ def test_gradient_flow():
         + out["direction_logits"].mean()
         + out["split_logits"].mean()
         + out["value"].mean()
+        + out["act_loss"]
     )
     loss.backward()
 
     components = {
         "spatial_encoder": model.spatial_encoder,
         "global_proj": model.global_proj,
-        "st_blocks": model.st_blocks,
+        "st_layers": model.st_layers,
+        "trm_block": model.trm_block,
+        "halt": model.halt,
         "source_head": model.source_head,
         "direction_head": model.direction_head,
         "split_head": model.split_head,

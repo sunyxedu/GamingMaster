@@ -1,11 +1,13 @@
 """
-Generals.io neural network — AlphaStar-inspired architecture.
+Generals.io neural network — two-stage architecture:
 
-Two temporal modes (selected via ModelConfig.temporal_type):
+  Stage 1 — History Encoder (spatiotemporal attention × L, separate weights)
+            Builds a rich spatiotemporal embedding where every cell knows
+            what happened at its position across all past timesteps.
 
-  "gru"             – GRU history encoder  →  spatial-only TransformerBlock ×k
-  "spatiotemporal"  – factored SpatiotemporalBlock ×n_layers
-                      (spatial self-attn + causal temporal self-attn + MLP)
+  Stage 2 — TRM / Tiny Recursive Model (spatial-only shared block × k, with Halt?)
+            Ponders the encoded state to produce the final decision.
+            Same weights are reused k times; optional ACT halting.
 """
 
 from __future__ import annotations
@@ -26,12 +28,37 @@ from model.components.transformer import (
 from model.components.world_model import WorldModel
 from model.config import ModelConfig
 
+# ---------------------------------------------------------------------------
+# ACT — Adaptive Computation Time halting
+# ---------------------------------------------------------------------------
+
+class ACTHalt(nn.Module):
+    """Per-position halting probability for the TRM pondering stage."""
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.proj = nn.Sequential(
+            nn.Linear(d_model, d_model // 4),
+            nn.ReLU(),
+            nn.Linear(d_model // 4, 1),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(self.proj(x)).squeeze(-1)
+
+
+# ---------------------------------------------------------------------------
+# Main network
+# ---------------------------------------------------------------------------
 
 class GeneralsNetwork(nn.Module):
     """
-    Full network for the generals.io bot.
+    Two-stage architecture matching the diagram:
 
-    Supports both temporal modes and both IL / RL training.
+        SpatialEncoder → (+globals, +PE)
+        → Stage 1: SpatiotemporalBlock × L  (history encoding)
+        → Stage 2: TransformerBlock × k     (TRM pondering, shared weights, Halt?)
+        → Decode → Source / Direction / Split / Value heads
     """
 
     def __init__(self, cfg: ModelConfig):
@@ -41,21 +68,27 @@ class GeneralsNetwork(nn.Module):
 
         # --- Create Embeddings ---
         self.spatial_encoder = SpatialEncoder(cfg)
-
         self.global_proj = nn.Sequential(
             nn.Linear(cfg.global_features, cfg.d_model),
             nn.ReLU(),
             nn.Linear(cfg.d_model, cfg.d_model),
         )
 
-        # --- Temporal backbone ---
+        # --- Stage 1: History Encoder ---
         if self.is_st:
-            self.st_blocks = nn.ModuleList(
-                [SpatiotemporalBlock(cfg) for _ in range(cfg.n_layers)]
+            self.st_layers = nn.ModuleList(
+                [SpatiotemporalBlock(cfg) for _ in range(cfg.n_st_layers)]
             )
         else:
             self.history_encoder = HistoryEncoder(cfg)
-            self.transformer_block = TransformerBlock(cfg)
+
+        # --- Stage 2: TRM (shared-weight pondering block) ---
+        self.trm_block = TransformerBlock(cfg)
+
+        # --- ACT halting (for the TRM stage) ---
+        self.halt: Optional[ACTHalt] = None
+        if cfg.use_act:
+            self.halt = ACTHalt(cfg.d_model)
 
         # --- Learnable decision tokens ---
         self.hl_token = nn.Parameter(torch.randn(1, 1, cfg.d_model) * 0.02)
@@ -73,6 +106,7 @@ class GeneralsNetwork(nn.Module):
 
         # --- Norms ---
         self.pre_norm = nn.LayerNorm(cfg.d_model)
+        self.mid_norm = nn.LayerNorm(cfg.d_model)  # between stage 1 and 2
         self.post_norm = nn.LayerNorm(cfg.d_model)
 
         # --- Policy heads ---
@@ -105,14 +139,55 @@ class GeneralsNetwork(nn.Module):
                 nn.init.zeros_(m.bias)
 
     def _build_spatial_pe(self) -> torch.Tensor:
-        """[1, N+2, d] spatial + decision-token positional encoding."""
         sp = (self.row_embed + self.col_embed).reshape(
             1, -1, self.cfg.d_model,
-        )  # [1, N, d]
-        return torch.cat([sp, self.hl_pos, self.ll_pos], dim=1)  # [1, N+2, d]
+        )
+        return torch.cat([sp, self.hl_pos, self.ll_pos], dim=1)
 
     # ------------------------------------------------------------------
-    # Forward — spatiotemporal mode
+    # TRM pondering with optional ACT
+    # ------------------------------------------------------------------
+
+    def _ponder_trm(
+        self,
+        tokens: torch.Tensor,
+        k: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Apply self.trm_block k times (shared weights).
+        If ACT is on, weight-average intermediate states and return
+        the ACT remainder loss.
+        """
+        if self.halt is None:
+            for _ in range(k):
+                tokens = self.trm_block(tokens)
+            return tokens, tokens.new_tensor(0.0)
+
+        shape = tokens.shape[:-1]
+        device = tokens.device
+        halted = torch.zeros(shape, device=device)
+        output = torch.zeros_like(tokens)
+        remainders = torch.zeros(shape, device=device)
+        threshold = self.cfg.act_threshold
+
+        for step in range(k):
+            tokens = self.trm_block(tokens)
+            p = self.halt(tokens)
+
+            still_running = (halted < threshold).float()
+            if step == k - 1:
+                p_use = still_running * (1.0 - halted)
+            else:
+                p_use = still_running * p
+
+            halted = halted + p_use
+            remainders = remainders + still_running * (1.0 - halted)
+            output = output + p_use.unsqueeze(-1) * tokens
+
+        return output, remainders.mean()
+
+    # ------------------------------------------------------------------
+    # Forward — spatiotemporal mode (two-stage)
     # ------------------------------------------------------------------
 
     def _forward_spatiotemporal(
@@ -142,44 +217,45 @@ class GeneralsNetwork(nn.Module):
         tokens = spatial.reshape(B, T, d, N).permute(0, 1, 3, 2)
         hl = self.hl_token.expand(B, T, -1, -1)
         ll = self.ll_token.expand(B, T, -1, -1)
-        tokens = torch.cat([tokens, hl, ll], dim=2)  # [B, T, N+2, d]
-        S = tokens.shape[2]
+        tokens = torch.cat([tokens, hl, ll], dim=2)
 
         # 4. Spatial PE + sinusoidal temporal PE
-        spatial_pe = self._build_spatial_pe()  # [1, S, d]
-        temporal_pe = _sinusoidal_pe(T, d, tokens.device)  # [T, d]
-        tokens = tokens + spatial_pe.unsqueeze(0)                # broadcast [1,1,S,d]
-        tokens = tokens + temporal_pe.unsqueeze(0).unsqueeze(2)  # broadcast [1,T,1,d]
+        spatial_pe = self._build_spatial_pe()
+        temporal_pe = _sinusoidal_pe(T, d, tokens.device)
+        tokens = tokens + spatial_pe.unsqueeze(0)
+        tokens = tokens + temporal_pe.unsqueeze(0).unsqueeze(2)
 
         # 5. Optional world-model embedding
         if world_model_embed is not None:
-            wm = world_model_embed.unsqueeze(2)  # [B, T, 1, d]
-            tokens[:, :, N:N + 1] += wm
+            tokens[:, :, N:N + 1] += world_model_embed.unsqueeze(2)
 
-        # 6. Pre-norm
+        # ── Stage 1: Spatiotemporal encoding (L layers, separate weights) ──
         tokens = self.pre_norm(tokens)
-
-        # 7. Causal mask for temporal attention
         causal = torch.triu(
             torch.full((T, T), float("-inf"), device=tokens.device),
             diagonal=1,
         )
+        for layer in self.st_layers:
+            tokens = layer(tokens, causal)
+        tokens = self.mid_norm(tokens)
 
-        # 8. Spatiotemporal blocks
-        for block in self.st_blocks:
-            tokens = block(tokens, causal)
+        # ── Stage 2: TRM pondering (shared block × k, spatial only) ──
+        BT = B * T
+        S = tokens.shape[2]
+        tokens_flat = tokens.reshape(BT, S, d)
+        tokens_flat, act_loss = self._ponder_trm(tokens_flat, cfg.n_ponder_steps)
+        tokens_flat = self.post_norm(tokens_flat)
 
-        # 9. Post-norm
-        tokens = self.post_norm(tokens)
-
-        # 10. Decode & heads
-        return self._decode_heads(
-            tokens.reshape(B * T, S, d), B, T, N, W,
+        # Decode & heads
+        out = self._decode_heads(
+            tokens_flat, B, T, N, W,
             legal_mask, source_y, source_x,
         )
+        out["act_loss"] = act_loss
+        return out
 
     # ------------------------------------------------------------------
-    # Forward — GRU + spatial pondering mode
+    # Forward — GRU mode
     # ------------------------------------------------------------------
 
     def _forward_gru(
@@ -214,22 +290,21 @@ class GeneralsNetwork(nn.Module):
         ll = self.ll_token.expand(BT, -1, -1)
         tokens = torch.cat([tokens, hl, ll], dim=1)
 
-        spatial_pe = self._build_spatial_pe()
-        tokens = tokens + spatial_pe
+        tokens = tokens + self._build_spatial_pe()
 
         if world_model_embed is not None:
-            wm = world_model_embed.reshape(BT, 1, d)
-            tokens[:, N:N + 1] += wm
+            tokens[:, N:N + 1] += world_model_embed.reshape(BT, 1, d)
 
+        # TRM pondering (shared block × k)
         tokens = self.pre_norm(tokens)
-        for _ in range(cfg.n_ponder_steps):
-            tokens = self.transformer_block(tokens)
+        tokens, act_loss = self._ponder_trm(tokens, cfg.n_ponder_steps)
         tokens = self.post_norm(tokens)
 
         out = self._decode_heads(
             tokens, B, T, N, W, legal_mask, source_y, source_x,
         )
         out["hidden"] = hidden
+        out["act_loss"] = act_loss
         return out
 
     # ------------------------------------------------------------------
@@ -238,7 +313,7 @@ class GeneralsNetwork(nn.Module):
 
     def _decode_heads(
         self,
-        tokens: torch.Tensor,  # [BT, S, d]
+        tokens: torch.Tensor,
         B: int, T: int, N: int, W: int,
         legal_mask: Optional[torch.Tensor],
         source_y: Optional[torch.Tensor],
@@ -291,15 +366,6 @@ class GeneralsNetwork(nn.Module):
         hidden: Optional[torch.Tensor] = None,
         world_model_embed: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Args:
-            grid_seq          : [B, T, C, H, W]
-            globals_seq       : [B, T, G]
-            legal_mask        : [B, T, 1, H, W] bool
-            source_y / source_x : [B, T] int  (ground-truth source for training)
-            hidden            : GRU hidden (gru mode only)
-            world_model_embed : [B, T, d]
-        """
         if self.is_st:
             return self._forward_spatiotemporal(
                 grid_seq, globals_seq, legal_mask,
@@ -323,13 +389,6 @@ class GeneralsNetwork(nn.Module):
         world_model_embed: Optional[torch.Tensor] = None,
         st_cache: Optional[List[torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Single-timestep forward for inference.
-
-        For spatiotemporal mode, pass *st_cache* (list of per-block KV
-        tensors) and receive the updated cache back.  For gru mode, pass
-        *hidden* and receive it back.
-        """
         if self.is_st:
             return self._step_spatiotemporal(
                 grid, globals_vec, legal_mask,
@@ -338,8 +397,6 @@ class GeneralsNetwork(nn.Module):
         return self._step_gru(
             grid, globals_vec, legal_mask, hidden, world_model_embed,
         )
-
-    # ── gru step ──
 
     def _step_gru(self, grid, globals_vec, legal_mask, hidden, wm_embed):
         out = self._forward_gru(
@@ -359,8 +416,6 @@ class GeneralsNetwork(nn.Module):
                 squeezed[k] = v
         return squeezed
 
-    # ── spatiotemporal step (with per-block KV cache) ──
-
     def _step_spatiotemporal(
         self, grid, globals_vec, legal_mask, wm_embed, st_cache,
     ):
@@ -370,37 +425,36 @@ class GeneralsNetwork(nn.Module):
         H, W = cfg.grid_h, cfg.grid_w
         N = H * W
 
-        # encode current timestep
-        spatial = self.spatial_encoder(grid)  # [B, d, H, W]
-        g = self.global_proj(globals_vec)     # [B, d]
+        spatial = self.spatial_encoder(grid)
+        g = self.global_proj(globals_vec)
         spatial = spatial + g.unsqueeze(-1).unsqueeze(-1)
 
-        tokens = spatial.reshape(B, d, N).permute(0, 2, 1)  # [B, N, d]
+        tokens = spatial.reshape(B, d, N).permute(0, 2, 1)
         hl = self.hl_token.expand(B, -1, -1)
         ll = self.ll_token.expand(B, -1, -1)
-        tokens = torch.cat([tokens, hl, ll], dim=1)  # [B, S, d]
+        tokens = torch.cat([tokens, hl, ll], dim=1)
+        tokens = tokens + self._build_spatial_pe()
 
-        # spatial PE
-        spatial_pe = self._build_spatial_pe()
-        tokens = tokens + spatial_pe
-
-        # temporal PE (figure out current step from cache)
         t_cur = 0 if st_cache is None else st_cache[0].shape[1]
-        t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]  # [d]
+        t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]
         tokens = tokens + t_pe.unsqueeze(0).unsqueeze(0)
 
         if wm_embed is not None:
             tokens[:, N:N + 1] += wm_embed.unsqueeze(1)
 
+        # Stage 1: spatiotemporal layers with KV cache
         tokens = self.pre_norm(tokens).unsqueeze(1)  # [B, 1, S, d]
-
-        new_cache: List[torch.Tensor] = []
-        for i, block in enumerate(self.st_blocks):
+        new_caches: List[torch.Tensor] = []
+        for i, layer in enumerate(self.st_layers):
             prev = st_cache[i] if st_cache is not None else None
-            tokens, cache_i = block.forward_step(tokens, prev)
-            new_cache.append(cache_i)
+            tokens, cache_i = layer.forward_step(tokens, prev)
+            new_caches.append(cache_i)
 
-        tokens = self.post_norm(tokens.squeeze(1))  # [B, S, d]
+        tokens = self.mid_norm(tokens.squeeze(1))  # [B, S, d]
+
+        # Stage 2: TRM pondering (spatial only, no cache needed)
+        tokens, _ = self._ponder_trm(tokens, cfg.n_ponder_steps)
+        tokens = self.post_norm(tokens)
 
         spatial_out = tokens[:, :N]
         hl_out = tokens[:, N]
@@ -419,5 +473,5 @@ class GeneralsNetwork(nn.Module):
             "direction_logits": self.direction_head(source_embed, ll_out),
             "split_logits": self.split_head(source_embed, ll_out),
             "value": self.value_head(hl_out),
-            "st_cache": new_cache,
+            "st_cache": new_caches,
         }

@@ -26,6 +26,7 @@ class ImitationLoss(nn.Module):
         direction_weight: float = 1.0,
         split_weight: float = 0.5,
         value_weight: float = 0.5,
+        act_weight: float = 0.01,
         grid_w: int = 25,
     ):
         super().__init__()
@@ -33,6 +34,7 @@ class ImitationLoss(nn.Module):
         self.direction_weight = direction_weight
         self.split_weight = split_weight
         self.value_weight = value_weight
+        self.act_weight = act_weight
         self.grid_w = grid_w
 
     def forward(
@@ -121,12 +123,16 @@ class ImitationLoss(nn.Module):
         )
         value_loss = (value_loss_all * seq_mask.float()).sum() / n_seq
 
+        # --- ACT regularisation ------------------------------------------
+        act_loss = pred.get("act_loss", source_loss.new_tensor(0.0))
+
         # --- Total -------------------------------------------------------
         total = (
             self.source_weight * source_loss
             + self.direction_weight * dir_loss
             + self.split_weight * split_loss
             + self.value_weight * value_loss
+            + self.act_weight * act_loss
         )
 
         return {
@@ -135,6 +141,7 @@ class ImitationLoss(nn.Module):
             "direction_loss": dir_loss.detach(),
             "split_loss": split_loss.detach(),
             "value_loss": value_loss.detach(),
+            "act_loss": act_loss.detach(),
         }
 
 
