@@ -185,8 +185,7 @@ def test_spatiotemporal_block():
     block = SpatiotemporalBlock(cfg)
     B, T, S, d = 2, 8, 627, 64
     x = torch.randn(B, T, S, d)
-    causal = torch.triu(torch.full((T, T), float("-inf")), diagonal=1)
-    y = block(x, causal)
+    y = block(x)
     assert y.shape == (B, T, S, d), f"Shape: {y.shape}"
     print(f"  Input:  {x.shape}")
     print(f"  Output: {y.shape} ✓")
@@ -210,7 +209,7 @@ def test_trm_module():
     )
     trm = TRM(cfg)
     x = torch.randn(2, 627, 64)
-    z_H, q_halt = trm(x)
+    z_H, q_halt, _ = trm(x)
     assert z_H.shape == (2, 627, 64), f"z_H shape: {z_H.shape}"
     assert q_halt.shape == (2,), f"q_halt shape: {q_halt.shape}"
     n_params = sum(p.numel() for p in trm.parameters())
@@ -346,7 +345,7 @@ def test_trm_nograd_optimization():
     )
     trm = TRM(cfg)
     x = torch.randn(1, 10, 64, requires_grad=True)
-    z_H, q_halt = trm(x)
+    z_H, q_halt, _ = trm(x)
     loss = z_H.sum() + q_halt.sum()
     loss.backward()
 

@@ -9,6 +9,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from model.config import ModelConfig
 
@@ -35,7 +36,7 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        attn_out, _ = self.attn(x, x, x)
+        attn_out, _ = self.attn(x, x, x, need_weights=False)
         x = self.norm1(x + attn_out)
         x = self.norm2(x + self.ff(x))
         return x
@@ -91,15 +92,35 @@ class SpatiotemporalBlock(nn.Module):
         )
         self.ff_norm = nn.LayerNorm(cfg.d_model)
 
+    def _causal_temporal_attn(self, x: torch.Tensor) -> torch.Tensor:
+        """Temporal self-attention with causal masking via F.scaled_dot_product_attention.
+
+        Bypasses nn.MultiheadAttention.forward() but reuses its parameters,
+        so existing checkpoints load without any changes.
+        """
+        B, T, d = x.shape
+        n_heads = self.temporal_attn.num_heads
+        d_head = d // n_heads
+
+        # Project Q, K, V using temporal_attn's weights
+        qkv = F.linear(x, self.temporal_attn.in_proj_weight, self.temporal_attn.in_proj_bias)
+        qkv = qkv.reshape(B, T, 3, n_heads, d_head).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)  # each [B, n_heads, T, d_head]
+
+        dropout_p = self.temporal_attn.dropout if self.training else 0.0
+        attn_out = F.scaled_dot_product_attention(
+            q, k, v, dropout_p=dropout_p, is_causal=True,
+        )
+        attn_out = attn_out.permute(0, 2, 1, 3).reshape(B, T, d)
+        return self.temporal_attn.out_proj(attn_out)
+
     def forward(
         self,
         x: torch.Tensor,
-        causal_mask: torch.Tensor,
     ) -> torch.Tensor:
         """
         Args:
-            x           : [B, T, S, d]   S = N+2 (spatial tokens + decision tokens)
-            causal_mask : [T, T]          upper-triangular -inf mask
+            x : [B, T, S, d]   S = N+2 (spatial tokens + decision tokens)
         Returns:
             [B, T, S, d]
         """
@@ -107,15 +128,13 @@ class SpatiotemporalBlock(nn.Module):
 
         # ── spatial self-attention (within each timestep) ──
         x_flat = x.reshape(B * T, S, d)
-        sa_out, _ = self.spatial_attn(x_flat, x_flat, x_flat)
+        sa_out, _ = self.spatial_attn(x_flat, x_flat, x_flat, need_weights=False)
         x_flat = self.spatial_norm(x_flat + sa_out)
         x = x_flat.reshape(B, T, S, d)
 
         # ── temporal self-attention (across timesteps, per position, causal) ──
         x_perm = x.permute(0, 2, 1, 3).reshape(B * S, T, d)
-        ta_out, _ = self.temporal_attn(
-            x_perm, x_perm, x_perm, attn_mask=causal_mask,
-        )
+        ta_out = self._causal_temporal_attn(x_perm)
         x_perm = self.temporal_norm(x_perm + ta_out)
         x = x_perm.reshape(B, S, T, d).permute(0, 2, 1, 3)
 
@@ -142,7 +161,7 @@ class SpatiotemporalBlock(nn.Module):
 
         # ── spatial (only current timestep) ──
         x_flat = x_cur.reshape(B, S, d)
-        sa_out, _ = self.spatial_attn(x_flat, x_flat, x_flat)
+        sa_out, _ = self.spatial_attn(x_flat, x_flat, x_flat, need_weights=False)
         x_flat = self.spatial_norm(x_flat + sa_out)
 
         # ── temporal (query = current, key/value = cache + current) ──
@@ -153,7 +172,7 @@ class SpatiotemporalBlock(nn.Module):
             kv = q  # [B*S, 1, d]
         new_cache = kv
 
-        ta_out, _ = self.temporal_attn(q, kv, kv)
+        ta_out, _ = self.temporal_attn(q, kv, kv, need_weights=False)
         q = self.temporal_norm(q + ta_out)
 
         x_out = q.reshape(B, S, d)

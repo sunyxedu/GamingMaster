@@ -630,7 +630,7 @@ def test_trm_h1_all_params_have_grad():
     )
     trm = TRM(cfg)
     x = torch.randn(1, 5, 32)
-    z_H, q = trm(x)
+    z_H, q, _ = trm(x)
     loss = z_H.sum() + q.sum()
     loss.backward()
 
@@ -656,8 +656,8 @@ def test_trm_output_varies_with_input():
     x2 = torch.randn(1, 5, 32)
 
     with torch.no_grad():
-        z1, _ = trm(x1)
-        z2, _ = trm(x2)
+        z1, _, _ = trm(x1)
+        z2, _, _ = trm(x2)
 
     diff = (z1 - z2).abs().max().item()
     assert diff > 0.01, f"TRM outputs too similar for different inputs: {diff}"

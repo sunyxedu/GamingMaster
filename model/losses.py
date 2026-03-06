@@ -158,71 +158,90 @@ class ImitationLoss(nn.Module):
 
 
 class RLLoss(nn.Module):
-    """
-    Placeholder for future RL losses (PPO / IMPALA style).
+    """PPO loss for RL training.
 
-    Includes:
-      - Policy gradient loss
-      - Value loss
-      - Entropy bonus
-      - (Optional) World-model prediction error as intrinsic reward
+    Takes **pre-computed** log-probabilities and entropy produced by
+    ``GeneralsNetwork.compute_action_log_prob()``.  This cleanly
+    separates action-space logic (in the model) from the RL objective
+    (here).
+
+    Components:
+      - Clipped policy-gradient loss
+      - Value-function MSE
+      - Entropy bonus (maximised)
+
+    Extra diagnostics returned (detached):
+      - approx_kl:      0.5 * mean((log_prob - old_log_prob)^2)
+      - clip_fraction:   fraction of samples where ratio was clipped
     """
 
     def __init__(
         self,
         value_weight: float = 0.5,
         entropy_weight: float = 0.01,
+        clip_range: float = 0.2,
     ):
         super().__init__()
         self.value_weight = value_weight
         self.entropy_weight = entropy_weight
+        self.clip_range = clip_range
 
     def forward(
         self,
-        pred: Dict[str, torch.Tensor],
-        actions: Dict[str, torch.Tensor],
+        log_probs: torch.Tensor,
+        entropy: torch.Tensor,
+        values: torch.Tensor,
         returns: torch.Tensor,
         advantages: torch.Tensor,
         old_log_probs: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        """PPO-style loss (to be implemented when RL training begins)."""
-        B, T, N = pred["source_logits"].shape
+        """
+        Args:
+            log_probs      [B, T]  current-policy log π(a|s)  (differentiable)
+            entropy        [B, T]  current-policy entropy     (differentiable)
+            values         [B, T]  value-head predictions     (differentiable)
+            returns        [B, T]  discounted returns from GAE
+            advantages     [B, T]  GAE advantages (should be normalized)
+            old_log_probs  [B, T]  log π_old(a|s) from rollout
+            mask           [B, T]  bool — True for valid timesteps
+        """
+        if mask is None:
+            mask = torch.ones_like(log_probs, dtype=torch.bool)
+        mask_f = mask.float()
+        n_valid = mask_f.sum().clamp(min=1)
 
-        # Source log-probs
-        source_log_probs = F.log_softmax(pred["source_logits"], dim=-1)
-        source_action = actions["source_idx"]  # [B, T]
-        source_lp = source_log_probs.gather(-1, source_action.unsqueeze(-1)).squeeze(-1)
+        # --- PPO clipped policy loss ---
+        ratio = torch.exp(log_probs - old_log_probs)
+        clip_ratio = torch.clamp(ratio, 1.0 - self.clip_range, 1.0 + self.clip_range)
+        policy_loss = -torch.min(
+            ratio * advantages,
+            clip_ratio * advantages,
+        )
+        policy_loss = (policy_loss * mask_f).sum() / n_valid
 
-        # Direction log-probs
-        dir_log_probs = F.log_softmax(pred["direction_logits"], dim=-1)
-        dir_action = actions["direction"]  # [B, T]
-        dir_lp = dir_log_probs.gather(-1, dir_action.unsqueeze(-1)).squeeze(-1)
+        # --- value loss ---
+        value_loss = F.mse_loss(values, returns, reduction="none")
+        value_loss = (value_loss * mask_f).sum() / n_valid
 
-        # Split log-probs
-        split_log_probs = F.log_softmax(pred["split_logits"], dim=-1)
-        split_action = actions["split"]  # [B, T]
-        split_lp = split_log_probs.gather(-1, split_action.unsqueeze(-1)).squeeze(-1)
+        # --- entropy bonus (negative → we *maximise* entropy) ---
+        entropy_bonus = (entropy * mask_f).sum() / n_valid
 
-        # Total log-prob
-        total_lp = source_lp + dir_lp + split_lp
-
-        # PPO clipped objective
-        ratio = torch.exp(total_lp - old_log_probs)
-        clip_ratio = torch.clamp(ratio, 0.8, 1.2)
-        policy_loss = -torch.min(ratio * advantages, clip_ratio * advantages).mean()
-
-        # Value loss
-        value_loss = F.mse_loss(pred["value"], returns)
-
-        # Entropy bonus (source only for now)
-        source_probs = F.softmax(pred["source_logits"], dim=-1)
-        entropy = -(source_probs * source_log_probs).sum(-1).mean()
-
-        total = policy_loss + self.value_weight * value_loss - self.entropy_weight * entropy
+        total = (
+            policy_loss
+            + self.value_weight * value_loss
+            - self.entropy_weight * entropy_bonus
+        )
 
         return {
             "loss": total,
             "policy_loss": policy_loss.detach(),
             "value_loss": value_loss.detach(),
-            "entropy": entropy.detach(),
+            "entropy": entropy_bonus.detach(),
+            "approx_kl": (
+                0.5 * (log_probs - old_log_probs).pow(2) * mask_f
+            ).sum().detach() / n_valid,
+            "clip_fraction": (
+                ((ratio - 1.0).abs() > self.clip_range).float() * mask_f
+            ).sum().detach() / n_valid,
         }

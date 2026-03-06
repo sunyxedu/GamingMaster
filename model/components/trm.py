@@ -18,6 +18,7 @@ memory efficiency, following the paper).
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint as ckpt_fn
 
 from model.config import ModelConfig
 
@@ -41,7 +42,7 @@ class TRMBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        attn_out, _ = self.attn(x, x, x)
+        attn_out, _ = self.attn(x, x, x, need_weights=False)
         x = self.norm1(x + attn_out)
         x = self.norm2(x + self.ff(x))
         return x
@@ -96,22 +97,29 @@ class TRM(nn.Module):
         nn.init.constant_(self.q_head.bias, -5.0)
 
     def forward(
-        self, x: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self,
+        x: torch.Tensor,
+        carry: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
-            x: [B, S, d]  input embeddings (from spatiotemporal encoder)
+            x:     [B, S, d]  input embeddings (from spatiotemporal encoder)
+            carry: optional (z_H, z_L) from a previous ACT step
 
         Returns:
-            z_H:     [B, S, d]  final high-level state (→ decode to heads)
-            q_halt:  [B]        halt Q-logit (positive = confident, should halt)
+            z_H:       [B, S, d]  final high-level state (→ decode to heads)
+            q_halt:    [B]        halt Q-logit (positive = confident, should halt)
+            new_carry: (z_H, z_L) detached, for next ACT step
         """
         B, S, d = x.shape
         H_cycles = self.cfg.trm_H_cycles
         L_cycles = self.cfg.trm_L_cycles
 
-        z_H = self.H_init.unsqueeze(0).unsqueeze(0).expand(B, S, d)
-        z_L = self.L_init.unsqueeze(0).unsqueeze(0).expand(B, S, d)
+        if carry is not None:
+            z_H, z_L = carry
+        else:
+            z_H = self.H_init.unsqueeze(0).unsqueeze(0).expand(B, S, d)
+            z_L = self.L_init.unsqueeze(0).unsqueeze(0).expand(B, S, d)
 
         # H_cycles-1 without gradient (memory efficiency, following the paper)
         if H_cycles > 1:
@@ -123,12 +131,13 @@ class TRM(nn.Module):
             z_H = z_H.detach().requires_grad_(True)
             z_L = z_L.detach().requires_grad_(True)
 
-        # Last H_cycle with gradient
+        # Last H_cycle with gradient (checkpointed to save memory)
         for _ in range(L_cycles):
-            z_L = self.reasoning(z_L, z_H + x)
-        z_H = self.reasoning(z_H, z_L)
+            z_L = ckpt_fn(self.reasoning, z_L, z_H + x, use_reentrant=False)
+        z_H = ckpt_fn(self.reasoning, z_H, z_L, use_reentrant=False)
 
         # Q-halt from the first token position (following paper)
         q_halt = self.q_head(z_H[:, 0]).squeeze(-1)
 
-        return z_H, q_halt
+        new_carry = (z_H.detach(), z_L.detach())
+        return z_H, q_halt, new_carry

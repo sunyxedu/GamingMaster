@@ -216,7 +216,7 @@ def test_trm_recursion_structure():
         z_H_manual = trm.reasoning(z_H, z_L_manual)
 
         # Through the full TRM
-        z_H_trm, _ = trm(x)
+        z_H_trm, _, _ = trm(x)
 
     diff = (z_H_manual - z_H_trm).abs().max().item()
     assert diff < 1e-5, f"TRM recursion mismatch: {diff:.6f}"
@@ -245,7 +245,7 @@ def test_trm_nograd_saves_memory():
     trm = TRM(cfg)
 
     x = torch.randn(1, 5, 32, requires_grad=True)
-    z_H, q = trm(x)
+    z_H, q, _ = trm(x)
     loss = z_H.sum()
     loss.backward()
 

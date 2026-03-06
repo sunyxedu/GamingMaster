@@ -13,7 +13,7 @@ Generals.io neural network — two-stage architecture:
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -147,17 +147,14 @@ class GeneralsNetwork(nn.Module):
 
         # ── Stage 1: Spatiotemporal encoding ──
         tokens = self.pre_norm(tokens)
-        causal = torch.triu(
-            torch.full((T, T), float("-inf"), device=tokens.device), diagonal=1,
-        )
         for layer in self.st_layers:
-            tokens = layer(tokens, causal)
+            tokens = layer(tokens)
         tokens = self.mid_norm(tokens)
 
         # ── Stage 2: TRM pondering ──
         S = tokens.shape[2]
         x = tokens.reshape(BT, S, d)          # input embeddings for TRM
-        z_H, q_halt = self.trm(x)             # [BT, S, d], [BT]
+        z_H, q_halt, _ = self.trm(x)          # [BT, S, d], [BT]
         z_H = self.post_norm(z_H)
 
         # Decode
@@ -199,7 +196,7 @@ class GeneralsNetwork(nn.Module):
 
         # TRM pondering
         x = self.pre_norm(tokens)
-        z_H, q_halt = self.trm(x)
+        z_H, q_halt, _ = self.trm(x)
         z_H = self.post_norm(z_H)
 
         out = self._decode_heads(z_H, B, T, N, W, legal_mask, source_y, source_x)
@@ -252,7 +249,140 @@ class GeneralsNetwork(nn.Module):
                 source_embed, ll_out,
             ).reshape(B, T, cfg.n_split),
             "value": self.value_head(hl_out).reshape(B, T),
+            "src_idx": src_idx.reshape(B, T),
         }
+
+    # ------------------------------------------------------------------
+    # RL: action sampling and log-probability computation
+    # ------------------------------------------------------------------
+
+    def _sample_actions(
+        self,
+        source_logits: torch.Tensor,
+        direction_logits: torch.Tensor,
+        split_logits: torch.Tensor,
+        legal_mask: Optional[torch.Tensor],
+        src_idx: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Sample direction/split and compute log-probs for all action heads.
+
+        Called during ``step()`` for RL rollout.  Source has already been
+        sampled (``src_idx`` provided); direction and split are sampled here.
+
+        All computations run under ``torch.no_grad`` — gradients are not needed
+        during data-collection rollouts.
+
+        Returns dict with keys:
+            action_source     [B]
+            action_direction  [B]
+            action_split      [B]
+            action_log_prob   [B]   (sum of per-head log-probs)
+        """
+        B = source_logits.shape[0]
+        N = source_logits.shape[-1]
+        device = source_logits.device
+        arange_B = torch.arange(B, device=device)
+
+        with torch.no_grad():
+            # --- source log-prob (masked distribution) ---
+            sl_masked = source_logits.detach().clone()
+            if legal_mask is not None:
+                lm = legal_mask.reshape(B, N)
+                sl_masked = sl_masked.masked_fill(~lm, float("-inf"))
+            all_inf = sl_masked.isinf() & (sl_masked < 0)
+            bad_rows = all_inf.all(dim=-1)
+            if bad_rows.any():
+                sl_masked[bad_rows, 0] = 0.0
+            source_lp = F.log_softmax(sl_masked, dim=-1)[arange_B, src_idx]
+
+            # --- direction ---
+            dir_probs = F.softmax(direction_logits, dim=-1)
+            dir_idx = torch.multinomial(dir_probs, 1).squeeze(-1)
+            dir_lp = F.log_softmax(direction_logits, dim=-1)[arange_B, dir_idx]
+
+            # --- split ---
+            spl_probs = F.softmax(split_logits, dim=-1)
+            spl_idx = torch.multinomial(spl_probs, 1).squeeze(-1)
+            spl_lp = F.log_softmax(split_logits, dim=-1)[arange_B, spl_idx]
+
+        return {
+            "action_source": src_idx,
+            "action_direction": dir_idx,
+            "action_split": spl_idx,
+            "action_log_prob": source_lp + dir_lp + spl_lp,
+        }
+
+    def compute_action_log_prob(
+        self,
+        pred: Dict[str, torch.Tensor],
+        actions: Dict[str, torch.Tensor],
+        legal_mask: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Re-evaluate stored actions under the **current** policy.
+
+        Used during PPO update.  ``pred`` must have been produced by
+        ``forward()`` with ``source_y / source_x`` set to the stored source
+        action so that direction/split logits are conditioned on the correct
+        source embedding.
+
+        Args:
+            pred: model output with
+                source_logits    [B, T, N]  (raw, unmasked)
+                direction_logits [B, T, 4]
+                split_logits     [B, T, 2]
+            actions: dict with
+                source_idx  [B, T]   flat index 0..N-1
+                direction   [B, T]   0..3
+                split       [B, T]   0..1
+            legal_mask: [B, T, 1, H, W] or ``None``
+
+        Returns:
+            log_prob  [B, T]  sum of per-head log-probs (differentiable)
+            entropy   [B, T]  sum of per-head entropies (differentiable)
+        """
+        source_logits = pred["source_logits"]          # [B, T, N]
+        B, T, N = source_logits.shape
+
+        # --- apply legal mask to source logits ---
+        if legal_mask is not None:
+            lm = legal_mask.reshape(B, T, N)
+            sl_masked = source_logits.masked_fill(~lm, float("-inf"))
+            all_inf = sl_masked.isinf() & (sl_masked < 0)
+            bad_rows = all_inf.all(dim=-1)                       # [B, T]
+            if bad_rows.any():
+                sl_masked = sl_masked.clone()
+                sl_masked[bad_rows, 0] = 0.0
+        else:
+            sl_masked = source_logits
+
+        # --- source ---
+        src_log_p = F.log_softmax(sl_masked, dim=-1)             # [B, T, N]
+        src_lp = src_log_p.gather(
+            -1, actions["source_idx"].unsqueeze(-1),
+        ).squeeze(-1)                                            # [B, T]
+        src_probs = torch.exp(src_log_p)
+        src_ent = -(src_probs * src_log_p).nan_to_num(0.0).sum(-1)
+
+        # --- direction ---
+        dir_log_p = F.log_softmax(pred["direction_logits"], dim=-1)
+        dir_lp = dir_log_p.gather(
+            -1, actions["direction"].unsqueeze(-1),
+        ).squeeze(-1)
+        dir_probs = torch.exp(dir_log_p)
+        dir_ent = -(dir_probs * dir_log_p).sum(-1)
+
+        # --- split ---
+        spl_log_p = F.log_softmax(pred["split_logits"], dim=-1)
+        spl_lp = spl_log_p.gather(
+            -1, actions["split"].unsqueeze(-1),
+        ).squeeze(-1)
+        spl_probs = torch.exp(spl_log_p)
+        spl_ent = -(spl_probs * spl_log_p).sum(-1)
+
+        return (
+            src_lp + dir_lp + spl_lp,
+            src_ent + dir_ent + spl_ent,
+        )
 
     # ------------------------------------------------------------------
     # Public forward
@@ -296,15 +426,70 @@ class GeneralsNetwork(nn.Module):
         return self._step_gru(grid, globals_vec, legal_mask, hidden, world_model_embed)
 
     def _step_gru(self, grid, globals_vec, legal_mask, hidden, wm_embed):
-        out = self._forward_gru(
-            grid.unsqueeze(1), globals_vec.unsqueeze(1),
-            legal_mask.unsqueeze(1) if legal_mask is not None else None,
-            None, None, hidden,
-            wm_embed.unsqueeze(1) if wm_embed is not None else None,
+        cfg = self.cfg
+        B, d = grid.shape[0], cfg.d_model
+        N = cfg.grid_h * cfg.grid_w
+        W = cfg.grid_w
+
+        spatial = self.spatial_encoder(grid)
+        spatial = spatial + self.global_proj(globals_vec).unsqueeze(-1).unsqueeze(-1)
+
+        pooled = spatial.mean(dim=(-2, -1)).unsqueeze(1)  # [B, 1, d]
+        temporal, hidden = self.history_encoder(pooled, hidden)
+        spatial = spatial + temporal.squeeze(1).unsqueeze(-1).unsqueeze(-1)
+
+        tokens = spatial.reshape(B, d, N).permute(0, 2, 1)
+        tokens = torch.cat([tokens, self.hl_token.expand(B, -1, -1),
+                            self.ll_token.expand(B, -1, -1)], dim=1)
+        tokens = tokens + self._build_spatial_pe()
+
+        if wm_embed is not None:
+            tokens[:, N:N + 1] += wm_embed.unsqueeze(1)
+
+        # TRM with ACT
+        x = self.pre_norm(tokens)
+        carry = None
+        for _ in range(cfg.halt_max_steps):
+            z_H, q_halt, carry = self.trm(x, carry)
+            if (q_halt > 0).all():
+                break
+        z_H = self.post_norm(z_H)
+
+        spatial_out = z_H[:, :N]
+        hl_out = z_H[:, N]
+        ll_out = z_H[:, N + 1]
+
+        source_logits = self.source_head(spatial_out)
+        with torch.no_grad():
+            logits_safe = source_logits.detach().clone()
+            if legal_mask is not None:
+                lm = legal_mask.reshape(B, N)
+                logits_safe = logits_safe.masked_fill(~lm, float("-inf"))
+            all_masked = logits_safe.isinf() & (logits_safe < 0)
+            bad_rows = all_masked.all(dim=-1)
+            if bad_rows.any():
+                logits_safe[bad_rows, 0] = 0.0
+            probs = F.softmax(logits_safe, dim=-1)
+            src_idx = torch.multinomial(probs, 1).squeeze(-1)
+        source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
+
+        direction_logits = self.direction_head(source_embed, ll_out)
+        split_logits = self.split_head(source_embed, ll_out)
+        value = self.value_head(hl_out)
+
+        rl_out = self._sample_actions(
+            source_logits, direction_logits, split_logits,
+            legal_mask, src_idx,
         )
+
         return {
-            k: (v if k == "hidden" else v.squeeze(1) if isinstance(v, torch.Tensor) and v.dim() > 1 else v)
-            for k, v in out.items()
+            "source_logits": source_logits,
+            "direction_logits": direction_logits,
+            "split_logits": split_logits,
+            "value": value,
+            "q_halt": q_halt,
+            "hidden": hidden,
+            **rl_out,
         }
 
     def _step_st(self, grid, globals_vec, legal_mask, wm_embed, st_cache):
@@ -336,8 +521,12 @@ class GeneralsNetwork(nn.Module):
             new_caches.append(cache_i)
         tokens = self.mid_norm(tokens.squeeze(1))
 
-        # Stage 2: TRM
-        z_H, q_halt = self.trm(tokens)
+        # Stage 2: TRM with ACT
+        carry = None
+        for _ in range(cfg.halt_max_steps):
+            z_H, q_halt, carry = self.trm(tokens, carry)
+            if (q_halt > 0).all():
+                break
         z_H = self.post_norm(z_H)
 
         spatial_out = z_H[:, :N]
@@ -359,11 +548,22 @@ class GeneralsNetwork(nn.Module):
             src_idx = torch.multinomial(probs, 1).squeeze(-1)
         source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
 
+        direction_logits = self.direction_head(source_embed, ll_out)
+        split_logits = self.split_head(source_embed, ll_out)
+        value = self.value_head(hl_out)
+
+        # Sample direction/split and compute log-probs for RL rollout
+        rl_out = self._sample_actions(
+            source_logits, direction_logits, split_logits,
+            legal_mask, src_idx,
+        )
+
         return {
             "source_logits": source_logits,
-            "direction_logits": self.direction_head(source_embed, ll_out),
-            "split_logits": self.split_head(source_embed, ll_out),
-            "value": self.value_head(hl_out),
+            "direction_logits": direction_logits,
+            "split_logits": split_logits,
+            "value": value,
             "q_halt": q_halt,
             "st_cache": new_caches,
+            **rl_out,
         }

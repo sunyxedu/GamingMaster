@@ -24,12 +24,13 @@ class ModelConfig:
     n_st_layers: int = 2
 
     # Stage 2: TRM pondering
-    trm_H_cycles: int = 4    # outer loop — refine answer
-    trm_L_cycles: int = 4    # inner loop — refine reasoning
+    trm_H_cycles: int = 3    # outer loop — refine answer
+    trm_L_cycles: int = 6    # inner loop — refine reasoning
     trm_block_layers: int = 2  # transformer layers inside the shared reasoning module
+    halt_max_steps: int = 5   # ACT pondering steps at inference (1 = no ACT)
 
     # Temporal modelling
-    #   "spatiotemporal" – Stage1: factored spatiotemporal → Stage2: TRM
+    #   "spatiotemporal" – factored spatiotemporal → TRM
     #   "gru"            – GRU history encoder → TRM
     temporal_type: str = "spatiotemporal"
 

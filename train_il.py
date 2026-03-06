@@ -2,7 +2,11 @@
 Imitation Learning training script for the generals.io bot.
 
 Usage:
+    # Single GPU:
     python3 train_il.py --data_dir <path_to_gio_data> [options]
+
+    # Multi-GPU (DDP):
+    torchrun --nproc_per_node=2 train_il.py --data_dir <path_to_gio_data> [options]
 """
 
 import argparse
@@ -10,7 +14,10 @@ import os
 import time
 
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
 from model.config import ModelConfig
@@ -42,11 +49,12 @@ def parse_args():
     return p.parse_args()
 
 
-def train_epoch(model, loader, criterion, optimizer, device, epoch, args):
+def train_epoch(model, loader, criterion, optimizer, device, epoch, args, rank0=True):
     model.train()
     total_loss = 0.0
     total_steps = 0
     log_losses = {"source": 0, "direction": 0, "split": 0, "value": 0, "q_halt": 0}
+    use_amp = device.type == "cuda"
 
     for step, batch in enumerate(loader):
         grid_seq = batch["obs"]["grid_seq"].to(device)
@@ -59,14 +67,14 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args):
         source_y = tgt["src_y"][:, :, 0]
         source_x = tgt["src_x"][:, :, 0]
 
-        pred = model(
-            grid_seq, globals_seq,
-            legal_mask=legal_mask,
-            source_y=source_y,
-            source_x=source_x,
-        )
-
-        losses = criterion(pred, tgt, lengths)
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+            pred = model(
+                grid_seq, globals_seq,
+                legal_mask=legal_mask,
+                source_y=source_y,
+                source_x=source_x,
+            )
+            losses = criterion(pred, tgt, lengths)
         loss = losses["loss"]
 
         optimizer.zero_grad()
@@ -80,7 +88,7 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args):
         for k in log_losses:
             log_losses[k] += losses[f"{k}_loss"].item()
 
-        if (step + 1) % args.log_interval == 0:
+        if rank0 and (step + 1) % args.log_interval == 0:
             avg = total_loss / total_steps
             parts = {k: v / total_steps for k, v in log_losses.items()}
             print(
@@ -97,11 +105,21 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args):
 def main():
     args = parse_args()
 
-    if args.device == "auto":
+    # Distributed setup (auto-detected via torchrun)
+    distributed = "LOCAL_RANK" in os.environ
+    if distributed:
+        dist.init_process_group(backend="nccl")
+        local_rank = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(local_rank)
+        device = torch.device(f"cuda:{local_rank}")
+    elif args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device(args.device)
-    print(f"Device: {device}")
+    rank0 = not distributed or dist.get_rank() == 0
+    if rank0:
+        suffix = f" (world_size={dist.get_world_size()})" if distributed else ""
+        print(f"Device: {device}{suffix}")
 
     cfg = ModelConfig(
         d_model=args.d_model,
@@ -110,12 +128,16 @@ def main():
         trm_L_cycles=args.trm_L_cycles,
         trm_block_layers=args.trm_block_layers,
     )
-    print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, "
-          f"TRM={cfg.trm_H_cycles}H×{cfg.trm_L_cycles}L×{cfg.trm_block_layers}blk")
+    if rank0:
+        print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, "
+              f"TRM={cfg.trm_H_cycles}H\u00d7{cfg.trm_L_cycles}L\u00d7{cfg.trm_block_layers}blk")
 
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {n_params:,}")
+    if distributed:
+        model = DDP(model, device_ids=[local_rank])
+    if rank0:
+        print(f"Model parameters: {n_params:,}")
 
     criterion = ImitationLoss(grid_w=cfg.grid_w)
     optimizer = torch.optim.AdamW(
@@ -129,12 +151,15 @@ def main():
         args.data_dir,
         max_sequence_length=args.max_seq_len,
     )
-    print(f"Dataset: {len(dataset)} replays from {args.data_dir}")
+    if rank0:
+        print(f"Dataset: {len(dataset)} replays from {args.data_dir}")
 
+    sampler = DistributedSampler(dataset, shuffle=True) if distributed else None
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=(sampler is None),
+        sampler=sampler,
         collate_fn=collate_variable_length_sequences,
         num_workers=args.num_workers,
         pin_memory=(device.type == "cuda"),
@@ -143,17 +168,21 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     for epoch in range(1, args.epochs + 1):
+        if sampler is not None:
+            sampler.set_epoch(epoch)
         t0 = time.time()
-        avg_loss = train_epoch(model, loader, criterion, optimizer, device, epoch, args)
+        avg_loss = train_epoch(model, loader, criterion, optimizer, device, epoch, args, rank0=rank0)
         scheduler.step()
         elapsed = time.time() - t0
         lr = optimizer.param_groups[0]["lr"]
-        print(f"Epoch {epoch}/{args.epochs}  loss={avg_loss:.4f}  lr={lr:.6f}  time={elapsed:.1f}s")
+        if rank0:
+            print(f"Epoch {epoch}/{args.epochs}  loss={avg_loss:.4f}  lr={lr:.6f}  time={elapsed:.1f}s")
 
-        if epoch % args.save_interval == 0:
+        if epoch % args.save_interval == 0 and rank0:
+            raw_model = model.module if distributed else model
             ckpt = {
                 "epoch": epoch,
-                "model_state": model.state_dict(),
+                "model_state": raw_model.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
                 "scheduler_state": scheduler.state_dict(),
                 "config": cfg.__dict__,
@@ -163,7 +192,10 @@ def main():
             torch.save(ckpt, path)
             print(f"  Saved {path}")
 
-    print("Training complete.")
+    if rank0:
+        print("Training complete.")
+    if distributed:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

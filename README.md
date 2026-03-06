@@ -15,6 +15,7 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 │   ├── config.py             #   ModelConfig dataclass
 │   ├── network.py            #   GeneralsNetwork (assembles everything)
 │   ├── losses.py             #   ImitationLoss, RLLoss
+│   ├── rl_utils.py           #   GAE, RolloutBuffer, KL reg, freeze helpers
 │   └── components/           #   Reusable building blocks
 │       ├── encoder.py        #     SpatialEncoder, HistoryEncoder, ResBlock
 │       ├── transformer.py    #     TransformerBlock, SpatiotemporalBlock
@@ -25,12 +26,14 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 │   ├── prepare_data.py       # CLI: batch download → filter → simulate → convert
 │   └── replay_to_visual.py   # CLI: download one replay → simulate → HTML viewer
 ├── train_il.py               # Imitation Learning training script
+├── train_rl.py               # RL training script (PPO self-play + IL regularisation)
 ├── tests/
 │   ├── test_verify_simulator.py       # Simulator correctness (real replay)
 │   ├── test_model.py                  # 26 unit tests for every model component
 │   ├── test_audit_fixes.py            # 11 bug-fix verification tests
 │   ├── test_comprehensive_audit.py    # 48 comprehensive audit tests (all modules)
-│   └── test_training_e2e.py           # End-to-end training loop tests
+│   ├── test_training_e2e.py           # End-to-end training loop tests
+│   └── test_rl.py                     # RL utilities and rollout tests
 └── pyproject.toml
 ```
 
@@ -79,14 +82,15 @@ uv run python train_il.py \
 ### 5. Train (Reinforcement Learning)
 
 ```bash
-# Load from IL checkpoint, fine-tune with PPO (requires interactive env, not yet implemented)
+# Load from IL checkpoint, fine-tune with PPO self-play
 uv run python train_rl.py \
-    --checkpoint checkpoints/checkpoint_epoch50.pt \
+    --il_checkpoint checkpoints/checkpoint_epoch50.pt \
+    --il_data_dir data/output/training/MeltedToast \
     --use_world_model
 ```
 
-> RL training requires an interactive generals.io environment (self-play or vs bot), which is not yet implemented.
-> Model-side support is ready: `model.step()` single-step inference with KV cache, `ValueHead`, `RLLoss` (PPO), `WorldModel` (curiosity reward).
+> RL training uses PPO self-play with joint IL regularisation (AlphaStar-style). Requires an interactive generals.io environment (not yet implemented).
+> Model-side support is ready: `model.step()` single-step inference with KV cache, `ValueHead`, `RLLoss` (PPO), `WorldModel` (curiosity reward), `rl_utils.py` (GAE, RolloutBuffer, KL regularisation).
 
 ---
 
@@ -209,7 +213,7 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
   │  │  z_H = reason(z_H, z_L)             │  Self-Attn→Norm  │  │
   │  (first H_cycles−1 with no_grad)       │  MLP→Norm        │  │
   │                                        └──────────────────┘  │
-  │  q_halt = σ(linear(z_H[:,0]))  ── confidence logit           │
+  │  q_halt = linear(z_H[:,0])  ── raw halt logit                │
   └──────────────────────┬───────────────────────────────────────┘
                          │ z_H [B*T, 627, d],  q_halt [B, T]
                     ┌──────────┐
@@ -267,6 +271,7 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
 - **Legal mask at sampling only**: `SourceHead` outputs raw logits over all 625 positions. The legal-move mask (owned tiles with army > 1) is applied externally only during inference sampling — not during training. This lets the model learn board understanding from the state encoding itself, rather than relying on a hard mask.
 - **Decision tokens**: Two learnable tokens — High-Level (→ value prediction) and Low-Level (→ direction/split) — are appended to the 625 spatial tokens and participate in both spatial and temporal attention.
 - **2D spatial PE + sinusoidal temporal PE**: Spatial positions use learnable row + column embeddings (summed). Temporal positions use sinusoidal encoding, allowing generalisation to arbitrary game lengths.
+- **TRM two-state pondering** ([arxiv 2510.04871](https://arxiv.org/abs/2510.04871)): Two learnable state vectors — `z_H` (answer) and `z_L` (reasoning scratchpad) — are iteratively refined by a single shared reasoning module. Inner loop refines `z_L` using `z_H + x` as injection; outer loop updates `z_H` from `z_L`. First `H_cycles−1` outer iterations run without gradient for memory efficiency; only the last iteration propagates gradients. At inference, ACT (Adaptive Computation Time) loops up to `halt_max_steps` times — `q_halt` head on `z_H` outputs a confidence logit; when positive, the model stops pondering early. Carry state `(z_H, z_L)` is passed between ACT steps so each round builds on the previous thinking.
 - **World model** (optional): Predicts next-state embedding from (current state, action). Disabled during IL; during RL, prediction error serves as intrinsic curiosity reward.
 
 Default config:
@@ -276,9 +281,10 @@ Default config:
 | `n_heads` | 8 |
 | `d_ff` | 512 |
 | `n_st_layers` | 2 |
-| `trm_H_cycles` | 4 |
-| `trm_L_cycles` | 4 |
+| `trm_H_cycles` | 3 |
+| `trm_L_cycles` | 6 |
 | `trm_block_layers` | 2 |
+| `halt_max_steps` | 5 |
 | `encoder_channels` | 128 |
 | `temporal_type` | `"spatiotemporal"` |
 
@@ -294,6 +300,7 @@ Supervised learning from expert replays:
 | Direction CE | 1.0 | Cross-entropy over 4 directions |
 | Split CE | 0.5 | Cross-entropy over 2 split options |
 | Value MSE | 0.5 | Mean squared error on game value |
+| Q-halt BCE | 0.5 | Binary CE — target 1 if source prediction correct, 0 otherwise |
 
 All losses are masked: timesteps with no move (`count=0`) are excluded from source/direction/split loss; timesteps beyond the actual sequence length are excluded from all losses.
 
@@ -334,7 +341,9 @@ IL pretrained model
 Why the world model matters: generals.io has extremely sparse reward (only win/loss at game end). The world model provides dense intrinsic reward — the worse the model's prediction for an unseen area, the more information lies there, encouraging the agent to explore through fog of war.
 
 RL training requires an interactive generals.io environment (self-play or vs bot), which is not yet implemented. On the model side, everything is ready:
-- `model.step()` single-step inference with KV cache, suitable for RL rollouts
+- `train_rl.py` — full PPO self-play loop with joint IL regularisation and KL constraint
+- `model/rl_utils.py` — GAE, RolloutBuffer, encoder freeze/unfreeze helpers
+- `model.step()` — single-step inference with KV cache, suitable for RL rollouts
 - `ValueHead` outputs game value in \[-1, 1\]
 - `WorldModel` can be enabled via `use_world_model=True`
 
