@@ -28,7 +28,7 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--weight_decay", type=float, default=1e-4)
-    p.add_argument("--max_seq_len", type=int, default=512, help="Max sequence length per sample")
+    p.add_argument("--max_seq_len", type=int, default=2000, help="Max sequence length per sample")
     p.add_argument("--d_model", type=int, default=256)
     p.add_argument("--n_heads", type=int, default=8)
     p.add_argument("--trm_H_cycles", type=int, default=4)
