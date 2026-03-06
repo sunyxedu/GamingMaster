@@ -195,12 +195,14 @@ def convert_simulator_to_gio(
 
         # --- value (state-based) ----------------------------------------
         if estimate_value:
-            if my_land > 0 and op_land > 0:
+            if op_land == 0:
+                val = 1.0   # opponent eliminated → win
+            elif my_land == 0:
+                val = -1.0  # we lost all land → loss
+            else:
                 land_ratio = my_land / max(op_land, 1)
                 army_ratio = my_army / max(op_army, 1)
                 val = np.tanh((land_ratio + army_ratio) / 2.0 - 1.0)
-            else:
-                val = 0.0
             value.append(float(val))
         else:
             value.append(0.0)

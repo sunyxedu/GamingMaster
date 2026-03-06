@@ -1,6 +1,8 @@
-import os, json, torch
+import json
+import os
+
+import torch
 from torch.utils.data import Dataset
-from torch.nn.utils.rnn import pad_sequence
 
 
 def collate_variable_length_sequences(batch):

@@ -1,4 +1,9 @@
-import os, json, argparse, random
+import argparse
+import json
+import os
+import random
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)

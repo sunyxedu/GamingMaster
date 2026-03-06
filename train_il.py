@@ -46,7 +46,7 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args):
     model.train()
     total_loss = 0.0
     total_steps = 0
-    log_losses = {"source": 0, "direction": 0, "split": 0, "value": 0}
+    log_losses = {"source": 0, "direction": 0, "split": 0, "value": 0, "q_halt": 0}
 
     for step, batch in enumerate(loader):
         grid_seq = batch["obs"]["grid_seq"].to(device)
@@ -87,7 +87,7 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args):
                 f"  Epoch {epoch} Step {step+1}/{len(loader)}  "
                 f"loss={avg:.4f}  src={parts['source']:.4f}  "
                 f"dir={parts['direction']:.4f}  split={parts['split']:.4f}  "
-                f"val={parts['value']:.4f}"
+                f"val={parts['value']:.4f}  qhalt={parts['q_halt']:.4f}"
             )
 
     avg_loss = total_loss / max(total_steps, 1)

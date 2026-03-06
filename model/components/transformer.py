@@ -54,7 +54,7 @@ def _sinusoidal_pe(length: int, d_model: int, device: torch.device) -> torch.Ten
     )
     pe = torch.zeros(length, d_model, device=device)
     pe[:, 0::2] = torch.sin(pos * div)
-    pe[:, 1::2] = torch.cos(pos * div)
+    pe[:, 1::2] = torch.cos(pos * div[:d_model // 2])
     return pe
 
 

@@ -6,9 +6,9 @@ including fog of war, visible units, and actions taken.
 """
 
 import json
-import math
-from typing import List, Dict, Any, Tuple, Optional
-from data_processing.processing.models import Tile, Player, Turn
+from typing import Any, Dict, List, Optional, Tuple
+
+from data_processing.processing.models import Player, Tile, Turn
 
 
 class ReplaySimulator:

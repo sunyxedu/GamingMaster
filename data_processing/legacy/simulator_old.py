@@ -6,9 +6,8 @@ including fog of war, visible units, and actions taken.
 """
 
 import json
-import math
-from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass

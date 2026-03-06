@@ -126,6 +126,8 @@ class ImitationLoss(nn.Module):
         # --- Q-halt loss (TRM halting) ------------------------------------
         # q_halt predicts whether the current answer is "good enough"
         # Target: 1 if source prediction is correct, 0 otherwise
+        # Must use `valid` mask (not seq_mask) because tgt_src is only
+        # meaningful at timesteps with actual moves (count > 0).
         q_halt_loss = source_loss.new_tensor(0.0)
         if "q_halt" in pred and valid.any():
             with torch.no_grad():
@@ -134,7 +136,7 @@ class ImitationLoss(nn.Module):
             q_halt_loss = F.binary_cross_entropy_with_logits(
                 pred["q_halt"], correct, reduction="none",
             )
-            q_halt_loss = (q_halt_loss * seq_mask.float()).sum() / n_seq
+            q_halt_loss = (q_halt_loss * valid.float()).sum() / n_valid
 
         # --- Total -------------------------------------------------------
         total = (
