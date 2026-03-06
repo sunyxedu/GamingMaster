@@ -17,7 +17,7 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 │   ├── losses.py             #   ImitationLoss, RLLoss
 │   └── components/           #   Reusable building blocks
 │       ├── encoder.py        #     SpatialEncoder, HistoryEncoder, ResBlock
-│       ├── transformer.py    #     TransformerBlock (shared-weight pondering)
+│       ├── transformer.py    #     TransformerBlock, SpatiotemporalBlock
 │       ├── heads.py          #     Source / Direction / Split / Value heads
 │       └── world_model.py    #     WorldModel (for RL curiosity reward)
 ├── scripts/
@@ -26,7 +26,7 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 ├── train_il.py               # Imitation Learning training script
 ├── tests/
 │   ├── test_verify_simulator.py   # Simulator correctness (real replay)
-│   ├── test_model.py              # 19 unit tests for every model component
+│   ├── test_model.py              # 24 unit tests for every model component
 │   └── test_training_e2e.py       # End-to-end training loop tests
 └── pyproject.toml
 ```
@@ -70,8 +70,7 @@ uv run python train_il.py \
     --data_dir data/output/training/MeltedToast \
     --epochs 50 \
     --batch_size 4 \
-    --d_model 256 \
-    --n_ponder_steps 4
+    --d_model 256
 ```
 
 ---
@@ -129,54 +128,67 @@ Training format per timestep:
 
 ### Step 2: Neural Network Architecture
 
-The model follows the architecture diagram — a Transformer with shared-weight pondering, autoregressive policy heads, and optional world model.
+The model uses **factored spatiotemporal attention**: each layer first does spatial self-attention within the current timestep, then causal temporal self-attention across all past timesteps at each grid position. This replaces both the CNN-era history encoder and the spatial Transformer into a single unified backbone.
+
+Two temporal modes are available via `ModelConfig.temporal_type`:
+
+| Mode | `temporal_type` | Description |
+|------|----------------|-------------|
+| **Spatiotemporal** (default) | `"spatiotemporal"` | Factored spatial + causal temporal attention, stacked `n_layers` times |
+| GRU + Pondering | `"gru"` | GRU history encoder → shared-weight spatial TransformerBlock ×k |
 
 ```
-Input (Grid Types + Grid Number + Globals)
+Input (Grid Types 11ch + Grid Number 1ch + Globals 4-dim)
   │
   ▼
 ┌─────────────────────┐
 │   SpatialEncoder     │  Conv + ResBlocks: [B, 12, 25, 25] → [B, d, 25, 25]
 └─────────┬───────────┘
           │ + broadcast global features [B, d, 1, 1]
+          │ + sinusoidal temporal PE
+          │ flatten to [B, T, 625, d] + append HL & LL decision tokens
           ▼
-┌─────────────────────┐
-│   HistoryEncoder     │  GRU over temporally-pooled spatial embeddings
-└─────────┬───────────┘
-          │ flatten to [B·T, 625, d] + append 2 decision tokens
-          ▼
-┌─────────────────────┐
-│  TransformerBlock    │  Self-Attention → Add & Norm → MLP → Add & Norm
-│       × k steps      │  (same weights applied k times — pondering)
-└─────────┬───────────┘
-          │
-    ┌─────┼──────────┐
-    ▼     ▼          ▼
- spatial  HL token   LL token
- tokens
-    │     │          │
-    ▼     │     ┌────┴─────┐
-┌────────┐│     ▼          ▼
-│ Source  ││  ┌──────┐  ┌──────┐
-│  Head   ││  │ Dir  │  │Split │
-└───┬────┘│  │ Head │  │ Head │
-    │     │  └──────┘  └──────┘
-    │     ▼
-    │  ┌──────┐
-    │  │Value │
-    │  │ Head │
-    │  └──────┘
-    ▼
+┌──────────────────────────────────┐
+│    SpatiotemporalBlock × n_layers │
+│                                  │
+│  ┌─ Spatial Self-Attention ────┐ │  627 tokens within each timestep
+│  │  Add & Norm                 │ │
+│  ├─ Temporal Self-Attention ───┤ │  per cell across all past timesteps (causal)
+│  │  Add & Norm                 │ │
+│  ├─ MLP ───────────────────────┤ │
+│  │  Add & Norm                 │ │
+│  └─────────────────────────────┘ │
+└─────────────┬────────────────────┘
+              │
+        ┌─────┼──────────┐
+        ▼     ▼          ▼
+     spatial  HL token   LL token
+     tokens
+        │     │          │
+        ▼     │     ┌────┴─────┐
+   ┌────────┐ │     ▼          ▼
+   │ Source  │ │  ┌──────┐  ┌──────┐
+   │  Head   │ │  │ Dir  │  │Split │
+   └───┬────┘ │  │ Head │  │ Head │
+       │      │  └──────┘  └──────┘
+       │      ▼
+       │   ┌──────┐
+       │   │Value │
+       │   │ Head │
+       │   └──────┘
+       ▼
   source_logits [B, T, 625]
 ```
 
 **Key design choices:**
 
-- **Autoregressive policy heads**: Source is predicted first; its embedding is then fed to the Direction and Split heads. During training, the ground-truth source is used; during inference, the model samples.
-- **Shared-weight pondering** (×k): A single `TransformerBlock` is applied k times (default 4). This lets the model iteratively refine its representation, similar to Universal Transformer / ACT.
-- **2D positional encoding**: Separate learnable row and column embeddings, summed additively.
-- **Decision tokens**: Two special learnable tokens — High-Level (used for value prediction) and Low-Level (used for direction/split prediction) — are appended to the spatial tokens and participate in self-attention.
-- **World model** (optional): Predicts next-state embedding from (current state, action). Disabled during IL (receives zeros); during RL, prediction error serves as intrinsic curiosity reward.
+- **Factored spatiotemporal attention**: Each `SpatiotemporalBlock` first runs spatial self-attention (627 tokens within the same timestep interact), then causal temporal self-attention (each of the 627 token positions attends to its own history across all past timesteps). This gives every grid cell a per-cell temporal memory — it knows exactly *where* and *when* it saw something before, unlike a pooled GRU that discards spatial structure.
+- **Causal temporal masking**: Timestep *t* can only attend to timesteps 0..*t*, never the future. Verified by test: processing T=6 vs T=3 produces identical outputs for the first 3 steps (diff = 0).
+- **KV cache for inference**: During single-step inference, each block caches past key/value tensors. Only the current timestep's tokens are computed; temporal attention queries the growing cache. No re-processing of past timesteps.
+- **Autoregressive policy heads**: Source is predicted first from spatial tokens; its embedding is extracted and concatenated with the Low-Level decision token to predict Direction and Split. During training, ground-truth source is used; during inference, the model samples.
+- **Decision tokens**: Two learnable tokens — High-Level (→ value prediction) and Low-Level (→ direction/split) — are appended to the 625 spatial tokens and participate in both spatial and temporal attention.
+- **2D spatial PE + sinusoidal temporal PE**: Spatial positions use learnable row + column embeddings (summed). Temporal positions use sinusoidal encoding, allowing generalisation to arbitrary game lengths.
+- **World model** (optional): Predicts next-state embedding from (current state, action). Disabled during IL; during RL, prediction error serves as intrinsic curiosity reward.
 
 Default config:
 | Parameter | Value |
@@ -184,9 +196,9 @@ Default config:
 | `d_model` | 256 |
 | `n_heads` | 8 |
 | `d_ff` | 512 |
-| `n_ponder_steps` | 4 |
+| `n_layers` | 4 |
 | `encoder_channels` | 128 |
-| `gru_layers` | 1 |
+| `temporal_type` | `"spatiotemporal"` |
 
 ### Step 3: Training
 
@@ -243,14 +255,16 @@ Every component has been verified against the real replay `asS2S5O_y` (~Hemlix~ 
 | State encoding | 11 categories correct for all terrain/ownership/visibility combos | ✓ |
 | Obs-action pairing | 0/1225 legal-mask violations (was 1160/1225 before fix) | ✓ |
 | Full simulation | Both players' perspectives: correct winner, land/army progression | ✓ |
+| Temporal causality | T=6 vs T=3 prefix outputs match exactly (diff = 0) | ✓ |
+| KV cache inference | Cache grows correctly step-by-step (1→2→3→…→t) | ✓ |
 | Model forward | All output shapes correct for batch + sequence dims | ✓ |
-| Gradient flow | All 64 parameters receive gradients through every component | ✓ |
+| Gradient flow | All parameters receive gradients through every component | ✓ |
 | Training loop | Loss decreases on mock and real data; checkpoint save/load works | ✓ |
 
 Run all tests:
 
 ```bash
 uv run python tests/test_verify_simulator.py   # Simulator correctness
-uv run python tests/test_model.py              # 19 model unit tests
+uv run python tests/test_model.py              # 24 model unit tests
 uv run python tests/test_training_e2e.py       # End-to-end training
 ```
