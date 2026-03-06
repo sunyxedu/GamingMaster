@@ -205,9 +205,8 @@ def convert_simulator_to_gio(
                 city_diff = my_cities - op_cities
                 adj_my = my_army + max(city_diff, 0) * 50
                 adj_op = op_army + max(-city_diff, 0) * 50
-                land_ratio = my_land / max(op_land, 1)
                 army_ratio = adj_my / max(adj_op, 1)
-                heuristic = float(np.tanh((land_ratio + army_ratio) / 2.0 - 1.0))
+                heuristic = float(np.tanh(army_ratio - 1.0))
 
             winner = sim_data.get("winner")
             player = sim_data.get("player")
