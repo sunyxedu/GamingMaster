@@ -73,6 +73,18 @@ uv run python train_il.py \
     --d_model 256
 ```
 
+### 5. Train (Reinforcement Learning)
+
+```bash
+# 从 IL checkpoint 加载，用 PPO 做 fine-tune（需要交互式环境，尚未实现）
+uv run python train_rl.py \
+    --checkpoint checkpoints/checkpoint_epoch50.pt \
+    --use_world_model
+```
+
+> RL 训练需要一个可交互的 generals.io 环境（self-play 或 vs bot），环境接口尚未实现。
+> 模型侧已支持：`model.step()` 单步推理 + KV cache、`ValueHead`、`RLLoss` (PPO)、`WorldModel` (curiosity reward)。
+
 ---
 
 ## How It Works — Step by Step
