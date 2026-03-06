@@ -392,6 +392,71 @@ def test_full_pipeline_real_data():
             break
 
 
+def test_inference_empty_legal_mask():
+    """Inference must not crash when all legal positions are masked (no legal moves)."""
+    print("\n=== Inference with empty legal mask ===")
+    from model.config import ModelConfig
+    from model.network import GeneralsNetwork
+
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        encoder_channels=32, temporal_type="spatiotemporal",
+    )
+    model = GeneralsNetwork(cfg)
+    model.eval()
+
+    # All-False legal mask (no legal moves)
+    legal_mask = torch.zeros(1, 1, 25, 25, dtype=torch.bool)
+    with torch.no_grad():
+        out = model.step(torch.randn(1, 12, 25, 25), torch.randn(1, 4), legal_mask=legal_mask)
+    assert out["source_logits"].shape == (1, 625)
+    print("  All-False mask: no crash ✓")
+
+    # None legal mask (no masking at all)
+    with torch.no_grad():
+        out2 = model.step(torch.randn(1, 12, 25, 25), torch.randn(1, 4))
+    assert out2["source_logits"].shape == (1, 625)
+    print("  None mask: no crash ✓")
+
+
+def test_step_vs_full_consistency():
+    """Step-by-step inference must match full-sequence forward exactly."""
+    print("\n=== Step-by-step vs full-sequence consistency ===")
+    from model.config import ModelConfig
+    from model.network import GeneralsNetwork
+
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
+    )
+    model = GeneralsNetwork(cfg)
+    model.eval()
+
+    B, T = 1, 5
+    grid_seq = torch.randn(B, T, 12, 25, 25)
+    globals_seq = torch.randn(B, T, 4)
+    source_y = torch.randint(0, 25, (B, T))
+    source_x = torch.randint(0, 25, (B, T))
+
+    with torch.no_grad():
+        full = model(grid_seq, globals_seq, source_y=source_y, source_x=source_x)
+
+    cache = None
+    step_sources = []
+    for t in range(T):
+        with torch.no_grad():
+            out = model.step(grid_seq[:, t], globals_seq[:, t], st_cache=cache)
+        cache = out["st_cache"]
+        step_sources.append(out["source_logits"])
+    step_src = torch.stack(step_sources, dim=1)
+
+    diff = (full["source_logits"] - step_src).abs().max().item()
+    assert diff < 1e-3, f"Diff too large: {diff}"
+    print(f"  Max diff: {diff:.8f} ✓")
+
+
 def main():
     print("=" * 60)
     print("AUDIT FIX VERIFICATION TESTS")
@@ -407,6 +472,8 @@ def main():
         test_trm_nograd_saves_memory,
         test_il_loss_masking,
         test_full_pipeline_real_data,
+        test_inference_empty_legal_mask,
+        test_step_vs_full_consistency,
     ]
 
     passed = 0

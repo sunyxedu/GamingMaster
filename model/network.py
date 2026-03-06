@@ -227,7 +227,13 @@ class GeneralsNetwork(nn.Module):
             ).long().clamp(0, N - 1)
         else:
             with torch.no_grad():
-                probs = F.softmax(source_logits.detach(), dim=-1)
+                logits_safe = source_logits.detach().clone()
+                # Handle all-masked rows (no legal moves) — pick position 0
+                all_masked = logits_safe.isinf() & (logits_safe < 0)
+                bad_rows = all_masked.all(dim=-1)
+                if bad_rows.any():
+                    logits_safe[bad_rows, 0] = 0.0
+                probs = F.softmax(logits_safe, dim=-1)
                 src_idx = torch.multinomial(probs, 1).squeeze(-1)
 
         source_embed = spatial_out[
@@ -338,7 +344,12 @@ class GeneralsNetwork(nn.Module):
         lm = legal_mask.reshape(B, N) if legal_mask is not None else None
         source_logits = self.source_head(spatial_out, lm)
         with torch.no_grad():
-            probs = F.softmax(source_logits.detach(), dim=-1)
+            logits_safe = source_logits.detach().clone()
+            all_masked = logits_safe.isinf() & (logits_safe < 0)
+            bad_rows = all_masked.all(dim=-1)
+            if bad_rows.any():
+                logits_safe[bad_rows, 0] = 0.0
+            probs = F.softmax(logits_safe, dim=-1)
             src_idx = torch.multinomial(probs, 1).squeeze(-1)
         source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
 
