@@ -157,23 +157,23 @@ Input (Grid Types 11ch + Grid Number 1ch + Globals 4-dim)
   │
   ▼
 ┌─────────────────────┐
-│   SpatialEncoder     │  Conv + ResBlocks: [B, 12, 25, 25] → [B, d, 25, 25]
+│   SpatialEncoder    │  Conv + ResBlocks: [B, 12, 25, 25] → [B, d, 25, 25]
 └─────────┬───────────┘
           │ + broadcast global features [B, d, 1, 1]
           │ + sinusoidal temporal PE
           │ flatten to [B, T, 625, d] + append HL & LL decision tokens
           ▼
-┌──────────────────────────────────┐
+┌─────────────────────────────────────────────┐
 │  Stage 1: SpatiotemporalBlock × n_st_layers │
-│                                  │
-│  ┌─ Spatial Self-Attention ────┐ │  627 tokens within each timestep
-│  │  Add & Norm                 │ │
-│  ├─ Temporal Self-Attention ───┤ │  per cell across all past timesteps (causal)
-│  │  Add & Norm                 │ │
-│  ├─ MLP ───────────────────────┤ │
-│  │  Add & Norm                 │ │
-│  └─────────────────────────────┘ │
-└─────────────┬────────────────────┘
+│                                             │
+│  ┌─ Spatial Self-Attention ────┐            │  627 tokens within each timestep
+│  │  Add & Norm                 │            │
+│  ├─ Temporal Self-Attention ───┤            │  per cell across all past timesteps (causal)
+│  │  Add & Norm                 │            │
+│  ├─ MLP ───────────────────────┤            │
+│  │  Add & Norm                 │            │
+│  └─────────────────────────────┘            │
+└─────────────┬───────────────────────────────┘
               ▼
 ┌──────────────────────────────────┐
 │  Stage 2: TRM Pondering          │
@@ -181,7 +181,7 @@ Input (Grid Types 11ch + Grid Number 1ch + Globals 4-dim)
 │  z_H (answer), z_L (scratchpad)  │
 │  iteratively refined by shared   │
 │  reasoning module (H + L cycles) │
-│  → q_halt ∈ [0,1]               │
+│  → q_halt ∈ [0,1]                │
 └─────────────┬────────────────────┘
               │
         ┌─────┼──────────┐
@@ -191,8 +191,8 @@ Input (Grid Types 11ch + Grid Number 1ch + Globals 4-dim)
         │     │          │
         ▼     │     ┌────┴─────┐
    ┌────────┐ │     ▼          ▼
-   │ Source  │ │  ┌──────┐  ┌──────┐
-   │  Head   │ │  │ Dir  │  │Split │
+   │ Source │ │  ┌──────┐  ┌──────┐
+   │  Head  │ │  │ Dir  │  │Split │
    └───┬────┘ │  │ Head │  │ Head │
        │      │  └──────┘  └──────┘
        │      ▼
@@ -250,12 +250,12 @@ After IL produces a reasonable initial policy, RL fine-tunes it to surpass human
 IL pretrained model
   │
   ▼
-┌────────────────────────────────────────────┐
-│  RL Training Loop (PPO)                    │
-│                                            │
-│  1. model.step() generates action (KV cache) │
-│  2. Environment executes, returns next_obs   │
-│     + reward                                 │
+┌───────────────────────────────────────────────┐
+│  RL Training Loop (PPO)                       │
+│                                               │
+│  1. model.step() generates action (KV cache)  │
+│  2. Environment executes, returns next_obs    │
+│     + reward                                  │
 │  3. Collect trajectory (obs, action, reward)  │
 │  4. Compute advantage (GAE)                   │
 │  5. PPO update:                               │
@@ -264,7 +264,7 @@ IL pretrained model
 │     - entropy bonus                           │
 │  6. (Optional) World Model prediction error   │
 │     as intrinsic reward                       │
-└────────────────────────────────────────────┘
+└───────────────────────────────────────────────┘
 ```
 
 `RLLoss` implements the core PPO components:
