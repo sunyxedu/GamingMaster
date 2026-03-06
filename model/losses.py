@@ -26,7 +26,7 @@ class ImitationLoss(nn.Module):
         direction_weight: float = 1.0,
         split_weight: float = 0.5,
         value_weight: float = 0.5,
-        act_weight: float = 0.01,
+        q_halt_weight: float = 0.5,
         grid_w: int = 25,
     ):
         super().__init__()
@@ -34,7 +34,7 @@ class ImitationLoss(nn.Module):
         self.direction_weight = direction_weight
         self.split_weight = split_weight
         self.value_weight = value_weight
-        self.act_weight = act_weight
+        self.q_halt_weight = q_halt_weight
         self.grid_w = grid_w
 
     def forward(
@@ -123,8 +123,18 @@ class ImitationLoss(nn.Module):
         )
         value_loss = (value_loss_all * seq_mask.float()).sum() / n_seq
 
-        # --- ACT regularisation ------------------------------------------
-        act_loss = pred.get("act_loss", source_loss.new_tensor(0.0))
+        # --- Q-halt loss (TRM halting) ------------------------------------
+        # q_halt predicts whether the current answer is "good enough"
+        # Target: 1 if source prediction is correct, 0 otherwise
+        q_halt_loss = source_loss.new_tensor(0.0)
+        if "q_halt" in pred and valid.any():
+            with torch.no_grad():
+                predicted_src = pred["source_logits"].argmax(dim=-1)  # [B, T]
+                correct = (predicted_src == tgt_src).float()
+            q_halt_loss = F.binary_cross_entropy_with_logits(
+                pred["q_halt"], correct, reduction="none",
+            )
+            q_halt_loss = (q_halt_loss * seq_mask.float()).sum() / n_seq
 
         # --- Total -------------------------------------------------------
         total = (
@@ -132,7 +142,7 @@ class ImitationLoss(nn.Module):
             + self.direction_weight * dir_loss
             + self.split_weight * split_loss
             + self.value_weight * value_loss
-            + self.act_weight * act_loss
+            + self.q_halt_weight * q_halt_loss
         )
 
         return {
@@ -141,7 +151,7 @@ class ImitationLoss(nn.Module):
             "direction_loss": dir_loss.detach(),
             "split_loss": split_loss.detach(),
             "value_loss": value_loss.detach(),
-            "act_loss": act_loss.detach(),
+            "q_halt_loss": q_halt_loss.detach() if isinstance(q_halt_loss, torch.Tensor) else q_halt_loss,
         }
 
 

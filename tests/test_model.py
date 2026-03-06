@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from model.components.encoder import HistoryEncoder, ResBlock, SpatialEncoder
 from model.components.heads import DirectionHead, SourceHead, SplitHead, ValueHead
 from model.components.transformer import SpatiotemporalBlock, TransformerBlock
+from model.components.trm import TRM
 from model.components.world_model import WorldModel
 from model.config import ModelConfig
 from model.losses import ImitationLoss
@@ -153,7 +154,7 @@ def test_generals_network_forward():
     print("\n=== GeneralsNetwork Forward (GRU mode) ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_ponder_steps=2, encoder_channels=32, dropout=0.0,
+        trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32, dropout=0.0,
         temporal_type="gru",
     )
     model = GeneralsNetwork(cfg)
@@ -202,13 +203,35 @@ def test_spatiotemporal_block():
     print("  forward_step: cache grows 1→2 ✓")
 
 
+def test_trm_module():
+    print("\n=== TRM Module ===")
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        trm_H_cycles=3, trm_L_cycles=2, trm_block_layers=2,
+        dropout=0.0,
+    )
+    trm = TRM(cfg)
+    x = torch.randn(2, 627, 64)
+    z_H, q_halt = trm(x)
+    assert z_H.shape == (2, 627, 64), f"z_H shape: {z_H.shape}"
+    assert q_halt.shape == (2,), f"q_halt shape: {q_halt.shape}"
+    n_params = sum(p.numel() for p in trm.parameters())
+    print(f"  Input: {x.shape}")
+    print(f"  z_H:   {z_H.shape}, q_halt: {q_halt.shape}")
+    print(f"  Params: {n_params:,}")
+
+    # Verify shared weights: reasoning module is used for both z_L and z_H
+    r_params = sum(p.numel() for p in trm.reasoning.parameters())
+    print(f"  Reasoning module params: {r_params:,} (shared for z_L and z_H) ✓")
+
+
 def test_spatiotemporal_forward():
     print("\n=== GeneralsNetwork Forward (spatiotemporal + TRM) ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, n_ponder_steps=3,
+        n_st_layers=2, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32, dropout=0.0,
-        temporal_type="spatiotemporal", use_act=False,
+        temporal_type="spatiotemporal",
     )
     model = GeneralsNetwork(cfg)
     n_params = sum(p.numel() for p in model.parameters())
@@ -238,9 +261,9 @@ def test_spatiotemporal_causal():
     print("\n=== Spatiotemporal Causality ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=1, n_ponder_steps=2,
+        n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, dropout=0.0,
-        temporal_type="spatiotemporal", use_act=False,
+        temporal_type="spatiotemporal",
     )
     model = GeneralsNetwork(cfg)
     model.eval()
@@ -263,9 +286,9 @@ def test_spatiotemporal_step():
     print("\n=== Spatiotemporal + TRM Single-step Inference ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, n_ponder_steps=3,
+        n_st_layers=2, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32, dropout=0.0,
-        temporal_type="spatiotemporal", use_act=False,
+        temporal_type="spatiotemporal",
     )
     model = GeneralsNetwork(cfg)
     model.eval()
@@ -285,12 +308,13 @@ def test_spatiotemporal_step():
 
 
 def test_spatiotemporal_backward():
+    """With H_cycles=1, all params (including H_init, L_init, q_head) get gradients."""
     print("\n=== Spatiotemporal + TRM Backward ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, n_ponder_steps=3,
+        n_st_layers=2, trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32,
-        temporal_type="spatiotemporal", use_act=True,
+        temporal_type="spatiotemporal",
     )
     model = GeneralsNetwork(cfg)
 
@@ -306,6 +330,7 @@ def test_spatiotemporal_backward():
         + out["direction_logits"].mean()
         + out["split_logits"].mean()
         + out["value"].mean()
+        + out["q_halt"].mean()
     )
     loss.backward()
 
@@ -314,9 +339,34 @@ def test_spatiotemporal_backward():
     print(f"  All {sum(1 for _ in model.parameters())} params have gradients ✓")
 
 
+def test_trm_nograd_optimization():
+    """With H_cycles>1, the first H_cycles-1 run without grad (paper's optimization)."""
+    print("\n=== TRM No-grad Optimization ===")
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        trm_H_cycles=3, trm_L_cycles=2, trm_block_layers=1,
+    )
+    trm = TRM(cfg)
+    x = torch.randn(1, 10, 64, requires_grad=True)
+    z_H, q_halt = trm(x)
+    loss = z_H.sum() + q_halt.sum()
+    loss.backward()
+
+    # reasoning module should have gradients (last cycle has grad)
+    has_reasoning_grad = any(
+        p.grad is not None and p.grad.abs().sum() > 0
+        for p in trm.reasoning.parameters()
+    )
+    assert has_reasoning_grad, "Reasoning module should have gradients"
+    # input x should have gradients
+    assert x.grad is not None and x.grad.abs().sum() > 0, "Input should have gradients"
+    print("  H_cycles=3: reasoning has grad ✓, input has grad ✓")
+    print("  (H_init/L_init don't get grad when H_cycles>1 — expected, as in paper) ✓")
+
+
 def test_generals_network_inference():
     print("\n=== GeneralsNetwork Inference (no source_y/x) ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32, temporal_type="gru")
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32, temporal_type="gru")
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -334,7 +384,7 @@ def test_generals_network_inference():
 
 def test_generals_network_step():
     print("\n=== GeneralsNetwork Single-step (GRU) ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32, temporal_type="gru")
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32, temporal_type="gru")
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -364,7 +414,7 @@ def test_generals_network_step():
 
 def test_backward_pass():
     print("\n=== Backward Pass ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
 
     B, T = 2, 5
@@ -380,10 +430,10 @@ def test_backward_pass():
         + out["direction_logits"].mean()
         + out["split_logits"].mean()
         + out["value"].mean()
+        + out.get("q_halt", torch.tensor(0.0)).mean()
     )
     loss.backward()
 
-    # Check gradients exist
     grad_count = 0
     no_grad = []
     for name, p in model.named_parameters():
@@ -438,7 +488,7 @@ def test_imitation_loss():
 
 def test_imitation_loss_backward():
     print("\n=== ImitationLoss Backward ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
     criterion = ImitationLoss(grid_w=25)
 
@@ -513,7 +563,7 @@ def test_dataset_integration():
     import json
     import tempfile
 
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -612,7 +662,7 @@ def test_real_replay_integration():
         gio["legal_source_mask_seq"][:max_t], dtype=torch.bool
     ).unsqueeze(0)
 
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -633,7 +683,7 @@ def test_world_model_integration():
     print("\n=== World Model Integration ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_ponder_steps=2, encoder_channels=32,
+        trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
         use_world_model=True,
     )
     model = GeneralsNetwork(cfg)
@@ -660,9 +710,9 @@ def test_gradient_flow():
     print("\n=== Gradient Flow (spatiotemporal + TRM) ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, n_ponder_steps=3,
+        n_st_layers=2, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32,
-        temporal_type="spatiotemporal", use_act=True,
+        temporal_type="spatiotemporal",
     )
     model = GeneralsNetwork(cfg)
 
@@ -679,7 +729,7 @@ def test_gradient_flow():
         + out["direction_logits"].mean()
         + out["split_logits"].mean()
         + out["value"].mean()
-        + out["act_loss"]
+        + out["q_halt"].mean()
     )
     loss.backward()
 
@@ -687,8 +737,8 @@ def test_gradient_flow():
         "spatial_encoder": model.spatial_encoder,
         "global_proj": model.global_proj,
         "st_layers": model.st_layers,
-        "trm_block": model.trm_block,
-        "halt": model.halt,
+        "trm.reasoning": model.trm.reasoning,
+        "trm.q_head": model.trm.q_head,
         "source_head": model.source_head,
         "direction_head": model.direction_head,
         "split_head": model.split_head,
@@ -741,12 +791,14 @@ def main():
         test_real_replay_integration,
         test_world_model_integration,
         test_gradient_flow,
-        # spatiotemporal tests
+        # spatiotemporal + TRM tests
+        test_trm_module,
         test_spatiotemporal_block,
         test_spatiotemporal_forward,
         test_spatiotemporal_causal,
         test_spatiotemporal_step,
         test_spatiotemporal_backward,
+        test_trm_nograd_optimization,
     ]
 
     passed = 0

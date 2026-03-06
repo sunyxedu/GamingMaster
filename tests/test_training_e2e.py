@@ -15,10 +15,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 from torch.utils.data import DataLoader
 
-from model.config import ModelConfig
-from model.network import GeneralsNetwork
-from model.losses import ImitationLoss
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
+from model.config import ModelConfig
+from model.losses import ImitationLoss
+from model.network import GeneralsNetwork
 
 
 def create_mock_gio_data(n_files: int, out_dir: str, T: int = 20):
@@ -62,10 +62,10 @@ def test_training_loop():
 
         cfg = ModelConfig(
             d_model=64, n_heads=4, d_ff=128,
-            n_ponder_steps=2, encoder_channels=32,
+            trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
         )
         model = GeneralsNetwork(cfg)
-        criterion = ImitationLoss(grid_w=cfg.grid_w)
+        ImitationLoss(grid_w=cfg.grid_w)
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
 
         dataset = SeqReplayDataset(data_dir, max_sequence_length=15)
@@ -89,7 +89,7 @@ def test_training_loop():
                 globals_seq = batch["obs"]["globals_seq"]
                 legal_mask = batch["obs"]["legal_source_mask_seq"]
                 tgt = batch["tgt"]
-                lengths = batch["meta"]["lengths"]
+                batch["meta"]["lengths"]
 
                 source_y = tgt["src_y"][:, :, 0]
                 source_x = tgt["src_x"][:, :, 0]
@@ -162,8 +162,8 @@ def test_real_data_training():
         print("  Skipped (no real replay data)")
         return
 
-    from data_processing.processing.simulator import ReplaySimulator
     from data_processing.parsers.generals_json import convert_simulator_to_gio
+    from data_processing.processing.simulator import ReplaySimulator
 
     with open(replay_file, "r") as f:
         replay_data = json.load(f)
@@ -180,7 +180,7 @@ def test_real_data_training():
 
         cfg = ModelConfig(
             d_model=64, n_heads=4, d_ff=128,
-            n_ponder_steps=2, encoder_channels=32,
+            trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
         )
         model = GeneralsNetwork(cfg)
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -192,7 +192,7 @@ def test_real_data_training():
         )
 
         print(f"  Dataset: {len(dataset)} replays")
-        print(f"  Max seq len: 64")
+        print("  Max seq len: 64")
 
         model.train()
         for batch in loader:
@@ -236,7 +236,7 @@ def test_checkpoint_save_load():
     """Test model checkpoint save/load."""
     print("\n=== Checkpoint Save/Load ===")
 
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, n_ponder_steps=2, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
 
     B, T = 1, 3

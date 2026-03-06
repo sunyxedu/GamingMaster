@@ -31,7 +31,9 @@ def parse_args():
     p.add_argument("--max_seq_len", type=int, default=512, help="Max sequence length per sample")
     p.add_argument("--d_model", type=int, default=256)
     p.add_argument("--n_heads", type=int, default=8)
-    p.add_argument("--n_ponder_steps", type=int, default=4)
+    p.add_argument("--trm_H_cycles", type=int, default=4)
+    p.add_argument("--trm_L_cycles", type=int, default=4)
+    p.add_argument("--trm_block_layers", type=int, default=2)
     p.add_argument("--log_interval", type=int, default=10, help="Log every N steps")
     p.add_argument("--save_interval", type=int, default=1, help="Save every N epochs")
     p.add_argument("--grad_clip", type=float, default=1.0)
@@ -104,9 +106,12 @@ def main():
     cfg = ModelConfig(
         d_model=args.d_model,
         n_heads=args.n_heads,
-        n_ponder_steps=args.n_ponder_steps,
+        trm_H_cycles=args.trm_H_cycles,
+        trm_L_cycles=args.trm_L_cycles,
+        trm_block_layers=args.trm_block_layers,
     )
-    print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, ponder={cfg.n_ponder_steps}")
+    print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, "
+          f"TRM={cfg.trm_H_cycles}H×{cfg.trm_L_cycles}L×{cfg.trm_block_layers}blk")
 
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())

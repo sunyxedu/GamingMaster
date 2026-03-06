@@ -17,20 +17,20 @@ class ModelConfig:
     # Core model dimensions
     d_model: int = 256
     n_heads: int = 8
-    d_ff: int = 512  # feed-forward hidden dim
+    d_ff: int = 512
     dropout: float = 0.1
 
     # Stage 1: Spatiotemporal encoding (separate weights per layer)
     n_st_layers: int = 2
 
-    # Stage 2: TRM pondering (shared weights, applied k times)
-    n_ponder_steps: int = 4
-    use_act: bool = True       # Adaptive Computation Time halting
-    act_threshold: float = 0.99
+    # Stage 2: TRM pondering
+    trm_H_cycles: int = 4    # outer loop — refine answer
+    trm_L_cycles: int = 4    # inner loop — refine reasoning
+    trm_block_layers: int = 2  # transformer layers inside the shared reasoning module
 
     # Temporal modelling
-    #   "spatiotemporal" – Stage1: factored spatiotemporal → Stage2: spatial TRM
-    #   "gru"            – GRU history encoder → spatial TRM
+    #   "spatiotemporal" – Stage1: factored spatiotemporal → Stage2: TRM
+    #   "gru"            – GRU history encoder → TRM
     temporal_type: str = "spatiotemporal"
 
     # GRU-specific (only used when temporal_type="gru")
@@ -40,8 +40,8 @@ class ModelConfig:
     encoder_channels: int = 128
 
     # Action space
-    n_directions: int = 4  # down, right, up, left
-    n_split: int = 2  # all-but-1, 50%
+    n_directions: int = 4
+    n_split: int = 2
 
     # World model (optional, for RL)
     use_world_model: bool = False

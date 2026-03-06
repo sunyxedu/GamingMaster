@@ -8,9 +8,11 @@ import asyncio
 import json
 import os
 import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import aiohttp
+
 from data_processing.download.replay_fetcher import ReplayFetcher
 from data_processing.processing.simulator import ReplaySimulator
 
@@ -58,12 +60,12 @@ def verify_army_growth(replay_data: dict):
 
     # Turn 0: general should have army=1
     assert sim.map[gr][gc].army == 1, f"Turn 0: general army should be 1, got {sim.map[gr][gc].army}"
-    assert sim.map[gr][gc].occupied == 0, f"Turn 0: general should be owned by player 0"
+    assert sim.map[gr][gc].occupied == 0, "Turn 0: general should be owned by player 0"
     print("Turn 0: General army = 1 ✓")
 
     # Simulate increment for turn 2 (generals increment every 2 turns)
     sim.increment_armies(1)  # turn 1: no increment
-    assert sim.map[gr][gc].army == 1, f"Turn 1: general army should still be 1"
+    assert sim.map[gr][gc].army == 1, "Turn 1: general army should still be 1"
     print("Turn 1: No increment ✓")
 
     sim.increment_armies(2)  # turn 2: generals increment
@@ -71,7 +73,7 @@ def verify_army_growth(replay_data: dict):
     print("Turn 2: General army = 2 ✓")
 
     sim.increment_armies(3)  # turn 3: no increment
-    assert sim.map[gr][gc].army == 2, f"Turn 3: general army should still be 2"
+    assert sim.map[gr][gc].army == 2, "Turn 3: general army should still be 2"
     sim.increment_armies(4)  # turn 4: generals increment
     assert sim.map[gr][gc].army == 3, f"Turn 4: general army should be 3, got {sim.map[gr][gc].army}"
     print("Turn 4: General army = 3 ✓")
@@ -121,7 +123,7 @@ def verify_move_execution(replay_data: dict):
 
     # After move: source should have 1 army
     assert sim.map[p0_r][p0_c].army == 1, f"Source army should be 1, got {sim.map[p0_r][p0_c].army}"
-    print(f"Source tile army = 1 after move ✓")
+    print("Source tile army = 1 after move ✓")
 
     # Destination: 9 army moved, minus whatever was there
     expected_army = 9 - prev_adj_army if prev_adj_owner != 0 else 9 + prev_adj_army
@@ -141,7 +143,7 @@ def verify_move_execution(replay_data: dict):
     }
     sim._execute_single_move(move_50)
     assert sim.map[p0_r][p0_c].army == 5, f"50% move: source should have 5, got {sim.map[p0_r][p0_c].army}"
-    print(f"50% move: Source has 5 army ✓")
+    print("50% move: Source has 5 army ✓")
 
     print("Move execution verified! ✓")
 
@@ -155,7 +157,7 @@ def verify_move_priority(replay_data: dict):
     # Test chase priority: if p0 moves A->B and p1 moves B->C, p0 is chasing
     # Chase move should execute first
     p0_gen = sim.generals[0]
-    p1_gen = sim.generals[1]
+    sim.generals[1]
 
     # Verify _is_chase_move
     move_a = {"index": 0, "start": 10, "end": 20, "is50": False, "turn": 1}
@@ -249,7 +251,7 @@ def verify_state_encoding(replay_data: dict):
     # Own general should be state 7
     assert state[gen_r][gen_c] == 7, f"Own general should be state 7, got {state[gen_r][gen_c]}"
     assert army[gen_r][gen_c] == 1, f"Own general army should be 1, got {army[gen_r][gen_c]}"
-    print(f"Own general encoded as state 7 with army 1 ✓")
+    print("Own general encoded as state 7 with army 1 ✓")
 
     # Mountains should be state 4 if visible
     for m in sim.mountains:
@@ -295,7 +297,7 @@ def verify_full_simulation(replay_data: dict):
         assert len(result['move_start']) == T
         assert len(result['move_end']) == T
         assert len(result['move_is_50']) == T
-        print(f"  All arrays consistent length ✓")
+        print("  All arrays consistent length ✓")
 
         # Verify map dimensions (should be padded to 25x25)
         for t in range(T):
@@ -303,12 +305,12 @@ def verify_full_simulation(replay_data: dict):
             assert len(result['map'][t][0]) == 25, f"Map width should be 25 at turn {t}"
             assert len(result['armies'][t]) == 25
             assert len(result['armies'][t][0]) == 25
-        print(f"  All maps padded to 25x25 ✓")
+        print("  All maps padded to 25x25 ✓")
 
         # Verify initial state
         assert result['info_myLand'][0] == 1, f"Should start with 1 land, got {result['info_myLand'][0]}"
         assert result['info_myArmy'][0] == 1, f"Should start with 1 army, got {result['info_myArmy'][0]}"
-        print(f"  Initial state correct ✓")
+        print("  Initial state correct ✓")
 
         # Verify army generally grows over time
         if T > 50:
@@ -326,7 +328,7 @@ def verify_full_simulation(replay_data: dict):
                 for j in range(25):
                     v = result['map'][t][i][j]
                     assert -1 <= v <= 10, f"Invalid state value {v} at turn {t}, ({i},{j})"
-        print(f"  State values in valid range [-1, 10] ✓")
+        print("  State values in valid range [-1, 10] ✓")
 
     print("\nFull simulation verified! ✓")
 
@@ -393,7 +395,7 @@ def verify_data_conversion(replay_data: dict):
             elif dc < 0:
                 assert d == 3, f"Turn {t}: left should be dir 3, got {d}"
 
-    print(f"  Direction encoding consistent ✓")
+    print("  Direction encoding consistent ✓")
 
     # Verify action sources are within the legal mask (key correctness check)
     import numpy as np
@@ -414,7 +416,7 @@ def verify_data_conversion(replay_data: dict):
     assert len(gio_data['tick_seq']) == T
     assert len(gio_data['tick_bucket_seq']) == T
     assert gio_data['tick_seq'][0] == 0
-    print(f"  Tick features present and correct ✓")
+    print("  Tick features present and correct ✓")
 
     print("Data conversion verified! ✓")
 
@@ -430,7 +432,7 @@ async def main():
         print("ERROR: Failed to download replay")
         return False
 
-    print(f"Replay downloaded successfully!")
+    print("Replay downloaded successfully!")
     print(f"  ID: {replay_data['id']}")
     print(f"  Map: {replay_data['mapWidth']}x{replay_data['mapHeight']}")
     print(f"  Players: {replay_data['usernames']}")
