@@ -153,55 +153,109 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
 | GRU + TRM | `"gru"` | GRU history encoder → TRM two-state recursive pondering |
 
 ```
-Input (Grid Types 11ch + Grid Number 1ch + Globals 4-dim)
-  │
-  ▼
-┌─────────────────────┐
-│   SpatialEncoder    │  Conv + ResBlocks: [B, 12, 25, 25] → [B, d, 25, 25]
-└─────────┬───────────┘
-          │ + broadcast global features [B, d, 1, 1]
-          │ + sinusoidal temporal PE
-          │ flatten to [B, T, 625, d] + append HL & LL decision tokens
-          ▼
-┌─────────────────────────────────────────────┐
-│  Stage 1: SpatiotemporalBlock × n_st_layers │
-│                                             │
-│  ┌─ Spatial Self-Attention ────┐            │  627 tokens within each timestep
-│  │  Add & Norm                 │            │
-│  ├─ Temporal Self-Attention ───┤            │  per cell across all past timesteps (causal)
-│  │  Add & Norm                 │            │
-│  ├─ MLP ───────────────────────┤            │
-│  │  Add & Norm                 │            │
-│  └─────────────────────────────┘            │
-└─────────────┬───────────────────────────────┘
-              ▼
-┌──────────────────────────────────┐
-│  Stage 2: TRM Pondering          │
-│                                  │
-│  z_H (answer), z_L (scratchpad)  │
-│  iteratively refined by shared   │
-│  reasoning module (H + L cycles) │
-│  → q_halt ∈ [0,1]                │
-└─────────────┬────────────────────┘
-              │
-        ┌─────┼──────────┐
-        ▼     ▼          ▼
-     spatial  HL token   LL token
-     tokens
-        │     │          │
-        ▼     │     ┌────┴─────┐
-   ┌────────┐ │     ▼          ▼
-   │ Source │ │  ┌──────┐  ┌──────┐
-   │  Head  │ │  │ Dir  │  │Split │
-   └───┬────┘ │  │ Head │  │ Head │
-       │      │  └──────┘  └──────┘
-       │      ▼
-       │   ┌──────┐
-       │   │Value │
-       │   │ Head │
-       │   └──────┘
-       ▼
-  source_logits [B, T, 625]
+  grid_seq [B,T,12,25,25]              globals_seq [B,T,4]
+  (11 one-hot state + 1 army)          (myArmy, myLand, opArmy, opLand)
+          │                                     │
+          ▼                                     ▼
+  ┌───────────────────┐                ┌─────────────────┐
+  │  SpatialEncoder   │                │   GlobalProj    │
+  │  Conv + ResBlocks │                │  Linear→ReLU    │
+  │  ×3               │                │  →Linear        │
+  └────────┬──────────┘                └────────┬────────┘
+           │ [B*T, d, 25, 25]                   │ [B*T, d]
+           │                          broadcast │ → [B*T, d, 1, 1]
+           └──────────── + ─────────────────────┘
+                         │ [B, T, d, 25, 25]
+                         ▼
+                  flatten to [B, T, 625, d]
+                         │
+                  append learnable tokens:
+                    HL (High-Level → value)
+                    LL (Low-Level  → direction/split)
+                         │ [B, T, 627, d]
+                         │
+                  + 2D spatial PE  (learnable row + col embeddings)
+                  + sinusoidal temporal PE
+                         │
+                    ┌─────────┐
+                    │pre_norm │ LayerNorm
+                    └────┬────┘
+                         ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Stage 1: SpatiotemporalBlock × n_st_layers  (separate wts)  │
+  │                                                              │
+  │  ┌─ Spatial Self-Attention ──────┐   627 tokens within each  │
+  │  │  Add & Norm                   │   timestep interact       │
+  │  ├─ Temporal Self-Attention ─────┤   per position across all │
+  │  │  (causal: t sees 0..t only)   │   past timesteps          │
+  │  │  Add & Norm                   │                           │
+  │  ├─ MLP (d → d_ff → d) ──────────┤                           │
+  │  │  Add & Norm                   │                           │
+  │  └───────────────────────────────┘                           │
+  └──────────────────────┬───────────────────────────────────────┘
+                         │ [B, T, 627, d]
+                    ┌─────────┐
+                    │mid_norm │ LayerNorm
+                    └────┬────┘
+                         ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Stage 2: TRM Pondering  (shared reasoning module)           │
+  │                                                              │
+  │  z_H = H_init (learnable),  z_L = L_init (learnable)         │
+  │                                                              │
+  │  for h in H_cycles:                    ┌──────────────────┐  │
+  │  │  for l in L_cycles:                 │ ReasoningModule  │  │
+  │  │  │  z_L = reason(z_L, z_H + x)      │ (TRMBlock × N)   │  │
+  │  │  z_H = reason(z_H, z_L)             │  Self-Attn→Norm  │  │
+  │  (first H_cycles−1 with no_grad)       │  MLP→Norm        │  │
+  │                                        └──────────────────┘  │
+  │  q_halt = σ(linear(z_H[:,0]))  ── confidence logit           │
+  └──────────────────────┬───────────────────────────────────────┘
+                         │ z_H [B*T, 627, d],  q_halt [B, T]
+                    ┌──────────┐
+                    │post_norm │ LayerNorm
+                    └─────┬────┘
+                          │
+           ┌──────────────┼──────────────┐
+           ▼              ▼              ▼
+      spatial[:625]    hl [pos 625]   ll [pos 626]
+           │              │              │
+           ▼              │              │
+    ┌────────────┐        │              │
+    │ SourceHead │        │              │
+    └─────┬──────┘        │              │
+          │               │              │
+          ├──→ source_logits [B,T,625]  (raw, unmasked)
+          │               │              │
+          ▼               │              │
+     extract src          │              │
+     embedding at         │              │
+     predicted pos        │              │
+     (train: GT,          │              │
+      infer: mask →       │              │
+       sample)            │              │
+          │               │              │
+          │               ▼              │
+          │         ┌───────────┐        │
+          │         │ ValueHead │        │
+          │         │ → tanh    │        │
+          │         └─────┬─────┘        │
+          │               │              │
+          │          value [B,T]         │
+          │          ∈ [−1, 1]           │
+          │                              │
+          │   cat(src_embed, ll_out)     │
+          └──────────────┬───────────────┘
+                         │ [B*T, 2d]
+                    ┌────┴────┐
+                    ▼         ▼
+             ┌───────────┐ ┌───────────┐
+             │  DirHead  │ │ SplitHead │
+             └─────┬─────┘ └─────┬─────┘
+                   │             │
+            dir_logits      split_logits
+            [B,T,4]         [B,T,2]
+            (↓→↑←)          (all|50%)
 ```
 
 **Key design choices:**
@@ -210,6 +264,7 @@ Input (Grid Types 11ch + Grid Number 1ch + Globals 4-dim)
 - **Causal temporal masking**: Timestep *t* can only attend to timesteps 0..*t*, never the future. Verified by test: processing T=6 vs T=3 produces identical outputs for the first 3 steps (diff = 0).
 - **KV cache for inference**: During single-step inference, each block caches past key/value tensors. Only the current timestep's tokens are computed; temporal attention queries the growing cache. No re-processing of past timesteps.
 - **Autoregressive policy heads**: Source is predicted first from spatial tokens; its embedding is extracted and concatenated with the Low-Level decision token to predict Direction and Split. During training, ground-truth source is used; during inference, the model samples.
+- **Legal mask at sampling only**: `SourceHead` outputs raw logits over all 625 positions. The legal-move mask (owned tiles with army > 1) is applied externally only during inference sampling — not during training. This lets the model learn board understanding from the state encoding itself, rather than relying on a hard mask.
 - **Decision tokens**: Two learnable tokens — High-Level (→ value prediction) and Low-Level (→ direction/split) — are appended to the 625 spatial tokens and participate in both spatial and temporal attention.
 - **2D spatial PE + sinusoidal temporal PE**: Spatial positions use learnable row + column embeddings (summed). Temporal positions use sinusoidal encoding, allowing generalisation to arbitrary game lengths.
 - **World model** (optional): Predicts next-state embedding from (current state, action). Disabled during IL; during RL, prediction error serves as intrinsic curiosity reward.

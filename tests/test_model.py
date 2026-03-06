@@ -92,17 +92,15 @@ def test_source_head():
     print(f"  Input:  {tokens.shape}")
     print(f"  Output: {logits.shape} ✓")
 
-    # With legal mask
+    # Legal mask applied externally (not in SourceHead)
     mask = torch.zeros(4, 625, dtype=torch.bool)
     mask[:, :10] = True  # only first 10 positions legal
-    logits_masked = head(tokens, mask)
+    logits_masked = logits.masked_fill(~mask, float("-inf"))
     assert logits_masked.shape == (4, 625)
-    # Masked positions should be -inf
     assert (logits_masked[:, 10:] == float("-inf")).all(), "Masked positions not -inf"
-    # Can still softmax
     probs = F.softmax(logits_masked, dim=-1)
     assert probs[:, 10:].sum() < 1e-6, "Masked positions have nonzero probability"
-    print("  Masked output ✓ (10 legal positions)")
+    print("  External mask ✓ (10 legal positions)")
 
 
 def test_direction_head():

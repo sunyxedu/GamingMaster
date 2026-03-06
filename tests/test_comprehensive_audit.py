@@ -547,21 +547,22 @@ def test_spatial_encoder_different_batch():
 
 
 def test_source_head_all_masked():
-    """SourceHead with all-masked legal mask produces all -inf."""
-    print("\n=== SourceHead: all masked ===")
+    """External legal mask: all-masked produces all -inf after masking."""
+    print("\n=== SourceHead: all masked (external) ===")
     from model.components.heads import SourceHead
 
     head = SourceHead(64)
     tokens = torch.randn(2, 625, 64)
     mask = torch.zeros(2, 625, dtype=torch.bool)  # all False
-    logits = head(tokens, mask)
-    assert (logits == float("-inf")).all(), "All positions should be -inf"
+    logits = head(tokens)
+    logits_masked = logits.masked_fill(~mask, float("-inf"))
+    assert (logits_masked == float("-inf")).all(), "All positions should be -inf"
     print("  All-masked produces -inf ✓")
 
 
 def test_source_head_partial_mask():
-    """SourceHead masking preserves legal positions."""
-    print("\n=== SourceHead: partial mask ===")
+    """External legal mask preserves legal positions."""
+    print("\n=== SourceHead: partial mask (external) ===")
     from model.components.heads import SourceHead
 
     head = SourceHead(64)
@@ -570,12 +571,13 @@ def test_source_head_partial_mask():
     mask[0, 3] = True
     mask[0, 7] = True
 
-    logits = head(tokens, mask)
-    assert logits[0, 3] != float("-inf"), "Legal position should not be -inf"
-    assert logits[0, 7] != float("-inf"), "Legal position should not be -inf"
-    assert logits[0, 0] == float("-inf"), "Masked position should be -inf"
+    logits = head(tokens)
+    logits_masked = logits.masked_fill(~mask, float("-inf"))
+    assert logits_masked[0, 3] != float("-inf"), "Legal position should not be -inf"
+    assert logits_masked[0, 7] != float("-inf"), "Legal position should not be -inf"
+    assert logits_masked[0, 0] == float("-inf"), "Masked position should be -inf"
 
-    probs = F.softmax(logits, dim=-1)
+    probs = F.softmax(logits_masked, dim=-1)
     assert abs(probs[0, 3] + probs[0, 7] - 1.0) < 1e-5, "Legal positions should sum to 1"
     print("  Partial mask correct ✓")
 
@@ -983,7 +985,7 @@ def test_network_st_step_cache_growth():
 
 
 def test_network_legal_mask_effect():
-    """Legal mask should affect source logits distribution."""
+    """Legal mask affects sampling but source_logits are raw (unmasked)."""
     print("\n=== network: legal mask effect ===")
     from model.config import ModelConfig
     from model.network import GeneralsNetwork
@@ -1000,19 +1002,20 @@ def test_network_legal_mask_effect():
     grid = torch.randn(B, 12, 25, 25)
     glob = torch.randn(B, 4)
 
-    # All legal
-    mask_all = torch.ones(B, 1, 25, 25, dtype=torch.bool)
-    # Only first position legal
+    # Source logits should be raw (no -inf) regardless of mask
     mask_one = torch.zeros(B, 1, 25, 25, dtype=torch.bool)
     mask_one[0, 0, 0, 0] = True
 
     with torch.no_grad():
-        out_all = model.step(grid, glob, legal_mask=mask_all)
-        out_one = model.step(grid, glob, legal_mask=mask_one)
+        out = model.step(grid, glob, legal_mask=mask_one)
 
-    # With mask_one, all positions except (0,0)→flat_idx=0 should be -inf
-    assert (out_one["source_logits"][0, 1:] == float("-inf")).all()
-    assert out_one["source_logits"][0, 0] != float("-inf")
+    # source_logits are raw — no -inf values
+    assert not (out["source_logits"] == float("-inf")).any(), \
+        "source_logits should be raw (unmasked)"
+    # External masking still works
+    lm = mask_one.reshape(B, -1)
+    masked = out["source_logits"].masked_fill(~lm, float("-inf"))
+    assert (masked[0, 1:] == float("-inf")).all()
     print("  Legal mask affects source logits ✓")
 
 

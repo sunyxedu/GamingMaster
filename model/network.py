@@ -218,8 +218,7 @@ class GeneralsNetwork(nn.Module):
         hl_out = tokens[:, N]
         ll_out = tokens[:, N + 1]
 
-        lm = legal_mask.reshape(BT, N) if legal_mask is not None else None
-        source_logits = self.source_head(spatial_out, lm)
+        source_logits = self.source_head(spatial_out)  # raw logits, no mask
 
         if source_y is not None and source_x is not None:
             src_idx = (
@@ -228,6 +227,10 @@ class GeneralsNetwork(nn.Module):
         else:
             with torch.no_grad():
                 logits_safe = source_logits.detach().clone()
+                # Apply legal mask only for sampling
+                if legal_mask is not None:
+                    lm = legal_mask.reshape(BT, N)
+                    logits_safe = logits_safe.masked_fill(~lm, float("-inf"))
                 # Handle all-masked rows (no legal moves) — pick position 0
                 all_masked = logits_safe.isinf() & (logits_safe < 0)
                 bad_rows = all_masked.all(dim=-1)
@@ -341,10 +344,13 @@ class GeneralsNetwork(nn.Module):
         hl_out = z_H[:, N]
         ll_out = z_H[:, N + 1]
 
-        lm = legal_mask.reshape(B, N) if legal_mask is not None else None
-        source_logits = self.source_head(spatial_out, lm)
+        source_logits = self.source_head(spatial_out)  # raw logits, no mask
         with torch.no_grad():
             logits_safe = source_logits.detach().clone()
+            # Apply legal mask only for sampling
+            if legal_mask is not None:
+                lm = legal_mask.reshape(B, N)
+                logits_safe = logits_safe.masked_fill(~lm, float("-inf"))
             all_masked = logits_safe.isinf() & (logits_safe < 0)
             bad_rows = all_masked.all(dim=-1)
             if bad_rows.any():

@@ -17,22 +17,14 @@ class SourceHead(nn.Module):
             nn.Linear(d_model, 1),
         )
 
-    def forward(
-        self,
-        spatial_tokens: torch.Tensor,
-        legal_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+    def forward(self, spatial_tokens: torch.Tensor) -> torch.Tensor:
         """
         Args:
             spatial_tokens: [B, N, d]
-            legal_mask:     [B, N]  bool – True where move is legal
         Returns:
-            logits: [B, N]
+            logits: [B, N]  (raw, no masking — mask applied externally during inference)
         """
-        logits = self.proj(spatial_tokens).squeeze(-1)  # [B, N]
-        if legal_mask is not None:
-            logits = logits.masked_fill(~legal_mask, float("-inf"))
-        return logits
+        return self.proj(spatial_tokens).squeeze(-1)  # [B, N]
 
 
 class DirectionHead(nn.Module):
