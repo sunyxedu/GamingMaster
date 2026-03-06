@@ -388,9 +388,12 @@ class ReplaySimulator:
         info_myLand = []
         info_opArmy = []
         info_opLand = []
+        info_myCities = []
+        info_opCities = []
         move_start = []
         move_end = []
         move_is_50 = []
+        winner_name = None
         
         # Get total turns
         max_turn = self.moves[-1]["turn"] if self.moves else 0
@@ -449,6 +452,23 @@ class ReplaySimulator:
             else:
                 op_army = 0
                 op_land = 0
+
+            # Count cities owned by each player (generals count as cities for production)
+            my_cities = 0
+            op_cities = 0
+            for city_idx in self.cities:
+                r, c = city_idx // self.map_width, city_idx % self.map_width
+                if self.map[r][c].occupied == self.player_id:
+                    my_cities += 1
+                elif opponent_idx is not None and self.map[r][c].occupied == opponent_idx:
+                    op_cities += 1
+            # Generals always produce — count them too
+            my_cities += 1  # own general always owned
+            if opponent_idx is not None:
+                gen_r = self.generals[opponent_idx] // self.map_width
+                gen_c = self.generals[opponent_idx] % self.map_width
+                if self.map[gen_r][gen_c].occupied == opponent_idx:
+                    op_cities += 1
             
             # Store turn data
             is_first = 1 if (self.player_id == 0 and turn % 2 == 0) or \
@@ -461,6 +481,8 @@ class ReplaySimulator:
             info_myLand.append(len(my_player.land))
             info_opArmy.append(op_army)
             info_opLand.append(op_land)
+            info_myCities.append(my_cities)
+            info_opCities.append(op_cities)
             
             # Store move info
             if player_move_start != -1:
@@ -479,12 +501,14 @@ class ReplaySimulator:
 
             winner = self.check_winner()
             if winner is not None:
-                print(f"Winner: {self.players[winner].name} at turn {turn}")
+                winner_name = self.players[winner].name
+                print(f"Winner: {winner_name} at turn {turn}")
                 break
 
         return {
             "id": self.data["id"],
             "player": self.player_name,
+            "winner": winner_name,
             "first": first,
             "map": map_info,
             "armies": armies_num,
@@ -492,6 +516,8 @@ class ReplaySimulator:
             "info_myLand": info_myLand,
             "info_opArmy": info_opArmy,
             "info_opLand": info_opLand,
+            "info_myCities": info_myCities,
+            "info_opCities": info_opCities,
             "move_start": move_start,
             "move_end": move_end,
             "move_is_50": move_is_50,

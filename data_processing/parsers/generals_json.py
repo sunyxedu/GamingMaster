@@ -193,16 +193,30 @@ def convert_simulator_to_gio(
             dir_id.append([0] * K)
             ratio_id.append([0] * K)
 
-        # --- value (state-based) ----------------------------------------
+        # --- value (blended: heuristic + game outcome) --------------------
         if estimate_value:
             if op_land == 0:
-                val = 1.0   # opponent eliminated → win
+                heuristic = 1.0
             elif my_land == 0:
-                val = -1.0  # we lost all land → loss
+                heuristic = -1.0
             else:
+                my_cities = sim_data.get("info_myCities", [0] * T_raw)[t]
+                op_cities = sim_data.get("info_opCities", [0] * T_raw)[t]
+                city_diff = my_cities - op_cities
+                adj_my = my_army + max(city_diff, 0) * 50
+                adj_op = op_army + max(-city_diff, 0) * 50
                 land_ratio = my_land / max(op_land, 1)
-                army_ratio = my_army / max(op_army, 1)
-                val = np.tanh((land_ratio + army_ratio) / 2.0 - 1.0)
+                army_ratio = adj_my / max(adj_op, 1)
+                heuristic = float(np.tanh((land_ratio + army_ratio) / 2.0 - 1.0))
+
+            winner = sim_data.get("winner")
+            player = sim_data.get("player")
+            if winner is not None and player is not None:
+                outcome = 1.0 if winner == player else -1.0
+                w = (t / max(T - 1, 1)) ** 2
+                val = w * outcome + (1.0 - w) * heuristic
+            else:
+                val = heuristic
             value.append(float(val))
         else:
             value.append(0.0)
