@@ -22,6 +22,8 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 │       ├── trm.py            #     TRM (Tiny Recursive Model) two-state pondering
 │       ├── heads.py          #     Source / Direction / Split / Value heads
 │       └── world_model.py    #     WorldModel (for RL curiosity reward)
+├── env/                      # RL environment
+│   └── generals_env.py       #   Two-player simultaneous-move Gym-like env
 ├── scripts/
 │   ├── prepare_data.py       # CLI: batch download → filter → simulate → convert
 │   └── replay_to_visual.py   # CLI: download one replay → simulate → HTML viewer
@@ -85,12 +87,12 @@ uv run python train_il.py \
 # Load from IL checkpoint, fine-tune with PPO self-play
 uv run python train_rl.py \
     --il_checkpoint checkpoints/checkpoint_epoch50.pt \
-    --il_data_dir data/output/training/MeltedToast \
-    --use_world_model
+    --il_data_dir data/output/training/MeltedToast
 ```
 
-> RL training uses PPO self-play with joint IL regularisation (AlphaStar-style). Requires an interactive generals.io environment (not yet implemented).
-> Model-side support is ready: `model.step()` single-step inference with KV cache, `ValueHead`, `RLLoss` (PPO), `WorldModel` (curiosity reward), `rl_utils.py` (GAE, RolloutBuffer, KL regularisation).
+> RL training uses PPO self-play with joint IL regularisation (AlphaStar-style).
+> Environment: `env/generals_env.py` provides a two-player simultaneous-move Gym-like environment with fog of war.
+> Model-side support: `model.step()` single-step inference with KV cache, `ValueHead`, `RLLoss` (PPO), `WorldModel` (curiosity reward), `rl_utils.py` (GAE, RolloutBuffer, KL regularisation).
 
 ---
 
@@ -164,7 +166,7 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
   ┌───────────────────┐                ┌─────────────────┐
   │  SpatialEncoder   │                │   GlobalProj    │
   │  Conv + ResBlocks │                │  Linear→ReLU    │
-  │  ×3               │                │  →Linear        │
+  │  ×2               │                │  →Linear        │
   └────────┬──────────┘                └────────┬────────┘
            │ [B*T, d, 25, 25]                   │ [B*T, d]
            │                          broadcast │ → [B*T, d, 1, 1]
@@ -205,7 +207,7 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
   ┌──────────────────────────────────────────────────────────────┐
   │  Stage 2: TRM Pondering  (shared reasoning module)           │
   │                                                              │
-  │  z_H = H_init (learnable),  z_L = L_init (learnable)         │
+  │  z_H = H_init (fixed buffer),  z_L = L_init (fixed buffer)    │
   │                                                              │
   │  for h in H_cycles:                    ┌──────────────────┐  │
   │  │  for l in L_cycles:                 │ ReasoningModule  │  │
@@ -271,7 +273,7 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
 - **Legal mask at sampling only**: `SourceHead` outputs raw logits over all 625 positions. The legal-move mask (owned tiles with army > 1) is applied externally only during inference sampling — not during training. This lets the model learn board understanding from the state encoding itself, rather than relying on a hard mask.
 - **Decision tokens**: Two learnable tokens — High-Level (→ value prediction) and Low-Level (→ direction/split) — are appended to the 625 spatial tokens and participate in both spatial and temporal attention.
 - **2D spatial PE + sinusoidal temporal PE**: Spatial positions use learnable row + column embeddings (summed). Temporal positions use sinusoidal encoding, allowing generalisation to arbitrary game lengths.
-- **TRM two-state pondering** ([arxiv 2510.04871](https://arxiv.org/abs/2510.04871)): Two learnable state vectors — `z_H` (answer) and `z_L` (reasoning scratchpad) — are iteratively refined by a single shared reasoning module. Inner loop refines `z_L` using `z_H + x` as injection; outer loop updates `z_H` from `z_L`. First `H_cycles−1` outer iterations run without gradient for memory efficiency; only the last iteration propagates gradients. At inference, ACT (Adaptive Computation Time) loops up to `halt_max_steps` times — `q_halt` head on `z_H` outputs a confidence logit; when positive, the model stops pondering early. Carry state `(z_H, z_L)` is passed between ACT steps so each round builds on the previous thinking.
+- **TRM two-state pondering** ([arxiv 2510.04871](https://arxiv.org/abs/2510.04871)): Two state vectors — `z_H` (answer) and `z_L` (reasoning scratchpad) — are initialized from fixed buffers and iteratively refined by a single shared reasoning module. Inner loop refines `z_L` using `z_H + x` as injection; outer loop updates `z_H` from `z_L`. First `H_cycles−1` outer iterations run without gradient for memory efficiency; only the last iteration propagates gradients. At inference, ACT (Adaptive Computation Time) loops up to `halt_max_steps` times — `q_halt` head on `z_H` outputs a confidence logit; when positive, the model stops pondering early. Carry state `(z_H, z_L)` is passed between ACT steps so each round builds on the previous thinking.
 - **World model** (optional): Predicts next-state embedding from (current state, action). Disabled during IL; during RL, prediction error serves as intrinsic curiosity reward.
 
 Default config:
@@ -340,7 +342,8 @@ IL pretrained model
 
 Why the world model matters: generals.io has extremely sparse reward (only win/loss at game end). The world model provides dense intrinsic reward — the worse the model's prediction for an unseen area, the more information lies there, encouraging the agent to explore through fog of war.
 
-RL training requires an interactive generals.io environment (self-play or vs bot), which is not yet implemented. On the model side, everything is ready:
+RL training components:
+- `env/generals_env.py` — two-player simultaneous-move environment with fog of war, random map generation, and dense reward shaping
 - `train_rl.py` — full PPO self-play loop with joint IL regularisation and KL constraint
 - `model/rl_utils.py` — GAE, RolloutBuffer, encoder freeze/unfreeze helpers
 - `model.step()` — single-step inference with KV cache, suitable for RL rollouts
