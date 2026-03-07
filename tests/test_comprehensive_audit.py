@@ -698,6 +698,7 @@ def test_loss_all_zero_count():
         "source_logits": torch.randn(B, T, N),
         "direction_logits": torch.randn(B, T, 4),
         "split_logits": torch.randn(B, T, 2),
+        "pass_logits": torch.randn(B, T),
         "value": torch.randn(B, T),
     }
     tgt = {
@@ -729,6 +730,7 @@ def test_loss_sequence_length_masking():
         "source_logits": torch.randn(B, T, N),
         "direction_logits": torch.randn(B, T, 4),
         "split_logits": torch.randn(B, T, 2),
+        "pass_logits": torch.randn(B, T),
         "value": torch.randn(B, T),
     }
     tgt = {
@@ -765,6 +767,7 @@ def test_loss_q_halt_masked_to_valid():
         "source_logits": torch.zeros(B, T, N),
         "direction_logits": torch.zeros(B, T, 4),
         "split_logits": torch.zeros(B, T, 2),
+        "pass_logits": torch.zeros(B, T),
         "value": torch.zeros(B, T),
         "q_halt": torch.zeros(B, T),
     }
@@ -803,6 +806,7 @@ def test_loss_nan_handling():
         "source_logits": torch.full((B, T, N), float("-inf")),  # all masked
         "direction_logits": torch.randn(B, T, 4),
         "split_logits": torch.randn(B, T, 2),
+        "pass_logits": torch.randn(B, T),
         "value": torch.randn(B, T),
     }
     tgt = {
@@ -891,6 +895,7 @@ def test_network_gru_shapes():
     assert out["source_logits"].shape == (B, T, 625)
     assert out["direction_logits"].shape == (B, T, 4)
     assert out["split_logits"].shape == (B, T, 2)
+    assert out["pass_logits"].shape == (B, T)
     assert out["value"].shape == (B, T)
     assert out["hidden"] is not None
     assert out["q_halt"].shape == (B, T)
@@ -921,6 +926,7 @@ def test_network_st_shapes():
     assert out["source_logits"].shape == (B, T, 625)
     assert out["direction_logits"].shape == (B, T, 4)
     assert out["split_logits"].shape == (B, T, 2)
+    assert out["pass_logits"].shape == (B, T)
     assert out["value"].shape == (B, T)
     assert out["q_halt"].shape == (B, T)
     print("  ST shapes correct ✓")

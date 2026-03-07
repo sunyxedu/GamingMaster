@@ -266,7 +266,7 @@ def test_checkpoint_save_load():
             out2 = model2(grid_seq, globals_seq, source_y=source_y, source_x=source_x)
 
         # Outputs should match
-        for key in ["source_logits", "direction_logits", "split_logits", "value"]:
+        for key in ["source_logits", "direction_logits", "split_logits", "pass_logits", "value"]:
             assert torch.allclose(out1[key], out2[key], atol=1e-5), \
                 f"Mismatch in {key} after load"
         print("  Checkpoint save/load verified ✓")

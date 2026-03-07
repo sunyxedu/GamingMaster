@@ -29,6 +29,7 @@ def test_q_halt_loss_mask():
         "source_logits": torch.zeros(B, T, N),
         "direction_logits": torch.zeros(B, T, 4),
         "split_logits": torch.zeros(B, T, 2),
+        "pass_logits": torch.zeros(B, T),
         "value": torch.zeros(B, T),
         "q_halt": torch.zeros(B, T),  # all zero logits → sigmoid=0.5
     }
@@ -281,6 +282,7 @@ def test_il_loss_masking():
         "source_logits": torch.randn(B, T, N),
         "direction_logits": torch.randn(B, T, 4),
         "split_logits": torch.randn(B, T, 2),
+        "pass_logits": torch.randn(B, T),
         "value": torch.randn(B, T),
     }
     tgt = {

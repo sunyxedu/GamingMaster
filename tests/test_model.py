@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 
 from model.components.encoder import HistoryEncoder, ResBlock, SpatialEncoder
-from model.components.heads import DirectionHead, SourceHead, SplitHead, ValueHead
+from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead, ValueHead
 from model.components.transformer import SpatiotemporalBlock, TransformerBlock
 from model.components.trm import TRM
 from model.components.world_model import WorldModel
@@ -135,6 +135,21 @@ def test_value_head():
     print(f"  Output: {v.shape}, range=[{v.min():.3f}, {v.max():.3f}] ✓")
 
 
+def test_pass_head():
+    print("\n=== PassHead ===")
+    head = PassHead(d_model=128, n_directions=4, n_split=2, time_pe_dim=32)
+    ll_token = torch.randn(4, 128)
+    source_embed = torch.randn(4, 128)
+    direction_logits = torch.randn(4, 4)
+    split_logits = torch.randn(4, 2)
+    time_pe = torch.randn(4, 32)
+    logits = head(ll_token, source_embed, direction_logits, split_logits, time_pe)
+    assert logits.shape == (4,), f"Shape: {logits.shape}"
+    print(f"  Input:  ll_token={ll_token.shape}, source_embed={source_embed.shape}, "
+          f"dir={direction_logits.shape}, split={split_logits.shape}, time_pe={time_pe.shape}")
+    print(f"  Output: {logits.shape} ✓")
+
+
 def test_world_model():
     print("\n=== WorldModel ===")
     cfg = ModelConfig(d_model=128, use_world_model=True)
@@ -171,11 +186,13 @@ def test_generals_network_forward():
     assert out["source_logits"].shape == (B, T, 625), f"source: {out['source_logits'].shape}"
     assert out["direction_logits"].shape == (B, T, 4), f"dir: {out['direction_logits'].shape}"
     assert out["split_logits"].shape == (B, T, 2), f"split: {out['split_logits'].shape}"
+    assert out["pass_logits"].shape == (B, T), f"pass: {out['pass_logits'].shape}"
     assert out["value"].shape == (B, T), f"value: {out['value'].shape}"
     assert out["hidden"] is not None
     print(f"  source_logits:    {out['source_logits'].shape} ✓")
     print(f"  direction_logits: {out['direction_logits'].shape} ✓")
     print(f"  split_logits:     {out['split_logits'].shape} ✓")
+    print(f"  pass_logits:      {out['pass_logits'].shape} ✓")
     print(f"  value:            {out['value'].shape} ✓")
 
 
@@ -246,10 +263,12 @@ def test_spatiotemporal_forward():
     assert out["source_logits"].shape == (B, T, 625)
     assert out["direction_logits"].shape == (B, T, 4)
     assert out["split_logits"].shape == (B, T, 2)
+    assert out["pass_logits"].shape == (B, T)
     assert out["value"].shape == (B, T)
     print(f"  source_logits:    {out['source_logits'].shape} ✓")
     print(f"  direction_logits: {out['direction_logits'].shape} ✓")
     print(f"  split_logits:     {out['split_logits'].shape} ✓")
+    print(f"  pass_logits:      {out['pass_logits'].shape} ✓")
     print(f"  value:            {out['value'].shape} ✓")
 
 
@@ -326,6 +345,7 @@ def test_spatiotemporal_backward():
         out["source_logits"].mean()
         + out["direction_logits"].mean()
         + out["split_logits"].mean()
+        + out["pass_logits"].mean()
         + out["value"].mean()
         + out["q_halt"].mean()
     )
@@ -396,10 +416,12 @@ def test_generals_network_step():
     assert out["source_logits"].shape == (B, 625), f"source: {out['source_logits'].shape}"
     assert out["direction_logits"].shape == (B, 4), f"dir: {out['direction_logits'].shape}"
     assert out["split_logits"].shape == (B, 2), f"split: {out['split_logits'].shape}"
+    assert out["pass_logits"].shape == (B,), f"pass: {out['pass_logits'].shape}"
     assert out["value"].shape == (B,), f"value: {out['value'].shape}"
     print(f"  source_logits:    {out['source_logits'].shape} ✓")
     print(f"  direction_logits: {out['direction_logits'].shape} ✓")
     print(f"  split_logits:     {out['split_logits'].shape} ✓")
+    print(f"  pass_logits:      {out['pass_logits'].shape} ✓")
     print(f"  value:            {out['value'].shape} ✓")
 
     # Test sequential inference with hidden state
@@ -426,6 +448,7 @@ def test_backward_pass():
         out["source_logits"].mean()
         + out["direction_logits"].mean()
         + out["split_logits"].mean()
+        + out["pass_logits"].mean()
         + out["value"].mean()
         + out.get("q_halt", torch.tensor(0.0)).mean()
     )
@@ -455,6 +478,7 @@ def test_imitation_loss():
         "source_logits": torch.randn(B, T, N),
         "direction_logits": torch.randn(B, T, 4),
         "split_logits": torch.randn(B, T, 2),
+        "pass_logits": torch.randn(B, T),
         "value": torch.randn(B, T),
     }
     tgt = {
@@ -724,6 +748,7 @@ def test_gradient_flow():
         out["source_logits"].mean()
         + out["direction_logits"].mean()
         + out["split_logits"].mean()
+        + out["pass_logits"].mean()
         + out["value"].mean()
         + out["q_halt"].mean()
     )
@@ -738,6 +763,7 @@ def test_gradient_flow():
         "source_head": model.source_head,
         "direction_head": model.direction_head,
         "split_head": model.split_head,
+        "pass_head": model.pass_head,
         "value_head": model.value_head,
     }
 
@@ -772,6 +798,7 @@ def test_move_match_loss():
         "source_logits": torch.randn(B, T, N),
         "direction_logits": torch.randn(B, T, 4),
         "split_logits": torch.randn(B, T, 2),
+        "pass_logits": torch.randn(B, T),
         "value": torch.randn(B, T),
     }
     tgt = {
@@ -794,6 +821,7 @@ def test_move_match_loss():
         "source_logits": torch.full((B, T, N), -1e9),
         "direction_logits": torch.full((B, T, 4), -1e9),
         "split_logits": torch.full((B, T, 2), -1e9),
+        "pass_logits": torch.zeros(B, T),
         "value": torch.randn(B, T),
     }
     # Set the correct class to have highest logit
@@ -889,6 +917,7 @@ def main():
         test_direction_head,
         test_split_head,
         test_value_head,
+        test_pass_head,
         test_world_model,
         test_generals_network_forward,
         test_generals_network_inference,
