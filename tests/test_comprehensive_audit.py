@@ -678,8 +678,7 @@ def test_spatiotemporal_block_output_shape():
 
     for B, T, S in [(1, 1, 10), (2, 5, 627), (1, 20, 50)]:
         x = torch.randn(B, T, S, 32)
-        causal = torch.triu(torch.full((T, T), float("-inf")), diagonal=1)
-        y = block(x, causal)
+        y = block(x)
         assert y.shape == (B, T, S, 32), f"Shape mismatch for B={B},T={T},S={S}: {y.shape}"
     print("  All shapes correct ✓")
 

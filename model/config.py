@@ -42,7 +42,7 @@ class ModelConfig:
 
     # Action space
     n_directions: int = 4
-    n_split: int = 2
+    n_split: int = 2  # 0=all-but-1, 1=50%
 
     # World model (optional, for RL)
     use_world_model: bool = False

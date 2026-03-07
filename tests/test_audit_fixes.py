@@ -163,11 +163,10 @@ def test_st_cache_vs_full():
 
     B, T, S, d = 1, 5, 10, 32
     x = torch.randn(B, T, S, d)
-    causal = torch.triu(torch.full((T, T), float("-inf")), diagonal=1)
 
     # Full sequence
     with torch.no_grad():
-        full_out = block(x, causal)
+        full_out = block(x)
 
     # Step-by-step with cache
     cache = None
@@ -432,6 +431,7 @@ def test_step_vs_full_consistency():
         d_model=64, n_heads=4, d_ff=128,
         n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
+        halt_max_steps=1,
     )
     model = GeneralsNetwork(cfg)
     model.eval()

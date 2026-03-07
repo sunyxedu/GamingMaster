@@ -13,11 +13,14 @@ class ImitationLoss(nn.Module):
     """
     Imitation Learning loss for the generals.io bot.
 
-    Components (all masked to valid moves only):
-      - Source CE    : cross-entropy over H*W positions
-      - Direction CE : cross-entropy over 4 directions
-      - Split CE     : cross-entropy over 2 split options
-      - Value MSE    : mean squared error on game-value estimate
+    Components:
+      - Source CE    : cross-entropy over H*W positions      (valid mask: count>0)
+      - Direction CE : cross-entropy over 4 directions       (valid mask: count>0)
+      - Split CE     : cross-entropy over 2 options          (valid mask: count>0)
+                       0=all-but-1, 1=50%
+      - Pass BCE     : binary cross-entropy on pass head     (seq_mask: all timesteps)
+                       target=1 when count==0 (no move)
+      - Value MSE    : mean squared error on game-value      (seq_mask: all timesteps)
     """
 
     def __init__(
@@ -25,6 +28,7 @@ class ImitationLoss(nn.Module):
         source_weight: float = 1.0,
         direction_weight: float = 1.0,
         split_weight: float = 0.5,
+        pass_weight: float = 10.0,
         value_weight: float = 0.5,
         q_halt_weight: float = 0.5,
         move_match_weight: float = 2.0,
@@ -34,6 +38,7 @@ class ImitationLoss(nn.Module):
         self.source_weight = source_weight
         self.direction_weight = direction_weight
         self.split_weight = split_weight
+        self.pass_weight = pass_weight
         self.value_weight = value_weight
         self.q_halt_weight = q_halt_weight
         self.move_match_weight = move_match_weight
@@ -50,7 +55,8 @@ class ImitationLoss(nn.Module):
             pred: model output dict with keys:
                 source_logits    [B, T, N]
                 direction_logits [B, T, 4]
-                split_logits     [B, T, 2]
+                split_logits     [B, T, 2]  (0=all-but-1, 1=50%)
+                pass_logits      [B, T]     (>0 → pass)
                 value            [B, T]
             tgt: target dict with keys:
                 count    [B, T]       – number of actions (0 or 1)
@@ -109,30 +115,44 @@ class ImitationLoss(nn.Module):
         dir_loss_all = torch.nan_to_num(dir_loss_all, nan=0.0)
         dir_loss = (dir_loss_all * valid).sum() / n_valid
 
-        # --- Split loss --------------------------------------------------
+        # --- Split loss (2-class: 0=all-but-1, 1=50%) ----------------------
+        # Only on valid (count>0) timesteps — split is meaningless without a move.
+        n_split = pred["split_logits"].size(-1)
         tgt_split = tgt["ratio_id"][:, :, 0].long()
+        # Clamp invalid positions to 0 so CE doesn't error; they're masked out anyway.
+        tgt_split = torch.where(valid, tgt_split, torch.zeros_like(tgt_split))
+
         split_loss_all = F.cross_entropy(
-            pred["split_logits"].reshape(-1, pred["split_logits"].size(-1)),
+            pred["split_logits"].reshape(-1, n_split),
             tgt_split.reshape(-1),
             reduction="none",
         ).reshape(B, T)
         split_loss_all = torch.nan_to_num(split_loss_all, nan=0.0)
         split_loss = (split_loss_all * valid).sum() / n_valid
 
+        # --- Pass loss (binary: should the agent pass this turn?) ----------
+        # target=1 when count==0 (no move), target=0 when count>0
+        tgt_pass = (~move_mask).float()  # [B, T]
+        pass_loss_all = F.binary_cross_entropy_with_logits(
+            pred["pass_logits"], tgt_pass, reduction="none",
+        )
+        pass_loss = (pass_loss_all * seq_mask.float()).sum() / n_seq
+
         # --- Move-mismatch loss (extra penalty for incomplete moves) ------
-        # A correct move requires all three (src, dir, split) to be right.
-        # Upweight timesteps where the model gets some but NOT all three
-        # correct, pushing it to coordinate the three heads together.
+        # Only on valid (count>0) timesteps.  A correct move requires
+        # src + dir + split all correct AND pass_head says "don't pass".
         move_match_loss = source_loss.new_tensor(0.0)
         if valid.any():
             with torch.no_grad():
                 pred_src = pred["source_logits"].argmax(dim=-1)   # [B, T]
                 pred_dir = pred["direction_logits"].argmax(dim=-1)
                 pred_split = pred["split_logits"].argmax(dim=-1)
+                pred_pass = pred["pass_logits"] > 0  # True = pass
                 all_match = (
                     (pred_src == tgt_src)
                     & (pred_dir == tgt_dir)
                     & (pred_split == tgt_split)
+                    & ~pred_pass  # must NOT pass on a valid-move timestep
                 )
                 mismatch_mask = ~all_match & valid
             n_mismatch = mismatch_mask.sum().clamp(min=1).float()
@@ -146,10 +166,6 @@ class ImitationLoss(nn.Module):
         value_loss = (value_loss_all * seq_mask.float()).sum() / n_seq
 
         # --- Q-halt loss (TRM halting) ------------------------------------
-        # q_halt predicts whether the current answer is "good enough"
-        # Target: 1 if source prediction is correct, 0 otherwise
-        # Must use `valid` mask (not seq_mask) because tgt_src is only
-        # meaningful at timesteps with actual moves (count > 0).
         q_halt_loss = source_loss.new_tensor(0.0)
         if "q_halt" in pred and valid.any():
             with torch.no_grad():
@@ -165,6 +181,7 @@ class ImitationLoss(nn.Module):
             self.source_weight * source_loss
             + self.direction_weight * dir_loss
             + self.split_weight * split_loss
+            + self.pass_weight * pass_loss
             + self.value_weight * value_loss
             + self.q_halt_weight * q_halt_loss
             + self.move_match_weight * move_match_loss
@@ -175,6 +192,7 @@ class ImitationLoss(nn.Module):
             "source_loss": source_loss.detach(),
             "direction_loss": dir_loss.detach(),
             "split_loss": split_loss.detach(),
+            "pass_loss": pass_loss.detach(),
             "value_loss": value_loss.detach(),
             "q_halt_loss": q_halt_loss.detach() if isinstance(q_halt_loss, torch.Tensor) else q_halt_loss,
             "move_match_loss": move_match_loss.detach() if isinstance(move_match_loss, torch.Tensor) else move_match_loss,

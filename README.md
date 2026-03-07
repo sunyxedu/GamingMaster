@@ -20,7 +20,7 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 │       ├── encoder.py        #     SpatialEncoder, HistoryEncoder, ResBlock
 │       ├── transformer.py    #     TransformerBlock, SpatiotemporalBlock
 │       ├── trm.py            #     TRM (Tiny Recursive Model) two-state pondering
-│       ├── heads.py          #     Source / Direction / Split / Value heads
+│       ├── heads.py          #     Source / Direction / Split / Pass / Value heads
 │       └── world_model.py    #     WorldModel (for RL curiosity reward)
 ├── env/                      # RL environment
 │   └── generals_env.py       #   Two-player simultaneous-move Gym-like env
@@ -262,6 +262,21 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
             dir_logits      split_logits
             [B,T,4]         [B,T,2]
             (↓→↑←)          (all|50%)
+                   │             │
+                   └──────┬──────┘
+                          ▼
+                    ┌───────────┐
+                    │ PassHead  │
+                    │ ll_token  │
+                    │ src_embed │
+                    │ dir_logits│
+                    │split_logits│
+                    │ sin time  │
+                    │ PE (32-d) │
+                    └─────┬─────┘
+                          │
+                    pass_logits
+                    [B,T] (>0 = pass/no move)
 ```
 
 **Key design choices:**
@@ -269,9 +284,9 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
 - **Factored spatiotemporal attention**: Each `SpatiotemporalBlock` first runs spatial self-attention (627 tokens within the same timestep interact), then causal temporal self-attention (each of the 627 token positions attends to its own history across all past timesteps). This gives every grid cell a per-cell temporal memory — it knows exactly *where* and *when* it saw something before, unlike a pooled GRU that discards spatial structure.
 - **Causal temporal masking**: Timestep *t* can only attend to timesteps 0..*t*, never the future. Verified by test: processing T=6 vs T=3 produces identical outputs for the first 3 steps (diff = 0).
 - **KV cache for inference**: During single-step inference, each block caches past key/value tensors. Only the current timestep's tokens are computed; temporal attention queries the growing cache. No re-processing of past timesteps.
-- **Autoregressive policy heads**: Source is predicted first from spatial tokens; its embedding is extracted and concatenated with the Low-Level decision token to predict Direction and Split. During training, ground-truth source is used; during inference, the model samples.
+- **Autoregressive policy heads**: Source is predicted first from spatial tokens; its embedding is extracted and concatenated with the Low-Level decision token to predict Direction, Split, and Pass. During training, ground-truth source is used; during inference, the model samples.
 - **Legal mask at sampling only**: `SourceHead` outputs raw logits over all 625 positions. The legal-move mask (owned tiles with army > 1) is applied externally only during inference sampling — not during training. This lets the model learn board understanding from the state encoding itself, rather than relying on a hard mask.
-- **Decision tokens**: Two learnable tokens — High-Level (→ value prediction) and Low-Level (→ direction/split) — are appended to the 625 spatial tokens and participate in both spatial and temporal attention.
+- **Decision tokens**: Two learnable tokens — High-Level (→ value prediction) and Low-Level (→ direction/split/pass) — are appended to the 625 spatial tokens and participate in both spatial and temporal attention.
 - **2D spatial PE + sinusoidal temporal PE**: Spatial positions use learnable row + column embeddings (summed). Temporal positions use sinusoidal encoding, allowing generalisation to arbitrary game lengths.
 - **TRM two-state pondering** ([arxiv 2510.04871](https://arxiv.org/abs/2510.04871)): Two state vectors — `z_H` (answer) and `z_L` (reasoning scratchpad) — are initialized from fixed buffers and iteratively refined by a single shared reasoning module. Inner loop refines `z_L` using `z_H + x` as injection; outer loop updates `z_H` from `z_L`. First `H_cycles−1` outer iterations run without gradient for memory efficiency; only the last iteration propagates gradients. At inference, ACT (Adaptive Computation Time) loops up to `halt_max_steps` times — `q_halt` head on `z_H` outputs a confidence logit; when positive, the model stops pondering early. Carry state `(z_H, z_L)` is passed between ACT steps so each round builds on the previous thinking.
 - **World model** (optional): Predicts next-state embedding from (current state, action). Disabled during IL; during RL, prediction error serves as intrinsic curiosity reward.
@@ -296,15 +311,17 @@ Default config:
 
 Supervised learning from expert replays:
 
-| Loss component | Weight | Description |
-|----------------|--------|-------------|
-| Source CE | 1.0 | Cross-entropy over 625 grid positions |
-| Direction CE | 1.0 | Cross-entropy over 4 directions |
-| Split CE | 0.5 | Cross-entropy over 2 split options |
-| Value MSE | 0.5 | Mean squared error on game value |
-| Q-halt BCE | 0.5 | Binary CE — target 1 if source prediction correct, 0 otherwise |
+| Loss component | Weight | Mask | Description |
+|----------------|--------|------|-------------|
+| Source CE | 1.0 | valid (count>0) | Cross-entropy over 625 grid positions |
+| Direction CE | 1.0 | valid (count>0) | Cross-entropy over 4 directions |
+| Split CE | 0.5 | valid (count>0) | Cross-entropy over 2 split options (0=all-but-1, 1=50%) |
+| Pass BCE | 1.0 | seq_mask (all) | Binary CE — target=1 when count=0, target=0 when count>0 |
+| Value MSE | 0.5 | seq_mask (all) | Mean squared error on game value |
+| Q-halt BCE | 0.5 | valid (count>0) | Binary CE — target 1 if source prediction correct, 0 otherwise |
+| Move-Mismatch | 2.0 | valid & mismatch | Extra penalty on src+dir+split CE when any head predicts wrong |
 
-All losses are masked: timesteps with no move (`count=0`) are excluded from source/direction/split loss; timesteps beyond the actual sequence length are excluded from all losses.
+Source/direction/split losses are masked to timesteps with moves (count>0). Pass and value losses apply to all valid sequence timesteps. Move-mismatch loss re-penalizes timesteps where any of source/direction/split/pass predictions are wrong.
 
 **Reinforcement Learning** (`model/losses.py` — `RLLoss`)
 

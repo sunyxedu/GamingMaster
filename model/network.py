@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from model.components.encoder import HistoryEncoder, SpatialEncoder
-from model.components.heads import DirectionHead, SourceHead, SplitHead, ValueHead
+from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead, ValueHead
 from model.components.transformer import SpatiotemporalBlock, _sinusoidal_pe
 from model.components.trm import TRM
 from model.components.world_model import WorldModel
@@ -83,6 +83,7 @@ class GeneralsNetwork(nn.Module):
         self.source_head = SourceHead(cfg.d_model)
         self.direction_head = DirectionHead(cfg.d_model, cfg.n_directions)
         self.split_head = SplitHead(cfg.d_model, cfg.n_split)
+        self.pass_head = PassHead(cfg.d_model, cfg.n_directions, cfg.n_split)
         self.value_head = ValueHead(cfg.d_model)
 
         # --- Optional world model ---
@@ -211,6 +212,7 @@ class GeneralsNetwork(nn.Module):
     def _decode_heads(self, tokens, B, T, N, W, legal_mask, source_y, source_x):
         cfg = self.cfg
         BT = B * T
+        device = tokens.device
         spatial_out = tokens[:, :N]
         hl_out = tokens[:, N]
         ll_out = tokens[:, N + 1]
@@ -237,17 +239,30 @@ class GeneralsNetwork(nn.Module):
                 src_idx = torch.multinomial(probs, 1).squeeze(-1)
 
         source_embed = spatial_out[
-            torch.arange(BT, device=spatial_out.device), src_idx,
+            torch.arange(BT, device=device), src_idx,
         ]
+
+        direction_logits = self.direction_head(
+            source_embed, ll_out,
+        )  # [BT, n_dir]
+        split_logits = self.split_head(
+            source_embed, ll_out,
+        )  # [BT, n_split]
+
+        # Time PE for PassHead: [T, pe_dim] → [BT, pe_dim]
+        pe_dim = self.pass_head.time_pe_dim
+        time_pe = _sinusoidal_pe(T, pe_dim, device)  # [T, pe_dim]
+        time_pe = time_pe.unsqueeze(0).expand(B, T, pe_dim).reshape(BT, pe_dim)
+
+        pass_logits = self.pass_head(
+            ll_out, source_embed, direction_logits, split_logits, time_pe,
+        )  # [BT]
 
         return {
             "source_logits": source_logits.reshape(B, T, N),
-            "direction_logits": self.direction_head(
-                source_embed, ll_out,
-            ).reshape(B, T, cfg.n_directions),
-            "split_logits": self.split_head(
-                source_embed, ll_out,
-            ).reshape(B, T, cfg.n_split),
+            "direction_logits": direction_logits.reshape(B, T, cfg.n_directions),
+            "split_logits": split_logits.reshape(B, T, cfg.n_split),
+            "pass_logits": pass_logits.reshape(B, T),
             "value": self.value_head(hl_out).reshape(B, T),
             "src_idx": src_idx.reshape(B, T),
         }
@@ -329,7 +344,8 @@ class GeneralsNetwork(nn.Module):
             pred: model output with
                 source_logits    [B, T, N]  (raw, unmasked)
                 direction_logits [B, T, 4]
-                split_logits     [B, T, 2]
+                split_logits     [B, T, 2]  (0=all-but-1, 1=50%)
+                pass_logits      [B, T]     (>0 → pass)
             actions: dict with
                 source_idx  [B, T]   flat index 0..N-1
                 direction   [B, T]   0..3
@@ -420,12 +436,13 @@ class GeneralsNetwork(nn.Module):
         hidden: Optional[torch.Tensor] = None,
         world_model_embed: Optional[torch.Tensor] = None,
         st_cache: Optional[List[torch.Tensor]] = None,
+        step_idx: int = 0,
     ) -> Dict[str, torch.Tensor]:
         if self.is_st:
             return self._step_st(grid, globals_vec, legal_mask, world_model_embed, st_cache)
-        return self._step_gru(grid, globals_vec, legal_mask, hidden, world_model_embed)
+        return self._step_gru(grid, globals_vec, legal_mask, hidden, world_model_embed, step_idx)
 
-    def _step_gru(self, grid, globals_vec, legal_mask, hidden, wm_embed):
+    def _step_gru(self, grid, globals_vec, legal_mask, hidden, wm_embed, step_idx):
         cfg = self.cfg
         B, d = grid.shape[0], cfg.d_model
         N = cfg.grid_h * cfg.grid_w
@@ -448,11 +465,11 @@ class GeneralsNetwork(nn.Module):
 
         # TRM with ACT
         x = self.pre_norm(tokens)
-        carry = None
-        for _ in range(cfg.halt_max_steps):
-            z_H, q_halt, carry = self.trm(x, carry)
+        z_H, q_halt, carry = self.trm(x)
+        for _ in range(cfg.halt_max_steps - 1):
             if (q_halt > 0).all():
                 break
+            z_H, q_halt, carry = self.trm(x, carry)
         z_H = self.post_norm(z_H)
 
         spatial_out = z_H[:, :N]
@@ -475,6 +492,9 @@ class GeneralsNetwork(nn.Module):
 
         direction_logits = self.direction_head(source_embed, ll_out)
         split_logits = self.split_head(source_embed, ll_out)
+        pe_dim = self.pass_head.time_pe_dim
+        time_pe = _sinusoidal_pe(step_idx + 1, pe_dim, z_H.device)[step_idx].unsqueeze(0).expand(B, pe_dim)
+        pass_logits = self.pass_head(ll_out, source_embed, direction_logits, split_logits, time_pe)
         value = self.value_head(hl_out)
 
         rl_out = self._sample_actions(
@@ -486,6 +506,7 @@ class GeneralsNetwork(nn.Module):
             "source_logits": source_logits,
             "direction_logits": direction_logits,
             "split_logits": split_logits,
+            "pass_logits": pass_logits,
             "value": value,
             "q_halt": q_halt,
             "hidden": hidden,
@@ -522,11 +543,11 @@ class GeneralsNetwork(nn.Module):
         tokens = self.mid_norm(tokens.squeeze(1))
 
         # Stage 2: TRM with ACT
-        carry = None
-        for _ in range(cfg.halt_max_steps):
-            z_H, q_halt, carry = self.trm(tokens, carry)
+        z_H, q_halt, carry = self.trm(tokens)
+        for _ in range(cfg.halt_max_steps - 1):
             if (q_halt > 0).all():
                 break
+            z_H, q_halt, carry = self.trm(tokens, carry)
         z_H = self.post_norm(z_H)
 
         spatial_out = z_H[:, :N]
@@ -550,6 +571,9 @@ class GeneralsNetwork(nn.Module):
 
         direction_logits = self.direction_head(source_embed, ll_out)
         split_logits = self.split_head(source_embed, ll_out)
+        pe_dim = self.pass_head.time_pe_dim
+        time_pe = _sinusoidal_pe(t_cur + 1, pe_dim, z_H.device)[t_cur].unsqueeze(0).expand(B, pe_dim)
+        pass_logits = self.pass_head(ll_out, source_embed, direction_logits, split_logits, time_pe)
         value = self.value_head(hl_out)
 
         # Sample direction/split and compute log-probs for RL rollout
@@ -562,6 +586,7 @@ class GeneralsNetwork(nn.Module):
             "source_logits": source_logits,
             "direction_logits": direction_logits,
             "split_logits": split_logits,
+            "pass_logits": pass_logits,
             "value": value,
             "q_halt": q_halt,
             "st_cache": new_caches,
