@@ -1,6 +1,8 @@
-import os, json, torch
+import json
+import os
+
+import torch
 from torch.utils.data import Dataset
-from torch.nn.utils.rnn import pad_sequence
 
 
 def collate_variable_length_sequences(batch):
@@ -17,7 +19,6 @@ def collate_variable_length_sequences(batch):
     K = batch[0]['meta']['K']
     C = batch[0]['obs']['grid_seq'].shape[2]
     G = batch[0]['obs']['globals_seq'].shape[2]
-    A = batch[0]['obs']['prev_action_seq'].shape[2]
     
     B = len(batch)
     
@@ -26,7 +27,6 @@ def collate_variable_length_sequences(batch):
         'obs': {
             'grid_seq': torch.zeros(B, max_T, C, H, W),
             'globals_seq': torch.zeros(B, max_T, G),
-            'prev_action_seq': torch.zeros(B, max_T, A),
             'legal_source_mask_seq': torch.zeros(B, max_T, 1, H, W, dtype=torch.bool)
         },
         'tgt': {
@@ -53,7 +53,6 @@ def collate_variable_length_sequences(batch):
         T = item['meta']['T']
         collated['obs']['grid_seq'][i, :T] = item['obs']['grid_seq'][0]
         collated['obs']['globals_seq'][i, :T] = item['obs']['globals_seq'][0]
-        collated['obs']['prev_action_seq'][i, :T] = item['obs']['prev_action_seq'][0]
         collated['obs']['legal_source_mask_seq'][i, :T] = item['obs']['legal_source_mask_seq'][0]
         
         collated['tgt']['count'][i, :T] = item['tgt']['count'][0]
@@ -126,12 +125,6 @@ class SeqReplayDataset(Dataset):
             dtype=torch.float32
         )[:T]
         
-        # Load previous action [T, A]
-        prev_action = torch.tensor(
-            obj.get('prev_action_seq', [[0.0] * 8 for _ in range(T)]),
-            dtype=torch.float32
-        )[:T]
-        
         # Load legal source mask [T, 1, H, W]
         lsrc = torch.tensor(
             obj.get('legal_source_mask_seq', [[[[True] * W for _ in range(H)]] for _ in range(T)]),
@@ -197,7 +190,6 @@ class SeqReplayDataset(Dataset):
             'obs': {
                 'grid_seq': grid.unsqueeze(0),              # [1, T, C, H, W]
                 'globals_seq': globals_.unsqueeze(0),       # [1, T, G]
-                'prev_action_seq': prev_action.unsqueeze(0), # [1, T, A]
                 'legal_source_mask_seq': lsrc.unsqueeze(0)  # [1, T, 1, H, W]
             },
             'tgt': {

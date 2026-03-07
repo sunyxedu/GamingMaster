@@ -1,10 +1,10 @@
 """API client for fetching replay metadata from generals.io."""
 
-import asyncio
-import aiohttp
-import ssl
-from typing import List, Dict, Any
 import json
+import ssl
+from typing import Any, Dict, List
+
+import aiohttp
 
 
 async def fetch_replay_list(

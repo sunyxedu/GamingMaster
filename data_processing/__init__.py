@@ -9,13 +9,13 @@ Modules:
 
 from data_processing.download.api_client import fetch_replay_list, save_replay_list
 from data_processing.download.replay_fetcher import ReplayFetcher, download_replays
-from data_processing.processing.filter import filter_replays, filter_replay_file
-from data_processing.processing.simulator import ReplaySimulator, simulate_replay
 from data_processing.parsers.generals_json import (
+    batch_parse_directory,
     convert_simulator_to_gio,
     parse_replay_to_gio,
-    batch_parse_directory,
 )
+from data_processing.processing.filter import filter_replay_file, filter_replays
+from data_processing.processing.simulator import ReplaySimulator, simulate_replay
 
 __all__ = [
     # Download

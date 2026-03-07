@@ -36,30 +36,15 @@ scripts/
 
 ## Installation
 
-### Using uv (Recommended)
-
 ```bash
 uv sync
 ```
 
-### Node.js Dependency
-
-The replay deserializer requires Node.js and the `lz-string` package for decompressing `.gior` files:
+Node.js dependency (auto-installed on first use, or manually):
 
 ```bash
-cd data_processing/download
-npm install lz-string
+(cd data_processing/download && npm install lz-string)
 ```
-
-### Key Dependencies
-
-Python:
-- `aiohttp` - Async HTTP client for downloads
-- `numpy` - Array operations
-- `torch` - PyTorch for dataset
-
-Node.js:
-- `lz-string` - LZ-string decompression for .gior files
 
 ## Quick Start
 
@@ -69,8 +54,8 @@ Process replays for specific players:
 
 ```bash
 uv run python scripts/prepare_data.py \
-    --players MeltedToast Mithraaaa \
-    --output data/my_replays \
+    -p MeltedToast Mithraaaa \
+    -o data/my_replays \
     --max-replays 1000 \
     --min-turns 80
 ```
@@ -205,7 +190,6 @@ The final training format:
 {
   "grid_seq": [T, C, H, W],
   "globals_seq": [T, G],
-  "prev_action_seq": [T, A],
   "legal_source_mask_seq": [T, 1, H, W],
   "max_actions_per_tick": 4,
   "count": [T],

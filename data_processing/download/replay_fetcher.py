@@ -1,12 +1,13 @@
 """Replay fetcher for downloading and deserializing .gior files from S3."""
 
 import asyncio
-import aiohttp
-import ssl
 import json
-import os
+import ssl
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import Dict, List, Optional
+
+import aiohttp
+
 from .deserializer import deserialize_replay
 
 

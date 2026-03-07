@@ -5,15 +5,16 @@ Right-click to advance one turn.
 """
 
 import json
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import numpy as np
-from data_processing.processing.simulator import ReplaySimulator
 
+from data_processing.processing.simulator import ReplaySimulator
 
 # Color scheme for different tile types
 COLORS = {

@@ -1,8 +1,8 @@
 """Filter replays based on criteria."""
 
 import json
-from typing import List, Dict, Any, Optional
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 
 def filter_replays(
