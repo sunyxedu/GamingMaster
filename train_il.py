@@ -35,7 +35,7 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=4)
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--weight_decay", type=float, default=1e-4)
-    p.add_argument("--max_seq_len", type=int, default=2000, help="Max sequence length per sample")
+    p.add_argument("--max_seq_len", type=int, default=1500, help="Max sequence length per sample")
     p.add_argument("--d_model", type=int, default=256)
     p.add_argument("--n_heads", type=int, default=8)
     p.add_argument("--trm_H_cycles", type=int, default=3)
@@ -68,21 +68,29 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args, rank0=
         source_y = tgt["src_y"][:, :, 0]
         source_x = tgt["src_x"][:, :, 0]
 
-        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
-            pred = model(
-                grid_seq, globals_seq,
-                legal_mask=legal_mask,
-                source_y=source_y,
-                source_x=source_x,
-            )
-            losses = criterion(pred, tgt, lengths)
-        loss = losses["loss"]
+        try:
+            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+                pred = model(
+                    grid_seq, globals_seq,
+                    legal_mask=legal_mask,
+                    source_y=source_y,
+                    source_x=source_x,
+                )
+                losses = criterion(pred, tgt, lengths)
+            loss = losses["loss"]
 
-        optimizer.zero_grad()
-        loss.backward()
-        if args.grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-        optimizer.step()
+            optimizer.zero_grad()
+            loss.backward()
+            if args.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            optimizer.step()
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            optimizer.zero_grad(set_to_none=True)
+            if rank0:
+                T_cur = grid_seq.shape[1]
+                print(f"  [OOM] Skipped step {step+1} (T={T_cur})")
+            continue
 
         total_loss += loss.item()
         total_steps += 1
