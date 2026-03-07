@@ -46,6 +46,7 @@ def parse_args():
     p.add_argument("--grad_clip", type=float, default=1.0)
     p.add_argument("--num_workers", type=int, default=0)
     p.add_argument("--device", type=str, default="auto")
+    p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
     return p.parse_args()
 
 
@@ -53,7 +54,7 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args, rank0=
     model.train()
     total_loss = 0.0
     total_steps = 0
-    log_losses = {"source": 0, "direction": 0, "split": 0, "value": 0, "q_halt": 0}
+    log_losses = {"source": 0, "direction": 0, "split": 0, "value": 0, "q_halt": 0, "move_match": 0}
     use_amp = device.type == "cuda"
 
     for step, batch in enumerate(loader):
@@ -95,7 +96,8 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args, rank0=
                 f"  Epoch {epoch} Step {step+1}/{len(loader)}  "
                 f"loss={avg:.4f}  src={parts['source']:.4f}  "
                 f"dir={parts['direction']:.4f}  split={parts['split']:.4f}  "
-                f"val={parts['value']:.4f}  qhalt={parts['q_halt']:.4f}"
+                f"val={parts['value']:.4f}  qhalt={parts['q_halt']:.4f}  "
+                f"mmatch={parts['move_match']:.4f}"
             )
 
     avg_loss = total_loss / max(total_steps, 1)
@@ -167,7 +169,18 @@ def main():
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    for epoch in range(1, args.epochs + 1):
+    start_epoch = 1
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        raw_model = model.module if distributed else model
+        raw_model.load_state_dict(ckpt["model_state"])
+        optimizer.load_state_dict(ckpt["optimizer_state"])
+        scheduler.load_state_dict(ckpt["scheduler_state"])
+        start_epoch = ckpt["epoch"] + 1
+        if rank0:
+            print(f"Resumed from {args.resume} (epoch {ckpt['epoch']}, loss={ckpt['loss']:.4f})")
+
+    for epoch in range(start_epoch, args.epochs + 1):
         if sampler is not None:
             sampler.set_epoch(epoch)
         t0 = time.time()

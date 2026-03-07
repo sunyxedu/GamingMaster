@@ -27,6 +27,7 @@ class ImitationLoss(nn.Module):
         split_weight: float = 0.5,
         value_weight: float = 0.5,
         q_halt_weight: float = 0.5,
+        move_match_weight: float = 2.0,
         grid_w: int = 25,
     ):
         super().__init__()
@@ -35,6 +36,7 @@ class ImitationLoss(nn.Module):
         self.split_weight = split_weight
         self.value_weight = value_weight
         self.q_halt_weight = q_halt_weight
+        self.move_match_weight = move_match_weight
         self.grid_w = grid_w
 
     def forward(
@@ -117,6 +119,26 @@ class ImitationLoss(nn.Module):
         split_loss_all = torch.nan_to_num(split_loss_all, nan=0.0)
         split_loss = (split_loss_all * valid).sum() / n_valid
 
+        # --- Move-mismatch loss (extra penalty for incomplete moves) ------
+        # A correct move requires all three (src, dir, split) to be right.
+        # Upweight timesteps where the model gets some but NOT all three
+        # correct, pushing it to coordinate the three heads together.
+        move_match_loss = source_loss.new_tensor(0.0)
+        if valid.any():
+            with torch.no_grad():
+                pred_src = pred["source_logits"].argmax(dim=-1)   # [B, T]
+                pred_dir = pred["direction_logits"].argmax(dim=-1)
+                pred_split = pred["split_logits"].argmax(dim=-1)
+                all_match = (
+                    (pred_src == tgt_src)
+                    & (pred_dir == tgt_dir)
+                    & (pred_split == tgt_split)
+                )
+                mismatch_mask = ~all_match & valid
+            n_mismatch = mismatch_mask.sum().clamp(min=1).float()
+            combined_per_step = source_loss_all + dir_loss_all + split_loss_all
+            move_match_loss = (combined_per_step * mismatch_mask.float()).sum() / n_mismatch
+
         # --- Value loss --------------------------------------------------
         value_loss_all = F.mse_loss(
             pred["value"], tgt["value"], reduction="none",
@@ -145,6 +167,7 @@ class ImitationLoss(nn.Module):
             + self.split_weight * split_loss
             + self.value_weight * value_loss
             + self.q_halt_weight * q_halt_loss
+            + self.move_match_weight * move_match_loss
         )
 
         return {
@@ -154,6 +177,7 @@ class ImitationLoss(nn.Module):
             "split_loss": split_loss.detach(),
             "value_loss": value_loss.detach(),
             "q_halt_loss": q_halt_loss.detach() if isinstance(q_halt_loss, torch.Tensor) else q_halt_loss,
+            "move_match_loss": move_match_loss.detach() if isinstance(move_match_loss, torch.Tensor) else move_match_loss,
         }
 
 
