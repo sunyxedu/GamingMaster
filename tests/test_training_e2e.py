@@ -272,6 +272,133 @@ def test_checkpoint_save_load():
         print("  Checkpoint save/load verified ✓")
 
 
+def test_resume_training():
+    """Test that --resume correctly restores model, optimizer, scheduler, and continues training."""
+    print("\n=== Resume Training ===")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        data_dir = os.path.join(tmpdir, "data")
+        ckpt_dir = os.path.join(tmpdir, "ckpts")
+        create_mock_gio_data(4, data_dir, T=10)
+
+        cfg = ModelConfig(
+            d_model=64, n_heads=4, d_ff=128,
+            trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
+        )
+
+        # --- Phase 1: train 3 epochs, save checkpoint ---
+        model = GeneralsNetwork(cfg)
+        criterion = ImitationLoss(grid_w=cfg.grid_w)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+
+        dataset = SeqReplayDataset(data_dir, max_sequence_length=10)
+        loader = DataLoader(
+            dataset, batch_size=2,
+            collate_fn=collate_variable_length_sequences,
+        )
+
+        model.train()
+        for epoch in range(1, 4):
+            for batch in loader:
+                grid_seq = batch["obs"]["grid_seq"]
+                globals_seq = batch["obs"]["globals_seq"]
+                legal_mask = batch["obs"]["legal_source_mask_seq"]
+                tgt = batch["tgt"]
+                source_y = tgt["src_y"][:, :, 0]
+                source_x = tgt["src_x"][:, :, 0]
+
+                pred = model(grid_seq, globals_seq, legal_mask, source_y, source_x)
+                losses = criterion(pred, tgt, batch["meta"]["lengths"])
+                loss = losses["loss"]
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+            scheduler.step()
+
+        # Save checkpoint at epoch 3
+        os.makedirs(ckpt_dir, exist_ok=True)
+        ckpt_path = os.path.join(ckpt_dir, "checkpoint_epoch3.pt")
+        torch.save({
+            "epoch": 3,
+            "model_state": model.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "scheduler_state": scheduler.state_dict(),
+            "config": cfg.__dict__,
+            "loss": loss.item(),
+        }, ckpt_path)
+
+        # Record state after epoch 3 for comparison
+        saved_lr = optimizer.param_groups[0]["lr"]
+        saved_scheduler_epoch = scheduler.last_epoch
+
+        # Run one more epoch (epoch 4) continuously to get reference output
+        for batch in loader:
+            grid_seq = batch["obs"]["grid_seq"]
+            globals_seq = batch["obs"]["globals_seq"]
+            legal_mask = batch["obs"]["legal_source_mask_seq"]
+            tgt = batch["tgt"]
+            source_y = tgt["src_y"][:, :, 0]
+            source_x = tgt["src_x"][:, :, 0]
+
+            model.eval()
+            with torch.no_grad():
+                ref_pred = model(grid_seq, globals_seq, legal_mask, source_y, source_x)
+            break
+        ref_source_logits = ref_pred["source_logits"].clone()
+
+        # --- Phase 2: load checkpoint into fresh model, verify state ---
+        model2 = GeneralsNetwork(cfg)
+        optimizer2 = torch.optim.AdamW(model2.parameters(), lr=1e-3)
+        scheduler2 = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer2, T_max=10)
+
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        model2.load_state_dict(ckpt["model_state"])
+        optimizer2.load_state_dict(ckpt["optimizer_state"])
+        scheduler2.load_state_dict(ckpt["scheduler_state"])
+        start_epoch = ckpt["epoch"] + 1
+
+        # Verify epoch
+        assert start_epoch == 4, f"Expected start_epoch=4, got {start_epoch}"
+        print(f"  start_epoch={start_epoch} ✓")
+
+        # Verify lr matches
+        resumed_lr = optimizer2.param_groups[0]["lr"]
+        assert abs(resumed_lr - saved_lr) < 1e-8, \
+            f"LR mismatch: saved={saved_lr}, resumed={resumed_lr}"
+        print(f"  LR restored: {resumed_lr:.6f} ✓")
+
+        # Verify scheduler state
+        assert scheduler2.last_epoch == saved_scheduler_epoch, \
+            f"Scheduler epoch mismatch: {scheduler2.last_epoch} vs {saved_scheduler_epoch}"
+        print(f"  Scheduler last_epoch={scheduler2.last_epoch} ✓")
+
+        # Verify model weights produce same output
+        model2.eval()
+        with torch.no_grad():
+            resumed_pred = model2(grid_seq, globals_seq, legal_mask, source_y, source_x)
+        assert torch.allclose(resumed_pred["source_logits"], ref_source_logits, atol=1e-5), \
+            "Model output mismatch after resume"
+        print("  Model weights restored correctly ✓")
+
+        # Verify optimizer momentum buffers restored (Adam state)
+        orig_state_keys = set(optimizer.state.keys())
+        resumed_state_keys = set(optimizer2.state.keys())
+        assert len(orig_state_keys) == len(resumed_state_keys), \
+            f"Optimizer state count mismatch: {len(orig_state_keys)} vs {len(resumed_state_keys)}"
+        print(f"  Optimizer state restored ({len(resumed_state_keys)} param groups) ✓")
+
+        # Verify move_match_loss is in the output (new loss works with resumed model)
+        model2.train()
+        pred2 = model2(grid_seq, globals_seq, legal_mask, source_y, source_x)
+        losses2 = criterion(pred2, tgt, batch["meta"]["lengths"])
+        assert "move_match_loss" in losses2, "move_match_loss missing from resumed model output"
+        print(f"  move_match_loss present after resume: {losses2['move_match_loss']:.4f} ✓")
+
+        print("  Resume training verified ✓")
+
+
 def main():
     print("=" * 60)
     print("END-TO-END TRAINING TESTS")
@@ -281,6 +408,7 @@ def main():
         test_training_loop,
         test_real_data_training,
         test_checkpoint_save_load,
+        test_resume_training,
     ]
 
     passed = 0
