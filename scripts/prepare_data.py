@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import json
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
 
@@ -125,8 +126,15 @@ def run_filter(
     return all_filtered
 
 
-def run_simulate(players: List[str], output_dir: Path) -> int:
-    """Simulate replays from each player's perspective."""
+def _simulate_one(args):
+    """Worker function for parallel simulation (must be top-level for pickling)."""
+    replay_file, player, output_file = args
+    simulate_replay(replay_file, player, output_file)
+    return replay_file
+
+
+def run_simulate(players: List[str], output_dir: Path, max_workers: int = None) -> int:
+    """Simulate replays from each player's perspective using multiprocessing."""
     filtered_dir = output_dir / "filtered"
     replays_dir = output_dir / "replays"
     simulated_dir = output_dir / "simulated"
@@ -148,27 +156,39 @@ def run_simulate(players: List[str], output_dir: Path) -> int:
         with open(filtered_file) as f:
             filtered = json.load(f)
 
-        simulated_count = 0
+        # Collect tasks to submit
+        tasks = []
+        already_done = 0
         for replay in filtered:
             replay_id = replay["id"]
             replay_file = replays_dir / f"{replay_id}.json"
             output_file = player_sim_dir / f"{replay_id}.json"
 
             if output_file.exists():
-                simulated_count += 1
+                already_done += 1
                 continue
 
             if not replay_file.exists():
                 print(f"Replay file not found: {replay_file}")
                 continue
 
-            try:
-                simulate_replay(str(replay_file), player, str(output_file))
-                simulated_count += 1
-            except ValueError as e:
-                print(f"Skipping {replay_id}: {e}")
-            except Exception as e:
-                print(f"Error simulating {replay_id}: {e}")
+            tasks.append((str(replay_file), player, str(output_file)))
+
+        simulated_count = already_done
+        if tasks:
+            print(f"Simulating {len(tasks)} replays concurrently ({already_done} already done)...")
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_simulate_one, t): t for t in tasks}
+                for future in as_completed(futures):
+                    replay_file, _, _ = futures[future]
+                    replay_id = Path(replay_file).stem
+                    try:
+                        future.result()
+                        simulated_count += 1
+                    except ValueError as e:
+                        print(f"Skipping {replay_id}: {e}")
+                    except Exception as e:
+                        print(f"Error simulating {replay_id}: {e}")
 
         print(f"Simulated {simulated_count} replays for {player}")
         total_simulated += simulated_count
