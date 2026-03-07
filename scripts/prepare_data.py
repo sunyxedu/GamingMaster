@@ -59,9 +59,16 @@ async def run_download(
         # Fetch metadata
         metadata_file = metadata_dir / f"{player}.json"
         if metadata_file.exists():
-            print(f"Loading existing metadata from {metadata_file}")
             with open(metadata_file) as f:
                 replays = json.load(f)
+            if len(replays) >= max_replays:
+                print(f"Loading existing metadata from {metadata_file} ({len(replays)} replays)")
+            else:
+                print(f"Existing metadata has {len(replays)} replays, fetching {max_replays}...")
+                replays = await fetch_replay_list(player, total=max_replays)
+                with open(metadata_file, "w") as f:
+                    json.dump(replays, f, indent=2)
+                print(f"Saved {len(replays)} replay metadata to {metadata_file}")
         else:
             print(f"Fetching replay list for {player}...")
             replays = await fetch_replay_list(player, total=max_replays)
