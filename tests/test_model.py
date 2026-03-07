@@ -305,7 +305,7 @@ def test_spatiotemporal_step():
 
 
 def test_spatiotemporal_backward():
-    """With H_cycles=1, all params (including H_init, L_init, q_head) get gradients."""
+    """With H_cycles=1, all trainable params get gradients (H_init/L_init are buffers)."""
     print("\n=== Spatiotemporal + TRM Backward ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
@@ -358,7 +358,7 @@ def test_trm_nograd_optimization():
     # input x should have gradients
     assert x.grad is not None and x.grad.abs().sum() > 0, "Input should have gradients"
     print("  H_cycles=3: reasoning has grad ✓, input has grad ✓")
-    print("  (H_init/L_init don't get grad when H_cycles>1 — expected, as in paper) ✓")
+    print("  (H_init/L_init are buffers — not trainable, following paper) ✓")
 
 
 def test_generals_network_inference():
@@ -572,7 +572,6 @@ def test_dataset_integration():
     mock_data = {
         "grid_seq": torch.randn(T, 12, H, W).tolist(),
         "globals_seq": torch.randn(T, 4).tolist(),
-        "prev_action_seq": [[0.0] * 8 for _ in range(T)],
         "legal_source_mask_seq": [[[[True] * W for _ in range(H)]] for _ in range(T)],
         "max_actions_per_tick": K,
         "count": [1] * T,

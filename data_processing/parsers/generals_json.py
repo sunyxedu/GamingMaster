@@ -4,7 +4,6 @@ Parser to convert simulator output to gio training format.
 Converts the replay simulation data into the sequence format expected by gio:
 - grid_seq: [T, C, H, W] - spatial state
 - globals_seq: [T, G] - global features
-- prev_action_seq: [T, A] - previous action embeddings
 - legal_source_mask_seq: [T, 1, H, W] - legal source positions
 - Action targets: count, src_y, src_x, dir_id, ratio_id
 - Value and auxiliary targets
@@ -126,7 +125,6 @@ def convert_simulator_to_gio(
 
     grid_seq = []
     globals_seq = []
-    prev_action_seq = []
     legal_source_mask_seq = []
 
     count = []
@@ -164,8 +162,6 @@ def convert_simulator_to_gio(
             np.log1p(op_army) / 10.0,
             np.log1p(op_land) / 10.0,
         ])
-
-        prev_action_seq.append([0.0] * 8)
 
         legal_mask = create_legal_source_mask(sim_data["map"][t], sim_data["armies"][t])
         legal_source_mask_seq.append(legal_mask.tolist())
@@ -229,7 +225,6 @@ def convert_simulator_to_gio(
     return {
         "grid_seq": grid_seq,
         "globals_seq": globals_seq,
-        "prev_action_seq": prev_action_seq,
         "legal_source_mask_seq": legal_source_mask_seq,
         "max_actions_per_tick": K,
         "count": count,

@@ -256,11 +256,11 @@ def test_trm_nograd_saves_memory():
     assert reasoning_grads > 0, "Reasoning should have gradients from last cycle"
     assert x.grad is not None, "Input should have gradients"
 
-    # H_init and L_init should NOT have gradients (detached after no-grad cycles)
-    assert trm.H_init.grad is None, "H_init should not have gradient with H_cycles>1"
-    assert trm.L_init.grad is None, "L_init should not have gradient with H_cycles>1"
+    # H_init and L_init are buffers (not trainable), so not in named_parameters()
+    assert "H_init" not in dict(trm.named_parameters())
+    assert "L_init" not in dict(trm.named_parameters())
     print("  reasoning: has grad ✓")
-    print("  H_init/L_init: no grad (detached after no-grad cycles) ✓")
+    print("  H_init/L_init: buffers (not trainable, following paper) ✓")
 
 
 # ── Verification: ImitationLoss masking is correct ───────────────────

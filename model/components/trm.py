@@ -87,9 +87,9 @@ class TRM(nn.Module):
         # Shared reasoning module (used for both z_L and z_H updates)
         self.reasoning = TRMReasoningModule(cfg)
 
-        # Learnable initial states (broadcast to sequence length)
-        self.H_init = nn.Parameter(torch.randn(cfg.d_model) * 0.02)
-        self.L_init = nn.Parameter(torch.randn(cfg.d_model) * 0.02)
+        # Fixed initial states (not trainable, following the paper)
+        self.register_buffer("H_init", torch.randn(cfg.d_model))
+        self.register_buffer("L_init", torch.randn(cfg.d_model))
 
         # Q-halt head: predicts whether the current answer is good enough
         self.q_head = nn.Linear(cfg.d_model, 1, bias=True)

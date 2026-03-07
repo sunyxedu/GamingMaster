@@ -359,10 +359,6 @@ def verify_data_conversion(replay_data: dict):
     assert len(gio_data['globals_seq'][0]) == 4
     print(f"  globals_seq shape: [{T}, 4] ✓")
 
-    assert len(gio_data['prev_action_seq']) == T
-    assert len(gio_data['prev_action_seq'][0]) == 8
-    print(f"  prev_action_seq shape: [{T}, 8] ✓")
-
     assert len(gio_data['legal_source_mask_seq']) == T
     print(f"  legal_source_mask_seq shape: [{T}, 1, 25, 25] ✓")
 

@@ -190,7 +190,6 @@ The final training format:
 {
   "grid_seq": [T, C, H, W],
   "globals_seq": [T, G],
-  "prev_action_seq": [T, A],
   "legal_source_mask_seq": [T, 1, H, W],
   "max_actions_per_tick": 4,
   "count": [T],

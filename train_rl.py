@@ -87,8 +87,8 @@ def parse_args():
     # Model (used when no checkpoint is provided)
     p.add_argument("--d_model", type=int, default=256)
     p.add_argument("--n_heads", type=int, default=8)
-    p.add_argument("--trm_H_cycles", type=int, default=4)
-    p.add_argument("--trm_L_cycles", type=int, default=4)
+    p.add_argument("--trm_H_cycles", type=int, default=3)
+    p.add_argument("--trm_L_cycles", type=int, default=6)
     p.add_argument("--trm_block_layers", type=int, default=2)
 
     # Environment

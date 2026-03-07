@@ -143,7 +143,6 @@ def test_convert_simulator_to_gio_shapes():
 
     assert len(gio["grid_seq"]) == T
     assert len(gio["globals_seq"]) == T
-    assert len(gio["prev_action_seq"]) == T
     assert len(gio["legal_source_mask_seq"]) == T
     assert len(gio["count"]) == T
     assert len(gio["src_y"]) == T
@@ -427,7 +426,6 @@ def test_dataset_loading_shapes():
 
         assert item["obs"]["grid_seq"].shape == (1, 10, 12, 25, 25)
         assert item["obs"]["globals_seq"].shape == (1, 10, 4)
-        assert item["obs"]["prev_action_seq"].shape == (1, 10, 8)
         assert item["obs"]["legal_source_mask_seq"].shape == (1, 10, 1, 25, 25)
         assert item["tgt"]["count"].shape == (1, 10)
         assert item["tgt"]["src_y"].shape == (1, 10, 4)
@@ -619,7 +617,8 @@ def test_direction_head_dimensions():
 
 
 def test_trm_h1_all_params_have_grad():
-    """With H_cycles=1, ALL parameters (including H_init, L_init) get gradients."""
+    """With H_cycles=1, all trainable parameters get gradients.
+    H_init/L_init are buffers (not trainable), following the paper."""
     print("\n=== TRM: H_cycles=1 all params get grad ===")
     from model.components.trm import TRM
     from model.config import ModelConfig
@@ -636,7 +635,11 @@ def test_trm_h1_all_params_have_grad():
 
     no_grad = [n for n, p in trm.named_parameters() if p.grad is None]
     assert len(no_grad) == 0, f"Missing gradients: {no_grad}"
-    print("  All parameters get gradients with H_cycles=1 ✓")
+    # H_init/L_init are buffers, not in named_parameters()
+    assert "H_init" not in dict(trm.named_parameters())
+    assert "L_init" not in dict(trm.named_parameters())
+    print("  All trainable parameters get gradients with H_cycles=1 ✓")
+    print("  H_init/L_init are buffers (not trainable) ✓")
 
 
 def test_trm_output_varies_with_input():
@@ -1304,7 +1307,6 @@ def _write_mock_gio(tmpdir, filename, T=10, H=25, W=25, K=4):
     data = {
         "grid_seq": np.random.randn(T, 12, H, W).astype(np.float32).tolist(),
         "globals_seq": np.random.randn(T, 4).astype(np.float32).tolist(),
-        "prev_action_seq": [[0.0] * 8 for _ in range(T)],
         "legal_source_mask_seq": [[[[True] * W for _ in range(H)]] for _ in range(T)],
         "max_actions_per_tick": K,
         "count": [1] * T,

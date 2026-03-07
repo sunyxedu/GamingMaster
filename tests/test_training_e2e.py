@@ -34,7 +34,6 @@ def create_mock_gio_data(n_files: int, out_dir: str, T: int = 20):
         data = {
             "grid_seq": grid_seq.tolist(),
             "globals_seq": globals_seq.tolist(),
-            "prev_action_seq": [[0.0] * 8 for _ in range(T)],
             "legal_source_mask_seq": [[[[True] * W for _ in range(H)]] for _ in range(T)],
             "max_actions_per_tick": K,
             "count": [1] * T,
