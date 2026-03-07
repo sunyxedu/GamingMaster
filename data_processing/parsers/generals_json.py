@@ -10,6 +10,8 @@ Converts the replay simulation data into the sequence format expected by gio:
 """
 
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -269,34 +271,57 @@ def parse_replay_to_gio(
     return gio_data
 
 
+def _convert_single_file(args: tuple) -> tuple[str, bool, str]:
+    """Worker function for parallel conversion. Returns (filename, success, error_msg)."""
+    sim_file, gio_file, max_actions_per_tick = args
+    try:
+        parse_replay_to_gio(sim_file, gio_file, max_actions_per_tick)
+        return (sim_file, True, "")
+    except Exception as e:
+        return (sim_file, False, str(e))
+
+
 def batch_parse_directory(
     sim_dir: str,
     gio_dir: str,
-    max_actions_per_tick: int = 4
+    max_actions_per_tick: int = 4,
+    max_workers: int | None = None,
 ) -> int:
     """
-    Parse all simulator outputs in a directory.
-    
+    Parse all simulator outputs in a directory (concurrently).
+
     Args:
         sim_dir: Directory containing simulator outputs
         gio_dir: Directory to save gio format files
         max_actions_per_tick: Max actions per turn
-        
+        max_workers: Max parallel workers (default: number of CPUs)
+
     Returns:
         Number of files processed
     """
     sim_path = Path(sim_dir)
     gio_path = Path(gio_dir)
     gio_path.mkdir(parents=True, exist_ok=True)
-    
-    count = 0
+
+    tasks = []
     for sim_file in sim_path.glob("*.json"):
         gio_file = gio_path / sim_file.name
-        try:
-            parse_replay_to_gio(str(sim_file), str(gio_file), max_actions_per_tick)
-            count += 1
-        except Exception as e:
-            print(f"Error processing {sim_file}: {e}")
-    
+        tasks.append((str(sim_file), str(gio_file), max_actions_per_tick))
+
+    if not tasks:
+        print("No files to process")
+        return 0
+
+    if max_workers is None:
+        max_workers = min(os.cpu_count() or 4, len(tasks))
+
+    count = 0
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        for sim_file, success, error_msg in executor.map(_convert_single_file, tasks):
+            if success:
+                count += 1
+            else:
+                print(f"Error processing {sim_file}: {error_msg}")
+
     print(f"Processed {count} files")
     return count
