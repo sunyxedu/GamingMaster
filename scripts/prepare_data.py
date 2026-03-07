@@ -265,8 +265,8 @@ async def async_main():
     parser.add_argument(
         "--max-concurrent",
         type=int,
-        default=10,
-        help="Maximum concurrent downloads (default: 10)",
+        default=None,
+        help="Maximum concurrent downloads (default: os.cpu_count())",
     )
     parser.add_argument(
         "--min-turns",

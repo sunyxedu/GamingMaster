@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import ssl
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -19,20 +20,22 @@ class ReplayFetcher:
         server: str = 'na',
         max_retries: int = 3,
         retry_delay: float = 2.0,
-        max_concurrent: int = 10
+        max_concurrent: int | None = None
     ):
         """
         Initialize the replay fetcher.
-        
+
         Args:
             server: Server location ('na', 'eu', etc.)
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
-            max_concurrent: Maximum concurrent downloads
+            max_concurrent: Maximum concurrent downloads (default: os.cpu_count())
         """
         self.base_url = f"https://generalsio-replays-{server}.s3.amazonaws.com"
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        if max_concurrent is None:
+            max_concurrent = os.cpu_count() or 4
         self.semaphore = asyncio.Semaphore(max_concurrent)
         
         # Create SSL context (like axios behavior)
@@ -162,7 +165,7 @@ async def download_replays(
     replay_ids: List[str],
     output_dir: str,
     server: str = 'na',
-    max_concurrent: int = 10
+    max_concurrent: int | None = None
 ) -> Dict[str, int]:
     """
     Convenience function to download replays.
