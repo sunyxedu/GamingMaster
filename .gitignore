@@ -8,6 +8,7 @@ build/
 node_modules/
 .ruff_cache/
 checkpoints/
+checkpoints_prev/
 *.pt
 tests/test_data/
 viz_*/

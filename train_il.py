@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import os
+import random
 import time
 
 import torch
@@ -43,21 +44,32 @@ def parse_args():
     p.add_argument("--trm_block_layers", type=int, default=2)
     p.add_argument("--log_interval", type=int, default=10, help="Log every N steps")
     p.add_argument("--save_interval", type=int, default=1, help="Save every N epochs")
+    p.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every N steps within epoch")
     p.add_argument("--grad_clip", type=float, default=1.0)
     p.add_argument("--num_workers", type=int, default=0)
     p.add_argument("--device", type=str, default="auto")
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
+    p.add_argument("--tf_start", type=float, default=1.0, help="Teacher forcing ratio at epoch 1")
+    p.add_argument("--tf_end", type=float, default=0.0, help="Teacher forcing ratio at last epoch")
     return p.parse_args()
 
 
-def train_epoch(model, loader, criterion, optimizer, device, epoch, args, rank0=True):
+def train_epoch(model, loader, criterion, optimizer, device, epoch, args,
+                rank0=True, save_fn=None, start_step=0, tf_ratio=1.0):
     model.train()
-    total_loss = 0.0
-    total_steps = 0
-    log_losses = {"source": 0, "direction": 0, "split": 0, "pass": 0, "value": 0, "q_halt": 0, "move_match": 0}
+    from collections import deque
+    window = args.log_interval
+    recent_loss = deque(maxlen=window)
+    recent_parts = {k: deque(maxlen=window) for k in
+                    ["source", "direction", "split", "pass", "value", "q_halt", "move_match"]}
+    epoch_loss_sum = 0.0
+    epoch_steps = 0
     use_amp = device.type == "cuda"
 
     for step, batch in enumerate(loader):
+        if step < start_step:
+            continue
+
         grid_seq = batch["obs"]["grid_seq"].to(device)
         globals_seq = batch["obs"]["globals_seq"].to(device)
         legal_mask = batch["obs"]["legal_source_mask_seq"].to(device)
@@ -68,13 +80,14 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args, rank0=
         source_y = tgt["src_y"][:, :, 0]
         source_x = tgt["src_x"][:, :, 0]
 
+        use_tf = random.random() < tf_ratio
         try:
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
                 pred = model(
                     grid_seq, globals_seq,
                     legal_mask=legal_mask,
-                    source_y=source_y,
-                    source_x=source_x,
+                    source_y=source_y if use_tf else None,
+                    source_x=source_x if use_tf else None,
                 )
                 losses = criterion(pred, tgt, lengths)
             loss = losses["loss"]
@@ -92,14 +105,15 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args, rank0=
                 print(f"  [OOM] Skipped step {step+1} (T={T_cur})")
             continue
 
-        total_loss += loss.item()
-        total_steps += 1
-        for k in log_losses:
-            log_losses[k] += losses[f"{k}_loss"].item()
+        recent_loss.append(loss.item())
+        epoch_loss_sum += loss.item()
+        epoch_steps += 1
+        for k in recent_parts:
+            recent_parts[k].append(losses[f"{k}_loss"].item())
 
         if rank0 and (step + 1) % args.log_interval == 0:
-            avg = total_loss / total_steps
-            parts = {k: v / total_steps for k, v in log_losses.items()}
+            avg = sum(recent_loss) / len(recent_loss)
+            parts = {k: sum(v) / len(v) for k, v in recent_parts.items()}
             print(
                 f"  Epoch {epoch} Step {step+1}/{len(loader)}  "
                 f"loss={avg:.4f}  src={parts['source']:.4f}  "
@@ -108,7 +122,10 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args, rank0=
                 f"qhalt={parts['q_halt']:.4f}  mmatch={parts['move_match']:.4f}"
             )
 
-    avg_loss = total_loss / max(total_steps, 1)
+        if save_fn and rank0 and (step + 1) % args.save_steps == 0:
+            save_fn(epoch, step + 1)
+
+    avg_loss = epoch_loss_sum / max(epoch_steps, 1)
     return avg_loss
 
 
@@ -178,40 +195,64 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     start_epoch = 1
+    start_step = 0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         raw_model = model.module if distributed else model
         raw_model.load_state_dict(ckpt["model_state"], strict=False)
         optimizer.load_state_dict(ckpt["optimizer_state"])
         scheduler.load_state_dict(ckpt["scheduler_state"])
-        start_epoch = ckpt["epoch"] + 1
+        start_step = ckpt.get("step", 0)
+        if start_step > 0:
+            start_epoch = ckpt["epoch"]
+        else:
+            start_epoch = ckpt["epoch"] + 1
         if rank0:
-            print(f"Resumed from {args.resume} (epoch {ckpt['epoch']}, loss={ckpt['loss']:.4f})")
+            msg = f"Resumed from {args.resume} (epoch {ckpt['epoch']}, loss={ckpt['loss']:.4f}"
+            if start_step > 0:
+                msg += f", step {start_step}"
+            print(msg + ")")
+
+    def save_checkpoint(epoch, step=0):
+        raw = model.module if distributed else model
+        ckpt = {
+            "epoch": epoch,
+            "step": step,
+            "model_state": raw.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "scheduler_state": scheduler.state_dict(),
+            "config": cfg.__dict__,
+            "loss": 0.0,
+        }
+        if step > 0:
+            path = os.path.join(args.output_dir, f"checkpoint_epoch{epoch}_step{step}.pt")
+        else:
+            path = os.path.join(args.output_dir, f"checkpoint_epoch{epoch}.pt")
+        torch.save(ckpt, path)
+        print(f"  Saved {path}")
 
     for epoch in range(start_epoch, args.epochs + 1):
         if sampler is not None:
             sampler.set_epoch(epoch)
+        # Linear decay: tf_start at epoch 1 → tf_end at last epoch
+        progress = (epoch - 1) / max(args.epochs - 1, 1)
+        tf_ratio = args.tf_start + (args.tf_end - args.tf_start) * progress
         t0 = time.time()
-        avg_loss = train_epoch(model, loader, criterion, optimizer, device, epoch, args, rank0=rank0)
+        avg_loss = train_epoch(
+            model, loader, criterion, optimizer, device, epoch, args,
+            rank0=rank0, save_fn=save_checkpoint, start_step=start_step,
+            tf_ratio=tf_ratio,
+        )
+        start_step = 0  # only skip steps for the first epoch after resume
         scheduler.step()
         elapsed = time.time() - t0
         lr = optimizer.param_groups[0]["lr"]
         if rank0:
-            print(f"Epoch {epoch}/{args.epochs}  loss={avg_loss:.4f}  lr={lr:.6f}  time={elapsed:.1f}s")
+            print(f"Epoch {epoch}/{args.epochs}  loss={avg_loss:.4f}  lr={lr:.6f}  "
+                  f"tf={tf_ratio:.2f}  time={elapsed:.1f}s")
 
         if epoch % args.save_interval == 0 and rank0:
-            raw_model = model.module if distributed else model
-            ckpt = {
-                "epoch": epoch,
-                "model_state": raw_model.state_dict(),
-                "optimizer_state": optimizer.state_dict(),
-                "scheduler_state": scheduler.state_dict(),
-                "config": cfg.__dict__,
-                "loss": avg_loss,
-            }
-            path = os.path.join(args.output_dir, f"checkpoint_epoch{epoch}.pt")
-            torch.save(ckpt, path)
-            print(f"  Saved {path}")
+            save_checkpoint(epoch)
 
     if rank0:
         print("Training complete.")

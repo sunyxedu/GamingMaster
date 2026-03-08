@@ -64,18 +64,14 @@ open viz_output/replay.html
 ### 3. Prepare Training Data
 
 ```bash
-uv run python scripts/prepare_data.py \
-    --players MeltedToast \
-    --output data/output \
-    --max-replays 1000 \
-    --min-turns 80
+uv run python -m scripts.prepare_data --players Human.exe --output data/output --max-replays 1000 --min-turns 80
 ```
 
 ### 4. Train (Imitation Learning)
 
 ```bash
 uv run python train_il.py \
-    --data_dir data/output/training/MeltedToast \
+    --data_dir data/output/training/Human.exe \
     --epochs 50 \
     --batch_size 4 \
     --d_model 256
