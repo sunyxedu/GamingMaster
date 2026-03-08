@@ -49,7 +49,7 @@ def parse_args():
     p.add_argument("--num_workers", type=int, default=0)
     p.add_argument("--device", type=str, default="auto")
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
-    p.add_argument("--tf_start", type=float, default=1.0, help="Teacher forcing ratio at epoch 1")
+    p.add_argument("--tf_start", type=float, default=0.0, help="Teacher forcing ratio at epoch 1")
     p.add_argument("--tf_end", type=float, default=0.0, help="Teacher forcing ratio at last epoch")
     return p.parse_args()
 
@@ -81,13 +81,22 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args,
         source_x = tgt["src_x"][:, :, 0]
 
         use_tf = random.random() < tf_ratio
+        if use_tf:
+            # Mark pass timesteps (count=0) with -1 so model samples its own source
+            move_mask = tgt["count"] > 0
+            source_y = torch.where(move_mask, source_y, torch.full_like(source_y, -1))
+            source_x = torch.where(move_mask, source_x, torch.full_like(source_x, -1))
+        else:
+            source_y = None
+            source_x = None
+
         try:
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
                 pred = model(
                     grid_seq, globals_seq,
                     legal_mask=legal_mask,
-                    source_y=source_y if use_tf else None,
-                    source_x=source_x if use_tf else None,
+                    source_y=source_y,
+                    source_x=source_x,
                 )
                 losses = criterion(pred, tgt, lengths)
             loss = losses["loss"]

@@ -209,6 +209,20 @@ class GeneralsNetwork(nn.Module):
     # Shared head logic
     # ------------------------------------------------------------------
 
+    def _sample_source(self, source_logits, legal_mask, BT, N):
+        """Sample source index from model's own predictions (no grad)."""
+        with torch.no_grad():
+            logits_safe = source_logits.detach().clone()
+            if legal_mask is not None:
+                lm = legal_mask.reshape(BT, N)
+                logits_safe = logits_safe.masked_fill(~lm, float("-inf"))
+            all_masked = logits_safe.isinf() & (logits_safe < 0)
+            bad_rows = all_masked.all(dim=-1)
+            if bad_rows.any():
+                logits_safe[bad_rows, 0] = 0.0
+            probs = F.softmax(logits_safe, dim=-1)
+            return torch.multinomial(probs, 1).squeeze(-1)
+
     def _decode_heads(self, tokens, B, T, N, W, legal_mask, source_y, source_x):
         cfg = self.cfg
         BT = B * T
@@ -220,23 +234,17 @@ class GeneralsNetwork(nn.Module):
         source_logits = self.source_head(spatial_out)  # raw logits, no mask
 
         if source_y is not None and source_x is not None:
-            src_idx = (
-                source_y.reshape(BT) * W + source_x.reshape(BT)
-            ).long().clamp(0, N - 1)
+            sy = source_y.reshape(BT)
+            sx = source_x.reshape(BT)
+            gt_idx = (sy * W + sx).long().clamp(0, N - 1)
+            needs_sample = (sy < 0)
+            if needs_sample.any():
+                pred_idx = self._sample_source(source_logits, legal_mask, BT, N)
+                src_idx = torch.where(needs_sample, pred_idx, gt_idx)
+            else:
+                src_idx = gt_idx
         else:
-            with torch.no_grad():
-                logits_safe = source_logits.detach().clone()
-                # Apply legal mask only for sampling
-                if legal_mask is not None:
-                    lm = legal_mask.reshape(BT, N)
-                    logits_safe = logits_safe.masked_fill(~lm, float("-inf"))
-                # Handle all-masked rows (no legal moves) — pick position 0
-                all_masked = logits_safe.isinf() & (logits_safe < 0)
-                bad_rows = all_masked.all(dim=-1)
-                if bad_rows.any():
-                    logits_safe[bad_rows, 0] = 0.0
-                probs = F.softmax(logits_safe, dim=-1)
-                src_idx = torch.multinomial(probs, 1).squeeze(-1)
+            src_idx = self._sample_source(source_logits, legal_mask, BT, N)
 
         source_embed = spatial_out[
             torch.arange(BT, device=device), src_idx,
@@ -477,17 +485,7 @@ class GeneralsNetwork(nn.Module):
         ll_out = z_H[:, N + 1]
 
         source_logits = self.source_head(spatial_out)
-        with torch.no_grad():
-            logits_safe = source_logits.detach().clone()
-            if legal_mask is not None:
-                lm = legal_mask.reshape(B, N)
-                logits_safe = logits_safe.masked_fill(~lm, float("-inf"))
-            all_masked = logits_safe.isinf() & (logits_safe < 0)
-            bad_rows = all_masked.all(dim=-1)
-            if bad_rows.any():
-                logits_safe[bad_rows, 0] = 0.0
-            probs = F.softmax(logits_safe, dim=-1)
-            src_idx = torch.multinomial(probs, 1).squeeze(-1)
+        src_idx = self._sample_source(source_logits, legal_mask, B, N)
         source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
 
         direction_logits = self.direction_head(source_embed, ll_out)
@@ -555,18 +553,7 @@ class GeneralsNetwork(nn.Module):
         ll_out = z_H[:, N + 1]
 
         source_logits = self.source_head(spatial_out)  # raw logits, no mask
-        with torch.no_grad():
-            logits_safe = source_logits.detach().clone()
-            # Apply legal mask only for sampling
-            if legal_mask is not None:
-                lm = legal_mask.reshape(B, N)
-                logits_safe = logits_safe.masked_fill(~lm, float("-inf"))
-            all_masked = logits_safe.isinf() & (logits_safe < 0)
-            bad_rows = all_masked.all(dim=-1)
-            if bad_rows.any():
-                logits_safe[bad_rows, 0] = 0.0
-            probs = F.softmax(logits_safe, dim=-1)
-            src_idx = torch.multinomial(probs, 1).squeeze(-1)
+        src_idx = self._sample_source(source_logits, legal_mask, B, N)
         source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
 
         direction_logits = self.direction_head(source_embed, ll_out)

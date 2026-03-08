@@ -27,7 +27,7 @@ class ImitationLoss(nn.Module):
         self,
         source_weight: float = 1.0,
         direction_weight: float = 1.0,
-        split_weight: float = 0.5,
+        split_weight: float = 0.8,
         pass_weight: float = 10.0,
         value_weight: float = 0.5,
         q_halt_weight: float = 0.5,
