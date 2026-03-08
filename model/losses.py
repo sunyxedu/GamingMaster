@@ -31,7 +31,7 @@ class ImitationLoss(nn.Module):
         pass_weight: float = 10.0,
         value_weight: float = 0.5,
         q_halt_weight: float = 0.5,
-        move_match_weight: float = 2.0,
+        move_match_weight: float = 1.5,
         grid_w: int = 25,
     ):
         super().__init__()
