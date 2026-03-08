@@ -222,7 +222,7 @@ def main():
                 msg += f", step {start_step}"
             print(msg + ")")
 
-    def save_checkpoint(epoch, step=0):
+    def save_checkpoint(epoch, step=0, loss=0.0):
         raw = model.module if distributed else model
         ckpt = {
             "epoch": epoch,
@@ -231,7 +231,7 @@ def main():
             "optimizer_state": optimizer.state_dict(),
             "scheduler_state": scheduler.state_dict(),
             "config": cfg.__dict__,
-            "loss": 0.0,
+            "loss": loss,
         }
         if step > 0:
             path = os.path.join(args.output_dir, f"checkpoint_epoch{epoch}_step{step}.pt")
@@ -261,7 +261,7 @@ def main():
                   f"tf={tf_ratio:.2f}  time={elapsed:.1f}s")
 
         if epoch % args.save_interval == 0 and rank0:
-            save_checkpoint(epoch)
+            save_checkpoint(epoch, loss=avg_loss)
 
     if rank0:
         print("Training complete.")
