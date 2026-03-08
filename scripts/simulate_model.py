@@ -178,10 +178,13 @@ def run_inference(model, replay, device, grid_w):
     if bad.any():
         src_logits_masked[bad, 0] = 0.0
 
+    pass_logits = pred["pass_logits"][0]
+
     src_probs = F.softmax(src_logits_masked, dim=-1)
     pred_src_idx = src_probs.argmax(dim=-1)
     pred_dir = dir_logits.argmax(dim=-1)
     pred_spl = spl_logits.argmax(dim=-1)
+    pred_pass = pass_logits > 0  # True = pass (no move)
 
     steps = []
     for t in range(T):
@@ -201,7 +204,7 @@ def run_inference(model, replay, device, grid_w):
         has_move = gt_count > 0
         gt_src_prob = src_probs[t, gt_sy * W + gt_sx].item() if has_move else 0.0
 
-        p_pass = p_spl == 2  # model predicts pass (no move)
+        p_pass = pred_pass[t].item()  # from dedicated pass head
 
         steps.append({
             "p_sy": p_sy, "p_sx": p_sx, "p_dir": p_dir, "p_spl": p_spl,

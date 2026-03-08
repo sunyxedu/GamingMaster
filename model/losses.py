@@ -26,7 +26,7 @@ class ImitationLoss(nn.Module):
     def __init__(
         self,
         source_weight: float = 1.0,
-        direction_weight: float = 1.0,
+        direction_weight: float = 2.0,
         split_weight: float = 0.8,
         pass_weight: float = 10.0,
         value_weight: float = 0.5,
