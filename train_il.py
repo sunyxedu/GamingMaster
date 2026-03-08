@@ -63,6 +63,8 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args,
     recent_parts = {k: deque(maxlen=window) for k in
                     ["source", "direction", "split", "pass", "value", "q_halt", "move_match"]}
     epoch_loss_sum = 0.0
+    epoch_parts_sum = {k: 0.0 for k in
+                       ["source", "direction", "split", "pass", "value", "q_halt", "move_match"]}
     epoch_steps = 0
     use_amp = device.type == "cuda"
 
@@ -118,17 +120,21 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args,
         epoch_loss_sum += loss.item()
         epoch_steps += 1
         for k in recent_parts:
-            recent_parts[k].append(losses[f"{k}_loss"].item())
+            v = losses[f"{k}_loss"].item()
+            recent_parts[k].append(v)
+            epoch_parts_sum[k] += v
 
         if rank0 and (step + 1) % args.log_interval == 0:
             avg = sum(recent_loss) / len(recent_loss)
             parts = {k: sum(v) / len(v) for k, v in recent_parts.items()}
+            ep_avg = epoch_loss_sum / epoch_steps
+            ep_parts = {k: epoch_parts_sum[k] / epoch_steps for k in epoch_parts_sum}
             print(
                 f"  Epoch {epoch} Step {step+1}/{len(loader)}  "
-                f"loss={avg:.4f}  src={parts['source']:.4f}  "
-                f"dir={parts['direction']:.4f}  split={parts['split']:.4f}  "
-                f"pass={parts['pass']:.4f}  val={parts['value']:.4f}  "
-                f"qhalt={parts['q_halt']:.4f}  mmatch={parts['move_match']:.4f}"
+                f"loss={avg:.4f}[{ep_avg:.4f}]  src={parts['source']:.4f}[{ep_parts['source']:.4f}]  "
+                f"dir={parts['direction']:.4f}[{ep_parts['direction']:.4f}]  split={parts['split']:.4f}[{ep_parts['split']:.4f}]  "
+                f"pass={parts['pass']:.4f}[{ep_parts['pass']:.4f}]  val={parts['value']:.4f}[{ep_parts['value']:.4f}]  "
+                f"qhalt={parts['q_halt']:.4f}[{ep_parts['q_halt']:.4f}]  mmatch={parts['move_match']:.4f}[{ep_parts['move_match']:.4f}]"
             )
 
         if save_fn and rank0 and (step + 1) % args.save_steps == 0:
