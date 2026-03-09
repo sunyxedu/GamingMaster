@@ -116,6 +116,7 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args,
                 print(f"  [OOM] Skipped step {step+1} (T={T_cur})")
             continue
 
+        T_cur = grid_seq.shape[1]
         recent_loss.append(loss.item())
         epoch_loss_sum += loss.item()
         epoch_steps += 1
@@ -130,8 +131,8 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args,
             ep_avg = epoch_loss_sum / epoch_steps
             ep_parts = {k: epoch_parts_sum[k] / epoch_steps for k in epoch_parts_sum}
             print(
-                f"  Epoch {epoch} Step {step+1}/{len(loader)}  "
-                f"loss={avg:.4f}[{ep_avg:.4f}]  src={parts['source']:.4f}[{ep_parts['source']:.4f}]  "
+                f"  Epoch {epoch} Step {step+1}/{len(loader)}  T={T_cur}  loss={avg:.4f}[{ep_avg:.4f}]:\n"
+                f"    src={parts['source']:.4f}[{ep_parts['source']:.4f}]  "
                 f"dir={parts['direction']:.4f}[{ep_parts['direction']:.4f}]  split={parts['split']:.4f}[{ep_parts['split']:.4f}]  "
                 f"pass={parts['pass']:.4f}[{ep_parts['pass']:.4f}]  val={parts['value']:.4f}[{ep_parts['value']:.4f}]  "
                 f"qhalt={parts['q_halt']:.4f}[{ep_parts['q_halt']:.4f}]  mmatch={parts['move_match']:.4f}[{ep_parts['move_match']:.4f}]"
