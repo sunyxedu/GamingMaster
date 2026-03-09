@@ -155,9 +155,8 @@ class ImitationLoss(nn.Module):
                     & ~pred_pass  # must NOT pass on a valid-move timestep
                 )
                 mismatch_mask = ~all_match & valid
-            n_mismatch = mismatch_mask.sum().clamp(min=1).float()
             combined_per_step = source_loss_all + dir_loss_all + split_loss_all
-            move_match_loss = (combined_per_step * mismatch_mask.float()).sum() / n_mismatch
+            move_match_loss = (combined_per_step * mismatch_mask.float()).sum() / n_seq
 
         # --- Value loss --------------------------------------------------
         value_loss_all = F.mse_loss(

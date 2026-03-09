@@ -100,9 +100,9 @@ def compute_legal_mask(state, army):
 
 def decode_model_move(out, sim, player_id):
     """Decode model output into a validated simulator move, or None."""
-    split = out["action_split"].item()
-    if split == 2:  # pass (no move)
+    if out["pass_logits"].item() > 0:  # PassHead says pass
         return None
+    split = out["action_split"].item()
 
     src_idx = out["action_source"].item()
     direction = out["action_direction"].item()
@@ -138,7 +138,21 @@ def decode_model_move(out, sim, player_id):
 
 # ── Main simulation loop ──────────────────────────────────────────────
 
-def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None):
+def compute_direction_mask(state, army, src_r, src_c, sim):
+    """Return a bool list of length 4: True if direction is legal (down, right, up, left)."""
+    mask = [False, False, False, False]
+    for d in range(4):
+        dst_r = src_r + DIR_DR[d]
+        dst_c = src_c + DIR_DC[d]
+        if not (0 <= dst_r < sim.map_height and 0 <= dst_c < sim.map_width):
+            continue
+        if sim.map[dst_r][dst_c].terrain == 3:  # mountain
+            continue
+        mask[d] = True
+    return mask
+
+
+def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None, use_mask=False):
     with open(replay_path) as f:
         replay_data = json.load(f)
 
@@ -203,8 +217,22 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None)
         legal_t = torch.tensor(legal_mask, dtype=torch.bool).unsqueeze(0).to(device)
 
         with torch.no_grad():
-            out = model.step(grid_t, globals_t, legal_mask=legal_t,
+            out = model.step(grid_t, globals_t,
+                             legal_mask=legal_t if use_mask else None,
                              hidden=hidden, st_cache=st_cache)
+
+            # Direction masking: re-sample direction with invalid dirs masked out
+            if use_mask:
+                src_idx_tmp = out["action_source"].item()
+                sr, sc = src_idx_tmp // 25, src_idx_tmp % 25
+                dir_mask = compute_direction_mask(state, army, sr, sc, sim)
+                if any(dir_mask):
+                    dir_logits = out["direction_logits"].clone()
+                    for d in range(4):
+                        if not dir_mask[d]:
+                            dir_logits[0, d] = float("-inf")
+                    dir_probs = F.softmax(dir_logits, dim=-1)
+                    out["action_direction"] = torch.multinomial(dir_probs, 1).squeeze(-1)
 
         hidden = out.get("hidden")
         st_cache = out.get("st_cache")
@@ -218,7 +246,7 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None)
         split_val = out["action_split"].item()
         p_sy, p_sx = src_idx // 25, src_idx % 25
 
-        did_pass = split_val == 2
+        did_pass = out["pass_logits"].item() > 0
         invalid = (not did_pass) and (pending_model_move is None)
 
         # Compute human direction for display
@@ -230,7 +258,7 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None)
             human_dir = 0
             human_has_move = False
 
-        frames.append({
+        frame = {
             "state": state,
             "army": army,
             # Model's prediction
@@ -247,7 +275,38 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None)
             "src_ok": human_has_move and p_sy == human_src[0] and p_sx == human_src[1],
             "dir_ok": human_has_move and direction == human_dir,
             "spl_ok": human_has_move and split_val == max(human_is_50, 0),
-        })
+        }
+        frames.append(frame)
+
+        # ── Live output ──
+        if did_pass:
+            tag = "PASS"
+        elif invalid:
+            tag = "INVALID(skip)"
+        elif pending_model_move is not None:
+            tag = "MOVE"
+        else:
+            tag = "?"
+        h_str = ""
+        if human_has_move:
+            match_tag = ""
+            if frame["src_ok"] and frame["dir_ok"] and frame["spl_ok"]:
+                match_tag = " [MATCH]"
+            elif frame["src_ok"]:
+                match_tag = " [src ok]"
+            h_str = (f"  human=({frame['gt_sy']:2d},{frame['gt_sx']:2d}) "
+                     f"{DIR_ARROWS[frame['gt_dir']]} {SPLIT_NAMES[frame['gt_ratio']]:>3s}{match_tag}")
+        else:
+            h_str = "  human=[no move]"
+        print(
+            f"t={turn:3d}  "
+            f"model=({p_sy:2d},{p_sx:2d}) {DIR_ARROWS[direction]} "
+            f"{SPLIT_NAMES[split_val]:>3s}  "
+            f"[{tag:>13s}]  "
+            f"val={value:+.3f}"
+            f"{h_str}",
+            flush=True,
+        )
 
         # ── 8. Check winner ──
         winner = sim.check_winner()
@@ -586,6 +645,8 @@ def main():
     p.add_argument("--max_steps", type=int, default=None)
     p.add_argument("--device", type=str, default="cpu")
     p.add_argument("--html", type=str, default=None, help="Output HTML visualization")
+    p.add_argument("--mask", action="store_true", default=False,
+                   help="Enable legal masking for source and direction during inference")
     args = p.parse_args()
 
     device = torch.device(args.device)
@@ -597,6 +658,7 @@ def main():
 
     frames, winner, sim = play_on_replay(
         model, cfg, device, args.replay, args.player, args.max_steps,
+        use_mask=args.mask,
     )
 
     print_results(frames, args.player)
