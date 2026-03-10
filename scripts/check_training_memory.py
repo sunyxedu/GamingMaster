@@ -10,11 +10,17 @@ from __future__ import annotations
 import argparse
 import contextlib
 import gc
+import os
+import sys
 import time
 from typing import Iterator
 
 import torch
 import torch.nn.functional as F
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 from model.config import ModelConfig
 from model.losses import ImitationLoss
