@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from model.components.encoder import HistoryEncoder, SpatialEncoder
 from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead, ValueHead
@@ -146,10 +147,10 @@ class GeneralsNetwork(nn.Module):
         if wm_embed is not None:
             tokens[:, :, N:N + 1] += wm_embed.unsqueeze(2)
 
-        # ── Stage 1: Spatiotemporal encoding ──
+        # ── Stage 1: Spatiotemporal encoding (checkpointed) ──
         tokens = self.pre_norm(tokens)
         for layer in self.st_layers:
-            tokens = layer(tokens)
+            tokens = checkpoint(layer, tokens, use_reentrant=False)
         tokens = self.mid_norm(tokens)
 
         # ── Stage 2: TRM pondering ──
@@ -284,10 +285,11 @@ class GeneralsNetwork(nn.Module):
         source_logits: torch.Tensor,
         direction_logits: torch.Tensor,
         split_logits: torch.Tensor,
+        pass_logits: torch.Tensor,
         legal_mask: Optional[torch.Tensor],
         src_idx: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        """Sample direction/split and compute log-probs for all action heads.
+        """Sample direction/split/pass and compute log-probs for all action heads.
 
         Called during ``step()`` for RL rollout.  Source has already been
         sampled (``src_idx`` provided); direction and split are sampled here.
@@ -299,7 +301,8 @@ class GeneralsNetwork(nn.Module):
             action_source     [B]
             action_direction  [B]
             action_split      [B]
-            action_log_prob   [B]   (sum of per-head log-probs)
+            action_pass       [B]   bool — True if model chose to pass
+            action_log_prob   [B]   (hierarchical log-prob including pass)
         """
         B = source_logits.shape[0]
         N = source_logits.shape[-1]
@@ -307,6 +310,14 @@ class GeneralsNetwork(nn.Module):
         arange_B = torch.arange(B, device=device)
 
         with torch.no_grad():
+            # --- pass decision ---
+            did_pass = pass_logits > 0  # [B]
+            pass_lp = torch.where(
+                did_pass,
+                F.logsigmoid(pass_logits),
+                F.logsigmoid(-pass_logits),
+            )
+
             # --- source log-prob (masked distribution) ---
             sl_masked = source_logits.detach().clone()
             if legal_mask is not None:
@@ -328,11 +339,16 @@ class GeneralsNetwork(nn.Module):
             spl_idx = torch.multinomial(spl_probs, 1).squeeze(-1)
             spl_lp = F.log_softmax(split_logits, dim=-1)[arange_B, spl_idx]
 
+            # Hierarchical: pass → only pass_lp; move → pass_lp + move heads
+            move_lp = source_lp + dir_lp + spl_lp
+            total_lp = torch.where(did_pass, pass_lp, pass_lp + move_lp)
+
         return {
             "action_source": src_idx,
             "action_direction": dir_idx,
             "action_split": spl_idx,
-            "action_log_prob": source_lp + dir_lp + spl_lp,
+            "action_pass": did_pass,
+            "action_log_prob": total_lp,
         }
 
     def compute_action_log_prob(
@@ -358,10 +374,11 @@ class GeneralsNetwork(nn.Module):
                 source_idx  [B, T]   flat index 0..N-1
                 direction   [B, T]   0..3
                 split       [B, T]   0..1
+                passed      [B, T]   bool — True if action was pass
             legal_mask: [B, T, 1, H, W] or ``None``
 
         Returns:
-            log_prob  [B, T]  sum of per-head log-probs (differentiable)
+            log_prob  [B, T]  hierarchical log-prob including pass (differentiable)
             entropy   [B, T]  sum of per-head entropies (differentiable)
         """
         source_logits = pred["source_logits"]          # [B, T, N]
@@ -378,6 +395,20 @@ class GeneralsNetwork(nn.Module):
                 sl_masked[bad_rows, 0] = 0.0
         else:
             sl_masked = source_logits
+
+        # --- pass ---
+        pass_logits = pred["pass_logits"]              # [B, T]
+        passed = actions["passed"]                     # [B, T] bool
+        pass_lp = torch.where(
+            passed,
+            F.logsigmoid(pass_logits),
+            F.logsigmoid(-pass_logits),
+        )
+        p_pass = torch.sigmoid(pass_logits)
+        pass_ent = -(
+            p_pass * F.logsigmoid(pass_logits)
+            + (1 - p_pass) * F.logsigmoid(-pass_logits)
+        )
 
         # --- source ---
         src_log_p = F.log_softmax(sl_masked, dim=-1)             # [B, T, N]
@@ -403,10 +434,14 @@ class GeneralsNetwork(nn.Module):
         spl_probs = torch.exp(spl_log_p)
         spl_ent = -(spl_probs * spl_log_p).sum(-1)
 
-        return (
-            src_lp + dir_lp + spl_lp,
-            src_ent + dir_ent + spl_ent,
-        )
+        # --- hierarchical combination ---
+        move_lp = src_lp + dir_lp + spl_lp
+        total_lp = torch.where(passed, pass_lp, pass_lp + move_lp)
+
+        move_ent = src_ent + dir_ent + spl_ent
+        total_ent = torch.where(passed, pass_ent, pass_ent + move_ent)
+
+        return total_lp, total_ent
 
     # ------------------------------------------------------------------
     # Public forward
@@ -496,7 +531,7 @@ class GeneralsNetwork(nn.Module):
         value = self.value_head(hl_out)
 
         rl_out = self._sample_actions(
-            source_logits, direction_logits, split_logits,
+            source_logits, direction_logits, split_logits, pass_logits,
             legal_mask, src_idx,
         )
 
@@ -565,7 +600,7 @@ class GeneralsNetwork(nn.Module):
 
         # Sample direction/split and compute log-probs for RL rollout
         rl_out = self._sample_actions(
-            source_logits, direction_logits, split_logits,
+            source_logits, direction_logits, split_logits, pass_logits,
             legal_mask, src_idx,
         )
 

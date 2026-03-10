@@ -18,6 +18,7 @@ memory efficiency, following the paper).
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 from model.config import ModelConfig
 
 
@@ -129,10 +130,10 @@ class TRM(nn.Module):
             z_H = z_H.detach().requires_grad_(True)
             z_L = z_L.detach().requires_grad_(True)
 
-        # Last H_cycle with gradient
+        # Last H_cycle with gradient (checkpointed to save memory)
         for _ in range(L_cycles):
-            z_L = self.reasoning(z_L, z_H + x)
-        z_H = self.reasoning(z_H, z_L)
+            z_L = checkpoint(self.reasoning, z_L, z_H + x, use_reentrant=False)
+        z_H = checkpoint(self.reasoning, z_H, z_L, use_reentrant=False)
 
         # Q-halt from the first token position (following paper)
         q_halt = self.q_head(z_H[:, 0]).squeeze(-1)

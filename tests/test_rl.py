@@ -96,6 +96,7 @@ class TestComputeActionLogProb:
             "source_idx": torch.randint(0, N, (B, T)),
             "direction": torch.randint(0, 4, (B, T)),
             "split": torch.randint(0, 2, (B, T)),
+            "passed": torch.zeros(B, T, dtype=torch.bool),
         }
         # Use GT source for forward
         source_y = actions["source_idx"] // cfg.grid_w
@@ -117,6 +118,7 @@ class TestComputeActionLogProb:
             "source_idx": torch.full((B, T), 5 * 25 + 5, dtype=torch.long),
             "direction": torch.zeros(B, T, dtype=torch.long),
             "split": torch.zeros(B, T, dtype=torch.long),
+            "passed": torch.zeros(B, T, dtype=torch.bool),
         }
         source_y = actions["source_idx"] // cfg.grid_w
         source_x = actions["source_idx"] % cfg.grid_w
@@ -135,6 +137,7 @@ class TestComputeActionLogProb:
             "source_idx": torch.full((B, T), 5 * 25 + 5, dtype=torch.long),
             "direction": torch.zeros(B, T, dtype=torch.long),
             "split": torch.zeros(B, T, dtype=torch.long),
+            "passed": torch.zeros(B, T, dtype=torch.bool),
         }
         source_y = actions["source_idx"] // cfg.grid_w
         source_x = actions["source_idx"] % cfg.grid_w
@@ -152,6 +155,7 @@ class TestComputeActionLogProb:
             "source_idx": torch.full((B, T), 5 * 25 + 5, dtype=torch.long),
             "direction": torch.zeros(B, T, dtype=torch.long),
             "split": torch.zeros(B, T, dtype=torch.long),
+            "passed": torch.zeros(B, T, dtype=torch.bool),
         }
         source_y = actions["source_idx"] // cfg.grid_w
         source_x = actions["source_idx"] % cfg.grid_w
@@ -179,7 +183,7 @@ class TestStepReturns:
         with torch.no_grad():
             out = model.step(grid, glb, legal_mask=legal)
 
-        for key in ["action_source", "action_direction", "action_split", "action_log_prob"]:
+        for key in ["action_source", "action_direction", "action_split", "action_pass", "action_log_prob"]:
             assert key in out, f"step() missing key '{key}'"
 
     def test_st_step_shapes(self, cfg):
@@ -258,10 +262,12 @@ class TestLogProbConsistency:
                 source_y=source_y, source_x=source_x,
             )
 
+        did_pass = step_out.get("action_pass", torch.tensor([False]))
         actions = {
             "source_idx": src_idx.unsqueeze(1),       # [1, 1]
             "direction": dir_idx.unsqueeze(1),
             "split": spl_idx.unsqueeze(1),
+            "passed": did_pass.unsqueeze(1),           # [1, 1]
         }
 
         with torch.no_grad():
@@ -513,6 +519,7 @@ class TestFreezeUnfreeze:
             "source_idx": torch.full((1, 2), 5 * 25 + 5, dtype=torch.long),
             "direction": torch.zeros(1, 2, dtype=torch.long),
             "split": torch.zeros(1, 2, dtype=torch.long),
+            "passed": torch.zeros(1, 2, dtype=torch.bool),
         }
         source_y = actions["source_idx"] // cfg.grid_w
         source_x = actions["source_idx"] % cfg.grid_w
@@ -622,19 +629,24 @@ class TestFullRLLoop:
             cache = out.get("st_cache")
 
             has_legal = lm.any().item()
-            if has_legal:
-                action = {
+            did_pass = out["action_pass"].item()
+            if has_legal and not did_pass:
+                env_action = {
                     "source_idx": out["action_source"].item(),
                     "direction": out["action_direction"].item(),
                     "split": out["action_split"].item(),
                 }
             else:
-                action = {"source_idx": 0, "direction": 0, "split": 0}
+                env_action = None
 
-            new_obs, rewards, done, _ = env.step(
-                action if has_legal else None, None,
-            )
+            new_obs, rewards, done, _ = env.step(env_action, None)
 
+            action = {
+                "source_idx": out["action_source"].item(),
+                "direction": out["action_direction"].item(),
+                "split": out["action_split"].item(),
+                "passed": did_pass,
+            }
             buf.add(obs[0], action, out["action_log_prob"].item(),
                     out["value"].item(), rewards[0], done)
             obs = new_obs
@@ -712,6 +724,7 @@ class TestFullRLLoop:
             "source_idx": torch.full((B, T), 5 * 25 + 5, dtype=torch.long),
             "direction": torch.zeros(B, T, dtype=torch.long),
             "split": torch.zeros(B, T, dtype=torch.long),
+            "passed": torch.zeros(B, T, dtype=torch.bool),
         }
         source_y_rl = actions_rl["source_idx"] // cfg.grid_w
         source_x_rl = actions_rl["source_idx"] % cfg.grid_w

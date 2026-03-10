@@ -132,14 +132,16 @@ def collect_selfplay_episode(
             lm = obs[pid]["legal_mask"].unsqueeze(0).to(device)   # [1, 1, H, W]
 
             with torch.no_grad():
-                out = model.step(grid, glb, legal_mask=lm, st_cache=caches[pid])
+                out = model.step(grid, glb, legal_mask=lm,
+                                 st_cache=caches[pid], step_idx=_step)
 
             caches[pid] = out.get("st_cache")
             step_out[pid] = out
 
-            # Check if player has any legal move
+            # Check if player has any legal move and model doesn't pass
             has_legal = lm.any().item()
-            if has_legal:
+            did_pass = out["action_pass"].item()
+            if has_legal and not did_pass:
                 actions_for_env[pid] = {
                     "source_idx": out["action_source"].item(),
                     "direction": out["action_direction"].item(),
@@ -153,10 +155,13 @@ def collect_selfplay_episode(
             actions_for_env.get(0), actions_for_env.get(1),
         )
 
-        # Store transitions
+        # Store transitions (always store sampled actions for PPO re-evaluation)
         for pid in [0, 1]:
-            action_dict = actions_for_env[pid] or {
-                "source_idx": 0, "direction": 0, "split": 0,
+            action_dict = {
+                "source_idx": step_out[pid]["action_source"].item(),
+                "direction": step_out[pid]["action_direction"].item(),
+                "split": step_out[pid]["action_split"].item(),
+                "passed": step_out[pid]["action_pass"].item(),
             }
             buffers[pid].add(
                 obs=obs[pid],
@@ -302,14 +307,12 @@ def il_auxiliary_update(
     tgt = {k: v.to(device) for k, v in il_batch["tgt"].items()}
     lengths = il_batch["meta"]["lengths"]
 
-    source_y = tgt["src_y"][:, :, 0]
-    source_x = tgt["src_x"][:, :, 0]
-
+    # No teacher forcing — let the model sample its own source
     pred = model(
         grid_seq, globals_seq,
         legal_mask=legal_mask,
-        source_y=source_y,
-        source_x=source_x,
+        source_y=None,
+        source_x=None,
     )
 
     il_losses = il_criterion(pred, tgt, lengths)

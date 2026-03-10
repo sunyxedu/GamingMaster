@@ -89,6 +89,7 @@ class RolloutBuffer:
         self.source_idxs: List[int] = []
         self.directions: List[int] = []
         self.splits: List[int] = []
+        self.passes: List[bool] = []
         self.log_probs: List[float] = []
         self.values: List[float] = []
         self.rewards: List[float] = []
@@ -114,6 +115,7 @@ class RolloutBuffer:
         self.source_idxs.append(action["source_idx"])
         self.directions.append(action["direction"])
         self.splits.append(action["split"])
+        self.passes.append(action.get("passed", False))
         self.log_probs.append(log_prob)
         self.values.append(value)
         self.rewards.append(reward)
@@ -155,6 +157,9 @@ class RolloutBuffer:
                 ).unsqueeze(0),
                 "split": torch.tensor(
                     self.splits, dtype=torch.long, device=device,
+                ).unsqueeze(0),
+                "passed": torch.tensor(
+                    self.passes, dtype=torch.bool, device=device,
                 ).unsqueeze(0),
             },
             "old_log_probs": torch.tensor(

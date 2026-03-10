@@ -32,11 +32,11 @@ def parse_args():
     p.add_argument(
         "--output_dir", type=str, default="checkpoints", help="Checkpoint output dir"
     )
-    p.add_argument("--epochs", type=int, default=50)
+    p.add_argument("--epochs", type=int, default=150)
     p.add_argument("--batch_size", type=int, default=4)
-    p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--lr", type=float, default=5e-4)
     p.add_argument("--weight_decay", type=float, default=1e-4)
-    p.add_argument("--max_seq_len", type=int, default=1500, help="Max sequence length per sample")
+    p.add_argument("--max_seq_len", type=int, default=600, help="Max sequence length per sample")
     p.add_argument("--d_model", type=int, default=256)
     p.add_argument("--n_heads", type=int, default=8)
     p.add_argument("--trm_H_cycles", type=int, default=3)
@@ -188,7 +188,7 @@ def main():
         lr=args.lr,
         weight_decay=args.weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
 
     dataset = SeqReplayDataset(
         args.data_dir,
@@ -217,7 +217,6 @@ def main():
         raw_model = model.module if distributed else model
         raw_model.load_state_dict(ckpt["model_state"], strict=False)
         optimizer.load_state_dict(ckpt["optimizer_state"])
-        scheduler.load_state_dict(ckpt["scheduler_state"])
         start_step = ckpt.get("step", 0)
         if start_step > 0:
             start_epoch = ckpt["epoch"]

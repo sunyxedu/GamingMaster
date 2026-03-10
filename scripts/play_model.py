@@ -173,24 +173,12 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None,
     winner = None
 
     for turn in range(0, max_turn + 2):
-        # ── 1. Collect opponent's move + human's original move from replay ──
+        # ── 1. Collect opponent's move for execution ──
         opponent_move = None
-        human_src = [-1, -1]
-        human_dst = [-1, -1]
-        human_is_50 = -1
-
         while move_idx < len(sim.moves) and sim.moves[move_idx]["turn"] + 1 == turn:
             move = sim.moves[move_idx]
             if move["index"] == opponent_id:
                 opponent_move = move
-            elif move["index"] == player_id:
-                sr = move["start"] // sim.map_width
-                sc = move["start"] % sim.map_width
-                er = move["end"] // sim.map_width
-                ec = move["end"] % sim.map_width
-                human_src = [sr, sc]
-                human_dst = [er, ec]
-                human_is_50 = 1 if move["is50"] else 0
             move_idx += 1
 
         # ── 2. Execute pending model move + opponent move ──
@@ -248,6 +236,23 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None,
 
         did_pass = out["pass_logits"].item() > 0
         invalid = (not did_pass) and (pending_model_move is None)
+
+        # ── Human reference for display (peek ahead: game_turn == turn) ──
+        human_src = [-1, -1]
+        human_dst = [-1, -1]
+        human_is_50 = -1
+        peek = move_idx
+        while peek < len(sim.moves) and sim.moves[peek]["turn"] == turn:
+            mv = sim.moves[peek]
+            if mv["index"] == player_id:
+                sr = mv["start"] // sim.map_width
+                sc = mv["start"] % sim.map_width
+                er = mv["end"] // sim.map_width
+                ec = mv["end"] % sim.map_width
+                human_src = [sr, sc]
+                human_dst = [er, ec]
+                human_is_50 = 1 if mv["is50"] else 0
+            peek += 1
 
         # Compute human direction for display
         if human_src[0] >= 0:
