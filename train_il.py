@@ -46,7 +46,7 @@ def parse_args():
     p.add_argument("--save_interval", type=int, default=1, help="Save every N epochs")
     p.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every N steps within epoch")
     p.add_argument("--grad_clip", type=float, default=1.0)
-    p.add_argument("--num_workers", type=int, default=0)
+    p.add_argument("--num_workers", type=int, default=16)
     p.add_argument("--device", type=str, default="auto")
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
     p.add_argument("--tf_start", type=float, default=0.0, help="Teacher forcing ratio at epoch 1")
