@@ -152,8 +152,8 @@ class TRM(nn.Module):
 
         # Last H_cycle with gradient (checkpointed to save memory)
         for _ in range(L_cycles):
-            z_L = checkpoint(self.reasoning, z_L, z_H + x, use_reentrant=False)
-        z_H = checkpoint(self.reasoning, z_H, z_L, use_reentrant=False)
+            z_L = checkpoint(self.reasoning, z_L, z_H + x, use_reentrant=True)
+        z_H = checkpoint(self.reasoning, z_H, z_L, use_reentrant=True)
 
         # Q-halt from the first token position (following paper)
         q_halt = self.q_head(z_H[:, 0]).squeeze(-1)
