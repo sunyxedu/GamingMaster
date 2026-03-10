@@ -72,7 +72,6 @@ uv run python -m scripts.prepare_data --players Human.exe --output data/output -
 ```bash
 uv run python train_il.py \
     --data_dir data/output/training/Human.exe \
-    --epochs 50 \
     --batch_size 4 \
     --d_model 256
 ```

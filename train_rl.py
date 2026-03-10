@@ -337,6 +337,9 @@ def il_auxiliary_update(
 def main():
     args = parse_args()
 
+    # Disable MHA fast path to avoid checkpoint recomputation mismatch
+    torch.backends.mha.set_fastpath_enabled(False)
+
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
