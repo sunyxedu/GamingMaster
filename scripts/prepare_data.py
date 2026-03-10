@@ -277,8 +277,8 @@ async def async_main():
     parser.add_argument(
         "--min-opponent-stars",
         type=int,
-        default=None,
-        help="Minimum opponent stars required (optional)",
+        default=40,
+        help="Minimum opponent stars required (default: 60)",
     )
 
     args = parser.parse_args()
