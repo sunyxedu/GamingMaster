@@ -92,6 +92,26 @@ class SpatiotemporalBlock(nn.Module):
         )
         self.ff_norm = nn.LayerNorm(cfg.d_model)
 
+    def _spatial_sdpa(self, x: torch.Tensor) -> torch.Tensor:
+        """Spatial self-attention via F.scaled_dot_product_attention.
+
+        Bypasses nn.MultiheadAttention.forward() but reuses its parameters,
+        avoiding checkpoint recomputation mismatches caused by non-deterministic
+        dispatch inside nn.MHA.
+        """
+        B, S, d = x.shape
+        n_heads = self.spatial_attn.num_heads
+        d_head = d // n_heads
+
+        qkv = F.linear(x, self.spatial_attn.in_proj_weight, self.spatial_attn.in_proj_bias)
+        qkv = qkv.reshape(B, S, 3, n_heads, d_head).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+
+        dropout_p = self.spatial_attn.dropout if self.training else 0.0
+        attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+        attn_out = attn_out.permute(0, 2, 1, 3).reshape(B, S, d)
+        return self.spatial_attn.out_proj(attn_out)
+
     def _causal_temporal_attn(self, x: torch.Tensor) -> torch.Tensor:
         """Temporal self-attention with causal masking via F.scaled_dot_product_attention.
 
@@ -128,7 +148,7 @@ class SpatiotemporalBlock(nn.Module):
 
         # ── spatial self-attention (within each timestep) ──
         x_flat = x.reshape(B * T, S, d)
-        sa_out, _ = self.spatial_attn(x_flat, x_flat, x_flat, need_weights=False)
+        sa_out = self._spatial_sdpa(x_flat)
         x_flat = self.spatial_norm(x_flat + sa_out)
         x = x_flat.reshape(B, T, S, d)
 

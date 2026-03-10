@@ -18,6 +18,7 @@ memory efficiency, following the paper).
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 from model.config import ModelConfig
 
@@ -40,8 +41,27 @@ class TRMBlock(nn.Module):
             nn.Dropout(cfg.dropout),
         )
 
+    def _sdpa(self, x: torch.Tensor) -> torch.Tensor:
+        """Self-attention via F.scaled_dot_product_attention.
+
+        Bypasses nn.MultiheadAttention.forward() to avoid checkpoint
+        recomputation mismatches caused by non-deterministic dispatch.
+        """
+        B, S, d = x.shape
+        n_heads = self.attn.num_heads
+        d_head = d // n_heads
+
+        qkv = F.linear(x, self.attn.in_proj_weight, self.attn.in_proj_bias)
+        qkv = qkv.reshape(B, S, 3, n_heads, d_head).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+
+        dropout_p = self.attn.dropout if self.training else 0.0
+        attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+        attn_out = attn_out.permute(0, 2, 1, 3).reshape(B, S, d)
+        return self.attn.out_proj(attn_out)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        attn_out, _ = self.attn(x, x, x, need_weights=False)
+        attn_out = self._sdpa(x)
         x = self.norm1(x + attn_out)
         x = self.norm2(x + self.ff(x))
         return x

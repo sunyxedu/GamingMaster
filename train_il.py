@@ -148,9 +148,6 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args,
 def main():
     args = parse_args()
 
-    # Disable MHA fast path to avoid checkpoint recomputation mismatch
-    torch.backends.mha.set_fastpath_enabled(False)
-
     # Distributed setup (auto-detected via torchrun)
     distributed = "LOCAL_RANK" in os.environ
     if distributed:
