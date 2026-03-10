@@ -111,8 +111,7 @@ class SeqReplayDataset(Dataset):
             with open(self.paths[idx], 'r') as f:
                 obj = json.load(f)
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            print(f"Warning: skipping corrupt file {self.paths[idx]}: {e}")
-            # Fall back to a random other sample
+            # print(f"Warning: skipping corrupt file {self.paths[idx]}: {e}")
             return self[torch.randint(len(self), (1,)).item()]
 
         # Load grid sequence [T, C, H, W]
