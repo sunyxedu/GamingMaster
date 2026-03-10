@@ -115,24 +115,14 @@ class TRM(nn.Module):
         nn.init.zeros_(self.q_head.weight)
         nn.init.constant_(self.q_head.bias, -5.0)
 
-    def _run_final_h_cycle(
+    def _reasoning_with_injection(
         self,
+        z: torch.Tensor,
         z_H: torch.Tensor,
-        z_L: torch.Tensor,
         x: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run the gradient-carrying H-cycle as one checkpointed segment.
-
-        Checkpointing each inner-loop step separately keeps one large ``z_L``
-        state per step alive in the graph, and materialising ``z_H + x`` before
-        the checkpoint creates another large tensor per step. Wrapping the whole
-        final H-cycle saves only the cycle inputs and recomputes all inner steps
-        during backward.
-        """
-        for _ in range(self.cfg.trm_L_cycles):
-            z_L = self.reasoning(z_L, z_H + x)
-        z_H = self.reasoning(z_H, z_L)
-        return z_H, z_L
+    ) -> torch.Tensor:
+        """Checkpoint-friendly wrapper that builds ``z_H + x`` inside the segment."""
+        return self.reasoning(z, z_H + x)
 
     def forward(
         self,
@@ -169,15 +159,18 @@ class TRM(nn.Module):
             z_H = z_H.detach().requires_grad_(True)
             z_L = z_L.detach().requires_grad_(True)
 
-        # Last H_cycle with gradient. Checkpoint the whole cycle so we do not
-        # retain one [B, S, d] state per inner step in the autograd graph.
-        z_H, z_L = checkpoint(
-            self._run_final_h_cycle,
-            z_H,
-            z_L,
-            x,
-            use_reentrant=False,
-        )
+        # Last H_cycle with gradient. Keep checkpoint granularity per step so
+        # backward only recomputes one reasoning step at a time, but avoid
+        # materialising ``z_H + x`` outside the checkpoint.
+        for _ in range(L_cycles):
+            z_L = checkpoint(
+                self._reasoning_with_injection,
+                z_L,
+                z_H,
+                x,
+                use_reentrant=True,
+            )
+        z_H = checkpoint(self.reasoning, z_H, z_L, use_reentrant=True)
 
         # Q-halt from the first token position (following paper)
         q_halt = self.q_head(z_H[:, 0]).squeeze(-1)
