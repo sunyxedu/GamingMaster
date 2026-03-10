@@ -337,6 +337,10 @@ def il_auxiliary_update(
 def main():
     args = parse_args()
 
+    # Force single SDPA backend to prevent checkpoint recomputation mismatch
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+    torch.backends.cuda.enable_math_sdp(False)
+
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:

@@ -148,6 +148,13 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args,
 def main():
     args = parse_args()
 
+    # Force single SDPA backend to prevent checkpoint recomputation mismatch:
+    # different backends (flash / mem-efficient / math) save different intermediate
+    # tensors, so if the backend changes between forward and recompute, the metadata
+    # won't match and CheckpointError is raised.
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+    torch.backends.cuda.enable_math_sdp(False)
+
     # Distributed setup (auto-detected via torchrun)
     distributed = "LOCAL_RANK" in os.environ
     if distributed:
