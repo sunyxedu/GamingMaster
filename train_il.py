@@ -179,6 +179,7 @@ def main():
     n_params = sum(p.numel() for p in model.parameters())
     if distributed:
         model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        model._set_static_graph()
     if rank0:
         print(f"Model parameters: {n_params:,}")
 

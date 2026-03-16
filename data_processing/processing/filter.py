@@ -63,7 +63,7 @@ def filter_replays(
             opponents = [p for p in ranking if p.get("name") != player_name]
             if opponents:
                 # Check if any opponent has at least min_opponent_stars
-                max_opponent_stars = max(p.get("stars", 0) for p in opponents)
+                max_opponent_stars = max((p.get("stars") or 0) for p in opponents)
                 passes_opponent_stars = max_opponent_stars >= min_opponent_stars
             else:
                 passes_opponent_stars = False
