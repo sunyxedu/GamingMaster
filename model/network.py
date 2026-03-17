@@ -252,7 +252,7 @@ class GeneralsNetwork(nn.Module):
         ]
 
         direction_logits = self.direction_head(
-            source_embed, ll_out,
+            source_embed, spatial_out, ll_out,
         )  # [BT, n_dir]
         split_logits = self.split_head(
             source_embed, ll_out,
@@ -523,7 +523,7 @@ class GeneralsNetwork(nn.Module):
         src_idx = self._sample_source(source_logits, legal_mask, B, N)
         source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
 
-        direction_logits = self.direction_head(source_embed, ll_out)
+        direction_logits = self.direction_head(source_embed, spatial_out, ll_out)
         split_logits = self.split_head(source_embed, ll_out)
         pe_dim = self.pass_head.time_pe_dim
         time_pe = _sinusoidal_pe(step_idx + 1, pe_dim, z_H.device)[step_idx].unsqueeze(0).expand(B, pe_dim)
@@ -591,7 +591,7 @@ class GeneralsNetwork(nn.Module):
         src_idx = self._sample_source(source_logits, legal_mask, B, N)
         source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
 
-        direction_logits = self.direction_head(source_embed, ll_out)
+        direction_logits = self.direction_head(source_embed, spatial_out, ll_out)
         split_logits = self.split_head(source_embed, ll_out)
         pe_dim = self.pass_head.time_pe_dim
         time_pe = _sinusoidal_pe(t_cur + 1, pe_dim, z_H.device)[t_cur].unsqueeze(0).expand(B, pe_dim)

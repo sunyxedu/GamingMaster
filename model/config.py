@@ -15,18 +15,18 @@ class ModelConfig:
     global_features: int = 4  # myArmy, myLand, opArmy, opLand
 
     # Core model dimensions
-    d_model: int = 256
-    n_heads: int = 8
-    d_ff: int = 512
+    d_model: int = 384
+    n_heads: int = 12
+    d_ff: int = 1024
     dropout: float = 0.1
 
     # Stage 1: Spatiotemporal encoding (separate weights per layer)
-    n_st_layers: int = 2
+    n_st_layers: int = 3
 
     # Stage 2: TRM pondering
     trm_H_cycles: int = 3    # outer loop — refine answer
     trm_L_cycles: int = 6    # inner loop — refine reasoning
-    trm_block_layers: int = 2  # transformer layers inside the shared reasoning module
+    trm_block_layers: int = 3  # transformer layers inside the shared reasoning module
     halt_max_steps: int = 5   # ACT pondering steps at inference (1 = no ACT)
 
     # Temporal modelling
@@ -38,7 +38,7 @@ class ModelConfig:
     gru_layers: int = 1
 
     # Spatial encoder
-    encoder_channels: int = 128
+    encoder_channels: int = 192
 
     # Action space
     n_directions: int = 4

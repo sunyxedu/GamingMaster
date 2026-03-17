@@ -26,21 +26,46 @@ class SourceHead(nn.Module):
 
 
 class DirectionHead(nn.Module):
-    """Predict movement direction conditioned on source embedding."""
+    """Predict movement direction via source-centric cross-attention over the
+    spatial field, combined with the global decision token.
+
+    The source embedding queries all spatial tokens so the head can attend to
+    whichever board positions matter (neighbours, distant threats, etc.)
+    without compressing everything into the decision token alone.
+    """
 
     def __init__(self, d_model: int, n_dirs: int = 4):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(d_model * 2, d_model),
+        self.scale = d_model ** 0.5
+        self.query = nn.Linear(d_model, d_model)
+        self.key = nn.Linear(d_model, d_model)
+        self.value = nn.Linear(d_model, d_model)
+        self.dir_proj = nn.Sequential(
+            nn.Linear(d_model * 3, d_model),
             nn.ReLU(),
             nn.Linear(d_model, n_dirs),
         )
 
     def forward(
-        self, source_embed: torch.Tensor, decision_token: torch.Tensor,
+        self,
+        source_embed: torch.Tensor,
+        spatial_out: torch.Tensor,
+        decision_token: torch.Tensor,
     ) -> torch.Tensor:
-        combined = torch.cat([source_embed, decision_token], dim=-1)
-        return self.net(combined)
+        """
+        Args:
+            source_embed:   [B, d]
+            spatial_out:    [B, N, d]   — all spatial token embeddings
+            decision_token: [B, d]
+        Returns:
+            logits: [B, n_dirs]
+        """
+        q = self.query(source_embed).unsqueeze(1)              # [B, 1, d]
+        k = self.key(spatial_out)                               # [B, N, d]
+        v = self.value(spatial_out)                              # [B, N, d]
+        attn = (q @ k.transpose(-1, -2)) / self.scale           # [B, 1, N]
+        context = (attn.softmax(-1) @ v).squeeze(1)              # [B, d]
+        return self.dir_proj(torch.cat([source_embed, context, decision_token], dim=-1))
 
 
 class SplitHead(nn.Module):
