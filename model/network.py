@@ -213,7 +213,7 @@ class GeneralsNetwork(nn.Module):
     def _sample_source(self, source_logits, legal_mask, BT, N):
         """Sample source index from model's own predictions (no grad)."""
         with torch.no_grad():
-            logits_safe = source_logits.detach().clone()
+            logits_safe = source_logits.detach().clone().float()
             if legal_mask is not None:
                 lm = legal_mask.reshape(BT, N)
                 logits_safe = logits_safe.masked_fill(~lm, float("-inf"))
@@ -221,6 +221,10 @@ class GeneralsNetwork(nn.Module):
             bad_rows = all_masked.all(dim=-1)
             if bad_rows.any():
                 logits_safe[bad_rows, 0] = 0.0
+            # Handle NaN from bf16 overflow: fall back to uniform sampling
+            nan_rows = logits_safe.isnan().any(dim=-1)
+            if nan_rows.any():
+                logits_safe[nan_rows] = 0.0
             probs = F.softmax(logits_safe, dim=-1)
             return torch.multinomial(probs, 1).squeeze(-1)
 

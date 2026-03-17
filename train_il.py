@@ -108,7 +108,18 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             optimizer.zero_grad()
             loss.backward()
             if args.grad_clip > 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            else:
+                grad_norm = torch.tensor(0.0)
+
+            # Skip step if NaN detected — prevents weight corruption
+            if not torch.isfinite(loss) or not torch.isfinite(grad_norm):
+                optimizer.zero_grad(set_to_none=True)
+                if rank0:
+                    T_cur = grid_seq.shape[1]
+                    print(f"  [NaN] Skipped step {step+1} (T={T_cur}, loss={loss.item():.4f})")
+                continue
+
             optimizer.step()
             scheduler.step()
         except torch.cuda.OutOfMemoryError:
