@@ -85,11 +85,11 @@ def parse_args():
     p.add_argument("--grad_clip", type=float, default=1.0)
 
     # Model (used when no checkpoint is provided)
-    p.add_argument("--d_model", type=int, default=256)
-    p.add_argument("--n_heads", type=int, default=8)
+    p.add_argument("--d_model", type=int, default=384)
+    p.add_argument("--n_heads", type=int, default=12)
     p.add_argument("--trm_H_cycles", type=int, default=3)
     p.add_argument("--trm_L_cycles", type=int, default=6)
-    p.add_argument("--trm_block_layers", type=int, default=2)
+    p.add_argument("--trm_block_layers", type=int, default=3)
 
     # Environment
     p.add_argument("--env_max_turns", type=int, default=500)
