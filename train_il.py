@@ -84,12 +84,15 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
         source_y = tgt["src_y"][:, :, 0]
         source_x = tgt["src_x"][:, :, 0]
 
-        use_tf = random.random() < tf_ratio
-        if use_tf:
-            # Mark pass timesteps (count=0) with -1 so model samples its own source
-            move_mask = tgt["count"] > 0
-            source_y = torch.where(move_mask, source_y, torch.full_like(source_y, -1))
-            source_x = torch.where(move_mask, source_x, torch.full_like(source_x, -1))
+        # Per-timestep teacher forcing: each timestep independently decides
+        # whether to use ground-truth source or let the model sample its own.
+        move_mask = tgt["count"] > 0  # [B, T]
+        if tf_ratio > 0:
+            tf_mask = torch.rand_like(source_y, dtype=torch.float32) < tf_ratio  # [B, T]
+            # Use GT source where both: (1) TF coin says yes, (2) there's a move
+            use_gt = tf_mask & move_mask
+            source_y = torch.where(use_gt, source_y, torch.full_like(source_y, -1))
+            source_x = torch.where(use_gt, source_x, torch.full_like(source_x, -1))
         else:
             source_y = None
             source_x = None
