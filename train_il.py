@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import math
 import os
 import random
 import time
@@ -34,7 +35,8 @@ def parse_args():
     )
     p.add_argument("--epochs", type=int, default=150)
     p.add_argument("--batch_size", type=int, default=4)
-    p.add_argument("--lr", type=float, default=5e-4)
+    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--warmup_steps", type=int, default=200, help="Linear LR warmup steps")
     p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--max_seq_len", type=int, default=1000, help="Max sequence length per sample")
     p.add_argument("--d_model", type=int, default=384)
@@ -54,7 +56,7 @@ def parse_args():
     return p.parse_args()
 
 
-def train_epoch(model, loader, criterion, optimizer, device, epoch, args,
+def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, args,
                 rank0=True, save_fn=None, start_step=0, tf_ratio=1.0):
     model.train()
     from collections import deque
@@ -108,6 +110,7 @@ def train_epoch(model, loader, criterion, optimizer, device, epoch, args,
             if args.grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
+            scheduler.step()
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
             optimizer.zero_grad(set_to_none=True)
@@ -189,7 +192,6 @@ def main():
         lr=args.lr,
         weight_decay=args.weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
 
     dataset = SeqReplayDataset(
         args.data_dir,
@@ -197,6 +199,19 @@ def main():
     )
     if rank0:
         print(f"Dataset: {len(dataset)} replays from {args.data_dir}")
+
+    world_size = dist.get_world_size() if distributed else 1
+    steps_per_epoch = len(dataset) // (args.batch_size * world_size)
+    total_steps = steps_per_epoch * args.epochs
+    warmup_steps = args.warmup_steps
+
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return step / max(1, warmup_steps)
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     sampler = DistributedSampler(dataset, shuffle=True) if distributed else None
     loader = DataLoader(
@@ -218,6 +233,8 @@ def main():
         raw_model = model.module if distributed else model
         raw_model.load_state_dict(ckpt["model_state"], strict=False)
         optimizer.load_state_dict(ckpt["optimizer_state"])
+        if "scheduler_state" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler_state"])
         start_step = ckpt.get("step", 0)
         if start_step > 0:
             start_epoch = ckpt["epoch"]
@@ -255,12 +272,11 @@ def main():
         tf_ratio = args.tf_start + (args.tf_end - args.tf_start) * progress
         t0 = time.time()
         avg_loss = train_epoch(
-            model, loader, criterion, optimizer, device, epoch, args,
+            model, loader, criterion, optimizer, scheduler, device, epoch, args,
             rank0=rank0, save_fn=save_checkpoint, start_step=start_step,
             tf_ratio=tf_ratio,
         )
         start_step = 0  # only skip steps for the first epoch after resume
-        scheduler.step()
         elapsed = time.time() - t0
         lr = optimizer.param_groups[0]["lr"]
         if rank0:
