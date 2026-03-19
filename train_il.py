@@ -195,7 +195,7 @@ def main():
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     if distributed:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
         model._set_static_graph()
     if rank0:
         print(f"Model parameters: {n_params:,}")

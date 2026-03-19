@@ -141,22 +141,20 @@ class ImitationLoss(nn.Module):
         # --- Move-mismatch loss (extra penalty for incomplete moves) ------
         # Only on valid (count>0) timesteps.  A correct move requires
         # src + dir + split all correct AND pass_head says "don't pass".
-        move_match_loss = source_loss.new_tensor(0.0)
-        if valid.any():
-            with torch.no_grad():
-                pred_src = pred["source_logits"].argmax(dim=-1)   # [B, T]
-                pred_dir = pred["direction_logits"].argmax(dim=-1)
-                pred_split = pred["split_logits"].argmax(dim=-1)
-                pred_pass = pred["pass_logits"] > 0  # True = pass
-                all_match = (
-                    (pred_src == tgt_src)
-                    & (pred_dir == tgt_dir)
-                    & (pred_split == tgt_split)
-                    & ~pred_pass  # must NOT pass on a valid-move timestep
-                )
-                mismatch_mask = ~all_match & valid
-            combined_per_step = source_loss_all + dir_loss_all + split_loss_all
-            move_match_loss = (combined_per_step * mismatch_mask.float()).sum() / n_seq
+        with torch.no_grad():
+            pred_src = pred["source_logits"].argmax(dim=-1)   # [B, T]
+            pred_dir = pred["direction_logits"].argmax(dim=-1)
+            pred_split = pred["split_logits"].argmax(dim=-1)
+            pred_pass = pred["pass_logits"] > 0  # True = pass
+            all_match = (
+                (pred_src == tgt_src)
+                & (pred_dir == tgt_dir)
+                & (pred_split == tgt_split)
+                & ~pred_pass  # must NOT pass on a valid-move timestep
+            )
+            mismatch_mask = ~all_match & valid
+        combined_per_step = source_loss_all + dir_loss_all + split_loss_all
+        move_match_loss = (combined_per_step * mismatch_mask.float()).sum() / n_seq
 
         # --- Value loss --------------------------------------------------
         value_loss_all = F.mse_loss(
@@ -165,7 +163,6 @@ class ImitationLoss(nn.Module):
         value_loss = (value_loss_all * seq_mask.float()).sum() / n_seq
 
         # --- Q-halt loss (TRM halting) ------------------------------------
-        q_halt_loss = source_loss.new_tensor(0.0)
         if "q_halt" in pred and valid.any():
             with torch.no_grad():
                 predicted_src = pred["source_logits"].argmax(dim=-1)  # [B, T]
@@ -174,6 +171,11 @@ class ImitationLoss(nn.Module):
                 pred["q_halt"], correct, reduction="none",
             )
             q_halt_loss = (q_halt_loss * valid.float()).sum() / n_valid
+        elif "q_halt" in pred:
+            # No valid moves, but still need gradient path for DDP static_graph
+            q_halt_loss = 0.0 * pred["q_halt"].sum()
+        else:
+            q_halt_loss = source_loss.new_tensor(0.0)
 
         # --- Total -------------------------------------------------------
         total = (
