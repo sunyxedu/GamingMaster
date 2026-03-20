@@ -560,11 +560,11 @@ def main():
             unfreeze_all(raw)
             optimizer = torch.optim.AdamW(
                 model.parameters(),
-                lr=args.lr * 0.1,
+                lr=args.lr * 0.33,
                 weight_decay=args.weight_decay,
             )
             if rank0:
-                print(f"Resumed past unfreeze point — encoder unfrozen, LR={args.lr * 0.1}")
+                print(f"Resumed past unfreeze point — encoder unfrozen, LR={args.lr * 0.33}")
 
         optimizer.load_state_dict(rl_ckpt["optimizer_state"])
 
@@ -584,7 +584,7 @@ def main():
             unfreeze_all(raw)
             optimizer = torch.optim.AdamW(
                 model.parameters(),
-                lr=args.lr * 0.1,
+                lr=args.lr * 0.33,
                 weight_decay=args.weight_decay,
             )
             if rank0:

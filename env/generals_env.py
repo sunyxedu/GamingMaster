@@ -135,7 +135,13 @@ class GeneralsEnv:
         if self.map_pool:
             self.current_map_idx = random.randint(0, len(self.map_pool) - 1)
             map_data = self.map_pool[self.current_map_idx]
-            self._generate_map_from_replay(map_data)
+            # Randomly swap general assignments so P0 doesn't always get generals[0]
+            if random.random() < 0.5:
+                swapped = dict(map_data)
+                swapped["generals"] = [map_data["generals"][1], map_data["generals"][0]]
+                self._generate_map_from_replay(swapped)
+            else:
+                self._generate_map_from_replay(map_data)
         else:
             self.real_h = self.grid_h
             self.real_w = self.grid_w
@@ -189,6 +195,13 @@ class GeneralsEnv:
         if illegal_1:
             rewards[1] -= 0.005
             info["illegal"][1] = True
+
+        # Penalize unnecessary passing (pass when legal moves exist)
+        # First 30 turns: passing is normal (accumulating army)
+        if self.turn >= 50:
+            for pid, action in [(0, action_0), (1, action_1)]:
+                if action is None and self._has_legal_moves(pid):
+                    rewards[pid] -= 0.005
 
         # Track cities before move execution (for capture detection)
         cities_before = {
@@ -356,6 +369,18 @@ class GeneralsEnv:
                 army_grid[r][c] = tile.army
 
         return {"state": state, "army": army_grid}
+
+    # ==================================================================
+    # Internal: legal move check
+    # ==================================================================
+
+    def _has_legal_moves(self, player_id: int) -> bool:
+        """Check if player has any tile with army > 1 (can make a move)."""
+        for idx in self.player_land[player_id]:
+            r, c = divmod(idx, self.grid_w)
+            if self.map[r][c].army > 1:
+                return True
+        return False
 
     # ==================================================================
     # Internal: player stats
