@@ -9,29 +9,105 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# ======================================================================
+# Original ImitationLoss (kept for reference)
+# ======================================================================
+# class ImitationLoss(nn.Module):
+#     """
+#     Original IL loss with move-mismatch penalty.
+#     Weights: source=1.5, direction=1.0, split=0.8, pass=10.0,
+#              value=0.5, q_halt=0.5, move_match=1.5
+#     """
+#     def __init__(self, source_weight=1.5, direction_weight=1.0,
+#                  split_weight=0.8, pass_weight=10.0, value_weight=0.5,
+#                  q_halt_weight=0.5, move_match_weight=1.5, grid_w=25):
+#         super().__init__()
+#         self.source_weight = source_weight
+#         self.direction_weight = direction_weight
+#         self.split_weight = split_weight
+#         self.pass_weight = pass_weight
+#         self.value_weight = value_weight
+#         self.q_halt_weight = q_halt_weight
+#         self.move_match_weight = move_match_weight
+#         self.grid_w = grid_w
+#
+#     def forward(self, pred, tgt, lengths=None):
+#         B, T, N = pred["source_logits"].shape
+#         device = pred["source_logits"].device
+#         move_mask = tgt["count"] > 0
+#         if lengths is not None:
+#             seq_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
+#             for i, length in enumerate(lengths):
+#                 seq_mask[i, :length] = True
+#         else:
+#             seq_mask = torch.ones(B, T, dtype=torch.bool, device=device)
+#         valid = move_mask & seq_mask
+#         n_valid = valid.sum().clamp(min=1).float()
+#         n_seq = seq_mask.sum().clamp(min=1).float()
+#         tgt_src = (tgt["src_y"][:,:,0] * self.grid_w + tgt["src_x"][:,:,0]).long().clamp(0, N-1)
+#         tgt_dir = tgt["dir_id"][:,:,0].long()
+#         tgt_split = torch.where(valid, tgt["ratio_id"][:,:,0].long(), torch.zeros_like(tgt["ratio_id"][:,:,0]))
+#
+#         source_loss_all = torch.nan_to_num(F.cross_entropy(
+#             pred["source_logits"].reshape(-1,N), tgt_src.reshape(-1), reduction="none").reshape(B,T), nan=0.0)
+#         source_loss = (source_loss_all * valid).sum() / n_valid
+#
+#         dir_loss_all = torch.nan_to_num(F.cross_entropy(
+#             pred["direction_logits"].reshape(-1,4), tgt_dir.reshape(-1), reduction="none").reshape(B,T), nan=0.0)
+#         dir_loss = (dir_loss_all * valid).sum() / n_valid
+#
+#         split_loss_all = torch.nan_to_num(F.cross_entropy(
+#             pred["split_logits"].reshape(-1,2), tgt_split.reshape(-1), reduction="none").reshape(B,T), nan=0.0)
+#         split_loss = (split_loss_all * valid).sum() / n_valid
+#
+#         tgt_pass = (~move_mask).float()
+#         pass_loss = (F.binary_cross_entropy_with_logits(
+#             pred["pass_logits"], tgt_pass, reduction="none") * seq_mask.float()).sum() / n_seq
+#
+#         # Move-mismatch: re-apply src+dir+split CE on steps where full move is wrong
+#         with torch.no_grad():
+#             mismatch = ~((pred["source_logits"].argmax(-1)==tgt_src)
+#                 & (pred["direction_logits"].argmax(-1)==tgt_dir)
+#                 & (pred["split_logits"].argmax(-1)==tgt_split)
+#                 & ~(pred["pass_logits"]>0)) & valid
+#         move_match_loss = ((source_loss_all+dir_loss_all+split_loss_all) * mismatch.float()).sum() / n_seq
+#
+#         value_loss = (F.mse_loss(pred["value"], tgt["value"], reduction="none") * seq_mask.float()).sum() / n_seq
+#         # ... q_halt_loss omitted for brevity ...
+#         total = (self.source_weight*source_loss + self.direction_weight*dir_loss
+#                  + self.split_weight*split_loss + self.pass_weight*pass_loss
+#                  + self.value_weight*value_loss + self.move_match_weight*move_match_loss)
+#         return {"loss": total, "source_loss": source_loss.detach(), ...}
+# ======================================================================
+
+
 class ImitationLoss(nn.Module):
     """
     Imitation Learning loss for the generals.io bot.
 
     Components:
-      - Source CE    : cross-entropy over H*W positions      (valid mask: count>0)
-      - Direction CE : cross-entropy over 4 directions       (valid mask: count>0)
-      - Split CE     : cross-entropy over 2 options          (valid mask: count>0)
-                       0=all-but-1, 1=50%
-      - Pass BCE     : binary cross-entropy on pass head     (seq_mask: all timesteps)
-                       target=1 when count==0 (no move)
-      - Value MSE    : mean squared error on game-value      (seq_mask: all timesteps)
+      - Source: Focal CE over H*W positions (auto-focuses on hard samples)
+      - Direction: Soft-conditional CE (weighted by source confidence)
+      - Split: Soft-conditional CE (weighted by source confidence)
+      - Pass BCE: binary cross-entropy on pass head
+      - Value MSE: mean squared error on game-value
+      - Q-halt: BCE for TRM halting supervision
+
+    Accuracy metrics (returned detached):
+      - src_acc:  source top-1 accuracy on valid timesteps
+      - dir_acc:  direction accuracy (only where source is correct)
+      - full_acc: full move match (src + dir + split + pass all correct)
     """
 
     def __init__(
         self,
-        source_weight: float = 1.5,
-        direction_weight: float = 1.0,
-        split_weight: float = 0.8,
-        pass_weight: float = 10.0,
-        value_weight: float = 0.5,
-        q_halt_weight: float = 0.5,
-        move_match_weight: float = 1.5,
+        source_weight: float = 3.0,
+        direction_weight: float = 1.5,
+        split_weight: float = 0.3,
+        pass_weight: float = 1.0,
+        value_weight: float = 0.2,
+        q_halt_weight: float = 0.2,
+        focal_gamma: float = 1.5,
         grid_w: int = 25,
     ):
         super().__init__()
@@ -41,7 +117,7 @@ class ImitationLoss(nn.Module):
         self.pass_weight = pass_weight
         self.value_weight = value_weight
         self.q_halt_weight = q_halt_weight
-        self.move_match_weight = move_match_weight
+        self.focal_gamma = focal_gamma
         self.grid_w = grid_w
 
     def forward(
@@ -49,35 +125,14 @@ class ImitationLoss(nn.Module):
         pred: Dict[str, torch.Tensor],
         tgt: Dict[str, torch.Tensor],
         lengths: Optional[list] = None,
+        tf_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        """
-        Args:
-            pred: model output dict with keys:
-                source_logits    [B, T, N]
-                direction_logits [B, T, 4]
-                split_logits     [B, T, 2]  (0=all-but-1, 1=50%)
-                pass_logits      [B, T]     (>0 → pass)
-                value            [B, T]
-            tgt: target dict with keys:
-                count    [B, T]       – number of actions (0 or 1)
-                src_y    [B, T, K]    – source row
-                src_x    [B, T, K]    – source col
-                dir_id   [B, T, K]    – direction
-                ratio_id [B, T, K]    – split option
-                value    [B, T]       – estimated game value
-            lengths: list[int] – actual sequence lengths per sample
-
-        Returns:
-            dict with individual loss components and total loss
-        """
         B, T, N = pred["source_logits"].shape
         device = pred["source_logits"].device
 
         # --- Build masks ------------------------------------------------
-        # move_mask: True where a valid move exists (count > 0)
         move_mask = tgt["count"] > 0  # [B, T]
 
-        # seq_mask: True where the timestep is within the actual sequence
         if lengths is not None:
             seq_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
             for i, length in enumerate(lengths):
@@ -85,99 +140,95 @@ class ImitationLoss(nn.Module):
         else:
             seq_mask = torch.ones(B, T, dtype=torch.bool, device=device)
 
-        # Combined: valid move AND within sequence
-        valid = move_mask & seq_mask  # [B, T]
+        valid = move_mask & seq_mask
         n_valid = valid.sum().clamp(min=1).float()
-
-        # seq-only mask for value loss (always predicted, even without move)
         n_seq = seq_mask.sum().clamp(min=1).float()
 
-        # --- Source loss -------------------------------------------------
-        # Target: flat index = src_y * W + src_x  (first action only, K=0)
+        # --- Targets -----------------------------------------------------
         tgt_src = (tgt["src_y"][:, :, 0] * self.grid_w + tgt["src_x"][:, :, 0]).long()
         tgt_src = tgt_src.clamp(0, N - 1)
+        tgt_dir = tgt["dir_id"][:, :, 0].long()
+        tgt_split = tgt["ratio_id"][:, :, 0].long()
+        tgt_split = torch.where(valid, tgt_split, torch.zeros_like(tgt_split))
 
-        source_loss_all = F.cross_entropy(
+        # --- Source loss: Focal CE ----------------------------------------
+        source_ce_all = F.cross_entropy(
             pred["source_logits"].reshape(-1, N),
             tgt_src.reshape(-1),
             reduction="none",
         ).reshape(B, T)
-        source_loss_all = torch.nan_to_num(source_loss_all, nan=0.0)
+        source_ce_all = torch.nan_to_num(source_ce_all, nan=0.0)
+
+        # Focal modulation: (1 - p_t)^gamma
+        with torch.no_grad():
+            p_t = torch.exp(-source_ce_all)  # prob assigned to correct class
+            focal_weight = (1.0 - p_t).pow(self.focal_gamma)
+        source_loss_all = focal_weight * source_ce_all
         source_loss = (source_loss_all * valid).sum() / n_valid
 
-        # --- Direction loss ----------------------------------------------
-        tgt_dir = tgt["dir_id"][:, :, 0].long()
+        # --- Dir/split weight: TF steps get full weight, others get src_conf ---
+        with torch.no_grad():
+            src_prob = F.softmax(pred["source_logits"], dim=-1)
+            src_conf = src_prob.gather(-1, tgt_src.unsqueeze(-1)).squeeze(-1)  # [B, T]
+
+            if tf_mask is not None:
+                # TF steps: direction sees correct source features → weight=1.0
+                # Non-TF steps: direction sees predicted source → weight=src_conf
+                cond_weight = torch.where(tf_mask, torch.ones_like(src_conf), src_conf)
+            else:
+                # No TF info (e.g. inference) → always soft-conditional
+                cond_weight = src_conf
+
+            cond_weight_valid = cond_weight * valid.float()
+            n_cond = cond_weight_valid.sum().clamp(min=1.0)
+
+        # --- Direction loss: conditional CE -------------------------------
         dir_loss_all = F.cross_entropy(
             pred["direction_logits"].reshape(-1, pred["direction_logits"].size(-1)),
             tgt_dir.reshape(-1),
             reduction="none",
         ).reshape(B, T)
         dir_loss_all = torch.nan_to_num(dir_loss_all, nan=0.0)
-        dir_loss = (dir_loss_all * valid).sum() / n_valid
+        dir_loss = (dir_loss_all * cond_weight_valid).sum() / n_cond
 
-        # --- Split loss (2-class: 0=all-but-1, 1=50%) ----------------------
-        # Only on valid (count>0) timesteps — split is meaningless without a move.
+        # --- Split loss: conditional CE -----------------------------------
         n_split = pred["split_logits"].size(-1)
-        tgt_split = tgt["ratio_id"][:, :, 0].long()
-        # Clamp invalid positions to 0 so CE doesn't error; they're masked out anyway.
-        tgt_split = torch.where(valid, tgt_split, torch.zeros_like(tgt_split))
-
         split_loss_all = F.cross_entropy(
             pred["split_logits"].reshape(-1, n_split),
             tgt_split.reshape(-1),
             reduction="none",
         ).reshape(B, T)
         split_loss_all = torch.nan_to_num(split_loss_all, nan=0.0)
-        split_loss = (split_loss_all * valid).sum() / n_valid
+        split_loss = (split_loss_all * cond_weight_valid).sum() / n_cond
 
-        # --- Pass loss (binary: should the agent pass this turn?) ----------
-        # target=1 when count==0 (no move), target=0 when count>0
-        tgt_pass = (~move_mask).float()  # [B, T]
+        # --- Pass loss ----------------------------------------------------
+        tgt_pass = (~move_mask).float()
         pass_loss_all = F.binary_cross_entropy_with_logits(
             pred["pass_logits"], tgt_pass, reduction="none",
         )
         pass_loss = (pass_loss_all * seq_mask.float()).sum() / n_seq
 
-        # --- Move-mismatch loss (extra penalty for incomplete moves) ------
-        # Only on valid (count>0) timesteps.  A correct move requires
-        # src + dir + split all correct AND pass_head says "don't pass".
-        with torch.no_grad():
-            pred_src = pred["source_logits"].argmax(dim=-1)   # [B, T]
-            pred_dir = pred["direction_logits"].argmax(dim=-1)
-            pred_split = pred["split_logits"].argmax(dim=-1)
-            pred_pass = pred["pass_logits"] > 0  # True = pass
-            all_match = (
-                (pred_src == tgt_src)
-                & (pred_dir == tgt_dir)
-                & (pred_split == tgt_split)
-                & ~pred_pass  # must NOT pass on a valid-move timestep
-            )
-            mismatch_mask = ~all_match & valid
-        combined_per_step = source_loss_all + dir_loss_all + split_loss_all
-        move_match_loss = (combined_per_step * mismatch_mask.float()).sum() / n_seq
-
-        # --- Value loss --------------------------------------------------
+        # --- Value loss ---------------------------------------------------
         value_loss_all = F.mse_loss(
             pred["value"], tgt["value"], reduction="none",
         )
         value_loss = (value_loss_all * seq_mask.float()).sum() / n_seq
 
-        # --- Q-halt loss (TRM halting) ------------------------------------
+        # --- Q-halt loss --------------------------------------------------
         if "q_halt" in pred and valid.any():
             with torch.no_grad():
-                predicted_src = pred["source_logits"].argmax(dim=-1)  # [B, T]
+                predicted_src = pred["source_logits"].argmax(dim=-1)
                 correct = (predicted_src == tgt_src).float()
             q_halt_loss = F.binary_cross_entropy_with_logits(
                 pred["q_halt"], correct, reduction="none",
             )
             q_halt_loss = (q_halt_loss * valid.float()).sum() / n_valid
         elif "q_halt" in pred:
-            # No valid moves, but still need gradient path for DDP static_graph
             q_halt_loss = 0.0 * pred["q_halt"].sum()
         else:
             q_halt_loss = source_loss.new_tensor(0.0)
 
-        # --- Total -------------------------------------------------------
+        # --- Total --------------------------------------------------------
         total = (
             self.source_weight * source_loss
             + self.direction_weight * dir_loss
@@ -185,8 +236,30 @@ class ImitationLoss(nn.Module):
             + self.pass_weight * pass_loss
             + self.value_weight * value_loss
             + self.q_halt_weight * q_halt_loss
-            + self.move_match_weight * move_match_loss
         )
+
+        # --- Accuracy metrics (detached) ----------------------------------
+        with torch.no_grad():
+            pred_src = pred["source_logits"].argmax(dim=-1)
+            pred_dir = pred["direction_logits"].argmax(dim=-1)
+            pred_split = pred["split_logits"].argmax(dim=-1)
+            pred_pass = pred["pass_logits"] > 0
+
+            src_ok = (pred_src == tgt_src) & valid
+            src_acc = src_ok.sum().float() / n_valid
+
+            # Direction accuracy only where source is correct
+            n_src_ok = src_ok.sum().clamp(min=1).float()
+            dir_acc = ((pred_dir == tgt_dir) & src_ok).sum().float() / n_src_ok
+
+            # Full move: src + dir + split correct AND didn't pass (move timesteps only)
+            full_match = src_ok & (pred_dir == tgt_dir) & (pred_split == tgt_split) & ~pred_pass
+            full_acc = full_match.sum().float() / n_valid
+
+            # Complete: correct on ALL timesteps (moves + passes)
+            pass_ok = pred_pass & (~move_mask) & seq_mask    # correctly passed
+            complete_ok = full_match | pass_ok               # move correct OR pass correct
+            complete_acc = complete_ok.sum().float() / n_seq
 
         return {
             "loss": total,
@@ -196,7 +269,10 @@ class ImitationLoss(nn.Module):
             "pass_loss": pass_loss.detach(),
             "value_loss": value_loss.detach(),
             "q_halt_loss": q_halt_loss.detach() if isinstance(q_halt_loss, torch.Tensor) else q_halt_loss,
-            "move_match_loss": move_match_loss.detach() if isinstance(move_match_loss, torch.Tensor) else move_match_loss,
+            "src_acc": src_acc,
+            "dir_acc": dir_acc,
+            "full_acc": full_acc,
+            "complete_acc": complete_acc,
         }
 
 

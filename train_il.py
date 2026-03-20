@@ -53,6 +53,8 @@ def parse_args():
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
     p.add_argument("--tf_start", type=float, default=0.0, help="Teacher forcing ratio at epoch 1")
     p.add_argument("--tf_end", type=float, default=0.0, help="Teacher forcing ratio at last epoch")
+    p.add_argument("--focal_gamma", type=float, default=1.5, help="Focal loss gamma for source CE")
+    p.add_argument("--reset_scheduler", action="store_true", help="Don't load scheduler state from checkpoint")
     return p.parse_args()
 
 
@@ -63,10 +65,12 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
     window = args.log_interval
     recent_loss = deque(maxlen=window)
     recent_parts = {k: deque(maxlen=window) for k in
-                    ["source", "direction", "split", "pass", "value", "q_halt", "move_match"]}
+                    ["source", "direction", "split", "pass", "value", "q_halt"]}
+    recent_acc = {k: deque(maxlen=window) for k in ["src_acc", "dir_acc", "full_acc", "complete_acc"]}
     epoch_loss_sum = 0.0
     epoch_parts_sum = {k: 0.0 for k in
-                       ["source", "direction", "split", "pass", "value", "q_halt", "move_match"]}
+                       ["source", "direction", "split", "pass", "value", "q_halt"]}
+    epoch_acc_sum = {k: 0.0 for k in ["src_acc", "dir_acc", "full_acc", "complete_acc"]}
     epoch_steps = 0
     use_amp = device.type == "cuda"
 
@@ -94,6 +98,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             source_y = torch.where(use_gt, source_y, torch.full_like(source_y, -1))
             source_x = torch.where(use_gt, source_x, torch.full_like(source_x, -1))
         else:
+            use_gt = None
             source_y = None
             source_x = None
 
@@ -105,7 +110,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                     source_y=source_y,
                     source_x=source_x,
                 )
-                losses = criterion(pred, tgt, lengths)
+                losses = criterion(pred, tgt, lengths, tf_mask=use_gt)
             loss = losses["loss"]
 
             optimizer.zero_grad()
@@ -141,18 +146,28 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             v = losses[f"{k}_loss"].item()
             recent_parts[k].append(v)
             epoch_parts_sum[k] += v
+        for k in recent_acc:
+            v = losses[k].item()
+            recent_acc[k].append(v)
+            epoch_acc_sum[k] += v
 
         if rank0 and (step + 1) % args.log_interval == 0:
             avg = sum(recent_loss) / len(recent_loss)
             parts = {k: sum(v) / len(v) for k, v in recent_parts.items()}
+            acc = {k: sum(v) / len(v) for k, v in recent_acc.items()}
             ep_avg = epoch_loss_sum / epoch_steps
             ep_parts = {k: epoch_parts_sum[k] / epoch_steps for k in epoch_parts_sum}
+            ep_acc = {k: epoch_acc_sum[k] / epoch_steps for k in epoch_acc_sum}
             print(
                 f"  Epoch {epoch} Step {step+1}/{len(loader)}  T={T_cur}  loss={avg:.4f}[{ep_avg:.4f}]:\n"
                 f"    src={parts['source']:.4f}[{ep_parts['source']:.4f}]  "
                 f"dir={parts['direction']:.4f}[{ep_parts['direction']:.4f}]  split={parts['split']:.4f}[{ep_parts['split']:.4f}]  "
                 f"pass={parts['pass']:.4f}[{ep_parts['pass']:.4f}]  val={parts['value']:.4f}[{ep_parts['value']:.4f}]  "
-                f"qhalt={parts['q_halt']:.4f}[{ep_parts['q_halt']:.4f}]  mmatch={parts['move_match']:.4f}[{ep_parts['move_match']:.4f}]"
+                f"qhalt={parts['q_halt']:.4f}[{ep_parts['q_halt']:.4f}]\n"
+                f"    acc: src={acc['src_acc']:.1%}[{ep_acc['src_acc']:.1%}]  "
+                f"dir={acc['dir_acc']:.1%}[{ep_acc['dir_acc']:.1%}]  "
+                f"full={acc['full_acc']:.1%}[{ep_acc['full_acc']:.1%}]  "
+                f"complete={acc['complete_acc']:.1%}[{ep_acc['complete_acc']:.1%}]"
             )
 
         if save_fn and rank0 and (step + 1) % args.save_steps == 0:
@@ -200,7 +215,7 @@ def main():
     if rank0:
         print(f"Model parameters: {n_params:,}")
 
-    criterion = ImitationLoss(grid_w=cfg.grid_w)
+    criterion = ImitationLoss(grid_w=cfg.grid_w, focal_gamma=args.focal_gamma)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
@@ -216,16 +231,6 @@ def main():
 
     world_size = dist.get_world_size() if distributed else 1
     steps_per_epoch = len(dataset) // (args.batch_size * world_size)
-    total_steps = steps_per_epoch * args.epochs
-    warmup_steps = args.warmup_steps
-
-    def lr_lambda(step):
-        if step < warmup_steps:
-            return step / max(1, warmup_steps)
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     sampler = DistributedSampler(dataset, shuffle=True) if distributed else None
     loader = DataLoader(
@@ -247,8 +252,6 @@ def main():
         raw_model = model.module if distributed else model
         raw_model.load_state_dict(ckpt["model_state"], strict=False)
         optimizer.load_state_dict(ckpt["optimizer_state"])
-        if "scheduler_state" in ckpt:
-            scheduler.load_state_dict(ckpt["scheduler_state"])
         start_step = ckpt.get("step", 0)
         if start_step > 0:
             start_epoch = ckpt["epoch"]
@@ -259,6 +262,37 @@ def main():
             if start_step > 0:
                 msg += f", step {start_step}"
             print(msg + ")")
+
+    # Build LR scheduler after resume so we know start_epoch
+    remaining_epochs = args.epochs - start_epoch + 1
+    if args.reset_scheduler or not args.resume:
+        # Cosine covers only the remaining epochs
+        total_steps = steps_per_epoch * remaining_epochs
+    else:
+        total_steps = steps_per_epoch * args.epochs
+    warmup_steps = args.warmup_steps
+
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return step / max(1, warmup_steps)
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    # Force optimizer to use the CLI lr (load_state_dict restores old initial_lr)
+    if args.reset_scheduler:
+        for pg in optimizer.param_groups:
+            pg["lr"] = args.lr
+            pg["initial_lr"] = args.lr
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+    if args.resume and not args.reset_scheduler:
+        if "scheduler_state" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler_state"])
+
+    if rank0:
+        print(f"LR schedule: {remaining_epochs} epochs, {total_steps} steps, "
+              f"warmup={warmup_steps}, reset={args.reset_scheduler}")
 
     def save_checkpoint(epoch, step=0, loss=0.0):
         raw = model.module if distributed else model

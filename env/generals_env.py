@@ -9,6 +9,11 @@ Observation format matches the model's ``step()`` input:
     grid       [C, H, W]     12-channel one-hot + army
     globals    [G]            4 log-normalised stats
     legal_mask [1, H, W]     owned tiles with army > 1
+
+Reward design (all in [-1, 1] to match ValueHead Tanh):
+    Terminal:  win +1.0, loss -1.0
+    Dense:     0.02 × delta_heuristic (city-adjusted army ratio)
+    Events:    capture city +0.004, illegal move -0.1
 """
 
 from __future__ import annotations
@@ -51,34 +56,29 @@ class GeneralsEnv:
     ----------
     grid_h, grid_w : int
         Map dimensions (default 25×25).
-    max_turns : int
-        Hard turn limit; game draws if reached.
     n_mountains, n_cities : int
         Number of random mountains / cities on the map.
     city_army_range : tuple[int, int]
         Uniform range for initial city army.
-    dense_reward : bool
-        If True, provide a small shaping reward based on land/army ratio.
     """
 
     def __init__(
         self,
         grid_h: int = 25,
         grid_w: int = 25,
-        max_turns: int = 500,
         n_mountains: int = 20,
         n_cities: int = 5,
         city_army_range: Tuple[int, int] = (40, 50),
+        # Legacy params (ignored, kept for backwards compat)
+        max_turns: int = 9999,
         dense_reward: bool = False,
     ):
         self.grid_h = grid_h
         self.grid_w = grid_w
         self.N = grid_h * grid_w
-        self.max_turns = max_turns
         self.n_mountains = n_mountains
         self.n_cities = n_cities
         self.city_army_range = city_army_range
-        self.dense_reward = dense_reward
 
         # State (set by reset)
         self.map: List[List[_Tile]] = []
@@ -90,16 +90,32 @@ class GeneralsEnv:
         self.done: bool = True
         self.winner: Optional[int] = None
 
+        # Heuristic tracking for dense reward
+        self.prev_heuristic: Dict[int, float] = {0: 0.0, 1: 0.0}
+
+    # ==================================================================
+    # Heuristic (city-adjusted army ratio)
+    # ==================================================================
+
+    def _heuristic(self, pid: int) -> float:
+        """Evaluate position for player `pid`. Returns value in [-1, 1]."""
+        s = self._player_stats(pid)
+        o = self._player_stats(1 - pid)
+        if s["land"] == 0:
+            return -1.0
+        if o["land"] == 0:
+            return 1.0
+        adj_my = s["army"] + s["cities"] * 50
+        adj_op = o["army"] + o["cities"] * 50
+        ratio = adj_my / max(adj_op, 1)
+        return float(math.tanh(ratio - 1.0))
+
     # ==================================================================
     # Reset
     # ==================================================================
 
     def reset(self, seed: Optional[int] = None) -> Dict[int, Dict[str, torch.Tensor]]:
-        """Reset the environment and return initial observations.
-
-        Returns:
-            dict mapping player_id (0 or 1) → observation dict
-        """
+        """Reset the environment and return initial observations."""
         if seed is not None:
             random.seed(seed)
 
@@ -107,6 +123,12 @@ class GeneralsEnv:
         self.turn = 0
         self.done = False
         self.winner = None
+
+        # Initialize heuristic tracking
+        self.prev_heuristic = {
+            0: self._heuristic(0),
+            1: self._heuristic(1),
+        }
 
         return {0: self._get_observation(0), 1: self._get_observation(1)}
 
@@ -133,9 +155,27 @@ class GeneralsEnv:
         """
         assert not self.done, "call reset() before step()"
 
-        # Convert actions → simulator format
-        move_0 = self._action_to_move(0, action_0)
-        move_1 = self._action_to_move(1, action_1)
+        rewards: Dict[int, float] = {0: 0.0, 1: 0.0}
+        info: Dict[str, Any] = {"turn": self.turn, "illegal": {0: False, 1: False}}
+
+        # Convert actions → simulator format (detect illegal moves)
+        move_0, illegal_0 = self._action_to_move(0, action_0)
+        move_1, illegal_1 = self._action_to_move(1, action_1)
+
+        if illegal_0:
+            rewards[0] -= 0.1
+            info["illegal"][0] = True
+        if illegal_1:
+            rewards[1] -= 0.1
+            info["illegal"][1] = True
+
+        # Track cities before move execution (for capture detection)
+        cities_before = {
+            0: set(idx for idx in self.player_land[0]
+                   if self.map[idx // self.grid_w][idx % self.grid_w].terrain == _CITY),
+            1: set(idx for idx in self.player_land[1]
+                   if self.map[idx // self.grid_w][idx % self.grid_w].terrain == _CITY),
+        }
 
         # Execute moves (with priority ordering)
         self._process_moves(move_0, move_1)
@@ -144,35 +184,29 @@ class GeneralsEnv:
         self.turn += 1
         self._increment_armies()
 
-        # Update vision (recomputed each step)
-        # (vision is implicit — computed on-the-fly in _get_observation)
+        # Detect city captures
+        for pid in [0, 1]:
+            cities_after = set(idx for idx in self.player_land[pid]
+                               if self.map[idx // self.grid_w][idx % self.grid_w].terrain == _CITY)
+            new_cities = cities_after - cities_before[pid]
+            if new_cities:
+                rewards[pid] += 0.004 * len(new_cities)
 
         # Check win
         winner = self._check_winner()
-        truncated = self.turn >= self.max_turns
-
-        rewards: Dict[int, float] = {0: 0.0, 1: 0.0}
-        info: Dict[str, Any] = {"turn": self.turn}
-
         if winner is not None:
             self.done = True
             self.winner = winner
-            rewards[winner] = 1.0
-            rewards[1 - winner] = -1.0
+            rewards[winner] += 1.0
+            rewards[1 - winner] += -1.0
             info["winner"] = winner
-        elif truncated:
-            self.done = True
-            info["truncated"] = True
-            # Draw — no reward (or use value estimates as bootstrap)
 
-        # Dense shaping reward (optional)
-        if self.dense_reward and not self.done:
+        # Dense reward: heuristic delta
+        if not self.done:
             for pid in [0, 1]:
-                stats = self._player_stats(pid)
-                opp_stats = self._player_stats(1 - pid)
-                land_ratio = stats["land"] / max(opp_stats["land"], 1)
-                army_ratio = stats["army"] / max(opp_stats["army"], 1)
-                rewards[pid] += 0.001 * (land_ratio + army_ratio - 2.0)
+                curr_h = self._heuristic(pid)
+                rewards[pid] += 0.02 * (curr_h - self.prev_heuristic[pid])
+                self.prev_heuristic[pid] = curr_h
 
         obs = {0: self._get_observation(0), 1: self._get_observation(1)}
         return obs, rewards, self.done, info
@@ -253,8 +287,7 @@ class GeneralsEnv:
                     return 9
                 if tile.terrain == _GENERAL:
                     return 10
-            # Edge case: visible own tile via neighbour (shouldn't happen with
-            # vision==2 but handle gracefully)
+            # Edge case: visible own tile via neighbour
             return 2
 
         # vision == 1  (owned)
@@ -272,10 +305,13 @@ class GeneralsEnv:
 
     def _player_stats(self, player_id: int) -> Dict[str, int]:
         army = 0
+        cities = 0
         for idx in self.player_land[player_id]:
             r, c = divmod(idx, self.grid_w)
             army += self.map[r][c].army
-        return {"land": len(self.player_land[player_id]), "army": army}
+            if self.map[r][c].terrain in (_CITY, _GENERAL):
+                cities += 1
+        return {"land": len(self.player_land[player_id]), "army": army, "cities": cities}
 
     # ==================================================================
     # Internal: action → move
@@ -283,9 +319,17 @@ class GeneralsEnv:
 
     def _action_to_move(
         self, player_id: int, action: Optional[Dict[str, int]],
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
+        """Convert action dict to internal move format.
+
+        Returns:
+            (move_dict or None, was_illegal: bool)
+            - action is None (pass): returns (None, False)
+            - action is valid: returns (move_dict, False)
+            - action is illegal: returns (None, True)
+        """
         if action is None:
-            return None
+            return None, False
 
         src_idx = action["source_idx"]
         direction = action["direction"]
@@ -297,25 +341,24 @@ class GeneralsEnv:
 
         # Validate bounds
         if not (0 <= dst_r < self.grid_h and 0 <= dst_c < self.grid_w):
-            return None
-
-        dst_idx = dst_r * self.grid_w + dst_c
+            return None, True
 
         # Validate: can't move into mountains
         if self.map[dst_r][dst_c].terrain == _MOUNTAIN:
-            return None
+            return None, True
 
         # Validate: must own source with army > 1
         src_tile = self.map[src_r][src_c]
         if src_tile.occupied != player_id or src_tile.army <= 1:
-            return None
+            return None, True
 
+        dst_idx = dst_r * self.grid_w + dst_c
         return {
             "start": src_idx,
             "end": dst_idx,
             "index": player_id,
             "is50": is_50,
-        }
+        }, False
 
     # ==================================================================
     # Internal: move execution (from simulator.py, verified)

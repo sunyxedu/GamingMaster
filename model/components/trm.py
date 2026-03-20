@@ -56,7 +56,12 @@ class TRMBlock(nn.Module):
         q, k, v = qkv.unbind(0)
 
         dropout_p = self.attn.dropout if self.training else 0.0
-        attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+        with torch.nn.attention.sdpa_kernel([
+            torch.nn.attention.SDPBackend.FLASH_ATTENTION,
+            torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION,
+            torch.nn.attention.SDPBackend.MATH,
+        ]):
+            attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
         attn_out = attn_out.permute(0, 2, 1, 3).reshape(B, S, d)
         return self.attn.out_proj(attn_out)
 

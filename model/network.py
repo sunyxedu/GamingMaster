@@ -314,8 +314,8 @@ class GeneralsNetwork(nn.Module):
         arange_B = torch.arange(B, device=device)
 
         with torch.no_grad():
-            # --- pass decision ---
-            did_pass = pass_logits > 0  # [B]
+            # --- pass decision (sampled, not deterministic) ---
+            did_pass = torch.bernoulli(torch.sigmoid(pass_logits)).bool()
             pass_lp = torch.where(
                 did_pass,
                 F.logsigmoid(pass_logits),
@@ -606,6 +606,272 @@ class GeneralsNetwork(nn.Module):
         rl_out = self._sample_actions(
             source_logits, direction_logits, split_logits, pass_logits,
             legal_mask, src_idx,
+        )
+
+        return {
+            "source_logits": source_logits,
+            "direction_logits": direction_logits,
+            "split_logits": split_logits,
+            "pass_logits": pass_logits,
+            "value": value,
+            "q_halt": q_halt,
+            "st_cache": new_caches,
+            **rl_out,
+        }
+
+    # ------------------------------------------------------------------
+    # RL (no legal mask): action sampling and log-probability
+    # ------------------------------------------------------------------
+
+    def _sample_source_rl(self, source_logits, BT, N):
+        """Sample source index without legal mask (RL mode)."""
+        with torch.no_grad():
+            logits_safe = source_logits.detach().clone().float()
+            nan_rows = logits_safe.isnan().any(dim=-1)
+            if nan_rows.any():
+                logits_safe[nan_rows] = 0.0
+            probs = F.softmax(logits_safe, dim=-1)
+            return torch.multinomial(probs, 1).squeeze(-1)
+
+    def _sample_actions_rl(
+        self,
+        source_logits: torch.Tensor,
+        direction_logits: torch.Tensor,
+        split_logits: torch.Tensor,
+        pass_logits: torch.Tensor,
+        src_idx: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Sample actions without legal mask (RL mode).
+
+        Same interface as ``_sample_actions`` but source log-prob is computed
+        over all 625 positions without masking.
+        """
+        B = source_logits.shape[0]
+        device = source_logits.device
+        arange_B = torch.arange(B, device=device)
+
+        with torch.no_grad():
+            # --- pass decision (sampled, not deterministic) ---
+            did_pass = torch.bernoulli(torch.sigmoid(pass_logits)).bool()
+            pass_lp = torch.where(
+                did_pass,
+                F.logsigmoid(pass_logits),
+                F.logsigmoid(-pass_logits),
+            )
+
+            # --- source log-prob (full distribution, no mask) ---
+            source_lp = F.log_softmax(source_logits.float(), dim=-1)[arange_B, src_idx]
+
+            # --- direction ---
+            dir_probs = F.softmax(direction_logits, dim=-1)
+            dir_idx = torch.multinomial(dir_probs, 1).squeeze(-1)
+            dir_lp = F.log_softmax(direction_logits, dim=-1)[arange_B, dir_idx]
+
+            # --- split ---
+            spl_probs = F.softmax(split_logits, dim=-1)
+            spl_idx = torch.multinomial(spl_probs, 1).squeeze(-1)
+            spl_lp = F.log_softmax(split_logits, dim=-1)[arange_B, spl_idx]
+
+            # Hierarchical
+            move_lp = source_lp + dir_lp + spl_lp
+            total_lp = torch.where(did_pass, pass_lp, pass_lp + move_lp)
+
+        return {
+            "action_source": src_idx,
+            "action_direction": dir_idx,
+            "action_split": spl_idx,
+            "action_pass": did_pass,
+            "action_log_prob": total_lp,
+        }
+
+    def compute_action_log_prob_rl(
+        self,
+        pred: Dict[str, torch.Tensor],
+        actions: Dict[str, torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Re-evaluate stored actions without legal mask (RL mode).
+
+        Same as ``compute_action_log_prob`` but source logits are not masked.
+        Used during PPO update in RL training.
+        """
+        source_logits = pred["source_logits"]          # [B, T, N]
+        B, T, N = source_logits.shape
+
+        # --- pass ---
+        pass_logits = pred["pass_logits"]
+        passed = actions["passed"]
+        pass_lp = torch.where(
+            passed,
+            F.logsigmoid(pass_logits),
+            F.logsigmoid(-pass_logits),
+        )
+        p_pass = torch.sigmoid(pass_logits)
+        pass_ent = -(
+            p_pass * F.logsigmoid(pass_logits)
+            + (1 - p_pass) * F.logsigmoid(-pass_logits)
+        )
+
+        # --- source (no mask) ---
+        src_log_p = F.log_softmax(source_logits, dim=-1)
+        src_lp = src_log_p.gather(
+            -1, actions["source_idx"].unsqueeze(-1),
+        ).squeeze(-1)
+        src_probs = torch.exp(src_log_p)
+        src_ent = -(src_probs * src_log_p).nan_to_num(0.0).sum(-1)
+
+        # --- direction ---
+        dir_log_p = F.log_softmax(pred["direction_logits"], dim=-1)
+        dir_lp = dir_log_p.gather(
+            -1, actions["direction"].unsqueeze(-1),
+        ).squeeze(-1)
+        dir_probs = torch.exp(dir_log_p)
+        dir_ent = -(dir_probs * dir_log_p).sum(-1)
+
+        # --- split ---
+        spl_log_p = F.log_softmax(pred["split_logits"], dim=-1)
+        spl_lp = spl_log_p.gather(
+            -1, actions["split"].unsqueeze(-1),
+        ).squeeze(-1)
+        spl_probs = torch.exp(spl_log_p)
+        spl_ent = -(spl_probs * spl_log_p).sum(-1)
+
+        # --- hierarchical combination ---
+        move_lp = src_lp + dir_lp + spl_lp
+        total_lp = torch.where(passed, pass_lp, pass_lp + move_lp)
+
+        move_ent = src_ent + dir_ent + spl_ent
+        total_ent = torch.where(passed, pass_ent, pass_ent + move_ent)
+
+        return total_lp, total_ent
+
+    def step_rl(
+        self,
+        grid: torch.Tensor,
+        globals_vec: torch.Tensor,
+        hidden: Optional[torch.Tensor] = None,
+        world_model_embed: Optional[torch.Tensor] = None,
+        st_cache: Optional[List[torch.Tensor]] = None,
+        step_idx: int = 0,
+    ) -> Dict[str, torch.Tensor]:
+        """Single-step inference without legal mask (RL mode).
+
+        Same as ``step()`` but uses ``_sample_source_rl`` and
+        ``_sample_actions_rl`` so the model can select any position.
+        """
+        if self.is_st:
+            return self._step_st_rl(grid, globals_vec, world_model_embed, st_cache)
+        return self._step_gru_rl(grid, globals_vec, hidden, world_model_embed, step_idx)
+
+    def _step_gru_rl(self, grid, globals_vec, hidden, wm_embed, step_idx):
+        cfg = self.cfg
+        B, d = grid.shape[0], cfg.d_model
+        N = cfg.grid_h * cfg.grid_w
+
+        spatial = self.spatial_encoder(grid)
+        spatial = spatial + self.global_proj(globals_vec).unsqueeze(-1).unsqueeze(-1)
+
+        pooled = spatial.mean(dim=(-2, -1)).unsqueeze(1)
+        temporal, hidden = self.history_encoder(pooled, hidden)
+        spatial = spatial + temporal.squeeze(1).unsqueeze(-1).unsqueeze(-1)
+
+        tokens = spatial.reshape(B, d, N).permute(0, 2, 1)
+        tokens = torch.cat([tokens, self.hl_token.expand(B, -1, -1),
+                            self.ll_token.expand(B, -1, -1)], dim=1)
+        tokens = tokens + self._build_spatial_pe()
+
+        if wm_embed is not None:
+            tokens[:, N:N + 1] += wm_embed.unsqueeze(1)
+
+        x = self.pre_norm(tokens)
+        z_H, q_halt, carry = self.trm(x)
+        for _ in range(cfg.halt_max_steps - 1):
+            if (q_halt > 0).all():
+                break
+            z_H, q_halt, carry = self.trm(x, carry)
+        z_H = self.post_norm(z_H)
+
+        spatial_out = z_H[:, :N]
+        hl_out = z_H[:, N]
+        ll_out = z_H[:, N + 1]
+
+        source_logits = self.source_head(spatial_out)
+        src_idx = self._sample_source_rl(source_logits, B, N)
+        source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
+
+        direction_logits = self.direction_head(source_embed, spatial_out, ll_out)
+        split_logits = self.split_head(source_embed, ll_out)
+        pe_dim = self.pass_head.time_pe_dim
+        time_pe = _sinusoidal_pe(step_idx + 1, pe_dim, z_H.device)[step_idx].unsqueeze(0).expand(B, pe_dim)
+        pass_logits = self.pass_head(ll_out, source_embed, direction_logits, split_logits, time_pe)
+        value = self.value_head(hl_out)
+
+        rl_out = self._sample_actions_rl(
+            source_logits, direction_logits, split_logits, pass_logits, src_idx,
+        )
+
+        return {
+            "source_logits": source_logits,
+            "direction_logits": direction_logits,
+            "split_logits": split_logits,
+            "pass_logits": pass_logits,
+            "value": value,
+            "q_halt": q_halt,
+            "hidden": hidden,
+            **rl_out,
+        }
+
+    def _step_st_rl(self, grid, globals_vec, wm_embed, st_cache):
+        cfg = self.cfg
+        B, d = grid.shape[0], cfg.d_model
+        N = cfg.grid_h * cfg.grid_w
+
+        spatial = self.spatial_encoder(grid)
+        spatial = spatial + self.global_proj(globals_vec).unsqueeze(-1).unsqueeze(-1)
+
+        tokens = spatial.reshape(B, d, N).permute(0, 2, 1)
+        tokens = torch.cat([tokens, self.hl_token.expand(B, -1, -1),
+                            self.ll_token.expand(B, -1, -1)], dim=1)
+        tokens = tokens + self._build_spatial_pe()
+
+        t_cur = 0 if st_cache is None else st_cache[0].shape[1]
+        t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]
+        tokens = tokens + t_pe.unsqueeze(0).unsqueeze(0)
+
+        if wm_embed is not None:
+            tokens[:, N:N + 1] += wm_embed.unsqueeze(1)
+
+        tokens = self.pre_norm(tokens).unsqueeze(1)
+        new_caches: List[torch.Tensor] = []
+        for i, layer in enumerate(self.st_layers):
+            prev = st_cache[i] if st_cache is not None else None
+            tokens, cache_i = layer.forward_step(tokens, prev)
+            new_caches.append(cache_i)
+        tokens = self.mid_norm(tokens.squeeze(1))
+
+        z_H, q_halt, carry = self.trm(tokens)
+        for _ in range(cfg.halt_max_steps - 1):
+            if (q_halt > 0).all():
+                break
+            z_H, q_halt, carry = self.trm(tokens, carry)
+        z_H = self.post_norm(z_H)
+
+        spatial_out = z_H[:, :N]
+        hl_out = z_H[:, N]
+        ll_out = z_H[:, N + 1]
+
+        source_logits = self.source_head(spatial_out)
+        src_idx = self._sample_source_rl(source_logits, B, N)
+        source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
+
+        direction_logits = self.direction_head(source_embed, spatial_out, ll_out)
+        split_logits = self.split_head(source_embed, ll_out)
+        pe_dim = self.pass_head.time_pe_dim
+        time_pe = _sinusoidal_pe(t_cur + 1, pe_dim, z_H.device)[t_cur].unsqueeze(0).expand(B, pe_dim)
+        pass_logits = self.pass_head(ll_out, source_embed, direction_logits, split_logits, time_pe)
+        value = self.value_head(hl_out)
+
+        rl_out = self._sample_actions_rl(
+            source_logits, direction_logits, split_logits, pass_logits, src_idx,
         )
 
         return {

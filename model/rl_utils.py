@@ -240,6 +240,31 @@ def compute_policy_kl(
     return kl
 
 
+def compute_policy_kl_rl(
+    current_source_logits: torch.Tensor,
+    reference_source_logits: torch.Tensor,
+    mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """KL( π_ref ‖ π_current ) without legal mask (RL mode).
+
+    Same as ``compute_policy_kl`` but operates on raw logits over all 625
+    positions without masking.
+    """
+    log_p_ref = F.log_softmax(reference_source_logits, dim=-1)
+    log_p_cur = F.log_softmax(current_source_logits, dim=-1)
+    p_ref = torch.exp(log_p_ref)
+
+    kl = (p_ref * (log_p_ref - log_p_cur)).nan_to_num(0.0).sum(-1)
+
+    if mask is not None:
+        n_valid = mask.float().sum().clamp(min=1)
+        kl = (kl * mask.float()).sum() / n_valid
+    else:
+        kl = kl.mean()
+
+    return kl
+
+
 # ======================================================================
 # Encoder freeze / unfreeze
 # ======================================================================
