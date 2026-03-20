@@ -23,7 +23,7 @@ import copy
 import os
 import random
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -110,6 +110,8 @@ def parse_args():
     # Logging
     p.add_argument("--log_interval", type=int, default=10)
     p.add_argument("--save_interval", type=int, default=100)
+    p.add_argument("--save_replay_interval", type=int, default=50,
+                   help="Save a game replay every N iterations (0 = never)")
     p.add_argument("--device", type=str, default="auto")
 
     return p.parse_args()
@@ -156,17 +158,36 @@ def collect_selfplay_episode(
     max_steps: int = 1000,
     gamma: float = 0.99,
     gae_lambda: float = 0.95,
-) -> RolloutBuffer:
+    record: bool = False,
+) -> Tuple[RolloutBuffer, Optional[List[Dict]]]:
     """Run one self-play episode: model (player 0) vs opponent (player 1).
 
     Only collects trajectory for player 0 (the model being trained).
     Uses step_rl (no legal mask) for both players.
+
+    If ``record=True``, returns a list of per-step dicts for replay viewing.
     """
     model.eval()
     opponent.eval()
     obs = env.reset()
     buffer = RolloutBuffer()
     caches = {0: None, 1: None}
+    replay_log: Optional[List[Dict]] = [] if record else None
+
+    # Record initial state before any moves
+    if replay_log is not None:
+        snapshot = env.get_state_snapshot()
+        replay_log.append({
+            "turn": -1,
+            "p0_action": None, "p1_action": None,
+            "p0_reward": 0.0, "p1_reward": 0.0,
+            "illegal": [False, False],
+            "p0_stats": env._player_stats(0),
+            "p1_stats": env._player_stats(1),
+            "state": snapshot["state"],
+            "army": snapshot["army"],
+            "done": False, "winner": None,
+        })
 
     for _step in range(max_steps):
         step_out = {}
@@ -198,6 +219,24 @@ def collect_selfplay_episode(
         new_obs, rewards, done, info = env.step(
             actions_for_env.get(0), actions_for_env.get(1),
         )
+
+        # Record step for replay (snapshot AFTER env.step)
+        if replay_log is not None:
+            snapshot = env.get_state_snapshot()
+            replay_log.append({
+                "turn": info["turn"],
+                "p0_action": actions_for_env.get(0),
+                "p1_action": actions_for_env.get(1),
+                "p0_reward": rewards[0],
+                "p1_reward": rewards[1],
+                "illegal": [info["illegal"][0], info["illegal"][1]],
+                "p0_stats": env._player_stats(0),
+                "p1_stats": env._player_stats(1),
+                "state": snapshot["state"],
+                "army": snapshot["army"],
+                "done": done,
+                "winner": info.get("winner"),
+            })
 
         # Store transition for player 0 only
         action_dict = {
@@ -232,7 +271,7 @@ def collect_selfplay_episode(
         gamma=gamma, lam=gae_lambda, last_value=last_value,
     )
 
-    return buffer
+    return buffer, replay_log
 
 
 # ======================================================================
@@ -556,16 +595,22 @@ def main():
         opponent_model.load_state_dict(opp_state)
 
         # ---- 2. Collect self-play episode (each GPU independently) ----
-        raw = model
-        buffer = collect_selfplay_episode(
-            raw, opponent_model, env, device,
+        should_record = (
+            rank0
+            and args.save_replay_interval > 0
+            and iteration % args.save_replay_interval == 0
+        )
+        buffer, replay_log = collect_selfplay_episode(
+            model, opponent_model, env, device,
             max_steps=args.rollout_steps,
             gamma=args.gamma,
             gae_lambda=args.gae_lambda,
+            record=should_record,
         )
         ep_len = len(buffer)
         ep_reward = sum(buffer.rewards)
 
+        # Local wins tracking (for checkpoint)
         if env.winner == 0:
             wins[0] += 1
         elif env.winner == 1:
@@ -636,13 +681,35 @@ def main():
             if rank0:
                 print(f"  Pool updated: {len(opponent_pool)} opponents")
 
-        # ---- 6. Logging ----
+        # ---- 6. Aggregate stats across all GPUs ----
+        if dist.is_initialized():
+            local_stats = torch.tensor([
+                1.0 if env.winner == 0 else 0.0,
+                1.0 if env.winner == 1 else 0.0,
+                1.0 if env.winner is None else 0.0,
+                ep_reward,
+                float(ep_len),
+            ], device=device)
+            dist.all_reduce(local_stats)
+            global_p0 = int(local_stats[0].item())
+            global_p1 = int(local_stats[1].item())
+            global_draw = int(local_stats[2].item())
+            global_avg_r = local_stats[3].item() / world_size
+            global_avg_len = local_stats[4].item() / world_size
+        else:
+            global_p0 = 1 if env.winner == 0 else 0
+            global_p1 = 1 if env.winner == 1 else 0
+            global_draw = 1 if env.winner is None else 0
+            global_avg_r = ep_reward
+            global_avg_len = ep_len
+
+        # ---- 7. Logging ----
         if rank0 and iteration % args.log_interval == 0:
             print(
                 f"Iter {iteration:>6d} | "
-                f"ep_len={ep_len:>4d}  "
-                f"r={ep_reward:+.3f}  "
-                f"winner={'p0' if env.winner == 0 else 'p1' if env.winner == 1 else 'draw'} | "
+                f"ep_len={global_avg_len:>6.0f}  "
+                f"r={global_avg_r:+.3f}  "
+                f"p0/p1/draw={global_p0}/{global_p1}/{global_draw} | "
                 f"pol={ppo_avg.get('policy_loss', 0):.4f}  "
                 f"val={ppo_avg.get('value_loss', 0):.4f}  "
                 f"ent={ppo_avg.get('entropy', 0):.4f}  "
@@ -651,12 +718,35 @@ def main():
                 f"kl_reg={ppo_avg.get('kl_reg', 0):.4f} | "
                 f"il={il_metrics.get('il_loss', 0):.4f}  "
                 f"il_w={il_weight:.4f} | "
-                f"wins={wins[0]}/{wins[1]}/{wins['draw']}  "
                 f"pool={len(opponent_pool)}  "
                 f"t={elapsed:.1f}s"
             )
 
-        # ---- 7. Save checkpoint ----
+        # ---- 7. Save game replay ----
+        if replay_log is not None:
+            import json as _json
+            replay_path = os.path.join(
+                args.output_dir, f"replay_iter{iteration}.json",
+            )
+            _json.dump({
+                "iteration": iteration,
+                "ep_len": ep_len,
+                "total_reward_p0": ep_reward,
+                "winner": env.winner,
+                "map_pool_idx": env.current_map_idx,
+                "replay_id": env.map_pool[env.current_map_idx]["replay_id"] if env.map_pool and env.current_map_idx is not None else None,
+                "map": {
+                    "real_h": env.real_h,
+                    "real_w": env.real_w,
+                    "generals": env.generals,
+                    "cities": env.cities,
+                    "mountains": env.mountains,
+                },
+                "steps": replay_log,
+            }, open(replay_path, "w"), indent=2)
+            print(f"  Saved replay {replay_path}")
+
+        # ---- 8. Save checkpoint ----
         if rank0 and iteration % args.save_interval == 0:
             raw = model
             ckpt_path = os.path.join(

@@ -12,8 +12,8 @@ Observation format matches the model's ``step()`` input:
 
 Reward design (all in [-1, 1] to match ValueHead Tanh):
     Terminal:  win +1.0, loss -1.0
-    Dense:     0.02 × delta_heuristic (city-adjusted army ratio)
-    Events:    capture city +0.004, illegal move -0.1
+    Dense:     0.05 × delta_heuristic (city-adjusted army ratio)
+    Events:    capture city +0.01, illegal move -0.005
 """
 
 from __future__ import annotations
@@ -131,8 +131,10 @@ class GeneralsEnv:
         if seed is not None:
             random.seed(seed)
 
+        self.current_map_idx: Optional[int] = None
         if self.map_pool:
-            map_data = random.choice(self.map_pool)
+            self.current_map_idx = random.randint(0, len(self.map_pool) - 1)
+            map_data = self.map_pool[self.current_map_idx]
             self._generate_map_from_replay(map_data)
         else:
             self.real_h = self.grid_h
@@ -182,10 +184,10 @@ class GeneralsEnv:
         move_1, illegal_1 = self._action_to_move(1, action_1)
 
         if illegal_0:
-            rewards[0] -= 0.1
+            rewards[0] -= 0.005
             info["illegal"][0] = True
         if illegal_1:
-            rewards[1] -= 0.1
+            rewards[1] -= 0.005
             info["illegal"][1] = True
 
         # Track cities before move execution (for capture detection)
@@ -209,7 +211,7 @@ class GeneralsEnv:
                                if self.map[idx // self.grid_w][idx % self.grid_w].terrain == _CITY)
             new_cities = cities_after - cities_before[pid]
             if new_cities:
-                rewards[pid] += 0.004 * len(new_cities)
+                rewards[pid] += 0.005 * len(new_cities)
 
         # Check win
         winner = self._check_winner()
@@ -224,7 +226,7 @@ class GeneralsEnv:
         if not self.done:
             for pid in [0, 1]:
                 curr_h = self._heuristic(pid)
-                rewards[pid] += 0.02 * (curr_h - self.prev_heuristic[pid])
+                rewards[pid] += 0.1 * (curr_h - self.prev_heuristic[pid])
                 self.prev_heuristic[pid] = curr_h
 
         obs = {0: self._get_observation(0), 1: self._get_observation(1)}
@@ -320,6 +322,40 @@ class GeneralsEnv:
         if tile.terrain == _GENERAL:
             return 7
         return 5  # fallback
+
+    # ==================================================================
+    # State snapshot (for replay recording)
+    # ==================================================================
+
+    def get_state_snapshot(self) -> Dict[str, List[List[int]]]:
+        """Return full-information state and army grids for replay recording.
+
+        Returns dict with:
+            state: [H][W] int — tile state using same encoding as IL (0-10),
+                   full-information view (P0 perspective: own=5-7, enemy=8-10)
+            army:  [H][W] int — army counts (0 for empty/mountain/padding)
+        """
+        H, W = self.grid_h, self.grid_w
+        rH, rW = self.real_h, self.real_w
+        state = [[-1] * W for _ in range(H)]
+        army_grid = [[0] * W for _ in range(H)]
+
+        for r in range(rH):
+            for c in range(rW):
+                tile = self.map[r][c]
+                if tile.terrain == _MOUNTAIN:
+                    state[r][c] = 4
+                elif tile.occupied == 0:
+                    state[r][c] = {_BLANK: 5, _CITY: 6, _GENERAL: 7}[tile.terrain]
+                elif tile.occupied == 1:
+                    state[r][c] = {_BLANK: 8, _CITY: 9, _GENERAL: 10}[tile.terrain]
+                elif tile.terrain == _CITY:
+                    state[r][c] = 3  # uncaptured city
+                else:
+                    state[r][c] = 2  # blank
+                army_grid[r][c] = tile.army
+
+        return {"state": state, "army": army_grid}
 
     # ==================================================================
     # Internal: player stats
@@ -585,10 +621,13 @@ class GeneralsEnv:
             try:
                 with open(replay_path) as f:
                     data = _json.load(f)
-                # Only keep 1v1 maps (2 generals)
+                # Only keep 1v1 maps (2 generals) that fit in grid
                 if len(data.get("generals", [])) != 2:
                     continue
+                if data["mapHeight"] > self.grid_h or data["mapWidth"] > self.grid_w:
+                    continue
                 self.map_pool.append({
+                    "replay_id": replay_id,
                     "map_w": data["mapWidth"],
                     "map_h": data["mapHeight"],
                     "generals": data["generals"],
@@ -630,15 +669,16 @@ class GeneralsEnv:
         self.generals = []
         for pid, gen_orig in enumerate(map_data["generals"]):
             r, c, new_idx = remap(gen_orig)
-            self.map[r][c] = _Tile(_GENERAL, 1, pid)
-            self.generals.append(new_idx)
-            self.player_land[pid].append(new_idx)
+            if 0 <= r < H and 0 <= c < W:
+                self.map[r][c] = _Tile(_GENERAL, 1, pid)
+                self.generals.append(new_idx)
+                self.player_land[pid].append(new_idx)
 
         # Place mountains
         self.mountains = []
         for mtn_orig in map_data["mountains"]:
             r, c, new_idx = remap(mtn_orig)
-            if 0 <= r < orig_h and 0 <= c < orig_w:
+            if 0 <= r < H and 0 <= c < W:
                 self.map[r][c] = _Tile(_MOUNTAIN, 0, -1)
                 self.mountains.append(new_idx)
 
@@ -647,7 +687,7 @@ class GeneralsEnv:
         city_armies = map_data.get("city_armies", [])
         for i, city_orig in enumerate(map_data["cities"]):
             r, c, new_idx = remap(city_orig)
-            if 0 <= r < orig_h and 0 <= c < orig_w:
+            if 0 <= r < H and 0 <= c < W:
                 army = city_armies[i] if i < len(city_armies) else 40
                 self.map[r][c] = _Tile(_CITY, army, -1)
                 self.cities.append(new_idx)

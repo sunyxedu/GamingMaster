@@ -39,4 +39,5 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --pool_update_interval 100 \
         --iterations 10000 \
         --save_interval 100 \
-        --log_interval 10
+        --save_replay_interval 50 \
+        --log_interval 1
