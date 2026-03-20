@@ -89,6 +89,12 @@ def parse_args():
     p.add_argument("--pool_update_interval", type=int, default=100,
                    help="Add current model to pool every N iterations")
 
+    # Map pool (use real replay maps instead of random)
+    p.add_argument("--replay_dir", type=str, default=None,
+                   help="Directory with raw replay JSON files")
+    p.add_argument("--filtered_file", type=str, default=None,
+                   help="Path to filtered replay list JSON")
+
     # Optimiser
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--weight_decay", type=float, default=1e-4)
@@ -230,23 +236,35 @@ def collect_selfplay_episode(
 
 
 # ======================================================================
+# Gradient sync (replaces DDP)
+# ======================================================================
+
+def sync_gradients(model: torch.nn.Module, world_size: int) -> None:
+    """All-reduce gradients across GPUs (manual DDP replacement)."""
+    for param in model.parameters():
+        if param.grad is not None:
+            dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
+            param.grad.div_(world_size)
+
+
+# ======================================================================
 # PPO update
 # ======================================================================
 
 def ppo_update(
-    model,  # DDP-wrapped or raw GeneralsNetwork
+    model: GeneralsNetwork,
     ref_model: Optional[GeneralsNetwork],
     buffer: RolloutBuffer,
     rl_criterion: RLLoss,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     cfg: ModelConfig,
+    world_size: int = 1,
     kl_weight: float = 0.01,
     grad_clip: float = 1.0,
 ) -> Dict[str, float]:
     """Run one PPO update epoch on a single trajectory (no legal mask)."""
     model.train()
-    raw = model.module if hasattr(model, "module") else model
     batch = buffer.to_tensor_batch(device)
 
     grid_seq = batch["grid_seq"]        # [1, T, C, H, W]
@@ -259,7 +277,6 @@ def ppo_update(
     # Advantages are already normalized before the PPO loop (in main)
 
     # Forward with stored source positions (no legal mask)
-    # Use DDP wrapper for forward() so gradients sync across GPUs
     source_y = actions["source_idx"] // cfg.grid_w
     source_x = actions["source_idx"] % cfg.grid_w
 
@@ -270,9 +287,7 @@ def ppo_update(
         source_x=source_x,
     )
 
-    # Compute current log-probs and entropy (no legal mask)
-    # Use raw model for custom method (gradient graph already set up by DDP forward)
-    log_probs, entropy = raw.compute_action_log_prob_rl(pred, actions)
+    log_probs, entropy = model.compute_action_log_prob_rl(pred, actions)
 
     # RL loss
     rl_losses = rl_criterion(
@@ -304,6 +319,8 @@ def ppo_update(
 
     optimizer.zero_grad()
     total.backward()
+    if world_size > 1:
+        sync_gradients(model, world_size)
     if grad_clip > 0:
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     optimizer.step()
@@ -320,12 +337,13 @@ def ppo_update(
 
 
 def il_auxiliary_update(
-    model,  # DDP-wrapped or raw GeneralsNetwork
+    model: GeneralsNetwork,
     il_batch: Dict,
     il_criterion: ImitationLoss,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
     il_weight: float,
+    world_size: int = 1,
     grad_clip: float = 1.0,
 ) -> Dict[str, float]:
     """One gradient step on IL expert data (auxiliary regularisation).
@@ -340,8 +358,6 @@ def il_auxiliary_update(
     tgt = {k: v.to(device) for k, v in il_batch["tgt"].items()}
     lengths = il_batch["meta"]["lengths"]
 
-    # No teacher forcing — let the model sample its own source
-    # Use DDP wrapper for forward() so gradients sync
     pred = model(
         grid_seq, globals_seq,
         legal_mask=legal_mask,
@@ -354,6 +370,8 @@ def il_auxiliary_update(
     loss = il_weight * il_losses["loss"]
     optimizer.zero_grad()
     loss.backward()
+    if world_size > 1:
+        sync_gradients(model, world_size)
     if grad_clip > 0:
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     optimizer.step()
@@ -442,9 +460,9 @@ def main():
             print(f"Encoder frozen for the first {args.freeze_encoder_iters} iterations")
 
     # ---- DDP -----------------------------------------------------------
-    if distributed:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
-        model._set_static_graph()
+    # No DDP wrapper — use manual gradient all-reduce instead.
+    # DDP conflicts with gradient checkpointing + varying computation graphs
+    # (PPO vs IL forward paths). Manual sync is simpler and reliable.
 
     # ---- Losses --------------------------------------------------------
     rl_criterion = RLLoss(
@@ -478,6 +496,10 @@ def main():
 
     # ---- Environment (each rank gets its own) --------------------------
     env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w)
+    if args.replay_dir and args.filtered_file:
+        n_maps = env.load_map_pool(args.replay_dir, args.filtered_file)
+        if rank0:
+            print(f"Loaded {n_maps} replay maps for environment")
 
     # ---- Resume --------------------------------------------------------
     start_iter = 1
@@ -486,7 +508,7 @@ def main():
 
     if args.resume:
         rl_ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        raw = model.module if distributed else model
+        raw = model
         raw.load_state_dict(rl_ckpt["model_state"])
         start_iter = rl_ckpt["iteration"] + 1
         il_weight = rl_ckpt.get("il_weight", args.il_weight)
@@ -519,7 +541,7 @@ def main():
 
         # Unfreeze encoder after schedule
         if args.freeze_encoder_iters > 0 and iteration == args.freeze_encoder_iters + 1:
-            raw = model.module if distributed else model
+            raw = model
             unfreeze_all(raw)
             optimizer = torch.optim.AdamW(
                 model.parameters(),
@@ -534,7 +556,7 @@ def main():
         opponent_model.load_state_dict(opp_state)
 
         # ---- 2. Collect self-play episode (each GPU independently) ----
-        raw = model.module if distributed else model
+        raw = model
         buffer = collect_selfplay_episode(
             raw, opponent_model, env, device,
             max_steps=args.rollout_steps,
@@ -574,9 +596,9 @@ def main():
         if len(buffer) > 0:
             for _epoch in range(args.ppo_epochs):
                 metrics = ppo_update(
-                    model,  # pass DDP wrapper for gradient sync
-                    ref_model, buffer, rl_criterion,
+                    model, ref_model, buffer, rl_criterion,
                     optimizer, device, cfg,
+                    world_size=world_size,
                     kl_weight=args.kl_weight,
                     grad_clip=args.grad_clip,
                 )
@@ -600,6 +622,7 @@ def main():
             il_metrics = il_auxiliary_update(
                 model, il_batch, il_criterion, optimizer, device,
                 il_weight=il_weight,
+                world_size=world_size,
                 grad_clip=args.grad_clip,
             )
             il_weight *= args.il_decay
@@ -608,7 +631,7 @@ def main():
 
         # ---- 5. Update opponent pool ----
         if iteration % args.pool_update_interval == 0:
-            raw = model.module if distributed else model
+            raw = model
             opponent_pool.add(raw.state_dict())
             if rank0:
                 print(f"  Pool updated: {len(opponent_pool)} opponents")
@@ -635,7 +658,7 @@ def main():
 
         # ---- 7. Save checkpoint ----
         if rank0 and iteration % args.save_interval == 0:
-            raw = model.module if distributed else model
+            raw = model
             ckpt_path = os.path.join(
                 args.output_dir, f"rl_checkpoint_iter{iteration}.pt",
             )

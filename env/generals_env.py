@@ -19,6 +19,7 @@ Reward design (all in [-1, 1] to match ValueHead Tanh):
 from __future__ import annotations
 
 import math
+import os
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -80,11 +81,15 @@ class GeneralsEnv:
         self.n_cities = n_cities
         self.city_army_range = city_army_range
 
+        # Real map bounds (for replays smaller than 25×25)
+        self.real_h = grid_h
+        self.real_w = grid_w
+
         # State (set by reset)
         self.map: List[List[_Tile]] = []
-        self.generals: List[int] = []       # flat index per player
-        self.cities: List[int] = []
-        self.mountains: List[int] = []
+        self.generals: List[int] = []       # flat index per player (in 25-wide grid)
+        self.cities: List[int] = []         # flat indices (in 25-wide grid)
+        self.mountains: List[int] = []      # flat indices (in 25-wide grid)
         self.player_land: List[List[int]] = [[], []]
         self.turn: int = 0
         self.done: bool = True
@@ -92,6 +97,9 @@ class GeneralsEnv:
 
         # Heuristic tracking for dense reward
         self.prev_heuristic: Dict[int, float] = {0: 0.0, 1: 0.0}
+
+        # Map pool for replay-based maps
+        self.map_pool: Optional[List[Dict]] = None
 
     # ==================================================================
     # Heuristic (city-adjusted army ratio)
@@ -115,11 +123,22 @@ class GeneralsEnv:
     # ==================================================================
 
     def reset(self, seed: Optional[int] = None) -> Dict[int, Dict[str, torch.Tensor]]:
-        """Reset the environment and return initial observations."""
+        """Reset the environment and return initial observations.
+
+        If a map pool is loaded (via ``load_map_pool``), a random replay map
+        is used.  Otherwise falls back to random map generation.
+        """
         if seed is not None:
             random.seed(seed)
 
-        self._generate_map()
+        if self.map_pool:
+            map_data = random.choice(self.map_pool)
+            self._generate_map_from_replay(map_data)
+        else:
+            self.real_h = self.grid_h
+            self.real_w = self.grid_w
+            self._generate_map()
+
         self.turn = 0
         self.done = False
         self.winner = None
@@ -216,7 +235,8 @@ class GeneralsEnv:
     # ==================================================================
 
     def _get_observation(self, player_id: int) -> Dict[str, torch.Tensor]:
-        H, W = self.grid_h, self.grid_w
+        H, W = self.grid_h, self.grid_w  # 25, 25 (padded)
+        rH, rW = self.real_h, self.real_w  # real map bounds
 
         # --- compute vision for this player ---
         vision = [[0] * W for _ in range(H)]
@@ -226,13 +246,15 @@ class GeneralsEnv:
             for dr in [-1, 0, 1]:
                 for dc in [-1, 0, 1]:
                     nr, nc = r + dr, c + dc
-                    if 0 <= nr < H and 0 <= nc < W and vision[nr][nc] != 1:
+                    if 0 <= nr < rH and 0 <= nc < rW and vision[nr][nc] != 1:
                         vision[nr][nc] = 2  # visible
 
         # --- build grid channels ---
+        # Only encode tiles within real map bounds (padding stays all-zero,
+        # matching how the IL converter pads data)
         grid = torch.zeros(12, H, W, dtype=torch.float32)
-        for r in range(H):
-            for c in range(W):
+        for r in range(rH):
+            for c in range(rW):
                 tile = self.map[r][c]
                 v = vision[r][c]
                 state = self._tile_to_state(tile, v, player_id)
@@ -339,8 +361,8 @@ class GeneralsEnv:
         dr, dc = _DIR_DR[direction], _DIR_DC[direction]
         dst_r, dst_c = src_r + dr, src_c + dc
 
-        # Validate bounds
-        if not (0 <= dst_r < self.grid_h and 0 <= dst_c < self.grid_w):
+        # Validate bounds (use real map size, not padded 25×25)
+        if not (0 <= dst_r < self.real_h and 0 <= dst_c < self.real_w):
             return None, True
 
         # Validate: can't move into mountains
@@ -534,3 +556,98 @@ class GeneralsEnv:
                 self.cities.append(idx)
                 occupied.add(idx)
             attempts += 1
+
+    # ==================================================================
+    # Replay-based map loading
+    # ==================================================================
+
+    def load_map_pool(self, replay_dir: str, filtered_file: str) -> int:
+        """Load map data from filtered replays.
+
+        Args:
+            replay_dir: Directory with raw replay JSON files
+            filtered_file: Path to filtered replay list (e.g., filtered/Human.exe.json)
+
+        Returns:
+            Number of maps loaded
+        """
+        import json as _json
+
+        with open(filtered_file) as f:
+            filtered = _json.load(f)
+
+        self.map_pool = []
+        for entry in filtered:
+            replay_id = entry["id"]
+            replay_path = os.path.join(replay_dir, f"{replay_id}.json")
+            if not os.path.exists(replay_path):
+                continue
+            try:
+                with open(replay_path) as f:
+                    data = _json.load(f)
+                # Only keep 1v1 maps (2 generals)
+                if len(data.get("generals", [])) != 2:
+                    continue
+                self.map_pool.append({
+                    "map_w": data["mapWidth"],
+                    "map_h": data["mapHeight"],
+                    "generals": data["generals"],
+                    "cities": data.get("cities", []),
+                    "city_armies": data.get("cityArmies", []),
+                    "mountains": data.get("mountains", []),
+                })
+            except (KeyError, _json.JSONDecodeError):
+                continue
+
+        return len(self.map_pool)
+
+    def _generate_map_from_replay(self, map_data: Dict) -> None:
+        """Initialize the map from real replay data.
+
+        Places the original map in the top-left corner of the 25×25 grid,
+        matching how the IL converter pads data.
+        """
+        H, W = self.grid_h, self.grid_w  # 25, 25
+        orig_h = map_data["map_h"]
+        orig_w = map_data["map_w"]
+
+        # Store real bounds for move validation
+        self.real_h = orig_h
+        self.real_w = orig_w
+
+        # Fresh 25×25 map (padding = blank tiles, same as IL data)
+        self.map = [[_Tile() for _ in range(W)] for _ in range(H)]
+        self.player_land = [[], []]
+
+        # Helper: convert flat index from original map width to 25-wide
+        def remap(flat_idx: int) -> Tuple[int, int, int]:
+            """Returns (row, col, new_flat_idx_in_25_wide)."""
+            r = flat_idx // orig_w
+            c = flat_idx % orig_w
+            return r, c, r * W + c
+
+        # Place generals
+        self.generals = []
+        for pid, gen_orig in enumerate(map_data["generals"]):
+            r, c, new_idx = remap(gen_orig)
+            self.map[r][c] = _Tile(_GENERAL, 1, pid)
+            self.generals.append(new_idx)
+            self.player_land[pid].append(new_idx)
+
+        # Place mountains
+        self.mountains = []
+        for mtn_orig in map_data["mountains"]:
+            r, c, new_idx = remap(mtn_orig)
+            if 0 <= r < orig_h and 0 <= c < orig_w:
+                self.map[r][c] = _Tile(_MOUNTAIN, 0, -1)
+                self.mountains.append(new_idx)
+
+        # Place cities
+        self.cities = []
+        city_armies = map_data.get("city_armies", [])
+        for i, city_orig in enumerate(map_data["cities"]):
+            r, c, new_idx = remap(city_orig)
+            if 0 <= r < orig_h and 0 <= c < orig_w:
+                army = city_armies[i] if i < len(city_armies) else 40
+                self.map[r][c] = _Tile(_CITY, army, -1)
+                self.cities.append(new_idx)

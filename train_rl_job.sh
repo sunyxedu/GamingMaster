@@ -21,6 +21,8 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         ~/GamingMaster/train_rl.py \
         --il_checkpoint /scratch/$USER/gaming-master/checkpoints/finetune/checkpoint_epoch67.pt \
         --output_dir /scratch/$USER/gaming-master/checkpoints/rl \
+        --replay_dir /scratch/$USER/gaming-master/data-1k/replays \
+        --filtered_file /scratch/$USER/gaming-master/data-1k/filtered/Human.exe.json \
         --rollout_steps 1000 \
         --ppo_epochs 4 \
         --clip_range 0.2 \
