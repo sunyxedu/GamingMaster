@@ -66,18 +66,20 @@ def parse_args():
                    help="Max steps per self-play episode")
     p.add_argument("--ppo_epochs", type=int, default=4)
     p.add_argument("--clip_range", type=float, default=0.2)
-    p.add_argument("--gamma", type=float, default=0.99)
+    p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--gae_lambda", type=float, default=0.95)
 
     # Loss weights
     p.add_argument("--value_weight", type=float, default=0.5)
-    p.add_argument("--entropy_weight", type=float, default=0.03)
+    p.add_argument("--entropy_weight", type=float, default=0.01)
     p.add_argument("--il_weight", type=float, default=0.5,
                    help="Weight of IL auxiliary loss")
     p.add_argument("--il_decay", type=float, default=0.9999,
                    help="Per-iteration decay for il_weight")
     p.add_argument("--kl_weight", type=float, default=0.01,
                    help="KL regularisation against reference policy")
+    p.add_argument("--invalidity_weight", type=float, default=0.1,
+                   help="Weight for source/direction invalidity auxiliary loss")
 
     # Encoder freeze schedule
     p.add_argument("--freeze_encoder_iters", type=int, default=1000,
@@ -245,6 +247,8 @@ def collect_selfplay_episode(
             "split": step_out[0]["action_split"].item(),
             "passed": step_out[0]["action_pass"].item(),
         }
+        # Compute valid directions for chosen source
+        valid_dirs = env.get_valid_directions(action_dict["source_idx"])
         buffer.add(
             obs=obs[0],
             action=action_dict,
@@ -252,6 +256,7 @@ def collect_selfplay_episode(
             value=step_out[0]["value"].item(),
             reward=rewards[0],
             done=done,
+            valid_directions=valid_dirs,
         )
 
         obs = new_obs
@@ -300,6 +305,7 @@ def ppo_update(
     cfg: ModelConfig,
     world_size: int = 1,
     kl_weight: float = 0.01,
+    invalidity_weight: float = 0.1,
     grad_clip: float = 1.0,
 ) -> Dict[str, float]:
     """Run one PPO update epoch on a single trajectory (no legal mask)."""
@@ -356,6 +362,38 @@ def ppo_update(
         )
         total = total + kl_weight * kl_loss
 
+    # Invalidity loss: push probability toward legal sources & valid directions
+    inv_loss = torch.tensor(0.0, device=device)
+    if invalidity_weight > 0:
+        T = grid_seq.size(1)
+        not_passed = ~actions["passed"]  # [1, T]
+
+        # Source validity: encourage prob mass on legal source positions
+        legal_mask_flat = batch["legal_mask"].reshape(1, T, -1).float()  # [1, T, 625]
+        source_probs = F.softmax(pred["source_logits"], dim=-1)          # [1, T, 625]
+        prob_on_valid_src = (source_probs * legal_mask_flat).sum(-1)      # [1, T]
+        src_val_loss = -torch.log(prob_on_valid_src.clamp(min=1e-8))      # [1, T]
+        # Only for non-pass steps
+        src_mask = not_passed.float()
+        n_src = src_mask.sum().clamp(min=1)
+        src_val_loss = (src_val_loss * src_mask).sum() / n_src
+
+        # Direction validity: encourage prob mass on valid directions
+        valid_dirs = batch["valid_directions"].float()                     # [1, T, 4]
+        dir_probs = F.softmax(pred["direction_logits"], dim=-1)           # [1, T, 4]
+        prob_on_valid_dir = (dir_probs * valid_dirs).sum(-1)              # [1, T]
+        dir_val_loss = -torch.log(prob_on_valid_dir.clamp(min=1e-8))      # [1, T]
+        # Only when source was valid AND not pass
+        source_was_valid = legal_mask_flat.gather(
+            -1, actions["source_idx"].unsqueeze(-1),
+        ).squeeze(-1)  # [1, T]
+        dir_mask = source_was_valid * not_passed.float()
+        n_dir = dir_mask.sum().clamp(min=1)
+        dir_val_loss = (dir_val_loss * dir_mask).sum() / n_dir
+
+        inv_loss = src_val_loss + dir_val_loss
+        total = total + invalidity_weight * inv_loss
+
     optimizer.zero_grad()
     total.backward()
     if world_size > 1:
@@ -372,6 +410,7 @@ def ppo_update(
         "approx_kl": rl_losses["approx_kl"].item(),
         "clip_frac": rl_losses["clip_fraction"].item(),
         "kl_reg": kl_loss.item() if isinstance(kl_loss, torch.Tensor) else kl_loss,
+        "inv_loss": inv_loss.item() if isinstance(inv_loss, torch.Tensor) else inv_loss,
     }
 
 
@@ -645,6 +684,7 @@ def main():
                     optimizer, device, cfg,
                     world_size=world_size,
                     kl_weight=args.kl_weight,
+                    invalidity_weight=args.invalidity_weight,
                     grad_clip=args.grad_clip,
                 )
                 for k, v in metrics.items():
@@ -715,7 +755,8 @@ def main():
                 f"ent={ppo_avg.get('entropy', 0):.4f}  "
                 f"kl={ppo_avg.get('approx_kl', 0):.4f}  "
                 f"clip={ppo_avg.get('clip_frac', 0):.3f}  "
-                f"kl_reg={ppo_avg.get('kl_reg', 0):.4f} | "
+                f"kl_reg={ppo_avg.get('kl_reg', 0):.4f}  "
+                f"inv={ppo_avg.get('inv_loss', 0):.4f} | "
                 f"il={il_metrics.get('il_loss', 0):.4f}  "
                 f"il_w={il_weight:.4f} | "
                 f"pool={len(opponent_pool)}  "

@@ -5,6 +5,12 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+try:
+    import lzstring
+    _HAS_LZSTRING = True
+except ImportError:
+    _HAS_LZSTRING = False
+
 
 # Constants from generals.io
 class Constants:

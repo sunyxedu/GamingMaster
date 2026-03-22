@@ -190,18 +190,18 @@ class GeneralsEnv:
         move_1, illegal_1 = self._action_to_move(1, action_1)
 
         if illegal_0:
-            rewards[0] -= 0.005
+            rewards[0] -= 0.05
             info["illegal"][0] = True
         if illegal_1:
-            rewards[1] -= 0.005
+            rewards[1] -= 0.05
             info["illegal"][1] = True
 
         # Penalize unnecessary passing (pass when legal moves exist)
-        # First 30 turns: passing is normal (accumulating army)
+        # First 50 turns: passing is normal (accumulating army)
         if self.turn >= 50:
             for pid, action in [(0, action_0), (1, action_1)]:
                 if action is None and self._has_legal_moves(pid):
-                    rewards[pid] -= 0.005
+                    rewards[pid] -= 0.05
 
         # Track cities before move execution (for capture detection)
         cities_before = {
@@ -381,6 +381,20 @@ class GeneralsEnv:
             if self.map[r][c].army > 1:
                 return True
         return False
+
+    def get_valid_directions(self, source_idx: int) -> List[bool]:
+        """Return [down, right, up, left] validity for a given source tile."""
+        src_r, src_c = divmod(source_idx, self.grid_w)
+        valid = []
+        for d in range(4):
+            dst_r = src_r + _DIR_DR[d]
+            dst_c = src_c + _DIR_DC[d]
+            if (0 <= dst_r < self.real_h and 0 <= dst_c < self.real_w
+                    and self.map[dst_r][dst_c].terrain != _MOUNTAIN):
+                valid.append(True)
+            else:
+                valid.append(False)
+        return valid
 
     # ==================================================================
     # Internal: player stats

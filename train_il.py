@@ -29,7 +29,7 @@ from model.network import GeneralsNetwork
 
 def parse_args():
     p = argparse.ArgumentParser(description="IL training for generals.io bot")
-    p.add_argument("--data_dir", type=str, required=True, help="Directory with .json training data")
+    p.add_argument("--data_dir", type=str, nargs="+", required=True, help="Directory(s) with .json training data")
     p.add_argument(
         "--output_dir", type=str, default="checkpoints", help="Checkpoint output dir"
     )
@@ -222,10 +222,14 @@ def main():
         weight_decay=args.weight_decay,
     )
 
-    dataset = SeqReplayDataset(
-        args.data_dir,
-        max_sequence_length=args.max_seq_len,
-    )
+    if len(args.data_dir) == 1:
+        dataset = SeqReplayDataset(args.data_dir[0], max_sequence_length=args.max_seq_len)
+    else:
+        from torch.utils.data import ConcatDataset
+        dataset = ConcatDataset([
+            SeqReplayDataset(d, max_sequence_length=args.max_seq_len)
+            for d in args.data_dir
+        ])
     if rank0:
         print(f"Dataset: {len(dataset)} replays from {args.data_dir}")
 
@@ -251,17 +255,25 @@ def main():
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         raw_model = model.module if distributed else model
         raw_model.load_state_dict(ckpt["model_state"], strict=False)
-        optimizer.load_state_dict(ckpt["optimizer_state"])
+        # RL checkpoints don't have optimizer_state / epoch / loss — handle gracefully
+        if "optimizer_state" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer_state"])
         start_step = ckpt.get("step", 0)
-        if start_step > 0:
-            start_epoch = ckpt["epoch"]
-        else:
-            start_epoch = ckpt["epoch"] + 1
-        if rank0:
-            msg = f"Resumed from {args.resume} (epoch {ckpt['epoch']}, loss={ckpt['loss']:.4f}"
+        if "epoch" in ckpt:
             if start_step > 0:
-                msg += f", step {start_step}"
-            print(msg + ")")
+                start_epoch = ckpt["epoch"]
+            else:
+                start_epoch = ckpt["epoch"] + 1
+        if rank0:
+            if "epoch" in ckpt:
+                msg = f"Resumed from {args.resume} (epoch {ckpt['epoch']}, loss={ckpt.get('loss', 0):.4f}"
+                if start_step > 0:
+                    msg += f", step {start_step}"
+                print(msg + ")")
+            else:
+                # RL checkpoint — just report iteration if available
+                it = ckpt.get("iteration", "?")
+                print(f"Loaded weights from RL checkpoint {args.resume} (iteration {it})")
 
     # Build LR scheduler after resume so we know start_epoch
     remaining_epochs = args.epochs - start_epoch + 1
