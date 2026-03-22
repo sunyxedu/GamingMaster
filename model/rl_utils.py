@@ -94,6 +94,7 @@ class RolloutBuffer:
         self.values: List[float] = []
         self.rewards: List[float] = []
         self.dones: List[bool] = []
+        self.valid_directions: List[List[bool]] = []  # [4] per step
 
         self.advantages: Optional[torch.Tensor] = None
         self.returns: Optional[torch.Tensor] = None
@@ -108,6 +109,7 @@ class RolloutBuffer:
         value: float,
         reward: float,
         done: bool,
+        valid_directions: Optional[List[bool]] = None,
     ) -> None:
         self.grids.append(obs["grid"])
         self.globals_.append(obs["globals"])
@@ -120,6 +122,7 @@ class RolloutBuffer:
         self.values.append(value)
         self.rewards.append(reward)
         self.dones.append(done)
+        self.valid_directions.append(valid_directions or [True, True, True, True])
 
     # ---- advantage computation -----------------------------------------
 
@@ -167,6 +170,9 @@ class RolloutBuffer:
             ).unsqueeze(0),
             "advantages": self.advantages.to(device).unsqueeze(0),
             "returns": self.returns.to(device).unsqueeze(0),
+            "valid_directions": torch.tensor(
+                self.valid_directions, dtype=torch.bool, device=device,
+            ).unsqueeze(0),  # [1, T, 4]
             "length": T,
         }
 
