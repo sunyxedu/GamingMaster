@@ -72,6 +72,10 @@ def parse_args():
     # Loss weights
     p.add_argument("--value_weight", type=float, default=0.5)
     p.add_argument("--entropy_weight", type=float, default=0.01)
+    p.add_argument("--entropy_weight_decay", type=float, default=1.0,
+                   help="Per-iteration decay for entropy weight (1.0 = no decay)")
+    p.add_argument("--entropy_weight_min", type=float, default=0.008,
+                   help="Minimum entropy weight (floor for decay)")
     p.add_argument("--il_weight", type=float, default=0.5,
                    help="Weight of IL auxiliary loss")
     p.add_argument("--il_decay", type=float, default=0.9999,
@@ -80,6 +84,14 @@ def parse_args():
                    help="KL regularisation against reference policy")
     p.add_argument("--invalidity_weight", type=float, default=0.1,
                    help="Weight for source/direction invalidity auxiliary loss")
+    p.add_argument("--city_reward_decay", type=float, default=0.9999,
+                   help="Per-iteration decay for city capture reward scale")
+    p.add_argument("--pass_penalty_decay", type=float, default=0.9999,
+                   help="Per-iteration decay for pass penalty scale")
+    p.add_argument("--dense_reward_decay", type=float, default=0.9999,
+                   help="Per-iteration decay for dense heuristic reward scale")
+    p.add_argument("--failed_city_penalty_decay", type=float, default=0.9999,
+                   help="Per-iteration decay for failed city attack penalty")
 
     # Encoder freeze schedule
     p.add_argument("--freeze_encoder_iters", type=int, default=1000,
@@ -99,6 +111,8 @@ def parse_args():
 
     # Optimiser
     p.add_argument("--lr", type=float, default=1e-4)
+    p.add_argument("--lr_decay", type=float, default=0.9997,
+                   help="Per-iteration multiplicative LR decay")
     p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--grad_clip", type=float, default=1.0)
 
@@ -175,6 +189,10 @@ def collect_selfplay_episode(
     buffer = RolloutBuffer()
     caches = {0: None, 1: None}
     replay_log: Optional[List[Dict]] = [] if record else None
+    reward_totals: Dict[str, float] = {
+        "r_invalid": 0.0, "r_pass": 0.0, "r_city": 0.0,
+        "r_fail_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
+    }
 
     # Record initial state before any moves
     if replay_log is not None:
@@ -240,6 +258,11 @@ def collect_selfplay_episode(
                 "winner": info.get("winner"),
             })
 
+        # Accumulate reward breakdown
+        if "reward_breakdown" in info:
+            for k, v in info["reward_breakdown"].items():
+                reward_totals[k] += v
+
         # Store transition for player 0 only
         action_dict = {
             "source_idx": step_out[0]["action_source"].item(),
@@ -276,7 +299,7 @@ def collect_selfplay_episode(
         gamma=gamma, lam=gae_lambda, last_value=last_value,
     )
 
-    return buffer, replay_log
+    return buffer, replay_log, reward_totals
 
 
 # ======================================================================
@@ -332,7 +355,7 @@ def ppo_update(
         source_x=source_x,
     )
 
-    log_probs, entropy = model.compute_action_log_prob_rl(pred, actions)
+    log_probs, entropy, head_entropy = model.compute_action_log_prob_rl(pred, actions)
 
     # RL loss
     rl_losses = rl_criterion(
@@ -411,6 +434,10 @@ def ppo_update(
         "clip_frac": rl_losses["clip_fraction"].item(),
         "kl_reg": kl_loss.item() if isinstance(kl_loss, torch.Tensor) else kl_loss,
         "inv_loss": inv_loss.item() if isinstance(inv_loss, torch.Tensor) else inv_loss,
+        "ent_pass": head_entropy["ent_pass"].item(),
+        "ent_src": head_entropy["ent_src"].item(),
+        "ent_dir": head_entropy["ent_dir"].item(),
+        "ent_spl": head_entropy["ent_spl"].item(),
     }
 
 
@@ -599,13 +626,24 @@ def main():
             unfreeze_all(raw)
             optimizer = torch.optim.AdamW(
                 model.parameters(),
-                lr=args.lr * 0.33,
+                lr=args.lr * 0.5,
                 weight_decay=args.weight_decay,
             )
             if rank0:
-                print(f"Resumed past unfreeze point — encoder unfrozen, LR={args.lr * 0.33}")
+                print(f"Resumed past unfreeze point — encoder unfrozen, LR={args.lr * 0.5}")
 
         optimizer.load_state_dict(rl_ckpt["optimizer_state"])
+
+        # Recompute decayed reward scales based on iterations already done
+        done_iters = start_iter - 1
+        env.city_reward_scale = args.city_reward_decay ** done_iters
+        env.pass_penalty_scale = args.pass_penalty_decay ** done_iters
+        env.dense_reward_scale = args.dense_reward_decay ** done_iters
+        env.failed_city_penalty_scale = args.failed_city_penalty_decay ** done_iters
+        rl_criterion.entropy_weight = max(
+            args.entropy_weight * (args.entropy_weight_decay ** done_iters),
+            args.entropy_weight_min,
+        )
 
         if rank0:
             print(f"Resumed from {args.resume}, iteration {start_iter}, "
@@ -621,9 +659,10 @@ def main():
         if args.freeze_encoder_iters > 0 and iteration == args.freeze_encoder_iters + 1:
             raw = model
             unfreeze_all(raw)
+            current_lr = optimizer.param_groups[0]["lr"]
             optimizer = torch.optim.AdamW(
                 model.parameters(),
-                lr=args.lr * 0.33,
+                lr=current_lr * 0.5,
                 weight_decay=args.weight_decay,
             )
             if rank0:
@@ -639,7 +678,7 @@ def main():
             and args.save_replay_interval > 0
             and iteration % args.save_replay_interval == 0
         )
-        buffer, replay_log = collect_selfplay_episode(
+        buffer, replay_log, reward_totals = collect_selfplay_episode(
             model, opponent_model, env, device,
             max_steps=args.rollout_steps,
             gamma=args.gamma,
@@ -675,6 +714,8 @@ def main():
                 adv_mean = buffer.advantages.mean()
                 adv_std = buffer.advantages.std().clamp(min=1e-8)
                 buffer.advantages = (buffer.advantages - adv_mean) / adv_std
+            del batch_for_norm, adv
+            torch.cuda.empty_cache()
 
         ppo_metrics_agg = {}
         if len(buffer) > 0:
@@ -712,6 +753,22 @@ def main():
             )
             il_weight *= args.il_decay
 
+        # Decay shaping rewards
+        env.city_reward_scale *= args.city_reward_decay
+        env.pass_penalty_scale *= args.pass_penalty_decay
+        env.dense_reward_scale *= args.dense_reward_decay
+        env.failed_city_penalty_scale *= args.failed_city_penalty_decay
+
+        # Decay learning rate
+        for pg in optimizer.param_groups:
+            pg["lr"] *= args.lr_decay
+
+        # Decay entropy weight
+        rl_criterion.entropy_weight = max(
+            rl_criterion.entropy_weight * args.entropy_weight_decay,
+            args.entropy_weight_min,
+        )
+
         elapsed = time.time() - t0
 
         # ---- 5. Update opponent pool ----
@@ -723,19 +780,22 @@ def main():
 
         # ---- 6. Aggregate stats across all GPUs ----
         if dist.is_initialized():
+            rw_keys = ["r_invalid", "r_pass", "r_city", "r_fail_city", "r_dense", "r_winlose"]
             local_stats = torch.tensor([
                 1.0 if env.winner == 0 else 0.0,
                 1.0 if env.winner == 1 else 0.0,
                 1.0 if env.winner is None else 0.0,
                 ep_reward,
                 float(ep_len),
-            ], device=device)
+            ] + [reward_totals[k] for k in rw_keys], device=device)
             dist.all_reduce(local_stats)
             global_p0 = int(local_stats[0].item())
             global_p1 = int(local_stats[1].item())
             global_draw = int(local_stats[2].item())
             global_avg_r = local_stats[3].item() / world_size
             global_avg_len = local_stats[4].item() / world_size
+            for i, k in enumerate(rw_keys):
+                reward_totals[k] = local_stats[5 + i].item() / world_size
         else:
             global_p0 = 1 if env.winner == 0 else 0
             global_p1 = 1 if env.winner == 1 else 0
@@ -756,11 +816,21 @@ def main():
                 f"kl={ppo_avg.get('approx_kl', 0):.4f}  "
                 f"clip={ppo_avg.get('clip_frac', 0):.3f}  "
                 f"kl_reg={ppo_avg.get('kl_reg', 0):.4f}  "
-                f"inv={ppo_avg.get('inv_loss', 0):.4f} | "
+                f"inv={ppo_avg.get('inv_loss', 0):.4f}  "
+                f"e_p={ppo_avg.get('ent_pass', 0):.3f}  "
+                f"e_s={ppo_avg.get('ent_src', 0):.3f}  "
+                f"e_d={ppo_avg.get('ent_dir', 0):.3f}  "
+                f"e_sp={ppo_avg.get('ent_spl', 0):.3f} | "
                 f"il={il_metrics.get('il_loss', 0):.4f}  "
                 f"il_w={il_weight:.4f} | "
                 f"pool={len(opponent_pool)}  "
-                f"t={elapsed:.1f}s"
+                f"t={elapsed:.1f}s\n"
+                f"    rw: inv={reward_totals['r_invalid']:.3f}  "
+                f"pass={reward_totals['r_pass']:.3f}  "
+                f"city={reward_totals['r_city']:.3f}  "
+                f"fcity={reward_totals['r_fail_city']:.3f}  "
+                f"dense={reward_totals['r_dense']:.3f}  "
+                f"wl={reward_totals['r_winlose']:.1f}"
             )
 
         # ---- 7. Save game replay ----

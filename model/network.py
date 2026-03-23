@@ -688,7 +688,7 @@ class GeneralsNetwork(nn.Module):
         self,
         pred: Dict[str, torch.Tensor],
         actions: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """Re-evaluate stored actions without legal mask (RL mode).
 
         Same as ``compute_action_log_prob`` but source logits are not masked.
@@ -742,7 +742,18 @@ class GeneralsNetwork(nn.Module):
         move_ent = src_ent + dir_ent + spl_ent
         total_ent = torch.where(passed, pass_ent, pass_ent + move_ent)
 
-        return total_lp, total_ent
+        # Per-head mean entropy (for logging, fully detached)
+        with torch.no_grad():
+            mask_f = (~passed).float()
+            n_moves = mask_f.sum().clamp(min=1)
+            head_entropy = {
+                "ent_pass": pass_ent.detach().mean(),
+                "ent_src": (src_ent.detach() * mask_f).sum() / n_moves,
+                "ent_dir": (dir_ent.detach() * mask_f).sum() / n_moves,
+                "ent_spl": (spl_ent.detach() * mask_f).sum() / n_moves,
+            }
+
+        return total_lp, total_ent, head_entropy
 
     def step_rl(
         self,

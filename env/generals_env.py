@@ -98,6 +98,12 @@ class GeneralsEnv:
         # Heuristic tracking for dense reward
         self.prev_heuristic: Dict[int, float] = {0: 0.0, 1: 0.0}
 
+        # Reward scales (can be decayed independently during RL training)
+        self.city_reward_scale: float = 1.0
+        self.pass_penalty_scale: float = 1.0
+        self.dense_reward_scale: float = 1.0
+        self.failed_city_penalty_scale: float = 1.0
+
         # Map pool for replay-based maps
         self.map_pool: Optional[List[Dict]] = None
 
@@ -184,6 +190,11 @@ class GeneralsEnv:
 
         rewards: Dict[int, float] = {0: 0.0, 1: 0.0}
         info: Dict[str, Any] = {"turn": self.turn, "illegal": {0: False, 1: False}}
+        # Per-component reward tracking (for player 0 only)
+        reward_breakdown: Dict[str, float] = {
+            "r_invalid": 0.0, "r_pass": 0.0, "r_city": 0.0,
+            "r_fail_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
+        }
 
         # Convert actions → simulator format (detect illegal moves)
         move_0, illegal_0 = self._action_to_move(0, action_0)
@@ -191,6 +202,7 @@ class GeneralsEnv:
 
         if illegal_0:
             rewards[0] -= 0.05
+            reward_breakdown["r_invalid"] -= 0.05
             info["illegal"][0] = True
         if illegal_1:
             rewards[1] -= 0.05
@@ -201,7 +213,10 @@ class GeneralsEnv:
         if self.turn >= 50:
             for pid, action in [(0, action_0), (1, action_1)]:
                 if action is None and self._has_legal_moves(pid):
-                    rewards[pid] -= 0.05
+                    penalty = 0.05 * self.pass_penalty_scale
+                    rewards[pid] -= penalty
+                    if pid == 0:
+                        reward_breakdown["r_pass"] -= penalty
 
         # Track cities before move execution (for capture detection)
         cities_before = {
@@ -211,8 +226,27 @@ class GeneralsEnv:
                    if self.map[idx // self.grid_w][idx % self.grid_w].terrain == _CITY),
         }
 
+        # Detect failed city attacks (before move execution)
+        failed_city_targets: Dict[int, List[int]] = {0: [], 1: []}
+        for pid, move in [(0, move_0), (1, move_1)]:
+            if move is not None:
+                end_idx = move["end"]
+                er, ec = divmod(end_idx, self.grid_w)
+                end_tile = self.map[er][ec]
+                if end_tile.terrain == _CITY and end_tile.occupied != pid:
+                    failed_city_targets[pid].append(end_idx)
+
         # Execute moves (with priority ordering)
         self._process_moves(move_0, move_1)
+
+        # Penalize failed city attacks (attacked city but didn't capture)
+        for pid in [0, 1]:
+            for city_idx in failed_city_targets[pid]:
+                if city_idx not in self.player_land[pid]:
+                    penalty = 0.05 * self.failed_city_penalty_scale
+                    rewards[pid] -= penalty
+                    if pid == 0:
+                        reward_breakdown["r_fail_city"] -= penalty
 
         # Increment armies
         self.turn += 1
@@ -220,11 +254,26 @@ class GeneralsEnv:
 
         # Detect city captures
         for pid in [0, 1]:
+            opp = 1 - pid
             cities_after = set(idx for idx in self.player_land[pid]
                                if self.map[idx // self.grid_w][idx % self.grid_w].terrain == _CITY)
             new_cities = cities_after - cities_before[pid]
-            if new_cities:
-                rewards[pid] += 0.005 * len(new_cities)
+            for city_idx in new_cities:
+                if city_idx in cities_before[opp]:
+                    # Took opponent's city — fixed reward
+                    city_r = 0.16 * self.city_reward_scale
+                    rewards[pid] += city_r
+                    if pid == 0:
+                        reward_breakdown["r_city"] += city_r
+                else:
+                    # Captured neutral city — bonus for efficiency
+                    r, c = divmod(city_idx, self.grid_w)
+                    remaining = self.map[r][c].army
+                    bonus = 0.08 * math.exp(-0.1 * remaining)
+                    city_r = (0.04 + bonus) * self.city_reward_scale
+                    rewards[pid] += city_r
+                    if pid == 0:
+                        reward_breakdown["r_city"] += city_r
 
         # Check win
         winner = self._check_winner()
@@ -234,14 +283,22 @@ class GeneralsEnv:
             rewards[winner] += 1.0
             rewards[1 - winner] += -1.0
             info["winner"] = winner
+            if winner == 0:
+                reward_breakdown["r_winlose"] += 1.0
+            else:
+                reward_breakdown["r_winlose"] -= 1.0
 
         # Dense reward: heuristic delta
         if not self.done:
             for pid in [0, 1]:
                 curr_h = self._heuristic(pid)
-                rewards[pid] += 0.1 * (curr_h - self.prev_heuristic[pid])
+                dense_r = 0.6 * (curr_h - self.prev_heuristic[pid]) * self.dense_reward_scale
+                rewards[pid] += dense_r
+                if pid == 0:
+                    reward_breakdown["r_dense"] += dense_r
                 self.prev_heuristic[pid] = curr_h
 
+        info["reward_breakdown"] = reward_breakdown
         obs = {0: self._get_observation(0), 1: self._get_observation(1)}
         return obs, rewards, self.done, info
 

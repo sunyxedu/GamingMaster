@@ -19,9 +19,8 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$HEAD_NODE:29500 \
         ~/GamingMaster/train_rl.py \
-        --resume /scratch/$USER/gaming-master/checkpoints/rl/rl_checkpoint_iter225.pt \
-        --il_checkpoint /scratch/$USER/gaming-master/checkpoints/finetune/checkpoint_epoch67.pt \
-        --output_dir /scratch/$USER/gaming-master/checkpoints/rl \
+        --il_checkpoint /scratch/$USER/gaming-master/checkpoints/rl_finetune/checkpoint_epoch27.pt \
+        --output_dir /scratch/$USER/gaming-master/checkpoints/rl2 \
         --replay_dir /scratch/$USER/gaming-master/data-1k/replays \
         --filtered_file /scratch/$USER/gaming-master/data-1k/filtered/Human.exe.json \
         --rollout_steps 1000 \
@@ -29,18 +28,26 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --clip_range 0.2 \
         --gamma 0.999 \
         --gae_lambda 0.95 \
-        --entropy_weight 0.01 \
+        --entropy_weight 0.03 \
+        --entropy_weight_decay 0.9998 \
+        --entropy_weight_min 0.008 \
         --kl_weight 0.05 \
         --il_weight 0.5 \
         --il_decay 0.995 \
-        --lr 1.5e-5 \
+        --lr 6e-5 \
+        --lr_decay 0.9997 \
         --grad_clip 1.0 \
-        --freeze_encoder_iters 1000 \
-        --pool_size 10 \
+        --freeze_encoder_iters 200 \
+        --pool_size 15 \
         --pool_update_interval 100 \
+        --resume /scratch/$USER/gaming-master/checkpoints/rl2/rl_checkpoint_iter600.pt \
         --iterations 10000 \
         --save_interval 25 \
         --save_replay_interval 10 \
         --log_interval 1 \
-        --il_data_dir /scratch/$USER/gaming-master/data-1k/training/Human.exe \
-        --invalidity_weight 0.5
+        --il_data_dir /scratch/$USER/gaming-master/data/training/asdvlaksudhiouwenf \
+        --invalidity_weight 0.5 \
+        --city_reward_decay 0.9995 \
+        --pass_penalty_decay 0.9995 \
+        --dense_reward_decay 0.9997 \
+        --failed_city_penalty_decay 0.999
