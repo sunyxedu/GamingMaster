@@ -97,6 +97,10 @@ def parse_args():
     p.add_argument("--freeze_encoder_iters", type=int, default=1000,
                    help="Freeze encoder for the first N iterations (0 = never freeze)")
 
+    # Multi-episode collection
+    p.add_argument("--episodes_per_gpu", type=int, default=1,
+                   help="Episodes to collect per GPU before PPO update (gradient accumulation)")
+
     # Opponent pool
     p.add_argument("--pool_size", type=int, default=10,
                    help="Max opponents in pool (excluding IL baseline)")
@@ -321,7 +325,7 @@ def sync_gradients(model: torch.nn.Module, world_size: int) -> None:
 def ppo_update(
     model: GeneralsNetwork,
     ref_model: Optional[GeneralsNetwork],
-    buffer: RolloutBuffer,
+    buffers: List[RolloutBuffer],
     rl_criterion: RLLoss,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
@@ -331,114 +335,122 @@ def ppo_update(
     invalidity_weight: float = 0.1,
     grad_clip: float = 1.0,
 ) -> Dict[str, float]:
-    """Run one PPO update epoch on a single trajectory (no legal mask)."""
+    """Run one PPO update epoch with gradient accumulation over multiple trajectories."""
     model.train()
-    batch = buffer.to_tensor_batch(device)
-
-    grid_seq = batch["grid_seq"]        # [1, T, C, H, W]
-    globals_seq = batch["globals_seq"]  # [1, T, G]
-    actions = batch["actions"]
-    old_lp = batch["old_log_probs"]     # [1, T]
-    advantages = batch["advantages"]    # [1, T]
-    returns = batch["returns"]          # [1, T]
-
-    # Advantages are already normalized before the PPO loop (in main)
-
-    # Forward with stored source positions (no legal mask)
-    source_y = actions["source_idx"] // cfg.grid_w
-    source_x = actions["source_idx"] % cfg.grid_w
-
-    pred = model(
-        grid_seq, globals_seq,
-        legal_mask=None,
-        source_y=source_y,
-        source_x=source_x,
-    )
-
-    log_probs, entropy, head_entropy = model.compute_action_log_prob_rl(pred, actions)
-
-    # RL loss
-    rl_losses = rl_criterion(
-        log_probs=log_probs,
-        entropy=entropy,
-        values=pred["value"],
-        returns=returns,
-        advantages=advantages,
-        old_log_probs=old_lp,
-    )
-
-    total = rl_losses["loss"]
-
-    # KL regularisation against reference policy (no legal mask)
-    kl_loss = torch.tensor(0.0, device=device)
-    if ref_model is not None and kl_weight > 0:
-        with torch.no_grad():
-            ref_pred = ref_model(
-                grid_seq, globals_seq,
-                legal_mask=None,
-                source_y=source_y,
-                source_x=source_x,
-            )
-        kl_loss = compute_policy_kl_rl(
-            pred["source_logits"],
-            ref_pred["source_logits"].detach(),
-        )
-        total = total + kl_weight * kl_loss
-
-    # Invalidity loss: push probability toward legal sources & valid directions
-    inv_loss = torch.tensor(0.0, device=device)
-    if invalidity_weight > 0:
-        T = grid_seq.size(1)
-        not_passed = ~actions["passed"]  # [1, T]
-
-        # Source validity: encourage prob mass on legal source positions
-        legal_mask_flat = batch["legal_mask"].reshape(1, T, -1).float()  # [1, T, 625]
-        source_probs = F.softmax(pred["source_logits"], dim=-1)          # [1, T, 625]
-        prob_on_valid_src = (source_probs * legal_mask_flat).sum(-1)      # [1, T]
-        src_val_loss = -torch.log(prob_on_valid_src.clamp(min=1e-8))      # [1, T]
-        # Only for non-pass steps
-        src_mask = not_passed.float()
-        n_src = src_mask.sum().clamp(min=1)
-        src_val_loss = (src_val_loss * src_mask).sum() / n_src
-
-        # Direction validity: encourage prob mass on valid directions
-        valid_dirs = batch["valid_directions"].float()                     # [1, T, 4]
-        dir_probs = F.softmax(pred["direction_logits"], dim=-1)           # [1, T, 4]
-        prob_on_valid_dir = (dir_probs * valid_dirs).sum(-1)              # [1, T]
-        dir_val_loss = -torch.log(prob_on_valid_dir.clamp(min=1e-8))      # [1, T]
-        # Only when source was valid AND not pass
-        source_was_valid = legal_mask_flat.gather(
-            -1, actions["source_idx"].unsqueeze(-1),
-        ).squeeze(-1)  # [1, T]
-        dir_mask = source_was_valid * not_passed.float()
-        n_dir = dir_mask.sum().clamp(min=1)
-        dir_val_loss = (dir_val_loss * dir_mask).sum() / n_dir
-
-        inv_loss = src_val_loss + dir_val_loss
-        total = total + invalidity_weight * inv_loss
-
     optimizer.zero_grad()
-    total.backward()
+
+    n_buffers = len(buffers)
+    metrics_accum: Dict[str, float] = {}
+
+    for buf in buffers:
+        batch = buf.to_tensor_batch(device)
+
+        grid_seq = batch["grid_seq"]        # [1, T, C, H, W]
+        globals_seq = batch["globals_seq"]  # [1, T, G]
+        actions = batch["actions"]
+        old_lp = batch["old_log_probs"]     # [1, T]
+        advantages = batch["advantages"]    # [1, T]
+        returns = batch["returns"]          # [1, T]
+
+        # Forward with stored source positions (no legal mask)
+        source_y = actions["source_idx"] // cfg.grid_w
+        source_x = actions["source_idx"] % cfg.grid_w
+
+        pred = model(
+            grid_seq, globals_seq,
+            legal_mask=None,
+            source_y=source_y,
+            source_x=source_x,
+        )
+
+        log_probs, entropy, head_entropy = model.compute_action_log_prob_rl(pred, actions)
+
+        # RL loss
+        rl_losses = rl_criterion(
+            log_probs=log_probs,
+            entropy=entropy,
+            values=pred["value"],
+            returns=returns,
+            advantages=advantages,
+            old_log_probs=old_lp,
+        )
+
+        total = rl_losses["loss"]
+
+        # KL regularisation against reference policy (no legal mask)
+        kl_loss = torch.tensor(0.0, device=device)
+        if ref_model is not None and kl_weight > 0:
+            with torch.no_grad():
+                ref_pred = ref_model(
+                    grid_seq, globals_seq,
+                    legal_mask=None,
+                    source_y=source_y,
+                    source_x=source_x,
+                )
+            kl_loss = compute_policy_kl_rl(
+                pred["source_logits"],
+                ref_pred["source_logits"].detach(),
+            )
+            total = total + kl_weight * kl_loss
+
+        # Invalidity loss: push probability toward legal sources & valid directions
+        inv_loss = torch.tensor(0.0, device=device)
+        if invalidity_weight > 0:
+            T = grid_seq.size(1)
+            not_passed = ~actions["passed"]  # [1, T]
+
+            # Source validity: encourage prob mass on legal source positions
+            legal_mask_flat = batch["legal_mask"].reshape(1, T, -1).float()
+            source_probs = F.softmax(pred["source_logits"], dim=-1)
+            prob_on_valid_src = (source_probs * legal_mask_flat).sum(-1)
+            src_val_loss = -torch.log(prob_on_valid_src.clamp(min=1e-8))
+            src_mask = not_passed.float()
+            n_src = src_mask.sum().clamp(min=1)
+            src_val_loss = (src_val_loss * src_mask).sum() / n_src
+
+            # Direction validity: encourage prob mass on valid directions
+            valid_dirs = batch["valid_directions"].float()
+            dir_probs = F.softmax(pred["direction_logits"], dim=-1)
+            prob_on_valid_dir = (dir_probs * valid_dirs).sum(-1)
+            dir_val_loss = -torch.log(prob_on_valid_dir.clamp(min=1e-8))
+            source_was_valid = legal_mask_flat.gather(
+                -1, actions["source_idx"].unsqueeze(-1),
+            ).squeeze(-1)
+            dir_mask = source_was_valid * not_passed.float()
+            n_dir = dir_mask.sum().clamp(min=1)
+            dir_val_loss = (dir_val_loss * dir_mask).sum() / n_dir
+
+            inv_loss = src_val_loss + dir_val_loss
+            total = total + invalidity_weight * inv_loss
+
+        # Scale loss for gradient accumulation
+        (total / n_buffers).backward()
+
+        # Accumulate metrics
+        step_metrics = {
+            "total_loss": total.item(),
+            "policy_loss": rl_losses["policy_loss"].item(),
+            "value_loss": rl_losses["value_loss"].item(),
+            "entropy": rl_losses["entropy"].item(),
+            "approx_kl": rl_losses["approx_kl"].item(),
+            "clip_frac": rl_losses["clip_fraction"].item(),
+            "kl_reg": kl_loss.item() if isinstance(kl_loss, torch.Tensor) else kl_loss,
+            "inv_loss": inv_loss.item() if isinstance(inv_loss, torch.Tensor) else inv_loss,
+            "ent_pass": head_entropy["ent_pass"].item(),
+            "ent_src": head_entropy["ent_src"].item(),
+            "ent_dir": head_entropy["ent_dir"].item(),
+            "ent_spl": head_entropy["ent_spl"].item(),
+        }
+        for k, v in step_metrics.items():
+            metrics_accum[k] = metrics_accum.get(k, 0.0) + v
+
     if world_size > 1:
         sync_gradients(model, world_size)
     if grad_clip > 0:
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     optimizer.step()
 
-    return {
-        "total_loss": total.item(),
-        "policy_loss": rl_losses["policy_loss"].item(),
-        "value_loss": rl_losses["value_loss"].item(),
-        "entropy": rl_losses["entropy"].item(),
-        "approx_kl": rl_losses["approx_kl"].item(),
-        "clip_frac": rl_losses["clip_fraction"].item(),
-        "kl_reg": kl_loss.item() if isinstance(kl_loss, torch.Tensor) else kl_loss,
-        "inv_loss": inv_loss.item() if isinstance(inv_loss, torch.Tensor) else inv_loss,
-        "ent_pass": head_entropy["ent_pass"].item(),
-        "ent_src": head_entropy["ent_src"].item(),
-        "ent_dir": head_entropy["ent_dir"].item(),
-        "ent_spl": head_entropy["ent_spl"].item(),
-    }
+    return {k: v / n_buffers for k, v in metrics_accum.items()}
 
 
 def il_auxiliary_update(
@@ -669,59 +681,106 @@ def main():
                 print(f"Iteration {iteration}: encoder unfrozen, LR reduced to {args.lr * 0.1}")
 
         # ---- 1. Load opponent from pool ----
+        # Each GPU picks one opponent for all its local episodes.
+        # Local games share the same opponent (clean gradient), but different
+        # GPUs may face different opponents (diversity via all-reduce).
         opp_state = opponent_pool.sample()
         opponent_model.load_state_dict(opp_state)
 
-        # ---- 2. Collect self-play episode (each GPU independently) ----
+        # ---- 2. Collect multiple self-play episodes per GPU ----
         should_record = (
             rank0
             and args.save_replay_interval > 0
             and iteration % args.save_replay_interval == 0
         )
-        buffer, replay_log, reward_totals = collect_selfplay_episode(
-            model, opponent_model, env, device,
-            max_steps=args.rollout_steps,
-            gamma=args.gamma,
-            gae_lambda=args.gae_lambda,
-            record=should_record,
-        )
-        ep_len = len(buffer)
-        ep_reward = sum(buffer.rewards)
+        ep_buffers: List[RolloutBuffer] = []
+        replay_log = None
+        reward_totals: Dict[str, float] = {
+            "r_invalid": 0.0, "r_pass": 0.0, "r_city": 0.0,
+            "r_fail_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
+        }
+        local_ep_len = 0.0
+        local_ep_reward = 0.0
+        local_p0 = 0
+        local_p1 = 0
+        local_draw = 0
 
-        # Local wins tracking (for checkpoint)
-        if env.winner == 0:
-            wins[0] += 1
-        elif env.winner == 1:
-            wins[1] += 1
-        else:
-            wins["draw"] += 1
+        replay_env_snapshot = None  # env state for the recorded episode
+        for ep_i in range(args.episodes_per_gpu):
+            record_this = should_record and ep_i == 0
+            buf, ep_replay, ep_rw = collect_selfplay_episode(
+                model, opponent_model, env, device,
+                max_steps=args.rollout_steps,
+                gamma=args.gamma,
+                gae_lambda=args.gae_lambda,
+                record=record_this,
+            )
+            if ep_replay is not None:
+                replay_log = ep_replay
+                replay_env_snapshot = {
+                    "winner": env.winner,
+                    "map_pool_idx": env.current_map_idx,
+                    "replay_id": env.map_pool[env.current_map_idx]["replay_id"] if env.map_pool and env.current_map_idx is not None else None,
+                    "real_h": env.real_h, "real_w": env.real_w,
+                    "generals": env.generals, "cities": env.cities,
+                    "mountains": env.mountains,
+                }
+            ep_buffers.append(buf)
+            local_ep_len += len(buf)
+            local_ep_reward += sum(buf.rewards)
+            for k in reward_totals:
+                reward_totals[k] += ep_rw[k]
 
-        # ---- 3. PPO update (DDP syncs gradients across all GPUs) ----
-        # Normalize advantages once before the PPO loop (not inside ppo_update)
-        if len(buffer) > 0:
-            batch_for_norm = buffer.to_tensor_batch(device)
-            adv = batch_for_norm["advantages"]
+            if env.winner == 0:
+                wins[0] += 1
+                local_p0 += 1
+            elif env.winner == 1:
+                wins[1] += 1
+                local_p1 += 1
+            else:
+                wins["draw"] += 1
+                local_draw += 1
+
+        n_local_eps = args.episodes_per_gpu
+        local_ep_len /= n_local_eps
+        local_ep_reward /= n_local_eps
+        for k in reward_totals:
+            reward_totals[k] /= n_local_eps
+
+        # ---- 3. PPO update with gradient accumulation ----
+        # Normalize advantages across all local buffers + all GPUs
+        all_advs = []
+        for buf in ep_buffers:
+            if len(buf) > 0:
+                all_advs.append(buf.advantages)
+        if all_advs:
+            cat_adv = torch.cat(all_advs)
             if dist.is_initialized():
-                local_sum = adv.sum()
-                local_sq_sum = (adv ** 2).sum()
-                local_count = torch.tensor(adv.numel(), dtype=torch.float32, device=device)
-                stats = torch.stack([local_sum, local_sq_sum, local_count])
+                local_sum = cat_adv.sum()
+                local_sq_sum = (cat_adv ** 2).sum()
+                local_count = torch.tensor(cat_adv.numel(), dtype=torch.float32, device=device)
+                stats = torch.stack([local_sum.to(device), local_sq_sum.to(device), local_count])
                 dist.all_reduce(stats)
                 g_mean = stats[0] / stats[2]
                 g_var = (stats[1] / stats[2] - g_mean ** 2).clamp(min=1e-8)
-                buffer.advantages = (buffer.advantages - g_mean.cpu()) / g_var.sqrt().cpu()
+                for buf in ep_buffers:
+                    if len(buf) > 0:
+                        buf.advantages = (buf.advantages - g_mean.cpu()) / g_var.sqrt().cpu()
             else:
-                adv_mean = buffer.advantages.mean()
-                adv_std = buffer.advantages.std().clamp(min=1e-8)
-                buffer.advantages = (buffer.advantages - adv_mean) / adv_std
-            del batch_for_norm, adv
+                adv_mean = cat_adv.mean()
+                adv_std = cat_adv.std().clamp(min=1e-8)
+                for buf in ep_buffers:
+                    if len(buf) > 0:
+                        buf.advantages = (buf.advantages - adv_mean) / adv_std
+            del cat_adv, all_advs
             torch.cuda.empty_cache()
 
+        valid_buffers = [buf for buf in ep_buffers if len(buf) > 0]
         ppo_metrics_agg = {}
-        if len(buffer) > 0:
+        if valid_buffers:
             for _epoch in range(args.ppo_epochs):
                 metrics = ppo_update(
-                    model, ref_model, buffer, rl_criterion,
+                    model, ref_model, valid_buffers, rl_criterion,
                     optimizer, device, cfg,
                     world_size=world_size,
                     kl_weight=args.kl_weight,
@@ -731,7 +790,7 @@ def main():
                 for k, v in metrics.items():
                     ppo_metrics_agg[k] = ppo_metrics_agg.get(k, 0.0) + v
 
-        n_updates = args.ppo_epochs if len(buffer) > 0 else 1
+        n_updates = args.ppo_epochs if valid_buffers else 1
         ppo_avg = {k: v / n_updates for k, v in ppo_metrics_agg.items()}
 
         # ---- 4. IL auxiliary update ----
@@ -779,14 +838,15 @@ def main():
                 print(f"  Pool updated: {len(opponent_pool)} opponents")
 
         # ---- 6. Aggregate stats across all GPUs ----
+        total_games = args.episodes_per_gpu * world_size
         if dist.is_initialized():
             rw_keys = ["r_invalid", "r_pass", "r_city", "r_fail_city", "r_dense", "r_winlose"]
             local_stats = torch.tensor([
-                1.0 if env.winner == 0 else 0.0,
-                1.0 if env.winner == 1 else 0.0,
-                1.0 if env.winner is None else 0.0,
-                ep_reward,
-                float(ep_len),
+                float(local_p0),
+                float(local_p1),
+                float(local_draw),
+                local_ep_reward,
+                local_ep_len,
             ] + [reward_totals[k] for k in rw_keys], device=device)
             dist.all_reduce(local_stats)
             global_p0 = int(local_stats[0].item())
@@ -797,11 +857,11 @@ def main():
             for i, k in enumerate(rw_keys):
                 reward_totals[k] = local_stats[5 + i].item() / world_size
         else:
-            global_p0 = 1 if env.winner == 0 else 0
-            global_p1 = 1 if env.winner == 1 else 0
-            global_draw = 1 if env.winner is None else 0
-            global_avg_r = ep_reward
-            global_avg_len = ep_len
+            global_p0 = local_p0
+            global_p1 = local_p1
+            global_draw = local_draw
+            global_avg_r = local_ep_reward
+            global_avg_len = local_ep_len
 
         # ---- 7. Logging ----
         if rank0 and iteration % args.log_interval == 0:
@@ -809,7 +869,7 @@ def main():
                 f"Iter {iteration:>6d} | "
                 f"ep_len={global_avg_len:>6.0f}  "
                 f"r={global_avg_r:+.3f}  "
-                f"p0/p1/draw={global_p0}/{global_p1}/{global_draw} | "
+                f"p0/p1/draw={global_p0}/{global_p1}/{global_draw}({total_games}) | "
                 f"pol={ppo_avg.get('policy_loss', 0):.4f}  "
                 f"val={ppo_avg.get('value_loss', 0):.4f}  "
                 f"ent={ppo_avg.get('entropy', 0):.4f}  "
@@ -839,19 +899,20 @@ def main():
             replay_path = os.path.join(
                 args.output_dir, f"replay_iter{iteration}.json",
             )
+            snap = replay_env_snapshot
             _json.dump({
                 "iteration": iteration,
-                "ep_len": ep_len,
-                "total_reward_p0": ep_reward,
-                "winner": env.winner,
-                "map_pool_idx": env.current_map_idx,
-                "replay_id": env.map_pool[env.current_map_idx]["replay_id"] if env.map_pool and env.current_map_idx is not None else None,
+                "ep_len": len(ep_buffers[0]),
+                "total_reward_p0": sum(ep_buffers[0].rewards),
+                "winner": snap["winner"],
+                "map_pool_idx": snap["map_pool_idx"],
+                "replay_id": snap["replay_id"],
                 "map": {
-                    "real_h": env.real_h,
-                    "real_w": env.real_w,
-                    "generals": env.generals,
-                    "cities": env.cities,
-                    "mountains": env.mountains,
+                    "real_h": snap["real_h"],
+                    "real_w": snap["real_w"],
+                    "generals": snap["generals"],
+                    "cities": snap["cities"],
+                    "mountains": snap["mountains"],
                 },
                 "steps": replay_log,
             }, open(replay_path, "w"), indent=2)

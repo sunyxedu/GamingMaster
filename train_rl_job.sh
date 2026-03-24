@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=gm-rl-train
 #SBATCH --partition=batch
-#SBATCH --nodes=3
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:nvidia_h200_nvl:8
 #SBATCH --exclusive
@@ -15,7 +15,7 @@ export PYTHONPATH=~/GamingMaster
 HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
 
 srun apptainer exec --nv /scratch/$USER/pytorch.sif \
-    torchrun --nproc_per_node=8 --nnodes=3 \
+    torchrun --nproc_per_node=8 --nnodes=2 \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$HEAD_NODE:29500 \
         ~/GamingMaster/train_rl.py \
@@ -23,12 +23,13 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --output_dir /scratch/$USER/gaming-master/checkpoints/rl2 \
         --replay_dir /scratch/$USER/gaming-master/data-1k/replays \
         --filtered_file /scratch/$USER/gaming-master/data-1k/filtered/Human.exe.json \
+        --episodes_per_gpu 4 \
         --rollout_steps 1000 \
         --ppo_epochs 2 \
         --clip_range 0.2 \
         --gamma 0.999 \
         --gae_lambda 0.95 \
-        --entropy_weight 0.03 \
+        --entropy_weight 0.02 \
         --entropy_weight_decay 0.9998 \
         --entropy_weight_min 0.008 \
         --kl_weight 0.05 \
