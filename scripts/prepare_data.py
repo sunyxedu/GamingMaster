@@ -121,6 +121,7 @@ def run_filter(
             min_turns=min_turns,
             player_name=player,
             min_opponent_stars=min_opponent_stars,
+            start_date="2025-04-01T00:00:00Z",
         )
 
         filtered_file = filtered_dir / f"{player}.json"

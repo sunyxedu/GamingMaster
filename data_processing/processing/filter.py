@@ -44,10 +44,15 @@ def filter_replays(
         # Check start date if specified
         if start_date:
             try:
-                entry_date = datetime.strptime(entry.get("started", ""), "%Y-%m-%dT%H:%M:%SZ")
+                started = entry.get("started", 0)
+                if isinstance(started, (int, float)):
+                    # Unix timestamp in milliseconds
+                    entry_date = datetime.utcfromtimestamp(started / 1000)
+                else:
+                    entry_date = datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ")
                 filter_date = datetime.strptime(start_date, "%Y-%m-%dT%H:%M:%SZ")
                 passes_date = entry_date >= filter_date
-            except (ValueError, KeyError):
+            except (ValueError, KeyError, OSError):
                 passes_date = False
         else:
             passes_date = True

@@ -105,7 +105,11 @@ def parse_args():
     p.add_argument("--pool_size", type=int, default=10,
                    help="Max opponents in pool (excluding IL baseline)")
     p.add_argument("--pool_update_interval", type=int, default=100,
-                   help="Add current model to pool every N iterations")
+                   help="Check pool update eligibility every N iterations")
+    p.add_argument("--pool_update_winrate", type=float, default=0.0,
+                   help="Min winrate over recent iterations to update pool (0 = always update)")
+    p.add_argument("--pool_update_window", type=int, default=50,
+                   help="Number of recent iterations to compute winrate for pool update")
 
     # Map pool (use real replay maps instead of random)
     p.add_argument("--replay_dir", type=str, default=None,
@@ -157,10 +161,12 @@ class OpponentPool:
             self.pool.pop(1)  # keep index 0 (IL baseline)
 
     def sample(self) -> dict:
-        """50% latest, 50% random from pool."""
+        """50% from latest 3, 50% random from pool."""
         if len(self.pool) > 1 and random.random() < 0.5:
             return random.choice(self.pool)
-        return self.pool[-1]
+        # Pick from the latest 3 (excluding IL baseline at index 0)
+        recent = self.pool[-min(3, len(self.pool) - 1):]
+        return random.choice(recent) if recent else self.pool[-1]
 
     def __len__(self) -> int:
         return len(self.pool)
@@ -646,6 +652,13 @@ def main():
 
         optimizer.load_state_dict(rl_ckpt["optimizer_state"])
 
+        # Override LR with CLI args (allows resetting LR on resume)
+        resume_lr = args.lr * 0.5 if (args.freeze_encoder_iters > 0 and start_iter > args.freeze_encoder_iters) else args.lr
+        for pg in optimizer.param_groups:
+            pg["lr"] = resume_lr
+        if rank0:
+            print(f"  LR overridden to {resume_lr}")
+
         # Recompute decayed reward scales based on iterations already done
         done_iters = start_iter - 1
         env.city_reward_scale = args.city_reward_decay ** done_iters
@@ -662,6 +675,11 @@ def main():
                   f"pool={len(opponent_pool)}")
 
     os.makedirs(args.output_dir, exist_ok=True)
+
+    # Win rate history for conditional pool updates
+    from collections import deque
+    winrate_history: deque = deque(maxlen=args.pool_update_window)
+    last_pool_update_iter = start_iter - args.pool_update_interval  # allow immediate check
 
     # ---- Training loop -------------------------------------------------
     for iteration in range(start_iter, args.iterations + 1):
@@ -830,14 +848,7 @@ def main():
 
         elapsed = time.time() - t0
 
-        # ---- 5. Update opponent pool ----
-        if iteration % args.pool_update_interval == 0:
-            raw = model
-            opponent_pool.add(raw.state_dict())
-            if rank0:
-                print(f"  Pool updated: {len(opponent_pool)} opponents")
-
-        # ---- 6. Aggregate stats across all GPUs ----
+        # ---- 5. Aggregate stats across all GPUs ----
         total_games = args.episodes_per_gpu * world_size
         if dist.is_initialized():
             rw_keys = ["r_invalid", "r_pass", "r_city", "r_fail_city", "r_dense", "r_winlose"]
@@ -862,6 +873,20 @@ def main():
             global_draw = local_draw
             global_avg_r = local_ep_reward
             global_avg_len = local_ep_len
+
+        # ---- 6. Update opponent pool (conditional on winrate + min interval) ----
+        winrate_history.append(global_p0 / max(global_p0 + global_p1 + global_draw, 1))
+        iters_since_update = iteration - last_pool_update_iter
+        if iters_since_update >= args.pool_update_interval:
+            recent_wr = sum(winrate_history) / len(winrate_history) if winrate_history else 0
+            if recent_wr >= args.pool_update_winrate:
+                raw = model
+                opponent_pool.add(raw.state_dict())
+                last_pool_update_iter = iteration
+                if rank0:
+                    print(f"  Pool updated: {len(opponent_pool)} opponents (winrate={recent_wr:.2f})")
+            elif rank0:
+                print(f"  Pool update skipped: winrate={recent_wr:.2f} < {args.pool_update_winrate}")
 
         # ---- 7. Logging ----
         if rank0 and iteration % args.log_interval == 0:

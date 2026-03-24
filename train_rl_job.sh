@@ -26,7 +26,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --episodes_per_gpu 4 \
         --rollout_steps 1000 \
         --ppo_epochs 2 \
-        --clip_range 0.2 \
+        --clip_range 0.15 \
         --gamma 0.999 \
         --gae_lambda 0.95 \
         --entropy_weight 0.02 \
@@ -36,12 +36,14 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --il_weight 0.5 \
         --il_decay 0.995 \
         --lr 6e-5 \
-        --lr_decay 0.9997 \
+        --lr_decay 0.9999 \
         --grad_clip 1.0 \
         --freeze_encoder_iters 200 \
         --pool_size 15 \
-        --pool_update_interval 100 \
-        --resume /scratch/$USER/gaming-master/checkpoints/rl2/rl_checkpoint_iter600.pt \
+        --pool_update_interval 50 \
+        --pool_update_winrate 0.55 \
+        --pool_update_window 10 \
+        --resume /scratch/$USER/gaming-master/checkpoints/rl2/rl_checkpoint_iter900.pt \
         --iterations 10000 \
         --save_interval 25 \
         --save_replay_interval 10 \
@@ -49,6 +51,6 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --il_data_dir /scratch/$USER/gaming-master/data/training/asdvlaksudhiouwenf \
         --invalidity_weight 0.5 \
         --city_reward_decay 0.9995 \
-        --pass_penalty_decay 0.9995 \
+        --pass_penalty_decay 1.0 \
         --dense_reward_decay 0.9997 \
         --failed_city_penalty_decay 0.999
