@@ -632,8 +632,10 @@ def main():
     if args.resume:
         rl_ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         raw = model
-        raw.load_state_dict(rl_ckpt["model_state"])
-        start_iter = rl_ckpt["iteration"] + 1
+        # Support both RL checkpoints (model_state) and IL checkpoints (model_state_dict or model_state)
+        state_key = "model_state" if "model_state" in rl_ckpt else "model_state_dict"
+        raw.load_state_dict(rl_ckpt[state_key], strict=False)
+        start_iter = rl_ckpt.get("iteration", 0) + 1
         il_weight = rl_ckpt.get("il_weight", args.il_weight)
         wins = rl_ckpt.get("wins", wins)
         if "opponent_pool" in rl_ckpt:
@@ -650,7 +652,8 @@ def main():
             if rank0:
                 print(f"Resumed past unfreeze point — encoder unfrozen, LR={args.lr * 0.5}")
 
-        optimizer.load_state_dict(rl_ckpt["optimizer_state"])
+        if "iteration" in rl_ckpt and "optimizer_state" in rl_ckpt:
+            optimizer.load_state_dict(rl_ckpt["optimizer_state"])
 
         # Override LR with CLI args (allows resetting LR on resume)
         resume_lr = args.lr * 0.5 if (args.freeze_encoder_iters > 0 and start_iter > args.freeze_encoder_iters) else args.lr
