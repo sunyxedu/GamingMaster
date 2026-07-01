@@ -90,12 +90,8 @@ def parse_args():
                    help="Weight for source/direction invalidity auxiliary loss")
     p.add_argument("--city_reward_decay", type=float, default=0.9999,
                    help="Per-iteration decay for city capture reward scale")
-    p.add_argument("--pass_penalty_decay", type=float, default=0.9999,
-                   help="Per-iteration decay for pass penalty scale")
     p.add_argument("--dense_reward_decay", type=float, default=0.9999,
                    help="Per-iteration decay for dense heuristic reward scale")
-    p.add_argument("--failed_city_penalty_decay", type=float, default=0.9999,
-                   help="Per-iteration decay for failed city attack penalty")
 
     # Encoder freeze schedule
     p.add_argument("--freeze_encoder_iters", type=int, default=1000,
@@ -211,8 +207,7 @@ def collect_selfplay_episode(
     hiddens = {0: None, 1: None}   # GRU hidden states
     replay_log: Optional[List[Dict]] = [] if record else None
     reward_totals: Dict[str, float] = {
-        "r_invalid": 0.0, "r_pass": 0.0, "r_city": 0.0,
-        "r_fail_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
+        "r_invalid": 0.0, "r_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
     }
 
     # Record initial state before any moves
@@ -720,9 +715,7 @@ def main():
 
         # Recompute decayed reward scales based on iterations already done
         env.city_reward_scale = args.city_reward_decay ** done_iters
-        env.pass_penalty_scale = args.pass_penalty_decay ** done_iters
         env.dense_reward_scale = args.dense_reward_decay ** done_iters
-        env.failed_city_penalty_scale = args.failed_city_penalty_decay ** done_iters
         rl_criterion.entropy_weight = max(
             args.entropy_weight * (args.entropy_weight_decay ** done_iters),
             args.entropy_weight_min,
@@ -772,8 +765,7 @@ def main():
         ep_buffers: List[RolloutBuffer] = []
         replay_log = None
         reward_totals: Dict[str, float] = {
-            "r_invalid": 0.0, "r_pass": 0.0, "r_city": 0.0,
-            "r_fail_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
+            "r_invalid": 0.0, "r_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
         }
         local_ep_len = 0.0
         local_ep_reward = 0.0
@@ -892,9 +884,7 @@ def main():
 
         # Decay shaping rewards
         env.city_reward_scale *= args.city_reward_decay
-        env.pass_penalty_scale *= args.pass_penalty_decay
         env.dense_reward_scale *= args.dense_reward_decay
-        env.failed_city_penalty_scale *= args.failed_city_penalty_decay
 
         # Decay learning rate
         for pg in optimizer.param_groups:
@@ -911,7 +901,7 @@ def main():
         # ---- 5. Aggregate stats across all GPUs ----
         total_games = args.episodes_per_gpu * world_size
         if dist.is_initialized():
-            rw_keys = ["r_invalid", "r_pass", "r_city", "r_fail_city", "r_dense", "r_winlose"]
+            rw_keys = ["r_invalid", "r_city", "r_dense", "r_winlose"]
             local_stats = torch.tensor([
                 float(local_p0),
                 float(local_p1),
@@ -971,9 +961,7 @@ def main():
                 f"pool={len(opponent_pool)}  "
                 f"t={elapsed:.1f}s\n"
                 f"    rw: inv={reward_totals['r_invalid']:.3f}  "
-                f"pass={reward_totals['r_pass']:.3f}  "
                 f"city={reward_totals['r_city']:.3f}  "
-                f"fcity={reward_totals['r_fail_city']:.3f}  "
                 f"dense={reward_totals['r_dense']:.3f}  "
                 f"wl={reward_totals['r_winlose']:.1f}"
             )

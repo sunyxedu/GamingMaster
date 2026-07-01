@@ -101,9 +101,7 @@ class GeneralsEnv:
 
         # Reward scales (can be decayed independently during RL training)
         self.city_reward_scale: float = 1.0
-        self.pass_penalty_scale: float = 1.0
         self.dense_reward_scale: float = 1.0
-        self.failed_city_penalty_scale: float = 1.0
 
         # Map pool for replay-based maps
         self.map_pool: Optional[List[Dict]] = None
@@ -193,8 +191,8 @@ class GeneralsEnv:
         info: Dict[str, Any] = {"turn": self.turn, "illegal": {0: False, 1: False}}
         # Per-component reward tracking (for player 0 only)
         reward_breakdown: Dict[str, float] = {
-            "r_invalid": 0.0, "r_pass": 0.0, "r_city": 0.0,
-            "r_fail_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
+            "r_invalid": 0.0, "r_city": 0.0,
+            "r_dense": 0.0, "r_winlose": 0.0,
         }
 
         # Convert actions → simulator format (detect illegal moves)
@@ -209,15 +207,10 @@ class GeneralsEnv:
             rewards[1] -= 0.05
             info["illegal"][1] = True
 
-        # Penalize unnecessary passing (pass when legal moves exist)
-        # First 50 turns: passing is normal (accumulating army)
-        if self.turn >= 50:
-            for pid, action in [(0, action_0), (1, action_1)]:
-                if action is None and self._has_legal_moves(pid):
-                    penalty = 0.05 * self.pass_penalty_scale
-                    rewards[pid] -= penalty
-                    if pid == 0:
-                        reward_breakdown["r_pass"] -= penalty
+        # NOTE: no pass penalty — it was trivially dodged by shuffling army
+        # between owned tiles and punished legitimate accumulation; and no
+        # failed-city-attack penalty — whittling a 40-50 army city over
+        # several hits is normal play, not a mistake.
 
         # Track cities before move execution (for capture detection)
         cities_before = {
@@ -227,27 +220,8 @@ class GeneralsEnv:
                    if self.map[idx // self.grid_w][idx % self.grid_w].terrain == _CITY),
         }
 
-        # Detect failed city attacks (before move execution)
-        failed_city_targets: Dict[int, List[int]] = {0: [], 1: []}
-        for pid, move in [(0, move_0), (1, move_1)]:
-            if move is not None:
-                end_idx = move["end"]
-                er, ec = divmod(end_idx, self.grid_w)
-                end_tile = self.map[er][ec]
-                if end_tile.terrain == _CITY and end_tile.occupied != pid:
-                    failed_city_targets[pid].append(end_idx)
-
         # Execute moves (with priority ordering)
         self._process_moves(move_0, move_1)
-
-        # Penalize failed city attacks (attacked city but didn't capture)
-        for pid in [0, 1]:
-            for city_idx in failed_city_targets[pid]:
-                if city_idx not in self.player_land[pid]:
-                    penalty = 0.05 * self.failed_city_penalty_scale
-                    rewards[pid] -= penalty
-                    if pid == 0:
-                        reward_breakdown["r_fail_city"] -= penalty
 
         # Increment armies
         self.turn += 1
