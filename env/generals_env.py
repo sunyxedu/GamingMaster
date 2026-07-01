@@ -652,6 +652,41 @@ class GeneralsEnv:
     # ==================================================================
 
     def _generate_map(self) -> None:
+        # Retry until the generals are mutually reachable — uniform mountain
+        # placement can occasionally wall a general in, producing unwinnable
+        # episodes of pure shaping noise.
+        for _ in range(20):
+            self._generate_map_once()
+            if self._generals_connected():
+                return
+        # Practically unreachable fallback: keep the last map without mountains
+        for idx in self.mountains:
+            r, c = divmod(idx, self.grid_w)
+            self.map[r][c] = _Tile()
+        self.mountains = []
+
+    def _generals_connected(self) -> bool:
+        """BFS over non-mountain tiles between the two generals."""
+        from collections import deque
+        H, W = self.grid_h, self.grid_w
+        start, goal = self.generals
+        seen = {start}
+        dq = deque([start])
+        while dq:
+            idx = dq.popleft()
+            if idx == goal:
+                return True
+            r, c = divmod(idx, W)
+            for d in range(4):
+                nr, nc = r + _DIR_DR[d], c + _DIR_DC[d]
+                if 0 <= nr < H and 0 <= nc < W:
+                    nidx = nr * W + nc
+                    if nidx not in seen and self.map[nr][nc].terrain != _MOUNTAIN:
+                        seen.add(nidx)
+                        dq.append(nidx)
+        return False
+
+    def _generate_map_once(self) -> None:
         H, W = self.grid_h, self.grid_w
 
         # Fresh map
@@ -671,6 +706,10 @@ class GeneralsEnv:
 
         g0 = r0 * W + c0
         g1 = r1 * W + c1
+        # 50% side swap so the learner (always player 0) doesn't acquire a
+        # top-left positional prior — the replay-map path already swaps.
+        if random.random() < 0.5:
+            g0, g1 = g1, g0
         self.generals = [g0, g1]
         occupied.update(self.generals)
 
