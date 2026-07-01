@@ -253,7 +253,10 @@ class GeneralsEnv:
         self.turn += 1
         self._increment_armies()
 
-        # Detect city captures
+        # Detect city captures and losses.
+        # Losing a city costs exactly what the opponent gains: without the
+        # symmetric penalty, two agents trading a city back and forth farm
+        # net-positive reward every cycle (the dense potential telescopes out).
         for pid in [0, 1]:
             opp = 1 - pid
             cities_after = set(idx for idx in self.player_land[pid]
@@ -261,11 +264,14 @@ class GeneralsEnv:
             new_cities = cities_after - cities_before[pid]
             for city_idx in new_cities:
                 if city_idx in cities_before[opp]:
-                    # Took opponent's city — fixed reward
+                    # Took opponent's city — fixed reward, mirrored as a loss
                     city_r = 0.16 * self.city_reward_scale
                     rewards[pid] += city_r
+                    rewards[opp] -= city_r
                     if pid == 0:
                         reward_breakdown["r_city"] += city_r
+                    else:
+                        reward_breakdown["r_city"] -= city_r
                 else:
                     # Captured neutral city — bonus for efficiency
                     r, c = divmod(city_idx, self.grid_w)
