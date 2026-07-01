@@ -490,10 +490,13 @@ def il_auxiliary_update(
     il_weight: float,
     world_size: int = 1,
     grad_clip: float = 1.0,
+    act_steps: int = 1,
 ) -> Dict[str, float]:
     """One gradient step on IL expert data (auxiliary regularisation).
 
     IL path keeps legal_mask (model learns from expert data with mask).
+    Runs at the same ACT depth as PPO so the regularizer constrains the
+    policy that is actually being trained.
     """
     model.train()
 
@@ -508,6 +511,7 @@ def il_auxiliary_update(
         legal_mask=legal_mask,
         source_y=None,
         source_x=None,
+        act_steps=act_steps,
     )
 
     il_losses = il_criterion(pred, tgt, lengths)
@@ -886,6 +890,7 @@ def main():
                 il_weight=il_weight,
                 world_size=world_size,
                 grad_clip=args.grad_clip,
+                act_steps=args.act_steps,
             )
             il_weight *= args.il_decay
 
