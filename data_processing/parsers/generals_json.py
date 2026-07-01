@@ -172,6 +172,7 @@ def convert_simulator_to_gio(
         move_start = sim_data["move_start"][t + 1]
         move_end = sim_data["move_end"][t + 1]
         is_50 = sim_data["move_is_50"][t + 1]
+        dropped = sim_data.get("move_dropped", [False] * T_raw)[t + 1]
 
         if move_start[0] >= 0:
             count.append(1)
@@ -185,7 +186,10 @@ def convert_simulator_to_gio(
             dir_id.append(dirs)
             ratio_id.append(ratio)
         else:
-            count.append(0)
+            # count=-1: the player tried to move but the server dropped it —
+            # neither a valid move label nor a deliberate pass; the loss
+            # excludes these frames from pass supervision.
+            count.append(-1 if dropped else 0)
             src_y.append([0] * K)
             src_x.append([0] * K)
             dir_id.append([0] * K)

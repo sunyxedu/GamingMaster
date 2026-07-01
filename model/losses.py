@@ -131,7 +131,10 @@ class ImitationLoss(nn.Module):
         device = pred["source_logits"].device
 
         # --- Build masks ------------------------------------------------
-        move_mask = tgt["count"] > 0  # [B, T]
+        move_mask = tgt["count"] > 0   # [B, T]
+        # count == -1 marks frames where the player's move was dropped by
+        # the server: no action label AND not a deliberate pass.
+        label_valid = tgt["count"] >= 0
 
         if lengths is not None:
             seq_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
@@ -214,7 +217,9 @@ class ImitationLoss(nn.Module):
             pred["pass_logits"], tgt_pass, reduction="none",
         )
         pass_loss_all = torch.nan_to_num(pass_loss_all, nan=0.0)
-        pass_loss = (pass_loss_all * seq_mask.float()).sum() / n_seq
+        pass_mask = (seq_mask & label_valid).float()
+        n_pass = pass_mask.sum().clamp(min=1)
+        pass_loss = (pass_loss_all * pass_mask).sum() / n_pass
 
         # --- Value loss ---------------------------------------------------
         value_loss_all = F.mse_loss(
@@ -270,10 +275,12 @@ class ImitationLoss(nn.Module):
             full_match = src_ok & (pred_dir == tgt_dir) & (pred_split == tgt_split) & ~pred_pass
             full_acc = full_match.sum().float() / n_valid
 
-            # Complete: correct on ALL timesteps (moves + passes)
-            pass_ok = pred_pass & (~move_mask) & seq_mask    # correctly passed
+            # Complete: correct on ALL labeled timesteps (moves + passes,
+            # excluding dropped-move frames which have no action label)
+            pass_ok = pred_pass & (~move_mask) & seq_mask & label_valid
             complete_ok = full_match | pass_ok               # move correct OR pass correct
-            complete_acc = complete_ok.sum().float() / n_seq
+            n_labeled = (seq_mask & label_valid).sum().clamp(min=1).float()
+            complete_acc = complete_ok.sum().float() / n_labeled
 
         return {
             "loss": total,

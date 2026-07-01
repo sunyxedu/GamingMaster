@@ -442,6 +442,7 @@ class ReplaySimulator:
         move_start = []
         move_end = []
         move_is_50 = []
+        move_dropped = []
         winner_name = None
         
         # Get total turns
@@ -468,12 +469,19 @@ class ReplaySimulator:
 
             # Record our player's move only if the server executed it —
             # dropped moves (stale source, mountain target) would otherwise
-            # become impossible-action training labels.
+            # become impossible-action training labels. Frames where the
+            # player TRIED to move but the move was dropped are flagged so
+            # the converter can exclude them from pass supervision too.
+            player_move_dropped = False
             for mv, ok in executed:
-                if ok and mv["index"] == self.player_id:
-                    player_move_start = mv["start"]
-                    player_move_end = mv["end"]
-                    player_move_is_50 = mv["is50"]
+                if mv["index"] == self.player_id:
+                    if ok:
+                        player_move_start = mv["start"]
+                        player_move_end = mv["end"]
+                        player_move_is_50 = mv["is50"]
+                    else:
+                        player_move_dropped = True
+            player_move_dropped = player_move_dropped and player_move_start == -1
 
             # Increment armies at end of turn
             self.increment_armies(turn)
@@ -550,6 +558,7 @@ class ReplaySimulator:
                 move_end.append([-1, -1])
             
             move_is_50.append(player_move_is_50)
+            move_dropped.append(player_move_dropped)
 
             winner = self.check_winner()
             if winner is not None:
@@ -584,6 +593,7 @@ class ReplaySimulator:
             "move_start": move_start,
             "move_end": move_end,
             "move_is_50": move_is_50,
+            "move_dropped": move_dropped,
         }
 
 
