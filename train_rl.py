@@ -750,7 +750,7 @@ def main():
                 weight_decay=args.weight_decay,
             )
             if rank0:
-                print(f"Iteration {iteration}: encoder unfrozen, LR reduced to {args.lr * 0.1}")
+                print(f"Iteration {iteration}: encoder unfrozen, LR reduced to {current_lr * 0.5:.3e}")
 
         # ---- 1. Load opponent from pool ----
         # Each GPU picks one opponent for all its local episodes.
