@@ -234,7 +234,11 @@ class ImitationLoss(nn.Module):
             q_halt_loss = torch.nan_to_num(q_halt_loss, nan=0.0)
             q_halt_loss = (q_halt_loss * valid.float()).sum() / n_valid
         elif "q_halt" in pred:
-            q_halt_loss = 0.0 * pred["q_halt"].sum()
+            # Zero-weight graph connection (keeps q_head "used" for DDP);
+            # nan_to_num so a non-finite logit can't turn 0 * x into NaN.
+            q_halt_loss = 0.0 * torch.nan_to_num(
+                pred["q_halt"], nan=0.0, posinf=0.0, neginf=0.0,
+            ).sum()
         else:
             q_halt_loss = source_loss.new_tensor(0.0)
 
