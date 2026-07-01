@@ -166,18 +166,25 @@ class ImitationLoss(nn.Module):
         source_loss_all = focal_weight * source_ce_all
         source_loss = (source_loss_all * valid).sum() / n_valid
 
-        # --- Dir/split weight: TF steps get full weight, others get src_conf ---
+        # --- Dir/split weight -------------------------------------------
+        # The direction/split heads are conditioned on the embedding of the
+        # source the network actually used (GT on TF steps, model-sampled
+        # otherwise, reported in pred["src_idx"]).  Their labels only make
+        # sense when that conditioning source IS the ground-truth source, so
+        # weight each step by that indicator — not by the softmax confidence
+        # assigned to the GT source, which mismatches the sampled embedding.
         with torch.no_grad():
-            src_prob = F.softmax(pred["source_logits"], dim=-1)
-            src_conf = src_prob.gather(-1, tgt_src.unsqueeze(-1)).squeeze(-1)  # [B, T]
-
-            if tf_mask is not None:
-                # TF steps: direction sees correct source features → weight=1.0
-                # Non-TF steps: direction sees predicted source → weight=src_conf
-                cond_weight = torch.where(tf_mask, torch.ones_like(src_conf), src_conf)
+            if "src_idx" in pred:
+                cond_weight = (pred["src_idx"] == tgt_src).float()
             else:
-                # No TF info (e.g. inference) → always soft-conditional
-                cond_weight = src_conf
+                # Fallback (e.g. tests feeding raw logits): soft-conditional
+                src_prob = F.softmax(pred["source_logits"], dim=-1)
+                src_conf = src_prob.gather(-1, tgt_src.unsqueeze(-1)).squeeze(-1)
+                src_conf = torch.nan_to_num(src_conf, nan=0.0)
+                if tf_mask is not None:
+                    cond_weight = torch.where(tf_mask, torch.ones_like(src_conf), src_conf)
+                else:
+                    cond_weight = src_conf
 
             cond_weight_valid = cond_weight * valid.float()
             n_cond = cond_weight_valid.sum().clamp(min=1.0)
