@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from data_processing.processing.simulator import ReplaySimulator
 from model.config import ModelConfig
 from model.network import GeneralsNetwork
+from model.rl_utils import load_model_state
 
 DIR_NAMES = ["down", "right", "up", "left"]
 DIR_ARROWS = ["\u2193", "\u2192", "\u2191", "\u2190"]
@@ -44,10 +45,14 @@ def load_model(checkpoint_path, device):
     cfg_dict = ckpt["config"]
     cfg = ModelConfig(**{k: v for k, v in cfg_dict.items() if k in ModelConfig.__dataclass_fields__})
     model = GeneralsNetwork(cfg)
-    model.load_state_dict(ckpt["model_state"], strict=False)
+    state_key = "model_state" if "model_state" in ckpt else "model_state_dict"
+    load_model_state(model, ckpt[state_key], ctx=checkpoint_path)
     model.to(device)
     model.eval()
-    print(f"Loaded checkpoint: epoch {ckpt['epoch']}, loss {ckpt['loss']:.4f}")
+    if "epoch" in ckpt:  # IL checkpoint
+        print(f"Loaded IL checkpoint: epoch {ckpt['epoch']}, loss {ckpt.get('loss', 0):.4f}")
+    else:  # RL checkpoint
+        print(f"Loaded RL checkpoint: iteration {ckpt.get('iteration', '?')}")
     print(f"Model: d={cfg.d_model}, heads={cfg.n_heads}, params={sum(p.numel() for p in model.parameters()):,}")
     return model, cfg
 
@@ -207,7 +212,7 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None,
         with torch.no_grad():
             out = model.step(grid_t, globals_t,
                              legal_mask=legal_t if use_mask else None,
-                             hidden=hidden, st_cache=st_cache)
+                             hidden=hidden, st_cache=st_cache, step_idx=turn)
 
             # Direction masking: re-sample direction with invalid dirs masked out
             if use_mask:
