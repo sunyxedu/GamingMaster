@@ -155,12 +155,17 @@ class OpponentPool:
     Index 0 is always the IL baseline (never removed).
     """
 
+    @staticmethod
+    def _to_cpu(state_dict: dict) -> dict:
+        """Detached CPU copy — keeps up to max_size+1 models off the GPU."""
+        return {k: v.detach().to("cpu", copy=True) for k, v in state_dict.items()}
+
     def __init__(self, initial_state: dict, max_size: int = 10):
-        self.pool: List[dict] = [copy.deepcopy(initial_state)]
+        self.pool: List[dict] = [self._to_cpu(initial_state)]
         self.max_size = max_size
 
     def add(self, state_dict: dict) -> None:
-        self.pool.append(copy.deepcopy(state_dict))
+        self.pool.append(self._to_cpu(state_dict))
         if len(self.pool) > self.max_size + 1:  # +1 for IL baseline
             self.pool.pop(1)  # keep index 0 (IL baseline)
 
@@ -616,7 +621,9 @@ def main():
         max_size=args.pool_size,
     )
     if rl_ckpt is not None and "opponent_pool" in rl_ckpt:
-        opponent_pool.pool = rl_ckpt["opponent_pool"]
+        opponent_pool.pool = [
+            OpponentPool._to_cpu(sd) for sd in rl_ckpt["opponent_pool"]
+        ]
     # Opponent model (loaded with pool checkpoint each iteration)
     opponent_model = copy.deepcopy(model)
     opponent_model.eval()
