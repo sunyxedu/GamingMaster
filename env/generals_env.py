@@ -10,10 +10,13 @@ Observation format matches the model's ``step()`` input:
     globals    [G]            4 log-normalised stats
     legal_mask [1, H, W]     owned tiles with army > 1
 
-Reward design (all in [-1, 1] to match ValueHead Tanh):
-    Terminal:  win +1.0, loss -1.0
-    Dense:     0.05 × delta_heuristic (city-adjusted army ratio)
-    Events:    capture city +0.01, illegal move -0.005
+Reward design (per step; discounted returns are NOT bounded to [-1, 1] —
+the value head is deliberately unbounded):
+    Terminal:  win +1.0, loss -1.0 (turn-limit truncation gives neither)
+    Dense:     0.6 × delta_heuristic × dense_reward_scale (potential-based)
+    Events:    enemy city capture +0.16 / loss -0.16 (symmetric),
+               neutral city capture +0.04..0.12,
+               invalid move -0.05
 """
 
 from __future__ import annotations
