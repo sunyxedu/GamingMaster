@@ -584,7 +584,10 @@ def main():
     wins = {0: 0, 1: 0, "draw": 0}
     rl_ckpt = None
     if args.resume:
-        rl_ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        # Load on CPU: the checkpoint embeds the whole opponent pool, and
+        # materializing it on GPU would keep pool_size+1 models resident.
+        # load_state_dict copies to the right devices on its own.
+        rl_ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
         # Support both RL checkpoints (model_state) and IL checkpoints
         state_key = "model_state" if "model_state" in rl_ckpt else "model_state_dict"
         load_model_state(model, rl_ckpt[state_key], ctx="resume checkpoint")
@@ -724,6 +727,7 @@ def main():
         if rank0:
             print(f"Resumed from {args.resume}, iteration {start_iter}, "
                   f"pool={len(opponent_pool)}")
+        rl_ckpt = None  # release checkpoint tensors
 
     os.makedirs(args.output_dir, exist_ok=True)
 
