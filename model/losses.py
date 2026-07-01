@@ -213,12 +213,14 @@ class ImitationLoss(nn.Module):
         pass_loss_all = F.binary_cross_entropy_with_logits(
             pred["pass_logits"], tgt_pass, reduction="none",
         )
+        pass_loss_all = torch.nan_to_num(pass_loss_all, nan=0.0)
         pass_loss = (pass_loss_all * seq_mask.float()).sum() / n_seq
 
         # --- Value loss ---------------------------------------------------
         value_loss_all = F.mse_loss(
             pred["value"], tgt["value"], reduction="none",
         )
+        value_loss_all = torch.nan_to_num(value_loss_all, nan=0.0)
         value_loss = (value_loss_all * seq_mask.float()).sum() / n_seq
 
         # --- Q-halt loss --------------------------------------------------
@@ -229,6 +231,7 @@ class ImitationLoss(nn.Module):
             q_halt_loss = F.binary_cross_entropy_with_logits(
                 pred["q_halt"], correct, reduction="none",
             )
+            q_halt_loss = torch.nan_to_num(q_halt_loss, nan=0.0)
             q_halt_loss = (q_halt_loss * valid.float()).sum() / n_valid
         elif "q_halt" in pred:
             q_halt_loss = 0.0 * pred["q_halt"].sum()
