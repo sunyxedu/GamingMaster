@@ -51,6 +51,4 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --il_data_dir /scratch/$USER/gaming-master/data/training/asdvlaksudhiouwenf \
         --invalidity_weight 0.5 \
         --city_reward_decay 0.9995 \
-        --pass_penalty_decay 1.0 \
-        --dense_reward_decay 0.9997 \
-        --failed_city_penalty_decay 0.999
+        --dense_reward_decay 0.9997
