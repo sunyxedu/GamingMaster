@@ -590,6 +590,16 @@ def main():
         if rank0:
             print(f"Resumed weights from {args.resume} (starting iteration {start_iter})")
 
+    # ---- Sync initial state across ranks --------------------------------
+    # Gradients are manually all-reduced, but nothing else aligns the ranks:
+    # a from-scratch multi-GPU run would average gradients over different
+    # random initializations. Broadcast rank 0's parameters and buffers
+    # (DDP does this at construction; the manual setup must too).
+    if distributed:
+        for t in model.state_dict().values():
+            if isinstance(t, torch.Tensor):
+                dist.broadcast(t, src=0)
+
     # ---- Reference model (frozen copy for KL regularisation) -----------
     ref_model: Optional[GeneralsNetwork] = None
     if args.kl_weight > 0:
