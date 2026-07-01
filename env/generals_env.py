@@ -114,15 +114,21 @@ class GeneralsEnv:
     # ==================================================================
 
     def _heuristic(self, pid: int) -> float:
-        """Evaluate position for player `pid`. Returns value in [-1, 1]."""
+        """Evaluate position for player `pid`. Returns value in [-1, 1].
+
+        Same formula as the IL value target in
+        data_processing/parsers/generals_json.py so the value head sees a
+        consistent signal across IL pre-training and RL fine-tuning.
+        """
         s = self._player_stats(pid)
         o = self._player_stats(1 - pid)
         if s["land"] == 0:
             return -1.0
         if o["land"] == 0:
             return 1.0
-        adj_my = s["army"] + s["cities"] * 50
-        adj_op = o["army"] + o["cities"] * 50
+        city_diff = s["cities"] - o["cities"]
+        adj_my = s["army"] + max(city_diff, 0) * 50
+        adj_op = o["army"] + max(-city_diff, 0) * 50
         ratio = adj_my / max(adj_op, 1)
         return float(math.tanh(ratio - 1.0))
 
