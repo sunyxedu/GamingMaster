@@ -25,6 +25,7 @@ from data_processing.dataset_seq import SeqReplayDataset, collate_variable_lengt
 from model.config import ModelConfig
 from model.losses import ImitationLoss
 from model.network import GeneralsNetwork
+from model.rl_utils import load_model_state
 
 
 def parse_args():
@@ -278,7 +279,7 @@ def main():
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         raw_model = model.module if distributed else model
-        raw_model.load_state_dict(ckpt["model_state"], strict=False)
+        load_model_state(raw_model, ckpt["model_state"], ctx="resume checkpoint")
         # RL checkpoints don't have optimizer_state / epoch / loss — handle gracefully
         if "optimizer_state" in ckpt:
             optimizer.load_state_dict(ckpt["optimizer_state"])

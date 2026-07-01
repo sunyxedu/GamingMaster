@@ -272,6 +272,36 @@ def compute_policy_kl_rl(
 
 
 # ======================================================================
+# Checkpoint loading
+# ======================================================================
+
+def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint") -> None:
+    """Load a state dict, normalizing DDP/compile prefixes.
+
+    Fails loudly if any model parameter is missing from the checkpoint —
+    a silent partial load (strict=False with ignored return value) leaves
+    whole modules randomly initialized while training continues.
+    Unused checkpoint keys only warn (e.g. optional world-model weights).
+    """
+    def _clean(k: str) -> str:
+        for prefix in ("module.", "_orig_mod."):
+            if k.startswith(prefix):
+                k = k[len(prefix):]
+        return k
+
+    cleaned = {_clean(k): v for k, v in state_dict.items()}
+    missing, unexpected = model.load_state_dict(cleaned, strict=False)
+    if missing:
+        raise RuntimeError(
+            f"{ctx}: {len(missing)} model keys missing from checkpoint "
+            f"(would stay randomly initialized), e.g. {missing[:8]}"
+        )
+    if unexpected:
+        print(f"  [warn] {ctx}: {len(unexpected)} unused checkpoint keys, "
+              f"e.g. {unexpected[:8]}")
+
+
+# ======================================================================
 # Encoder freeze / unfreeze
 # ======================================================================
 

@@ -41,6 +41,7 @@ from model.rl_utils import (
     RolloutBuffer,
     compute_policy_kl_rl,
     freeze_encoder,
+    load_model_state,
     unfreeze_all,
 )
 
@@ -551,7 +552,7 @@ def main():
         ckpt = torch.load(args.il_checkpoint, map_location=device, weights_only=False)
         cfg = ModelConfig(**ckpt["config"])
         model = GeneralsNetwork(cfg).to(device)
-        model.load_state_dict(ckpt["model_state"], strict=False)
+        load_model_state(model, ckpt["model_state"], ctx="IL checkpoint")
         if rank0:
             print(f"Loaded IL checkpoint from {args.il_checkpoint}")
     else:
@@ -651,7 +652,7 @@ def main():
         raw = model
         # Support both RL checkpoints (model_state) and IL checkpoints (model_state_dict or model_state)
         state_key = "model_state" if "model_state" in rl_ckpt else "model_state_dict"
-        raw.load_state_dict(rl_ckpt[state_key], strict=False)
+        load_model_state(raw, rl_ckpt[state_key], ctx="resume checkpoint")
         start_iter = rl_ckpt.get("iteration", 0) + 1
         il_weight = rl_ckpt.get("il_weight", args.il_weight)
         wins = rl_ckpt.get("wins", wins)
