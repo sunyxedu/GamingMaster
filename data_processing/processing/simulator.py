@@ -537,6 +537,17 @@ class ReplaySimulator:
                 print(f"Winner: {winner_name} at turn {turn}")
                 break
 
+        # Games ending by surrender/disconnect never see a general capture —
+        # the first AFK entry marks the loser. Without this, a large share
+        # of decisive games would train the value head with no outcome signal.
+        if winner_name is None and len(self.players) == 2:
+            afks = self.data.get("afks") or []
+            if afks:
+                afk_index = afks[0]["index"] if isinstance(afks[0], dict) else afks[0]
+                if afk_index in (0, 1):
+                    winner_name = self.players[1 - afk_index].name
+                    print(f"Winner by opponent surrender/AFK: {winner_name}")
+
         return {
             "id": self.data["id"],
             "player": self.player_name,
