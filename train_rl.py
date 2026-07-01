@@ -68,6 +68,9 @@ def parse_args():
     p.add_argument("--clip_range", type=float, default=0.2)
     p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--gae_lambda", type=float, default=0.95)
+    p.add_argument("--act_steps", type=int, default=1,
+                   help="Fixed TRM ACT depth used for BOTH rollout and PPO update "
+                        "(the two must match for the PPO ratio to be valid)")
 
     # Loss weights
     p.add_argument("--value_weight", type=float, default=0.5)
@@ -185,6 +188,7 @@ def collect_selfplay_episode(
     gamma: float = 0.99,
     gae_lambda: float = 0.95,
     record: bool = False,
+    act_steps: int = 1,
 ) -> Tuple[RolloutBuffer, Optional[List[Dict]]]:
     """Run one self-play episode: model (player 0) vs opponent (player 1).
 
@@ -227,7 +231,8 @@ def collect_selfplay_episode(
             glb = obs[pid]["globals"].unsqueeze(0).to(device)
 
             with torch.no_grad():
-                out = net.step_rl(grid, glb, st_cache=caches[pid], step_idx=_step)
+                out = net.step_rl(grid, glb, st_cache=caches[pid], step_idx=_step,
+                                  act_steps=act_steps)
 
             caches[pid] = out.get("st_cache")
             step_out[pid] = out
@@ -301,7 +306,8 @@ def collect_selfplay_episode(
         grid = obs[0]["grid"].unsqueeze(0).to(device)
         glb = obs[0]["globals"].unsqueeze(0).to(device)
         with torch.no_grad():
-            last_out = model.step_rl(grid, glb, st_cache=caches[0])
+            last_out = model.step_rl(grid, glb, st_cache=caches[0],
+                                     step_idx=len(buffer), act_steps=act_steps)
         last_value = last_out["value"].item()
     else:
         last_value = 0.0
@@ -340,9 +346,14 @@ def ppo_update(
     kl_weight: float = 0.01,
     invalidity_weight: float = 0.1,
     grad_clip: float = 1.0,
+    act_steps: int = 1,
 ) -> Dict[str, float]:
     """Run one PPO update epoch with gradient accumulation over multiple trajectories."""
-    model.train()
+    # eval mode: rollout log-probs were collected in eval mode, so the update
+    # must disable dropout and use BatchNorm running stats — otherwise
+    # old/new log-probs come from different policies and the ratio is invalid.
+    # Gradients still flow in eval mode.
+    model.eval()
     optimizer.zero_grad()
 
     n_buffers = len(buffers)
@@ -367,6 +378,7 @@ def ppo_update(
             legal_mask=None,
             source_y=source_y,
             source_x=source_x,
+            act_steps=act_steps,
         )
 
         log_probs, entropy, head_entropy = model.compute_action_log_prob_rl(pred, actions)
@@ -392,6 +404,7 @@ def ppo_update(
                     legal_mask=None,
                     source_y=source_y,
                     source_x=source_x,
+                    act_steps=act_steps,
                 )
             kl_loss = compute_policy_kl_rl(
                 pred["source_logits"],
@@ -735,6 +748,7 @@ def main():
                 gamma=args.gamma,
                 gae_lambda=args.gae_lambda,
                 record=record_this,
+                act_steps=args.act_steps,
             )
             if ep_replay is not None:
                 replay_log = ep_replay
@@ -807,6 +821,7 @@ def main():
                     kl_weight=args.kl_weight,
                     invalidity_weight=args.invalidity_weight,
                     grad_clip=args.grad_clip,
+                    act_steps=args.act_steps,
                 )
                 for k, v in metrics.items():
                     ppo_metrics_agg[k] = ppo_metrics_agg.get(k, 0.0) + v
