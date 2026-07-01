@@ -459,6 +459,43 @@ def test_step_vs_full_consistency():
     print(f"  Max diff: {diff:.8f} ✓")
 
 
+def test_padded_frames_do_not_affect_batchnorm():
+    """In train mode, padded-frame content must not leak into valid steps'
+    outputs via BatchNorm batch statistics."""
+    print("\n=== frame_mask: pad frames excluded from BatchNorm ===")
+    from model.config import ModelConfig
+    from model.network import GeneralsNetwork
+
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
+    )
+    model = GeneralsNetwork(cfg)
+    model.train()
+
+    B, T = 2, 4
+    torch.manual_seed(0)
+    grid = torch.randn(B, T, 12, 25, 25)
+    glb = torch.randn(B, T, 4)
+    frame_mask = torch.tensor([[True, True, True, True],
+                               [True, True, False, False]])
+    grid2 = grid.clone()
+    grid2[1, 2:] = 999.0  # different garbage in the padded frames
+
+    # GT-conditioned sources so no sampling randomness enters the comparison
+    sy = torch.zeros(B, T, dtype=torch.long)
+    sx = torch.zeros(B, T, dtype=torch.long)
+
+    with torch.no_grad():
+        out1 = model(grid, glb, source_y=sy, source_x=sx, frame_mask=frame_mask)
+        out2 = model(grid2, glb, source_y=sy, source_x=sx, frame_mask=frame_mask)
+
+    diff = (out1["source_logits"][frame_mask] - out2["source_logits"][frame_mask]).abs().max().item()
+    assert diff < 1e-4, f"Pad content leaked into valid steps: diff={diff}"
+    print(f"  Valid-step outputs invariant to pad content (diff={diff:.2e}) ✓")
+
+
 def test_step_vs_full_consistency_act_steps():
     """With a fixed ACT depth, step_rl and forward(act_steps=K) must define
     the same policy — this is what makes the PPO ratio valid."""

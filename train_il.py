@@ -84,6 +84,11 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
 
         tgt = {k: v.to(device) for k, v in batch["tgt"].items()}
         lengths = batch["meta"]["lengths"]
+        # True for real frames — keeps zero-padded frames out of BatchNorm stats
+        frame_mask = (
+            torch.arange(grid_seq.shape[1], device=device)[None, :]
+            < torch.as_tensor(lengths, device=device)[:, None]
+        )
 
         source_y = tgt["src_y"][:, :, 0]
         source_x = tgt["src_x"][:, :, 0]
@@ -109,6 +114,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                     legal_mask=legal_mask,
                     source_y=source_y,
                     source_x=source_x,
+                    frame_mask=frame_mask,
                 )
                 losses = criterion(pred, tgt, lengths, tf_mask=use_gt)
             loss = losses["loss"]

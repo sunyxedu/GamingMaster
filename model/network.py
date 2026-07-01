@@ -152,9 +152,25 @@ class GeneralsNetwork(nn.Module):
     # Forward — spatiotemporal + TRM
     # ------------------------------------------------------------------
 
+    def _encode_frames(self, grid_seq, frame_mask):
+        """Run the spatial encoder, excluding padded frames from BatchNorm
+        statistics when ``frame_mask`` ([B, T] bool, True = real frame) is
+        given.  Padded frames get zero features (they are masked in the loss
+        and never attended to by earlier steps thanks to causal time attn)."""
+        B, T, C, H, W = grid_seq.shape
+        BT = B * T
+        flat = grid_seq.reshape(BT, C, H, W)
+        if frame_mask is None or bool(frame_mask.all()):
+            return self.spatial_encoder(flat).reshape(B, T, -1, H, W)
+        fm = frame_mask.reshape(BT)
+        enc = self.spatial_encoder(flat[fm])
+        feat = enc.new_zeros(BT, enc.shape[1], H, W)
+        feat[fm] = enc
+        return feat.reshape(B, T, -1, H, W)
+
     def _forward_spatiotemporal(
         self, grid_seq, globals_seq, legal_mask, source_y, source_x, wm_embed,
-        act_steps=None,
+        act_steps=None, frame_mask=None,
     ) -> Dict[str, torch.Tensor]:
         cfg = self.cfg
         B, T, C, H, W = grid_seq.shape
@@ -163,9 +179,7 @@ class GeneralsNetwork(nn.Module):
         BT = B * T
 
         # 1. Spatial encoder
-        spatial = self.spatial_encoder(
-            grid_seq.reshape(BT, C, H, W),
-        ).reshape(B, T, d, H, W)
+        spatial = self._encode_frames(grid_seq, frame_mask)
 
         # 2. Global features
         spatial = spatial + self.global_proj(globals_seq).unsqueeze(-1).unsqueeze(-1)
@@ -207,7 +221,7 @@ class GeneralsNetwork(nn.Module):
 
     def _forward_gru(
         self, grid_seq, globals_seq, legal_mask, source_y, source_x, hidden, wm_embed,
-        act_steps=None,
+        act_steps=None, frame_mask=None,
     ) -> Dict[str, torch.Tensor]:
         cfg = self.cfg
         B, T, C, H, W = grid_seq.shape
@@ -215,9 +229,7 @@ class GeneralsNetwork(nn.Module):
         d = cfg.d_model
         BT = B * T
 
-        spatial = self.spatial_encoder(
-            grid_seq.reshape(BT, C, H, W),
-        ).reshape(B, T, d, H, W)
+        spatial = self._encode_frames(grid_seq, frame_mask)
 
         spatial = spatial + self.global_proj(globals_seq).unsqueeze(-1).unsqueeze(-1)
 
@@ -499,17 +511,18 @@ class GeneralsNetwork(nn.Module):
         hidden: Optional[torch.Tensor] = None,
         world_model_embed: Optional[torch.Tensor] = None,
         act_steps: Optional[int] = None,
+        frame_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         if self.is_st:
             return self._forward_spatiotemporal(
                 grid_seq, globals_seq, legal_mask,
                 source_y, source_x, world_model_embed,
-                act_steps=act_steps,
+                act_steps=act_steps, frame_mask=frame_mask,
             )
         return self._forward_gru(
             grid_seq, globals_seq, legal_mask,
             source_y, source_x, hidden, world_model_embed,
-            act_steps=act_steps,
+            act_steps=act_steps, frame_mask=frame_mask,
         )
 
     # ------------------------------------------------------------------
