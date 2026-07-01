@@ -288,8 +288,9 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--seq-len", type=int, default=1000)
     common.add_argument("--grid-h", type=int, default=25)
     common.add_argument("--grid-w", type=int, default=25)
-    common.add_argument("--d-model", type=int, default=256)
-    common.add_argument("--n-heads", type=int, default=8)
+    # Defaults mirror ModelConfig so the probe measures the real model size
+    common.add_argument("--d-model", type=int, default=384)
+    common.add_argument("--n-heads", type=int, default=12)
     common.add_argument(
         "--backends",
         nargs="+",
@@ -301,12 +302,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_sdpa.set_defaults(func=cmd_sdpa)
 
     p_model = sub.add_parser("model", parents=[common], help="Run one model+loss+backward step")
-    p_model.add_argument("--d-ff", type=int, default=512)
-    p_model.add_argument("--n-st-layers", type=int, default=2)
+    p_model.add_argument("--d-ff", type=int, default=1024)
+    p_model.add_argument("--n-st-layers", type=int, default=3)
     p_model.add_argument("--trm-H-cycles", type=int, default=3)
     p_model.add_argument("--trm-L-cycles", type=int, default=6)
-    p_model.add_argument("--trm-block-layers", type=int, default=2)
-    p_model.add_argument("--encoder-channels", type=int, default=128)
+    p_model.add_argument("--trm-block-layers", type=int, default=3)
+    p_model.add_argument("--encoder-channels", type=int, default=192)
     p_model.add_argument("--dropout", type=float, default=0.1)
     p_model.add_argument(
         "--temporal-type",
