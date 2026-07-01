@@ -459,6 +459,45 @@ def test_step_vs_full_consistency():
     print(f"  Max diff: {diff:.8f} ✓")
 
 
+def test_q_halt_full_answer_target():
+    """q_halt is trained against FULL-answer correctness (paper-faithful):
+    a correct source with a wrong direction must NOT count as halt-worthy."""
+    print("\n=== q_halt: full-answer halt target ===")
+    from model.losses import ImitationLoss
+
+    B, T, N = 1, 2, 625
+    pred = {
+        "source_logits": torch.zeros(B, T, N),
+        "direction_logits": torch.zeros(B, T, 4),
+        "split_logits": torch.zeros(B, T, 2),
+        "pass_logits": torch.full((B, T), -10.0),  # never passes
+        "value": torch.zeros(B, T),
+        "q_halt": torch.full((B, T), 5.0),         # confidently wants to halt
+    }
+    pred["source_logits"][:, :, 5 * 25 + 5] = 100.0  # source argmax correct
+    pred["direction_logits"][:, :, 3] = 100.0        # ... but direction wrong
+
+    tgt = {
+        "count": torch.ones(B, T, dtype=torch.long),
+        "src_y": torch.full((B, T, 4), 5, dtype=torch.long),
+        "src_x": torch.full((B, T, 4), 5, dtype=torch.long),
+        "dir_id": torch.ones(B, T, 4, dtype=torch.long),  # GT dir = 1
+        "ratio_id": torch.zeros(B, T, 4, dtype=torch.long),
+        "value": torch.zeros(B, T),
+    }
+    criterion = ImitationLoss(grid_w=25)
+    wrong_dir_loss = criterion(pred, tgt)["q_halt_loss"].item()
+
+    pred["direction_logits"] = torch.zeros(B, T, 4)
+    pred["direction_logits"][:, :, 1] = 100.0        # now fully correct
+    right_loss = criterion(pred, tgt)["q_halt_loss"].item()
+
+    # BCE(logit 5, target 0) ~= 5.007 vs BCE(logit 5, target 1) ~= 0.0067
+    assert wrong_dir_loss > 1.0, f"halt target ignored the wrong direction: {wrong_dir_loss}"
+    assert right_loss < 0.1, f"fully-correct move should be halt-worthy: {right_loss}"
+    print(f"  wrong-direction loss {wrong_dir_loss:.3f} >> correct-move loss {right_loss:.4f} OK")
+
+
 def test_padded_frames_do_not_affect_batchnorm():
     """In train mode, padded-frame content must not leak into valid steps'
     outputs via BatchNorm batch statistics."""
@@ -568,6 +607,7 @@ def main():
         test_step_vs_full_consistency,
         test_padded_frames_do_not_affect_batchnorm,
         test_step_vs_full_consistency_act_steps,
+        test_q_halt_full_answer_target,
     ]
 
     passed = 0

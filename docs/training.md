@@ -55,7 +55,7 @@ Loss components (`model/losses.py::ImitationLoss`):
 | Split CE | 0.3 | same as direction | 0 = all-but-1, 1 = 50% |
 | Pass BCE | 1.0 | `count >= 0` | `count == -1` frames are excluded (see data doc) |
 | Value MSE | 0.2 | sequence | target ∈ [−1, 1] (heuristic ⊕ outcome blend) |
-| Q-halt BCE | 0.2 | `count > 0` | target = "was the source argmax correct at this ACT depth" |
+| Q-halt BCE | 0.2 | `count >= 0` | target = "is the full answer correct at this ACT depth" (whole move on move frames, correct pass on pass frames — paper-faithful) |
 
 **Direction/split conditioning.** The direction and split heads are
 conditioned on the embedding of the source tile the network actually used:

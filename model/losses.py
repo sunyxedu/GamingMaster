@@ -229,15 +229,27 @@ class ImitationLoss(nn.Module):
         value_loss = (value_loss_all * seq_mask.float()).sum() / n_seq
 
         # --- Q-halt loss --------------------------------------------------
-        if "q_halt" in pred and valid.any():
+        # Paper-faithful target: halt when the CURRENT answer is fully
+        # correct (TRM trains q against exact answer match, not a single
+        # head). For a move frame that means the whole move — source,
+        # direction, split, and not passing; for a pass frame, a correct
+        # pass. Dropped-move frames (count=-1) carry no answer. This matters
+        # here because inference actually gates pondering depth on q_halt.
+        q_supervised = seq_mask & label_valid
+        if "q_halt" in pred and q_supervised.any():
             with torch.no_grad():
-                predicted_src = pred["source_logits"].argmax(dim=-1)
-                correct = (predicted_src == tgt_src).float()
+                q_src_ok = pred["source_logits"].argmax(dim=-1) == tgt_src
+                q_dir_ok = pred["direction_logits"].argmax(dim=-1) == tgt_dir
+                q_spl_ok = pred["split_logits"].argmax(dim=-1) == tgt_split
+                q_passed = pred["pass_logits"] > 0
+                move_ok = q_src_ok & q_dir_ok & q_spl_ok & ~q_passed
+                correct = torch.where(move_mask, move_ok, q_passed & ~move_mask).float()
             q_halt_loss = F.binary_cross_entropy_with_logits(
                 pred["q_halt"], correct, reduction="none",
             )
             q_halt_loss = torch.nan_to_num(q_halt_loss, nan=0.0)
-            q_halt_loss = (q_halt_loss * valid.float()).sum() / n_valid
+            n_q = q_supervised.float().sum().clamp(min=1)
+            q_halt_loss = (q_halt_loss * q_supervised.float()).sum() / n_q
         elif "q_halt" in pred:
             # Zero-weight graph connection (keeps q_head "used" for DDP);
             # nan_to_num so a non-finite logit can't turn 0 * x into NaN.
