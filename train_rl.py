@@ -645,7 +645,10 @@ def main():
         entropy_weight=args.entropy_weight,
         clip_range=args.clip_range,
     )
-    il_criterion = ImitationLoss(grid_w=cfg.grid_w)
+    # AlphaStar-style auxiliary regularization targets the POLICY heads only:
+    # the replay-outcome value labels live on a different scale and state
+    # distribution than the PPO returns and would fight the critic every step.
+    il_criterion = ImitationLoss(grid_w=cfg.grid_w, value_weight=0.0)
 
     # ---- Optimiser -----------------------------------------------------
     optimizer = torch.optim.AdamW(
