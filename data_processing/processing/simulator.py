@@ -38,6 +38,14 @@ class ReplaySimulator:
                 f"map {self.map_width}x{self.map_height} exceeds the "
                 f"{MAX_GRID}x{MAX_GRID} model grid"
             )
+
+        # Modern map features are not simulated — replaying such games would
+        # silently diverge from the real state (swamps drain armies, deserts
+        # halve production, lookouts/observatories grant vision, ...).
+        for feature in ("swamps", "deserts", "lookouts", "observatories",
+                        "lights", "neutrals"):
+            if replay_data.get(feature):
+                raise ValueError(f"unsupported map feature: {feature}")
         
         # Map features
         self.cities = replay_data["cities"]
