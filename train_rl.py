@@ -571,6 +571,25 @@ def main():
     if rank0:
         print(f"Model parameters: {n_params:,}")
 
+    # ---- Resume: load weights & counters FIRST -------------------------
+    # Must happen before the KL reference model and opponent pool are
+    # captured, otherwise a resume without --il_checkpoint regularizes
+    # toward (and plays against) a randomly initialized network.
+    start_iter = 1
+    il_weight = args.il_weight
+    wins = {0: 0, 1: 0, "draw": 0}
+    rl_ckpt = None
+    if args.resume:
+        rl_ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        # Support both RL checkpoints (model_state) and IL checkpoints
+        state_key = "model_state" if "model_state" in rl_ckpt else "model_state_dict"
+        load_model_state(model, rl_ckpt[state_key], ctx="resume checkpoint")
+        start_iter = rl_ckpt.get("iteration", 0) + 1
+        il_weight = rl_ckpt.get("il_weight", args.il_weight)
+        wins = rl_ckpt.get("wins", wins)
+        if rank0:
+            print(f"Resumed weights from {args.resume} (starting iteration {start_iter})")
+
     # ---- Reference model (frozen copy for KL regularisation) -----------
     ref_model: Optional[GeneralsNetwork] = None
     if args.kl_weight > 0:
@@ -586,6 +605,8 @@ def main():
         initial_state=model.state_dict(),
         max_size=args.pool_size,
     )
+    if rl_ckpt is not None and "opponent_pool" in rl_ckpt:
+        opponent_pool.pool = rl_ckpt["opponent_pool"]
     # Opponent model (loaded with pool checkpoint each iteration)
     opponent_model = copy.deepcopy(model)
     opponent_model.eval()
@@ -642,23 +663,9 @@ def main():
         if rank0:
             print(f"Loaded {n_maps} replay maps for environment")
 
-    # ---- Resume --------------------------------------------------------
-    start_iter = 1
-    il_weight = args.il_weight
-    wins = {0: 0, 1: 0, "draw": 0}
-
+    # ---- Resume: optimizer state & schedules (weights loaded earlier) ---
     if args.resume:
-        rl_ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         raw = model
-        # Support both RL checkpoints (model_state) and IL checkpoints (model_state_dict or model_state)
-        state_key = "model_state" if "model_state" in rl_ckpt else "model_state_dict"
-        load_model_state(raw, rl_ckpt[state_key], ctx="resume checkpoint")
-        start_iter = rl_ckpt.get("iteration", 0) + 1
-        il_weight = rl_ckpt.get("il_weight", args.il_weight)
-        wins = rl_ckpt.get("wins", wins)
-        if "opponent_pool" in rl_ckpt:
-            opponent_pool.pool = rl_ckpt["opponent_pool"]
-
         # If resuming past the unfreeze point, unfreeze encoder and rebuild optimizer
         if args.freeze_encoder_iters > 0 and start_iter > args.freeze_encoder_iters:
             unfreeze_all(raw)
