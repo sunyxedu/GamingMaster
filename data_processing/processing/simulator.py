@@ -46,6 +46,11 @@ class ReplaySimulator:
                         "lights", "neutrals"):
             if replay_data.get(feature):
                 raise ValueError(f"unsupported map feature: {feature}")
+
+        # Game modifiers (Torus, Defenseless, City-State, ...) change the
+        # rules themselves — mostly present in custom lobbies.
+        if replay_data.get("modifiers"):
+            raise ValueError(f"unsupported modifiers: {replay_data['modifiers']}")
         
         # Map features
         self.cities = replay_data["cities"]

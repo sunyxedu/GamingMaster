@@ -36,11 +36,12 @@ def filter_replays(
 
     for entry in replays:
         # Check game type. 1v1-queue games are always two-player; custom
-        # lobbies can hold more, so enforce max_players on them.
+        # lobbies need exactly two players — solo practice games would feed
+        # the value head a constant +1 outcome (opponent has no land).
         gtype = entry.get("type")
         n_players = len(entry.get("ranking", []))
         is_valid_type = gtype in game_types and (
-            gtype == '1v1' or n_players <= max_players
+            gtype == '1v1' or (2 <= n_players <= max_players)
         )
         
         # Check minimum turns
