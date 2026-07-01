@@ -64,7 +64,7 @@ def parse_args():
 
 
 def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, args,
-                rank0=True, save_fn=None, start_step=0, tf_ratio=1.0):
+                rank0=True, save_fn=None, start_step=0, tf_ratio=1.0, distributed=False):
     model.train()
     from collections import deque
     window = args.log_interval
@@ -147,6 +147,11 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             optimizer.step()
             scheduler.step()
         except torch.cuda.OutOfMemoryError:
+            if distributed:
+                # A rank-local skip desynchronizes DDP's gradient allreduce —
+                # the surviving ranks block on this rank's buckets and every
+                # later step silently averages mismatched batches. Fail fast.
+                raise
             torch.cuda.empty_cache()
             optimizer.zero_grad(set_to_none=True)
             if rank0:
@@ -353,7 +358,7 @@ def main():
         avg_loss = train_epoch(
             model, loader, criterion, optimizer, scheduler, device, epoch, args,
             rank0=rank0, save_fn=save_checkpoint, start_step=start_step,
-            tf_ratio=tf_ratio,
+            tf_ratio=tf_ratio, distributed=distributed,
         )
         start_step = 0  # only skip steps for the first epoch after resume
         elapsed = time.time() - t0
