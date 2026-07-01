@@ -605,14 +605,16 @@ def test_direction_head_dimensions():
 
     head = DirectionHead(64, 4)
     src = torch.randn(2, 64)
+    spatial = torch.randn(2, 625, 64)
     dec = torch.randn(2, 64)
-    logits = head(src, dec)
+    logits = head(src, spatial, dec)
     assert logits.shape == (2, 4)
 
     # Should accept batched inputs [BT, d]
     src_big = torch.randn(100, 64)
+    spatial_big = torch.randn(100, 625, 64)
     dec_big = torch.randn(100, 64)
-    logits_big = head(src_big, dec_big)
+    logits_big = head(src_big, spatial_big, dec_big)
     assert logits_big.shape == (100, 4)
     print("  Dimensions correct ✓")
 

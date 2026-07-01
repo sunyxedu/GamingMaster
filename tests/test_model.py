@@ -107,8 +107,9 @@ def test_direction_head():
     print("\n=== DirectionHead ===")
     head = DirectionHead(128, 4)
     source_embed = torch.randn(4, 128)
+    spatial_out = torch.randn(4, 625, 128)
     decision = torch.randn(4, 128)
-    logits = head(source_embed, decision)
+    logits = head(source_embed, spatial_out, decision)
     assert logits.shape == (4, 4), f"Shape: {logits.shape}"
     print(f"  Input:  source={source_embed.shape}, decision={decision.shape}")
     print(f"  Output: {logits.shape} ✓")
@@ -788,19 +789,11 @@ def test_gradient_flow():
     print("  col_embed: gradient ✓")
 
 
-def test_move_match_loss():
-    """Test move_match_loss: returns in dict, nonzero when mismatches exist, zero when all match."""
-    print("\n=== Move-Match Loss ===")
+def test_imitation_loss_components():
+    """All loss components present; dir/split weighted by conditioning-source correctness."""
+    print("\n=== ImitationLoss components ===")
     B, T, N = 2, 5, 625
 
-    # Case 1: random predictions — likely mismatch, move_match_loss > 0
-    pred = {
-        "source_logits": torch.randn(B, T, N),
-        "direction_logits": torch.randn(B, T, 4),
-        "split_logits": torch.randn(B, T, 2),
-        "pass_logits": torch.randn(B, T),
-        "value": torch.randn(B, T),
-    }
     tgt = {
         "count": torch.ones(B, T, dtype=torch.long),
         "src_y": torch.randint(0, 25, (B, T, 4)),
@@ -809,61 +802,44 @@ def test_move_match_loss():
         "ratio_id": torch.randint(0, 2, (B, T, 4)),
         "value": torch.randn(B, T),
     }
-    criterion = ImitationLoss(grid_w=25, move_match_weight=2.0)
-    losses = criterion(pred, tgt, [5, 3])
-    assert "move_match_loss" in losses, "move_match_loss not in output dict"
-    assert losses["move_match_loss"].item() > 0, "move_match_loss should be > 0 with random preds"
-    print(f"  Random preds: move_match_loss={losses['move_match_loss']:.4f} > 0 ✓")
-
-    # Case 2: predictions exactly match targets — all_match=True, mismatch_mask=False everywhere
-    tgt_src_flat = (tgt["src_y"][:, :, 0] * 25 + tgt["src_x"][:, :, 0]).long().clamp(0, N - 1)
-    pred_match = {
-        "source_logits": torch.full((B, T, N), -1e9),
-        "direction_logits": torch.full((B, T, 4), -1e9),
-        "split_logits": torch.full((B, T, 2), -1e9),
-        "pass_logits": torch.zeros(B, T),
+    tgt_src = (tgt["src_y"][:, :, 0] * 25 + tgt["src_x"][:, :, 0]).long()
+    pred = {
+        "source_logits": torch.randn(B, T, N),
+        "direction_logits": torch.randn(B, T, 4),
+        "split_logits": torch.randn(B, T, 2),
+        "pass_logits": torch.randn(B, T),
         "value": torch.randn(B, T),
+        "q_halt": torch.randn(B, T),
+        "src_idx": tgt_src.clone(),
     }
-    # Set the correct class to have highest logit
-    for b in range(B):
-        for t in range(T):
-            pred_match["source_logits"][b, t, tgt_src_flat[b, t]] = 10.0
-            pred_match["direction_logits"][b, t, tgt["dir_id"][b, t, 0]] = 10.0
-            pred_match["split_logits"][b, t, tgt["ratio_id"][b, t, 0]] = 10.0
-    losses_match = criterion(pred_match, tgt, [5, 3])
-    assert losses_match["move_match_loss"].item() == 0.0, \
-        f"move_match_loss should be 0 when all match, got {losses_match['move_match_loss'].item()}"
-    print(f"  All match: move_match_loss={losses_match['move_match_loss']:.4f} == 0 ✓")
+    criterion = ImitationLoss(grid_w=25)
+    losses = criterion(pred, tgt, [5, 3])
+    for k in ["loss", "source_loss", "direction_loss", "split_loss",
+              "pass_loss", "value_loss", "q_halt_loss"]:
+        assert torch.isfinite(torch.as_tensor(losses[k])).all(), f"{k} not finite"
+    assert losses["direction_loss"].item() > 0, \
+        "dir loss should be > 0 when conditioning source matches GT"
+    print("  All components present and finite OK")
 
-    # Case 3: move_match_weight=0 should disable this loss component
-    criterion_off = ImitationLoss(grid_w=25, move_match_weight=0.0)
-    losses_off = criterion_off(pred, tgt, [5, 3])
-    criterion_on = ImitationLoss(grid_w=25, move_match_weight=2.0)
-    losses_on = criterion_on(pred, tgt, [5, 3])
-    diff = losses_on["loss"].item() - losses_off["loss"].item()
-    expected_diff = 2.0 * losses_on["move_match_loss"].item()
-    assert abs(diff - expected_diff) < 1e-4, \
-        f"Total loss diff ({diff:.6f}) should equal weight * move_match_loss ({expected_diff:.6f})"
-    print(f"  Weight contribution: diff={diff:.4f}, expected={expected_diff:.4f} ✓")
-
-    # Case 4: count=0 → no valid moves → move_match_loss=0
-    tgt_zero = {k: v.clone() for k, v in tgt.items()}
-    tgt_zero["count"] = torch.zeros(B, T, dtype=torch.long)
-    losses_zero = criterion(pred, tgt_zero, [5, 3])
-    assert losses_zero["move_match_loss"].item() == 0.0, "move_match_loss should be 0 with no moves"
-    print(f"  Zero count: move_match_loss=0 ✓")
+    # When the conditioning source never matches GT, dir/split get zero weight
+    pred_miss = dict(pred)
+    pred_miss["src_idx"] = (tgt_src + 1) % N
+    losses_miss = criterion(pred_miss, tgt, [5, 3])
+    assert losses_miss["direction_loss"].item() == 0.0
+    assert losses_miss["split_loss"].item() == 0.0
+    print("  Conditional dir/split weighting via src_idx OK")
 
 
-def test_move_match_loss_gradient():
-    """Verify gradients flow through move_match_loss to model parameters."""
-    print("\n=== Move-Match Loss Gradient ===")
+def test_imitation_loss_gradient():
+    """Gradients flow from ImitationLoss through the whole network."""
+    print("\n=== ImitationLoss gradient flow ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
         trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32,
     )
     model = GeneralsNetwork(cfg)
-    criterion = ImitationLoss(grid_w=25, move_match_weight=2.0)
+    criterion = ImitationLoss(grid_w=25)
 
     B, T = 1, 3
     grid_seq = torch.randn(B, T, 12, 25, 25)
@@ -880,27 +856,14 @@ def test_move_match_loss_gradient():
     source_x = tgt["src_x"][:, :, 0]
 
     pred = model(grid_seq, globals_seq, source_y=source_y, source_x=source_x)
-
-    # Recompute loss with grad (criterion returns detached total, so compute manually)
-    losses = criterion(pred, tgt)
-    # The "loss" key in returned dict has requires_grad because it's the sum of differentiable terms
-    # Actually let's check: pred tensors have grad, so the forward pass should produce grad-able loss
-    total = losses["loss"]
-
-    # If total has no grad (because criterion detaches), recompute
-    if not total.requires_grad:
-        # Manually sum the weighted components from the criterion forward
-        total = criterion(pred, tgt)["loss"]
-
-    # The loss should have grad since pred has grad
+    total = criterion(pred, tgt)["loss"]
     assert total.requires_grad, "Total loss should require grad"
     total.backward()
 
     grad_count = sum(1 for p in model.parameters() if p.grad is not None and p.grad.abs().sum() > 0)
     total_params = sum(1 for _ in model.parameters())
-    assert grad_count > 0, "No gradients computed through move_match_loss"
+    assert grad_count > 0, "No gradients computed through ImitationLoss"
     print(f"  Parameters with gradients: {grad_count}/{total_params}")
-    print("  Gradient flow through move_match_loss ✓")
 
 
 def main():
@@ -937,8 +900,8 @@ def main():
         test_spatiotemporal_step,
         test_spatiotemporal_backward,
         test_trm_nograd_optimization,
-        test_move_match_loss,
-        test_move_match_loss_gradient,
+        test_imitation_loss_components,
+        test_imitation_loss_gradient,
     ]
 
     passed = 0

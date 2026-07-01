@@ -389,12 +389,12 @@ def test_resume_training():
             f"Optimizer state count mismatch: {len(orig_state_keys)} vs {len(resumed_state_keys)}"
         print(f"  Optimizer state restored ({len(resumed_state_keys)} param groups) ✓")
 
-        # Verify move_match_loss is in the output (new loss works with resumed model)
+        # Verify the current loss components work with the resumed model
         model2.train()
         pred2 = model2(grid_seq, globals_seq, legal_mask, source_y, source_x)
         losses2 = criterion(pred2, tgt, batch["meta"]["lengths"])
-        assert "move_match_loss" in losses2, "move_match_loss missing from resumed model output"
-        print(f"  move_match_loss present after resume: {losses2['move_match_loss']:.4f} ✓")
+        assert "source_loss" in losses2 and "q_halt_loss" in losses2, "loss components missing after resume"
+        print("  loss components present after resume OK")
 
         print("  Resume training verified ✓")
 
