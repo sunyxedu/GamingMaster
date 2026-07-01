@@ -1,6 +1,8 @@
 # GamingMaster — Generals.io Neural Network Bot
 
-An AlphaStar-inspired Transformer architecture for [generals.io](https://generals.io), supporting Imitation Learning (IL) and future Reinforcement Learning (RL).
+An AlphaStar-inspired Transformer architecture for [generals.io](https://generals.io) with a TRM (Tiny Recursive Model) pondering core, trained by Imitation Learning (IL) followed by PPO self-play (RL).
+
+Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-pipeline.md) · [known limitations](docs/known-limitations.md)
 
 ## Project Structure
 
@@ -26,14 +28,19 @@ An AlphaStar-inspired Transformer architecture for [generals.io](https://general
 │   └── generals_env.py       #   Two-player simultaneous-move Gym-like env
 ├── scripts/
 │   ├── prepare_data.py       # CLI: batch download → filter → simulate → convert
-│   └── replay_to_visual.py   # CLI: download one replay → simulate → HTML viewer
+│   ├── replay_to_visual.py   # CLI: download one replay → simulate → HTML viewer
+│   ├── play_model.py         # CLI: model plays on a real replay map (vs replay opponent)
+│   ├── simulate_model.py     # CLI: compare model predictions to human moves
+│   ├── view_rl_replay.py     # CLI: RL self-play replay JSON → HTML viewer
+│   └── check_training_memory.py  # CLI: memory probe at real model shapes
+├── docs/                     # Training guide, data pipeline, known limitations
 ├── train_il.py               # Imitation Learning training script
 ├── train_rl.py               # RL training script (PPO self-play + IL regularisation)
 ├── tests/
 │   ├── test_verify_simulator.py       # Simulator correctness (real replay)
-│   ├── test_model.py                  # 26 unit tests for every model component
-│   ├── test_audit_fixes.py            # 11 bug-fix verification tests
-│   ├── test_comprehensive_audit.py    # 48 comprehensive audit tests (all modules)
+│   ├── test_model.py                  # Unit tests for every model component
+│   ├── test_audit_fixes.py            # 13 bug-fix regression tests
+│   ├── test_comprehensive_audit.py    # Comprehensive audit tests (all modules)
 │   ├── test_training_e2e.py           # End-to-end training loop tests
 │   └── test_rl.py                     # RL utilities and rollout tests
 └── pyproject.toml
@@ -122,9 +129,13 @@ Key game rules implemented:
 |------|---------------|
 | Army growth | Generals/cities: +1 every 2 ticks. All land: +1 every 50 ticks |
 | Fog of war | Owned tiles + 8 adjacent tiles visible |
-| Move priority | Chase > Defensive > Army size (largest first), general attacks last |
+| Move priority | Heuristic: Chase > Defensive > Army size, general attacks last (known approximation — see [docs/known-limitations.md](docs/known-limitations.md)) |
 | Capture | Attacker wins if moving army > defender army; difference remains |
 | 50% split | Moves ⌊army/2⌋ instead of army−1 |
+| Dropped moves | Moves invalid at execution time (stale source, mountain target) are dropped like the real server and excluded from labels (`count=-1`) |
+| Surrender | Games without a general capture resolve the winner from the `afks` array |
+
+Replays the simulator cannot reproduce faithfully are rejected: maps larger than 25×25, modern map features (swamps, deserts, lookouts, …) and game modifiers. See [docs/data-pipeline.md](docs/data-pipeline.md).
 
 **Convert** — `data_processing/parsers/generals_json.py`
 
@@ -136,7 +147,7 @@ Training format per timestep:
 | `grid_seq` | `[T, 12, 25, 25]` | 11 one-hot state channels + 1 log-normalised army channel |
 | `globals_seq` | `[T, 4]` | log-normalised (myArmy, myLand, opArmy, opLand) |
 | `legal_source_mask_seq` | `[T, 1, 25, 25]` | bool mask — owned tiles with army > 1 |
-| `count` | `[T]` | 0 or 1 — whether a move was made |
+| `count` | `[T]` | 1 = executed move, 0 = deliberate pass, −1 = server-dropped move (excluded from loss) |
 | `src_y`, `src_x` | `[T, K]` | source tile coordinates |
 | `dir_id` | `[T, K]` | direction: 0=↓ 1=→ 2=↑ 3=← |
 | `ratio_id` | `[T, K]` | 0=all-but-1, 1=50% split |
@@ -210,7 +221,9 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
   │  │  z_H = reason(z_H, z_L)             │  Self-Attn→Norm  │  │
   │  (first H_cycles−1 with no_grad)       │  MLP→Norm        │  │
   │                                        └──────────────────┘  │
-  │  q_halt = linear(z_H[:,0])  ── raw halt logit                │
+  │  q_halt = linear(z_H[:, HL])  ── halt logit from HL token    │
+  │  (multi-step ACT: carry (z_H, z_L) between steps;            │
+  │   training depth = act_steps, gradient on last step only)    │
   └──────────────────────┬───────────────────────────────────────┘
                          │ z_H [B*T, 627, d],  q_halt [B, T]
                     ┌──────────┐
@@ -239,11 +252,12 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
           │               ▼              │
           │         ┌───────────┐        │
           │         │ ValueHead │        │
-          │         │ → tanh    │        │
+          │         │(unbounded)│        │
           │         └─────┬─────┘        │
           │               │              │
           │          value [B,T]         │
-          │          ∈ [−1, 1]           │
+          │       (IL targets ∈ [−1,1],  │
+          │        RL returns unbounded) │
           │                              │
           │   cat(src_embed, ll_out)     │
           └──────────────┬───────────────┘
@@ -283,21 +297,22 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
 - **Legal mask at sampling only**: `SourceHead` outputs raw logits over all 625 positions. The legal-move mask (owned tiles with army > 1) is applied externally only during inference sampling — not during training. This lets the model learn board understanding from the state encoding itself, rather than relying on a hard mask.
 - **Decision tokens**: Two learnable tokens — High-Level (→ value prediction) and Low-Level (→ direction/split/pass) — are appended to the 625 spatial tokens and participate in both spatial and temporal attention.
 - **2D spatial PE + sinusoidal temporal PE**: Spatial positions use learnable row + column embeddings (summed). Temporal positions use sinusoidal encoding, allowing generalisation to arbitrary game lengths.
-- **TRM two-state pondering** ([arxiv 2510.04871](https://arxiv.org/abs/2510.04871)): Two state vectors — `z_H` (answer) and `z_L` (reasoning scratchpad) — are initialized from fixed buffers and iteratively refined by a single shared reasoning module. Inner loop refines `z_L` using `z_H + x` as injection; outer loop updates `z_H` from `z_L`. First `H_cycles−1` outer iterations run without gradient for memory efficiency; only the last iteration propagates gradients. At inference, ACT (Adaptive Computation Time) loops up to `halt_max_steps` times — `q_halt` head on `z_H` outputs a confidence logit; when positive, the model stops pondering early. Carry state `(z_H, z_L)` is passed between ACT steps so each round builds on the previous thinking.
+- **TRM two-state pondering** ([arxiv 2510.04871](https://arxiv.org/abs/2510.04871)): Two state vectors — `z_H` (answer) and `z_L` (reasoning scratchpad) — are initialized from fixed buffers and iteratively refined by a single shared reasoning module. Inner loop refines `z_L` using `z_H + x` as injection; outer loop updates `z_H` from `z_L`. First `H_cycles−1` outer iterations run without gradient for memory efficiency; only the last iteration propagates gradients. `q_halt` is read from the HL decision token.
+- **Multi-step ACT with matched train/inference depth**: the carry `(z_H, z_L)` lets the TRM ponder over multiple ACT steps. IL trains at a *random* depth per batch (`--max_act_steps`, deep-supervision style) so every inference depth is in-distribution; RL uses a *fixed* depth (`--act_steps`) for rollout and update alike so the PPO ratio is exact; the q_halt-gated adaptive loop is an inference-time option for IL checkpoints. See [docs/training.md](docs/training.md).
 - **World model** (optional): Predicts next-state embedding from (current state, action). Disabled during IL; during RL, prediction error serves as intrinsic curiosity reward.
 
-Default config:
+Default config (`model/config.py`):
 | Parameter | Value |
 |-----------|-------|
-| `d_model` | 256 |
-| `n_heads` | 8 |
-| `d_ff` | 512 |
-| `n_st_layers` | 2 |
+| `d_model` | 384 |
+| `n_heads` | 12 |
+| `d_ff` | 1024 |
+| `n_st_layers` | 3 |
 | `trm_H_cycles` | 3 |
 | `trm_L_cycles` | 6 |
-| `trm_block_layers` | 2 |
+| `trm_block_layers` | 3 |
 | `halt_max_steps` | 5 |
-| `encoder_channels` | 128 |
+| `encoder_channels` | 192 |
 | `temporal_type` | `"spatiotemporal"` |
 
 ### Step 3: Training
@@ -308,15 +323,14 @@ Supervised learning from expert replays:
 
 | Loss component | Weight | Mask | Description |
 |----------------|--------|------|-------------|
-| Source CE | 1.0 | valid (count>0) | Cross-entropy over 625 grid positions |
-| Direction CE | 1.0 | valid (count>0) | Cross-entropy over 4 directions |
-| Split CE | 0.5 | valid (count>0) | Cross-entropy over 2 split options (0=all-but-1, 1=50%) |
-| Pass BCE | 1.0 | seq_mask (all) | Binary CE — target=1 when count=0, target=0 when count>0 |
-| Value MSE | 0.5 | seq_mask (all) | Mean squared error on game value |
-| Q-halt BCE | 0.5 | valid (count>0) | Binary CE — target 1 if source prediction correct, 0 otherwise |
-| Move-Mismatch | 2.0 | valid & mismatch | Extra penalty on src+dir+split CE when any head predicts wrong |
+| Source focal CE | 3.0 | valid (count>0) | Focal cross-entropy (γ=1.5) over 625 grid positions |
+| Direction CE | 1.5 | valid ∧ conditioning-source correct | CE over 4 directions, weighted by `src_idx == gt_src` |
+| Split CE | 0.3 | valid ∧ conditioning-source correct | CE over 2 split options (0=all-but-1, 1=50%) |
+| Pass BCE | 1.0 | count ≥ 0 | Binary CE — dropped-move frames (count=−1) are excluded |
+| Value MSE | 0.2 | seq_mask (all) | Mean squared error on game value |
+| Q-halt BCE | 0.2 | valid (count>0) | Target 1 if source argmax correct at the sampled ACT depth |
 
-Source/direction/split losses are masked to timesteps with moves (count>0). Pass and value losses apply to all valid sequence timesteps. Move-mismatch loss re-penalizes timesteps where any of source/direction/split/pass predictions are wrong.
+Direction/split labels are only meaningful when the head was conditioned on the human's source tile, so those terms are weighted by that indicator (teacher forcing raises the hit rate early in training — `--tf_start 0.4` recommended). Each batch trains at a random TRM ACT depth in `[1, --max_act_steps]`. Details in [docs/training.md](docs/training.md).
 
 **Reinforcement Learning** (`model/losses.py` — `RLLoss`)
 
@@ -355,12 +369,14 @@ IL pretrained model
 Why the world model matters: generals.io has extremely sparse reward (only win/loss at game end). The world model provides dense intrinsic reward — the worse the model's prediction for an unseen area, the more information lies there, encouraging the agent to explore through fog of war.
 
 RL training components:
-- `env/generals_env.py` — two-player simultaneous-move environment with fog of war, random map generation, and dense reward shaping
-- `train_rl.py` — full PPO self-play loop with joint IL regularisation and KL constraint
-- `model/rl_utils.py` — GAE, RolloutBuffer, encoder freeze/unfreeze helpers
-- `model.step()` — single-step inference with KV cache, suitable for RL rollouts
-- `ValueHead` outputs game value in \[-1, 1\]
-- `WorldModel` can be enabled via `use_world_model=True`
+- `env/generals_env.py` — two-player simultaneous-move environment with fog of war, full general-capture rules (territory conversion), turn-limit truncation, symmetric city rewards, and connectivity-checked random maps
+- `train_rl.py` — PPO self-play loop with joint IL regularisation (policy heads only), KL constraint, opponent pool (CPU-resident), and strict checkpoint loading
+- `model/rl_utils.py` — GAE, RolloutBuffer, strict `load_model_state`, encoder freeze/unfreeze helpers
+- `model.step_rl(act_steps=K)` — single-step inference with KV cache at a fixed pondering depth; the PPO update recomputes log-probs with `forward(act_steps=K)` in eval mode so the ratio is exact (verified to ~1e-6)
+- `ValueHead` is unbounded (discounted shaped returns exceed \[−1, 1\])
+- `WorldModel` can be enabled via `use_world_model=True` (untested end-to-end)
+
+Correctness invariants (matched ACT depth, eval-mode updates, truncation bootstrapping) are documented in [docs/training.md](docs/training.md).
 
 ### Step 4: Visualisation
 
@@ -400,12 +416,24 @@ Every component has been verified against the real replay `asS2S5O_y` (~Hemlix~ 
 | Gradient flow | All parameters receive gradients through every component | ✓ |
 | Training loop | Loss decreases on mock and real data; checkpoint save/load works | ✓ |
 
-Run all tests:
+Run all tests (129 tests):
 
 ```bash
-uv run python tests/test_verify_simulator.py        # Simulator correctness
-uv run python tests/test_model.py                   # 26 model unit tests
-uv run python tests/test_audit_fixes.py             # 11 bug-fix verification tests
-uv run python tests/test_comprehensive_audit.py     # 48 comprehensive audit tests
-uv run python tests/test_training_e2e.py            # End-to-end training
+uv run pytest tests/ -q
 ```
+
+Or by area:
+
+```bash
+uv run python tests/test_model.py                   # Model unit tests
+uv run python tests/test_audit_fixes.py             # 13 bug-fix regression tests
+uv run python tests/test_comprehensive_audit.py     # Comprehensive audit tests (all modules)
+uv run python tests/test_training_e2e.py            # End-to-end training
+uv run pytest tests/test_rl.py -q                   # RL env + rollout tests
+```
+
+Two of the regression tests encode the project's core correctness claims:
+`test_step_vs_full_consistency_act_steps` (rollout and PPO update define the
+same policy at a fixed ACT depth) and
+`test_padded_frames_do_not_affect_batchnorm` (padding cannot leak into
+training statistics).
