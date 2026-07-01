@@ -278,6 +278,7 @@ class GeneralsEnv:
         # Check win
         winner = self._check_winner()
         if winner is not None:
+            self._apply_general_capture(winner)
             self.done = True
             self.winner = winner
             rewards[winner] += 1.0
@@ -577,11 +578,16 @@ class GeneralsEnv:
         p1 = self._move_priority(m1, m0, 1)
 
         if p0 <= p1:
-            self._execute_single_move(m0)
-            self._execute_single_move(m1)
+            first, second = m0, m1
         else:
-            self._execute_single_move(m1)
-            self._execute_single_move(m0)
+            first, second = m1, m0
+        self._execute_single_move(first)
+        # Real rules: once a general falls the game is decided — the server
+        # drops the loser's queued move. This also makes the winner of a
+        # would-be "mutual capture" tick follow move-execution order instead
+        # of _check_winner's scan order.
+        if self._check_winner() is None:
+            self._execute_single_move(second)
 
     def _move_priority(self, move: Dict, other: Dict, idx: int) -> Tuple:
         # Chase
@@ -631,6 +637,27 @@ class GeneralsEnv:
             if tile.occupied != -1 and tile.occupied != pid:
                 return tile.occupied
         return None
+
+    def _apply_general_capture(self, winner: int) -> None:
+        """generals.io rules: capturing the general transfers the loser's
+        whole territory to the winner with armies halved (rounded up) and
+        turns the fallen general into a city."""
+        loser = 1 - winner
+        for idx in list(self.player_land[loser]):
+            r, c = divmod(idx, self.grid_w)
+            tile = self.map[r][c]
+            tile.occupied = winner
+            tile.army = (tile.army + 1) // 2
+            self.player_land[winner].append(idx)
+        self.player_land[loser] = []
+
+        gen_idx = self.generals[loser]
+        r, c = divmod(gen_idx, self.grid_w)
+        gen_tile = self.map[r][c]
+        if gen_tile.terrain == _GENERAL:
+            gen_tile.terrain = _CITY
+            if gen_idx not in self.cities:
+                self.cities.append(gen_idx)
 
     # ==================================================================
     # Internal: map generation
