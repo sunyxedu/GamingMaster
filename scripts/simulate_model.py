@@ -155,7 +155,7 @@ def render_grid_ascii(grid_channels, src_pred=None, src_gt=None):
 DIR_DELTAS = [(1, 0), (0, 1), (-1, 0), (0, -1)]  # down, right, up, left
 
 
-def run_inference(model, replay, device, grid_w):
+def run_inference(model, replay, device, grid_w, act_steps=None):
     """Run model on full sequence and return per-step predictions."""
     T = replay["T"]
     W = grid_w
@@ -180,7 +180,8 @@ def run_inference(model, replay, device, grid_w):
 
     with torch.no_grad():
         pred = model(grid_seq, globals_seq, legal_mask=legal_mask,
-                     source_y=src_y_gt.to(device), source_x=src_x_gt.to(device))
+                     source_y=src_y_gt.to(device), source_x=src_x_gt.to(device),
+                     act_steps=act_steps)
 
     src_logits = pred["source_logits"][0]
     dir_logits = pred["direction_logits"][0]
@@ -509,6 +510,8 @@ def main():
     p.add_argument("--replay", type=str, required=True)
     p.add_argument("--max_steps", type=int, default=None)
     p.add_argument("--device", type=str, default="cpu")
+    p.add_argument("--act_steps", type=int, default=None,
+                   help="Fixed TRM ACT depth (match train_rl --act_steps for RL checkpoints)")
     p.add_argument("--show_grid", action="store_true", help="Show ASCII grid at each step")
     p.add_argument("--only_moves", action="store_true", help="Only show steps with actual moves")
     p.add_argument("--html", type=str, default=None, help="Output HTML visualization to this path")
@@ -522,7 +525,7 @@ def main():
     print(f"Replay: {args.replay} ({T} steps)")
     print("=" * 70)
 
-    steps = run_inference(model, replay, device, cfg.grid_w)
+    steps = run_inference(model, replay, device, cfg.grid_w, act_steps=args.act_steps)
     print_results(steps, args.only_moves)
 
     if args.html:

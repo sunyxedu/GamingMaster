@@ -566,6 +566,8 @@ def main():
         test_full_pipeline_real_data,
         test_inference_empty_legal_mask,
         test_step_vs_full_consistency,
+        test_padded_frames_do_not_affect_batchnorm,
+        test_step_vs_full_consistency_act_steps,
     ]
 
     passed = 0

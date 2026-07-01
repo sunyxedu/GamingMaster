@@ -157,7 +157,7 @@ def compute_direction_mask(state, army, src_r, src_c, sim):
     return mask
 
 
-def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None, use_mask=False):
+def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None, use_mask=False, act_steps=None):
     with open(replay_path) as f:
         replay_data = json.load(f)
 
@@ -212,7 +212,8 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None,
         with torch.no_grad():
             out = model.step(grid_t, globals_t,
                              legal_mask=legal_t if use_mask else None,
-                             hidden=hidden, st_cache=st_cache, step_idx=turn)
+                             hidden=hidden, st_cache=st_cache, step_idx=turn,
+                             act_steps=act_steps)
 
             # Direction masking: re-sample direction with invalid dirs masked out
             if use_mask:
@@ -655,6 +656,10 @@ def main():
     p.add_argument("--max_steps", type=int, default=None)
     p.add_argument("--device", type=str, default="cpu")
     p.add_argument("--html", type=str, default=None, help="Output HTML visualization")
+    p.add_argument("--act_steps", type=int, default=None,
+                   help="Fixed TRM ACT depth. RL checkpoints are trained at a fixed depth "
+                        "(train_rl --act_steps) and should be deployed at the same one; "
+                        "default None uses the q_halt-gated loop (IL checkpoints)")
     p.add_argument("--mask", action="store_true", default=False,
                    help="Enable legal masking for source and direction during inference")
     args = p.parse_args()
@@ -668,7 +673,7 @@ def main():
 
     frames, winner, sim = play_on_replay(
         model, cfg, device, args.replay, args.player, args.max_steps,
-        use_mask=args.mask,
+        use_mask=args.mask, act_steps=args.act_steps,
     )
 
     print_results(frames, args.player)
