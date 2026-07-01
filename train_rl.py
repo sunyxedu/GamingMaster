@@ -616,7 +616,10 @@ def main():
         print(f"Opponent pool initialised (max_size={args.pool_size})")
 
     # ---- Encoder freeze ------------------------------------------------
-    if args.freeze_encoder_iters > 0:
+    # Phase decided by start_iter so a resume past the boundary builds the
+    # optimizer over the full parameter set from the start.
+    frozen_phase = args.freeze_encoder_iters > 0 and start_iter <= args.freeze_encoder_iters
+    if frozen_phase:
         freeze_encoder(model)
         if rank0:
             print(f"Encoder frozen for the first {args.freeze_encoder_iters} iterations")
@@ -665,20 +668,19 @@ def main():
 
     # ---- Resume: optimizer state & schedules (weights loaded earlier) ---
     if args.resume:
-        raw = model
-        # If resuming past the unfreeze point, unfreeze encoder and rebuild optimizer
-        if args.freeze_encoder_iters > 0 and start_iter > args.freeze_encoder_iters:
-            unfreeze_all(raw)
-            optimizer = torch.optim.AdamW(
-                model.parameters(),
-                lr=args.lr * 0.5,
-                weight_decay=args.weight_decay,
-            )
-            if rank0:
-                print(f"Resumed past unfreeze point — encoder unfrozen, LR={args.lr * 0.5}")
-
         if "iteration" in rl_ckpt and "optimizer_state" in rl_ckpt:
-            optimizer.load_state_dict(rl_ckpt["optimizer_state"])
+            # Skip states saved for a different trainable set (e.g. a
+            # checkpoint from the frozen phase resumed past the boundary) —
+            # loading them raises inside torch.optim.
+            saved = rl_ckpt["optimizer_state"]
+            n_saved = sum(len(g["params"]) for g in saved["param_groups"])
+            n_cur = sum(len(g["params"]) for g in optimizer.param_groups)
+            if n_saved == n_cur:
+                optimizer.load_state_dict(saved)
+            elif rank0:
+                print(f"  [warn] optimizer state skipped ({n_saved} saved vs "
+                      f"{n_cur} current params — freeze boundary crossed); "
+                      f"starting with a fresh optimizer")
 
         # Override LR with CLI args (allows resetting LR on resume)
         resume_lr = args.lr * 0.5 if (args.freeze_encoder_iters > 0 and start_iter > args.freeze_encoder_iters) else args.lr
