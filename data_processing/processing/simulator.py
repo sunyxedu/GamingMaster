@@ -89,8 +89,12 @@ class ReplaySimulator:
             col = mountain % self.map_width
             self.map[row][col] = Tile(3, 0, -1)
     
-    def _execute_single_move(self, move: Dict[str, Any]):
-        """Execute a single move on the map."""
+    def _execute_single_move(self, move: Dict[str, Any]) -> bool:
+        """Execute a single move on the map.
+
+        Returns True if the move executed, False if the server would have
+        dropped it (stale source, army <= 1, mountain destination).
+        """
         start_idx = move["start"]
         end_idx = move["end"]
         player_idx = move["index"]
@@ -106,12 +110,12 @@ class ReplaySimulator:
 
         # Validate move: must own the start tile and have army > 1
         if start_tile.occupied != player_idx or start_tile.army <= 1:
-            return
+            return False
 
         # The server drops moves into mountains (players probe fog obstacles
         # hoping for a city) — executing them would "capture" the mountain.
         if end_tile.terrain == 3:
-            return
+            return False
 
         # Calculate armies to move
         if is_50:
@@ -144,6 +148,8 @@ class ReplaySimulator:
                 end_tile.army -= army_to_move
 
             start_tile.army = army_remaining
+
+        return True
 
     def _is_chase_move(self, chaser: Dict[str, Any], target: Dict[str, Any]) -> bool:
         """Check if chaser is chasing target (chaser.end == target.start and not swapping)."""
@@ -221,7 +227,11 @@ class ReplaySimulator:
 
         return chase_priority, defense_priority, attack_priority, army_tiebreak, original_index
 
-    def process_moves(self, move1: Optional[Dict[str, Any]], move2: Optional[Dict[str, Any]]):
+    def process_moves(
+        self,
+        move1: Optional[Dict[str, Any]],
+        move2: Optional[Dict[str, Any]],
+    ) -> List[Tuple[Dict[str, Any], bool]]:
         """
         Process moves for a turn with proper priority ordering.
 
@@ -231,6 +241,9 @@ class ReplaySimulator:
         3. Larger tile first (affects general capture tiebreaks), general attacks last
         4. General trades between players = tie (not implemented yet)
         5. Original move order as final tiebreaker
+
+        Returns [(move, executed)] so callers can tell which moves the
+        server would actually have carried out.
         """
         moves = []
         if move1 is not None:
@@ -239,11 +252,11 @@ class ReplaySimulator:
             moves.append((move2, 1))
 
         if len(moves) == 0:
-            return
+            return []
 
         if len(moves) == 1:
-            self._execute_single_move(moves[0][0])
-            return
+            ok = self._execute_single_move(moves[0][0])
+            return [(moves[0][0], ok)]
 
         # Two moves - determine order based on priority
         m1, idx1 = moves[0]
@@ -255,11 +268,12 @@ class ReplaySimulator:
 
         # Sort by priority (lower = first)
         if priority1 <= priority2:
-            self._execute_single_move(m1)
-            self._execute_single_move(m2)
+            ok1 = self._execute_single_move(m1)
+            ok2 = self._execute_single_move(m2)
         else:
-            self._execute_single_move(m2)
-            self._execute_single_move(m1)
+            ok2 = self._execute_single_move(m2)
+            ok1 = self._execute_single_move(m1)
+        return [(m1, ok1), (m2, ok2)]
     
     def update_vision(self):
         """Update vision for all players."""
@@ -415,18 +429,21 @@ class ReplaySimulator:
             cnt = 0
             while move_idx < len(self.moves) and self.moves[move_idx]["turn"] + 1 == turn:
                 move = self.moves[move_idx]
-
-                # Record the move if it's from our player
-                if move["index"] == self.player_id:
-                    player_move_start = move["start"]
-                    player_move_end = move["end"]
-                    player_move_is_50 = move["is50"]
                 if cnt < 2:
                     turn_moves[cnt] = move
                 cnt += 1
                 move_idx += 1
 
-            self.process_moves(turn_moves[0], turn_moves[1])
+            executed = self.process_moves(turn_moves[0], turn_moves[1])
+
+            # Record our player's move only if the server executed it —
+            # dropped moves (stale source, mountain target) would otherwise
+            # become impossible-action training labels.
+            for mv, ok in executed:
+                if ok and mv["index"] == self.player_id:
+                    player_move_start = mv["start"]
+                    player_move_end = mv["end"]
+                    player_move_is_50 = mv["is50"]
 
             # Increment armies at end of turn
             self.increment_armies(turn)
