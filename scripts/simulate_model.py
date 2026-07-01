@@ -33,19 +33,20 @@ STATE_CHARS = {
 
 
 def load_model(checkpoint_path, device):
+    from model.rl_utils import load_model_state
+
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     cfg_dict = ckpt["config"]
     cfg = ModelConfig(**{k: v for k, v in cfg_dict.items() if k in ModelConfig.__dataclass_fields__})
     model = GeneralsNetwork(cfg)
-    # Filter out keys with shape mismatch (e.g. old n_split=2 vs new n_split=3)
-    state = ckpt["model_state"]
-    model_state = model.state_dict()
-    filtered = {k: v for k, v in state.items()
-                if k in model_state and v.shape == model_state[k].shape}
-    model.load_state_dict(filtered, strict=False)
+    state_key = "model_state" if "model_state" in ckpt else "model_state_dict"
+    load_model_state(model, ckpt[state_key], ctx=checkpoint_path)
     model.to(device)
     model.eval()
-    print(f"Loaded checkpoint: epoch {ckpt['epoch']}, loss {ckpt['loss']:.4f}")
+    if "epoch" in ckpt:
+        print(f"Loaded IL checkpoint: epoch {ckpt['epoch']}, loss {ckpt.get('loss', 0):.4f}")
+    else:
+        print(f"Loaded RL checkpoint: iteration {ckpt.get('iteration', '?')}")
     print(f"Model: d={cfg.d_model}, heads={cfg.n_heads}, params={sum(p.numel() for p in model.parameters()):,}")
     return model, cfg
 
@@ -163,8 +164,23 @@ def run_inference(model, replay, device, grid_w):
     globals_seq = replay["globals"].unsqueeze(0).to(device)
     legal_mask = replay["legal_mask"].unsqueeze(0).to(device)
 
+    # Condition direction/split on the GT source (teacher forcing): the
+    # reported dir/split accuracies compare against the human's move, which
+    # is only meaningful when the heads saw the human's source embedding —
+    # otherwise they are conditioned on an internally sampled source while
+    # the display shows the argmax source.
+    src_y_gt = torch.full((1, T), -1, dtype=torch.long)
+    src_x_gt = torch.full((1, T), -1, dtype=torch.long)
+    for t in range(T):
+        if replay["count"][t] > 0:
+            sy = replay["src_y"][t][0] if isinstance(replay["src_y"][t], list) else replay["src_y"][t]
+            sx = replay["src_x"][t][0] if isinstance(replay["src_x"][t], list) else replay["src_x"][t]
+            src_y_gt[0, t] = int(sy)
+            src_x_gt[0, t] = int(sx)
+
     with torch.no_grad():
-        pred = model(grid_seq, globals_seq, legal_mask=legal_mask)
+        pred = model(grid_seq, globals_seq, legal_mask=legal_mask,
+                     source_y=src_y_gt.to(device), source_x=src_x_gt.to(device))
 
     src_logits = pred["source_logits"][0]
     dir_logits = pred["direction_logits"][0]
