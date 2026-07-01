@@ -459,6 +459,59 @@ def test_step_vs_full_consistency():
     print(f"  Max diff: {diff:.8f} ✓")
 
 
+def test_step_vs_full_consistency_act_steps():
+    """With a fixed ACT depth, step_rl and forward(act_steps=K) must define
+    the same policy — this is what makes the PPO ratio valid."""
+    print("\n=== Fixed ACT depth: step_rl vs forward consistency ===")
+    from model.config import ModelConfig
+    from model.network import GeneralsNetwork
+
+    K = 3
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_st_layers=1, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
+        halt_max_steps=5,
+    )
+    model = GeneralsNetwork(cfg)
+    model.eval()
+
+    B, T = 1, 4
+    grid_seq = torch.randn(B, T, 12, 25, 25)
+    globals_seq = torch.randn(B, T, 4)
+
+    # Rollout: step-by-step with fixed depth, keeping the sampled sources
+    cache = None
+    step_src, step_pass, step_val, sampled = [], [], [], []
+    for t in range(T):
+        with torch.no_grad():
+            out = model.step_rl(grid_seq[:, t], globals_seq[:, t],
+                                st_cache=cache, act_steps=K)
+        cache = out["st_cache"]
+        step_src.append(out["source_logits"])
+        step_pass.append(out["pass_logits"])
+        step_val.append(out["value"])
+        sampled.append(out["action_source"])
+
+    # Update path: full-sequence forward conditioned on the rollout sources
+    src_idx = torch.stack(sampled, dim=1)  # [B, T]
+    with torch.no_grad():
+        full = model(
+            grid_seq, globals_seq,
+            source_y=src_idx // 25, source_x=src_idx % 25,
+            act_steps=K,
+        )
+
+    for name, full_t, step_t in [
+        ("source_logits", full["source_logits"], torch.stack(step_src, dim=1)),
+        ("pass_logits", full["pass_logits"], torch.stack(step_pass, dim=1)),
+        ("value", full["value"], torch.stack(step_val, dim=1)),
+    ]:
+        diff = (full_t - step_t).abs().max().item()
+        assert diff < 1e-3, f"{name} diff too large: {diff}"
+        print(f"  {name}: max diff {diff:.8f} ✓")
+
+
 def main():
     print("=" * 60)
     print("AUDIT FIX VERIFICATION TESTS")

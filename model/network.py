@@ -112,12 +112,49 @@ class GeneralsNetwork(nn.Module):
         sp = (self.row_embed + self.col_embed).reshape(1, -1, self.cfg.d_model)
         return torch.cat([sp, self.hl_pos, self.ll_pos], dim=1)
 
+    def _trm_ponder(
+        self, x: torch.Tensor, act_steps: Optional[int],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Run ``act_steps`` ACT steps of the TRM with detached carry.
+
+        The first ``act_steps - 1`` steps run without gradient; only the
+        final step is differentiated (deep-supervision one-step gradient,
+        matching the TRM recursion itself).  ``act_steps=None`` → 1 step.
+        """
+        steps = max(1, act_steps or 1)
+        carry = None
+        if steps > 1:
+            with torch.no_grad():
+                for _ in range(steps - 1):
+                    _, _, carry = self.trm(x, carry)
+        z_H, q_halt, _ = self.trm(x, carry)
+        return z_H, q_halt
+
+    def _trm_act_loop(
+        self,
+        x: torch.Tensor,
+        act_steps: Optional[int],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Inference-time ACT: fixed depth when ``act_steps`` is given
+        (needed for exact policy replay in RL), q_halt-gated otherwise."""
+        z_H, q_halt, carry = self.trm(x)
+        if act_steps is not None:
+            for _ in range(max(1, act_steps) - 1):
+                z_H, q_halt, carry = self.trm(x, carry)
+        else:
+            for _ in range(self.cfg.halt_max_steps - 1):
+                if (q_halt > 0).all():
+                    break
+                z_H, q_halt, carry = self.trm(x, carry)
+        return z_H, q_halt
+
     # ------------------------------------------------------------------
     # Forward — spatiotemporal + TRM
     # ------------------------------------------------------------------
 
     def _forward_spatiotemporal(
         self, grid_seq, globals_seq, legal_mask, source_y, source_x, wm_embed,
+        act_steps=None,
     ) -> Dict[str, torch.Tensor]:
         cfg = self.cfg
         B, T, C, H, W = grid_seq.shape
@@ -156,7 +193,7 @@ class GeneralsNetwork(nn.Module):
         # ── Stage 2: TRM pondering ──
         S = tokens.shape[2]
         x = tokens.reshape(BT, S, d)          # input embeddings for TRM
-        z_H, q_halt, _ = self.trm(x)          # [BT, S, d], [BT]
+        z_H, q_halt = self._trm_ponder(x, act_steps)  # [BT, S, d], [BT]
         z_H = self.post_norm(z_H)
 
         # Decode
@@ -170,6 +207,7 @@ class GeneralsNetwork(nn.Module):
 
     def _forward_gru(
         self, grid_seq, globals_seq, legal_mask, source_y, source_x, hidden, wm_embed,
+        act_steps=None,
     ) -> Dict[str, torch.Tensor]:
         cfg = self.cfg
         B, T, C, H, W = grid_seq.shape
@@ -198,7 +236,7 @@ class GeneralsNetwork(nn.Module):
 
         # TRM pondering
         x = self.pre_norm(tokens)
-        z_H, q_halt, _ = self.trm(x)
+        z_H, q_halt = self._trm_ponder(x, act_steps)
         z_H = self.post_norm(z_H)
 
         out = self._decode_heads(z_H, B, T, N, W, legal_mask, source_y, source_x)
@@ -460,15 +498,18 @@ class GeneralsNetwork(nn.Module):
         source_x: Optional[torch.Tensor] = None,
         hidden: Optional[torch.Tensor] = None,
         world_model_embed: Optional[torch.Tensor] = None,
+        act_steps: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         if self.is_st:
             return self._forward_spatiotemporal(
                 grid_seq, globals_seq, legal_mask,
                 source_y, source_x, world_model_embed,
+                act_steps=act_steps,
             )
         return self._forward_gru(
             grid_seq, globals_seq, legal_mask,
             source_y, source_x, hidden, world_model_embed,
+            act_steps=act_steps,
         )
 
     # ------------------------------------------------------------------
@@ -484,12 +525,13 @@ class GeneralsNetwork(nn.Module):
         world_model_embed: Optional[torch.Tensor] = None,
         st_cache: Optional[List[torch.Tensor]] = None,
         step_idx: int = 0,
+        act_steps: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         if self.is_st:
-            return self._step_st(grid, globals_vec, legal_mask, world_model_embed, st_cache)
-        return self._step_gru(grid, globals_vec, legal_mask, hidden, world_model_embed, step_idx)
+            return self._step_st(grid, globals_vec, legal_mask, world_model_embed, st_cache, act_steps)
+        return self._step_gru(grid, globals_vec, legal_mask, hidden, world_model_embed, step_idx, act_steps)
 
-    def _step_gru(self, grid, globals_vec, legal_mask, hidden, wm_embed, step_idx):
+    def _step_gru(self, grid, globals_vec, legal_mask, hidden, wm_embed, step_idx, act_steps=None):
         cfg = self.cfg
         B, d = grid.shape[0], cfg.d_model
         N = cfg.grid_h * cfg.grid_w
@@ -512,11 +554,7 @@ class GeneralsNetwork(nn.Module):
 
         # TRM with ACT
         x = self.pre_norm(tokens)
-        z_H, q_halt, carry = self.trm(x)
-        for _ in range(cfg.halt_max_steps - 1):
-            if (q_halt > 0).all():
-                break
-            z_H, q_halt, carry = self.trm(x, carry)
+        z_H, q_halt = self._trm_act_loop(x, act_steps)
         z_H = self.post_norm(z_H)
 
         spatial_out = z_H[:, :N]
@@ -550,7 +588,7 @@ class GeneralsNetwork(nn.Module):
             **rl_out,
         }
 
-    def _step_st(self, grid, globals_vec, legal_mask, wm_embed, st_cache):
+    def _step_st(self, grid, globals_vec, legal_mask, wm_embed, st_cache, act_steps=None):
         cfg = self.cfg
         B, d = grid.shape[0], cfg.d_model
         N = cfg.grid_h * cfg.grid_w
@@ -580,11 +618,7 @@ class GeneralsNetwork(nn.Module):
         tokens = self.mid_norm(tokens.squeeze(1))
 
         # Stage 2: TRM with ACT
-        z_H, q_halt, carry = self.trm(tokens)
-        for _ in range(cfg.halt_max_steps - 1):
-            if (q_halt > 0).all():
-                break
-            z_H, q_halt, carry = self.trm(tokens, carry)
+        z_H, q_halt = self._trm_act_loop(tokens, act_steps)
         z_H = self.post_norm(z_H)
 
         spatial_out = z_H[:, :N]
@@ -763,17 +797,21 @@ class GeneralsNetwork(nn.Module):
         world_model_embed: Optional[torch.Tensor] = None,
         st_cache: Optional[List[torch.Tensor]] = None,
         step_idx: int = 0,
+        act_steps: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         """Single-step inference without legal mask (RL mode).
 
         Same as ``step()`` but uses ``_sample_source_rl`` and
         ``_sample_actions_rl`` so the model can select any position.
+
+        ``act_steps`` forces a fixed TRM depth so the PPO update can
+        recompute the exact same policy with ``forward(act_steps=...)``.
         """
         if self.is_st:
-            return self._step_st_rl(grid, globals_vec, world_model_embed, st_cache)
-        return self._step_gru_rl(grid, globals_vec, hidden, world_model_embed, step_idx)
+            return self._step_st_rl(grid, globals_vec, world_model_embed, st_cache, act_steps)
+        return self._step_gru_rl(grid, globals_vec, hidden, world_model_embed, step_idx, act_steps)
 
-    def _step_gru_rl(self, grid, globals_vec, hidden, wm_embed, step_idx):
+    def _step_gru_rl(self, grid, globals_vec, hidden, wm_embed, step_idx, act_steps=None):
         cfg = self.cfg
         B, d = grid.shape[0], cfg.d_model
         N = cfg.grid_h * cfg.grid_w
@@ -794,11 +832,7 @@ class GeneralsNetwork(nn.Module):
             tokens[:, N:N + 1] += wm_embed.unsqueeze(1)
 
         x = self.pre_norm(tokens)
-        z_H, q_halt, carry = self.trm(x)
-        for _ in range(cfg.halt_max_steps - 1):
-            if (q_halt > 0).all():
-                break
-            z_H, q_halt, carry = self.trm(x, carry)
+        z_H, q_halt = self._trm_act_loop(x, act_steps)
         z_H = self.post_norm(z_H)
 
         spatial_out = z_H[:, :N]
@@ -831,7 +865,7 @@ class GeneralsNetwork(nn.Module):
             **rl_out,
         }
 
-    def _step_st_rl(self, grid, globals_vec, wm_embed, st_cache):
+    def _step_st_rl(self, grid, globals_vec, wm_embed, st_cache, act_steps=None):
         cfg = self.cfg
         B, d = grid.shape[0], cfg.d_model
         N = cfg.grid_h * cfg.grid_w
@@ -859,11 +893,7 @@ class GeneralsNetwork(nn.Module):
             new_caches.append(cache_i)
         tokens = self.mid_norm(tokens.squeeze(1))
 
-        z_H, q_halt, carry = self.trm(tokens)
-        for _ in range(cfg.halt_max_steps - 1):
-            if (q_halt > 0).all():
-                break
-            z_H, q_halt, carry = self.trm(tokens, carry)
+        z_H, q_halt = self._trm_act_loop(tokens, act_steps)
         z_H = self.post_norm(z_H)
 
         spatial_out = z_H[:, :N]
