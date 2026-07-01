@@ -55,6 +55,11 @@ def parse_args():
     p.add_argument("--tf_end", type=float, default=0.0, help="Teacher forcing ratio at last epoch")
     p.add_argument("--focal_gamma", type=float, default=1.5, help="Focal loss gamma for source CE")
     p.add_argument("--reset_scheduler", action="store_true", help="Don't load scheduler state from checkpoint")
+    p.add_argument(
+        "--max_act_steps", type=int, default=0,
+        help="Sample TRM ACT depth uniformly from [1, K] per batch so inference-time "
+             "pondering states are in-distribution (0 = use model halt_max_steps, 1 = off)",
+    )
     return p.parse_args()
 
 
@@ -107,6 +112,10 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             source_y = None
             source_x = None
 
+        # Deep-supervision-style ACT: train at a random pondering depth so
+        # carry states reached by the inference ACT loop are in-distribution.
+        act_steps = random.randint(1, args.max_act_steps) if args.max_act_steps > 1 else 1
+
         try:
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
                 pred = model(
@@ -115,6 +124,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                     source_y=source_y,
                     source_x=source_x,
                     frame_mask=frame_mask,
+                    act_steps=act_steps,
                 )
                 losses = criterion(pred, tgt, lengths, tf_mask=use_gt)
             loss = losses["loss"]
@@ -209,9 +219,12 @@ def main():
         trm_L_cycles=args.trm_L_cycles,
         trm_block_layers=args.trm_block_layers,
     )
+    if args.max_act_steps == 0:
+        args.max_act_steps = cfg.halt_max_steps
     if rank0:
         print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, "
-              f"TRM={cfg.trm_H_cycles}H\u00d7{cfg.trm_L_cycles}L\u00d7{cfg.trm_block_layers}blk")
+              f"TRM={cfg.trm_H_cycles}H\u00d7{cfg.trm_L_cycles}L\u00d7{cfg.trm_block_layers}blk, "
+              f"ACT depth 1..{args.max_act_steps}")
 
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
