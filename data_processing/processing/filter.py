@@ -30,13 +30,18 @@ def filter_replays(
         Filtered list of replays
     """
     if game_types is None:
-        game_types = ['1v1']
-    
+        game_types = ['1v1', 'custom']
+
     filtered = []
-    
+
     for entry in replays:
-        # Check game type
-        is_valid_type = entry.get("type") in game_types
+        # Check game type. 1v1-queue games are always two-player; custom
+        # lobbies can hold more, so enforce max_players on them.
+        gtype = entry.get("type")
+        n_players = len(entry.get("ranking", []))
+        is_valid_type = gtype in game_types and (
+            gtype == '1v1' or n_players <= max_players
+        )
         
         # Check minimum turns
         has_min_turns = entry.get("turns", 0) >= min_turns
