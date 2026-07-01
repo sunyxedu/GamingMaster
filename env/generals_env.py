@@ -70,8 +70,8 @@ class GeneralsEnv:
         n_mountains: int = 20,
         n_cities: int = 5,
         city_army_range: Tuple[int, int] = (40, 50),
-        # Legacy params (ignored, kept for backwards compat)
         max_turns: int = 9999,
+        # Legacy param (ignored, kept for backwards compat)
         dense_reward: bool = False,
     ):
         self.grid_h = grid_h
@@ -80,6 +80,7 @@ class GeneralsEnv:
         self.n_mountains = n_mountains
         self.n_cities = n_cities
         self.city_army_range = city_army_range
+        self.max_turns = max_turns
 
         # Real map bounds (for replays smaller than 25×25)
         self.real_h = grid_h
@@ -288,6 +289,12 @@ class GeneralsEnv:
                 reward_breakdown["r_winlose"] += 1.0
             else:
                 reward_breakdown["r_winlose"] -= 1.0
+        elif self.turn >= self.max_turns:
+            # Turn-limit truncation, not a terminal state: callers should
+            # bootstrap the value instead of assuming zero future return.
+            self.done = True
+            self.winner = None
+            info["truncated"] = True
 
         # Dense reward: heuristic delta
         if not self.done:
@@ -300,6 +307,7 @@ class GeneralsEnv:
                 self.prev_heuristic[pid] = curr_h
 
         info["reward_breakdown"] = reward_breakdown
+        info["turn"] = self.turn  # turn just completed (post-increment)
         obs = {0: self._get_observation(0), 1: self._get_observation(1)}
         return obs, rewards, self.done, info
 

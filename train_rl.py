@@ -296,13 +296,16 @@ def collect_selfplay_episode(
         }
         # Compute valid directions for chosen source
         valid_dirs = env.get_valid_directions(action_dict["source_idx"])
+        truncated = bool(info.get("truncated", False))
         buffer.add(
             obs=obs[0],
             action=action_dict,
             log_prob=step_out[0]["action_log_prob"].item(),
             value=step_out[0]["value"].item(),
             reward=rewards[0],
-            done=done,
+            # A turn-limit truncation is not a terminal state — marking it
+            # done would zero the bootstrap inside GAE.
+            done=done and not truncated,
             valid_directions=valid_dirs,
         )
 
@@ -310,8 +313,9 @@ def collect_selfplay_episode(
         if done:
             break
 
-    # Compute GAE. If truncated, bootstrap with value estimate.
-    if not done:
+    # Compute GAE. Bootstrap the value on truncation (env turn limit or
+    # rollout_steps running out) — only true terminals get 0.
+    if not done or truncated:
         grid = obs[0]["grid"].unsqueeze(0).to(device)
         glb = obs[0]["globals"].unsqueeze(0).to(device)
         with torch.no_grad():
