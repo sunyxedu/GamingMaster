@@ -10,6 +10,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from data_processing.processing.models import Player, Tile, Turn
 
+# Model grid size — larger replays would be silently cropped, hiding tiles
+# (even generals) from the observation and producing out-of-range move
+# labels that the loss clamps onto wrong tiles.
+MAX_GRID = 25
+
 
 class ReplaySimulator:
     """Simulates a generals.io replay from a player's perspective."""
@@ -28,6 +33,11 @@ class ReplaySimulator:
         # Map dimensions
         self.map_width = replay_data["mapWidth"]
         self.map_height = replay_data["mapHeight"]
+        if self.map_width > MAX_GRID or self.map_height > MAX_GRID:
+            raise ValueError(
+                f"map {self.map_width}x{self.map_height} exceeds the "
+                f"{MAX_GRID}x{MAX_GRID} model grid"
+            )
         
         # Map features
         self.cities = replay_data["cities"]
