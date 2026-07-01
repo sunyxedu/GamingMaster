@@ -682,15 +682,19 @@ def main():
                       f"{n_cur} current params — freeze boundary crossed); "
                       f"starting with a fresh optimizer")
 
-        # Override LR with CLI args (allows resetting LR on resume)
-        resume_lr = args.lr * 0.5 if (args.freeze_encoder_iters > 0 and start_iter > args.freeze_encoder_iters) else args.lr
+        # Restore the LR schedule: base LR decayed for the iterations already
+        # done (like every other decayed quantity below), halved once the
+        # unfreeze boundary has been crossed.
+        done_iters = start_iter - 1
+        resume_lr = args.lr * (args.lr_decay ** done_iters)
+        if args.freeze_encoder_iters > 0 and start_iter > args.freeze_encoder_iters:
+            resume_lr *= 0.5
         for pg in optimizer.param_groups:
             pg["lr"] = resume_lr
         if rank0:
-            print(f"  LR overridden to {resume_lr}")
+            print(f"  LR restored to {resume_lr:.3e} (decay^{done_iters})")
 
         # Recompute decayed reward scales based on iterations already done
-        done_iters = start_iter - 1
         env.city_reward_scale = args.city_reward_decay ** done_iters
         env.pass_penalty_scale = args.pass_penalty_decay ** done_iters
         env.dense_reward_scale = args.dense_reward_decay ** done_iters
