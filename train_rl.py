@@ -736,8 +736,11 @@ def main():
     for iteration in range(start_iter, args.iterations + 1):
         t0 = time.time()
 
-        # Unfreeze encoder after schedule
-        if args.freeze_encoder_iters > 0 and iteration == args.freeze_encoder_iters + 1:
+        # Unfreeze encoder after schedule. Only fires when THIS process
+        # started in the frozen phase — a resume landing exactly past the
+        # boundary already applied the 0.5x factor in the resume block and
+        # would otherwise be halved a second time.
+        if frozen_phase and iteration == args.freeze_encoder_iters + 1:
             raw = model
             unfreeze_all(raw)
             current_lr = optimizer.param_groups[0]["lr"]
