@@ -19,38 +19,45 @@ MAX_GRID = 25
 class ReplaySimulator:
     """Simulates a generals.io replay from a player's perspective."""
     
-    def __init__(self, replay_data: Dict[str, Any], player_name: str):
+    def __init__(self, replay_data: Dict[str, Any], player_name: str,
+                 strict: bool = True):
         """
         Initialize the simulator.
-        
+
         Args:
             replay_data: Deserialized replay data
             player_name: Name of the player to simulate from perspective of
+            strict: Reject replays the simulator cannot reproduce faithfully
+                (oversized maps, modern map features, rule modifiers).
+                The training pipeline must keep this True; model-independent
+                viewers may pass False to render such replays anyway.
         """
         self.data = replay_data
         self.player_name = player_name
-        
+
         # Map dimensions
         self.map_width = replay_data["mapWidth"]
         self.map_height = replay_data["mapHeight"]
-        if self.map_width > MAX_GRID or self.map_height > MAX_GRID:
-            raise ValueError(
-                f"map {self.map_width}x{self.map_height} exceeds the "
-                f"{MAX_GRID}x{MAX_GRID} model grid"
-            )
+        if strict:
+            if self.map_width > MAX_GRID or self.map_height > MAX_GRID:
+                raise ValueError(
+                    f"map {self.map_width}x{self.map_height} exceeds the "
+                    f"{MAX_GRID}x{MAX_GRID} model grid"
+                )
 
-        # Modern map features are not simulated — replaying such games would
-        # silently diverge from the real state (swamps drain armies, deserts
-        # halve production, lookouts/observatories grant vision, ...).
-        for feature in ("swamps", "deserts", "lookouts", "observatories",
-                        "lights", "neutrals"):
-            if replay_data.get(feature):
-                raise ValueError(f"unsupported map feature: {feature}")
+            # Modern map features are not simulated — replaying such games
+            # would silently diverge from the real state (swamps drain
+            # armies, deserts halve production, lookouts grant vision, ...).
+            for feature in ("swamps", "deserts", "lookouts", "observatories",
+                            "lights", "neutrals"):
+                if replay_data.get(feature):
+                    raise ValueError(f"unsupported map feature: {feature}")
 
-        # Game modifiers (Torus, Defenseless, City-State, ...) change the
-        # rules themselves — mostly present in custom lobbies.
-        if replay_data.get("modifiers"):
-            raise ValueError(f"unsupported modifiers: {replay_data['modifiers']}")
+            # Game modifiers (Torus, Defenseless, City-State, ...) change
+            # the rules themselves — mostly present in custom lobbies.
+            if replay_data.get("modifiers"):
+                raise ValueError(
+                    f"unsupported modifiers: {replay_data['modifiers']}")
         
         # Map features
         self.cities = replay_data["cities"]

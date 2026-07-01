@@ -98,7 +98,7 @@ def _collect_fog_frames(
     replay_data: Dict[str, Any], player: str,
 ) -> Dict[str, Any]:
     """Run fog-of-war simulation and return compact frame data."""
-    sim = ReplaySimulator(replay_data, player)
+    sim = ReplaySimulator(replay_data, player, strict=False)
     result = sim.simulate()
     H = replay_data["mapHeight"]
     W = replay_data["mapWidth"]
@@ -140,7 +140,7 @@ def _collect_fog_frames(
 
 def _collect_god_frames(replay_data: Dict[str, Any]) -> Dict[str, Any]:
     """Step-by-step god-mode simulation returning compact frame data."""
-    sim = ReplaySimulator(replay_data, replay_data["usernames"][0])
+    sim = ReplaySimulator(replay_data, replay_data["usernames"][0], strict=False)
     sim.init_map()
     H, W = sim.map_height, sim.map_width
     max_turn = sim.moves[-1]["turn"] if sim.moves else 0
