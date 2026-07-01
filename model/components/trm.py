@@ -166,6 +166,11 @@ class TRM(nn.Module):
                     for _ in range(L_cycles):
                         z_L = self.reasoning(z_L, z_H + x)
                     z_H = self.reasoning(z_H, z_L)
+
+        # Re-entrant checkpointing propagates grads only when its inputs
+        # require grad — this must run for H_cycles == 1 (init/carry states)
+        # too, not just after the no-grad cycles above.
+        if torch.is_grad_enabled():
             z_H = z_H.detach().requires_grad_(True)
             z_L = z_L.detach().requires_grad_(True)
 
