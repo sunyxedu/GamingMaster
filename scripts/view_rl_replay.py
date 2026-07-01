@@ -72,10 +72,13 @@ def generate_html(replay, output_path):
     ep_len = replay["ep_len"]
     winner = replay["winner"]
     total_r = replay["total_reward_p0"]
-    n_illegal_p0 = sum(1 for s in steps if s["illegal"][0])
-    n_illegal_p1 = sum(1 for s in steps if s["illegal"][1])
-    n_pass_p0 = sum(1 for s in steps if s["p0_action"] is None)
-    n_pass_p1 = sum(1 for s in steps if s["p1_action"] is None)
+    # The first entry is the pre-game snapshot (turn=-1, no actions) — keep
+    # it as a display frame but exclude it from action statistics.
+    action_steps = [s for s in steps if s.get("turn", -1) >= 0]
+    n_illegal_p0 = sum(1 for s in action_steps if s["illegal"][0])
+    n_illegal_p1 = sum(1 for s in action_steps if s["illegal"][1])
+    n_pass_p0 = sum(1 for s in action_steps if s["p0_action"] is None)
+    n_pass_p1 = sum(1 for s in action_steps if s["p1_action"] is None)
 
     outcome = f"Winner: P{winner}" if winner is not None else "Draw"
 
