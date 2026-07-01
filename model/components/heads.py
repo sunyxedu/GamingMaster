@@ -119,7 +119,12 @@ class PassHead(nn.Module):
 
 
 class ValueHead(nn.Module):
-    """Predict game value from the high-level decision token."""
+    """Predict game value from the high-level decision token.
+
+    Output is unbounded: IL targets live in [-1, 1] but RL returns
+    (shaped rewards discounted at gamma≈0.999) routinely exceed that
+    range, and a tanh-bounded critic saturates on them.
+    """
 
     def __init__(self, d_model: int):
         super().__init__()
@@ -127,7 +132,6 @@ class ValueHead(nn.Module):
             nn.Linear(d_model, d_model),
             nn.ReLU(),
             nn.Linear(d_model, 1),
-            nn.Tanh(),
         )
 
     def forward(self, hl_token: torch.Tensor) -> torch.Tensor:

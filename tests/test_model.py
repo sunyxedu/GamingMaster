@@ -130,7 +130,7 @@ def test_value_head():
     x = torch.randn(4, 128)
     v = head(x)
     assert v.shape == (4,), f"Shape: {v.shape}"
-    assert (v >= -1).all() and (v <= 1).all(), "Value out of [-1, 1] range"
+    assert torch.isfinite(v).all(), "Value contains non-finite entries"
     print(f"  Input:  {x.shape}")
     print(f"  Output: {v.shape}, range=[{v.min():.3f}, {v.max():.3f}] ✓")
 

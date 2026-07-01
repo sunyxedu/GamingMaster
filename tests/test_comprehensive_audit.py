@@ -581,7 +581,8 @@ def test_source_head_partial_mask():
 
 
 def test_value_head_range():
-    """ValueHead output is always in [-1, 1] (due to Tanh)."""
+    """ValueHead output is unbounded (no tanh) so the critic can fit
+    discounted RL returns that exceed [-1, 1]."""
     print("\n=== ValueHead: output range ===")
     from model.components.heads import ValueHead
 
@@ -593,8 +594,8 @@ def test_value_head_range():
 
     for x, name in [(x_large, "large"), (x_small, "small"), (x_rand, "random")]:
         v = head(x)
-        assert (v >= -1.0).all() and (v <= 1.0).all(), f"{name}: values out of [-1,1]"
-    print("  Output always in [-1, 1] ✓")
+        assert torch.isfinite(v).all(), f"{name}: non-finite values"
+    print("  Output finite and unbounded (no tanh saturation) ✓")
 
 
 def test_direction_head_dimensions():
