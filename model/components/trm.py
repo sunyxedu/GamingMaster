@@ -120,6 +120,11 @@ class TRM(nn.Module):
         nn.init.zeros_(self.q_head.weight)
         nn.init.constant_(self.q_head.bias, -5.0)
 
+        # Read q_halt from the HL decision token (index N = grid_h*grid_w in
+        # the network's token layout).  Falls back to token 0 when the
+        # sequence is shorter (e.g. unit tests running TRM standalone).
+        self.q_token_idx = cfg.grid_h * cfg.grid_w
+
     def _reasoning_with_injection(
         self,
         z: torch.Tensor,
@@ -177,8 +182,8 @@ class TRM(nn.Module):
             )
         z_H = checkpoint(self.reasoning, z_H, z_L, use_reentrant=True)
 
-        # Q-halt from the first token position (following paper)
-        q_halt = self.q_head(z_H[:, 0]).squeeze(-1)
+        q_idx = self.q_token_idx if S > self.q_token_idx else 0
+        q_halt = self.q_head(z_H[:, q_idx]).squeeze(-1)
 
         new_carry = (z_H.detach(), z_L.detach())
         return z_H, q_halt, new_carry
