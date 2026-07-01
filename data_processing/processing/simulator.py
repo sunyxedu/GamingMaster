@@ -108,6 +108,11 @@ class ReplaySimulator:
         if start_tile.occupied != player_idx or start_tile.army <= 1:
             return
 
+        # The server drops moves into mountains (players probe fog obstacles
+        # hoping for a city) — executing them would "capture" the mountain.
+        if end_tile.terrain == 3:
+            return
+
         # Calculate armies to move
         if is_50:
             army_to_move = start_tile.army // 2
