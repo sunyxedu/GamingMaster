@@ -560,7 +560,25 @@ def main():
         print(f"Device: {device}{suffix}")
 
     # ---- Build or load model -------------------------------------------
-    if args.il_checkpoint:
+    # A resume checkpoint defines the architecture: rebuilding from CLI
+    # defaults would silently change the run's lineage (drop the world-model
+    # head, switch temporal mixer) or crash at opponent-pool load.
+    rl_ckpt = None
+    if args.resume:
+        # Load once, on CPU: the checkpoint embeds the whole opponent pool,
+        # and load_state_dict copies to the right devices on its own.
+        rl_ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
+
+    if rl_ckpt is not None and "config" in rl_ckpt:
+        cfg = ModelConfig(**{k: v for k, v in rl_ckpt["config"].items()
+                             if k in ModelConfig.__dataclass_fields__})
+        model = GeneralsNetwork(cfg).to(device)
+        if rank0:
+            print(f"Architecture from resume checkpoint {args.resume}")
+            if args.il_checkpoint:
+                print("  [note] --il_checkpoint ignored on resume (weights and "
+                      "architecture come from the resume checkpoint)")
+    elif args.il_checkpoint:
         ckpt = torch.load(args.il_checkpoint, map_location=device, weights_only=False)
         cfg = ModelConfig(**ckpt["config"])
         model = GeneralsNetwork(cfg).to(device)
@@ -591,12 +609,8 @@ def main():
     start_iter = 1
     il_weight = args.il_weight
     wins = {0: 0, 1: 0, "draw": 0}
-    rl_ckpt = None
     if args.resume:
-        # Load on CPU: the checkpoint embeds the whole opponent pool, and
-        # materializing it on GPU would keep pool_size+1 models resident.
-        # load_state_dict copies to the right devices on its own.
-        rl_ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
+        # (checkpoint already loaded above, where it defined the architecture)
         # Support both RL checkpoints (model_state) and IL checkpoints
         state_key = "model_state" if "model_state" in rl_ckpt else "model_state_dict"
         load_model_state(model, rl_ckpt[state_key], ctx="resume checkpoint")
