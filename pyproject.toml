@@ -18,7 +18,7 @@ dependencies = [
 [project.scripts]
 prepare-data = "scripts.prepare_data:main"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=7.0.0",
     "ruff>=0.1.0",
