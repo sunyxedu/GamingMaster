@@ -1,12 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=gm-data-v2
-#SBATCH --partition=batch
+#SBATCH --partition=cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
+#SBATCH --cpus-per-task=20
 #SBATCH --time=1-00:00:00
 #SBATCH --output=slurm-%j.out
-#SBATCH --exclude=gpu[1-6]        # cpu[1-4] are idle — keep GPU nodes free
 
 # Unified data pipeline: fetch → filter → download → simulate → convert,
 # one command, resumable via per-player manifests. --target counts games
@@ -28,4 +27,4 @@ srun apptainer exec /scratch/$USER/pytorch.sif \
         --target 3000 \
         --min-turns 80 \
         --min-opponent-stars 40 \
-        --workers 64
+        --workers 18
