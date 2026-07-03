@@ -280,10 +280,10 @@ def main():
         print(f"Model parameters: {n_params:,}")
 
     criterion = ImitationLoss(grid_w=cfg.grid_w, focal_gamma=args.focal_gamma)
+    from model.rl_utils import optim_param_groups
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        optim_param_groups(model, args.weight_decay),
         lr=args.lr,
-        weight_decay=args.weight_decay,
     )
 
     if len(args.data_dir) == 1:
@@ -327,7 +327,8 @@ def main():
             saved = ckpt["optimizer_state"]
             n_saved = sum(len(g["params"]) for g in saved["param_groups"])
             n_cur = sum(len(g["params"]) for g in optimizer.param_groups)
-            if "epoch" in ckpt and n_saved == n_cur:
+            if ("epoch" in ckpt and n_saved == n_cur
+                    and len(saved["param_groups"]) == len(optimizer.param_groups)):
                 optimizer.load_state_dict(saved)
             elif rank0:
                 print("  [warn] optimizer state skipped (non-IL checkpoint "

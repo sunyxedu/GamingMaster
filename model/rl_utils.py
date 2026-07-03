@@ -272,6 +272,34 @@ def compute_policy_kl_rl(
 
 
 # ======================================================================
+# Optimizer parameter groups
+# ======================================================================
+
+def optim_param_groups(model: nn.Module, weight_decay: float) -> List[Dict]:
+    """Parameter groups excluding recurrence memory parameters from decay.
+
+    AdamW's decoupled decay shrinks ``retention_bias`` toward 0 every step
+    (a → 0.5), and the shrinkage hits the longest-memory channels hardest
+    (half-life ≈ ln2·e^b, so a constant relative shrink of b multiplies the
+    half-life down). Quantified: IL defaults (lr=1e-3, wd=1e-4) erode the
+    slowest channel from 1024 to ~370 ticks over ~1.5M steps. ``h_init``
+    is likewise decayed against a weak one-sample-per-sequence gradient.
+    """
+    no_decay, decay = [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if name.endswith("retention_bias") or name.endswith("temporal_rnn.h_init"):
+            no_decay.append(p)
+        else:
+            decay.append(p)
+    groups = [{"params": decay, "weight_decay": weight_decay}]
+    if no_decay:
+        groups.append({"params": no_decay, "weight_decay": 0.0})
+    return groups
+
+
+# ======================================================================
 # Checkpoint loading
 # ======================================================================
 

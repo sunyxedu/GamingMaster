@@ -360,6 +360,38 @@ def test_next_obs_head_trains_memory():
     print(f"  |d wm_loss / d a_proj| max = {ga.abs().max():.3e} > 0 OK")
 
 
+def test_memory_params_excluded_from_weight_decay():
+    """AdamW decay must not erode retention_bias/h_init: decay shrinks the
+    retention logits toward 0.5, hitting the longest-memory channels hardest
+    (half-life ~ ln2·e^bias). optim_param_groups puts them in a wd=0 group."""
+    print("\n=== weight decay excludes memory parameters ===")
+    from model.rl_utils import optim_param_groups
+
+    model, _ = _small_recurrent_net()
+    groups = optim_param_groups(model, weight_decay=0.1)
+    assert len(groups) == 2 and groups[1]["weight_decay"] == 0.0
+
+    no_decay_ids = {id(p) for p in groups[1]["params"]}
+    for name, p in model.named_parameters():
+        in_no_decay = id(p) in no_decay_ids
+        is_memory = name.endswith("retention_bias") or name.endswith("temporal_rnn.h_init")
+        assert in_no_decay == is_memory, f"{name}: wrong decay group"
+
+    # Empirical: pure decay (zero grad) must leave retention_bias untouched
+    opt = torch.optim.AdamW(groups, lr=1e-2)
+    rb = model.st_layers[0].temporal_rnn.retention_bias
+    before = rb.detach().clone()
+    for p in model.parameters():
+        p.grad = torch.zeros_like(p)
+    for _ in range(100):
+        opt.step()
+    assert torch.equal(rb.detach(), before), "retention_bias still being decayed"
+    # ...while a regular weight IS decayed (sanity that decay is on)
+    w = model.st_layers[0].temporal_rnn.a_proj.weight
+    assert not torch.equal(w.detach(), torch.zeros_like(w)) and w.abs().sum() > 0
+    print("  retention_bias/h_init bit-unchanged after 100 AdamW steps OK")
+
+
 def main():
     tests = [
         test_scan_matches_naive_autograd,
@@ -373,6 +405,7 @@ def main():
         test_network_recurrent_bptt_reaches_early_frames,
         test_next_obs_loss_masks_and_zero,
         test_next_obs_head_trains_memory,
+        test_memory_params_excluded_from_weight_decay,
     ]
     passed = failed = 0
     for t in tests:

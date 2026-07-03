@@ -42,6 +42,7 @@ from model.rl_utils import (
     compute_policy_kl_rl,
     freeze_encoder,
     load_model_state,
+    optim_param_groups,
     unfreeze_all,
 )
 
@@ -683,10 +684,11 @@ def main():
     il_criterion = ImitationLoss(grid_w=cfg.grid_w, value_weight=0.0)
 
     # ---- Optimiser -----------------------------------------------------
+    # optim_param_groups keeps weight decay off the recurrence memory
+    # parameters (retention_bias / h_init) and respects requires_grad.
     optimizer = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
+        optim_param_groups(model, args.weight_decay),
         lr=args.lr,
-        weight_decay=args.weight_decay,
     )
 
     # ---- IL data loader (optional) -------------------------------------
@@ -720,11 +722,12 @@ def main():
             saved = rl_ckpt["optimizer_state"]
             n_saved = sum(len(g["params"]) for g in saved["param_groups"])
             n_cur = sum(len(g["params"]) for g in optimizer.param_groups)
-            if n_saved == n_cur:
+            if n_saved == n_cur and len(saved["param_groups"]) == len(optimizer.param_groups):
                 optimizer.load_state_dict(saved)
             elif rank0:
                 print(f"  [warn] optimizer state skipped ({n_saved} saved vs "
-                      f"{n_cur} current params — freeze boundary crossed); "
+                      f"{n_cur} current params, "
+                      f"{len(saved['param_groups'])} vs {len(optimizer.param_groups)} groups); "
                       f"starting with a fresh optimizer")
 
         # Restore the LR schedule: base LR decayed for the iterations already
@@ -772,9 +775,8 @@ def main():
             unfreeze_all(raw)
             current_lr = optimizer.param_groups[0]["lr"]
             optimizer = torch.optim.AdamW(
-                model.parameters(),
+                optim_param_groups(model, args.weight_decay),
                 lr=current_lr * 0.5,
-                weight_decay=args.weight_decay,
             )
             if rank0:
                 print(f"Iteration {iteration}: encoder unfrozen, LR reduced to {current_lr * 0.5:.3e}")
