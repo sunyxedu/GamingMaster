@@ -237,15 +237,33 @@ def main():
         suffix = f" (world_size={dist.get_world_size()})" if distributed else ""
         print(f"Device: {device}{suffix}")
 
-    cfg = ModelConfig(
-        d_model=args.d_model,
-        n_heads=args.n_heads,
-        trm_H_cycles=args.trm_H_cycles,
-        trm_L_cycles=args.trm_L_cycles,
-        trm_block_layers=args.trm_block_layers,
-        temporal_mixer=args.temporal_mixer,
-        predict_next_obs=(args.world_model_weight > 0),
-    )
+    # A resume checkpoint defines the architecture — rebuilding from CLI
+    # defaults would silently drop heads or switch the temporal mixer.
+    resume_ckpt = None
+    if args.resume:
+        resume_ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
+
+    if resume_ckpt is not None and "config" in resume_ckpt:
+        cfg = ModelConfig(**{k: v for k, v in resume_ckpt["config"].items()
+                             if k in ModelConfig.__dataclass_fields__})
+        # Enabling the world-model loss on a lineage without the head fails
+        # loudly at weight load (documented in --world_model_weight help).
+        cfg.predict_next_obs = cfg.predict_next_obs or (args.world_model_weight > 0)
+        if rank0:
+            print(f"Architecture from resume checkpoint {args.resume}")
+            if cfg.temporal_mixer != args.temporal_mixer:
+                print(f"  [note] --temporal_mixer {args.temporal_mixer} ignored; "
+                      f"checkpoint uses {cfg.temporal_mixer!r}")
+    else:
+        cfg = ModelConfig(
+            d_model=args.d_model,
+            n_heads=args.n_heads,
+            trm_H_cycles=args.trm_H_cycles,
+            trm_L_cycles=args.trm_L_cycles,
+            trm_block_layers=args.trm_block_layers,
+            temporal_mixer=args.temporal_mixer,
+            predict_next_obs=(args.world_model_weight > 0),
+        )
     if args.max_act_steps == 0:
         args.max_act_steps = cfg.halt_max_steps
     if rank0:
@@ -298,7 +316,7 @@ def main():
     start_epoch = 1
     start_step = 0
     if args.resume:
-        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        ckpt = resume_ckpt  # loaded above, where it defined the architecture
         raw_model = model.module if distributed else model
         load_model_state(raw_model, ckpt["model_state"], ctx="resume checkpoint")
         # Only reuse optimizer state from IL checkpoints whose trainable set
