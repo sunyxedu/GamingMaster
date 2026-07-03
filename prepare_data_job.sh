@@ -13,9 +13,9 @@
 # dropped-move labels, afk winners, oversize/feature/modifier rejection)
 # are polluted and must not be used — write to a fresh data-v2 directory.
 #
-# The 'download' stage needs internet: if compute nodes are offline, run
-#   uv run python -m scripts.prepare_data --players ... --stages download ...
-# on the login node first; this job then only filters/simulates/converts.
+# The 'download' stage (fetch + filter-as-you-go + file download) needs
+# internet — run it on the login node first (it is numpy-free); this job
+# then only simulates/converts. --max-replays counts FILTERED games.
 
 export PYTHONPATH=~/GamingMaster
 
@@ -23,6 +23,6 @@ srun apptainer exec /scratch/$USER/pytorch.sif \
     python ~/GamingMaster/scripts/prepare_data.py \
         --players Human.exe \
         --output /scratch/$USER/gaming-master/data-v2 \
-        --stages filter simulate convert \
+        --stages simulate convert \
         --min-turns 80 \
         --min-opponent-stars 40

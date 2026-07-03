@@ -13,10 +13,14 @@ Usage:
     uv run python scripts/prepare_data.py --players MeltedToast --output data/output --stages convert
 
 Stages:
-    download  - Fetch replay metadata and download replay files
-    filter    - Filter replays by criteria (1v1, min turns, etc.)
+    download  - Fetch metadata page-by-page, filter as-you-go until
+                --max-replays FILTERED games are found, download their files
+    filter    - (optional) re-filter cached metadata offline
     simulate  - Simulate replays from player perspective with fog of war
     convert   - Convert simulated data to training format
+
+--max-replays counts games that PASS the filter (1v1, min turns, opponent
+stars, date), not raw games fetched.
 """
 
 import argparse
@@ -32,7 +36,13 @@ from typing import List, Optional
 # wheels cannot load (e.g. pre-x86-64-v2 login nodes).
 
 
-ALL_STAGES = ["download", "filter", "simulate", "convert"]
+# "download" fetches+filters incrementally and downloads filtered games only;
+# "filter" remains available for re-filtering cached metadata offline.
+ALL_STAGES = ["download", "simulate", "convert"]
+STAGE_CHOICES = ["download", "filter", "simulate", "convert"]
+
+
+FILTER_START_DATE = "2025-04-01T00:00:00Z"
 
 
 async def run_download(
@@ -40,51 +50,78 @@ async def run_download(
     output_dir: Path,
     max_replays: int,
     max_concurrent: int,
+    min_turns: int,
+    min_opponent_stars: Optional[int],
 ) -> dict[str, List[dict]]:
-    """Download replay metadata and files for given players."""
-    from data_processing import fetch_replay_list, download_replays
+    """Fetch metadata page-by-page, filtering as we go, until ``max_replays``
+    FILTERED games are collected (or the player's history is exhausted) —
+    then download replay files for the filtered games only.
+
+    ``max_replays`` therefore counts games that actually enter training,
+    not raw games fetched (most of a player's history is FFA/short games).
+    """
+    from data_processing import download_replays, filter_replays
+    from data_processing.download.api_client import fetch_replay_pages
 
     metadata_dir = output_dir / "metadata"
+    filtered_dir = output_dir / "filtered"
     replays_dir = output_dir / "replays"
-    metadata_dir.mkdir(parents=True, exist_ok=True)
-    replays_dir.mkdir(parents=True, exist_ok=True)
+    for d in (metadata_dir, filtered_dir, replays_dir):
+        d.mkdir(parents=True, exist_ok=True)
 
-    all_metadata = {}
+    def passes(entries: List[dict]) -> List[dict]:
+        return filter_replays(
+            entries,
+            min_turns=min_turns,
+            player_name=player,
+            min_opponent_stars=min_opponent_stars,
+            start_date=FILTER_START_DATE,
+        )
 
+    all_filtered = {}
     for player in players:
-        print(f"\n=== Downloading replays for {player} ===")
+        print(f"\n=== Downloading replays for {player} "
+              f"(target: {max_replays} filtered) ===")
 
-        # Fetch metadata
+        # Resume from cached metadata (pages are newest-first, append-only)
         metadata_file = metadata_dir / f"{player}.json"
+        raw: List[dict] = []
         if metadata_file.exists():
-            with open(metadata_file) as f:
-                replays = json.load(f)
-            if len(replays) >= max_replays:
-                print(f"Loading existing metadata from {metadata_file} ({len(replays)} replays)")
-            else:
-                print(f"Existing metadata has {len(replays)} replays, fetching {max_replays}...")
-                replays = await fetch_replay_list(player, total=max_replays)
-                with open(metadata_file, "w") as f:
-                    json.dump(replays, f, indent=2)
-                print(f"Saved {len(replays)} replay metadata to {metadata_file}")
-        else:
-            print(f"Fetching replay list for {player}...")
-            replays = await fetch_replay_list(player, total=max_replays)
+            raw = json.load(open(metadata_file))
+            print(f"Resuming from {len(raw)} cached metadata entries")
+        filtered = passes(raw)
+
+        if len(filtered) < max_replays:
+            async for page in fetch_replay_pages(player, start_offset=len(raw)):
+                raw.extend(page)
+                page_pass = passes(page)
+                filtered.extend(page_pass)
+                print(f"  fetched {len(raw)} games, "
+                      f"filtered {len(filtered)}/{max_replays}")
+                if len(filtered) >= max_replays:
+                    break
             with open(metadata_file, "w") as f:
-                json.dump(replays, f, indent=2)
-            print(f"Saved {len(replays)} replay metadata to {metadata_file}")
+                json.dump(raw, f, indent=2)
 
-        all_metadata[player] = replays
+        if len(filtered) < max_replays:
+            print(f"  history exhausted: only {len(filtered)} filtered games")
+        filtered = filtered[:max_replays]
 
-        # Download replay files
-        replay_ids = [r["id"] for r in replays]
+        filtered_file = filtered_dir / f"{player}.json"
+        with open(filtered_file, "w") as f:
+            json.dump(filtered, f, indent=2)
+        print(f"Filtered: {len(filtered)} games (saved to {filtered_file})")
+        all_filtered[player] = filtered
+
+        # Download replay files for the FILTERED games only
+        replay_ids = [r["id"] for r in filtered]
         print(f"Downloading {len(replay_ids)} replay files...")
         result = await download_replays(
             replay_ids, str(replays_dir), max_concurrent=max_concurrent
         )
         print(f"Downloaded: {result['success']} success, {result['failed']} failed")
 
-    return all_metadata
+    return all_filtered
 
 
 def run_filter(
@@ -121,7 +158,7 @@ def run_filter(
             min_turns=min_turns,
             player_name=player,
             min_opponent_stars=min_opponent_stars,
-            start_date="2025-04-01T00:00:00Z",
+            start_date=FILTER_START_DATE,
         )
 
         filtered_file = filtered_dir / f"{player}.json"
@@ -257,7 +294,7 @@ async def async_main():
         "--stages",
         "-s",
         nargs="+",
-        choices=ALL_STAGES,
+        choices=STAGE_CHOICES,
         default=ALL_STAGES,
         help=f"Stages to run (default: all). Choices: {ALL_STAGES}",
     )
@@ -265,7 +302,7 @@ async def async_main():
         "--max-replays",
         type=int,
         default=10000,
-        help="Maximum replays to fetch per player (default: 10000)",
+        help="Target number of FILTERED replays per player (default: 10000)",
     )
     parser.add_argument(
         "--max-concurrent",
@@ -302,6 +339,8 @@ async def async_main():
             output_dir,
             args.max_replays,
             args.max_concurrent,
+            args.min_turns,
+            args.min_opponent_stars,
         )
 
     if "filter" in args.stages:

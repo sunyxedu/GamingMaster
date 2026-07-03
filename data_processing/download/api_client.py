@@ -57,6 +57,39 @@ async def fetch_replay_list(
     return data
 
 
+async def fetch_replay_pages(
+    username: str,
+    count_per_request: int = 200,
+    start_offset: int = 0,
+):
+    """Async generator yielding metadata pages (newest first) until the
+    API is exhausted. Enables filter-as-you-go fetching: the caller keeps
+    consuming pages until it has enough FILTERED replays, instead of
+    guessing how many raw games to request."""
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        offset = start_offset
+        while True:
+            url = (f"https://generals.io/api/replaysForUsername"
+                   f"?u={username}&offset={offset}&count={count_per_request}")
+            try:
+                async with session.get(url) as response:
+                    replays = await response.json()
+            except Exception as e:
+                print(f"Error fetching replays at offset {offset}: {e}")
+                return
+            if not replays:
+                return
+            yield replays
+            if len(replays) < count_per_request:
+                return  # short page = history exhausted
+            offset += len(replays)
+
+
 async def save_replay_list(username: str, output_path: str, total: int = 10000):
     """
     Fetch and save replay list to a JSON file.
