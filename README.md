@@ -28,7 +28,7 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 ├── env/                      # RL environment
 │   └── generals_env.py       #   Two-player simultaneous-move Gym-like env
 ├── scripts/
-│   ├── prepare_data.py       # CLI: batch download → filter → simulate → convert
+│   ├── prepare_data.py       # CLI: unified resumable pipeline (fetch→filter→simulate→convert)
 │   ├── replay_to_visual.py   # CLI: download one replay → simulate → HTML viewer
 │   ├── play_model.py         # CLI: model plays on a real replay map (vs replay opponent)
 │   ├── simulate_model.py     # CLI: compare model predictions to human moves
@@ -72,7 +72,7 @@ open viz_output/replay.html
 ### 3. Prepare Training Data
 
 ```bash
-uv run python -m scripts.prepare_data --players Human.exe --output data/output --max-replays 1000 --min-turns 80
+uv run python -m scripts.prepare_data --players Human.exe --output data/output --target 1000 --min-turns 80
 ```
 
 ### 4. Train (Imitation Learning)

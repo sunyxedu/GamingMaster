@@ -1,28 +1,43 @@
 #!/usr/bin/env python3
 """
-Data preparation script for generals.io replays.
+Unified data pipeline for generals.io replays.
 
-Usage:
-    # Run all stages
-    uv run python scripts/prepare_data.py --players MeltedToast --output data/output
+One command takes each game end-to-end:
 
-    # Run specific stages
-    uv run python scripts/prepare_data.py --players MeltedToast --output data/output --stages download filter
+    metadata fetch → filter → download → simulate → convert → training JSON
 
-    # Run only convert stage on existing data
-    uv run python scripts/prepare_data.py --players MeltedToast --output data/output --stages convert
+and keeps going until --target trainable games per player exist on disk (or
+the player's history is exhausted). Every candidate game's fate lives in a
+per-player manifest, so reruns resume exactly where they stopped and never
+redo work. Run the SAME command on any machine:
 
-Stages:
-    download  - Collect --max-replays TRAINABLE games: fetch metadata
-                page-by-page, filter, download candidate files and SIMULATE
-                them; only games the simulator accepts count (map size,
-                modifiers and modern features are only visible in the file)
-    filter    - (optional) re-filter cached metadata offline
-    simulate  - (usually a no-op after download) simulate leftover games
-    convert   - Convert simulated data to training format (needs numpy)
+    uv run python -m scripts.prepare_data \\
+        --players Human.exe --target 3000 \\
+        --output /scratch/$USER/gaming-master/data-v2
 
---max-replays counts games that survive filter AND simulation, i.e. games
-that actually enter the training set.
+Machine notes:
+  - fetch/filter/download/simulate need no numpy (old login nodes work);
+    convert does. Without numpy, finished games park in the "simulated"
+    state (they still count toward --target) and the next run on a
+    numpy-capable machine converts them.
+  - Only the fetch step needs internet; a run without new fetching (e.g.
+    finishing conversions on a compute node) works offline.
+
+Layout:
+    output/
+      manifest/<player>.json        single source of truth per game
+      replays/<id>.json             raw replays (RL map pool, viewers)
+      filtered/<player>.json        trainable-game list (train_rl --filtered_file)
+      simulated/<player>/<id>.json  parking lot when numpy is unavailable
+      training/<player>/<id>.json   final training format
+
+Game statuses in the manifest:
+    pending    filtered candidate, not yet processed
+    converted  in training/ (terminal, counts toward --target)
+    simulated  awaiting convert on a numpy machine (counts toward --target)
+    skipped    simulator rejection — oversize map, modifiers, modern
+               features (terminal, never retried; reason recorded)
+    error      transient failure, retried on the next run
 """
 
 import argparse
@@ -31,401 +46,255 @@ import json
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Optional
-
-# Stage imports happen inside each run_* function: numpy is only needed by
-# the convert stage, and download/filter must work on machines where numpy
-# wheels cannot load (e.g. pre-x86-64-v2 login nodes).
-
-
-# "download" fetches+filters incrementally and downloads filtered games only;
-# "filter" remains available for re-filtering cached metadata offline.
-ALL_STAGES = ["download", "simulate", "convert"]
-STAGE_CHOICES = ["download", "filter", "simulate", "convert"]
-
+from typing import Dict, List, Optional
 
 FILTER_START_DATE = "2025-04-01T00:00:00Z"
+CHUNK = 16  # games downloaded + processed per round
 
 
-async def run_download(
-    players: List[str],
-    output_dir: Path,
-    max_replays: int,
-    max_concurrent: int,
-    min_turns: int,
-    min_opponent_stars: Optional[int],
-    sim_workers: Optional[int] = None,
-) -> dict[str, List[dict]]:
-    """Collect ``max_replays`` TRAINABLE games per player.
+# ----------------------------------------------------------------------
+# Worker functions (top-level for pickling; imports inside so the parent
+# process never needs numpy)
+# ----------------------------------------------------------------------
 
-    Loop: fetch metadata page-by-page → filter → download candidate files →
-    SIMULATE them. Only games the simulator accepts count toward the target
-    (the metadata filter cannot see map size / modifiers / modern features —
-    those live inside the replay file and are rejected at simulation).
-    Rejected ids go to ``simulated/<player>_skipped.json`` so reruns don't
-    redo them; ``filtered/<player>.json`` ends up listing exactly the games
-    that entered ``simulated/`` (and hence training).
-    """
-    from data_processing import download_replays, filter_replays
-    from data_processing.download.api_client import fetch_replay_pages
-
-    metadata_dir = output_dir / "metadata"
-    filtered_dir = output_dir / "filtered"
-    replays_dir = output_dir / "replays"
-    simulated_dir = output_dir / "simulated"
-    for d in (metadata_dir, filtered_dir, replays_dir, simulated_dir):
-        d.mkdir(parents=True, exist_ok=True)
-
-    CHUNK = 16  # candidates downloaded+simulated per round
-
-    def passes(entries: List[dict]) -> List[dict]:
-        return filter_replays(
-            entries,
-            min_turns=min_turns,
-            player_name=player,
-            min_opponent_stars=min_opponent_stars,
-            start_date=FILTER_START_DATE,
-        )
-
-    all_filtered = {}
-    for player in players:
-        print(f"\n=== Collecting replays for {player} "
-              f"(target: {max_replays} trainable) ===")
-
-        sim_dir = simulated_dir / player
-        sim_dir.mkdir(parents=True, exist_ok=True)
-        skip_file = simulated_dir / f"{player}_skipped.json"
-        skipped: dict = json.load(open(skip_file)) if skip_file.exists() else {}
-
-        # Resume: cached metadata (newest-first, append-only) + existing sims
-        metadata_file = metadata_dir / f"{player}.json"
-        raw: List[dict] = []
-        if metadata_file.exists():
-            raw = json.load(open(metadata_file))
-            print(f"Resuming from {len(raw)} cached metadata entries, "
-                  f"{len(skipped)} known-skipped")
-
-        ok_entries: List[dict] = []
-        pending: List[dict] = []
-        for e in passes(raw):
-            if (sim_dir / f"{e['id']}.json").exists():
-                ok_entries.append(e)
-            elif e["id"] not in skipped:
-                pending.append(e)
-
-        pages = fetch_replay_pages(player, start_offset=len(raw))
-        exhausted = False
-
-        with ProcessPoolExecutor(max_workers=sim_workers) as pool:
-            while len(ok_entries) < max_replays:
-                # Refill the candidate queue from the API
-                while not pending and not exhausted:
-                    try:
-                        page = await anext(pages)
-                    except StopAsyncIteration:
-                        exhausted = True
-                        break
-                    raw.extend(page)
-                    pending.extend(
-                        e for e in passes(page)
-                        if e["id"] not in skipped
-                        and not (sim_dir / f"{e['id']}.json").exists()
-                    )
-                    print(f"  fetched {len(raw)} games, "
-                          f"candidates +{len(pending)}")
-                if not pending:
-                    print(f"  history exhausted: only {len(ok_entries)} "
-                          f"trainable games")
-                    break
-
-                take = min(CHUNK, max_replays - len(ok_entries))
-                batch, pending = pending[:take], pending[take:]
-                ids = [e["id"] for e in batch]
-                await download_replays(ids, str(replays_dir),
-                                       max_concurrent=max_concurrent)
-
-                futures = {}
-                for e in batch:
-                    replay_file = replays_dir / f"{e['id']}.json"
-                    if not replay_file.exists():
-                        print(f"  download failed: {e['id']} (will retry on rerun)")
-                        continue
-                    out_file = sim_dir / f"{e['id']}.json"
-                    futures[pool.submit(
-                        _simulate_one, (str(replay_file), player, str(out_file))
-                    )] = e
-                for fut in as_completed(futures):
-                    e = futures[fut]
-                    try:
-                        fut.result()
-                        ok_entries.append(e)
-                    except ValueError as err:  # simulator rejection — permanent
-                        skipped[e["id"]] = str(err)
-                        print(f"  skipped {e['id']}: {err}")
-                    except Exception as err:  # transient — retry on rerun
-                        print(f"  error simulating {e['id']}: {err}")
-                print(f"  trainable {len(ok_entries)}/{max_replays}")
-
-        with open(metadata_file, "w") as f:
-            json.dump(raw, f, indent=2)
-        with open(skip_file, "w") as f:
-            json.dump(skipped, f, indent=2)
-        filtered_file = filtered_dir / f"{player}.json"
-        with open(filtered_file, "w") as f:
-            json.dump(ok_entries, f, indent=2)
-        print(f"Collected {len(ok_entries)} trainable games "
-              f"(saved to {filtered_file})")
-        all_filtered[player] = ok_entries
-
-    return all_filtered
-
-
-def run_filter(
-    players: List[str],
-    output_dir: Path,
-    min_turns: int,
-    min_opponent_stars: Optional[int],
-) -> dict[str, List[dict]]:
-    """Filter replays based on criteria."""
-    from data_processing import filter_replays
-
-    metadata_dir = output_dir / "metadata"
-    filtered_dir = output_dir / "filtered"
-    filtered_dir.mkdir(parents=True, exist_ok=True)
-
-    all_filtered = {}
-
-    for player in players:
-        print(f"\n=== Filtering replays for {player} ===")
-
-        metadata_file = metadata_dir / f"{player}.json"
-        if not metadata_file.exists():
-            print(f"Metadata file not found: {metadata_file}")
-            print("Run 'download' stage first.")
-            continue
-
-        with open(metadata_file) as f:
-            replays = json.load(f)
-
-        print(f"Input: {len(replays)} replays")
-
-        filtered = filter_replays(
-            replays,
-            min_turns=min_turns,
-            player_name=player,
-            min_opponent_stars=min_opponent_stars,
-            start_date=FILTER_START_DATE,
-        )
-
-        filtered_file = filtered_dir / f"{player}.json"
-        with open(filtered_file, "w") as f:
-            json.dump(filtered, f, indent=2)
-
-        print(f"Output: {len(filtered)} replays (saved to {filtered_file})")
-        all_filtered[player] = filtered
-
-    return all_filtered
-
-
-def _simulate_one(args):
-    """Worker function for parallel simulation (must be top-level for pickling)."""
+def _process_game(args) -> str:
+    """simulate (+ convert when possible) one game. Returns final status."""
+    replay_path, player, training_path, sim_fallback_path, do_convert = args
     from data_processing import simulate_replay
 
-    replay_file, player, output_file = args
-    simulate_replay(replay_file, player, output_file)
-    return replay_file
+    sim = simulate_replay(replay_path, player)  # ValueError = permanent reject
+    if do_convert:
+        from data_processing import convert_simulator_to_gio
+        gio = convert_simulator_to_gio(sim)
+        with open(training_path, "w") as f:
+            json.dump(gio, f)
+        return "converted"
+    with open(sim_fallback_path, "w") as f:
+        json.dump(sim, f)
+    return "simulated"
 
 
-def run_simulate(players: List[str], output_dir: Path, max_workers: int = None) -> int:
-    """Simulate replays from each player's perspective using multiprocessing."""
-    filtered_dir = output_dir / "filtered"
-    replays_dir = output_dir / "replays"
-    simulated_dir = output_dir / "simulated"
+def _convert_parked(args) -> str:
+    """Finish a game parked in the simulated state; removes the parking file."""
+    sim_path, training_path = args
+    from data_processing import convert_simulator_to_gio
 
-    total_simulated = 0
-
-    for player in players:
-        print(f"\n=== Simulating replays for {player} ===")
-
-        player_sim_dir = simulated_dir / player
-        player_sim_dir.mkdir(parents=True, exist_ok=True)
-
-        filtered_file = filtered_dir / f"{player}.json"
-        if not filtered_file.exists():
-            print(f"Filtered file not found: {filtered_file}")
-            print("Run 'filter' stage first.")
-            continue
-
-        with open(filtered_file) as f:
-            filtered = json.load(f)
-
-        # Collect tasks to submit
-        tasks = []
-        already_done = 0
-        for replay in filtered:
-            replay_id = replay["id"]
-            replay_file = replays_dir / f"{replay_id}.json"
-            output_file = player_sim_dir / f"{replay_id}.json"
-
-            if output_file.exists():
-                already_done += 1
-                continue
-
-            if not replay_file.exists():
-                print(f"Replay file not found: {replay_file}")
-                continue
-
-            tasks.append((str(replay_file), player, str(output_file)))
-
-        simulated_count = already_done
-        if tasks:
-            print(f"Simulating {len(tasks)} replays concurrently ({already_done} already done)...")
-            with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                futures = {executor.submit(_simulate_one, t): t for t in tasks}
-                for future in as_completed(futures):
-                    replay_file, _, _ = futures[future]
-                    replay_id = Path(replay_file).stem
-                    try:
-                        future.result()
-                        simulated_count += 1
-                    except ValueError as e:
-                        print(f"Skipping {replay_id}: {e}")
-                    except Exception as e:
-                        print(f"Error simulating {replay_id}: {e}")
-
-        print(f"Simulated {simulated_count} replays for {player}")
-        total_simulated += simulated_count
-
-    return total_simulated
+    with open(sim_path) as f:
+        sim = json.load(f)
+    gio = convert_simulator_to_gio(sim)
+    with open(training_path, "w") as f:
+        json.dump(gio, f)
+    os.remove(sim_path)
+    return "converted"
 
 
-def run_convert(players: List[str], output_dir: Path) -> int:
-    """Convert simulated data to training format."""
-    from data_processing import batch_parse_directory
+def _numpy_available() -> bool:
+    try:
+        import numpy  # noqa: F401
+        return True
+    except Exception:
+        return False
 
-    simulated_dir = output_dir / "simulated"
-    training_dir = output_dir / "training"
 
-    total_converted = 0
+# ----------------------------------------------------------------------
+# Pipeline
+# ----------------------------------------------------------------------
 
-    for player in players:
-        print(f"\n=== Converting data for {player} ===")
+class PlayerPipeline:
+    def __init__(self, player: str, output_dir: Path, args):
+        self.player = player
+        self.args = args
+        self.manifest_file = output_dir / "manifest" / f"{player}.json"
+        self.replays_dir = output_dir / "replays"
+        self.sim_dir = output_dir / "simulated" / player
+        self.training_dir = output_dir / "training" / player
+        self.filtered_file = output_dir / "filtered" / f"{player}.json"
+        for d in (self.manifest_file.parent, self.replays_dir, self.sim_dir,
+                  self.training_dir, self.filtered_file.parent):
+            d.mkdir(parents=True, exist_ok=True)
 
-        player_sim_dir = simulated_dir / player
-        player_train_dir = training_dir / player
+        if self.manifest_file.exists():
+            m = json.load(open(self.manifest_file))
+        else:
+            m = {"fetched_offset": 0, "games": {}}
+        self.offset: int = m["fetched_offset"]
+        self.games: Dict[str, dict] = m["games"]
 
-        if not player_sim_dir.exists():
-            print(f"Simulated directory not found: {player_sim_dir}")
-            print("Run 'simulate' stage first.")
-            continue
+    # -- bookkeeping ----------------------------------------------------
 
-        count = batch_parse_directory(str(player_sim_dir), str(player_train_dir))
-        total_converted += count
+    def save(self) -> None:
+        tmp = self.manifest_file.with_suffix(".tmp")
+        with open(tmp, "w") as f:
+            json.dump({"fetched_offset": self.offset, "games": self.games}, f, indent=1)
+        tmp.replace(self.manifest_file)
 
-    return total_converted
+    def trainable(self) -> int:
+        return sum(1 for g in self.games.values()
+                   if g["status"] in ("converted", "simulated"))
+
+    def by_status(self, *statuses: str) -> List[str]:
+        return [gid for gid, g in self.games.items() if g["status"] in statuses]
+
+    def _passes(self, entries: List[dict]) -> List[dict]:
+        from data_processing import filter_replays
+        return filter_replays(
+            entries,
+            min_turns=self.args.min_turns,
+            player_name=self.player,
+            min_opponent_stars=self.args.min_opponent_stars,
+            start_date=FILTER_START_DATE,
+        )
+
+    def _task(self, gid: str, do_convert: bool):
+        return (str(self.replays_dir / f"{gid}.json"), self.player,
+                str(self.training_dir / f"{gid}.json"),
+                str(self.sim_dir / f"{gid}.json"), do_convert)
+
+    # -- pipeline steps ---------------------------------------------------
+
+    def finish_parked(self, pool: ProcessPoolExecutor) -> None:
+        """Convert games parked in the simulated state (needs numpy)."""
+        parked = self.by_status("simulated")
+        if not parked:
+            return
+        print(f"  converting {len(parked)} parked games...")
+        futures = {
+            pool.submit(_convert_parked, (str(self.sim_dir / f"{gid}.json"),
+                                          str(self.training_dir / f"{gid}.json"))): gid
+            for gid in parked
+        }
+        for fut in as_completed(futures):
+            gid = futures[fut]
+            try:
+                self.games[gid]["status"] = fut.result()
+            except Exception as e:
+                self.games[gid].update(status="error", reason=str(e))
+                print(f"  error converting {gid}: {e}")
+        self.save()
+
+    async def run(self, pool: ProcessPoolExecutor, do_convert: bool) -> None:
+        from data_processing import download_replays
+        from data_processing.download.api_client import fetch_replay_pages
+
+        target = self.args.target
+        print(f"\n=== {self.player}: {self.trainable()}/{target} trainable ===")
+
+        if do_convert:
+            self.finish_parked(pool)
+
+        # Retry transient errors from previous runs, then fresh candidates
+        for gid in self.by_status("error"):
+            self.games[gid]["status"] = "pending"
+        pending = self.by_status("pending")
+        pages = fetch_replay_pages(self.player, start_offset=self.offset)
+        exhausted = False
+
+        while self.trainable() < target:
+            while not pending and not exhausted:
+                try:
+                    page = await anext(pages)
+                except StopAsyncIteration:
+                    exhausted = True
+                    break
+                except Exception as e:  # offline machine: finish what we have
+                    print(f"  fetch failed ({e}) — continuing without new games")
+                    exhausted = True
+                    break
+                self.offset += len(page)
+                for entry in self._passes(page):
+                    if entry["id"] not in self.games:
+                        self.games[entry["id"]] = {"status": "pending", "meta": entry}
+                        pending.append(entry["id"])
+                print(f"  fetched {self.offset} games, "
+                      f"candidates pending: {len(pending)}")
+            if not pending:
+                print(f"  history exhausted: {self.trainable()}/{target} trainable")
+                break
+
+            take = min(CHUNK, target - self.trainable())
+            batch, pending = pending[:take], pending[take:]
+
+            missing = [gid for gid in batch
+                       if not (self.replays_dir / f"{gid}.json").exists()]
+            if missing:
+                await download_replays(missing, str(self.replays_dir),
+                                       max_concurrent=self.args.max_concurrent)
+
+            futures = {}
+            for gid in batch:
+                if not (self.replays_dir / f"{gid}.json").exists():
+                    self.games[gid].update(status="error", reason="download failed")
+                    print(f"  download failed: {gid} (retried next run)")
+                    continue
+                futures[pool.submit(_process_game, self._task(gid, do_convert))] = gid
+            for fut in as_completed(futures):
+                gid = futures[fut]
+                try:
+                    self.games[gid]["status"] = fut.result()
+                    self.games[gid].pop("reason", None)
+                except ValueError as e:  # simulator rejection — permanent
+                    self.games[gid].update(status="skipped", reason=str(e))
+                    print(f"  skipped {gid}: {e}")
+                except Exception as e:  # transient
+                    self.games[gid].update(status="error", reason=str(e))
+                    print(f"  error {gid}: {e}")
+            self.save()
+            print(f"  trainable {self.trainable()}/{target}")
+
+        # filtered/<player>.json = exactly the trainable games (this is what
+        # train_rl --filtered_file consumes for the RL map pool)
+        trainable_meta = [g["meta"] for g in self.games.values()
+                          if g["status"] in ("converted", "simulated")]
+        with open(self.filtered_file, "w") as f:
+            json.dump(trainable_meta, f, indent=1)
+
+        n_parked = len(self.by_status("simulated"))
+        counts = {}
+        for g in self.games.values():
+            counts[g["status"]] = counts.get(g["status"], 0) + 1
+        print(f"  done: {counts}")
+        if n_parked:
+            print(f"  NOTE: {n_parked} games parked as 'simulated' — rerun the "
+                  f"same command on a numpy-capable machine to convert them.")
 
 
 async def async_main():
-    parser = argparse.ArgumentParser(
-        description="Prepare generals.io replay data for training",
+    p = argparse.ArgumentParser(
+        description="Unified generals.io data pipeline (see module docstring)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
+    p.add_argument("--players", "-p", nargs="+", required=True,
+                   help="Player usernames to collect")
+    p.add_argument("--output", "-o", type=Path, required=True,
+                   help="Output directory")
+    p.add_argument("--target", "--max-replays", type=int, default=10000,
+                   dest="target",
+                   help="Trainable games per player (counts games that "
+                        "survive filter AND simulation)")
+    p.add_argument("--min-turns", type=int, default=80)
+    p.add_argument("--min-opponent-stars", type=int, default=40)
+    p.add_argument("--workers", type=int, default=None,
+                   help="Parallel simulate/convert workers (default: CPU count)")
+    p.add_argument("--max-concurrent", type=int, default=None,
+                   help="Concurrent replay downloads (default: CPU count)")
+    args = p.parse_args()
 
-    parser.add_argument(
-        "--players",
-        "-p",
-        nargs="+",
-        required=True,
-        help="Player usernames to process",
-    )
-    parser.add_argument(
-        "--output",
-        "-o",
-        type=Path,
-        required=True,
-        help="Output directory for processed data",
-    )
-    parser.add_argument(
-        "--stages",
-        "-s",
-        nargs="+",
-        choices=STAGE_CHOICES,
-        default=ALL_STAGES,
-        help=f"Stages to run (default: all). Choices: {ALL_STAGES}",
-    )
-    parser.add_argument(
-        "--max-replays",
-        type=int,
-        default=10000,
-        help="Target number of TRAINABLE replays per player (default: 10000)",
-    )
-    parser.add_argument(
-        "--max-concurrent",
-        type=int,
-        default=None,
-        help="Maximum concurrent downloads (default: os.cpu_count())",
-    )
-    parser.add_argument(
-        "--min-turns",
-        type=int,
-        default=80,
-        help="Minimum turns required (default: 80)",
-    )
-    parser.add_argument(
-        "--sim-workers",
-        type=int,
-        default=None,
-        help="Parallel simulation workers in the download loop (default: CPU count)",
-    )
-    parser.add_argument(
-        "--min-opponent-stars",
-        type=int,
-        default=40,
-        help="Minimum opponent stars required (default: 60)",
-    )
+    do_convert = _numpy_available()
+    if not do_convert:
+        print("numpy unavailable on this machine — games will park in the "
+              "'simulated' state; rerun on a numpy machine to finish.")
 
-    args = parser.parse_args()
+    with ProcessPoolExecutor(max_workers=args.workers) as pool:
+        for player in args.players:
+            pipeline = PlayerPipeline(player, args.output, args)
+            await pipeline.run(pool, do_convert)
 
-    output_dir = args.output
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"Players: {args.players}")
-    print(f"Output: {output_dir}")
-    print(f"Stages: {args.stages}")
-    print("=" * 50)
-
-    if "download" in args.stages:
-        await run_download(
-            args.players,
-            output_dir,
-            args.max_replays,
-            args.max_concurrent,
-            args.min_turns,
-            args.min_opponent_stars,
-            sim_workers=args.sim_workers,
-        )
-
-    if "filter" in args.stages:
-        run_filter(
-            args.players,
-            output_dir,
-            args.min_turns,
-            args.min_opponent_stars,
-        )
-
-    if "simulate" in args.stages:
-        run_simulate(args.players, output_dir)
-
-    if "convert" in args.stages:
-        run_convert(args.players, output_dir)
-
-    print("\n" + "=" * 50)
-    print("Done!")
+    print("\nDone. Validate with: uv run python scripts/validate_dataset.py "
+          f"{args.output}/training/<player>")
 
 
 def main():
-    """Entry point for the CLI."""
     asyncio.run(async_main())
 
 

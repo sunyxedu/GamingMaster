@@ -1,12 +1,24 @@
 # Data Pipeline
 
-`scripts/prepare_data.py` runs four stages: **download → filter → simulate →
-convert**. The output of `convert` is what `train_il.py` consumes.
+`scripts/prepare_data.py` is a single unified command that takes each game
+end-to-end — **fetch metadata → filter → download → simulate → convert** —
+until `--target` trainable games per player exist on disk. A game only
+counts once it survives BOTH the metadata filter and the simulator (map
+size, modifiers and modern features are only visible inside the replay
+file). Every candidate's fate is recorded in `manifest/<player>.json`, so
+runs are idempotent and resumable: interrupt and rerun freely.
 
 ```bash
 uv run python -m scripts.prepare_data --players Human.exe \
-    --output data/output --max-replays 1000 --min-turns 80
+    --output data/output --target 1000 --min-turns 80
 ```
+
+Machine flexibility: fetch/filter/simulate need no numpy (old login nodes
+work — finished games park in a `simulated` state) and only fetching needs
+internet; rerunning the same command on a numpy machine converts parked
+games. `filtered/<player>.json` ends up listing exactly the trainable
+games — the same file `train_rl.py --filtered_file` consumes for the RL
+map pool.
 
 ## What gets rejected, and why
 
@@ -21,7 +33,9 @@ therefore drops:
 | Replays with swamps / deserts / lookouts / observatories / lights / neutrals | `ReplaySimulator` | These features change army/production/vision rules the simulator does not implement |
 | Replays with game modifiers (Torus, Defenseless, City-State, …) | `ReplaySimulator` | Modifiers change the rules themselves |
 
-`prepare_data.py` catches these `ValueError`s and reports skipped replays.
+`prepare_data.py` records these rejections in the manifest (with reasons)
+and automatically fetches further back in the player's history to replace
+them, so `--target` is always met when enough history exists.
 Model-independent viewers (`scripts/replay_to_visual.py`) construct the
 simulator with `strict=False` and can still render such replays.
 
