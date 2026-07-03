@@ -18,6 +18,15 @@
 # Datasets generated before the 2026-07 simulator fixes are polluted —
 # always write to a fresh data-v2 directory.
 
+# The pipeline overlaps network and CPU (background downloader feeding a
+# always-full process pool), so --workers = all cores saturates the node.
+#
+# Multiple players? One node each fills cpu[1-4]:
+#   for P in Human.exe qianglituomao Crescent_; do
+#     sbatch --export=ALL,PLAYER=$P prepare_data_job.sh
+#   done
+# (set --players "${PLAYER:-Human.exe}" below to use the env override)
+#
 # No srun (single-task job; step creation times out on the cpu partition)
 # and no apptainer (the container lacks the lzstring package — the repo
 # venv on shared home has everything and cpu nodes run its wheels fine).
@@ -25,9 +34,9 @@ export PYTHONPATH=~/GamingMaster
 cd ~/GamingMaster
 
 .venv/bin/python -m scripts.prepare_data \
-        --players Human.exe \
+        --players "${PLAYER:-Human.exe}" \
         --output /scratch/$USER/gaming-master/data-v2 \
         --target 3000 \
         --min-turns 80 \
         --min-opponent-stars 40 \
-        --workers 18
+        --workers 20

@@ -49,7 +49,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 FILTER_START_DATE = "2025-04-01T00:00:00Z"
-CHUNK = 16  # games downloaded + processed per round
 
 
 # ----------------------------------------------------------------------
@@ -173,10 +172,14 @@ class PlayerPipeline:
         self.save()
 
     async def run(self, pool: ProcessPoolExecutor, do_convert: bool) -> None:
+        """Overlapped pipeline: metadata fetch and file downloads run as
+        background asyncio tasks while the process pool simulates — the
+        CPUs never wait for the network and vice versa."""
         from data_processing import download_replays
         from data_processing.download.api_client import fetch_replay_pages
 
         target = self.args.target
+        workers = self.args.workers or os.cpu_count() or 4
         print(f"\n=== {self.player}: {self.trainable()}/{target} trainable ===")
 
         if do_convert:
@@ -185,50 +188,85 @@ class PlayerPipeline:
         # Retry transient errors from previous runs, then fresh candidates
         for gid in self.by_status("error"):
             self.games[gid]["status"] = "pending"
-        pending = self.by_status("pending")
+        pending = self.by_status("pending")           # metadata only
+        ready: List[str] = []                         # replay file on disk
+        for gid in list(pending):
+            if (self.replays_dir / f"{gid}.json").exists():
+                pending.remove(gid)
+                ready.append(gid)
+
         pages = fetch_replay_pages(self.player, start_offset=self.offset)
         exhausted = False
+        loop = asyncio.get_running_loop()
+        in_flight: Dict[asyncio.Future, str] = {}
+        dl_task: Optional[asyncio.Task] = None
+        dirty = 0
 
-        while self.trainable() < target:
-            while not pending and not exhausted:
-                try:
-                    page = await anext(pages)
-                except StopAsyncIteration:
-                    exhausted = True
-                    break
-                except Exception as e:  # offline machine: finish what we have
-                    print(f"  fetch failed ({e}) — continuing without new games")
-                    exhausted = True
-                    break
-                self.offset += len(page)
-                for entry in self._passes(page):
-                    if entry["id"] not in self.games:
-                        self.games[entry["id"]] = {"status": "pending", "meta": entry}
-                        pending.append(entry["id"])
-                print(f"  fetched {self.offset} games, "
-                      f"candidates pending: {len(pending)}")
-            if not pending:
-                print(f"  history exhausted: {self.trainable()}/{target} trainable")
-                break
+        def need_more() -> bool:
+            return self.trainable() + len(in_flight) + len(ready) + len(pending) < target
 
-            take = min(CHUNK, target - self.trainable())
-            batch, pending = pending[:take], pending[take:]
+        async def fetch_page() -> None:
+            nonlocal exhausted
+            try:
+                page = await anext(pages)
+            except StopAsyncIteration:
+                exhausted = True
+                return
+            except Exception as e:  # offline machine: finish what we have
+                print(f"  fetch failed ({e}) — continuing without new games")
+                exhausted = True
+                return
+            self.offset += len(page)
+            for entry in self._passes(page):
+                if entry["id"] not in self.games:
+                    self.games[entry["id"]] = {"status": "pending", "meta": entry}
+                    pending.append(entry["id"])
+            print(f"  fetched {self.offset} games, candidates: {len(pending)}")
 
-            missing = [gid for gid in batch
-                       if not (self.replays_dir / f"{gid}.json").exists()]
+        async def download_batch() -> None:
+            batch = pending[:2 * workers]
+            del pending[:2 * workers]
+            missing = [g for g in batch
+                       if not (self.replays_dir / f"{g}.json").exists()]
             if missing:
                 await download_replays(missing, str(self.replays_dir),
                                        max_concurrent=self.args.max_concurrent)
+            for g in batch:
+                if (self.replays_dir / f"{g}.json").exists():
+                    ready.append(g)
+                else:
+                    self.games[g].update(status="error", reason="download failed")
+                    print(f"  download failed: {g} (retried next run)")
 
-            futures = {}
-            for gid in batch:
-                if not (self.replays_dir / f"{gid}.json").exists():
-                    self.games[gid].update(status="error", reason="download failed")
-                    print(f"  download failed: {gid} (retried next run)")
+        while True:
+            # 1) candidate metadata: fetch ahead while more will be needed
+            if not exhausted and need_more() and not pending and not ready:
+                await fetch_page()
+                continue
+
+            # 2) downloads: run in the background, keep a 2×workers buffer
+            if pending and len(ready) < 2 * workers and (dl_task is None or dl_task.done()):
+                dl_task = asyncio.create_task(download_batch())
+
+            # 3) CPUs: keep the pool full while the target is unmet
+            while ready and len(in_flight) < workers \
+                    and self.trainable() + len(in_flight) < target:
+                gid = ready.pop()
+                in_flight[loop.run_in_executor(
+                    pool, _process_game, self._task(gid, do_convert))] = gid
+
+            if not in_flight:
+                if dl_task is not None and not dl_task.done():
+                    await dl_task
                     continue
-                futures[pool.submit(_process_game, self._task(gid, do_convert))] = gid
-            for fut in as_completed(futures):
-                gid = futures[fut]
+                if not exhausted and need_more():
+                    continue  # go fetch another page
+                break  # target met, or nothing left anywhere
+
+            done, _ = await asyncio.wait(in_flight.keys(),
+                                         return_when=asyncio.FIRST_COMPLETED)
+            for fut in done:
+                gid = in_flight.pop(fut)
                 try:
                     self.games[gid]["status"] = fut.result()
                     self.games[gid].pop("reason", None)
@@ -238,8 +276,17 @@ class PlayerPipeline:
                 except Exception as e:  # transient
                     self.games[gid].update(status="error", reason=str(e))
                     print(f"  error {gid}: {e}")
-            self.save()
-            print(f"  trainable {self.trainable()}/{target}")
+            dirty += len(done)
+            if dirty >= 32:
+                self.save()
+                dirty = 0
+                print(f"  trainable {self.trainable()}/{target}")
+
+        if dl_task is not None and not dl_task.done():
+            await dl_task
+        self.save()
+        if self.trainable() < target:
+            print(f"  history exhausted: {self.trainable()}/{target} trainable")
 
         # filtered/<player>.json = exactly the trainable games (this is what
         # train_rl --filtered_file consumes for the RL map pool)
