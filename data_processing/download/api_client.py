@@ -61,11 +61,16 @@ async def fetch_replay_pages(
     username: str,
     count_per_request: int = 200,
     start_offset: int = 0,
+    stride_pages: int = 1,
 ):
-    """Async generator yielding metadata pages (newest first) until the
-    API is exhausted. Enables filter-as-you-go fetching: the caller keeps
-    consuming pages until it has enough FILTERED replays, instead of
-    guessing how many raw games to request."""
+    """Async generator yielding ``(next_offset, page)`` tuples, newest first,
+    until the API is exhausted. Enables filter-as-you-go fetching.
+
+    ``stride_pages > 1`` supports sharding: shard k of n starts at
+    ``k * count_per_request`` with stride n, so shards page through disjoint
+    slices of the player's history with zero coordination. ``next_offset``
+    is what a resuming caller should pass back as ``start_offset``.
+    """
     ssl_context = ssl.create_default_context()
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
@@ -84,10 +89,10 @@ async def fetch_replay_pages(
                 return
             if not replays:
                 return
-            yield replays
+            offset += count_per_request * stride_pages
+            yield offset, replays
             if len(replays) < count_per_request:
                 return  # short page = history exhausted
-            offset += len(replays)
 
 
 async def save_replay_list(username: str, output_path: str, total: int = 10000):

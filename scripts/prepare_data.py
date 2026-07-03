@@ -103,11 +103,15 @@ class PlayerPipeline:
     def __init__(self, player: str, output_dir: Path, args):
         self.player = player
         self.args = args
-        self.manifest_file = output_dir / "manifest" / f"{player}.json"
+        # Sharding: shard k of n owns metadata pages k, k+n, k+2n, ... —
+        # disjoint games, independent manifests, zero cross-job coordination.
+        self.shard_k, self.shard_n = args.shard
+        tag = f".shard-{self.shard_k}-of-{self.shard_n}" if self.shard_n > 1 else ""
+        self.manifest_file = output_dir / "manifest" / f"{player}{tag}.json"
         self.replays_dir = output_dir / "replays"
         self.sim_dir = output_dir / "simulated" / player
         self.training_dir = output_dir / "training" / player
-        self.filtered_file = output_dir / "filtered" / f"{player}.json"
+        self.filtered_file = output_dir / "filtered" / f"{player}{tag}.json"
         for d in (self.manifest_file.parent, self.replays_dir, self.sim_dir,
                   self.training_dir, self.filtered_file.parent):
             d.mkdir(parents=True, exist_ok=True)
@@ -115,7 +119,7 @@ class PlayerPipeline:
         if self.manifest_file.exists():
             m = json.load(open(self.manifest_file))
         else:
-            m = {"fetched_offset": 0, "games": {}}
+            m = {"fetched_offset": self.shard_k * 200, "games": {}}
         self.offset: int = m["fetched_offset"]
         self.games: Dict[str, dict] = m["games"]
 
@@ -178,9 +182,12 @@ class PlayerPipeline:
         from data_processing import download_replays
         from data_processing.download.api_client import fetch_replay_pages
 
-        target = self.args.target
+        # Each shard is responsible for its slice of the total target
+        target = -(-self.args.target // self.shard_n)  # ceil division
         workers = self.args.workers or os.cpu_count() or 4
-        print(f"\n=== {self.player}: {self.trainable()}/{target} trainable ===")
+        tag = (f" [shard {self.shard_k}/{self.shard_n}]"
+               if self.shard_n > 1 else "")
+        print(f"\n=== {self.player}{tag}: {self.trainable()}/{target} trainable ===")
 
         if do_convert:
             self.finish_parked(pool)
@@ -195,7 +202,8 @@ class PlayerPipeline:
                 pending.remove(gid)
                 ready.append(gid)
 
-        pages = fetch_replay_pages(self.player, start_offset=self.offset)
+        pages = fetch_replay_pages(self.player, start_offset=self.offset,
+                                   stride_pages=self.shard_n)
         exhausted = False
         loop = asyncio.get_running_loop()
         in_flight: Dict[asyncio.Future, str] = {}
@@ -208,7 +216,7 @@ class PlayerPipeline:
         async def fetch_page() -> None:
             nonlocal exhausted
             try:
-                page = await anext(pages)
+                self.offset, page = await anext(pages)
             except StopAsyncIteration:
                 exhausted = True
                 return
@@ -216,7 +224,6 @@ class PlayerPipeline:
                 print(f"  fetch failed ({e}) — continuing without new games")
                 exhausted = True
                 return
-            self.offset += len(page)
             for entry in self._passes(page):
                 if entry["id"] not in self.games:
                     self.games[entry["id"]] = {"status": "pending", "meta": entry}
@@ -305,6 +312,21 @@ class PlayerPipeline:
                   f"same command on a numpy-capable machine to convert them.")
 
 
+def merge_shards(args) -> None:
+    """Combine per-shard filtered lists into filtered/<player>.json."""
+    for player in args.players:
+        fdir = args.output / "filtered"
+        merged: Dict[str, dict] = {}
+        for f in sorted(fdir.glob(f"{player}.shard-*.json")) + \
+                 ([fdir / f"{player}.json"] if (fdir / f"{player}.json").exists() else []):
+            for entry in json.load(open(f)):
+                merged[entry["id"]] = entry
+        out = fdir / f"{player}.json"
+        with open(out, "w") as fh:
+            json.dump(list(merged.values()), fh, indent=1)
+        print(f"{player}: merged {len(merged)} trainable games -> {out}")
+
+
 async def async_main():
     p = argparse.ArgumentParser(
         description="Unified generals.io data pipeline (see module docstring)",
@@ -321,11 +343,26 @@ async def async_main():
                         "survive filter AND simulation)")
     p.add_argument("--min-turns", type=int, default=80)
     p.add_argument("--min-opponent-stars", type=int, default=40)
+    p.add_argument("--shard", type=str, default="0/1",
+                   help="Shard spec K/N for multi-node collection of one "
+                        "player (e.g. 0/4 .. 3/4); shards own disjoint "
+                        "metadata pages and need no coordination")
+    p.add_argument("--merge", action="store_true",
+                   help="Merge per-shard filtered lists into "
+                        "filtered/<player>.json (run once after all shards)")
     p.add_argument("--workers", type=int, default=None,
                    help="Parallel simulate/convert workers (default: CPU count)")
     p.add_argument("--max-concurrent", type=int, default=None,
                    help="Concurrent replay downloads (default: CPU count)")
     args = p.parse_args()
+    k, n = (int(x) for x in args.shard.split("/"))
+    if not (n >= 1 and 0 <= k < n):
+        p.error(f"invalid --shard {args.shard!r}: need 0 <= K < N")
+    args.shard = (k, n)
+
+    if args.merge:
+        merge_shards(args)
+        return
 
     do_convert = _numpy_available()
     if not do_convert:

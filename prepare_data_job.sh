@@ -18,14 +18,20 @@
 # Datasets generated before the 2026-07 simulator fixes are polluted —
 # always write to a fresh data-v2 directory.
 
-# The pipeline overlaps network and CPU (background downloader feeding a
-# always-full process pool), so --workers = all cores saturates the node.
+# The pipeline overlaps network and CPU (background downloader feeding an
+# always-full process pool), so --workers = all cores saturates one node.
 #
-# Multiple players? One node each fills cpu[1-4]:
-#   for P in Human.exe qianglituomao Crescent_; do
-#     sbatch --export=ALL,PLAYER=$P prepare_data_job.sh
-#   done
-# (set --players "${PLAYER:-Human.exe}" below to use the env override)
+# To saturate ALL FOUR cpu nodes on a single player, submit as a job array —
+# each task owns a disjoint shard of the player's history (no coordination):
+#
+#   sbatch --array=0-3 prepare_data_job.sh
+#   # after all tasks finish, merge the shard lists once:
+#   .venv/bin/python -m scripts.prepare_data -p Human.exe \
+#       -o /scratch/$USER/gaming-master/data-v2 --merge
+#
+# Multiple players instead? One node each:
+#   for P in Human.exe qianglituomao; do
+#     sbatch --export=ALL,PLAYER=$P prepare_data_job.sh; done
 #
 # No srun (single-task job; step creation times out on the cpu partition)
 # and no apptainer (the container lacks the lzstring package — the repo
@@ -33,8 +39,16 @@
 export PYTHONPATH=~/GamingMaster
 cd ~/GamingMaster
 
+# Shard spec from the array task id (defaults to 0/1 = unsharded)
+if [ -n "$SLURM_ARRAY_TASK_ID" ]; then
+    SHARD="$SLURM_ARRAY_TASK_ID/$SLURM_ARRAY_TASK_COUNT"
+else
+    SHARD="0/1"
+fi
+
 .venv/bin/python -m scripts.prepare_data \
         --players "${PLAYER:-Human.exe}" \
+        --shard "$SHARD" \
         --output /scratch/$USER/gaming-master/data-v2 \
         --target 3000 \
         --min-turns 80 \
