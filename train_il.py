@@ -23,7 +23,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
 from model.config import ModelConfig
-from model.losses import ImitationLoss
+from model.losses import ImitationLoss, next_obs_loss
 from model.network import GeneralsNetwork
 from model.rl_utils import load_model_state
 
@@ -61,6 +61,12 @@ def parse_args():
         help="Sample TRM ACT depth uniformly from [1, K] per batch so inference-time "
              "pondering states are in-distribution (0 = use model halt_max_steps, 1 = off)",
     )
+    p.add_argument(
+        "--world_model_weight", type=float, default=0.0,
+        help="Weight of the self-supervised next-observation loss (memory pressure "
+             "on the temporal state; 0 = off). Adds a next_obs head to the model — "
+             "checkpoints trained without it cannot be resumed with it enabled.",
+    )
     return p.parse_args()
 
 
@@ -71,11 +77,11 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
     window = args.log_interval
     recent_loss = deque(maxlen=window)
     recent_parts = {k: deque(maxlen=window) for k in
-                    ["source", "direction", "split", "pass", "value", "q_halt"]}
+                    ["source", "direction", "split", "pass", "value", "q_halt", "wm"]}
     recent_acc = {k: deque(maxlen=window) for k in ["src_acc", "dir_acc", "full_acc", "complete_acc"]}
     epoch_loss_sum = 0.0
     epoch_parts_sum = {k: 0.0 for k in
-                       ["source", "direction", "split", "pass", "value", "q_halt"]}
+                       ["source", "direction", "split", "pass", "value", "q_halt", "wm"]}
     epoch_acc_sum = {k: 0.0 for k in ["src_acc", "dir_acc", "full_acc", "complete_acc"]}
     epoch_steps = 0
     use_amp = device.type == "cuda"
@@ -128,6 +134,13 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                     act_steps=act_steps,
                 )
                 losses = criterion(pred, tgt, lengths, tf_mask=use_gt)
+                if args.world_model_weight > 0 and "next_state_logits" in pred:
+                    wm = next_obs_loss(pred, grid_seq, frame_mask)
+                    wm_total = wm["state_loss"] + wm["army_loss"]
+                    losses["loss"] = losses["loss"] + args.world_model_weight * wm_total
+                    losses["wm_loss"] = wm_total.detach()
+                else:
+                    losses["wm_loss"] = losses["loss"].new_tensor(0.0)
             loss = losses["loss"]
 
             optimizer.zero_grad()
@@ -185,7 +198,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                 f"    src={parts['source']:.4f}[{ep_parts['source']:.4f}]  "
                 f"dir={parts['direction']:.4f}[{ep_parts['direction']:.4f}]  split={parts['split']:.4f}[{ep_parts['split']:.4f}]  "
                 f"pass={parts['pass']:.4f}[{ep_parts['pass']:.4f}]  val={parts['value']:.4f}[{ep_parts['value']:.4f}]  "
-                f"qhalt={parts['q_halt']:.4f}[{ep_parts['q_halt']:.4f}]\n"
+                f"qhalt={parts['q_halt']:.4f}[{ep_parts['q_halt']:.4f}]  wm={parts['wm']:.4f}[{ep_parts['wm']:.4f}]\n"
                 f"    acc: src={acc['src_acc']:.1%}[{ep_acc['src_acc']:.1%}]  "
                 f"dir={acc['dir_acc']:.1%}[{ep_acc['dir_acc']:.1%}]  "
                 f"full={acc['full_acc']:.1%}[{ep_acc['full_acc']:.1%}]  "
@@ -224,6 +237,7 @@ def main():
         trm_H_cycles=args.trm_H_cycles,
         trm_L_cycles=args.trm_L_cycles,
         trm_block_layers=args.trm_block_layers,
+        predict_next_obs=(args.world_model_weight > 0),
     )
     if args.max_act_steps == 0:
         args.max_act_steps = cfg.halt_max_steps

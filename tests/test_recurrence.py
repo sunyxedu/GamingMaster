@@ -270,6 +270,96 @@ def test_network_recurrent_bptt_reaches_early_frames():
     print(f"  |dL/d obs_0| max = {g_first:.3e} > 0 across {T} frames OK")
 
 
+def test_next_obs_loss_masks_and_zero():
+    """next_obs_loss: correct masking of padded frames/off-map cells, and
+    a perfect prediction scores ~zero."""
+    print("\n=== next_obs_loss: masks + perfect-prediction zero ===")
+    from model.losses import next_obs_loss
+
+    torch.manual_seed(8)
+    B, T, H, W, C = 2, 5, 4, 4, 12
+    N = H * W
+    n_types = 11
+
+    # Build observations: one-hot states on a 3x4 "real map" area,
+    # last row of cells is off-map (all-zero); frame T-1 of sample 1 is padding.
+    grid_seq = torch.zeros(B, T, C, H, W)
+    states = torch.randint(0, n_types, (B, T, H, W))
+    for b in range(B):
+        for t in range(T):
+            for r in range(3):          # rows 0..2 real, row 3 off-map
+                for c in range(W):
+                    grid_seq[b, t, states[b, t, r, c], r, c] = 1.0
+                    grid_seq[b, t, 11, r, c] = 0.3
+    frame_mask = torch.ones(B, T, dtype=torch.bool)
+    frame_mask[1, -1] = False           # padded frame
+
+    # Perfect prediction: logits peaked on frame t+1's true state
+    logits = torch.full((B, T, N, n_types), -20.0)
+    army = torch.zeros(B, T, N)
+    for b in range(B):
+        for t in range(T - 1):
+            nxt = grid_seq[b, t + 1, :n_types].reshape(n_types, N)
+            idx = nxt.argmax(0)
+            logits[b, t, torch.arange(N), idx] = 20.0
+            army[b, t] = grid_seq[b, t + 1, 11].reshape(N)
+
+    pred = {"next_state_logits": logits, "next_army": army}
+    out = next_obs_loss(pred, grid_seq, frame_mask)
+    assert out["state_loss"].item() < 1e-3, f"perfect state loss: {out['state_loss']}"
+    assert out["army_loss"].item() < 1e-6, f"perfect army loss: {out['army_loss']}"
+    print(f"  perfect prediction: state={out['state_loss']:.2e}, army={out['army_loss']:.2e} OK")
+
+    # Corrupt predictions ONLY on masked entries (off-map cells + padded pair):
+    # loss must not change.
+    logits2 = logits.clone()
+    off_map = grid_seq[:, 1:, :n_types].sum(2).reshape(B, T - 1, N) < 0.5
+    logits2[:, :-1][off_map] = torch.randn_like(logits2[:, :-1][off_map])
+    logits2[1, T - 2] = torch.randn_like(logits2[1, T - 2])  # pair with padded frame
+    out2 = next_obs_loss({"next_state_logits": logits2, "next_army": army}, grid_seq, frame_mask)
+    assert abs(out2["state_loss"].item() - out["state_loss"].item()) < 1e-9, \
+        "masked entries leaked into the loss"
+    print("  masked cells/frames do not affect the loss OK")
+
+
+def test_next_obs_head_trains_memory():
+    """End-to-end: the world-model loss must send gradient into the
+    recurrence gates (the memory-pressure path)."""
+    print("\n=== next_obs head: gradient reaches recurrence gates ===")
+    from model.config import ModelConfig
+    from model.losses import next_obs_loss
+    from model.network import GeneralsNetwork
+
+    torch.manual_seed(9)
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
+        temporal_mixer="recurrent", predict_next_obs=True,
+    )
+    model = GeneralsNetwork(cfg)
+    model.train()
+
+    B, T = 1, 4
+    grid_seq = torch.rand(B, T, 12, 25, 25)
+    globals_seq = torch.randn(B, T, 4)
+    sy = torch.zeros(B, T, dtype=torch.long)
+    sx = torch.zeros(B, T, dtype=torch.long)
+
+    pred = model(grid_seq, globals_seq, source_y=sy, source_x=sx)
+    assert pred["next_state_logits"].shape == (B, T, 625, 11)
+    assert pred["next_army"].shape == (B, T, 625)
+
+    wm = next_obs_loss(pred, grid_seq)
+    (wm["state_loss"] + wm["army_loss"]).backward()
+
+    rnn = model.st_layers[0].temporal_rnn
+    ga = rnn.a_proj.weight.grad
+    assert ga is not None and ga.abs().max().item() > 0, \
+        "world-model loss reaches no gradient into the retention gate"
+    print(f"  |d wm_loss / d a_proj| max = {ga.abs().max():.3e} > 0 OK")
+
+
 def main():
     tests = [
         test_scan_matches_naive_autograd,
@@ -281,6 +371,8 @@ def main():
         test_scan_gradients_correct_under_checkpoint,
         test_network_recurrent_step_vs_full_act_steps,
         test_network_recurrent_bptt_reaches_early_frames,
+        test_next_obs_loss_masks_and_zero,
+        test_next_obs_head_trains_memory,
     ]
     passed = failed = 0
     for t in tests:

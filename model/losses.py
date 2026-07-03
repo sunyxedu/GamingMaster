@@ -309,6 +309,66 @@ class ImitationLoss(nn.Module):
         }
 
 
+def next_obs_loss(
+    pred: Dict[str, torch.Tensor],
+    grid_seq: torch.Tensor,
+    frame_mask: Optional[torch.Tensor] = None,
+) -> Dict[str, torch.Tensor]:
+    """Self-supervised next-observation prediction loss.
+
+    From the belief tokens at frame t, predict frame t+1's observation:
+    cross-entropy over the 11-state one-hot plus MSE on the army channel.
+    This is the game-agnostic memory pressure — a fogged tile re-entering
+    vision is only predictable if the belief retained what was there.
+
+    Masks:
+      - frame pair (t, t+1) must both be real frames (``frame_mask``),
+      - cells outside the real map (all-zero one-hot padding) are excluded.
+
+    Args:
+        pred: forward() output with next_state_logits [B,T,N,11] and
+              next_army [B,T,N]
+        grid_seq: [B, T, C, H, W] input observations (targets come from t+1)
+        frame_mask: [B, T] bool, True = real frame (None = all real)
+
+    Returns dict with differentiable "state_loss" / "army_loss".
+    """
+    logits = pred["next_state_logits"]                # [B, T, N, 11]
+    army_pred = pred["next_army"]                     # [B, T, N]
+    B, T, N, n_types = logits.shape
+
+    if T < 2:
+        zero = logits.sum() * 0.0
+        return {"state_loss": zero, "army_loss": zero}
+
+    # Targets: frame t+1, flattened to [B, T-1, N, C]
+    tgt = grid_seq[:, 1:].reshape(B, T - 1, grid_seq.shape[2], N).permute(0, 1, 3, 2)
+    tgt_state_onehot = tgt[..., :n_types]             # [B, T-1, N, 11]
+    tgt_army = tgt[..., n_types]                      # [B, T-1, N]
+
+    # Cell validity: real map cells carry exactly one active state channel;
+    # off-map padding is all-zero.
+    cell_valid = tgt_state_onehot.sum(-1) > 0.5       # [B, T-1, N]
+    if frame_mask is not None:
+        pair_valid = frame_mask[:, :-1] & frame_mask[:, 1:]
+        cell_valid = cell_valid & pair_valid.unsqueeze(-1)
+    mask_f = cell_valid.float()
+    n_valid = mask_f.sum().clamp(min=1.0)
+
+    tgt_state = tgt_state_onehot.argmax(-1)           # [B, T-1, N]
+    state_ce = F.cross_entropy(
+        logits[:, :-1].reshape(-1, n_types),
+        tgt_state.reshape(-1),
+        reduction="none",
+    ).reshape(B, T - 1, N)
+    state_loss = (torch.nan_to_num(state_ce, nan=0.0) * mask_f).sum() / n_valid
+
+    army_mse = F.mse_loss(army_pred[:, :-1], tgt_army, reduction="none")
+    army_loss = (torch.nan_to_num(army_mse, nan=0.0) * mask_f).sum() / n_valid
+
+    return {"state_loss": state_loss, "army_loss": army_loss}
+
+
 class RLLoss(nn.Module):
     """PPO loss for RL training.
 

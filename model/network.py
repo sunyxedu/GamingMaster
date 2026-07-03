@@ -87,6 +87,14 @@ class GeneralsNetwork(nn.Module):
         self.pass_head = PassHead(cfg.d_model, cfg.n_directions, cfg.n_split)
         self.value_head = ValueHead(cfg.d_model)
 
+        # --- Optional self-supervised next-observation head ---
+        # Predicts the next frame's 11-state one-hot + army channel per
+        # spatial token from the Stage-1 belief — the training pressure
+        # that forces the temporal state to actually retain information.
+        self.next_obs_head: Optional[nn.Linear] = None
+        if cfg.predict_next_obs:
+            self.next_obs_head = nn.Linear(cfg.d_model, cfg.grid_channels)
+
         # --- Optional world model ---
         self.world_model: Optional[WorldModel] = None
         if cfg.use_world_model:
@@ -216,6 +224,12 @@ class GeneralsNetwork(nn.Module):
         # Decode
         out = self._decode_heads(z_H, B, T, N, W, legal_mask, source_y, source_x)
         out["q_halt"] = q_halt.reshape(B, T)
+
+        # Self-supervised next-observation prediction from belief tokens
+        if self.next_obs_head is not None:
+            no = self.next_obs_head(tokens[:, :, :N])        # [B, T, N, C]
+            out["next_state_logits"] = no[..., : self.cfg.n_grid_types]
+            out["next_army"] = no[..., self.cfg.n_grid_types]
         return out
 
     # ------------------------------------------------------------------

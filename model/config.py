@@ -52,6 +52,12 @@ class ModelConfig:
     n_directions: int = 4
     n_split: int = 2  # 0=all-but-1, 1=50%
 
+    # Self-supervised next-observation prediction from the Stage-1 belief
+    # tokens (game-agnostic memory pressure: the belief must retain whatever
+    # is needed to predict the next frame — e.g. fogged tiles re-entering
+    # vision). Spatiotemporal path only.
+    predict_next_obs: bool = False
+
     # World model (optional, for RL)
     use_world_model: bool = False
     world_model_hidden: int = 256
