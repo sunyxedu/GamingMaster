@@ -74,7 +74,15 @@ def force_backend(name: str) -> Iterator[None]:
         "math": SDPBackend.MATH,
         "cudnn": SDPBackend.CUDNN_ATTENTION,
     }[name]
-    with sdpa_kernel([backend], set_priority=True):
+    # set_priority is a torch>=2.6 kwarg; the backend list alone forces the
+    # kernel on older torch (the training container ships 2.5). Probe the
+    # signature once so a body exception can't be mistaken for it.
+    import inspect
+    if "set_priority" in inspect.signature(sdpa_kernel).parameters:
+        cm = sdpa_kernel([backend], set_priority=True)
+    else:
+        cm = sdpa_kernel([backend])
+    with cm:
         yield
 
 
