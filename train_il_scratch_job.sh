@@ -27,6 +27,7 @@
 export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
 export PYTHONPATH=~/GamingMaster
+export PYTHONUNBUFFERED=1   # live logs (unbuffered stdout)
 
 # Uncomment if cross-node NCCL misbehaves (worked around IB issues before):
 # export NCCL_IB_DISABLE=1

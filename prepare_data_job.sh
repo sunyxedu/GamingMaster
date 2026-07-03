@@ -37,6 +37,7 @@
 # and no apptainer (the container lacks the lzstring package — the repo
 # venv on shared home has everything and cpu nodes run its wheels fine).
 export PYTHONPATH=~/GamingMaster
+export PYTHONUNBUFFERED=1   # live logs (unbuffered stdout)
 cd ~/GamingMaster
 
 # Shard spec from the array task id (defaults to 0/1 = unsharded)
