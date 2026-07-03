@@ -27,13 +27,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
 
-from data_processing import (
-    fetch_replay_list,
-    download_replays,
-    filter_replays,
-    simulate_replay,
-    batch_parse_directory,
-)
+# Stage imports happen inside each run_* function: numpy is only needed by
+# the convert stage, and download/filter must work on machines where numpy
+# wheels cannot load (e.g. pre-x86-64-v2 login nodes).
 
 
 ALL_STAGES = ["download", "filter", "simulate", "convert"]
@@ -46,6 +42,8 @@ async def run_download(
     max_concurrent: int,
 ) -> dict[str, List[dict]]:
     """Download replay metadata and files for given players."""
+    from data_processing import fetch_replay_list, download_replays
+
     metadata_dir = output_dir / "metadata"
     replays_dir = output_dir / "replays"
     metadata_dir.mkdir(parents=True, exist_ok=True)
@@ -96,6 +94,8 @@ def run_filter(
     min_opponent_stars: Optional[int],
 ) -> dict[str, List[dict]]:
     """Filter replays based on criteria."""
+    from data_processing import filter_replays
+
     metadata_dir = output_dir / "metadata"
     filtered_dir = output_dir / "filtered"
     filtered_dir.mkdir(parents=True, exist_ok=True)
@@ -136,6 +136,8 @@ def run_filter(
 
 def _simulate_one(args):
     """Worker function for parallel simulation (must be top-level for pickling)."""
+    from data_processing import simulate_replay
+
     replay_file, player, output_file = args
     simulate_replay(replay_file, player, output_file)
     return replay_file
@@ -206,6 +208,8 @@ def run_simulate(players: List[str], output_dir: Path, max_workers: int = None) 
 
 def run_convert(players: List[str], output_dir: Path) -> int:
     """Convert simulated data to training format."""
+    from data_processing import batch_parse_directory
+
     simulated_dir = output_dir / "simulated"
     training_dir = output_dir / "training"
 
