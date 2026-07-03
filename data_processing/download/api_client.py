@@ -78,7 +78,10 @@ async def fetch_replay_pages(
     ssl_context.verify_mode = ssl.CERT_NONE
 
     connector = aiohttp.TCPConnector(ssl=ssl_context)
-    async with aiohttp.ClientSession(connector=connector) as session:
+    # Bounded timeout so a hung/rate-limited page ends the run gracefully
+    # instead of blocking the whole pipeline on an open socket forever.
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         offset = start_offset
         while True:
             url = (f"https://generals.io/api/replaysForUsername"
