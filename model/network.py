@@ -190,9 +190,12 @@ class GeneralsNetwork(nn.Module):
         ll = self.ll_token.expand(B, T, -1, -1)
         tokens = torch.cat([tokens, hl, ll], dim=2)  # [B, T, S, d]
 
-        # 4. PE
+        # 4. PE — absolute time PE only for the attention mixer; the
+        # recurrence carries temporal order itself and absolute positions
+        # would only reintroduce step-index dependence.
         tokens = tokens + self._build_spatial_pe().unsqueeze(0)
-        tokens = tokens + _sinusoidal_pe(T, d, tokens.device).unsqueeze(0).unsqueeze(2)
+        if cfg.temporal_mixer != "recurrent":
+            tokens = tokens + _sinusoidal_pe(T, d, tokens.device).unsqueeze(0).unsqueeze(2)
 
         # 5. World model embedding
         if wm_embed is not None:
@@ -541,7 +544,7 @@ class GeneralsNetwork(nn.Module):
         act_steps: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         if self.is_st:
-            return self._step_st(grid, globals_vec, legal_mask, world_model_embed, st_cache, act_steps)
+            return self._step_st(grid, globals_vec, legal_mask, world_model_embed, st_cache, act_steps, step_idx)
         return self._step_gru(grid, globals_vec, legal_mask, hidden, world_model_embed, step_idx, act_steps)
 
     def _step_gru(self, grid, globals_vec, legal_mask, hidden, wm_embed, step_idx, act_steps=None):
@@ -601,7 +604,7 @@ class GeneralsNetwork(nn.Module):
             **rl_out,
         }
 
-    def _step_st(self, grid, globals_vec, legal_mask, wm_embed, st_cache, act_steps=None):
+    def _step_st(self, grid, globals_vec, legal_mask, wm_embed, st_cache, act_steps=None, step_idx=0):
         cfg = self.cfg
         B, d = grid.shape[0], cfg.d_model
         N = cfg.grid_h * cfg.grid_w
@@ -614,9 +617,14 @@ class GeneralsNetwork(nn.Module):
                             self.ll_token.expand(B, -1, -1)], dim=1)
         tokens = tokens + self._build_spatial_pe()
 
-        t_cur = 0 if st_cache is None else st_cache[0].shape[1]
-        t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]
-        tokens = tokens + t_pe.unsqueeze(0).unsqueeze(0)
+        if cfg.temporal_mixer == "recurrent":
+            # No absolute time PE on tokens (matches forward); the PassHead
+            # time feature below still uses the caller-supplied step index.
+            t_cur = step_idx
+        else:
+            t_cur = 0 if st_cache is None else st_cache[0].shape[1]
+            t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]
+            tokens = tokens + t_pe.unsqueeze(0).unsqueeze(0)
 
         if wm_embed is not None:
             tokens[:, N:N + 1] += wm_embed.unsqueeze(1)
@@ -821,7 +829,7 @@ class GeneralsNetwork(nn.Module):
         recompute the exact same policy with ``forward(act_steps=...)``.
         """
         if self.is_st:
-            return self._step_st_rl(grid, globals_vec, world_model_embed, st_cache, act_steps)
+            return self._step_st_rl(grid, globals_vec, world_model_embed, st_cache, act_steps, step_idx)
         return self._step_gru_rl(grid, globals_vec, hidden, world_model_embed, step_idx, act_steps)
 
     def _step_gru_rl(self, grid, globals_vec, hidden, wm_embed, step_idx, act_steps=None):
@@ -878,7 +886,7 @@ class GeneralsNetwork(nn.Module):
             **rl_out,
         }
 
-    def _step_st_rl(self, grid, globals_vec, wm_embed, st_cache, act_steps=None):
+    def _step_st_rl(self, grid, globals_vec, wm_embed, st_cache, act_steps=None, step_idx=0):
         cfg = self.cfg
         B, d = grid.shape[0], cfg.d_model
         N = cfg.grid_h * cfg.grid_w
@@ -891,9 +899,12 @@ class GeneralsNetwork(nn.Module):
                             self.ll_token.expand(B, -1, -1)], dim=1)
         tokens = tokens + self._build_spatial_pe()
 
-        t_cur = 0 if st_cache is None else st_cache[0].shape[1]
-        t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]
-        tokens = tokens + t_pe.unsqueeze(0).unsqueeze(0)
+        if cfg.temporal_mixer == "recurrent":
+            t_cur = step_idx
+        else:
+            t_cur = 0 if st_cache is None else st_cache[0].shape[1]
+            t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]
+            tokens = tokens + t_pe.unsqueeze(0).unsqueeze(0)
 
         if wm_embed is not None:
             tokens[:, N:N + 1] += wm_embed.unsqueeze(1)

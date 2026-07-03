@@ -152,6 +152,124 @@ def test_recurrent_block_step_vs_full():
     print(f"  max diff {diff:.2e}, state fixed at {tuple(cache.shape)} OK")
 
 
+def test_scan_gradients_correct_under_checkpoint():
+    """The network wraps ST blocks in re-entrant gradient checkpointing;
+    the custom scan's backward must produce identical grads inside it."""
+    print("\n=== scan under re-entrant checkpoint: grads identical ===")
+    from torch.utils.checkpoint import checkpoint
+    from model.components.transformer import SpatiotemporalBlock
+    from model.config import ModelConfig
+
+    torch.manual_seed(7)
+    cfg = ModelConfig(d_model=32, n_heads=4, d_ff=64, dropout=0.0,
+                      temporal_mixer="recurrent")
+    block = SpatiotemporalBlock(cfg)
+    block.train()
+
+    B, T, S, d = 2, 6, 8, 32
+    x0 = torch.randn(B, T, S, d)
+
+    grads = []
+    for use_ckpt in (False, True):
+        for p in block.parameters():
+            p.grad = None
+        x = x0.clone().requires_grad_(True)
+        out = checkpoint(block, x, use_reentrant=True) if use_ckpt else block(x)
+        out.square().sum().backward()
+        grads.append((x.grad.clone(),
+                      {n: p.grad.clone() for n, p in block.named_parameters()}))
+
+    xdiff = (grads[0][0] - grads[1][0]).abs().max().item()
+    pdiff = max((grads[0][1][n] - grads[1][1][n]).abs().max().item()
+                for n in grads[0][1])
+    assert xdiff == 0.0 and pdiff == 0.0, f"ckpt grad mismatch: x={xdiff}, p={pdiff}"
+    print(f"  x.grad diff {xdiff:.1e}, param grad diff {pdiff:.1e} OK")
+
+
+def _small_recurrent_net():
+    from model.config import ModelConfig
+    from model.network import GeneralsNetwork
+
+    cfg = ModelConfig(
+        d_model=64, n_heads=4, d_ff=128,
+        n_st_layers=2, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
+        temporal_mixer="recurrent",
+    )
+    return GeneralsNetwork(cfg), cfg
+
+
+def test_network_recurrent_step_vs_full_act_steps():
+    """Recurrent mode, fixed ACT depth: chained step_rl must define exactly
+    the policy that forward(act_steps=K) recomputes — the PPO ratio identity."""
+    print("\n=== recurrent network: step_rl vs forward(act_steps) ===")
+    torch.manual_seed(5)
+    model, cfg = _small_recurrent_net()
+    model.eval()
+
+    K = 2
+    B, T = 1, 5
+    grid_seq = torch.randn(B, T, 12, 25, 25)
+    globals_seq = torch.randn(B, T, 4)
+
+    # Rollout: step-by-step, threading the fixed-size recurrent cache
+    cache = None
+    step_src, step_pass, step_val, sampled = [], [], [], []
+    for t in range(T):
+        with torch.no_grad():
+            out = model.step_rl(grid_seq[:, t], globals_seq[:, t],
+                                st_cache=cache, step_idx=t, act_steps=K)
+        cache = out["st_cache"]
+        step_src.append(out["source_logits"])
+        step_pass.append(out["pass_logits"])
+        step_val.append(out["value"])
+        sampled.append(out["action_source"])
+
+    for c in cache:
+        assert c.dim() == 2, f"recurrent cache must be fixed-size [B*S, d], got {c.shape}"
+
+    # Update path: full-sequence forward conditioned on the rollout sources
+    src_idx = torch.stack(sampled, dim=1)
+    with torch.no_grad():
+        full = model(
+            grid_seq, globals_seq,
+            source_y=src_idx // 25, source_x=src_idx % 25,
+            act_steps=K,
+        )
+
+    for name, full_t, step_t in [
+        ("source_logits", full["source_logits"], torch.stack(step_src, dim=1)),
+        ("pass_logits", full["pass_logits"], torch.stack(step_pass, dim=1)),
+        ("value", full["value"], torch.stack(step_val, dim=1)),
+    ]:
+        diff = (full_t - step_t).abs().max().item()
+        assert diff < 1e-3, f"{name} diff too large: {diff}"
+        print(f"  {name}: max diff {diff:.8f} OK")
+
+
+def test_network_recurrent_bptt_reaches_early_frames():
+    """Training gradients must reach early observations through the
+    recurrence — this is what makes 'what to remember' learnable."""
+    print("\n=== recurrent network: BPTT reaches early frames ===")
+    torch.manual_seed(6)
+    model, cfg = _small_recurrent_net()
+    model.train()
+
+    B, T = 1, 12
+    grid_seq = torch.randn(B, T, 12, 25, 25, requires_grad=True)
+    globals_seq = torch.randn(B, T, 4)
+    sy = torch.zeros(B, T, dtype=torch.long)
+    sx = torch.zeros(B, T, dtype=torch.long)
+
+    out = model(grid_seq, globals_seq, source_y=sy, source_x=sx)
+    # Loss ONLY on the final timestep
+    out["source_logits"][:, -1].sum().backward()
+
+    g_first = grid_seq.grad[:, 0].abs().max().item()
+    assert g_first > 0, "loss at t=T-1 produced zero gradient at t=0 input"
+    print(f"  |dL/d obs_0| max = {g_first:.3e} > 0 across {T} frames OK")
+
+
 def main():
     tests = [
         test_scan_matches_naive_autograd,
@@ -160,6 +278,9 @@ def main():
         test_state_is_fixed_size,
         test_retention_bias_multi_timescale,
         test_recurrent_block_step_vs_full,
+        test_scan_gradients_correct_under_checkpoint,
+        test_network_recurrent_step_vs_full_act_steps,
+        test_network_recurrent_bptt_reaches_early_frames,
     ]
     passed = failed = 0
     for t in tests:
