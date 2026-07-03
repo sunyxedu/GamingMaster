@@ -6,6 +6,7 @@
 #SBATCH --cpus-per-task=64
 #SBATCH --time=1-00:00:00
 #SBATCH --output=slurm-%j.out
+#SBATCH --exclude=gpu[1-6]        # cpu[1-4] are idle — keep GPU nodes free
 
 # Regenerate IL training data with the FIXED simulator.
 # Datasets generated before the 2026-07 simulator fixes (mountain moves,

@@ -1,35 +1,49 @@
 #!/bin/bash
 #SBATCH --job-name=gm-il-scratch
 #SBATCH --partition=batch
-#SBATCH --nodes=4
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:nvidia_h200_nvl:8
-#SBATCH --exclusive
 #SBATCH --time=5-00:00:00
 #SBATCH --output=slurm-%j.out
 
-# From-scratch IL with the recurrent neural memory + world-model objective.
+# From-scratch IL: recurrent neural memory + world-model objective.
 #
-# Effective batch = batch_size x 32 GPUs x grad_accum = 6 x 32 x 2 = 384
-# full-game sequences per optimizer step. batch_size 6 is the conservative
-# start (estimated peak ~11-14 GB/sequence in bf16 at T=1000); probe first:
+# The effective batch (~TARGET_EFF full games / optimizer step) is held
+# constant by auto-scaling grad_accum from however many GPUs the job got —
+# fewer GPUs only means slower wall-clock, never different training.
 #
-#   srun --gres=gpu:nvidia_h200_nvl:1 --time=00:30:00 --pty \
-#     apptainer exec --nv /scratch/$USER/pytorch.sif \
-#     python ~/GamingMaster/scripts/check_training_memory.py model \
-#       --temporal-mixer recurrent --predict-next-obs \
-#       --batch-size 8 --seq-len 1000
+# Submit-time variants (no editing needed):
+#   sbatch train_il_scratch_job.sh                    # 1 node x 8 H200
+#   sbatch --nodes=2 train_il_scratch_job.sh          # 2 nodes x 8
+#   sbatch --nodes=3 train_il_scratch_job.sh          # gpu[1-3] when drained
+#   # Harvest the 4-full-card halves of gpu5/gpu6 with a uniform 4/node job:
+#   GPUS_PER_NODE=4 sbatch --export=ALL --nodes=4 \
+#       --gres=gpu:nvidia_h200_nvl:4 train_il_scratch_job.sh
 #
-# and raise batch_size / lower grad_accum accordingly.
+# NOTE: MIG slices (gres names like nvidia_h200_nvl_3g.71gb) cannot join
+# multi-GPU NCCL jobs — use them for single-GPU probes/smoke tests only.
 
 export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
 export PYTHONPATH=~/GamingMaster
 
+# Uncomment if cross-node NCCL misbehaves (worked around IB issues before):
+# export NCCL_IB_DISABLE=1
+# export NCCL_P2P_DISABLE=0
+
+GPUS_PER_NODE=${GPUS_PER_NODE:-8}
+MICRO=${MICRO:-6}                 # per-GPU micro-batch (probe before raising)
+TARGET_EFF=${TARGET_EFF:-384}     # target effective batch (full games/step)
+WORLD=$(( SLURM_NNODES * GPUS_PER_NODE ))
+ACCUM=$(( TARGET_EFF / (MICRO * WORLD) ))
+[ "$ACCUM" -lt 1 ] && ACCUM=1
+echo "GPUs: ${WORLD} (${SLURM_NNODES} nodes x ${GPUS_PER_NODE}) | micro ${MICRO} x accum ${ACCUM} = effective $(( MICRO * WORLD * ACCUM ))"
+
 HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
 
 srun apptainer exec --nv /scratch/$USER/pytorch.sif \
-    torchrun --nproc_per_node=8 --nnodes=$SLURM_NNODES \
+    torchrun --nproc_per_node=$GPUS_PER_NODE --nnodes=$SLURM_NNODES \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$HEAD_NODE:29500 \
         ~/GamingMaster/train_il.py \
@@ -38,7 +52,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --temporal_mixer recurrent \
         --world_model_weight 0.2 \
         --tf_start 0.4 --tf_end 0.0 \
-        --batch_size 6 --grad_accum 2 \
+        --batch_size $MICRO --grad_accum $ACCUM \
         --epochs 150 \
         --lr 1e-3 --warmup_steps 500 \
         --weight_decay 1e-4 \
