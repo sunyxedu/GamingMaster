@@ -42,12 +42,22 @@ echo "GPUs: ${WORLD} (${SLURM_NNODES} nodes x ${GPUS_PER_NODE}) | micro ${MICRO}
 
 HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
 
+# Training data: one dir per collected player (names with spaces are quoted).
+TRAIN_ROOT=/scratch/$USER/gaming-master/data-v2/training
+DATA_DIRS=(
+    "$TRAIN_ROOT/bike9800"
+    "$TRAIN_ROOT/Average Joe"
+    "$TRAIN_ROOT/d3st1ny"
+    "$TRAIN_ROOT/L_7d_gae90_30k_ema"
+    "$TRAIN_ROOT/cute_x1aoyu_ovo"
+)
+
 srun apptainer exec --nv /scratch/$USER/pytorch.sif \
     torchrun --nproc_per_node=$GPUS_PER_NODE --nnodes=$SLURM_NNODES \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$HEAD_NODE:29500 \
         ~/GamingMaster/train_il.py \
-        --data_dir /scratch/$USER/gaming-master/data-v2/training/Human.exe \
+        --data_dir "${DATA_DIRS[@]}" \
         --output_dir /scratch/$USER/gaming-master/checkpoints/il_recurrent_v1 \
         --temporal_mixer recurrent \
         --world_model_weight 0.2 \
