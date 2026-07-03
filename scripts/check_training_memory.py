@@ -202,12 +202,16 @@ def cmd_model(args: argparse.Namespace) -> None:
         trm_block_layers=args.trm_block_layers,
         encoder_channels=args.encoder_channels,
         temporal_type=args.temporal_type,
+        temporal_mixer=args.temporal_mixer,
+        predict_next_obs=args.predict_next_obs,
         dropout=args.dropout,
     )
 
     print_cuda_info()
     print("\nmodel config:")
     print(f"  temporal_type   = {cfg.temporal_type}")
+    print(f"  temporal_mixer  = {cfg.temporal_mixer}")
+    print(f"  predict_next_obs= {cfg.predict_next_obs}")
     print(f"  d_model         = {cfg.d_model}")
     print(f"  n_heads         = {cfg.n_heads}")
     print(f"  d_ff            = {cfg.d_ff}")
@@ -315,6 +319,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="spatiotemporal",
         choices=["spatiotemporal", "gru"],
     )
+    p_model.add_argument(
+        "--temporal-mixer",
+        type=str,
+        default="attention",
+        choices=["attention", "recurrent"],
+    )
+    p_model.add_argument("--predict-next-obs", action="store_true")
     p_model.set_defaults(func=cmd_model)
     return p
 
