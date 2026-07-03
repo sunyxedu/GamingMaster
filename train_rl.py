@@ -130,6 +130,10 @@ def parse_args():
     p.add_argument("--trm_H_cycles", type=int, default=3)
     p.add_argument("--trm_L_cycles", type=int, default=6)
     p.add_argument("--trm_block_layers", type=int, default=3)
+    p.add_argument("--temporal_mixer", type=str, default="attention",
+                   choices=["attention", "recurrent"],
+                   help="Temporal mixer for from-scratch models (checkpoints "
+                        "carry their own setting in the saved config)")
 
     # Logging
     p.add_argument("--log_interval", type=int, default=10)
@@ -570,6 +574,7 @@ def main():
             trm_H_cycles=args.trm_H_cycles,
             trm_L_cycles=args.trm_L_cycles,
             trm_block_layers=args.trm_block_layers,
+            temporal_mixer=args.temporal_mixer,
         )
         model = GeneralsNetwork(cfg).to(device)
         if rank0:

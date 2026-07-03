@@ -62,6 +62,12 @@ def parse_args():
              "pondering states are in-distribution (0 = use model halt_max_steps, 1 = off)",
     )
     p.add_argument(
+        "--temporal_mixer", type=str, default="attention",
+        choices=["attention", "recurrent"],
+        help="Temporal mixer: full-history causal attention (KV cache) or "
+             "gated linear recurrence (fixed-size neural memory, full BPTT)",
+    )
+    p.add_argument(
         "--world_model_weight", type=float, default=0.0,
         help="Weight of the self-supervised next-observation loss (memory pressure "
              "on the temporal state; 0 = off). Adds a next_obs head to the model — "
@@ -237,6 +243,7 @@ def main():
         trm_H_cycles=args.trm_H_cycles,
         trm_L_cycles=args.trm_L_cycles,
         trm_block_layers=args.trm_block_layers,
+        temporal_mixer=args.temporal_mixer,
         predict_next_obs=(args.world_model_weight > 0),
     )
     if args.max_act_steps == 0:

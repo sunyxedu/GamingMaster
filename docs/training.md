@@ -122,6 +122,44 @@ modules randomly initialized.
 instead); rank 0's parameters and buffers are broadcast at startup so all
 ranks start identical.
 
+## Recurrent neural memory (`temporal_mixer="recurrent"`)
+
+The temporal axis of the spatiotemporal blocks has two interchangeable
+implementations selected by `ModelConfig.temporal_mixer` (CLI:
+`--temporal_mixer` on both trainers; checkpoints carry their setting):
+
+- **`attention`** (default): causal temporal self-attention over the full
+  history. Lossless recall; KV cache grows O(T) at inference.
+- **`recurrent`**: token-wise gated linear recurrence
+  (`model/components/recurrence.py`). Episode memory lives in a
+  **fixed-size state** — [tokens, d_model] persistent activations updated
+  each tick (`h_t = a_t·h_{t-1} + (1-a_t)·v_t`). O(1) per step, unbounded
+  horizon, retention-biased gates with multi-timescale initialization
+  (half-lives spread geometrically from 1 to ~1000 ticks).
+
+Guarantees enforced by `tests/test_recurrence.py`:
+- the training scan is *exactly* plain autograd (custom analytic backward,
+  verified to <1e-12 in float64, including under re-entrant checkpointing);
+- chained `step_rl` equals `forward(act_steps=K)` — the PPO ratio identity
+  holds in recurrent mode (verified end-to-end at ~1e-6);
+- gradients flow through the **full episode** (true BPTT at O(T) cost), so
+  the network learns *what to write* into memory, not only how to read it.
+- No absolute time PE is added in recurrent mode (the recurrence carries
+  temporal order); the PassHead time feature uses the caller's `step_idx`.
+
+**Memory pressure — the world-model objective.** A fixed-size memory only
+retains what the gradient asks it to. `--world_model_weight > 0` adds a
+self-supervised head predicting the *next observation* from the Stage-1
+belief tokens (11-state CE + army MSE; padded frames and off-map cells
+masked). A fogged tile re-entering vision is only predictable if the state
+retained what was there — this is the game-agnostic definition of
+"important information". Recommended whenever `recurrent` is used.
+
+**Memory dashboard.** When evaluating memory, use the state-reset probe:
+reset the recurrent state at step `t-k` and measure the performance drop
+as a function of `k`. If accuracy saturates at small `k`, the model is not
+using long-range memory.
+
 ## Older checkpoints
 
 Checkpoints trained before the 2026-07 audit fixes load cleanly (no key
