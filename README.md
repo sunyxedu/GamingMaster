@@ -20,10 +20,11 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 │   ├── rl_utils.py           #   GAE, RolloutBuffer, KL reg, freeze helpers
 │   └── components/           #   Reusable building blocks
 │       ├── encoder.py        #     SpatialEncoder, HistoryEncoder, ResBlock
-│       ├── transformer.py    #     TransformerBlock, SpatiotemporalBlock
+│       ├── transformer.py    #     SpatiotemporalBlock (attention/recurrent temporal mixer)
+│       ├── recurrence.py     #     GatedRecurrence — fixed-size neural episode memory
 │       ├── trm.py            #     TRM (Tiny Recursive Model) two-state pondering
 │       ├── heads.py          #     Source / Direction / Split / Pass / Value heads
-│       └── world_model.py    #     WorldModel (for RL curiosity reward)
+│       └── world_model.py    #     WorldModel (legacy; see next-obs head in network.py)
 ├── env/                      # RL environment
 │   └── generals_env.py       #   Two-player simultaneous-move Gym-like env
 ├── scripts/
@@ -77,11 +78,17 @@ uv run python -m scripts.prepare_data --players Human.exe --output data/output -
 ### 4. Train (Imitation Learning)
 
 ```bash
+# Recommended: recurrent neural memory + world-model objective
 uv run python train_il.py \
     --data_dir data/output/training/Human.exe \
-    --batch_size 4 \
-    --d_model 256
+    --temporal_mixer recurrent --world_model_weight 0.2 \
+    --tf_start 0.4 --tf_end 0.0 \
+    --batch_size 4 --grad_accum 4
 ```
+
+Effective batch = `batch_size × GPUs × grad_accum`; see
+[docs/training.md](docs/training.md) for memory-based batch sizing and the
+full from-scratch recipe.
 
 ### 5. Train (Reinforcement Learning)
 
@@ -290,7 +297,12 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
 
 **Key design choices:**
 
-- **Factored spatiotemporal attention**: Each `SpatiotemporalBlock` first runs spatial self-attention (627 tokens within the same timestep interact), then causal temporal self-attention (each of the 627 token positions attends to its own history across all past timesteps). This gives every grid cell a per-cell temporal memory — it knows exactly *where* and *when* it saw something before, unlike a pooled GRU that discards spatial structure.
+- **Factored spatiotemporal blocks with two temporal mixers**: Each `SpatiotemporalBlock` first runs spatial self-attention (627 tokens within the same timestep interact), then a per-position temporal mixer selected by `temporal_mixer`:
+  - `"attention"`: causal temporal self-attention over the full history (lossless recall, KV cache grows O(T) at inference);
+  - `"recurrent"` (recommended): a token-wise gated linear recurrence — episode memory lives in a **fixed-size neural state** (`h_t = a_t·h_{t-1} + (1−a_t)·v_t`, multi-timescale retention gates, full BPTT during training, O(1) per step at inference). Precedent: R2I/Griffin-family results; see [docs/training.md](docs/training.md).
+
+  Either way every grid cell has a per-cell temporal memory — it knows exactly *where* it saw something before, unlike a pooled GRU that discards spatial structure.
+- **World-model objective** (`--world_model_weight`): a self-supervised head predicts the next observation from the Stage-1 belief tokens — the game-agnostic training pressure that forces the memory to retain fog information (a fogged tile re-entering vision is only predictable if the state remembered it).
 - **Causal temporal masking**: Timestep *t* can only attend to timesteps 0..*t*, never the future. Verified by test: processing T=6 vs T=3 produces identical outputs for the first 3 steps (diff = 0).
 - **KV cache for inference**: During single-step inference, each block caches past key/value tensors. Only the current timestep's tokens are computed; temporal attention queries the growing cache. No re-processing of past timesteps.
 - **Autoregressive policy heads**: Source is predicted first from spatial tokens; its embedding is extracted and concatenated with the Low-Level decision token to predict Direction, Split, and Pass. During training, ground-truth source is used; during inference, the model samples.
@@ -314,6 +326,8 @@ Default config (`model/config.py`):
 | `halt_max_steps` | 5 |
 | `encoder_channels` | 192 |
 | `temporal_type` | `"spatiotemporal"` |
+| `temporal_mixer` | `"attention"` (use `"recurrent"` for neural episode memory) |
+| `predict_next_obs` | `False` (enabled by `--world_model_weight > 0`) |
 
 ### Step 3: Training
 
@@ -416,7 +430,7 @@ Every component has been verified against the real replay `asS2S5O_y` (~Hemlix~ 
 | Gradient flow | All parameters receive gradients through every component | ✓ |
 | Training loop | Loss decreases on mock and real data; checkpoint save/load works | ✓ |
 
-Run all tests (129 tests):
+Run all tests (144 tests):
 
 ```bash
 uv run pytest tests/ -q
@@ -430,10 +444,13 @@ uv run python tests/test_audit_fixes.py             # 13 bug-fix regression test
 uv run python tests/test_comprehensive_audit.py     # Comprehensive audit tests (all modules)
 uv run python tests/test_training_e2e.py            # End-to-end training
 uv run pytest tests/test_rl.py -q                   # RL env + rollout tests
+uv run python tests/test_recurrence.py              # Neural-memory correctness suite
 ```
 
-Two of the regression tests encode the project's core correctness claims:
+Three regression-test groups encode the project's core correctness claims:
 `test_step_vs_full_consistency_act_steps` (rollout and PPO update define the
-same policy at a fixed ACT depth) and
-`test_padded_frames_do_not_affect_batchnorm` (padding cannot leak into
-training statistics).
+same policy at a fixed ACT depth), `test_padded_frames_do_not_affect_batchnorm`
+(padding cannot leak into training statistics), and `test_recurrence.py`
+(the memory scan equals plain autograd to <1e-12, chained steps equal the
+parallel forward, BPTT reaches frame 0, and memory parameters are excluded
+from weight decay).

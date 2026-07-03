@@ -161,6 +161,46 @@ reset the recurrent state at step `t-k` and measure the performance drop
 as a function of `k`. If accuracy saturates at small `k`, the model is not
 using long-range memory.
 
+**Implementation notes.**
+- The scan runs as a sequential loop by default: at this model's shape each
+  step is already a ~240k-element tensor op, so the loop is bandwidth-bound
+  and a Hillis-Steele parallel scan measured *slower* (0.6× CPU, 0.2× MPS).
+  The parallel path is kept behind `_USE_PARALLEL_SCAN`
+  (`model/components/recurrence.py`) with a standing exactness test —
+  benchmark before flipping it on CUDA.
+- `retention_bias` / `h_init` are excluded from AdamW weight decay
+  (`optim_param_groups`): decoupled decay would systematically erode long
+  half-lives (quantified: 1024 → ~370 ticks over a full IL run).
+
+## Batch sizing (from-scratch training)
+
+Sequences are full games (T ≤ 1000), so memory per sample is large. Peak
+training memory at the default model size in bf16 is roughly **11–14 GB per
+sequence** (ST checkpoint boundaries + TRM carry states + encoder conv
+activations + transient scan buffers), i.e. ~45–55 GB at `--batch_size 4`.
+On an H200 (141 GB) that allows **8–12 sequences per GPU**; scale the
+*effective* batch with `--grad_accum` (DDP allreduce fires once per
+optimizer step via `no_sync`):
+
+```
+effective batch = batch_size × world_size × grad_accum
+```
+
+Recommended from-scratch recipe (recurrent memory + world model):
+
+```bash
+torchrun --nproc_per_node=8 train_il.py \
+    --data_dir <regenerated data> \
+    --temporal_mixer recurrent --world_model_weight 0.2 \
+    --tf_start 0.4 --tf_end 0.0 \
+    --batch_size 8 --grad_accum 4        # 8 × 8 GPUs × 4 = 256 sequences
+```
+
+A non-finite micro-batch loss drops the whole accumulation window (restart,
+no gradient pollution); the LR schedule counts optimizer steps, not loader
+steps. Verify actual memory with `scripts/check_training_memory.py model`
+on the target hardware before committing to a batch size.
+
 ## Older checkpoints
 
 Checkpoints trained before the 2026-07 audit fixes load cleanly (no key
