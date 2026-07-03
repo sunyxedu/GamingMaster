@@ -121,6 +121,37 @@ def test_retention_bias_multi_timescale():
     print(f"  a range [{a0.min():.3f}, {a0.max():.4f}] OK")
 
 
+def test_recurrent_block_step_vs_full():
+    """SpatiotemporalBlock(recurrent): chained forward_step == forward."""
+    print("\n=== recurrent SpatiotemporalBlock: cache vs full ===")
+    from model.components.transformer import SpatiotemporalBlock
+    from model.config import ModelConfig
+
+    torch.manual_seed(4)
+    cfg = ModelConfig(d_model=32, n_heads=4, d_ff=64, dropout=0.0,
+                      temporal_mixer="recurrent")
+    block = SpatiotemporalBlock(cfg)
+    block.eval()
+
+    B, T, S, d = 2, 7, 10, 32
+    x = torch.randn(B, T, S, d)
+
+    with torch.no_grad():
+        full_out = block(x)
+
+        cache = None
+        outs = []
+        for t in range(T):
+            out_t, cache = block.forward_step(x[:, t:t + 1], cache)
+            outs.append(out_t)
+        step_out = torch.cat(outs, dim=1)
+
+    assert cache.shape == (B * S, d), f"state should be fixed-size, got {cache.shape}"
+    diff = (full_out - step_out).abs().max().item()
+    assert diff < 1e-4, f"recurrent block cache vs full diff={diff}"
+    print(f"  max diff {diff:.2e}, state fixed at {tuple(cache.shape)} OK")
+
+
 def main():
     tests = [
         test_scan_matches_naive_autograd,
@@ -128,6 +159,7 @@ def main():
         test_long_range_gradient_survives,
         test_state_is_fixed_size,
         test_retention_bias_multi_timescale,
+        test_recurrent_block_step_vs_full,
     ]
     passed = failed = 0
     for t in tests:

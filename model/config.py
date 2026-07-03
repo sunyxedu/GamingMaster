@@ -34,6 +34,14 @@ class ModelConfig:
     #   "gru"            – GRU history encoder → TRM
     temporal_type: str = "spatiotemporal"
 
+    # Temporal mixer inside SpatiotemporalBlock:
+    #   "attention"  – causal temporal self-attention over the full history
+    #                  (KV cache grows O(T) at inference)
+    #   "recurrent"  – token-wise gated linear recurrence: episode memory
+    #                  lives in a fixed-size state ("in the neurons"),
+    #                  O(1) per step, full BPTT during training
+    temporal_mixer: str = "attention"
+
     # GRU-specific (only used when temporal_type="gru")
     gru_layers: int = 1
 

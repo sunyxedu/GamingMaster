@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from model.components.recurrence import GatedRecurrence
 from model.config import ModelConfig
 
 # ---------------------------------------------------------------------------
@@ -61,26 +62,38 @@ def _sinusoidal_pe(length: int, d_model: int, device: torch.device) -> torch.Ten
 
 class SpatiotemporalBlock(nn.Module):
     """
-    Factored spatiotemporal attention block.
+    Factored spatiotemporal block.
 
         Spatial Self-Attention   (within each timestep, 627 tokens)
       → Add & Norm
-      → Temporal Self-Attention  (across timesteps, per token position, causal)
+      → Temporal mixer           (across timesteps, per token position)
       → Add & Norm
       → MLP
       → Add & Norm
+
+    The temporal mixer is either causal self-attention over the full
+    history (cfg.temporal_mixer="attention", KV cache at inference) or a
+    gated linear recurrence (cfg.temporal_mixer="recurrent", fixed-size
+    state at inference — episode memory lives in the neurons).
     """
 
     def __init__(self, cfg: ModelConfig):
         super().__init__()
+        self.mixer = getattr(cfg, "temporal_mixer", "attention")
+        if self.mixer not in ("attention", "recurrent"):
+            raise ValueError(f"unknown temporal_mixer: {self.mixer!r}")
+
         self.spatial_attn = nn.MultiheadAttention(
             cfg.d_model, cfg.n_heads, dropout=cfg.dropout, batch_first=True,
         )
         self.spatial_norm = nn.LayerNorm(cfg.d_model)
 
-        self.temporal_attn = nn.MultiheadAttention(
-            cfg.d_model, cfg.n_heads, dropout=cfg.dropout, batch_first=True,
-        )
+        if self.mixer == "recurrent":
+            self.temporal_rnn = GatedRecurrence(cfg.d_model)
+        else:
+            self.temporal_attn = nn.MultiheadAttention(
+                cfg.d_model, cfg.n_heads, dropout=cfg.dropout, batch_first=True,
+            )
         self.temporal_norm = nn.LayerNorm(cfg.d_model)
 
         self.ff = nn.Sequential(
@@ -152,9 +165,12 @@ class SpatiotemporalBlock(nn.Module):
         x_flat = self.spatial_norm(x_flat + sa_out)
         x = x_flat.reshape(B, T, S, d)
 
-        # ── temporal self-attention (across timesteps, per position, causal) ──
+        # ── temporal mixing (across timesteps, per position) ──
         x_perm = x.permute(0, 2, 1, 3).reshape(B * S, T, d)
-        ta_out = self._causal_temporal_attn(x_perm)
+        if self.mixer == "recurrent":
+            ta_out = self.temporal_rnn(x_perm)
+        else:
+            ta_out = self._causal_temporal_attn(x_perm)
         x_perm = self.temporal_norm(x_perm + ta_out)
         x = x_perm.reshape(B, S, T, d).permute(0, 2, 1, 3)
 
@@ -168,14 +184,17 @@ class SpatiotemporalBlock(nn.Module):
         temporal_cache: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Single-step inference with KV cache for temporal attention.
+        Single-step inference.
 
         Args:
             x_cur          : [B, 1, S, d]   current timestep only
-            temporal_cache  : [B*S, t_prev, d] or None  (past inputs to temporal attn)
+            temporal_cache : mixer="attention": [B*S, t_prev, d] KV cache
+                             (grows each step) or None;
+                             mixer="recurrent": [B*S, d] float32 recurrent
+                             state (fixed size) or None.
         Returns:
             output         : [B, 1, S, d]
-            new_cache      : [B*S, t_prev+1, d]
+            new_cache      : same convention as ``temporal_cache``
         """
         B, _, S, d = x_cur.shape
 
@@ -184,18 +203,24 @@ class SpatiotemporalBlock(nn.Module):
         sa_out, _ = self.spatial_attn(x_flat, x_flat, x_flat, need_weights=False)
         x_flat = self.spatial_norm(x_flat + sa_out)
 
-        # ── temporal (query = current, key/value = cache + current) ──
-        q = x_flat.reshape(B * S, 1, d)
-        if temporal_cache is not None:
-            kv = torch.cat([temporal_cache, q], dim=1)  # [B*S, t_prev+1, d]
+        if self.mixer == "recurrent":
+            # ── temporal: one recurrence step on a fixed-size state ──
+            q = x_flat.reshape(B * S, d)
+            ta_out, new_cache = self.temporal_rnn.forward_step(q, temporal_cache)
+            q = self.temporal_norm(q + ta_out)
+            x_out = q.reshape(B, S, d)
         else:
-            kv = q  # [B*S, 1, d]
-        new_cache = kv
+            # ── temporal (query = current, key/value = cache + current) ──
+            q = x_flat.reshape(B * S, 1, d)
+            if temporal_cache is not None:
+                kv = torch.cat([temporal_cache, q], dim=1)  # [B*S, t_prev+1, d]
+            else:
+                kv = q  # [B*S, 1, d]
+            new_cache = kv
 
-        ta_out, _ = self.temporal_attn(q, kv, kv, need_weights=False)
-        q = self.temporal_norm(q + ta_out)
-
-        x_out = q.reshape(B, S, d)
+            ta_out, _ = self.temporal_attn(q, kv, kv, need_weights=False)
+            q = self.temporal_norm(q + ta_out)
+            x_out = q.reshape(B, S, d)
 
         # ── feed-forward ──
         x_out = self.ff_norm(x_out + self.ff(x_out))
