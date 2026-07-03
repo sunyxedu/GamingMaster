@@ -13,14 +13,16 @@ Usage:
     uv run python scripts/prepare_data.py --players MeltedToast --output data/output --stages convert
 
 Stages:
-    download  - Fetch metadata page-by-page, filter as-you-go until
-                --max-replays FILTERED games are found, download their files
+    download  - Collect --max-replays TRAINABLE games: fetch metadata
+                page-by-page, filter, download candidate files and SIMULATE
+                them; only games the simulator accepts count (map size,
+                modifiers and modern features are only visible in the file)
     filter    - (optional) re-filter cached metadata offline
-    simulate  - Simulate replays from player perspective with fog of war
-    convert   - Convert simulated data to training format
+    simulate  - (usually a no-op after download) simulate leftover games
+    convert   - Convert simulated data to training format (needs numpy)
 
---max-replays counts games that PASS the filter (1v1, min turns, opponent
-stars, date), not raw games fetched.
+--max-replays counts games that survive filter AND simulation, i.e. games
+that actually enter the training set.
 """
 
 import argparse
@@ -52,13 +54,17 @@ async def run_download(
     max_concurrent: int,
     min_turns: int,
     min_opponent_stars: Optional[int],
+    sim_workers: Optional[int] = None,
 ) -> dict[str, List[dict]]:
-    """Fetch metadata page-by-page, filtering as we go, until ``max_replays``
-    FILTERED games are collected (or the player's history is exhausted) —
-    then download replay files for the filtered games only.
+    """Collect ``max_replays`` TRAINABLE games per player.
 
-    ``max_replays`` therefore counts games that actually enter training,
-    not raw games fetched (most of a player's history is FFA/short games).
+    Loop: fetch metadata page-by-page → filter → download candidate files →
+    SIMULATE them. Only games the simulator accepts count toward the target
+    (the metadata filter cannot see map size / modifiers / modern features —
+    those live inside the replay file and are rejected at simulation).
+    Rejected ids go to ``simulated/<player>_skipped.json`` so reruns don't
+    redo them; ``filtered/<player>.json`` ends up listing exactly the games
+    that entered ``simulated/`` (and hence training).
     """
     from data_processing import download_replays, filter_replays
     from data_processing.download.api_client import fetch_replay_pages
@@ -66,8 +72,11 @@ async def run_download(
     metadata_dir = output_dir / "metadata"
     filtered_dir = output_dir / "filtered"
     replays_dir = output_dir / "replays"
-    for d in (metadata_dir, filtered_dir, replays_dir):
+    simulated_dir = output_dir / "simulated"
+    for d in (metadata_dir, filtered_dir, replays_dir, simulated_dir):
         d.mkdir(parents=True, exist_ok=True)
+
+    CHUNK = 16  # candidates downloaded+simulated per round
 
     def passes(entries: List[dict]) -> List[dict]:
         return filter_replays(
@@ -80,46 +89,93 @@ async def run_download(
 
     all_filtered = {}
     for player in players:
-        print(f"\n=== Downloading replays for {player} "
-              f"(target: {max_replays} filtered) ===")
+        print(f"\n=== Collecting replays for {player} "
+              f"(target: {max_replays} trainable) ===")
 
-        # Resume from cached metadata (pages are newest-first, append-only)
+        sim_dir = simulated_dir / player
+        sim_dir.mkdir(parents=True, exist_ok=True)
+        skip_file = simulated_dir / f"{player}_skipped.json"
+        skipped: dict = json.load(open(skip_file)) if skip_file.exists() else {}
+
+        # Resume: cached metadata (newest-first, append-only) + existing sims
         metadata_file = metadata_dir / f"{player}.json"
         raw: List[dict] = []
         if metadata_file.exists():
             raw = json.load(open(metadata_file))
-            print(f"Resuming from {len(raw)} cached metadata entries")
-        filtered = passes(raw)
+            print(f"Resuming from {len(raw)} cached metadata entries, "
+                  f"{len(skipped)} known-skipped")
 
-        if len(filtered) < max_replays:
-            async for page in fetch_replay_pages(player, start_offset=len(raw)):
-                raw.extend(page)
-                page_pass = passes(page)
-                filtered.extend(page_pass)
-                print(f"  fetched {len(raw)} games, "
-                      f"filtered {len(filtered)}/{max_replays}")
-                if len(filtered) >= max_replays:
+        ok_entries: List[dict] = []
+        pending: List[dict] = []
+        for e in passes(raw):
+            if (sim_dir / f"{e['id']}.json").exists():
+                ok_entries.append(e)
+            elif e["id"] not in skipped:
+                pending.append(e)
+
+        pages = fetch_replay_pages(player, start_offset=len(raw))
+        exhausted = False
+
+        with ProcessPoolExecutor(max_workers=sim_workers) as pool:
+            while len(ok_entries) < max_replays:
+                # Refill the candidate queue from the API
+                while not pending and not exhausted:
+                    try:
+                        page = await anext(pages)
+                    except StopAsyncIteration:
+                        exhausted = True
+                        break
+                    raw.extend(page)
+                    pending.extend(
+                        e for e in passes(page)
+                        if e["id"] not in skipped
+                        and not (sim_dir / f"{e['id']}.json").exists()
+                    )
+                    print(f"  fetched {len(raw)} games, "
+                          f"candidates +{len(pending)}")
+                if not pending:
+                    print(f"  history exhausted: only {len(ok_entries)} "
+                          f"trainable games")
                     break
-            with open(metadata_file, "w") as f:
-                json.dump(raw, f, indent=2)
 
-        if len(filtered) < max_replays:
-            print(f"  history exhausted: only {len(filtered)} filtered games")
-        filtered = filtered[:max_replays]
+                take = min(CHUNK, max_replays - len(ok_entries))
+                batch, pending = pending[:take], pending[take:]
+                ids = [e["id"] for e in batch]
+                await download_replays(ids, str(replays_dir),
+                                       max_concurrent=max_concurrent)
 
+                futures = {}
+                for e in batch:
+                    replay_file = replays_dir / f"{e['id']}.json"
+                    if not replay_file.exists():
+                        print(f"  download failed: {e['id']} (will retry on rerun)")
+                        continue
+                    out_file = sim_dir / f"{e['id']}.json"
+                    futures[pool.submit(
+                        _simulate_one, (str(replay_file), player, str(out_file))
+                    )] = e
+                for fut in as_completed(futures):
+                    e = futures[fut]
+                    try:
+                        fut.result()
+                        ok_entries.append(e)
+                    except ValueError as err:  # simulator rejection — permanent
+                        skipped[e["id"]] = str(err)
+                        print(f"  skipped {e['id']}: {err}")
+                    except Exception as err:  # transient — retry on rerun
+                        print(f"  error simulating {e['id']}: {err}")
+                print(f"  trainable {len(ok_entries)}/{max_replays}")
+
+        with open(metadata_file, "w") as f:
+            json.dump(raw, f, indent=2)
+        with open(skip_file, "w") as f:
+            json.dump(skipped, f, indent=2)
         filtered_file = filtered_dir / f"{player}.json"
         with open(filtered_file, "w") as f:
-            json.dump(filtered, f, indent=2)
-        print(f"Filtered: {len(filtered)} games (saved to {filtered_file})")
-        all_filtered[player] = filtered
-
-        # Download replay files for the FILTERED games only
-        replay_ids = [r["id"] for r in filtered]
-        print(f"Downloading {len(replay_ids)} replay files...")
-        result = await download_replays(
-            replay_ids, str(replays_dir), max_concurrent=max_concurrent
-        )
-        print(f"Downloaded: {result['success']} success, {result['failed']} failed")
+            json.dump(ok_entries, f, indent=2)
+        print(f"Collected {len(ok_entries)} trainable games "
+              f"(saved to {filtered_file})")
+        all_filtered[player] = ok_entries
 
     return all_filtered
 
@@ -302,7 +358,7 @@ async def async_main():
         "--max-replays",
         type=int,
         default=10000,
-        help="Target number of FILTERED replays per player (default: 10000)",
+        help="Target number of TRAINABLE replays per player (default: 10000)",
     )
     parser.add_argument(
         "--max-concurrent",
@@ -315,6 +371,12 @@ async def async_main():
         type=int,
         default=80,
         help="Minimum turns required (default: 80)",
+    )
+    parser.add_argument(
+        "--sim-workers",
+        type=int,
+        default=None,
+        help="Parallel simulation workers in the download loop (default: CPU count)",
     )
     parser.add_argument(
         "--min-opponent-stars",
@@ -341,6 +403,7 @@ async def async_main():
             args.max_concurrent,
             args.min_turns,
             args.min_opponent_stars,
+            sim_workers=args.sim_workers,
         )
 
     if "filter" in args.stages:
