@@ -29,9 +29,9 @@
 #   .venv/bin/python -m scripts.prepare_data -p Human.exe \
 #       -o /scratch/$USER/gaming-master/data-v2 --merge
 #
-# Multiple players instead? One node each:
-#   for P in Human.exe qianglituomao; do
-#     sbatch --export=ALL,PLAYER=$P prepare_data_job.sh; done
+# Multiple players? Pass the name as the script argument (space-safe):
+#   sbatch prepare_data_job.sh "Average Joe"
+# or submit the whole roster with collect_data.sh.
 #
 # No srun (single-task job; step creation times out on the cpu partition)
 # and no apptainer (the container lacks the lzstring package — the repo
@@ -47,7 +47,7 @@ else
 fi
 
 .venv/bin/python -m scripts.prepare_data \
-        --players "${PLAYER:-Human.exe}" \
+        --players "${1:-${PLAYER:-Human.exe}}" \
         --shard "$SHARD" \
         --output /scratch/$USER/gaming-master/data-v2 \
         --target 3000 \

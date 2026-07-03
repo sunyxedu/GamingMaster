@@ -3,6 +3,7 @@
 import json
 import ssl
 from typing import Any, Dict, List
+from urllib.parse import quote
 
 import aiohttp
 
@@ -38,7 +39,8 @@ async def fetch_replay_list(
             # Last request: only fetch remaining count
             remaining = total - offset
             count = min(count_per_request, remaining)
-            url = f"https://generals.io/api/replaysForUsername?u={username}&offset={offset}&count={count}"
+            url = (f"https://generals.io/api/replaysForUsername"
+                   f"?u={quote(username)}&offset={offset}&count={count}")
             
             try:
                 async with session.get(url) as response:
@@ -80,7 +82,7 @@ async def fetch_replay_pages(
         offset = start_offset
         while True:
             url = (f"https://generals.io/api/replaysForUsername"
-                   f"?u={username}&offset={offset}&count={count_per_request}")
+                   f"?u={quote(username)}&offset={offset}&count={count_per_request}")
             try:
                 async with session.get(url) as response:
                     replays = await response.json()
