@@ -70,6 +70,25 @@ def _ensure_lz_string(script_dir: Path) -> None:
     print("lz-string installed successfully.")
 
 
+def deserialize_replay_python(serialized_bytes: bytes) -> list:
+    """Pure-Python decompression — no Node.js needed (containers, clusters).
+
+    .gior files are LZString.compressToUint8Array output: the UTF-16 code
+    units of the raw compressed string packed as big-endian byte pairs.
+    Reverse the packing, then apply the raw LZ-string decompress.
+    """
+    data = serialized_bytes
+    if len(data) % 2:  # defensive: compressToUint8Array output is even-length
+        data = data + b"\x00"
+    compressed = "".join(
+        chr((data[i] << 8) | data[i + 1]) for i in range(0, len(data), 2)
+    )
+    text = lzstring.LZString().decompress(compressed)
+    if not text:
+        raise ValueError("LZ-string decompression produced no output")
+    return json.loads(text)
+
+
 def deserialize_replay_nodejs(serialized_bytes: bytes) -> dict:
     """
     Deserialize using Node.js (more reliable for LZ-string).
@@ -129,8 +148,12 @@ def deserialize_replay(serialized_bytes: bytes) -> dict:
     Returns:
         Dictionary containing deserialized replay data
     """
-    # Use Node.js for reliable decompression
-    obj = deserialize_replay_nodejs(serialized_bytes)
+    # Pure-Python decompression by default (works in containers/clusters
+    # without Node.js); the Node.js path remains as a fallback.
+    if _HAS_LZSTRING:
+        obj = deserialize_replay_python(serialized_bytes)
+    else:
+        obj = deserialize_replay_nodejs(serialized_bytes)
 
     replay = {}
     i = 0

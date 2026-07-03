@@ -54,8 +54,7 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 ```bash
 uv sync
 
-# Node.js dependency (auto-installed on first use, or manually):
-(cd data_processing/download && npm install lz-string)
+# (Node.js is NOT required — .gior decompression is pure Python)
 ```
 
 ### 2. Visualise a Replay
