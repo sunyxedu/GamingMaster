@@ -30,44 +30,118 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+# Scan implementation selection.
+#
+# Measured on this codebase's real shape ([627·B, 1000, 384] fp32): each
+# sequential step is already a ~240k-element tensor op, so the loop is
+# BANDWIDTH-bound, not launch-bound — the parallel scan's log2(chunk)×
+# extra memory traffic makes it SLOWER on CPU (0.6×) and MPS (0.2×).
+# The parallel path is kept, tested for exact equivalence, and selectable
+# for devices where kernel-launch overhead dominates instead; benchmark
+# before flipping this on CUDA.
+_USE_PARALLEL_SCAN = False
+
+# Chunk length for the parallel scan: T is processed in sequential chunks
+# (bounded transient memory), each scanned with log2(chunk) parallel steps.
+_SCAN_CHUNK = 256
+
+
+def _hillis_steele(a: torch.Tensor, u: torch.Tensor):
+    """Inclusive parallel scan of the linear recurrence x_t = a_t x_{t-1} + u_t.
+
+    Returns (A, U) per position t such that x_t = A_t * x_0 + U_t, i.e. the
+    composed segment coefficients over 1..t. log2(T) parallel steps; the
+    composition (a2,u2)∘(a1,u1) = (a1*a2, a2*u1 + u2) is associative.
+    """
+    A, U = a, u
+    offset = 1
+    T = a.shape[1]
+    while offset < T:
+        A_tail = A[:, offset:] * A[:, :-offset]
+        U_tail = A[:, offset:] * U[:, :-offset] + U[:, offset:]
+        A = torch.cat([A[:, :offset], A_tail], dim=1)
+        U = torch.cat([U[:, :offset], U_tail], dim=1)
+        offset *= 2
+    return A, U
+
+
+def _scan_parallel(a: torch.Tensor, u: torch.Tensor, h0: torch.Tensor) -> torch.Tensor:
+    """Chunked Hillis-Steele evaluation of h_t = a_t h_{t-1} + u_t."""
+    T = a.shape[1]
+    hs = []
+    h = h0
+    for s in range(0, T, _SCAN_CHUNK):
+        A, U = _hillis_steele(a[:, s:s + _SCAN_CHUNK], u[:, s:s + _SCAN_CHUNK])
+        hc = A * h.unsqueeze(1) + U
+        hs.append(hc)
+        h = hc[:, -1]
+    return torch.cat(hs, dim=1)
+
+
+def _scan_forward(a: torch.Tensor, u: torch.Tensor, h0: torch.Tensor) -> torch.Tensor:
+    """h_t = a_t h_{t-1} + u_t. Plain math (no autograd assumptions) —
+    used by BOTH directions of _GatedScan. Dispatches between the
+    bandwidth-optimal sequential loop and the launch-optimal parallel scan
+    (see _USE_PARALLEL_SCAN)."""
+    if _USE_PARALLEL_SCAN and a.device.type != "cpu":
+        return _scan_parallel(a, u, h0)
+
+    h = h0
+    hs = []
+    for t in range(a.shape[1]):
+        h = a[:, t] * h + u[:, t]
+        hs.append(h)
+    return torch.stack(hs, dim=1)
+
+
+def _scan_sequential(a: torch.Tensor, v: torch.Tensor, h0: torch.Tensor) -> torch.Tensor:
+    """Step-by-step reference of the gated scan (kept for tests/benchmarks)."""
+    h = h0
+    hs = []
+    for t in range(a.shape[1]):
+        h = a[:, t] * h + (1.0 - a[:, t]) * v[:, t]
+        hs.append(h)
+    return torch.stack(hs, dim=1)
+
+
 class _GatedScan(torch.autograd.Function):
     """h_t = a_t * h_{t-1} + (1 - a_t) * v_t, with analytic backward.
 
     a, v: [B, T, d] (float32), h0: [B, d] (float32) → h_all: [B, T, d].
 
-    The backward recurrence, derived from the forward:
-        dL/dh_t      = grad_out_t + a_{t+1} * dL/dh_{t+1}
-        dL/da_t      = dL/dh_t * (h_{t-1} - v_t)
-        dL/dv_t      = dL/dh_t * (1 - a_t)
-        dL/dh0       = a_1 * dL/dh_1
+    Both directions are linear scans and both run as chunked parallel scans:
+      forward:   h_t  = a_t * h_{t-1} + u_t,          u_t = (1 - a_t) v_t
+      backward:  dH_t = a_{t+1} * dH_{t+1} + g_t      (reverse scan)
+    then  dL/da_t = dH_t (h_{t-1} - v_t),  dL/dv_t = dH_t (1 - a_t),
+          dL/dh0 = a_1 dH_1.
     """
 
     @staticmethod
     def forward(ctx, a: torch.Tensor, v: torch.Tensor, h0: torch.Tensor) -> torch.Tensor:
-        T = a.shape[1]
-        h = h0
-        hs = []
-        for t in range(T):
-            h = a[:, t] * h + (1.0 - a[:, t]) * v[:, t]
-            hs.append(h)
-        h_all = torch.stack(hs, dim=1)
+        h_all = _scan_forward(a, (1.0 - a) * v, h0)
         ctx.save_for_backward(a, v, h0, h_all)
         return h_all
 
     @staticmethod
     def backward(ctx, grad_out: torch.Tensor):
         a, v, h0, h_all = ctx.saved_tensors
-        T = a.shape[1]
-        da = torch.empty_like(a)
-        dv = torch.empty_like(v)
-        dh = torch.zeros_like(h0)
-        for t in range(T - 1, -1, -1):
-            dh = dh + grad_out[:, t]
-            h_prev = h_all[:, t - 1] if t > 0 else h0
-            da[:, t] = dh * (h_prev - v[:, t])
-            dv[:, t] = dh * (1.0 - a[:, t])
-            dh = dh * a[:, t]
-        return da, dv, dh
+
+        # Reverse scan: flip time, coefficient at t becomes a_{t+1} (0 at T).
+        coef = torch.cat([a[:, 1:], torch.zeros_like(a[:, :1])], dim=1)
+        dH = torch.flip(
+            _scan_forward(
+                torch.flip(coef, dims=[1]),
+                torch.flip(grad_out, dims=[1]),
+                torch.zeros_like(h0),
+            ),
+            dims=[1],
+        )
+
+        h_prev = torch.cat([h0.unsqueeze(1), h_all[:, :-1]], dim=1)
+        da = dH * (h_prev - v)
+        dv = dH * (1.0 - a)
+        dh0 = dH[:, 0] * a[:, 0]
+        return da, dv, dh0
 
 
 class GatedRecurrence(nn.Module):

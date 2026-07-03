@@ -52,6 +52,25 @@ def test_scan_matches_naive_autograd():
         print(f"  {name}: max diff {diff:.2e} OK")
 
 
+def test_parallel_scan_equals_sequential():
+    """The chunked Hillis-Steele scan must reproduce the step-by-step
+    recurrence across chunk boundaries, odd lengths, and extreme gates."""
+    print("\n=== parallel scan vs sequential reference ===")
+    from model.components.recurrence import _SCAN_CHUNK, _scan_parallel, _scan_sequential
+
+    torch.manual_seed(10)
+    for T in (1, 2, 7, _SCAN_CHUNK - 1, _SCAN_CHUNK, _SCAN_CHUNK + 1, 3 * _SCAN_CHUNK + 5):
+        B, d = 3, 8
+        a = torch.sigmoid(torch.randn(B, T, d, dtype=torch.float64) * 4)  # incl. near-0/1 gates
+        v = torch.randn(B, T, d, dtype=torch.float64)
+        h0 = torch.randn(B, d, dtype=torch.float64)
+        seq = _scan_sequential(a, v, h0)
+        par = _scan_parallel(a, (1.0 - a) * v, h0)
+        diff = (seq - par).abs().max().item()
+        assert diff < 1e-12, f"T={T}: diff={diff}"
+    print(f"  T ∈ {{1, 2, 7, C±1, 3C+5}}: all < 1e-12 OK")
+
+
 def test_module_step_equals_forward():
     """Chained forward_step must reproduce forward exactly."""
     print("\n=== GatedRecurrence: step chain vs forward ===")
@@ -395,6 +414,7 @@ def test_memory_params_excluded_from_weight_decay():
 def main():
     tests = [
         test_scan_matches_naive_autograd,
+        test_parallel_scan_equals_sequential,
         test_module_step_equals_forward,
         test_long_range_gradient_survives,
         test_state_is_fixed_size,
