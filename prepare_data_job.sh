@@ -50,7 +50,7 @@ fi
         --players "${1:-${PLAYER:-Human.exe}}" \
         --shard "$SHARD" \
         --output /scratch/$USER/gaming-master/data-v2 \
-        --target 3000 \
+        --target 10000 \
         --min-turns 80 \
         --min-opponent-stars 40 \
         --workers 20
