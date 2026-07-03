@@ -42,6 +42,7 @@ Game statuses in the manifest:
 
 import argparse
 import asyncio
+import sys
 import json
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -374,8 +375,26 @@ async def async_main():
             pipeline = PlayerPipeline(player, args.output, args)
             await pipeline.run(pool, do_convert)
 
-    print("\nDone. Validate with: uv run python scripts/validate_dataset.py "
-          f"{args.output}/training/<player>")
+    # Auto-merge shard lists (idempotent union; with concurrent shards the
+    # last finisher produces the complete file) and auto-verify: the label
+    # invariants catch silent data corruption BEFORE GPU time is spent.
+    merge_shards(args)
+    if do_convert:
+        from scripts.validate_dataset import validate_directory
+        failed = 0
+        for player in args.players:
+            print(f"\n=== verify {player} ===")
+            summary = validate_directory(args.output / "training" / player,
+                                         per_file=False)
+            failed += summary["bad_files"]
+        if failed:
+            print(f"\nRESULT: {failed} files FAILED validation — do NOT train "
+                  f"on this dataset until investigated")
+            sys.exit(1)
+        print("\nRESULT: all files valid")
+    else:
+        print("\n(numpy unavailable — verification will run on the machine "
+              "that finishes the conversions)")
 
 
 def main():

@@ -85,16 +85,13 @@ def validate_file(path: Path) -> dict:
     return {"errors": errors, "stats": stats}
 
 
-def main():
-    if len(sys.argv) != 2:
-        print(__doc__)
-        return 2
-    root = Path(sys.argv[1])
-    files = sorted(root.glob("*.json"))
-    if not files:
-        print(f"no .json files under {root}")
-        return 2
+def validate_directory(root: Path, per_file: bool = True) -> dict:
+    """Run label/observation invariants over every training file.
 
+    Returns {"files", "bad_files", "frames", "moves", "passes", "dropped"}.
+    Importable: prepare_data calls this automatically after collection.
+    """
+    files = sorted(Path(root).glob("*.json"))
     total = {"T": 0, "moves": 0, "passes": 0, "dropped": 0}
     bad_files = 0
     for f in files:
@@ -106,18 +103,33 @@ def main():
             print(f"FAIL {f.name}: {len(r['errors'])} violations")
             for e in r["errors"][:5]:
                 print(f"    {e}")
-        else:
+        elif per_file:
             s = r["stats"]
             print(f"ok   {f.name}: T={s['T']}  moves={s['moves']}  "
                   f"passes={s['passes']}  dropped={s['dropped']}")
 
-    print("-" * 64)
     frac = {k: total[k] / max(total["T"], 1) for k in ("moves", "passes", "dropped")}
     print(f"{len(files)} files, {total['T']} frames | "
           f"moves {frac['moves']:.1%}  passes {frac['passes']:.1%}  "
-          f"dropped {frac['dropped']:.1%}")
-    if frac["moves"] < 0.2:
+          f"dropped {frac['dropped']:.1%}"
+          + (f" | {bad_files} FAILED" if bad_files else ""))
+    if frac["moves"] < 0.2 and total["T"]:
         print("WARN: suspiciously few move labels — check the pipeline")
+    return {"files": len(files), "bad_files": bad_files,
+            "frames": total["T"], **{k: total[k] for k in ("moves", "passes", "dropped")}}
+
+
+def main():
+    if len(sys.argv) != 2:
+        print(__doc__)
+        return 2
+    root = Path(sys.argv[1])
+    if not sorted(root.glob("*.json")):
+        print(f"no .json files under {root}")
+        return 2
+
+    summary = validate_directory(root)
+    bad_files = summary["bad_files"]
 
     # --- can this data actually train the target architecture? ---
     from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
@@ -150,9 +162,9 @@ def main():
           f"wm_state={wm['state_loss'].item():.3f}  grads finite OK")
 
     if bad_files:
-        print(f"\nRESULT: {bad_files}/{len(files)} files FAILED validation")
+        print(f"\nRESULT: {bad_files}/{summary['files']} files FAILED validation")
         return 1
-    print(f"\nRESULT: all {len(files)} files valid")
+    print(f"\nRESULT: all {summary['files']} files valid")
     return 0
 
 
