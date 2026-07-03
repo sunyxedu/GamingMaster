@@ -18,10 +18,13 @@
 # Datasets generated before the 2026-07 simulator fixes are polluted —
 # always write to a fresh data-v2 directory.
 
+# No srun (single-task job; step creation times out on the cpu partition)
+# and no apptainer (the container lacks the lzstring package — the repo
+# venv on shared home has everything and cpu nodes run its wheels fine).
 export PYTHONPATH=~/GamingMaster
+cd ~/GamingMaster
 
-srun apptainer exec /scratch/$USER/pytorch.sif \
-    python ~/GamingMaster/scripts/prepare_data.py \
+.venv/bin/python -m scripts.prepare_data \
         --players Human.exe \
         --output /scratch/$USER/gaming-master/data-v2 \
         --target 3000 \
