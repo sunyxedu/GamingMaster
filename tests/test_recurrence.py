@@ -411,6 +411,46 @@ def test_memory_params_excluded_from_weight_decay():
     print("  retention_bias/h_init bit-unchanged after 100 AdamW steps OK")
 
 
+def test_grad_accumulation_matches_large_batch():
+    """k accumulated micro-batches must produce the same gradients as one
+    k-times-larger batch (identical loss scaling)."""
+    print("\n=== gradient accumulation == large batch ===")
+    torch.manual_seed(12)
+    model, _ = _small_recurrent_net()
+    model.train()
+
+    B, T = 2, 3
+    grids = [torch.rand(B, T, 12, 25, 25) for _ in range(2)]
+    glbs = [torch.randn(B, T, 4) for _ in range(2)]
+    sy = torch.zeros(B, T, dtype=torch.long)
+    sx = torch.zeros(B, T, dtype=torch.long)
+
+    def loss_of(g, gl):
+        pred = model(g, gl, source_y=sy, source_x=sx)
+        return pred["source_logits"].square().mean()
+
+    # accumulated: two micro-batches, each backward(loss/2)
+    for p in model.parameters():
+        p.grad = None
+    for g, gl in zip(grids, glbs):
+        (loss_of(g, gl) / 2).backward()
+    g_accum = {n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None}
+
+    # one large batch (same samples concatenated)
+    for p in model.parameters():
+        p.grad = None
+    big_g = torch.cat(grids, dim=0)
+    big_gl = torch.cat(glbs, dim=0)
+    big_sy = torch.zeros(2 * B, T, dtype=torch.long)
+    pred = model(big_g, big_gl, source_y=big_sy, source_x=big_sy)
+    pred["source_logits"].square().mean().backward()
+
+    max_diff = max((g_accum[n] - p.grad).abs().max().item()
+                   for n, p in model.named_parameters() if n in g_accum)
+    assert max_diff < 1e-5, f"accumulated vs large-batch grad diff: {max_diff}"
+    print(f"  max grad diff {max_diff:.2e} OK")
+
+
 def main():
     tests = [
         test_scan_matches_naive_autograd,
@@ -426,6 +466,7 @@ def main():
         test_next_obs_loss_masks_and_zero,
         test_next_obs_head_trains_memory,
         test_memory_params_excluded_from_weight_decay,
+        test_grad_accumulation_matches_large_batch,
     ]
     passed = failed = 0
     for t in tests:

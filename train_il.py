@@ -35,7 +35,11 @@ def parse_args():
         "--output_dir", type=str, default="checkpoints", help="Checkpoint output dir"
     )
     p.add_argument("--epochs", type=int, default=150)
-    p.add_argument("--batch_size", type=int, default=4)
+    p.add_argument("--batch_size", type=int, default=4,
+                   help="Per-GPU micro-batch (full-game sequences)")
+    p.add_argument("--grad_accum", type=int, default=1,
+                   help="Gradient accumulation steps; effective batch = "
+                        "batch_size x world_size x grad_accum")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--warmup_steps", type=int, default=200, help="Linear LR warmup steps")
     p.add_argument("--weight_decay", type=float, default=1e-4)
@@ -91,6 +95,9 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
     epoch_acc_sum = {k: 0.0 for k in ["src_acc", "dir_acc", "full_acc", "complete_acc"]}
     epoch_steps = 0
     use_amp = device.type == "cuda"
+    accum = max(1, getattr(args, "grad_accum", 1))
+    micro = 0  # micro-batches accumulated toward the next optimizer step
+    optimizer.zero_grad(set_to_none=True)
 
     for step, batch in enumerate(loader):
         if step < start_step:
@@ -149,23 +156,41 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                     losses["wm_loss"] = losses["loss"].new_tensor(0.0)
             loss = losses["loss"]
 
-            optimizer.zero_grad()
-            loss.backward()
-            if args.grad_clip > 0:
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-            else:
-                grad_norm = torch.tensor(0.0)
-
-            # Skip step if NaN detected — prevents weight corruption
-            if not torch.isfinite(loss) or not torch.isfinite(grad_norm):
+            # A non-finite micro-batch poisons the whole accumulation
+            # window — drop it and restart before touching gradients.
+            if not torch.isfinite(loss):
                 optimizer.zero_grad(set_to_none=True)
+                micro = 0
                 if rank0:
-                    T_cur = grid_seq.shape[1]
-                    print(f"  [NaN] Skipped step {step+1} (T={T_cur}, loss={loss.item():.4f})")
+                    print(f"  [NaN] Skipped step {step+1} "
+                          f"(T={grid_seq.shape[1]}, loss={loss.item():.4f})")
                 continue
 
-            optimizer.step()
-            scheduler.step()
+            # Accumulate; under DDP skip the allreduce on non-final
+            # micro-batches (no_sync) so it fires once per optimizer step.
+            if distributed and micro < accum - 1:
+                with model.no_sync():
+                    (loss / accum).backward()
+            else:
+                (loss / accum).backward()
+            micro += 1
+
+            if micro == accum:
+                if args.grad_clip > 0:
+                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+                else:
+                    grad_norm = torch.tensor(0.0)
+                if not torch.isfinite(grad_norm):
+                    optimizer.zero_grad(set_to_none=True)
+                    micro = 0
+                    if rank0:
+                        print(f"  [NaN] Dropped accumulation window at step {step+1} "
+                              f"(grad_norm={grad_norm.item():.4f})")
+                    continue
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+                micro = 0
         except torch.cuda.OutOfMemoryError:
             if distributed:
                 # A rank-local skip desynchronizes DDP's gradient allreduce —
@@ -174,6 +199,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                 raise
             torch.cuda.empty_cache()
             optimizer.zero_grad(set_to_none=True)
+            micro = 0
             if rank0:
                 T_cur = grid_seq.shape[1]
                 print(f"  [OOM] Skipped step {step+1} (T={T_cur})")
@@ -213,6 +239,11 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
 
         if save_fn and rank0 and (step + 1) % args.save_steps == 0:
             save_fn(epoch, step + 1)
+
+    # Drop a trailing partial accumulation window — carrying half-window
+    # gradients into the next epoch would skew the first step there.
+    if micro > 0:
+        optimizer.zero_grad(set_to_none=True)
 
     avg_loss = epoch_loss_sum / max(epoch_steps, 1)
     return avg_loss
@@ -298,7 +329,11 @@ def main():
         print(f"Dataset: {len(dataset)} replays from {args.data_dir}")
 
     world_size = dist.get_world_size() if distributed else 1
-    steps_per_epoch = len(dataset) // (args.batch_size * world_size)
+    # Scheduler horizon counts OPTIMIZER steps (one per accumulation window)
+    steps_per_epoch = len(dataset) // (args.batch_size * world_size * max(1, args.grad_accum))
+    if rank0 and args.grad_accum > 1:
+        print(f"Effective batch: {args.batch_size} x {world_size} GPUs x "
+              f"{args.grad_accum} accum = {args.batch_size * world_size * args.grad_accum} sequences")
 
     sampler = DistributedSampler(dataset, shuffle=True) if distributed else None
     loader = DataLoader(
