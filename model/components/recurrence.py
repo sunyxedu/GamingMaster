@@ -101,8 +101,15 @@ class GatedRecurrence(nn.Module):
         self.h_init = nn.Parameter(torch.zeros(d_model))
 
     def _gates(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Retention gate and write candidate, always in float32."""
+        """Retention gate and write candidate, always in float32.
+
+        The gate is clamped below exact 1.0: fp32 sigmoid saturates at
+        logits ≳ 16.6, which would zero the write path (1-a)·v AND its
+        gradient, permanently closing the channel. The clamp caps the
+        half-life at ~7e5 steps instead — effectively infinite, but alive.
+        """
         a = torch.sigmoid((self.a_proj(x) + self.retention_bias).float())
+        a = a.clamp(max=1.0 - 1e-6)
         v = self.v_proj(x).float()
         return a, v
 

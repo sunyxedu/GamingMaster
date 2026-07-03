@@ -141,7 +141,8 @@ Guarantees enforced by `tests/test_recurrence.py`:
 - the training scan is *exactly* plain autograd (custom analytic backward,
   verified to <1e-12 in float64, including under re-entrant checkpointing);
 - chained `step_rl` equals `forward(act_steps=K)` — the PPO ratio identity
-  holds in recurrent mode (verified end-to-end at ~1e-6);
+  holds in recurrent mode (logit diff measured ~1e-8, asserted < 1e-3 in
+  the test; end-to-end ratio deviation measured ~1e-6);
 - gradients flow through the **full episode** (true BPTT at O(T) cost), so
   the network learns *what to write* into memory, not only how to read it.
 - No absolute time PE is added in recurrent mode (the recurrence carries

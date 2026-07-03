@@ -120,8 +120,16 @@ class SpatiotemporalBlock(nn.Module):
         qkv = qkv.reshape(B, S, 3, n_heads, d_head).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
 
+        # Pin the kernel set so the re-entrant checkpoint recompute cannot
+        # dispatch to a different backend (they consume dropout RNG
+        # differently, which would silently corrupt gradients).
         dropout_p = self.spatial_attn.dropout if self.training else 0.0
-        attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+        with torch.nn.attention.sdpa_kernel([
+            torch.nn.attention.SDPBackend.FLASH_ATTENTION,
+            torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION,
+            torch.nn.attention.SDPBackend.MATH,
+        ]):
+            attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
         attn_out = attn_out.permute(0, 2, 1, 3).reshape(B, S, d)
         return self.spatial_attn.out_proj(attn_out)
 
@@ -141,9 +149,14 @@ class SpatiotemporalBlock(nn.Module):
         q, k, v = qkv.unbind(0)  # each [B, n_heads, T, d_head]
 
         dropout_p = self.temporal_attn.dropout if self.training else 0.0
-        attn_out = F.scaled_dot_product_attention(
-            q, k, v, dropout_p=dropout_p, is_causal=True,
-        )
+        with torch.nn.attention.sdpa_kernel([
+            torch.nn.attention.SDPBackend.FLASH_ATTENTION,
+            torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION,
+            torch.nn.attention.SDPBackend.MATH,
+        ]):
+            attn_out = F.scaled_dot_product_attention(
+                q, k, v, dropout_p=dropout_p, is_causal=True,
+            )
         attn_out = attn_out.permute(0, 2, 1, 3).reshape(B, T, d)
         return self.temporal_attn.out_proj(attn_out)
 

@@ -93,6 +93,13 @@ class GeneralsNetwork(nn.Module):
         # that forces the temporal state to actually retain information.
         self.next_obs_head: Optional[nn.Linear] = None
         if cfg.predict_next_obs:
+            if cfg.temporal_type != "spatiotemporal":
+                # Only the spatiotemporal forward emits next_obs outputs; a
+                # silent head-without-outputs would zero the wm loss and
+                # break DDP's static-graph assumption.
+                raise ValueError(
+                    "predict_next_obs requires temporal_type='spatiotemporal'"
+                )
             self.next_obs_head = nn.Linear(cfg.d_model, cfg.grid_channels)
 
         # --- Optional world model ---
@@ -163,8 +170,10 @@ class GeneralsNetwork(nn.Module):
     def _encode_frames(self, grid_seq, frame_mask):
         """Run the spatial encoder, excluding padded frames from BatchNorm
         statistics when ``frame_mask`` ([B, T] bool, True = real frame) is
-        given.  Padded frames get zero features (they are masked in the loss
-        and never attended to by earlier steps thanks to causal time attn)."""
+        given.  Padded frames get zero features; they are masked in the loss
+        and cannot influence real frames because collate pads only at the
+        sequence TAIL and both temporal mixers are causal (attention masks
+        the future; the recurrence only carries state forward)."""
         B, T, C, H, W = grid_seq.shape
         BT = B * T
         flat = grid_seq.reshape(BT, C, H, W)
@@ -634,6 +643,14 @@ class GeneralsNetwork(nn.Module):
         if cfg.temporal_mixer == "recurrent":
             # No absolute time PE on tokens (matches forward); the PassHead
             # time feature below still uses the caller-supplied step index.
+            # The fixed-size cache carries no step count, so a caller that
+            # threads the cache but forgets step_idx would silently freeze
+            # the time feature at 0 — catch it.
+            if st_cache is not None and step_idx == 0:
+                raise ValueError(
+                    "recurrent mode: pass step_idx to step()/step_rl() "
+                    "(cache present but step_idx is still 0)"
+                )
             t_cur = step_idx
         else:
             t_cur = 0 if st_cache is None else st_cache[0].shape[1]
@@ -914,6 +931,11 @@ class GeneralsNetwork(nn.Module):
         tokens = tokens + self._build_spatial_pe()
 
         if cfg.temporal_mixer == "recurrent":
+            if st_cache is not None and step_idx == 0:
+                raise ValueError(
+                    "recurrent mode: pass step_idx to step()/step_rl() "
+                    "(cache present but step_idx is still 0)"
+                )
             t_cur = step_idx
         else:
             t_cur = 0 if st_cache is None else st_cache[0].shape[1]
