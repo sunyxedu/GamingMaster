@@ -20,9 +20,13 @@ export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
 export PYTHONPATH=~/GamingMaster
 export PYTHONUNBUFFERED=1
+# Recurrent-mode backward saves fp32 gate/state sequences; B=6/T=1000
+# exceeds 141GB (measured OOM). B=3 fits; expandable segments reclaim
+# allocator fragmentation (~13GB observed).
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
-MICRO=${MICRO:-6}
+MICRO=${MICRO:-3}
 TARGET_EFF=${TARGET_EFF:-384}
 WORLD=$(( SLURM_NNODES * GPUS_PER_NODE ))
 ACCUM=$(( TARGET_EFF / (MICRO * WORLD) ))
