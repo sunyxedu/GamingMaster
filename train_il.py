@@ -5,7 +5,7 @@ Usage:
     # Single GPU:
     python3 train_il.py --data_dir <path_to_gio_data> [options]
 
-    # Multi-GPU (DDP):
+    # Multi-GPU (torchrun + manual grad sync):
     torchrun --nproc_per_node=2 train_il.py --data_dir <path_to_gio_data> [options]
 """
 
@@ -17,7 +17,6 @@ import time
 
 import torch
 import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
@@ -162,8 +161,13 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             loss = losses["loss"]
 
             # A non-finite micro-batch poisons the whole accumulation
-            # window — drop it and restart before touching gradients.
-            if not torch.isfinite(loss):
+            # window — drop it and restart before touching gradients. The
+            # decision must be COLLECTIVE: a rank-local skip would desync the
+            # per-rank micro counters and deadlock the gradient allreduce.
+            bad = (~torch.isfinite(loss.detach())).float()
+            if distributed:
+                dist.all_reduce(bad, op=dist.ReduceOp.MAX)
+            if bad.item() > 0:
                 optimizer.zero_grad(set_to_none=True)
                 micro = 0
                 if rank0:
@@ -171,16 +175,19 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                           f"(T={grid_seq.shape[1]}, loss={loss.item():.4f})")
                 continue
 
-            # Accumulate; under DDP skip the allreduce on non-final
-            # micro-batches (no_sync) so it fires once per optimizer step.
-            if distributed and micro < accum - 1:
-                with model.no_sync():
-                    (loss / accum).backward()
-            else:
-                (loss / accum).backward()
+            (loss / accum).backward()
             micro += 1
 
             if micro == accum:
+                if distributed:
+                    # replaces DDP's bucketed allreduce; grads are averaged so
+                    # every rank steps identically (results are bitwise-equal
+                    # across ranks, keeping the NaN drop below collective)
+                    world = dist.get_world_size()
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+                            p.grad.div_(world)
                 if args.grad_clip > 0:
                     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
                 else:
@@ -260,10 +267,13 @@ def main():
     # Distributed setup (auto-detected via torchrun)
     distributed = "LOCAL_RANK" in os.environ
     if distributed:
-        dist.init_process_group(backend="nccl")
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        dist.init_process_group(backend=backend)
         local_rank = int(os.environ["LOCAL_RANK"])
-        torch.cuda.set_device(local_rank)
-        device = torch.device(f"cuda:{local_rank}")
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
+        device = (torch.device(f"cuda:{local_rank}")
+                  if torch.cuda.is_available() else torch.device("cpu"))
     elif args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -314,10 +324,14 @@ def main():
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     if distributed:
-        # No static_graph: IL trains at a RANDOM ACT depth per iteration
-        # (deep supervision), so the graph legitimately changes; non-reentrant
-        # activation checkpointing supports this under DDP.
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
+        # Manual gradient sync instead of DDP: IL trains at a RANDOM ACT
+        # depth per iteration (deep supervision), which DDP's reducer rejects
+        # (static_graph) or trips over (checkpoint recompute alignment). For a
+        # 16M model one grads-allreduce per optimizer step costs microseconds
+        # and is correct for ANY graph. Replicate DDP's initial sync here:
+        import itertools
+        for t in itertools.chain(model.parameters(), model.buffers()):
+            dist.broadcast(t.data, src=0)
     if rank0:
         print(f"Model parameters: {n_params:,}")
 
@@ -364,14 +378,14 @@ def main():
     if args.finetune_from:
         # Load weights only; everything else (epoch counter, optimizer state,
         # LR schedule) starts fresh — this is a NEW run seeded from phase 1.
-        raw_model = model.module if distributed else model
+        raw_model = model
         load_model_state(raw_model, resume_ckpt["model_state"], ctx="finetune checkpoint")
         if rank0:
             print(f"Fine-tuning from {args.finetune_from} "
                   f"(fresh epoch/optimizer/schedule)")
     elif args.resume:
         ckpt = resume_ckpt  # loaded above, where it defined the architecture
-        raw_model = model.module if distributed else model
+        raw_model = model
         load_model_state(raw_model, ckpt["model_state"], ctx="resume checkpoint")
         # Only reuse optimizer state from IL checkpoints whose trainable set
         # matches — RL checkpoints also carry optimizer_state, but it targets
@@ -436,7 +450,7 @@ def main():
               f"warmup={warmup_steps}, reset={args.reset_scheduler}")
 
     def save_checkpoint(epoch, step=0, loss=0.0):
-        raw = model.module if distributed else model
+        raw = model
         ckpt = {
             "epoch": epoch,
             "step": step,

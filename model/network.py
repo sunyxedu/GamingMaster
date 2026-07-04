@@ -212,7 +212,7 @@ class GeneralsNetwork(nn.Module):
         # ── Stage 1: Spatiotemporal encoding (checkpointed) ──
         tokens = self.pre_norm(tokens)
         for layer in self.st_layers:
-            tokens = checkpoint(layer, tokens, use_reentrant=False)
+            tokens = checkpoint(layer, tokens, use_reentrant=True)
         tokens = self.mid_norm(tokens)
 
         # ── Stage 2: TRM pondering ──
