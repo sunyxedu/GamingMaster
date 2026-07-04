@@ -314,8 +314,10 @@ def main():
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     if distributed:
+        # No static_graph: IL trains at a RANDOM ACT depth per iteration
+        # (deep supervision), so the graph legitimately changes; non-reentrant
+        # activation checkpointing supports this under DDP.
         model = DDP(model, device_ids=[local_rank], find_unused_parameters=False)
-        model._set_static_graph()
     if rank0:
         print(f"Model parameters: {n_params:,}")
 

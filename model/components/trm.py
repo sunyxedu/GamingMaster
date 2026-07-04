@@ -167,9 +167,10 @@ class TRM(nn.Module):
                         z_L = self.reasoning(z_L, z_H + x)
                     z_H = self.reasoning(z_H, z_L)
 
-        # Re-entrant checkpointing propagates grads only when its inputs
-        # require grad — this must run for H_cycles == 1 (init/carry states)
-        # too, not just after the no-grad cycles above.
+        # Cut the graph at the no-grad prefix and make the states leaf
+        # tensors that require grad, so backward flows into the final cycle
+        # regardless of checkpoint flavor — this must run for H_cycles == 1
+        # (init/carry states) too, not just after the no-grad cycles above.
         if torch.is_grad_enabled():
             z_H = z_H.detach().requires_grad_(True)
             z_L = z_L.detach().requires_grad_(True)
@@ -183,9 +184,9 @@ class TRM(nn.Module):
                 z_L,
                 z_H,
                 x,
-                use_reentrant=True,
+                use_reentrant=False,
             )
-        z_H = checkpoint(self.reasoning, z_H, z_L, use_reentrant=True)
+        z_H = checkpoint(self.reasoning, z_H, z_L, use_reentrant=False)
 
         q_idx = self.q_token_idx if S > self.q_token_idx else 0
         q_halt = self.q_head(z_H[:, q_idx]).squeeze(-1)
