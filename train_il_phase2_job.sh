@@ -21,15 +21,15 @@ export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
 export PYTHONPATH=~/GamingMaster
 export PYTHONUNBUFFERED=1
-# Recurrent-mode backward saves fp32 gate/state sequences; B=6/T=1000
-# exceeds 141GB (measured OOM). B=3 fits; expandable segments reclaim
-# allocator fragmentation (~13GB observed).
+# Recurrent-mode memory (measured, T=1000): B=6 OOMs a 141GB card; B=3
+# peaks at 134.5/139.8 GiB — no headroom for DDP buffers + variable
+# batch shapes. B=2 (~90 GiB peak) is the safe production setting.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 : "${CKPT:?set CKPT=/path/to/phase1 checkpoint .pt}"
 
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
-MICRO=${MICRO:-3}
+MICRO=${MICRO:-2}
 TARGET_EFF=${TARGET_EFF:-48}
 WORLD=$(( SLURM_NNODES * GPUS_PER_NODE ))
 ACCUM=$(( TARGET_EFF / (MICRO * WORLD) ))
