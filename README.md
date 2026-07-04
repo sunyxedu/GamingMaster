@@ -160,7 +160,9 @@ Training format per timestep:
 
 ### Step 2: Neural Network Architecture
 
-The model uses **factored spatiotemporal attention**: each layer first does spatial self-attention within the current timestep, then causal temporal self-attention across all past timesteps at each grid position. This replaces both the CNN-era history encoder and the spatial Transformer into a single unified backbone.
+![Model architecture](docs/architecture.svg)
+
+The model uses a **factored spatiotemporal backbone**: each layer first does spatial self-attention within the current timestep, then mixes across timesteps at each grid position — via a gated linear recurrence (fixed-size neural memory, the recommended mode) or causal temporal attention (`temporal_mixer`). A next-observation head pressures the recurrent state to actually retain what it saw; the TRM core then ponders the belief state before the autoregressive action heads decode a move.
 
 Two temporal modes are available via `ModelConfig.temporal_type`:
 
