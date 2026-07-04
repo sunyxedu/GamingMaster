@@ -28,6 +28,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 MICRO=${MICRO:-2}
 TARGET_EFF=${TARGET_EFF:-384}
+WARMUP=${WARMUP:-100}   # ~5% of total optimizer steps
 WORLD=$(( SLURM_NNODES * GPUS_PER_NODE ))
 ACCUM=$(( TARGET_EFF / (MICRO * WORLD) ))
 [ "$ACCUM" -lt 1 ] && ACCUM=1
@@ -63,7 +64,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --tf_start 0.4 --tf_end 0.0 \
         --batch_size $MICRO --grad_accum $ACCUM \
         --epochs 40 \
-        --lr 1e-3 --warmup_steps 500 \
+        --lr 1e-3 --warmup_steps $WARMUP \
         --weight_decay 1e-4 \
         --num_workers 16 \
         --save_interval 1 --save_steps 1000
