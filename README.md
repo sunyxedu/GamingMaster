@@ -166,8 +166,7 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
 
 | Mode | `temporal_type` | Description |
 |------|----------------|-------------|
-| **Spatiotemporal** (default) | `"spatiotemporal"` | Factored spatial + causal temporal attention (`n_st_layers`) → TRM pondering |
-| GRU + TRM | `"gru"` | GRU history encoder → TRM two-state recursive pondering |
+| **Spatiotemporal** (the only mode) | `"spatiotemporal"` | Factored spatial attention + temporal mixer (`n_st_layers`) → TRM pondering |
 
 ```
   grid_seq [B,T,12,25,25]              globals_seq [B,T,4]
@@ -386,7 +385,6 @@ RL training components:
 - `model/rl_utils.py` — GAE, RolloutBuffer, strict `load_model_state`, encoder freeze/unfreeze helpers
 - `model.step_rl(act_steps=K)` — single-step inference with KV cache at a fixed pondering depth; the PPO update recomputes log-probs with `forward(act_steps=K)` in eval mode so the ratio is exact (verified to ~1e-6)
 - `ValueHead` is unbounded (discounted shaped returns exceed \[−1, 1\])
-- `WorldModel` can be enabled via `use_world_model=True` (untested end-to-end)
 
 Correctness invariants (matched ACT depth, eval-mode updates, truncation bootstrapping) are documented in [docs/training.md](docs/training.md).
 

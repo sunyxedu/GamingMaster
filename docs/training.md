@@ -33,8 +33,9 @@ computation:
    ever switch the update to train mode, old and new log-probs come from
    different networks and the ratio is invalid again.
 
-3. **Recurrent state.** The spatiotemporal KV cache (and GRU hidden, if you
-   use `temporal_type="gru"`) is threaded through the whole rollout. The
+3. **Recurrent state.** The temporal state (KV cache in attention mode,
+   fixed-size recurrent state in recurrent mode) is threaded through the
+   whole rollout. The
    equivalence `step_rl(act_steps=K)` ≡ `forward(act_steps=K)` is asserted by
    `tests/test_audit_fixes.py::test_step_vs_full_consistency_act_steps` and
    should hold to ~1e-6 in the ratio.

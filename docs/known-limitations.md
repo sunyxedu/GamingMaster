@@ -35,12 +35,6 @@ Swamps, deserts, lookouts, observatories, and game modifiers are neither
 simulated nor learned — such replays are rejected during data prep, and the
 RL env never generates them. The bot targets classic 1v1 maps.
 
-## GRU temporal mode is second-class
-
-`temporal_type="gru"` is wired through training and rollout (including
-hidden-state threading), but all serious training and testing has been done
-with the default `"spatiotemporal"` mode.
-
 ## Miscellaneous
 
 - The RL env's random maps place mountains/cities uniformly (with a
