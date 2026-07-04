@@ -33,6 +33,12 @@ ACCUM=$(( TARGET_EFF / (MICRO * WORLD) ))
 [ "$ACCUM" -lt 1 ] && ACCUM=1
 echo "GPUs ${WORLD} | micro ${MICRO} x accum ${ACCUM} = effective $(( MICRO * WORLD * ACCUM ))"
 
+# Optional resume: RESUME=/path/to/checkpoint.pt sbatch ... (any GPU count —
+# ACCUM keeps the effective batch at TARGET_EFF, so the trajectory continues
+# identically; the checkpoint carries optimizer + LR-schedule position)
+RESUME_FLAG=""
+[ -n "${RESUME:-}" ] && RESUME_FLAG="--resume $RESUME"
+
 HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
 TRAIN_ROOT=/scratch/$USER/gaming-master/data-v2/training
 DATA_DIRS=(
@@ -50,6 +56,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --rdzv_endpoint=$HEAD_NODE:29500 \
         ~/GamingMaster/train_il.py \
         --data_dir "${DATA_DIRS[@]}" \
+        $RESUME_FLAG \
         --output_dir /scratch/$USER/gaming-master/checkpoints/il_phase1 \
         --temporal_mixer recurrent \
         --world_model_weight 0.2 \
