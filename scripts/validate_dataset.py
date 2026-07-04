@@ -85,28 +85,46 @@ def validate_file(path: Path) -> dict:
     return {"errors": errors, "stats": stats}
 
 
-def validate_directory(root: Path, per_file: bool = True) -> dict:
-    """Run label/observation invariants over every training file.
+def _validate_one(path_str: str) -> tuple:
+    """Pool worker: returns (name, errors, stats)."""
+    r = validate_file(Path(path_str))
+    return (Path(path_str).name, r["errors"], r["stats"])
 
-    Returns {"files", "bad_files", "frames", "moves", "passes", "dropped"}.
+
+def validate_directory(root: Path, per_file: bool = False, workers: int = None,
+                       sample: int = 0) -> dict:
+    """Run label/observation invariants over the training files in parallel.
+
+    Files are independent, so validation fans out over a process pool
+    (16k files serially is minutes; parallel is seconds). ``sample > 0``
+    checks a deterministic subset — enough to catch systematic corruption.
     Importable: prepare_data calls this automatically after collection.
     """
+    import os
+    from concurrent.futures import ProcessPoolExecutor
+
     files = sorted(Path(root).glob("*.json"))
+    if sample and len(files) > sample:
+        step = len(files) / sample
+        files = [files[int(i * step)] for i in range(sample)]  # even stride
+        print(f"(sampling {len(files)} of the files)")
+
     total = {"T": 0, "moves": 0, "passes": 0, "dropped": 0}
     bad_files = 0
-    for f in files:
-        r = validate_file(f)
-        for k in total:
-            total[k] += r["stats"][k]
-        if r["errors"]:
-            bad_files += 1
-            print(f"FAIL {f.name}: {len(r['errors'])} violations")
-            for e in r["errors"][:5]:
-                print(f"    {e}")
-        elif per_file:
-            s = r["stats"]
-            print(f"ok   {f.name}: T={s['T']}  moves={s['moves']}  "
-                  f"passes={s['passes']}  dropped={s['dropped']}")
+    workers = workers or os.cpu_count() or 4
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        for name, errors, stats in pool.map(_validate_one, [str(f) for f in files],
+                                            chunksize=16):
+            for k in total:
+                total[k] += stats[k]
+            if errors:
+                bad_files += 1
+                print(f"FAIL {name}: {len(errors)} violations")
+                for e in errors[:5]:
+                    print(f"    {e}")
+            elif per_file:
+                print(f"ok   {name}: T={stats['T']}  moves={stats['moves']}  "
+                      f"passes={stats['passes']}  dropped={stats['dropped']}")
 
     frac = {k: total[k] / max(total["T"], 1) for k in ("moves", "passes", "dropped")}
     print(f"{len(files)} files, {total['T']} frames | "
@@ -120,16 +138,23 @@ def validate_directory(root: Path, per_file: bool = True) -> dict:
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(__doc__)
-        return 2
-    root = Path(sys.argv[1])
-    if not sorted(root.glob("*.json")):
-        print(f"no .json files under {root}")
+    import argparse
+    p = argparse.ArgumentParser(description="Validate a converted IL dataset dir")
+    p.add_argument("root", type=Path, help="training/<player> directory")
+    p.add_argument("--sample", type=int, default=0,
+                   help="Validate a strided subset of N files (0 = all)")
+    p.add_argument("--workers", type=int, default=None)
+    p.add_argument("--per-file", action="store_true", help="Print every file")
+    args = p.parse_args()
+
+    if not sorted(args.root.glob("*.json")):
+        print(f"no .json files under {args.root}")
         return 2
 
-    summary = validate_directory(root)
+    summary = validate_directory(args.root, per_file=args.per_file,
+                                 workers=args.workers, sample=args.sample)
     bad_files = summary["bad_files"]
+    root = args.root
 
     # --- can this data actually train the target architecture? ---
     from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
