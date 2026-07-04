@@ -13,11 +13,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 import torch.nn.functional as F
 
-from model.components.encoder import HistoryEncoder, ResBlock, SpatialEncoder
+from model.components.encoder import ResBlock, SpatialEncoder
 from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead, ValueHead
 from model.components.transformer import SpatiotemporalBlock, TransformerBlock
 from model.components.trm import TRM
-from model.components.world_model import WorldModel
 from model.config import ModelConfig
 from model.losses import ImitationLoss
 from model.network import GeneralsNetwork
@@ -46,23 +45,6 @@ def test_spatial_encoder():
     print(f"  Output: {y.shape} ✓")
     n_params = sum(p.numel() for p in enc.parameters())
     print(f"  Params: {n_params:,}")
-
-
-def test_history_encoder():
-    print("\n=== HistoryEncoder ===")
-    cfg = ModelConfig(d_model=128)
-    enc = HistoryEncoder(cfg)
-    x = torch.randn(2, 10, 128)  # B=2, T=10, d=128
-    out, h = enc(x)
-    assert out.shape == (2, 10, 128), f"Output shape: {out.shape}"
-    assert h.shape == (1, 2, 128), f"Hidden shape: {h.shape}"
-    print(f"  Input:  {x.shape}")
-    print(f"  Output: {out.shape}, Hidden: {h.shape} ✓")
-
-    # Test with initial hidden state
-    out2, h2 = enc(x, h)
-    assert out2.shape == out.shape
-    print(f"  With hidden: {out2.shape} ✓")
 
 
 def test_transformer_block():
@@ -151,25 +133,11 @@ def test_pass_head():
     print(f"  Output: {logits.shape} ✓")
 
 
-def test_world_model():
-    print("\n=== WorldModel ===")
-    cfg = ModelConfig(d_model=128, use_world_model=True)
-    wm = WorldModel(cfg)
-    state = torch.randn(4, 128)
-    action_dim = 25 * 25 + 4 + 2
-    action = torch.randn(4, action_dim)
-    pred = wm(state, action)
-    assert pred.shape == (4, 128), f"Shape: {pred.shape}"
-    print(f"  Input:  state={state.shape}, action={action.shape}")
-    print(f"  Output: {pred.shape} ✓")
-
-
 def test_generals_network_forward():
-    print("\n=== GeneralsNetwork Forward (GRU mode) ===")
+    print("\n=== GeneralsNetwork Forward ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
         trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32, dropout=0.0,
-        temporal_type="gru",
     )
     model = GeneralsNetwork(cfg)
     n_params = sum(p.numel() for p in model.parameters())
@@ -189,7 +157,6 @@ def test_generals_network_forward():
     assert out["split_logits"].shape == (B, T, 2), f"split: {out['split_logits'].shape}"
     assert out["pass_logits"].shape == (B, T), f"pass: {out['pass_logits'].shape}"
     assert out["value"].shape == (B, T), f"value: {out['value'].shape}"
-    assert out["hidden"] is not None
     print(f"  source_logits:    {out['source_logits'].shape} ✓")
     print(f"  direction_logits: {out['direction_logits'].shape} ✓")
     print(f"  split_logits:     {out['split_logits'].shape} ✓")
@@ -384,7 +351,7 @@ def test_trm_nograd_optimization():
 
 def test_generals_network_inference():
     print("\n=== GeneralsNetwork Inference (no source_y/x) ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32, temporal_type="gru")
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -401,8 +368,8 @@ def test_generals_network_inference():
 
 
 def test_generals_network_step():
-    print("\n=== GeneralsNetwork Single-step (GRU) ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32, temporal_type="gru")
+    print("\n=== GeneralsNetwork Single-step ===")
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -425,11 +392,10 @@ def test_generals_network_step():
     print(f"  pass_logits:      {out['pass_logits'].shape} ✓")
     print(f"  value:            {out['value'].shape} ✓")
 
-    # Test sequential inference with hidden state
-    hidden = out["hidden"]
-    out2 = model.step(grid, globals_vec, legal_mask, hidden=hidden)
-    assert out2["hidden"] is not None
-    print("  Sequential inference with hidden state ✓")
+    # Sequential inference threads st_cache (+ step_idx in recurrent mode)
+    out2 = model.step(grid, globals_vec, legal_mask, st_cache=out["st_cache"], step_idx=1)
+    assert out2["st_cache"] is not None
+    print("  Sequential inference with st_cache ✓")
 
 
 def test_backward_pass():
@@ -700,32 +666,6 @@ def test_real_replay_integration():
     print("  Real replay integration ✓")
 
 
-def test_world_model_integration():
-    print("\n=== World Model Integration ===")
-    cfg = ModelConfig(
-        d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
-        use_world_model=True,
-    )
-    model = GeneralsNetwork(cfg)
-    assert model.world_model is not None, "World model not created"
-
-    B, T = 1, 3
-    grid_seq = torch.randn(B, T, 12, 25, 25)
-    globals_seq = torch.randn(B, T, 4)
-    wm_embed = torch.zeros(B, T, 64)  # zeros for IL
-
-    out = model(grid_seq, globals_seq, world_model_embed=wm_embed)
-    assert out["source_logits"].shape == (B, T, 625)
-    print("  Forward with zero world-model embed (IL mode) ✓")
-
-    # With random embed (simulating RL)
-    wm_embed_rl = torch.randn(B, T, 64)
-    out_rl = model(grid_seq, globals_seq, world_model_embed=wm_embed_rl)
-    assert out_rl["source_logits"].shape == (B, T, 625)
-    print("  Forward with random world-model embed (RL mode) ✓")
-
-
 def test_gradient_flow():
     """Verify gradients flow through all major components."""
     print("\n=== Gradient Flow (spatiotemporal + TRM) ===")
@@ -874,14 +814,12 @@ def main():
     tests = [
         test_resblock,
         test_spatial_encoder,
-        test_history_encoder,
         test_transformer_block,
         test_source_head,
         test_direction_head,
         test_split_head,
         test_value_head,
         test_pass_head,
-        test_world_model,
         test_generals_network_forward,
         test_generals_network_inference,
         test_generals_network_step,
@@ -890,7 +828,6 @@ def main():
         test_imitation_loss_backward,
         test_dataset_integration,
         test_real_replay_integration,
-        test_world_model_integration,
         test_gradient_flow,
         # spatiotemporal + TRM tests
         test_trm_module,

@@ -873,37 +873,6 @@ def test_loss_gradient_flow():
 # 6. Network tests (model/network.py)
 # =====================================================================
 
-def test_network_gru_shapes():
-    """GRU mode produces correct output shapes."""
-    print("\n=== network: GRU shapes ===")
-    from model.config import ModelConfig
-    from model.network import GeneralsNetwork
-
-    cfg = ModelConfig(
-        d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
-        encoder_channels=32, temporal_type="gru",
-    )
-    model = GeneralsNetwork(cfg)
-    model.eval()
-
-    B, T = 2, 5
-    grid = torch.randn(B, T, 12, 25, 25)
-    glob = torch.randn(B, T, 4)
-
-    with torch.no_grad():
-        out = model(grid, glob)
-
-    assert out["source_logits"].shape == (B, T, 625)
-    assert out["direction_logits"].shape == (B, T, 4)
-    assert out["split_logits"].shape == (B, T, 2)
-    assert out["pass_logits"].shape == (B, T)
-    assert out["value"].shape == (B, T)
-    assert out["hidden"] is not None
-    assert out["q_halt"].shape == (B, T)
-    print("  GRU shapes correct ✓")
-
-
 def test_network_st_shapes():
     """Spatiotemporal mode produces correct output shapes."""
     print("\n=== network: ST shapes ===")
@@ -932,38 +901,6 @@ def test_network_st_shapes():
     assert out["value"].shape == (B, T)
     assert out["q_halt"].shape == (B, T)
     print("  ST shapes correct ✓")
-
-
-def test_network_gru_step_consistency():
-    """GRU step-by-step should produce consistent shapes with hidden state."""
-    print("\n=== network: GRU step consistency ===")
-    from model.config import ModelConfig
-    from model.network import GeneralsNetwork
-
-    cfg = ModelConfig(
-        d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
-        encoder_channels=32, temporal_type="gru",
-    )
-    model = GeneralsNetwork(cfg)
-    model.eval()
-
-    B = 1
-    hidden = None
-    for t in range(5):
-        grid = torch.randn(B, 12, 25, 25)
-        glob = torch.randn(B, 4)
-        mask = torch.ones(B, 1, 25, 25, dtype=torch.bool)
-
-        with torch.no_grad():
-            out = model.step(grid, glob, mask, hidden=hidden)
-
-        hidden = out["hidden"]
-        assert out["source_logits"].shape == (B, 625)
-        assert out["direction_logits"].shape == (B, 4)
-        assert out["value"].shape == (B,)
-        assert hidden is not None
-    print("  GRU step: 5 sequential steps with hidden state ✓")
 
 
 def test_network_st_step_cache_growth():
@@ -1029,39 +966,6 @@ def test_network_legal_mask_effect():
     assert (masked[0, 1:] == float("-inf")).all()
     print("  Legal mask affects source logits ✓")
 
-
-def test_network_world_model_embed():
-    """World model embedding can be optionally provided."""
-    print("\n=== network: world model embed ===")
-    from model.config import ModelConfig
-    from model.network import GeneralsNetwork
-
-    cfg = ModelConfig(
-        d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
-        encoder_channels=32, use_world_model=True,
-    )
-    model = GeneralsNetwork(cfg)
-    model.eval()
-
-    B, T = 1, 3
-    grid = torch.randn(B, T, 12, 25, 25)
-    glob = torch.randn(B, T, 4)
-    wm = torch.zeros(B, T, 64)
-
-    with torch.no_grad():
-        out_zero = model(grid, glob, world_model_embed=wm)
-        out_none = model(grid, glob)
-
-    # Both should produce valid outputs
-    assert out_zero["source_logits"].shape == (B, T, 625)
-    assert out_none["source_logits"].shape == (B, T, 625)
-    print("  World model embed: zero and None both work ✓")
-
-
-# =====================================================================
-# 7. Mock data tests (make_mock_replays.py)
-# =====================================================================
 
 def test_mock_data_valid_ranges():
     """Verify mock data generator produces values in valid ranges."""
@@ -1383,12 +1287,9 @@ def main():
         test_loss_nan_handling,
         test_loss_gradient_flow,
         # 6. Network
-        test_network_gru_shapes,
         test_network_st_shapes,
-        test_network_gru_step_consistency,
         test_network_st_step_cache_growth,
         test_network_legal_mask_effect,
-        test_network_world_model_embed,
         # 7. Mock data
         test_mock_data_valid_ranges,
         test_mock_data_ce_compatible,

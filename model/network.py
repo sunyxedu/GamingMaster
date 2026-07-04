@@ -2,8 +2,7 @@
 Generals.io neural network — two-stage architecture:
 
   Stage 1 — History Encoder
-            spatiotemporal: SpatiotemporalBlock × L (separate weights)
-            gru:            GRU over pooled spatial embeddings
+            SpatiotemporalBlock × L (separate weights)
 
   Stage 2 — TRM (Tiny Recursive Model)
             Two-state recursive pondering with shared weights.
@@ -20,11 +19,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from model.components.encoder import HistoryEncoder, SpatialEncoder
+from model.components.encoder import SpatialEncoder
 from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead, ValueHead
 from model.components.transformer import SpatiotemporalBlock, _sinusoidal_pe
 from model.components.trm import TRM
-from model.components.world_model import WorldModel
 from model.config import ModelConfig
 
 
@@ -32,7 +30,7 @@ class GeneralsNetwork(nn.Module):
     """
     Two-stage architecture:
         SpatialEncoder → (+globals, +PE) →
-        Stage 1: History Encoding (spatiotemporal / GRU) →
+        Stage 1: History Encoding (spatiotemporal) →
         Stage 2: TRM (two-state recursive pondering) →
         Decode → Source / Direction / Split / Value heads
     """
@@ -40,7 +38,11 @@ class GeneralsNetwork(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.cfg = cfg
-        self.is_st = cfg.temporal_type == "spatiotemporal"
+        if cfg.temporal_type != "spatiotemporal":
+            raise ValueError(
+                f"unsupported temporal_type {cfg.temporal_type!r}; the GRU "
+                "path was removed — only 'spatiotemporal' exists"
+            )
 
         # --- Create Embeddings ---
         self.spatial_encoder = SpatialEncoder(cfg)
@@ -51,12 +53,9 @@ class GeneralsNetwork(nn.Module):
         )
 
         # --- Stage 1: History Encoder ---
-        if self.is_st:
-            self.st_layers = nn.ModuleList(
-                [SpatiotemporalBlock(cfg) for _ in range(cfg.n_st_layers)]
-            )
-        else:
-            self.history_encoder = HistoryEncoder(cfg)
+        self.st_layers = nn.ModuleList(
+            [SpatiotemporalBlock(cfg) for _ in range(cfg.n_st_layers)]
+        )
 
         # --- Stage 2: TRM ---
         self.trm = TRM(cfg)
@@ -101,11 +100,6 @@ class GeneralsNetwork(nn.Module):
                     "predict_next_obs requires temporal_type='spatiotemporal'"
                 )
             self.next_obs_head = nn.Linear(cfg.d_model, cfg.grid_channels)
-
-        # --- Optional world model ---
-        self.world_model: Optional[WorldModel] = None
-        if cfg.use_world_model:
-            self.world_model = WorldModel(cfg)
 
         self._init_weights()
 
@@ -186,7 +180,7 @@ class GeneralsNetwork(nn.Module):
         return feat.reshape(B, T, -1, H, W)
 
     def _forward_spatiotemporal(
-        self, grid_seq, globals_seq, legal_mask, source_y, source_x, wm_embed,
+        self, grid_seq, globals_seq, legal_mask, source_y, source_x,
         act_steps=None, frame_mask=None,
     ) -> Dict[str, torch.Tensor]:
         cfg = self.cfg
@@ -215,9 +209,6 @@ class GeneralsNetwork(nn.Module):
             tokens = tokens + _sinusoidal_pe(T, d, tokens.device).unsqueeze(0).unsqueeze(2)
 
         # 5. World model embedding
-        if wm_embed is not None:
-            tokens[:, :, N:N + 1] += wm_embed.unsqueeze(2)
-
         # ── Stage 1: Spatiotemporal encoding (checkpointed) ──
         tokens = self.pre_norm(tokens)
         for layer in self.st_layers:
@@ -239,47 +230,6 @@ class GeneralsNetwork(nn.Module):
             no = self.next_obs_head(tokens[:, :, :N])        # [B, T, N, C]
             out["next_state_logits"] = no[..., : self.cfg.n_grid_types]
             out["next_army"] = no[..., self.cfg.n_grid_types]
-        return out
-
-    # ------------------------------------------------------------------
-    # Forward — GRU + TRM
-    # ------------------------------------------------------------------
-
-    def _forward_gru(
-        self, grid_seq, globals_seq, legal_mask, source_y, source_x, hidden, wm_embed,
-        act_steps=None, frame_mask=None,
-    ) -> Dict[str, torch.Tensor]:
-        cfg = self.cfg
-        B, T, C, H, W = grid_seq.shape
-        N = H * W
-        d = cfg.d_model
-        BT = B * T
-
-        spatial = self._encode_frames(grid_seq, frame_mask)
-
-        spatial = spatial + self.global_proj(globals_seq).unsqueeze(-1).unsqueeze(-1)
-
-        pooled = spatial.mean(dim=(-2, -1))
-        temporal, hidden = self.history_encoder(pooled, hidden)
-        spatial = spatial + temporal.unsqueeze(-1).unsqueeze(-1)
-
-        tokens = spatial.reshape(BT, d, N).permute(0, 2, 1)
-        hl = self.hl_token.expand(BT, -1, -1)
-        ll = self.ll_token.expand(BT, -1, -1)
-        tokens = torch.cat([tokens, hl, ll], dim=1)
-        tokens = tokens + self._build_spatial_pe()
-
-        if wm_embed is not None:
-            tokens[:, N:N + 1] += wm_embed.reshape(BT, 1, d)
-
-        # TRM pondering
-        x = self.pre_norm(tokens)
-        z_H, q_halt = self._trm_ponder(x, act_steps)
-        z_H = self.post_norm(z_H)
-
-        out = self._decode_heads(z_H, B, T, N, W, legal_mask, source_y, source_x)
-        out["hidden"] = hidden
-        out["q_halt"] = q_halt.reshape(B, T)
         return out
 
     # ------------------------------------------------------------------
@@ -534,20 +484,12 @@ class GeneralsNetwork(nn.Module):
         legal_mask: Optional[torch.Tensor] = None,
         source_y: Optional[torch.Tensor] = None,
         source_x: Optional[torch.Tensor] = None,
-        hidden: Optional[torch.Tensor] = None,
-        world_model_embed: Optional[torch.Tensor] = None,
         act_steps: Optional[int] = None,
         frame_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        if self.is_st:
-            return self._forward_spatiotemporal(
-                grid_seq, globals_seq, legal_mask,
-                source_y, source_x, world_model_embed,
-                act_steps=act_steps, frame_mask=frame_mask,
-            )
-        return self._forward_gru(
+        return self._forward_spatiotemporal(
             grid_seq, globals_seq, legal_mask,
-            source_y, source_x, hidden, world_model_embed,
+            source_y, source_x,
             act_steps=act_steps, frame_mask=frame_mask,
         )
 
@@ -560,74 +502,13 @@ class GeneralsNetwork(nn.Module):
         grid: torch.Tensor,
         globals_vec: torch.Tensor,
         legal_mask: Optional[torch.Tensor] = None,
-        hidden: Optional[torch.Tensor] = None,
-        world_model_embed: Optional[torch.Tensor] = None,
         st_cache: Optional[List[torch.Tensor]] = None,
         step_idx: int = 0,
         act_steps: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
-        if self.is_st:
-            return self._step_st(grid, globals_vec, legal_mask, world_model_embed, st_cache, act_steps, step_idx)
-        return self._step_gru(grid, globals_vec, legal_mask, hidden, world_model_embed, step_idx, act_steps)
+        return self._step_st(grid, globals_vec, legal_mask, st_cache, act_steps, step_idx)
 
-    def _step_gru(self, grid, globals_vec, legal_mask, hidden, wm_embed, step_idx, act_steps=None):
-        cfg = self.cfg
-        B, d = grid.shape[0], cfg.d_model
-        N = cfg.grid_h * cfg.grid_w
-        W = cfg.grid_w
-
-        spatial = self.spatial_encoder(grid)
-        spatial = spatial + self.global_proj(globals_vec).unsqueeze(-1).unsqueeze(-1)
-
-        pooled = spatial.mean(dim=(-2, -1)).unsqueeze(1)  # [B, 1, d]
-        temporal, hidden = self.history_encoder(pooled, hidden)
-        spatial = spatial + temporal.squeeze(1).unsqueeze(-1).unsqueeze(-1)
-
-        tokens = spatial.reshape(B, d, N).permute(0, 2, 1)
-        tokens = torch.cat([tokens, self.hl_token.expand(B, -1, -1),
-                            self.ll_token.expand(B, -1, -1)], dim=1)
-        tokens = tokens + self._build_spatial_pe()
-
-        if wm_embed is not None:
-            tokens[:, N:N + 1] += wm_embed.unsqueeze(1)
-
-        # TRM with ACT
-        x = self.pre_norm(tokens)
-        z_H, q_halt = self._trm_act_loop(x, act_steps)
-        z_H = self.post_norm(z_H)
-
-        spatial_out = z_H[:, :N]
-        hl_out = z_H[:, N]
-        ll_out = z_H[:, N + 1]
-
-        source_logits = self.source_head(spatial_out)
-        src_idx = self._sample_source(source_logits, legal_mask, B, N)
-        source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
-
-        direction_logits = self.direction_head(source_embed, spatial_out, ll_out)
-        split_logits = self.split_head(source_embed, ll_out)
-        pe_dim = self.pass_head.time_pe_dim
-        time_pe = _sinusoidal_pe(step_idx + 1, pe_dim, z_H.device)[step_idx].unsqueeze(0).expand(B, pe_dim)
-        pass_logits = self.pass_head(ll_out, source_embed, direction_logits, split_logits, time_pe)
-        value = self.value_head(hl_out)
-
-        rl_out = self._sample_actions(
-            source_logits, direction_logits, split_logits, pass_logits,
-            legal_mask, src_idx,
-        )
-
-        return {
-            "source_logits": source_logits,
-            "direction_logits": direction_logits,
-            "split_logits": split_logits,
-            "pass_logits": pass_logits,
-            "value": value,
-            "q_halt": q_halt,
-            "hidden": hidden,
-            **rl_out,
-        }
-
-    def _step_st(self, grid, globals_vec, legal_mask, wm_embed, st_cache, act_steps=None, step_idx=0):
+    def _step_st(self, grid, globals_vec, legal_mask, st_cache, act_steps=None, step_idx=0):
         cfg = self.cfg
         B, d = grid.shape[0], cfg.d_model
         N = cfg.grid_h * cfg.grid_w
@@ -656,9 +537,6 @@ class GeneralsNetwork(nn.Module):
             t_cur = 0 if st_cache is None else st_cache[0].shape[1]
             t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]
             tokens = tokens + t_pe.unsqueeze(0).unsqueeze(0)
-
-        if wm_embed is not None:
-            tokens[:, N:N + 1] += wm_embed.unsqueeze(1)
 
         # Stage 1: spatiotemporal with KV cache
         tokens = self.pre_norm(tokens).unsqueeze(1)
@@ -845,8 +723,6 @@ class GeneralsNetwork(nn.Module):
         self,
         grid: torch.Tensor,
         globals_vec: torch.Tensor,
-        hidden: Optional[torch.Tensor] = None,
-        world_model_embed: Optional[torch.Tensor] = None,
         st_cache: Optional[List[torch.Tensor]] = None,
         step_idx: int = 0,
         act_steps: Optional[int] = None,
@@ -859,65 +735,9 @@ class GeneralsNetwork(nn.Module):
         ``act_steps`` forces a fixed TRM depth so the PPO update can
         recompute the exact same policy with ``forward(act_steps=...)``.
         """
-        if self.is_st:
-            return self._step_st_rl(grid, globals_vec, world_model_embed, st_cache, act_steps, step_idx)
-        return self._step_gru_rl(grid, globals_vec, hidden, world_model_embed, step_idx, act_steps)
+        return self._step_st_rl(grid, globals_vec, st_cache, act_steps, step_idx)
 
-    def _step_gru_rl(self, grid, globals_vec, hidden, wm_embed, step_idx, act_steps=None):
-        cfg = self.cfg
-        B, d = grid.shape[0], cfg.d_model
-        N = cfg.grid_h * cfg.grid_w
-
-        spatial = self.spatial_encoder(grid)
-        spatial = spatial + self.global_proj(globals_vec).unsqueeze(-1).unsqueeze(-1)
-
-        pooled = spatial.mean(dim=(-2, -1)).unsqueeze(1)
-        temporal, hidden = self.history_encoder(pooled, hidden)
-        spatial = spatial + temporal.squeeze(1).unsqueeze(-1).unsqueeze(-1)
-
-        tokens = spatial.reshape(B, d, N).permute(0, 2, 1)
-        tokens = torch.cat([tokens, self.hl_token.expand(B, -1, -1),
-                            self.ll_token.expand(B, -1, -1)], dim=1)
-        tokens = tokens + self._build_spatial_pe()
-
-        if wm_embed is not None:
-            tokens[:, N:N + 1] += wm_embed.unsqueeze(1)
-
-        x = self.pre_norm(tokens)
-        z_H, q_halt = self._trm_act_loop(x, act_steps)
-        z_H = self.post_norm(z_H)
-
-        spatial_out = z_H[:, :N]
-        hl_out = z_H[:, N]
-        ll_out = z_H[:, N + 1]
-
-        source_logits = self.source_head(spatial_out)
-        src_idx = self._sample_source_rl(source_logits, B, N)
-        source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
-
-        direction_logits = self.direction_head(source_embed, spatial_out, ll_out)
-        split_logits = self.split_head(source_embed, ll_out)
-        pe_dim = self.pass_head.time_pe_dim
-        time_pe = _sinusoidal_pe(step_idx + 1, pe_dim, z_H.device)[step_idx].unsqueeze(0).expand(B, pe_dim)
-        pass_logits = self.pass_head(ll_out, source_embed, direction_logits, split_logits, time_pe)
-        value = self.value_head(hl_out)
-
-        rl_out = self._sample_actions_rl(
-            source_logits, direction_logits, split_logits, pass_logits, src_idx,
-        )
-
-        return {
-            "source_logits": source_logits,
-            "direction_logits": direction_logits,
-            "split_logits": split_logits,
-            "pass_logits": pass_logits,
-            "value": value,
-            "q_halt": q_halt,
-            "hidden": hidden,
-            **rl_out,
-        }
-
-    def _step_st_rl(self, grid, globals_vec, wm_embed, st_cache, act_steps=None, step_idx=0):
+    def _step_st_rl(self, grid, globals_vec, st_cache, act_steps=None, step_idx=0):
         cfg = self.cfg
         B, d = grid.shape[0], cfg.d_model
         N = cfg.grid_h * cfg.grid_w
@@ -941,9 +761,6 @@ class GeneralsNetwork(nn.Module):
             t_cur = 0 if st_cache is None else st_cache[0].shape[1]
             t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]
             tokens = tokens + t_pe.unsqueeze(0).unsqueeze(0)
-
-        if wm_embed is not None:
-            tokens[:, N:N + 1] += wm_embed.unsqueeze(1)
 
         tokens = self.pre_norm(tokens).unsqueeze(1)
         new_caches: List[torch.Tensor] = []

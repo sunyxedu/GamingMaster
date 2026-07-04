@@ -1,15 +1,13 @@
 """Reusable network components for the generals.io model."""
 
-from model.components.encoder import HistoryEncoder, ResBlock, SpatialEncoder
+from model.components.encoder import ResBlock, SpatialEncoder
 from model.components.heads import DirectionHead, SourceHead, SplitHead, ValueHead
 from model.components.transformer import SpatiotemporalBlock, TransformerBlock
 from model.components.trm import TRM, TRMBlock, TRMReasoningModule
-from model.components.world_model import WorldModel
 
 __all__ = [
     "ResBlock",
     "SpatialEncoder",
-    "HistoryEncoder",
     "TransformerBlock",
     "SpatiotemporalBlock",
     "TRM",
@@ -19,5 +17,4 @@ __all__ = [
     "DirectionHead",
     "SplitHead",
     "ValueHead",
-    "WorldModel",
 ]

@@ -200,20 +200,6 @@ class TestStepReturns:
         assert out["action_split"].shape == (B,)
         assert out["action_log_prob"].shape == (B,)
 
-    def test_gru_step_has_rl_keys(self):
-        cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, dropout=0.0,
-                          temporal_type="gru", encoder_channels=32,
-                          trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1)
-        model = GeneralsNetwork(cfg)
-        model.eval()
-        grid, glb, legal = _make_dummy_step_obs()
-
-        with torch.no_grad():
-            out = model.step(grid, glb, legal_mask=legal)
-
-        for key in ["action_source", "action_direction", "action_split", "action_log_prob"]:
-            assert key in out, f"GRU step() missing key '{key}'"
-
     def test_action_source_is_legal(self, cfg):
         """Sampled source should be within the legal mask."""
         model = GeneralsNetwork(cfg)

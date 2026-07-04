@@ -24,7 +24,6 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 │       ├── recurrence.py     #     GatedRecurrence — fixed-size neural episode memory
 │       ├── trm.py            #     TRM (Tiny Recursive Model) two-state pondering
 │       ├── heads.py          #     Source / Direction / Split / Pass / Value heads
-│       └── world_model.py    #     WorldModel (legacy; see next-obs head in network.py)
 ├── env/                      # RL environment
 │   └── generals_env.py       #   Two-player simultaneous-move Gym-like env
 ├── scripts/
@@ -100,7 +99,7 @@ uv run python train_rl.py \
 
 > RL training uses PPO self-play with joint IL regularisation (AlphaStar-style).
 > Environment: `env/generals_env.py` provides a two-player simultaneous-move Gym-like environment with fog of war.
-> Model-side support: `model.step()` single-step inference with KV cache, `ValueHead`, `RLLoss` (PPO), `WorldModel` (curiosity reward), `rl_utils.py` (GAE, RolloutBuffer, KL regularisation).
+> Model-side support: `model.step()` single-step inference with KV cache, `ValueHead`, `RLLoss` (PPO), `rl_utils.py` (GAE, RolloutBuffer, KL regularisation).
 
 ---
 

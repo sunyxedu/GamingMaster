@@ -29,9 +29,8 @@ class ModelConfig:
     trm_block_layers: int = 3  # transformer layers inside the shared reasoning module
     halt_max_steps: int = 5   # ACT pondering steps at inference (1 = no ACT)
 
-    # Temporal modelling
-    #   "spatiotemporal" – factored spatiotemporal → TRM
-    #   "gru"            – GRU history encoder → TRM
+    # Temporal modelling ("spatiotemporal" is the only supported value; the
+    # field is kept so old checkpoints' configs load unchanged)
     temporal_type: str = "spatiotemporal"
 
     # Temporal mixer inside SpatiotemporalBlock:
@@ -41,9 +40,6 @@ class ModelConfig:
     #                  lives in a fixed-size state ("in the neurons"),
     #                  O(1) per step, full BPTT during training
     temporal_mixer: str = "attention"
-
-    # GRU-specific (only used when temporal_type="gru")
-    gru_layers: int = 1
 
     # Spatial encoder
     encoder_channels: int = 192
@@ -58,6 +54,3 @@ class ModelConfig:
     # vision). Spatiotemporal path only.
     predict_next_obs: bool = False
 
-    # World model (optional, for RL)
-    use_world_model: bool = False
-    world_model_hidden: int = 256

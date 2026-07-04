@@ -50,32 +50,3 @@ class SpatialEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
-
-
-class HistoryEncoder(nn.Module):
-    """
-    GRU-based temporal encoder.
-
-    Receives the spatially-pooled embedding at each timestep and produces
-    a temporal-context vector that is broadcast-added back into the spatial
-    feature map.
-
-    Input  : [B, T, d_model]   (pooled spatial)
-    Output : [B, T, d_model],  hidden state
-    """
-
-    def __init__(self, cfg: ModelConfig):
-        super().__init__()
-        self.gru = nn.GRU(
-            cfg.d_model, cfg.d_model,
-            num_layers=cfg.gru_layers,
-            batch_first=True,
-        )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        hidden: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        out, hidden = self.gru(x, hidden)
-        return out, hidden

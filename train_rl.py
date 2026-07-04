@@ -209,7 +209,6 @@ def collect_selfplay_episode(
     obs = env.reset()
     buffer = RolloutBuffer()
     caches = {0: None, 1: None}    # spatiotemporal KV caches
-    hiddens = {0: None, 1: None}   # GRU hidden states
     replay_log: Optional[List[Dict]] = [] if record else None
     reward_totals: Dict[str, float] = {
         "r_invalid": 0.0, "r_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
@@ -238,12 +237,11 @@ def collect_selfplay_episode(
             glb = obs[pid]["globals"].unsqueeze(0).to(device)
 
             with torch.no_grad():
-                out = net.step_rl(grid, glb, hidden=hiddens[pid],
+                out = net.step_rl(grid, glb,
                                   st_cache=caches[pid], step_idx=_step,
                                   act_steps=act_steps)
 
             caches[pid] = out.get("st_cache")
-            hiddens[pid] = out.get("hidden")
             step_out[pid] = out
 
         # Build env actions
@@ -319,7 +317,7 @@ def collect_selfplay_episode(
         grid = obs[0]["grid"].unsqueeze(0).to(device)
         glb = obs[0]["globals"].unsqueeze(0).to(device)
         with torch.no_grad():
-            last_out = model.step_rl(grid, glb, hidden=hiddens[0],
+            last_out = model.step_rl(grid, glb,
                                      st_cache=caches[0],
                                      step_idx=len(buffer), act_steps=act_steps)
         last_value = last_out["value"].item()
