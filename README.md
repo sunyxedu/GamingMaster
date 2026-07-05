@@ -7,8 +7,8 @@ The core network is **game-agnostic**: a fixed two-stage trunk (spatiotemporal h
 ```python
 from model.games import build_game_network
 
-net = build_game_network("chess", d_model=256)   # generals / chess / go / othello / gomoku /
-net = build_game_network("go", board_h=9)        # shogi / lux / clash_royale / hearthstone / starcraft
+net = build_game_network("chess", d_model=256)   # generals / chess / go / othello / gomoku / shogi /
+net = build_game_network("go", board_h=9)        # mahjong / pokemon / lux / clash_royale / hearthstone / starcraft
 ```
 
 Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-pipeline.md) · [multi-game architecture](docs/multi-game.md) · [game data sources](docs/game-data-sources.md) · [known limitations](docs/known-limitations.md)
@@ -26,7 +26,10 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 │   │   ├── chess/            #     Lichess PGN/zst → shards (+ fetch script)
 │   │   ├── go/               #     SGF → shards (own rules engine, ko/captures)
 │   │   ├── othello/          #     WTHOR → shards (exact rules, pass insertion)
-│   │   └── shogi/            #     floodgate CSA → shards (python-shogi replay)
+│   │   ├── shogi/            #     floodgate CSA → shards (python-shogi replay)
+│   │   ├── mahjong/          #     Tenhou mjai .mjson → decision-point shards
+│   │   ├── pokemon/          #     Showdown replay JSON → observer-view shards
+│   │   └── lux/              #     Kaggle Lux AI S3 episodes → per-match shards
 │   └── mock/                 #   Mock data generators for testing
 ├── model/                    # Neural network
 │   ├── config.py             #   ModelConfig dataclass (core config; game configs subclass it)
@@ -39,6 +42,10 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 │   │   ├── registry.py       #     build_game_network("chess" | "go" | ...)
 │   │   ├── generals.py       #     grid conv encoder + Source/Dir/Split/Pass decoder
 │   │   ├── board.py          #     BoardEncoder + FromToDecoder (chess) / PlacementDecoder (Go)
+│   │   ├── shogi.py          #     board + pieces-in-hand encoder, move-or-drop decoder
+│   │   ├── mahjong.py        #     tile-kind/player/table tokens + typed action decoder
+│   │   ├── pokemon.py        #     pokemon-slot encoder + move/switch decoder
+│   │   ├── lux.py            #     map conv + unit slots, simultaneous per-unit decoder
 │   │   ├── clash_royale.py   #     arena conv + hand tokens + card/placement decoder
 │   │   ├── hearthstone.py    #     entity-slot encoder + typed actor/target decoder
 │   │   └── starcraft.py      #     minimap conv + unit slots + AlphaStar-lite decoder
@@ -68,7 +75,9 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 │   ├── test_comprehensive_audit.py    # Comprehensive audit tests (all modules)
 │   ├── test_training_e2e.py           # End-to-end training loop tests
 │   ├── test_rl.py                     # RL utilities and rollout tests
-│   └── test_games_*.py                # Per-game adapter tests (board/CR/HS/SC + registry)
+│   ├── test_games_*.py                # Per-game adapter tests (+ registry)
+│   ├── test_pipeline_*.py             # Per-game data-pipeline tests (real-format fixtures)
+│   └── test_train_il_game.py          # Shared shard dataset + generic trainer tests
 └── pyproject.toml
 ```
 
@@ -291,20 +300,27 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
           │       (IL targets ∈ [−1,1],  │
           │        RL returns unbounded) │
           │                              │
-          │   cat(src_embed, ll_out)     │
+          │                              │
           └──────────────┬───────────────┘
-                         │ [B*T, 2d]
-                    ┌────┴────┐
-                    ▼         ▼
-             ┌───────────┐ ┌───────────┐
-             │  DirHead  │ │ SplitHead │
-             └─────┬─────┘ └─────┬─────┘
-                   │             │
-            dir_logits      split_logits
-            [B,T,4]         [B,T,2]
-            (↓→↑←)          (all|50%)
-                   │             │
-                   └──────┬──────┘
+                         │
+          ┌──────────────┴──────────────┐
+          ▼                             ▼
+   ┌──────────────────┐         ┌───────────────────┐
+   │     DirHead      │         │     SplitHead     │
+   │ per direction:   │         │ cat(src_embed,    │
+   │ gather neighbor  │         │     ll_out) [2d]  │
+   │ tile embedding,  │         └─────────┬─────────┘
+   │ score cat(src,   │                   │
+   │ neighbor, ll)    │                   │
+   │ (shared scorer;  │                   │
+   │ learned edge     │                   │
+   │ embed off-board) │                   │
+   └────────┬─────────┘                   │
+            │                             │
+       dir_logits                   split_logits
+       [B,T,4] (↓→↑←)               [B,T,2] (all|50%)
+            │                             │
+            └──────────────┬──────────────┘
                           ▼
                     ┌───────────┐
                     │ PassHead  │
@@ -330,13 +346,12 @@ Two temporal modes are available via `ModelConfig.temporal_type`:
 - **World-model objective** (`--world_model_weight`): a self-supervised head predicts the next observation from the Stage-1 belief tokens — the game-agnostic training pressure that forces the memory to retain fog information (a fogged tile re-entering vision is only predictable if the state remembered it).
 - **Causal temporal masking**: Timestep *t* can only attend to timesteps 0..*t*, never the future. Verified by test: processing T=6 vs T=3 produces identical outputs for the first 3 steps (diff = 0).
 - **KV cache for inference**: During single-step inference, each block caches past key/value tensors. Only the current timestep's tokens are computed; temporal attention queries the growing cache. No re-processing of past timesteps.
-- **Autoregressive policy heads**: Source is predicted first from spatial tokens; its embedding is extracted and concatenated with the Low-Level decision token to predict Direction, Split, and Pass. During training, ground-truth source is used; during inference, the model samples.
+- **Autoregressive policy heads**: Source is predicted first from spatial tokens; its embedding conditions the downstream heads. Direction uses a neighbor-gather design: grid adjacency is part of the action-space definition, so each direction is scored from `cat(source_embed, neighbor_embed, ll)` with a shared scorer (off-board neighbors get a learned edge embedding) instead of having to invent adjacency through content attention. Split and Pass condition on the source embedding and the Low-Level token. During training, ground-truth source is used; during inference, the model samples.
 - **Legal mask at sampling only**: `SourceHead` outputs raw logits over all 625 positions. The legal-move mask (owned tiles with army > 1) is applied externally only during inference sampling — not during training. This lets the model learn board understanding from the state encoding itself, rather than relying on a hard mask.
 - **Decision tokens**: Two learnable tokens — High-Level (→ value prediction) and Low-Level (→ direction/split/pass) — are appended to the 625 spatial tokens and participate in both spatial and temporal attention.
 - **2D spatial PE + sinusoidal temporal PE**: Spatial positions use learnable row + column embeddings (summed). Temporal positions use sinusoidal encoding, allowing generalisation to arbitrary game lengths.
 - **TRM two-state pondering** ([arxiv 2510.04871](https://arxiv.org/abs/2510.04871)): Two state vectors — `z_H` (answer) and `z_L` (reasoning scratchpad) — are initialized from fixed buffers and iteratively refined by a single shared reasoning module. Inner loop refines `z_L` using `z_H + x` as injection; outer loop updates `z_H` from `z_L`. First `H_cycles−1` outer iterations run without gradient for memory efficiency; only the last iteration propagates gradients. `q_halt` is read from the HL decision token.
 - **Multi-step ACT with matched train/inference depth**: the carry `(z_H, z_L)` lets the TRM ponder over multiple ACT steps. IL trains at a *random* depth per batch (`--max_act_steps`, deep-supervision style) so every inference depth is in-distribution; RL uses a *fixed* depth (`--act_steps`) for rollout and update alike so the PPO ratio is exact; the q_halt-gated adaptive loop is an inference-time option for IL checkpoints. See [docs/training.md](docs/training.md).
-- **World model** (optional): Predicts next-state embedding from (current state, action). Disabled during IL; during RL, prediction error serves as intrinsic curiosity reward.
 
 Default config (`model/config.py`):
 | Parameter | Value |
@@ -367,7 +382,7 @@ Supervised learning from expert replays:
 | Split CE | 0.3 | valid ∧ conditioning-source correct | CE over 2 split options (0=all-but-1, 1=50%) |
 | Pass BCE | 1.0 | count ≥ 0 | Binary CE — dropped-move frames (count=−1) are excluded |
 | Value MSE | 0.2 | seq_mask (all) | Mean squared error on game value |
-| Q-halt BCE | 0.2 | valid (count>0) | Target 1 if source argmax correct at the sampled ACT depth |
+| Q-halt BCE | 0.2 | count ≥ 0 | Target 1 if the full answer is correct at the sampled ACT depth (move: source+direction+split and not passing; pass frame: a correct pass) |
 
 Direction/split labels are only meaningful when the head was conditioned on the human's source tile, so those terms are weighted by that indicator (teacher forcing raises the hit rate early in training — `--tf_start 0.4` recommended). Each batch trains at a random TRM ACT depth in `[1, --max_act_steps]`. Details in [docs/training.md](docs/training.md).
 
@@ -391,8 +406,7 @@ IL pretrained model
 │     - clipped policy gradient                 │
 │     - value function loss                     │
 │     - entropy bonus                           │
-│  6. (Optional) World Model prediction error   │
-│     as intrinsic reward                       │
+│     - joint IL regularisation + KL constraint │
 └───────────────────────────────────────────────┘
 ```
 
@@ -400,12 +414,14 @@ IL pretrained model
 
 | Component | Description |
 |-----------|-------------|
-| Policy gradient | Sum of log-probs across source / direction / split heads, clipped ratio (0.8–1.2) |
+| Policy gradient | Hierarchical log-prob across pass / source / direction / split heads, clipped ratio (0.8–1.2) |
 | Value loss | MSE(predicted value, discounted returns) |
 | Entropy bonus | Encourages exploration, prevents premature convergence |
-| World model | Predicts next-state embedding; prediction error serves as curiosity intrinsic reward |
 
-Why the world model matters: generals.io has extremely sparse reward (only win/loss at game end). The world model provides dense intrinsic reward — the worse the model's prediction for an unseen area, the more information lies there, encouraging the agent to explore through fog of war.
+The world-model objective (`predict_next_obs`, trained during IL via
+`--world_model_weight`) is what pressures the recurrent belief state to retain
+fog-of-war information; RL itself uses shaped environment rewards only — there
+is no intrinsic-curiosity term in `RLLoss`.
 
 RL training components:
 - `env/generals_env.py` — two-player simultaneous-move environment with fog of war, full general-capture rules (territory conversion), turn-limit truncation, symmetric city rewards, and connectivity-checked random maps

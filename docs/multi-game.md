@@ -121,7 +121,7 @@ the value head, checkpointing, or the training-loop mechanics.
 
 ## Data pipelines & training
 
-Four games have full IL data pipelines (native format → shared shard format →
+Seven games have full IL data pipelines (native format → shared shard format →
 generic trainer); see [game-data-sources.md](game-data-sources.md) for where to
 download each dataset.
 
@@ -158,10 +158,17 @@ uv run python train_il_game.py --game chess --data_dir data/chess/train \
     --epochs 5 --batch_size 8 --max_act_steps 3
 ```
 
+Every pipeline has been validated end-to-end on real data: full-corpus WTHOR
+(127,885 games, zero illegal moves) with held-out-year val place_acc 46%
+(~30× random); Lichess 2013-01 with val from/to_acc 43%/47%; KGS go
+place_acc 24% (~87× random); floodgate shogi from/to_acc 39%/51%; 500 real
+Tenhou games → 328k frames; real Showdown replays with hand-verified labels;
+and a real Kaggle championship episode for lux (note: Lux S3 ended 2025-03 —
+its episodes are a fixed corpus behind Kaggle auth).
+
 The full survey of datasets, APIs and RL environments (with feasibility
 grades) is in [game-data-sources.md](game-data-sources.md): chess and Go have
 S-grade infrastructure; StarCraft II is feasible but compute-heavy; Hearthstone
 lacks public bulk replay data; Clash Royale currently lacks both frame-level
-data and an accurate simulator (adapters exist, pipelines deferred). Lux AI's
-episode converter is deferred until a target season is pinned (obs schema
-changes per season).
+data and an accurate simulator (adapters exist, pipelines deferred — see
+[clash-royale.md](clash-royale.md) for the deep-dive and possible routes).

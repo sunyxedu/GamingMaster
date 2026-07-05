@@ -72,9 +72,12 @@ direction/split receive little signal at first — start with `--tf_start 0.4`
 `frame_mask` keeps padded frames out of the spatial encoder so they cannot
 pollute BatchNorm statistics.
 
-**Distributed.** Standard DDP via `torchrun`. An OOM on one rank raises
-instead of skipping — a rank-local skip would desynchronize gradient
-allreduce and silently corrupt every later step of the epoch.
+**Distributed.** `torchrun` with manual gradient allreduce instead of DDP
+(DDP's static-graph assumption conflicts with the random ACT depth, and its
+non-reentrant checkpointing miscomputed gradients under torch 2.5 + bf16 +
+SDPA). Skipping a bad batch (non-finite loss) is decided by a collective vote
+across ranks — a rank-local skip would desynchronize gradient allreduce and
+silently corrupt every later step of the epoch.
 
 ## RL self-play
 

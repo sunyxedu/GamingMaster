@@ -42,5 +42,6 @@ RL env never generates them. The bot targets classic 1v1 maps.
   generator's fairness constraints (mirrored distances, city fairness).
 - `train_rl.py` trains player 0 only per episode; opponents come from a
   frozen pool, so there is no gradient through the opponent's seat.
-- The world model / curiosity reward path (`use_world_model=True`) exists
-  but is untrained and untested end-to-end.
+- The world-model objective (`predict_next_obs`, `--world_model_weight`)
+  trains only during IL; RL uses shaped environment rewards with no
+  intrinsic-curiosity term.

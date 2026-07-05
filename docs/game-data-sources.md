@@ -155,6 +155,14 @@
 
 ## Recommended Rollout Order
 
+> **Status update (2026-07-05)**: the IL half of this plan has since been
+> executed — data pipelines for chess, Go, Othello, Shogi, Riichi Mahjong,
+> Pokémon Showdown and Lux AI now exist and are validated on real data (see
+> [multi-game.md](multi-game.md)); Lux AI S3 turned out to have ended in
+> 2025-03, so its episodes are a fixed corpus behind Kaggle auth. The
+> remaining open items are RL self-play environments and full-scale training
+> runs.
+
 1. **Othello** (~1 week): WTHOR + a self-written 80-line simulator, to smoke-test the full "new-game onboarding → IL → RL → evaluation" pipeline (reusing `BoardEncoder` + `PlacementDecoder`).
 2. **Chess** (flagship): Lichess CC0 monthly packs + python-chess reconstruction + PettingZoo/custom env + Stockfish evaluation, with Maia as a public IL benchmark (`FromToDecoder`).
 3. **Go**: OGS/Tygem data + KataGo evaluation, reusing the board-game pipeline.
