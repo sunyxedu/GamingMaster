@@ -117,12 +117,46 @@ training scripts and all pre-existing tests work unchanged.
 What a new game does *not* need: any change to Stage 1, the TRM, ACT handling,
 the value head, checkpointing, or the training-loop mechanics.
 
-## Data & environments
+## Data pipelines & training
 
-Model adapters are only half the story — training needs human replays (IL) and a
-fast simulator (RL). See [game-data-sources.md](game-data-sources.md) for the
-per-game survey of datasets, APIs and simulators, with feasibility grades.
-Summary: chess and Go have S-grade infrastructure (Lichess CC0 dumps, OGS/Tygem,
-python-chess/PettingZoo/KataGo); StarCraft II is feasible but compute-heavy
-(Blizzard replay packs + PySC2); Hearthstone lacks public bulk replay data;
-Clash Royale currently lacks both frame-level data and an accurate simulator.
+Four games have full IL data pipelines (native format → shared shard format →
+generic trainer); see [game-data-sources.md](game-data-sources.md) for where to
+download each dataset.
+
+| Game | Source format | Converter | Notes |
+|---|---|---|---|
+| chess | Lichess PGN / `.pgn.zst` | `data_processing/games/chess/convert.py` | streams zst; side-to-move POV with 180° flip; labels replay-verified via python-chess |
+| go | SGF (OGS / KGS / Tygem) | `data_processing/games/go/convert.py` | own rules engine (captures, simple ko); POV = channel swap |
+| othello | WTHOR `.wtb` | `data_processing/games/othello/convert.py` | exact rules replay, implicit passes reinserted; byte format validated on real WTHOR archives |
+| shogi | floodgate CSA | `data_processing/games/shogi/convert.py` | python-shogi replay; move-or-drop labels; POV = 180° rotation |
+
+Shared infrastructure:
+
+- **Shard format** — `data_processing/games/dataset.py`: `save_shard()` writes
+  `{obs: {...[T,...]}, tgt: {...[T,...]}, meta}` samples; `GameShardDataset` +
+  `collate_game_sequences` tail-pad to the batch max and emit `frame_mask`.
+  Obs keys match the game's encoder; tgt keys match its decoder's `il_loss`
+  (plus `value [T]` for the shared value head).
+- **Generic trainer** — `train_il_game.py`: one code path for every adapter —
+  decoder `il_loss` + value MSE, random-depth ACT (`--max_act_steps`),
+  teacher-forcing schedule on the decoder's conditioning labels
+  (`--tf_start/--tf_end`), grad accumulation, warmup+linear decay, resume.
+  generals keeps its dedicated `train_il.py` (world model + multi-node).
+
+```bash
+# example: chess from a Lichess monthly dump
+data_processing/games/chess/fetch_lichess.sh 2026-05
+uv run python -m data_processing.games.chess.convert \
+    --input lichess_db_standard_rated_2026-05.pgn.zst \
+    --output_dir data/chess/train --min_elo 1800 --shard_size 512
+uv run python train_il_game.py --game chess --data_dir data/chess/train \
+    --epochs 5 --batch_size 8 --max_act_steps 3
+```
+
+The full survey of datasets, APIs and RL environments (with feasibility
+grades) is in [game-data-sources.md](game-data-sources.md): chess and Go have
+S-grade infrastructure; StarCraft II is feasible but compute-heavy; Hearthstone
+lacks public bulk replay data; Clash Royale currently lacks both frame-level
+data and an accurate simulator (adapters exist, pipelines deferred). Lux AI's
+episode converter is deferred until a target season is pinned (obs schema
+changes per season).

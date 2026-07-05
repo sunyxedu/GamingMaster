@@ -16,11 +16,17 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 ## Project Structure
 
 ```
-├── data_processing/          # Replay data pipeline
-│   ├── download/             #   S3 download + LZ-string decompression
-│   ├── processing/           #   Simulator, filter, data models
-│   ├── parsers/              #   Convert simulator output → training format
-│   ├── dataset_seq.py        #   PyTorch Dataset + collate
+├── data_processing/          # Replay data pipelines
+│   ├── download/             #   generals.io: S3 download + LZ-string decompression
+│   ├── processing/           #   generals.io: simulator, filter, data models
+│   ├── parsers/              #   generals.io: simulator output → training format
+│   ├── dataset_seq.py        #   generals.io: PyTorch Dataset + collate
+│   ├── games/                #   Multi-game pipelines → shared shard format
+│   │   ├── dataset.py        #     shard format + GameShardDataset + collate
+│   │   ├── chess/            #     Lichess PGN/zst → shards (+ fetch script)
+│   │   ├── go/               #     SGF → shards (own rules engine, ko/captures)
+│   │   ├── othello/          #     WTHOR → shards (exact rules, pass insertion)
+│   │   └── shogi/            #     floodgate CSA → shards (python-shogi replay)
 │   └── mock/                 #   Mock data generators for testing
 ├── model/                    # Neural network
 │   ├── config.py             #   ModelConfig dataclass (core config; game configs subclass it)
@@ -52,7 +58,8 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 │   ├── view_rl_replay.py     # CLI: RL self-play replay JSON → HTML viewer
 │   └── check_training_memory.py  # CLI: memory probe at real model shapes
 ├── docs/                     # Training guide, data pipeline, known limitations
-├── train_il.py               # Imitation Learning training script
+├── train_il.py               # generals.io IL training (world model, multi-node)
+├── train_il_game.py          # Generic IL trainer for every other game adapter
 ├── train_rl.py               # RL training script (PPO self-play + IL regularisation)
 ├── tests/
 │   ├── test_verify_simulator.py       # Simulator correctness (real replay)
@@ -447,7 +454,7 @@ Every component has been verified against the real replay `asS2S5O_y` (~Hemlix~ 
 | Gradient flow | All parameters receive gradients through every component | ✓ |
 | Training loop | Loss decreases on mock and real data; checkpoint save/load works | ✓ |
 
-Run all tests (207 tests):
+Run all tests (266 tests):
 
 ```bash
 uv run pytest tests/ -q
