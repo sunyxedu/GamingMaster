@@ -15,7 +15,7 @@ exported here)::
     9..17   1p..9p          (red 5 → kind 13)
     18..26  1s..9s          (red 5 → kind 22)
     27..30  E S W N         (winds)
-    31..33  P F C           (haku 白, hatsu 發, chun 中)
+    31..33  P F C           (haku, hatsu, chun — white/green/red dragons)
 
 Per-frame feature layouts (produced by
 ``data_processing.games.mahjong.convert``, consumed here):

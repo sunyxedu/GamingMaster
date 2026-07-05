@@ -112,7 +112,7 @@ SCORE_SCALE = 100000.0
 PLACEMENT_VALUES = (1.0, 1.0 / 3.0, -1.0 / 3.0, -1.0)
 
 _SUITS = "mps"
-_HONORS = ["E", "S", "W", "N", "P", "F", "C"]   # winds, then 白 發 中
+_HONORS = ["E", "S", "W", "N", "P", "F", "C"]   # winds, then white/green/red dragons
 
 #: mjai tile string → 34-kind index.  Red fives ("5mr"/"0m" style both
 #: accepted) map to their ordinary 5 kind; redness is a separate flag.
