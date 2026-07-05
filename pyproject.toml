@@ -13,6 +13,9 @@ dependencies = [
     "numpy>=2.1; python_version >= '3.13'",
     "matplotlib>=3.10.8",
     "lzstring>=1.0.4",
+    "python-chess>=1.999",
+    "python-shogi>=1.1.1",
+    "zstandard>=0.25.0",
 ]
 
 [project.scripts]
