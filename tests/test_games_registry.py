@@ -20,6 +20,8 @@ GAME_OVERRIDES = {
     "gomoku": dict(board_h=9, board_w=9),
     "shogi": dict(board_h=5, board_w=5),
     "lux": dict(map_h=6, map_w=6, max_units=5),
+    "mahjong": {},
+    "pokemon": {},
     "clash_royale": dict(arena_h=8, arena_w=6, n_cards=20),
     "hearthstone": {},
     "starcraft": dict(minimap_h=16, minimap_w=16, max_units=8),

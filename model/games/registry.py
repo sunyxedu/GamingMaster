@@ -100,6 +100,26 @@ def _build_lux(**overrides) -> nn.Module:
     return GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg))
 
 
+def _build_mahjong(**overrides) -> nn.Module:
+    """Riichi mahjong: 34 tile-kind + 4 player + 1 table tokens; typed
+    action decoder (discard/riichi/call/hora) with a tile pointer."""
+    from model.game_network import GameNetwork
+    from model.games.mahjong import MahjongConfig, MahjongDecoder, MahjongEncoder
+
+    cfg = MahjongConfig(**overrides)
+    return GameNetwork(cfg, MahjongEncoder(cfg), MahjongDecoder(cfg))
+
+
+def _build_pokemon(**overrides) -> nn.Module:
+    """Pokémon singles: 12 pokemon slot tokens + field token; move-or-switch
+    decoder with hash-bucket species embeddings."""
+    from model.game_network import GameNetwork
+    from model.games.pokemon import PokemonConfig, PokemonDecoder, PokemonEncoder
+
+    cfg = PokemonConfig(**overrides)
+    return GameNetwork(cfg, PokemonEncoder(cfg), PokemonDecoder(cfg))
+
+
 def _build_clash_royale(**overrides) -> nn.Module:
     from model.game_network import GameNetwork
     from model.games.clash_royale import (
@@ -140,6 +160,8 @@ GAME_REGISTRY: Dict[str, Callable[..., nn.Module]] = {
     "gomoku": _build_gomoku,
     "shogi": _build_shogi,
     "lux": _build_lux,
+    "mahjong": _build_mahjong,
+    "pokemon": _build_pokemon,
     "clash_royale": _build_clash_royale,
     "hearthstone": _build_hearthstone,
     "starcraft": _build_starcraft,
