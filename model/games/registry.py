@@ -40,6 +40,10 @@ def _build_go(**overrides) -> nn.Module:
 
     overrides.setdefault("board_h", 19)
     overrides.setdefault("board_w", 19)
+    # own stones / opponent stones / empty / simple-ko forbidden point —
+    # matches the SGF converter's plane layout (data_processing/games/go).
+    overrides.setdefault("piece_channels", 4)
+    overrides.setdefault("board_global_features", 0)
     overrides.setdefault("n_promotions", 0)
     cfg = BoardConfig(**overrides)
     return GameNetwork(cfg, BoardEncoder(cfg), PlacementDecoder(cfg))
