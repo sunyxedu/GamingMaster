@@ -39,6 +39,11 @@ echo "GPUs ${WORLD} | micro ${MICRO} x accum ${ACCUM} = effective $(( MICRO * WO
 # identically; the checkpoint carries optimizer + LR-schedule position)
 RESUME_FLAG=""
 [ -n "${RESUME:-}" ] && RESUME_FLAG="--resume $RESUME"
+# Hot-start across an architecture change: load weights from FINETUNE, fresh
+# run; REINIT names submodules to leave freshly initialized, e.g.
+#   FINETUNE=/scratch/.../checkpoint_epoch3.pt REINIT=direction_head. \
+#       ./submit_phase1.sh 1 4
+[ -n "${FINETUNE:-}" ] && RESUME_FLAG="--finetune_from $FINETUNE ${REINIT:+--reinit $REINIT}"
 
 HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
 TRAIN_ROOT=/scratch/$USER/gaming-master/data-v2/training

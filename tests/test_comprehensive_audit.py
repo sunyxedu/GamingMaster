@@ -599,22 +599,22 @@ def test_value_head_range():
 
 
 def test_direction_head_dimensions():
-    """DirectionHead input is 2*d_model (concat of source + decision token)."""
+    """Neighbor-gather DirectionHead: shape contract incl. [BT, d] batching."""
     print("\n=== DirectionHead: dimensions ===")
     from model.components.heads import DirectionHead
 
-    head = DirectionHead(64, 4)
+    head = DirectionHead(64, 25, 25)
     src = torch.randn(2, 64)
     spatial = torch.randn(2, 625, 64)
     dec = torch.randn(2, 64)
-    logits = head(src, spatial, dec)
+    logits = head(src, spatial, dec, torch.tensor([0, 624]))
     assert logits.shape == (2, 4)
 
     # Should accept batched inputs [BT, d]
     src_big = torch.randn(100, 64)
     spatial_big = torch.randn(100, 625, 64)
     dec_big = torch.randn(100, 64)
-    logits_big = head(src_big, spatial_big, dec_big)
+    logits_big = head(src_big, spatial_big, dec_big, torch.randint(0, 625, (100,)))
     assert logits_big.shape == (100, 4)
     print("  Dimensions correct ✓")
 

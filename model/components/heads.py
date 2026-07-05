@@ -26,24 +26,32 @@ class SourceHead(nn.Module):
 
 
 class DirectionHead(nn.Module):
-    """Predict movement direction via source-centric cross-attention over the
-    spatial field, combined with the global decision token.
+    """Score each direction by pairing the source embedding with the tile the
+    move would ENTER.
 
-    The source embedding queries all spatial tokens so the head can attend to
-    whichever board positions matter (neighbours, distant threats, etc.)
-    without compressing everything into the decision token alone.
+    Grid adjacency is part of the action-space definition, so the head is
+    handed each neighbor's embedding directly instead of having to invent
+    "adjacency" through content attention over all 625 tokens — the failure
+    mode of the previous cross-attention design, which stayed at uniform
+    (ln 4) through three epochs while the source head learned fine.
+
+    A single scorer is shared across the four directions (permutation-
+    consistent); off-board neighbors get a learned edge embedding. The
+    direction order matches the dir_id labels: 0=down 1=right 2=up 3=left.
     """
 
-    def __init__(self, d_model: int, n_dirs: int = 4):
+    # (drow, dcol) per direction — MUST match dir_id label semantics
+    _OFFSETS = ((1, 0), (0, 1), (-1, 0), (0, -1))
+
+    def __init__(self, d_model: int, grid_h: int = 25, grid_w: int = 25):
         super().__init__()
-        self.scale = d_model ** 0.5
-        self.query = nn.Linear(d_model, d_model)
-        self.key = nn.Linear(d_model, d_model)
-        self.value = nn.Linear(d_model, d_model)
-        self.dir_proj = nn.Sequential(
+        self.grid_h = grid_h
+        self.grid_w = grid_w
+        self.edge = nn.Parameter(torch.zeros(d_model))
+        self.scorer = nn.Sequential(
             nn.Linear(d_model * 3, d_model),
             nn.ReLU(),
-            nn.Linear(d_model, n_dirs),
+            nn.Linear(d_model, 1),
         )
 
     def forward(
@@ -51,21 +59,37 @@ class DirectionHead(nn.Module):
         source_embed: torch.Tensor,
         spatial_out: torch.Tensor,
         decision_token: torch.Tensor,
+        src_idx: torch.Tensor,
     ) -> torch.Tensor:
         """
         Args:
             source_embed:   [B, d]
             spatial_out:    [B, N, d]   — all spatial token embeddings
             decision_token: [B, d]
+            src_idx:        [B]         — flat index of the source tile
         Returns:
-            logits: [B, n_dirs]
+            logits: [B, 4]
         """
-        q = self.query(source_embed).unsqueeze(1)              # [B, 1, d]
-        k = self.key(spatial_out)                               # [B, N, d]
-        v = self.value(spatial_out)                              # [B, N, d]
-        attn = (q @ k.transpose(-1, -2)) / self.scale           # [B, 1, N]
-        context = (attn.softmax(-1) @ v).squeeze(1)              # [B, d]
-        return self.dir_proj(torch.cat([source_embed, context, decision_token], dim=-1))
+        B = spatial_out.shape[0]
+        H, W = self.grid_h, self.grid_w
+        batch = torch.arange(B, device=spatial_out.device)
+        row, col = src_idx // W, src_idx % W
+
+        logits = []
+        for drow, dcol in self._OFFSETS:
+            r, c = row + drow, col + dcol
+            on_board = (r >= 0) & (r < H) & (c >= 0) & (c < W)
+            idx = r.clamp(0, H - 1) * W + c.clamp(0, W - 1)
+            neighbor = spatial_out[batch, idx]
+            neighbor = torch.where(
+                on_board.unsqueeze(-1),
+                neighbor,
+                self.edge.to(neighbor.dtype).expand_as(neighbor),
+            )
+            logits.append(self.scorer(
+                torch.cat([source_embed, neighbor, decision_token], dim=-1)
+            ))
+        return torch.cat(logits, dim=-1)
 
 
 class SplitHead(nn.Module):

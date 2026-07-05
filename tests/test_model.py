@@ -86,15 +86,68 @@ def test_source_head():
 
 
 def test_direction_head():
-    print("\n=== DirectionHead ===")
-    head = DirectionHead(128, 4)
+    print("\n=== DirectionHead (neighbor-gather) ===")
+    head = DirectionHead(128, 25, 25)
     source_embed = torch.randn(4, 128)
     spatial_out = torch.randn(4, 625, 128)
     decision = torch.randn(4, 128)
-    logits = head(source_embed, spatial_out, decision)
+    src_idx = torch.tensor([0, 312, 624, 24])  # corners + center
+    logits = head(source_embed, spatial_out, decision, src_idx)
     assert logits.shape == (4, 4), f"Shape: {logits.shape}"
-    print(f"  Input:  source={source_embed.shape}, decision={decision.shape}")
-    print(f"  Output: {logits.shape} ✓")
+    assert torch.isfinite(logits).all()
+    print(f"  Output: {logits.shape} ✓ (edges handled)")
+
+
+def test_direction_head_neighbor_order():
+    """Direction d must score the tile dir_id d enters: 0=down 1=right 2=up 3=left."""
+    print("\n=== DirectionHead: neighbor order matches dir_id ===")
+    torch.manual_seed(0)
+    d, W = 32, 25
+    head = DirectionHead(d, 25, W)
+    src_idx = torch.tensor([12 * W + 12])          # center tile
+    spatial = torch.zeros(1, 625, d)
+    marker = torch.randn(d)
+    # Put the marker on the DOWN neighbor (row+1) only
+    spatial[0, 13 * W + 12] = marker
+    src_e = torch.randn(1, d)
+    dec = torch.randn(1, d)
+    base = head(src_e, torch.zeros(1, 625, d), dec, src_idx)
+    out = head(src_e, spatial, dec, src_idx)
+    changed = (out - base).abs().squeeze(0)
+    assert changed[0] > 1e-6 and changed[1:].max() < 1e-6, \
+        f"marker on down-neighbor must only affect dir 0, got {changed}"
+    # And the RIGHT neighbor (col+1) must only affect dir 1
+    spatial2 = torch.zeros(1, 625, d)
+    spatial2[0, 12 * W + 13] = marker
+    out2 = head(src_e, spatial2, dec, src_idx)
+    changed2 = (out2 - base).abs().squeeze(0)
+    assert changed2[1] > 1e-6 and changed2[[0, 2, 3]].max() < 1e-6
+    print("  dir 0←down, dir 1←right gather order ✓")
+
+
+def test_direction_head_learnability():
+    """The head must fit 'move toward the marked neighbor' quickly — the
+    exact task the cross-attention head failed to learn (stuck at ln4)."""
+    print("\n=== DirectionHead: learnability smoke ===")
+    torch.manual_seed(1)
+    d, W = 32, 25
+    head = DirectionHead(d, 25, W)
+    opt = torch.optim.Adam(head.parameters(), lr=3e-3)
+    B = 64
+    for step in range(150):
+        src_idx = torch.randint(0, 625, (B,))
+        row, col = src_idx // W, src_idx % W
+        spatial = torch.randn(B, 625, d) * 0.1
+        tgt = torch.randint(0, 4, (B,))
+        offs = torch.tensor([[1, 0], [0, 1], [-1, 0], [0, -1]])
+        r = (row + offs[tgt, 0]).clamp(0, 24)
+        c = (col + offs[tgt, 1]).clamp(0, 24)
+        spatial[torch.arange(B), r * W + c, 0] = 5.0  # marker feature
+        logits = head(torch.randn(B, d) * 0.1, spatial, torch.randn(B, d) * 0.1, src_idx)
+        loss = torch.nn.functional.cross_entropy(logits, tgt)
+        loss.backward(); opt.step(); opt.zero_grad()
+    assert loss.item() < 0.4, f"head failed to learn neighbor task: CE={loss.item():.3f}"
+    print(f"  CE after 150 steps: {loss.item():.3f} (< 0.4) ✓")
 
 
 def test_split_head():
@@ -817,6 +870,8 @@ def main():
         test_transformer_block,
         test_source_head,
         test_direction_head,
+        test_direction_head_neighbor_order,
+        test_direction_head_learnability,
         test_split_head,
         test_value_head,
         test_pass_head,

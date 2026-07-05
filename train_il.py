@@ -59,6 +59,10 @@ def parse_args():
     p.add_argument("--tf_end", type=float, default=0.0, help="Teacher forcing ratio at last epoch")
     p.add_argument("--focal_gamma", type=float, default=1.5, help="Focal loss gamma for source CE")
     p.add_argument("--reset_scheduler", action="store_true", help="Don't load scheduler state from checkpoint")
+    p.add_argument("--reinit", nargs="*", default=[],
+                   help="Submodule prefixes to re-initialize when loading "
+                        "--finetune_from (e.g. 'direction_head.' after an "
+                        "architecture change); other weights load strictly.")
     p.add_argument("--finetune_from", type=str, default=None,
                    help="Load model WEIGHTS + architecture from this checkpoint "
                         "but start a fresh run (epoch 1, new optimizer/schedule). "
@@ -379,7 +383,8 @@ def main():
         # Load weights only; everything else (epoch counter, optimizer state,
         # LR schedule) starts fresh — this is a NEW run seeded from phase 1.
         raw_model = model
-        load_model_state(raw_model, resume_ckpt["model_state"], ctx="finetune checkpoint")
+        load_model_state(raw_model, resume_ckpt["model_state"], ctx="finetune checkpoint",
+                         reinit_prefixes=tuple(args.reinit))
         if rank0:
             print(f"Fine-tuning from {args.finetune_from} "
                   f"(fresh epoch/optimizer/schedule)")

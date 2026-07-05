@@ -303,13 +303,19 @@ def optim_param_groups(model: nn.Module, weight_decay: float) -> List[Dict]:
 # Checkpoint loading
 # ======================================================================
 
-def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint") -> None:
+def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint",
+                     reinit_prefixes: tuple = ()) -> None:
     """Load a state dict, normalizing DDP/compile prefixes.
 
     Fails loudly if any model parameter is missing from the checkpoint —
     a silent partial load (strict=False with ignored return value) leaves
     whole modules randomly initialized while training continues.
     Unused checkpoint keys only warn (e.g. optional world-model weights).
+
+    ``reinit_prefixes`` opts specific submodules out of the strict check:
+    matching checkpoint keys are dropped and the model's fresh init is kept.
+    For hot-starting across an architecture change (e.g. the neighbor-gather
+    DirectionHead replacing the cross-attention one).
     """
     def _clean(k: str) -> str:
         for prefix in ("module.", "_orig_mod."):
@@ -318,7 +324,15 @@ def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint"
         return k
 
     cleaned = {_clean(k): v for k, v in state_dict.items()}
+    if reinit_prefixes:
+        dropped = [k for k in cleaned if k.startswith(tuple(reinit_prefixes))]
+        for k in dropped:
+            del cleaned[k]
+        print(f"  [reinit] {ctx}: dropped {len(dropped)} checkpoint keys under "
+              f"{tuple(reinit_prefixes)} — fresh initialization kept")
     missing, unexpected = model.load_state_dict(cleaned, strict=False)
+    if reinit_prefixes:
+        missing = [k for k in missing if not k.startswith(tuple(reinit_prefixes))]
     if missing:
         raise RuntimeError(
             f"{ctx}: {len(missing)} model keys missing from checkpoint "

@@ -81,7 +81,7 @@ class GeneralsNetwork(nn.Module):
 
         # --- Policy heads ---
         self.source_head = SourceHead(cfg.d_model)
-        self.direction_head = DirectionHead(cfg.d_model, cfg.n_directions)
+        self.direction_head = DirectionHead(cfg.d_model, cfg.grid_h, cfg.grid_w)
         self.split_head = SplitHead(cfg.d_model, cfg.n_split)
         self.pass_head = PassHead(cfg.d_model, cfg.n_directions, cfg.n_split)
         self.value_head = ValueHead(cfg.d_model)
@@ -282,7 +282,7 @@ class GeneralsNetwork(nn.Module):
         ]
 
         direction_logits = self.direction_head(
-            source_embed, spatial_out, ll_out,
+            source_embed, spatial_out, ll_out, src_idx,
         )  # [BT, n_dir]
         split_logits = self.split_head(
             source_embed, ll_out,
@@ -559,7 +559,7 @@ class GeneralsNetwork(nn.Module):
         src_idx = self._sample_source(source_logits, legal_mask, B, N)
         source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
 
-        direction_logits = self.direction_head(source_embed, spatial_out, ll_out)
+        direction_logits = self.direction_head(source_embed, spatial_out, ll_out, src_idx)
         split_logits = self.split_head(source_embed, ll_out)
         pe_dim = self.pass_head.time_pe_dim
         time_pe = _sinusoidal_pe(t_cur + 1, pe_dim, z_H.device)[t_cur].unsqueeze(0).expand(B, pe_dim)
@@ -781,7 +781,7 @@ class GeneralsNetwork(nn.Module):
         src_idx = self._sample_source_rl(source_logits, B, N)
         source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
 
-        direction_logits = self.direction_head(source_embed, spatial_out, ll_out)
+        direction_logits = self.direction_head(source_embed, spatial_out, ll_out, src_idx)
         split_logits = self.split_head(source_embed, ll_out)
         pe_dim = self.pass_head.time_pe_dim
         time_pe = _sinusoidal_pe(t_cur + 1, pe_dim, z_H.device)[t_cur].unsqueeze(0).expand(B, pe_dim)
