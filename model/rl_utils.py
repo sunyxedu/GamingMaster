@@ -323,16 +323,31 @@ def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint"
                 k = k[len(prefix):]
         return k
 
+    # Models that renamed submodules (e.g. GeneralsNetwork's game-adapter
+    # refactor) expose LEGACY_KEY_MAP; accept reinit prefixes in either the
+    # old or the new spelling by matching both.
+    prefixes = tuple(reinit_prefixes)
+    legacy_map = getattr(type(model), "LEGACY_KEY_MAP", None) or {}
+    if prefixes and legacy_map:
+        extra = []
+        for p in prefixes:
+            for old, new in legacy_map.items():
+                if p.startswith(old):
+                    extra.append(new + p[len(old):])
+                elif old.startswith(p):
+                    extra.append(new)
+        prefixes = prefixes + tuple(extra)
+
     cleaned = {_clean(k): v for k, v in state_dict.items()}
-    if reinit_prefixes:
-        dropped = [k for k in cleaned if k.startswith(tuple(reinit_prefixes))]
+    if prefixes:
+        dropped = [k for k in cleaned if k.startswith(prefixes)]
         for k in dropped:
             del cleaned[k]
         print(f"  [reinit] {ctx}: dropped {len(dropped)} checkpoint keys under "
               f"{tuple(reinit_prefixes)} — fresh initialization kept")
     missing, unexpected = model.load_state_dict(cleaned, strict=False)
-    if reinit_prefixes:
-        missing = [k for k in missing if not k.startswith(tuple(reinit_prefixes))]
+    if prefixes:
+        missing = [k for k in missing if not k.startswith(prefixes)]
     if missing:
         raise RuntimeError(
             f"{ctx}: {len(missing)} model keys missing from checkpoint "

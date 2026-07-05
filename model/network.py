@@ -1,13 +1,19 @@
 """
-Generals.io neural network — two-stage architecture:
+Generals.io neural network — the generals adapter of the game-agnostic
+two-stage core (see ``model.game_network.GameNetwork``):
 
   Stage 1 — History Encoder
             SpatiotemporalBlock × L (separate weights)
 
   Stage 2 — TRM (Tiny Recursive Model)
             Two-state recursive pondering with shared weights.
-            z_L (reasoning scratchpad) and z_H (answer state) are
-            iteratively refined by a single shared reasoning module.
+
+The game-specific parts (grid conv encoder, 2-D PE, world-model head,
+Source → Direction / Split / Pass decoder) live in
+``model.games.generals``; this class only adapts the historical public
+API (tensor-argument ``forward``/``step``/``step_rl`` signatures, legacy
+attribute names, and old checkpoint state-dict keys) onto the generic
+core so existing training scripts, tools and checkpoints keep working.
 """
 
 from __future__ import annotations
@@ -16,17 +22,13 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint
 
-from model.components.encoder import SpatialEncoder
-from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead, ValueHead
-from model.components.transformer import SpatiotemporalBlock, _sinusoidal_pe
-from model.components.trm import TRM
 from model.config import ModelConfig
+from model.game_network import GameNetwork
+from model.games.generals import GeneralsDecoder, GeneralsEncoder
 
 
-class GeneralsNetwork(nn.Module):
+class GeneralsNetwork(GameNetwork):
     """
     Two-stage architecture:
         SpatialEncoder → (+globals, +PE) →
@@ -35,351 +37,167 @@ class GeneralsNetwork(nn.Module):
         Decode → Source / Direction / Split / Value heads
     """
 
+    #: state-dict key prefixes from before the game-adapter refactor →
+    #: their current location.  Old checkpoints are remapped on load.
+    LEGACY_KEY_MAP = {
+        "spatial_encoder.": "obs_encoder.spatial_encoder.",
+        "global_proj.": "obs_encoder.global_proj.",
+        "row_embed": "obs_encoder.row_embed",
+        "col_embed": "obs_encoder.col_embed",
+        "next_obs_head.": "obs_encoder.next_obs_head.",
+        "source_head.": "action_decoder.source_head.",
+        "direction_head.": "action_decoder.direction_head.",
+        "split_head.": "action_decoder.split_head.",
+        "pass_head.": "action_decoder.pass_head.",
+    }
+
     def __init__(self, cfg: ModelConfig):
-        super().__init__()
-        self.cfg = cfg
-        if cfg.temporal_type != "spatiotemporal":
-            raise ValueError(
-                f"unsupported temporal_type {cfg.temporal_type!r}; the GRU "
-                "path was removed — only 'spatiotemporal' exists"
-            )
+        super().__init__(cfg, GeneralsEncoder(cfg), GeneralsDecoder(cfg))
 
-        # --- Create Embeddings ---
-        self.spatial_encoder = SpatialEncoder(cfg)
-        self.global_proj = nn.Sequential(
-            nn.Linear(cfg.global_features, cfg.d_model),
-            nn.ReLU(),
-            nn.Linear(cfg.d_model, cfg.d_model),
-        )
+    # ------------------------------------------------------------------
+    # Legacy attribute access (freeze helpers, tests, tools)
+    # ------------------------------------------------------------------
 
-        # --- Stage 1: History Encoder ---
-        self.st_layers = nn.ModuleList(
-            [SpatiotemporalBlock(cfg) for _ in range(cfg.n_st_layers)]
-        )
+    @property
+    def spatial_encoder(self):
+        return self.obs_encoder.spatial_encoder
 
-        # --- Stage 2: TRM ---
-        self.trm = TRM(cfg)
+    @property
+    def global_proj(self):
+        return self.obs_encoder.global_proj
 
-        # --- Learnable decision tokens ---
-        self.hl_token = nn.Parameter(torch.randn(1, 1, cfg.d_model) * 0.02)
-        self.ll_token = nn.Parameter(torch.randn(1, 1, cfg.d_model) * 0.02)
+    @property
+    def row_embed(self):
+        return self.obs_encoder.row_embed
 
-        # --- 2-D spatial PE ---
-        self.row_embed = nn.Parameter(
-            torch.randn(1, cfg.grid_h, 1, cfg.d_model) * 0.02,
-        )
-        self.col_embed = nn.Parameter(
-            torch.randn(1, 1, cfg.grid_w, cfg.d_model) * 0.02,
-        )
-        self.hl_pos = nn.Parameter(torch.randn(1, 1, cfg.d_model) * 0.02)
-        self.ll_pos = nn.Parameter(torch.randn(1, 1, cfg.d_model) * 0.02)
+    @property
+    def col_embed(self):
+        return self.obs_encoder.col_embed
 
-        # --- Norms ---
-        self.pre_norm = nn.LayerNorm(cfg.d_model)
-        self.mid_norm = nn.LayerNorm(cfg.d_model)
-        self.post_norm = nn.LayerNorm(cfg.d_model)
+    @property
+    def next_obs_head(self):
+        return self.obs_encoder.next_obs_head
 
-        # --- Policy heads ---
-        self.source_head = SourceHead(cfg.d_model)
-        self.direction_head = DirectionHead(cfg.d_model, cfg.grid_h, cfg.grid_w)
-        self.split_head = SplitHead(cfg.d_model, cfg.n_split)
-        self.pass_head = PassHead(cfg.d_model, cfg.n_directions, cfg.n_split)
-        self.value_head = ValueHead(cfg.d_model)
+    @property
+    def source_head(self):
+        return self.action_decoder.source_head
 
-        # --- Optional self-supervised next-observation head ---
-        # Predicts the next frame's 11-state one-hot + army channel per
-        # spatial token from the Stage-1 belief — the training pressure
-        # that forces the temporal state to actually retain information.
-        self.next_obs_head: Optional[nn.Linear] = None
-        if cfg.predict_next_obs:
-            if cfg.temporal_type != "spatiotemporal":
-                # Only the spatiotemporal forward emits next_obs outputs; a
-                # silent head-without-outputs would zero the wm loss and
-                # break DDP's static-graph assumption.
-                raise ValueError(
-                    "predict_next_obs requires temporal_type='spatiotemporal'"
-                )
-            self.next_obs_head = nn.Linear(cfg.d_model, cfg.grid_channels)
+    @property
+    def direction_head(self):
+        return self.action_decoder.direction_head
 
-        self._init_weights()
+    @property
+    def split_head(self):
+        return self.action_decoder.split_head
 
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                if m is self.trm.q_head:
-                    continue  # TRM q_head has custom init
-                nn.init.trunc_normal_(m.weight, std=0.02)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-            elif isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            elif isinstance(m, (nn.LayerNorm, nn.BatchNorm2d)):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
+    @property
+    def pass_head(self):
+        return self.action_decoder.pass_head
 
     def _build_spatial_pe(self) -> torch.Tensor:
-        sp = (self.row_embed + self.col_embed).reshape(1, -1, self.cfg.d_model)
-        return torch.cat([sp, self.hl_pos, self.ll_pos], dim=1)
+        return self._build_pe()
 
-    def _trm_ponder(
-        self, x: torch.Tensor, act_steps: Optional[int],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Run ``act_steps`` ACT steps of the TRM with detached carry.
+    # ------------------------------------------------------------------
+    # Legacy checkpoint compatibility
+    # ------------------------------------------------------------------
 
-        The first ``act_steps - 1`` steps run without gradient; only the
-        final step is differentiated (deep-supervision one-step gradient,
-        matching the TRM recursion itself).  ``act_steps=None`` → 1 step.
-        """
-        steps = max(1, act_steps or 1)
-        carry = None
-        if steps > 1:
-            with torch.no_grad():
-                for _ in range(steps - 1):
-                    _, _, carry = self.trm(x, carry)
-        z_H, q_halt, _ = self.trm(x, carry)
-        return z_H, q_halt
-
-    def _trm_act_loop(
-        self,
-        x: torch.Tensor,
-        act_steps: Optional[int],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Inference-time ACT: fixed depth when ``act_steps`` is given
-        (needed for exact policy replay in RL), q_halt-gated otherwise."""
-        z_H, q_halt, carry = self.trm(x)
-        if act_steps is not None:
-            for _ in range(max(1, act_steps) - 1):
-                z_H, q_halt, carry = self.trm(x, carry)
-        else:
-            for _ in range(self.cfg.halt_max_steps - 1):
-                if (q_halt > 0).all():
+    @classmethod
+    def remap_legacy_keys(cls, state_dict: Dict) -> Dict:
+        """Translate pre-refactor state-dict keys to the current layout."""
+        remapped = {}
+        for k, v in state_dict.items():
+            for old, new in cls.LEGACY_KEY_MAP.items():
+                if k.startswith(old):
+                    k = new + k[len(old):]
                     break
-                z_H, q_halt, carry = self.trm(x, carry)
-        return z_H, q_halt
+            remapped[k] = v
+        return remapped
+
+    def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
+        return super().load_state_dict(
+            self.remap_legacy_keys(dict(state_dict)), strict=strict, assign=assign,
+        )
 
     # ------------------------------------------------------------------
-    # Forward — spatiotemporal + TRM
+    # Legacy public API — tensor arguments instead of obs/legal/label dicts
     # ------------------------------------------------------------------
 
-    def _encode_frames(self, grid_seq, frame_mask):
-        """Run the spatial encoder, excluding padded frames from BatchNorm
-        statistics when ``frame_mask`` ([B, T] bool, True = real frame) is
-        given.  Padded frames get zero features; they are masked in the loss
-        and cannot influence real frames because collate pads only at the
-        sequence TAIL and both temporal mixers are causal (attention masks
-        the future; the recurrence only carries state forward)."""
-        B, T, C, H, W = grid_seq.shape
-        BT = B * T
-        flat = grid_seq.reshape(BT, C, H, W)
-        if frame_mask is None or bool(frame_mask.all()):
-            return self.spatial_encoder(flat).reshape(B, T, -1, H, W)
-        fm = frame_mask.reshape(BT)
-        enc = self.spatial_encoder(flat[fm])
-        feat = enc.new_zeros(BT, enc.shape[1], H, W)
-        feat[fm] = enc
-        return feat.reshape(B, T, -1, H, W)
-
-    def _forward_spatiotemporal(
-        self, grid_seq, globals_seq, legal_mask, source_y, source_x,
-        act_steps=None, frame_mask=None,
-    ) -> Dict[str, torch.Tensor]:
-        cfg = self.cfg
-        B, T, C, H, W = grid_seq.shape
-        N = H * W
-        d = cfg.d_model
-        BT = B * T
-
-        # 1. Spatial encoder
-        spatial = self._encode_frames(grid_seq, frame_mask)
-
-        # 2. Global features
-        spatial = spatial + self.global_proj(globals_seq).unsqueeze(-1).unsqueeze(-1)
-
-        # 3. Flatten + decision tokens
-        tokens = spatial.reshape(B, T, d, N).permute(0, 1, 3, 2)
-        hl = self.hl_token.expand(B, T, -1, -1)
-        ll = self.ll_token.expand(B, T, -1, -1)
-        tokens = torch.cat([tokens, hl, ll], dim=2)  # [B, T, S, d]
-
-        # 4. PE — absolute time PE only for the attention mixer; the
-        # recurrence carries temporal order itself and absolute positions
-        # would only reintroduce step-index dependence.
-        tokens = tokens + self._build_spatial_pe().unsqueeze(0)
-        if cfg.temporal_mixer != "recurrent":
-            tokens = tokens + _sinusoidal_pe(T, d, tokens.device).unsqueeze(0).unsqueeze(2)
-
-        # 5. World model embedding
-        # ── Stage 1: Spatiotemporal encoding (checkpointed) ──
-        tokens = self.pre_norm(tokens)
-        for layer in self.st_layers:
-            tokens = checkpoint(layer, tokens, use_reentrant=True)
-        tokens = self.mid_norm(tokens)
-
-        # ── Stage 2: TRM pondering ──
-        S = tokens.shape[2]
-        x = tokens.reshape(BT, S, d)          # input embeddings for TRM
-        z_H, q_halt = self._trm_ponder(x, act_steps)  # [BT, S, d], [BT]
-        z_H = self.post_norm(z_H)
-
-        # Decode
-        out = self._decode_heads(z_H, B, T, N, W, legal_mask, source_y, source_x)
-        out["q_halt"] = q_halt.reshape(B, T)
-
-        # Self-supervised next-observation prediction from belief tokens
-        if self.next_obs_head is not None:
-            no = self.next_obs_head(tokens[:, :, :N])        # [B, T, N, C]
-            out["next_state_logits"] = no[..., : self.cfg.n_grid_types]
-            out["next_army"] = no[..., self.cfg.n_grid_types]
-        return out
-
-    # ------------------------------------------------------------------
-    # Shared head logic
-    # ------------------------------------------------------------------
-
-    def _sample_source(self, source_logits, legal_mask, BT, N):
-        """Sample source index from model's own predictions (no grad)."""
-        with torch.no_grad():
-            logits_safe = source_logits.detach().clone().float()
-            if legal_mask is not None:
-                lm = legal_mask.reshape(BT, N)
-                logits_safe = logits_safe.masked_fill(~lm, float("-inf"))
-            all_masked = logits_safe.isinf() & (logits_safe < 0)
-            bad_rows = all_masked.all(dim=-1)
-            if bad_rows.any():
-                logits_safe[bad_rows, 0] = 0.0
-            # Handle NaN from bf16 overflow: fall back to uniform sampling
-            nan_rows = logits_safe.isnan().any(dim=-1)
-            if nan_rows.any():
-                logits_safe[nan_rows] = 0.0
-            probs = F.softmax(logits_safe, dim=-1)
-            return torch.multinomial(probs, 1).squeeze(-1)
-
-    def _decode_heads(self, tokens, B, T, N, W, legal_mask, source_y, source_x):
-        cfg = self.cfg
-        BT = B * T
-        device = tokens.device
-        spatial_out = tokens[:, :N]
-        hl_out = tokens[:, N]
-        ll_out = tokens[:, N + 1]
-
-        source_logits = self.source_head(spatial_out)  # raw logits, no mask
-
-        if source_y is not None and source_x is not None:
-            sy = source_y.reshape(BT)
-            sx = source_x.reshape(BT)
-            gt_idx = (sy * W + sx).long().clamp(0, N - 1)
-            needs_sample = (sy < 0)
-            if needs_sample.any():
-                pred_idx = self._sample_source(source_logits, legal_mask, BT, N)
-                src_idx = torch.where(needs_sample, pred_idx, gt_idx)
-            else:
-                src_idx = gt_idx
-        else:
-            src_idx = self._sample_source(source_logits, legal_mask, BT, N)
-
-        source_embed = spatial_out[
-            torch.arange(BT, device=device), src_idx,
-        ]
-
-        direction_logits = self.direction_head(
-            source_embed, spatial_out, ll_out, src_idx,
-        )  # [BT, n_dir]
-        split_logits = self.split_head(
-            source_embed, ll_out,
-        )  # [BT, n_split]
-
-        # Time PE for PassHead: [T, pe_dim] → [BT, pe_dim]
-        pe_dim = self.pass_head.time_pe_dim
-        time_pe = _sinusoidal_pe(T, pe_dim, device)  # [T, pe_dim]
-        time_pe = time_pe.unsqueeze(0).expand(B, T, pe_dim).reshape(BT, pe_dim)
-
-        pass_logits = self.pass_head(
-            ll_out, source_embed, direction_logits, split_logits, time_pe,
-        )  # [BT]
-
-        return {
-            "source_logits": source_logits.reshape(B, T, N),
-            "direction_logits": direction_logits.reshape(B, T, cfg.n_directions),
-            "split_logits": split_logits.reshape(B, T, cfg.n_split),
-            "pass_logits": pass_logits.reshape(B, T),
-            "value": self.value_head(hl_out).reshape(B, T),
-            "src_idx": src_idx.reshape(B, T),
-        }
-
-    # ------------------------------------------------------------------
-    # RL: action sampling and log-probability computation
-    # ------------------------------------------------------------------
-
-    def _sample_actions(
-        self,
-        source_logits: torch.Tensor,
-        direction_logits: torch.Tensor,
-        split_logits: torch.Tensor,
-        pass_logits: torch.Tensor,
+    @staticmethod
+    def _pack(
+        grid_seq: torch.Tensor,
+        globals_seq: torch.Tensor,
         legal_mask: Optional[torch.Tensor],
-        src_idx: torch.Tensor,
+        source_y: Optional[torch.Tensor] = None,
+        source_x: Optional[torch.Tensor] = None,
+    ):
+        obs = {"grid_seq": grid_seq, "globals_seq": globals_seq}
+        legal = {"source": legal_mask} if legal_mask is not None else None
+        labels = None
+        if source_y is not None and source_x is not None:
+            labels = {"source_y": source_y, "source_x": source_x}
+        return obs, legal, labels
+
+    def forward(
+        self,
+        grid_seq: torch.Tensor,
+        globals_seq: torch.Tensor,
+        legal_mask: Optional[torch.Tensor] = None,
+        source_y: Optional[torch.Tensor] = None,
+        source_x: Optional[torch.Tensor] = None,
+        act_steps: Optional[int] = None,
+        frame_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        """Sample direction/split/pass and compute log-probs for all action heads.
+        obs, legal, labels = self._pack(
+            grid_seq, globals_seq, legal_mask, source_y, source_x,
+        )
+        return super().forward(
+            obs, legal=legal, labels=labels,
+            act_steps=act_steps, frame_mask=frame_mask,
+        )
 
-        Called during ``step()`` for RL rollout.  Source has already been
-        sampled (``src_idx`` provided); direction and split are sampled here.
+    # ------------------------------------------------------------------
+    # Single-step inference
+    # ------------------------------------------------------------------
 
-        All computations run under ``torch.no_grad`` — gradients are not needed
-        during data-collection rollouts.
+    def step(
+        self,
+        grid: torch.Tensor,
+        globals_vec: torch.Tensor,
+        legal_mask: Optional[torch.Tensor] = None,
+        st_cache: Optional[List[torch.Tensor]] = None,
+        step_idx: int = 0,
+        act_steps: Optional[int] = None,
+    ) -> Dict[str, torch.Tensor]:
+        obs, legal, _ = self._pack(grid, globals_vec, legal_mask)
+        return super().step(
+            obs, legal=legal, st_cache=st_cache,
+            step_idx=step_idx, act_steps=act_steps,
+        )
 
-        Returns dict with keys:
-            action_source     [B]
-            action_direction  [B]
-            action_split      [B]
-            action_pass       [B]   bool — True if model chose to pass
-            action_log_prob   [B]   (hierarchical log-prob including pass)
+    def step_rl(
+        self,
+        grid: torch.Tensor,
+        globals_vec: torch.Tensor,
+        st_cache: Optional[List[torch.Tensor]] = None,
+        step_idx: int = 0,
+        act_steps: Optional[int] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Single-step inference without legal mask (RL mode).
+
+        Same as ``step()`` but the model can select any position, and the
+        source log-prob uses the full unmasked distribution.
+
+        ``act_steps`` forces a fixed TRM depth so the PPO update can
+        recompute the exact same policy with ``forward(act_steps=...)``.
         """
-        B = source_logits.shape[0]
-        N = source_logits.shape[-1]
-        device = source_logits.device
-        arange_B = torch.arange(B, device=device)
+        return self.step(
+            grid, globals_vec, legal_mask=None,
+            st_cache=st_cache, step_idx=step_idx, act_steps=act_steps,
+        )
 
-        with torch.no_grad():
-            # --- pass decision (sampled, not deterministic) ---
-            did_pass = torch.bernoulli(torch.sigmoid(pass_logits)).bool()
-            pass_lp = torch.where(
-                did_pass,
-                F.logsigmoid(pass_logits),
-                F.logsigmoid(-pass_logits),
-            )
-
-            # --- source log-prob (masked distribution) ---
-            sl_masked = source_logits.detach().clone()
-            if legal_mask is not None:
-                lm = legal_mask.reshape(B, N)
-                sl_masked = sl_masked.masked_fill(~lm, float("-inf"))
-            all_inf = sl_masked.isinf() & (sl_masked < 0)
-            bad_rows = all_inf.all(dim=-1)
-            if bad_rows.any():
-                sl_masked[bad_rows, 0] = 0.0
-            source_lp = F.log_softmax(sl_masked, dim=-1)[arange_B, src_idx]
-
-            # --- direction ---
-            dir_probs = F.softmax(direction_logits, dim=-1)
-            dir_idx = torch.multinomial(dir_probs, 1).squeeze(-1)
-            dir_lp = F.log_softmax(direction_logits, dim=-1)[arange_B, dir_idx]
-
-            # --- split ---
-            spl_probs = F.softmax(split_logits, dim=-1)
-            spl_idx = torch.multinomial(spl_probs, 1).squeeze(-1)
-            spl_lp = F.log_softmax(split_logits, dim=-1)[arange_B, spl_idx]
-
-            # Hierarchical: pass → only pass_lp; move → pass_lp + move heads
-            move_lp = source_lp + dir_lp + spl_lp
-            total_lp = torch.where(did_pass, pass_lp, pass_lp + move_lp)
-
-        return {
-            "action_source": src_idx,
-            "action_direction": dir_idx,
-            "action_split": spl_idx,
-            "action_pass": did_pass,
-            "action_log_prob": total_lp,
-        }
+    # ------------------------------------------------------------------
+    # RL: log-probability computation for stored actions
+    # ------------------------------------------------------------------
 
     def compute_action_log_prob(
         self,
@@ -411,242 +229,9 @@ class GeneralsNetwork(nn.Module):
             log_prob  [B, T]  hierarchical log-prob including pass (differentiable)
             entropy   [B, T]  sum of per-head entropies (differentiable)
         """
-        source_logits = pred["source_logits"]          # [B, T, N]
-        B, T, N = source_logits.shape
-
-        # --- apply legal mask to source logits ---
-        if legal_mask is not None:
-            lm = legal_mask.reshape(B, T, N)
-            sl_masked = source_logits.masked_fill(~lm, float("-inf"))
-            all_inf = sl_masked.isinf() & (sl_masked < 0)
-            bad_rows = all_inf.all(dim=-1)                       # [B, T]
-            if bad_rows.any():
-                sl_masked = sl_masked.clone()
-                sl_masked[bad_rows, 0] = 0.0
-        else:
-            sl_masked = source_logits
-
-        # --- pass ---
-        pass_logits = pred["pass_logits"]              # [B, T]
-        passed = actions["passed"]                     # [B, T] bool
-        pass_lp = torch.where(
-            passed,
-            F.logsigmoid(pass_logits),
-            F.logsigmoid(-pass_logits),
-        )
-        p_pass = torch.sigmoid(pass_logits)
-        pass_ent = -(
-            p_pass * F.logsigmoid(pass_logits)
-            + (1 - p_pass) * F.logsigmoid(-pass_logits)
-        )
-
-        # --- source ---
-        src_log_p = F.log_softmax(sl_masked, dim=-1)             # [B, T, N]
-        src_lp = src_log_p.gather(
-            -1, actions["source_idx"].unsqueeze(-1),
-        ).squeeze(-1)                                            # [B, T]
-        src_probs = torch.exp(src_log_p)
-        src_ent = -(src_probs * src_log_p).nan_to_num(0.0).sum(-1)
-
-        # --- direction ---
-        dir_log_p = F.log_softmax(pred["direction_logits"], dim=-1)
-        dir_lp = dir_log_p.gather(
-            -1, actions["direction"].unsqueeze(-1),
-        ).squeeze(-1)
-        dir_probs = torch.exp(dir_log_p)
-        dir_ent = -(dir_probs * dir_log_p).sum(-1)
-
-        # --- split ---
-        spl_log_p = F.log_softmax(pred["split_logits"], dim=-1)
-        spl_lp = spl_log_p.gather(
-            -1, actions["split"].unsqueeze(-1),
-        ).squeeze(-1)
-        spl_probs = torch.exp(spl_log_p)
-        spl_ent = -(spl_probs * spl_log_p).sum(-1)
-
-        # --- hierarchical combination ---
-        move_lp = src_lp + dir_lp + spl_lp
-        total_lp = torch.where(passed, pass_lp, pass_lp + move_lp)
-
-        move_ent = src_ent + dir_ent + spl_ent
-        total_ent = torch.where(passed, pass_ent, pass_ent + move_ent)
-
-        return total_lp, total_ent
-
-    # ------------------------------------------------------------------
-    # Public forward
-    # ------------------------------------------------------------------
-
-    def forward(
-        self,
-        grid_seq: torch.Tensor,
-        globals_seq: torch.Tensor,
-        legal_mask: Optional[torch.Tensor] = None,
-        source_y: Optional[torch.Tensor] = None,
-        source_x: Optional[torch.Tensor] = None,
-        act_steps: Optional[int] = None,
-        frame_mask: Optional[torch.Tensor] = None,
-    ) -> Dict[str, torch.Tensor]:
-        return self._forward_spatiotemporal(
-            grid_seq, globals_seq, legal_mask,
-            source_y, source_x,
-            act_steps=act_steps, frame_mask=frame_mask,
-        )
-
-    # ------------------------------------------------------------------
-    # Single-step inference
-    # ------------------------------------------------------------------
-
-    def step(
-        self,
-        grid: torch.Tensor,
-        globals_vec: torch.Tensor,
-        legal_mask: Optional[torch.Tensor] = None,
-        st_cache: Optional[List[torch.Tensor]] = None,
-        step_idx: int = 0,
-        act_steps: Optional[int] = None,
-    ) -> Dict[str, torch.Tensor]:
-        return self._step_st(grid, globals_vec, legal_mask, st_cache, act_steps, step_idx)
-
-    def _step_st(self, grid, globals_vec, legal_mask, st_cache, act_steps=None, step_idx=0):
-        cfg = self.cfg
-        B, d = grid.shape[0], cfg.d_model
-        N = cfg.grid_h * cfg.grid_w
-
-        spatial = self.spatial_encoder(grid)
-        spatial = spatial + self.global_proj(globals_vec).unsqueeze(-1).unsqueeze(-1)
-
-        tokens = spatial.reshape(B, d, N).permute(0, 2, 1)
-        tokens = torch.cat([tokens, self.hl_token.expand(B, -1, -1),
-                            self.ll_token.expand(B, -1, -1)], dim=1)
-        tokens = tokens + self._build_spatial_pe()
-
-        if cfg.temporal_mixer == "recurrent":
-            # No absolute time PE on tokens (matches forward); the PassHead
-            # time feature below still uses the caller-supplied step index.
-            # The fixed-size cache carries no step count, so a caller that
-            # threads the cache but forgets step_idx would silently freeze
-            # the time feature at 0 — catch it.
-            if st_cache is not None and step_idx == 0:
-                raise ValueError(
-                    "recurrent mode: pass step_idx to step()/step_rl() "
-                    "(cache present but step_idx is still 0)"
-                )
-            t_cur = step_idx
-        else:
-            t_cur = 0 if st_cache is None else st_cache[0].shape[1]
-            t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]
-            tokens = tokens + t_pe.unsqueeze(0).unsqueeze(0)
-
-        # Stage 1: spatiotemporal with KV cache
-        tokens = self.pre_norm(tokens).unsqueeze(1)
-        new_caches: List[torch.Tensor] = []
-        for i, layer in enumerate(self.st_layers):
-            prev = st_cache[i] if st_cache is not None else None
-            tokens, cache_i = layer.forward_step(tokens, prev)
-            new_caches.append(cache_i)
-        tokens = self.mid_norm(tokens.squeeze(1))
-
-        # Stage 2: TRM with ACT
-        z_H, q_halt = self._trm_act_loop(tokens, act_steps)
-        z_H = self.post_norm(z_H)
-
-        spatial_out = z_H[:, :N]
-        hl_out = z_H[:, N]
-        ll_out = z_H[:, N + 1]
-
-        source_logits = self.source_head(spatial_out)  # raw logits, no mask
-        src_idx = self._sample_source(source_logits, legal_mask, B, N)
-        source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
-
-        direction_logits = self.direction_head(source_embed, spatial_out, ll_out, src_idx)
-        split_logits = self.split_head(source_embed, ll_out)
-        pe_dim = self.pass_head.time_pe_dim
-        time_pe = _sinusoidal_pe(t_cur + 1, pe_dim, z_H.device)[t_cur].unsqueeze(0).expand(B, pe_dim)
-        pass_logits = self.pass_head(ll_out, source_embed, direction_logits, split_logits, time_pe)
-        value = self.value_head(hl_out)
-
-        # Sample direction/split and compute log-probs for RL rollout
-        rl_out = self._sample_actions(
-            source_logits, direction_logits, split_logits, pass_logits,
-            legal_mask, src_idx,
-        )
-
-        return {
-            "source_logits": source_logits,
-            "direction_logits": direction_logits,
-            "split_logits": split_logits,
-            "pass_logits": pass_logits,
-            "value": value,
-            "q_halt": q_halt,
-            "st_cache": new_caches,
-            **rl_out,
-        }
-
-    # ------------------------------------------------------------------
-    # RL (no legal mask): action sampling and log-probability
-    # ------------------------------------------------------------------
-
-    def _sample_source_rl(self, source_logits, BT, N):
-        """Sample source index without legal mask (RL mode)."""
-        with torch.no_grad():
-            logits_safe = source_logits.detach().clone().float()
-            nan_rows = logits_safe.isnan().any(dim=-1)
-            if nan_rows.any():
-                logits_safe[nan_rows] = 0.0
-            probs = F.softmax(logits_safe, dim=-1)
-            return torch.multinomial(probs, 1).squeeze(-1)
-
-    def _sample_actions_rl(
-        self,
-        source_logits: torch.Tensor,
-        direction_logits: torch.Tensor,
-        split_logits: torch.Tensor,
-        pass_logits: torch.Tensor,
-        src_idx: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
-        """Sample actions without legal mask (RL mode).
-
-        Same interface as ``_sample_actions`` but source log-prob is computed
-        over all 625 positions without masking.
-        """
-        B = source_logits.shape[0]
-        device = source_logits.device
-        arange_B = torch.arange(B, device=device)
-
-        with torch.no_grad():
-            # --- pass decision (sampled, not deterministic) ---
-            did_pass = torch.bernoulli(torch.sigmoid(pass_logits)).bool()
-            pass_lp = torch.where(
-                did_pass,
-                F.logsigmoid(pass_logits),
-                F.logsigmoid(-pass_logits),
-            )
-
-            # --- source log-prob (full distribution, no mask) ---
-            source_lp = F.log_softmax(source_logits.float(), dim=-1)[arange_B, src_idx]
-
-            # --- direction ---
-            dir_probs = F.softmax(direction_logits, dim=-1)
-            dir_idx = torch.multinomial(dir_probs, 1).squeeze(-1)
-            dir_lp = F.log_softmax(direction_logits, dim=-1)[arange_B, dir_idx]
-
-            # --- split ---
-            spl_probs = F.softmax(split_logits, dim=-1)
-            spl_idx = torch.multinomial(spl_probs, 1).squeeze(-1)
-            spl_lp = F.log_softmax(split_logits, dim=-1)[arange_B, spl_idx]
-
-            # Hierarchical
-            move_lp = source_lp + dir_lp + spl_lp
-            total_lp = torch.where(did_pass, pass_lp, pass_lp + move_lp)
-
-        return {
-            "action_source": src_idx,
-            "action_direction": dir_idx,
-            "action_split": spl_idx,
-            "action_pass": did_pass,
-            "action_log_prob": total_lp,
-        }
+        legal = {"source": legal_mask} if legal_mask is not None else None
+        log_prob, entropy, _ = self.compute_log_prob(pred, actions, legal)
+        return log_prob, entropy
 
     def compute_action_log_prob_rl(
         self,
@@ -655,150 +240,7 @@ class GeneralsNetwork(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """Re-evaluate stored actions without legal mask (RL mode).
 
-        Same as ``compute_action_log_prob`` but source logits are not masked.
-        Used during PPO update in RL training.
+        Same as ``compute_action_log_prob`` but source logits are not masked,
+        and per-head mean entropies are returned for logging.
         """
-        source_logits = pred["source_logits"]          # [B, T, N]
-        B, T, N = source_logits.shape
-
-        # --- pass ---
-        pass_logits = pred["pass_logits"]
-        passed = actions["passed"]
-        pass_lp = torch.where(
-            passed,
-            F.logsigmoid(pass_logits),
-            F.logsigmoid(-pass_logits),
-        )
-        p_pass = torch.sigmoid(pass_logits)
-        pass_ent = -(
-            p_pass * F.logsigmoid(pass_logits)
-            + (1 - p_pass) * F.logsigmoid(-pass_logits)
-        )
-
-        # --- source (no mask) ---
-        src_log_p = F.log_softmax(source_logits, dim=-1)
-        src_lp = src_log_p.gather(
-            -1, actions["source_idx"].unsqueeze(-1),
-        ).squeeze(-1)
-        src_probs = torch.exp(src_log_p)
-        src_ent = -(src_probs * src_log_p).nan_to_num(0.0).sum(-1)
-
-        # --- direction ---
-        dir_log_p = F.log_softmax(pred["direction_logits"], dim=-1)
-        dir_lp = dir_log_p.gather(
-            -1, actions["direction"].unsqueeze(-1),
-        ).squeeze(-1)
-        dir_probs = torch.exp(dir_log_p)
-        dir_ent = -(dir_probs * dir_log_p).sum(-1)
-
-        # --- split ---
-        spl_log_p = F.log_softmax(pred["split_logits"], dim=-1)
-        spl_lp = spl_log_p.gather(
-            -1, actions["split"].unsqueeze(-1),
-        ).squeeze(-1)
-        spl_probs = torch.exp(spl_log_p)
-        spl_ent = -(spl_probs * spl_log_p).sum(-1)
-
-        # --- hierarchical combination ---
-        move_lp = src_lp + dir_lp + spl_lp
-        total_lp = torch.where(passed, pass_lp, pass_lp + move_lp)
-
-        move_ent = src_ent + dir_ent + spl_ent
-        total_ent = torch.where(passed, pass_ent, pass_ent + move_ent)
-
-        # Per-head mean entropy (for logging, fully detached)
-        with torch.no_grad():
-            mask_f = (~passed).float()
-            n_moves = mask_f.sum().clamp(min=1)
-            head_entropy = {
-                "ent_pass": pass_ent.detach().mean(),
-                "ent_src": (src_ent.detach() * mask_f).sum() / n_moves,
-                "ent_dir": (dir_ent.detach() * mask_f).sum() / n_moves,
-                "ent_spl": (spl_ent.detach() * mask_f).sum() / n_moves,
-            }
-
-        return total_lp, total_ent, head_entropy
-
-    def step_rl(
-        self,
-        grid: torch.Tensor,
-        globals_vec: torch.Tensor,
-        st_cache: Optional[List[torch.Tensor]] = None,
-        step_idx: int = 0,
-        act_steps: Optional[int] = None,
-    ) -> Dict[str, torch.Tensor]:
-        """Single-step inference without legal mask (RL mode).
-
-        Same as ``step()`` but uses ``_sample_source_rl`` and
-        ``_sample_actions_rl`` so the model can select any position.
-
-        ``act_steps`` forces a fixed TRM depth so the PPO update can
-        recompute the exact same policy with ``forward(act_steps=...)``.
-        """
-        return self._step_st_rl(grid, globals_vec, st_cache, act_steps, step_idx)
-
-    def _step_st_rl(self, grid, globals_vec, st_cache, act_steps=None, step_idx=0):
-        cfg = self.cfg
-        B, d = grid.shape[0], cfg.d_model
-        N = cfg.grid_h * cfg.grid_w
-
-        spatial = self.spatial_encoder(grid)
-        spatial = spatial + self.global_proj(globals_vec).unsqueeze(-1).unsqueeze(-1)
-
-        tokens = spatial.reshape(B, d, N).permute(0, 2, 1)
-        tokens = torch.cat([tokens, self.hl_token.expand(B, -1, -1),
-                            self.ll_token.expand(B, -1, -1)], dim=1)
-        tokens = tokens + self._build_spatial_pe()
-
-        if cfg.temporal_mixer == "recurrent":
-            if st_cache is not None and step_idx == 0:
-                raise ValueError(
-                    "recurrent mode: pass step_idx to step()/step_rl() "
-                    "(cache present but step_idx is still 0)"
-                )
-            t_cur = step_idx
-        else:
-            t_cur = 0 if st_cache is None else st_cache[0].shape[1]
-            t_pe = _sinusoidal_pe(t_cur + 1, d, tokens.device)[t_cur]
-            tokens = tokens + t_pe.unsqueeze(0).unsqueeze(0)
-
-        tokens = self.pre_norm(tokens).unsqueeze(1)
-        new_caches: List[torch.Tensor] = []
-        for i, layer in enumerate(self.st_layers):
-            prev = st_cache[i] if st_cache is not None else None
-            tokens, cache_i = layer.forward_step(tokens, prev)
-            new_caches.append(cache_i)
-        tokens = self.mid_norm(tokens.squeeze(1))
-
-        z_H, q_halt = self._trm_act_loop(tokens, act_steps)
-        z_H = self.post_norm(z_H)
-
-        spatial_out = z_H[:, :N]
-        hl_out = z_H[:, N]
-        ll_out = z_H[:, N + 1]
-
-        source_logits = self.source_head(spatial_out)
-        src_idx = self._sample_source_rl(source_logits, B, N)
-        source_embed = spatial_out[torch.arange(B, device=z_H.device), src_idx]
-
-        direction_logits = self.direction_head(source_embed, spatial_out, ll_out, src_idx)
-        split_logits = self.split_head(source_embed, ll_out)
-        pe_dim = self.pass_head.time_pe_dim
-        time_pe = _sinusoidal_pe(t_cur + 1, pe_dim, z_H.device)[t_cur].unsqueeze(0).expand(B, pe_dim)
-        pass_logits = self.pass_head(ll_out, source_embed, direction_logits, split_logits, time_pe)
-        value = self.value_head(hl_out)
-
-        rl_out = self._sample_actions_rl(
-            source_logits, direction_logits, split_logits, pass_logits, src_idx,
-        )
-
-        return {
-            "source_logits": source_logits,
-            "direction_logits": direction_logits,
-            "split_logits": split_logits,
-            "pass_logits": pass_logits,
-            "value": value,
-            "q_halt": q_halt,
-            "st_cache": new_caches,
-            **rl_out,
-        }
+        return self.compute_log_prob(pred, actions, legal=None)
