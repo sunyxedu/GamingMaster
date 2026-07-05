@@ -75,9 +75,19 @@ net = build_game_network("go", board_h=9, board_w=9)
 | `generals` | `GeneralsEncoder` — grid conv + globals | `GeneralsDecoder` | source tile → direction/split, pass |
 | `chess` | `BoardEncoder` — piece-plane conv | `FromToDecoder` | from-square → to-square → promotion |
 | `go` | `BoardEncoder` | `PlacementDecoder` | point + pass |
+| `othello` | `BoardEncoder` (8×8, 3 planes) | `PlacementDecoder` | point + pass |
+| `gomoku` | `BoardEncoder` (15×15, 3 planes) | `PlacementDecoder` | point (+ pass, maskable) |
+| `shogi` | `ShogiEncoder` — board conv + 14 pieces-in-hand tokens | `ShogiDecoder` | move (from → to → promote?) OR drop (piece → square) |
+| `lux` | `LuxEncoder` — resource-map conv + unit slots | `LuxDecoder` | **simultaneous** per-unit categorical (factored joint policy) |
 | `clash_royale` | `ClashRoyaleEncoder` — arena conv + hand-card tokens | `CardPlacementDecoder` | wait / card → placement cell |
 | `hearthstone` | `HearthstoneEncoder` — 27 entity slots | `EntityActionDecoder` | action-type → actor → target → position (per-type `ARG_USES` gating) |
 | `starcraft` | `StarCraftEncoder` — minimap conv + unit slots | `RTSDecoder` | action-type → actor unit → target unit / map location + queued |
+
+`lux` demonstrates the second decoder pattern: instead of one hierarchical
+action per turn, every unit token gets its own categorical head and the joint
+log-prob is the sum over present units — replay stays exact with no
+teacher-forcing chain. Use it as the template for games where many pieces act
+at once.
 
 `GeneralsNetwork` (model/network.py) is now a thin adapter over the same core: it
 keeps the historical tensor-argument API (`forward(grid_seq, globals_seq, …)`,
