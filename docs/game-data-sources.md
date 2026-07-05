@@ -101,7 +101,14 @@
 - **没有精确规则的社区模拟器**（单位交互闭源）。所有 bot 均走 Android 模拟器实机、实时 1x 速度，无法 headless 加速自博弈；且违反 Supercell ToS。
 
 **契合度**：18×32 grid + 手牌 entity 纸面契合（`ClashRoyaleEncoder`/`CardPlacementDecoder` 已就绪）。
-**瓶颈**：**数据与环境双重缺失**，IL→RL 两端都不成立。建议搁置，或仅作 CV-驱动展示项目（KataCR 路线，成本极高）。
+**瓶颈**：**数据与环境双重缺失**，IL→RL 两端都不成立。
+
+> **2026-07-05 深挖更新**：专项深度调研（见 [clash-royale.md](clash-royale.md)）确认：
+> 帧级数据存在但极少（KataCR Replay-Dataset 105 局/113,981 帧/2 套卡组，无 license）；
+> KataCR 的 154 类 YOLO 检测数据集 + 合成管线可复用（YouTube 录像重建状态已被实践）；
+> Kaggle 有 4.81 亿场赛后 battlelog（仅元数据）；私服"支持战斗"但服务端保真度未证实。
+> 可执行路线：C=battlelog 辅助预训练（1-2 周）→ A=KataCR 栈+录像扩充做离线 IL（2-4 人月，无法在线 PPO）
+> → B=私服补全战斗逻辑（6+ 人月，唯一能自博弈的路径，法律风险最高）。
 
 ---
 
