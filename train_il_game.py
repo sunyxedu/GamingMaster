@@ -45,6 +45,18 @@ LABEL_KEYS = {
     "starcraft": ("action_type", "actor_idx"),
     "hearthstone": ("action_type", "actor_idx"),
     "clash_royale": ("card_slot",),
+    "mahjong": ("action_type",),
+    # active_idx is state (which own slot is on the field), delivered via
+    # labels because the observer-view converter stores it in tgt.
+    "pokemon": ("action_type", "active_idx"),
+}
+
+# Per-game legality derived from the observation itself: some decoders
+# need ``legal`` at decode time even during IL (lux's il_loss masks by
+# pred["unit_present"], which decode() reads from legal["unit"]).
+# Applied inside run_batch, so training and evaluate() share the mask.
+LEGAL_FROM_OBS = {
+    "lux": lambda obs: {"unit": obs["unit_mask"].bool()},
 }
 
 
@@ -129,10 +141,12 @@ def run_batch(
     tgt = {k: v.to(device) for k, v in batch["tgt"].items()}
     frame_mask = batch["meta"]["frame_mask"].to(device)
     labels = build_labels(game, tgt, tf_prob, frame_mask)
+    legal_fn = LEGAL_FROM_OBS.get(game)
+    legal = legal_fn(obs) if legal_fn is not None else None
 
     autocast = torch.autocast(device.type, dtype=torch.bfloat16, enabled=bf16)
     with autocast:
-        pred = net(obs, labels=labels, act_steps=act_steps,
+        pred = net(obs, legal=legal, labels=labels, act_steps=act_steps,
                    frame_mask=frame_mask)
         losses = net.action_decoder.il_loss(pred, tgt, frame_mask)
         loss = losses["loss"]
