@@ -79,6 +79,8 @@ net = build_game_network("go", board_h=9, board_w=9)
 | `gomoku` | `BoardEncoder` (15×15, 3 planes) | `PlacementDecoder` | point (+ pass, maskable) |
 | `shogi` | `ShogiEncoder` — board conv + 14 pieces-in-hand tokens | `ShogiDecoder` | move (from → to → promote?) OR drop (piece → square) |
 | `lux` | `LuxEncoder` — resource-map conv + unit slots | `LuxDecoder` | **simultaneous** per-unit categorical (factored joint policy) |
+| `mahjong` | `MahjongEncoder` — 34 tile-kind + 4 player + table tokens | `MahjongDecoder` | action-type (discard/riichi/chi/pon/kan/hora/pass) → tile pointer |
+| `pokemon` | `PokemonEncoder` — 12 pokemon slots + field token, hash-bucket species embeddings | `PokemonDecoder` | move slot / switch pointer (+ tera) |
 | `clash_royale` | `ClashRoyaleEncoder` — arena conv + hand-card tokens | `CardPlacementDecoder` | wait / card → placement cell |
 | `hearthstone` | `HearthstoneEncoder` — 27 entity slots | `EntityActionDecoder` | action-type → actor → target → position (per-type `ARG_USES` gating) |
 | `starcraft` | `StarCraftEncoder` — minimap conv + unit slots | `RTSDecoder` | action-type → actor unit → target unit / map location + queued |
@@ -129,6 +131,9 @@ download each dataset.
 | go | SGF (OGS / KGS / Tygem) | `data_processing/games/go/convert.py` | own rules engine (captures, simple ko); POV = channel swap |
 | othello | WTHOR `.wtb` | `data_processing/games/othello/convert.py` | exact rules replay, implicit passes reinserted; byte format validated on real WTHOR archives |
 | shogi | floodgate CSA | `data_processing/games/shogi/convert.py` | python-shogi replay; move-or-drop labels; POV = 180° rotation |
+| mahjong | Tenhou mjai `.mjson` (tenhou-to-mjai yearly zips) | `data_processing/games/mahjong/convert.py` | full state tracking from mjai events; decision-point frames incl. call opportunities; placement-based value |
+| pokemon | Showdown replay JSON (`replay.pokemonshowdown.com`) | `data_processing/games/pokemon/convert.py` | observer-view sim-protocol parser; one sample per side; revealed-move indices as labels |
+| lux | Kaggle Lux AI S3 episode JSON (auth CLI) | `data_processing/games/lux/convert.py` | per-match splits; per-unit action-type labels; obs↔action off-by-one and `[x][y]` transpose handled |
 
 Shared infrastructure:
 
