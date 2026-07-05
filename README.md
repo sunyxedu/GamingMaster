@@ -2,7 +2,7 @@
 
 An AlphaStar-inspired Transformer architecture with a TRM (Tiny Recursive Model) pondering core, trained by Imitation Learning (IL) followed by PPO self-play (RL).
 
-The core network is **game-agnostic**: a fixed two-stage trunk (spatiotemporal history encoder + TRM pondering) with pluggable per-game observation encoders and action decoders. [generals.io](https://generals.io) is the fully-trained reference game (data pipeline + RL environment + trained checkpoints); model adapters also exist for chess, Go, Othello, Gomoku, Shogi (pieces-in-hand drops), Lux AI–style simultaneous multi-unit games, Clash Royale, Hearthstone, and StarCraft-style RTS — see [docs/multi-game.md](docs/multi-game.md) and the per-game data/environment survey in [docs/game-data-sources.md](docs/game-data-sources.md).
+The core network is **game-agnostic**: a fixed two-stage trunk (spatiotemporal history encoder + TRM pondering) with pluggable per-game observation encoders and action decoders. [generals.io](https://generals.io) is the fully-trained reference game (data pipeline + RL environment + trained checkpoints); model adapters also exist for chess, Go, Othello, Gomoku, Shogi (pieces-in-hand drops), Riichi Mahjong, Pokémon (Showdown singles), Lux AI–style simultaneous multi-unit games, Clash Royale, Hearthstone, and StarCraft-style RTS — see [docs/multi-game.md](docs/multi-game.md) and the per-game data/environment survey in [docs/game-data-sources.md](docs/game-data-sources.md).
 
 ```python
 from model.games import build_game_network
@@ -454,7 +454,7 @@ Every component has been verified against the real replay `asS2S5O_y` (~Hemlix~ 
 | Gradient flow | All parameters receive gradients through every component | ✓ |
 | Training loop | Loss decreases on mock and real data; checkpoint save/load works | ✓ |
 
-Run all tests (266 tests):
+Run all tests (324 tests):
 
 ```bash
 uv run pytest tests/ -q
