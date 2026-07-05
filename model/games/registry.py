@@ -45,6 +45,57 @@ def _build_go(**overrides) -> nn.Module:
     return GameNetwork(cfg, BoardEncoder(cfg), PlacementDecoder(cfg))
 
 
+def _build_othello(**overrides) -> nn.Module:
+    """Othello/Reversi: 8×8 placement + pass.  2 piece planes + side-to-move.
+
+    The cheapest full-pipeline smoke-test game (WTHOR human data, trivial
+    exact rules) — see docs/game-data-sources.md.
+    """
+    from model.game_network import GameNetwork
+    from model.games.board import BoardConfig, BoardEncoder, PlacementDecoder
+
+    overrides.setdefault("board_h", 8)
+    overrides.setdefault("board_w", 8)
+    overrides.setdefault("piece_channels", 3)
+    overrides.setdefault("board_global_features", 0)
+    overrides.setdefault("n_promotions", 0)
+    cfg = BoardConfig(**overrides)
+    return GameNetwork(cfg, BoardEncoder(cfg), PlacementDecoder(cfg))
+
+
+def _build_gomoku(**overrides) -> nn.Module:
+    """Gomoku: 15×15 placement (no pass in practice; mask handles it)."""
+    from model.game_network import GameNetwork
+    from model.games.board import BoardConfig, BoardEncoder, PlacementDecoder
+
+    overrides.setdefault("board_h", 15)
+    overrides.setdefault("board_w", 15)
+    overrides.setdefault("piece_channels", 3)
+    overrides.setdefault("board_global_features", 0)
+    overrides.setdefault("n_promotions", 0)
+    cfg = BoardConfig(**overrides)
+    return GameNetwork(cfg, BoardEncoder(cfg), PlacementDecoder(cfg))
+
+
+def _build_shogi(**overrides) -> nn.Module:
+    """Shogi: 9×9 board + pieces in hand (move-or-drop action space)."""
+    from model.game_network import GameNetwork
+    from model.games.shogi import ShogiConfig, ShogiDecoder, ShogiEncoder
+
+    cfg = ShogiConfig(**overrides)
+    return GameNetwork(cfg, ShogiEncoder(cfg), ShogiDecoder(cfg))
+
+
+def _build_lux(**overrides) -> nn.Module:
+    """Lux AI–style: resource grid + units, all units act simultaneously
+    (factored per-unit policy)."""
+    from model.game_network import GameNetwork
+    from model.games.lux import LuxConfig, LuxDecoder, LuxEncoder
+
+    cfg = LuxConfig(**overrides)
+    return GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg))
+
+
 def _build_clash_royale(**overrides) -> nn.Module:
     from model.game_network import GameNetwork
     from model.games.clash_royale import (
@@ -81,6 +132,10 @@ GAME_REGISTRY: Dict[str, Callable[..., nn.Module]] = {
     "generals": _build_generals,
     "chess": _build_chess,
     "go": _build_go,
+    "othello": _build_othello,
+    "gomoku": _build_gomoku,
+    "shogi": _build_shogi,
+    "lux": _build_lux,
     "clash_royale": _build_clash_royale,
     "hearthstone": _build_hearthstone,
     "starcraft": _build_starcraft,
