@@ -1,8 +1,17 @@
-# GamingMaster — Generals.io Neural Network Bot
+# GamingMaster — Multi-Game Neural Network Bot
 
-An AlphaStar-inspired Transformer architecture for [generals.io](https://generals.io) with a TRM (Tiny Recursive Model) pondering core, trained by Imitation Learning (IL) followed by PPO self-play (RL).
+An AlphaStar-inspired Transformer architecture with a TRM (Tiny Recursive Model) pondering core, trained by Imitation Learning (IL) followed by PPO self-play (RL).
 
-Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-pipeline.md) · [known limitations](docs/known-limitations.md)
+The core network is **game-agnostic**: a fixed two-stage trunk (spatiotemporal history encoder + TRM pondering) with pluggable per-game observation encoders and action decoders. [generals.io](https://generals.io) is the fully-trained reference game (data pipeline + RL environment + trained checkpoints); model adapters also exist for chess-like board games, Go-like placement games, Clash Royale, Hearthstone, and StarCraft-style RTS — see [docs/multi-game.md](docs/multi-game.md) and the per-game data/environment survey in [docs/game-data-sources.md](docs/game-data-sources.md).
+
+```python
+from model.games import build_game_network
+
+net = build_game_network("chess", d_model=256)   # generals / chess / go /
+net = build_game_network("go", board_h=9)        # clash_royale / hearthstone / starcraft
+```
+
+Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-pipeline.md) · [multi-game architecture](docs/multi-game.md) · [game data sources](docs/game-data-sources.md) · [known limitations](docs/known-limitations.md)
 
 ## Project Structure
 
@@ -14,12 +23,21 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 │   ├── dataset_seq.py        #   PyTorch Dataset + collate
 │   └── mock/                 #   Mock data generators for testing
 ├── model/                    # Neural network
-│   ├── config.py             #   ModelConfig dataclass
-│   ├── network.py            #   GeneralsNetwork (assembles everything)
+│   ├── config.py             #   ModelConfig dataclass (core config; game configs subclass it)
+│   ├── game_network.py       #   GameNetwork — game-agnostic two-stage core
+│   ├── network.py            #   GeneralsNetwork (generals adapter, legacy API + checkpoints)
 │   ├── losses.py             #   ImitationLoss, RLLoss
 │   ├── rl_utils.py           #   GAE, RolloutBuffer, KL reg, freeze helpers
+│   ├── games/                #   Game adapters (encoder + decoder per game)
+│   │   ├── base.py           #     ObservationEncoder / ActionDecoder interfaces, PointerHead
+│   │   ├── registry.py       #     build_game_network("chess" | "go" | ...)
+│   │   ├── generals.py       #     grid conv encoder + Source/Dir/Split/Pass decoder
+│   │   ├── board.py          #     BoardEncoder + FromToDecoder (chess) / PlacementDecoder (Go)
+│   │   ├── clash_royale.py   #     arena conv + hand tokens + card/placement decoder
+│   │   ├── hearthstone.py    #     entity-slot encoder + typed actor/target decoder
+│   │   └── starcraft.py      #     minimap conv + unit slots + AlphaStar-lite decoder
 │   └── components/           #   Reusable building blocks
-│       ├── encoder.py        #     SpatialEncoder, HistoryEncoder, ResBlock
+│       ├── encoder.py        #     SpatialEncoder, ResBlock
 │       ├── transformer.py    #     SpatiotemporalBlock (attention/recurrent temporal mixer)
 │       ├── recurrence.py     #     GatedRecurrence — fixed-size neural episode memory
 │       ├── trm.py            #     TRM (Tiny Recursive Model) two-state pondering
@@ -42,7 +60,8 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 │   ├── test_audit_fixes.py            # 13 bug-fix regression tests
 │   ├── test_comprehensive_audit.py    # Comprehensive audit tests (all modules)
 │   ├── test_training_e2e.py           # End-to-end training loop tests
-│   └── test_rl.py                     # RL utilities and rollout tests
+│   ├── test_rl.py                     # RL utilities and rollout tests
+│   └── test_games_*.py                # Per-game adapter tests (board/CR/HS/SC + registry)
 └── pyproject.toml
 ```
 
@@ -428,7 +447,7 @@ Every component has been verified against the real replay `asS2S5O_y` (~Hemlix~ 
 | Gradient flow | All parameters receive gradients through every component | ✓ |
 | Training loop | Loss decreases on mock and real data; checkpoint save/load works | ✓ |
 
-Run all tests (144 tests):
+Run all tests (187 tests):
 
 ```bash
 uv run pytest tests/ -q
