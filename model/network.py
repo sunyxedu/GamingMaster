@@ -113,6 +113,20 @@ class GeneralsNetwork(GameNetwork):
             remapped[k] = v
         return remapped
 
+    @classmethod
+    def remap_to_legacy_keys(cls, state_dict: Dict) -> Dict:
+        """Inverse of :meth:`remap_legacy_keys`: rewrite a current-format
+        state dict with pre-refactor key names, for exporting checkpoints
+        to tools pinned to the old layout."""
+        remapped = {}
+        for k, v in state_dict.items():
+            for old, new in cls.LEGACY_KEY_MAP.items():
+                if k.startswith(new):
+                    k = old + k[len(new):]
+                    break
+            remapped[k] = v
+        return remapped
+
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
         return super().load_state_dict(
             self.remap_legacy_keys(dict(state_dict)), strict=strict, assign=assign,

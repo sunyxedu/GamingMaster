@@ -41,8 +41,10 @@ from model.rl_utils import (
     RolloutBuffer,
     compute_policy_kl_rl,
     freeze_encoder,
+    is_legacy_state_dict,
     load_model_state,
     optim_param_groups,
+    optim_state_mismatch,
     unfreeze_all,
 )
 
@@ -716,16 +718,20 @@ def main():
         if "iteration" in rl_ckpt and "optimizer_state" in rl_ckpt:
             # Skip states saved for a different trainable set (e.g. a
             # checkpoint from the frozen phase resumed past the boundary) —
-            # loading them raises inside torch.optim.
+            # loading them raises inside torch.optim. Also skip states saved
+            # before the game-adapter refactor: identical counts but a
+            # different parameter order, which a bare count check misses.
             saved = rl_ckpt["optimizer_state"]
-            n_saved = sum(len(g["params"]) for g in saved["param_groups"])
-            n_cur = sum(len(g["params"]) for g in optimizer.param_groups)
-            if n_saved == n_cur and len(saved["param_groups"]) == len(optimizer.param_groups):
+            saved_model = rl_ckpt.get(
+                "model_state", rl_ckpt.get("model_state_dict", {}))
+            if is_legacy_state_dict(saved_model, model):
+                reason = "pre-refactor checkpoint (parameter order changed)"
+            else:
+                reason = optim_state_mismatch(optimizer, saved)
+            if reason is None:
                 optimizer.load_state_dict(saved)
             elif rank0:
-                print(f"  [warn] optimizer state skipped ({n_saved} saved vs "
-                      f"{n_cur} current params, "
-                      f"{len(saved['param_groups'])} vs {len(optimizer.param_groups)} groups); "
+                print(f"  [warn] optimizer state skipped ({reason}); "
                       f"starting with a fresh optimizer")
 
         # Restore the LR schedule: base LR decayed for the iterations already

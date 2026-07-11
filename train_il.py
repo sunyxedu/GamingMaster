@@ -395,17 +395,22 @@ def main():
         # Only reuse optimizer state from IL checkpoints whose trainable set
         # matches — RL checkpoints also carry optimizer_state, but it targets
         # a different objective and (in the frozen-encoder phase) a parameter
-        # subset, which would crash or mislead AdamW here.
+        # subset, which would crash or mislead AdamW here. Optimizer state is
+        # matched by POSITION, so a checkpoint saved before the game-adapter
+        # refactor (different registration order, same counts) must be
+        # rejected too, not just count mismatches.
         if "optimizer_state" in ckpt:
+            from model.rl_utils import is_legacy_state_dict, optim_state_mismatch
             saved = ckpt["optimizer_state"]
-            n_saved = sum(len(g["params"]) for g in saved["param_groups"])
-            n_cur = sum(len(g["params"]) for g in optimizer.param_groups)
-            if ("epoch" in ckpt and n_saved == n_cur
-                    and len(saved["param_groups"]) == len(optimizer.param_groups)):
+            if is_legacy_state_dict(ckpt.get("model_state", {}), raw_model):
+                reason = "pre-refactor checkpoint (parameter order changed)"
+            else:
+                reason = optim_state_mismatch(optimizer, saved)
+            if "epoch" in ckpt and reason is None:
                 optimizer.load_state_dict(saved)
             elif rank0:
-                print("  [warn] optimizer state skipped (non-IL checkpoint "
-                      "or parameter-set mismatch) — starting fresh")
+                print(f"  [warn] optimizer state skipped "
+                      f"({reason or 'non-IL checkpoint'}) — starting fresh")
         start_step = ckpt.get("step", 0)
         if "epoch" in ckpt:
             if start_step > 0:

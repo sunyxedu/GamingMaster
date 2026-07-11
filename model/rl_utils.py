@@ -299,6 +299,59 @@ def optim_param_groups(model: nn.Module, weight_decay: float) -> List[Dict]:
     return groups
 
 
+def optim_state_mismatch(optimizer, saved: Dict) -> Optional[str]:
+    """Why ``saved`` (an optimizer ``state_dict``) cannot be loaded safely,
+    or ``None`` if it lines up with ``optimizer``'s current parameters.
+
+    ``torch.optim`` matches saved state to parameters purely by POSITION.
+    A checkpoint from a model with a different parameter registration
+    order (e.g. saved before the game-adapter refactor renamed submodules)
+    has identical counts, so a bare count check passes and the load
+    silently attaches Adam moments to the wrong tensors. Comparing the
+    per-position moment shapes catches any reordering between
+    differently-shaped parameters.
+    """
+    saved_groups = saved.get("param_groups", [])
+    if len(saved_groups) != len(optimizer.param_groups):
+        return (f"{len(saved_groups)} saved vs "
+                f"{len(optimizer.param_groups)} current param groups")
+    for gi, (sg, cg) in enumerate(zip(saved_groups, optimizer.param_groups)):
+        if len(sg["params"]) != len(cg["params"]):
+            return (f"group {gi}: {len(sg['params'])} saved vs "
+                    f"{len(cg['params'])} current params")
+        for sid, p in zip(sg["params"], cg["params"]):
+            state = saved.get("state", {}).get(sid)
+            if not state:
+                continue  # parameter never stepped — nothing to misalign
+            for name, v in state.items():
+                if torch.is_tensor(v) and v.dim() > 0 and v.shape != p.shape:
+                    return (f"group {gi}: saved {name} shape {tuple(v.shape)} "
+                            f"!= param shape {tuple(p.shape)} — parameter "
+                            f"order changed since the checkpoint was saved")
+    return None
+
+
+def is_legacy_state_dict(state_dict: Dict, model: nn.Module) -> bool:
+    """True if ``state_dict`` uses pre-refactor key names for ``model``.
+
+    Checks the model class's ``LEGACY_KEY_MAP`` old prefixes; new-format
+    keys never match them (the map is verified idempotent), so this is an
+    exact detector for checkpoints saved before the rename.
+    """
+    legacy_map = getattr(type(model), "LEGACY_KEY_MAP", None) or {}
+    if not legacy_map:
+        return False
+    old_prefixes = tuple(legacy_map)
+
+    def _clean(k: str) -> str:
+        for prefix in ("module.", "_orig_mod."):
+            if k.startswith(prefix):
+                k = k[len(prefix):]
+        return k
+
+    return any(_clean(k).startswith(old_prefixes) for k in state_dict)
+
+
 # ======================================================================
 # Checkpoint loading
 # ======================================================================
@@ -325,7 +378,10 @@ def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint"
 
     # Models that renamed submodules (e.g. GeneralsNetwork's game-adapter
     # refactor) expose LEGACY_KEY_MAP; accept reinit prefixes in either the
-    # old or the new spelling by matching both.
+    # old or the new spelling by expanding each prefix into BOTH spellings —
+    # the checkpoint-side drop must match old-format checkpoints and the
+    # model-side missing filter must match the current (new) key names,
+    # regardless of which spelling the caller used.
     prefixes = tuple(reinit_prefixes)
     legacy_map = getattr(type(model), "LEGACY_KEY_MAP", None) or {}
     if prefixes and legacy_map:
@@ -336,6 +392,10 @@ def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint"
                     extra.append(new + p[len(old):])
                 elif old.startswith(p):
                     extra.append(new)
+                if p.startswith(new):
+                    extra.append(old + p[len(new):])
+                elif new.startswith(p):
+                    extra.append(old)
         prefixes = prefixes + tuple(extra)
 
     cleaned = {_clean(k): v for k, v in state_dict.items()}
@@ -343,8 +403,22 @@ def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint"
         dropped = [k for k in cleaned if k.startswith(prefixes)]
         for k in dropped:
             del cleaned[k]
-        print(f"  [reinit] {ctx}: dropped {len(dropped)} checkpoint keys under "
-              f"{tuple(reinit_prefixes)} — fresh initialization kept")
+        if dropped:
+            print(f"  [reinit] {ctx}: dropped {len(dropped)} checkpoint keys under "
+                  f"{tuple(reinit_prefixes)} — fresh initialization kept")
+        else:
+            # Zero checkpoint matches is legitimate when the module is new
+            # (absent from the checkpoint — fresh init is kept either way),
+            # but a prefix that also matches nothing on the MODEL is a typo
+            # and would otherwise be silently ignored.
+            if not any(k.startswith(prefixes) for k in model.state_dict()):
+                raise ValueError(
+                    f"{ctx}: reinit prefixes {tuple(reinit_prefixes)} match no "
+                    f"checkpoint key and no model key — typo, or a module "
+                    f"disabled by the model config?"
+                )
+            print(f"  [reinit] {ctx}: no checkpoint keys under "
+                  f"{tuple(reinit_prefixes)} — module keeps fresh initialization")
     missing, unexpected = model.load_state_dict(cleaned, strict=False)
     if prefixes:
         missing = [k for k in missing if not k.startswith(prefixes)]
