@@ -31,7 +31,10 @@ export PYTHONUNBUFFERED=1
 # Recurrent-mode memory (measured, T=1000): B=6 OOMs a 141GB card; B=3
 # peaks at 134.5/139.8 GiB — no headroom for DDP buffers + variable
 # batch shapes. B=2 (~90 GiB peak) is the safe production setting.
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # live logs (unbuffered stdout)
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# Node-local tmp for multiprocessing scratch: on NFS, deleting worker temp
+# dirs hits ".nfs* Device or resource busy" tracebacks at every teardown.
+export TMPDIR=/tmp   # live logs (unbuffered stdout)
 
 # Uncomment if cross-node NCCL misbehaves (worked around IB issues before):
 # export NCCL_IB_DISABLE=1

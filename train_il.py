@@ -374,6 +374,10 @@ def main():
         collate_fn=collate_variable_length_sequences,
         num_workers=args.num_workers,
         pin_memory=(device.type == "cuda"),
+        # Keep workers alive across epochs: skips per-epoch respawn AND the
+        # multiprocessing temp-dir teardown that spams harmless NFS
+        # "Device or resource busy" tracebacks at every epoch boundary.
+        persistent_workers=(args.num_workers > 0),
     )
 
     os.makedirs(args.output_dir, exist_ok=True)

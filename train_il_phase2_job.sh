@@ -34,6 +34,9 @@ export PYTHONUNBUFFERED=1
 # peaks at 134.5/139.8 GiB — no headroom for DDP buffers + variable
 # batch shapes. B=2 (~90 GiB peak) is the safe production setting.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# Node-local tmp for multiprocessing scratch: on NFS, deleting worker temp
+# dirs hits ".nfs* Device or resource busy" tracebacks at every teardown.
+export TMPDIR=/tmp
 
 # Fresh start (--finetune_from phase-1 CKPT) and resume (--resume phase-2
 # checkpoint) are mutually exclusive in train_il.py: a resumed run must keep
