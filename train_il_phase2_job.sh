@@ -7,8 +7,10 @@
 #SBATCH --time=2-00:00:00
 #SBATCH --output=slurm-%j.out
 
-# Phase 2 IL — fine-tune the phase-1 floor on the HIGH-END players only, to
-# pull the policy toward strong play (memory/dynamics were learned in phase 1).
+# Phase 2 IL — fine-tune the phase-1 floor on ALL human players (everything
+# except the Human.exe bot bulk), to pull the policy toward human play
+# (memory/dynamics were learned in phase 1). The *-val splits are held out
+# for evaluation and deliberately NOT trained on.
 # --finetune_from loads phase-1 WEIGHTS + architecture but starts a fresh run
 # (epoch 1, new optimizer/schedule). Point CKPT at the best phase-1 checkpoint:
 #
@@ -55,11 +57,15 @@ echo "GPUs ${WORLD} | micro ${MICRO} x accum ${ACCUM} = effective $(( MICRO * WO
 HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
 TRAIN_ROOT=/scratch/$USER/gaming-master/data-v2/training
 DATA_DIRS=(
-    "$TRAIN_ROOT/bike9800"
     "$TRAIN_ROOT/Average Joe"
-    "$TRAIN_ROOT/d3st1ny"
+    "$TRAIN_ROOT/Hermione Granger"
     "$TRAIN_ROOT/L_7d_gae90_30k_ema"
+    "$TRAIN_ROOT/Sinyth"
+    "$TRAIN_ROOT/YiShengYiShi"
+    "$TRAIN_ROOT/asdvlaksudhiouwenf"
+    "$TRAIN_ROOT/bike9800"
     "$TRAIN_ROOT/cute_x1aoyu_ovo"
+    "$TRAIN_ROOT/d3st1ny"
 )
 
 srun apptainer exec --nv /scratch/$USER/pytorch.sif \
