@@ -15,6 +15,13 @@
 #   CKPT=/scratch/$USER/gaming-master/checkpoints/il_phase1/checkpoint_epoch40.pt \
 #       sbatch train_il_phase2_job.sh
 #
+# Resuming an INTERRUPTED phase-2 run (any GPU count — ACCUM keeps the
+# effective batch at TARGET_EFF; the checkpoint carries optimizer + LR
+# schedule; CKPT is not needed):
+#
+#   RESUME=/scratch/$USER/gaming-master/checkpoints/il_phase2/checkpoint_epochN.pt \
+#       sbatch train_il_phase2_job.sh
+#
 # Small high-end set → smaller effective batch (more optimizer steps).
 
 export PYTHONWARNINGS="ignore::UserWarning"
@@ -26,7 +33,16 @@ export PYTHONUNBUFFERED=1
 # batch shapes. B=2 (~90 GiB peak) is the safe production setting.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-: "${CKPT:?set CKPT=/path/to/phase1 checkpoint .pt}"
+# Fresh start (--finetune_from phase-1 CKPT) and resume (--resume phase-2
+# checkpoint) are mutually exclusive in train_il.py: a resumed run must keep
+# its own optimizer/schedule, not re-seed from phase 1. CKPT is only needed
+# for a fresh start.
+if [ -n "${RESUME:-}" ]; then
+    INIT_FLAGS=(--resume "$RESUME")
+else
+    : "${CKPT:?set CKPT=/path/to/phase1 checkpoint .pt}"
+    INIT_FLAGS=(--finetune_from "$CKPT")
+fi
 
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 MICRO=${MICRO:-2}
@@ -35,12 +51,6 @@ WORLD=$(( SLURM_NNODES * GPUS_PER_NODE ))
 ACCUM=$(( TARGET_EFF / (MICRO * WORLD) ))
 [ "$ACCUM" -lt 1 ] && ACCUM=1
 echo "GPUs ${WORLD} | micro ${MICRO} x accum ${ACCUM} = effective $(( MICRO * WORLD * ACCUM ))"
-
-# Optional resume: RESUME=/path/to/checkpoint.pt sbatch ... (any GPU count —
-# ACCUM keeps the effective batch at TARGET_EFF, so the trajectory continues
-# identically; the checkpoint carries optimizer + LR-schedule position)
-RESUME_FLAG=""
-[ -n "${RESUME:-}" ] && RESUME_FLAG="--resume $RESUME"
 
 HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
 TRAIN_ROOT=/scratch/$USER/gaming-master/data-v2/training
@@ -58,9 +68,8 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --rdzv_endpoint=$HEAD_NODE:29500 \
         ~/GamingMaster/train_il.py \
         --data_dir "${DATA_DIRS[@]}" \
-        $RESUME_FLAG \
+        "${INIT_FLAGS[@]}" \
         --output_dir /scratch/$USER/gaming-master/checkpoints/il_phase2 \
-        --finetune_from "$CKPT" \
         --world_model_weight 0.2 \
         --tf_start 0.2 --tf_end 0.0 \
         --batch_size $MICRO --grad_accum $ACCUM \
