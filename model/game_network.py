@@ -174,6 +174,12 @@ class GameNetwork(nn.Module):
         tokens = self.obs_encoder(obs, frame_mask)
         B, T, S_game, _ = tokens.shape
         BT = B * T
+        if S_game != self.obs_encoder.n_tokens:
+            raise RuntimeError(
+                f"{type(self.obs_encoder).__name__} produced {S_game} tokens "
+                f"but declares n_tokens={self.obs_encoder.n_tokens}; the "
+                f"positional embedding and the TRM q_halt index depend on it"
+            )
 
         # 2. Decision tokens
         hl = self.hl_token.expand(B, T, -1, -1)
@@ -239,6 +245,12 @@ class GameNetwork(nn.Module):
 
         tokens = self.obs_encoder.encode_step(obs)    # [B, S_game, d]
         B, S_game, _ = tokens.shape
+        if S_game != self.obs_encoder.n_tokens:
+            raise RuntimeError(
+                f"{type(self.obs_encoder).__name__} produced {S_game} tokens "
+                f"but declares n_tokens={self.obs_encoder.n_tokens}; the "
+                f"positional embedding and the TRM q_halt index depend on it"
+            )
 
         tokens = torch.cat([tokens, self.hl_token.expand(B, -1, -1),
                             self.ll_token.expand(B, -1, -1)], dim=1)

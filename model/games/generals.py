@@ -21,7 +21,7 @@ from model.components.encoder import SpatialEncoder
 from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead
 from model.components.transformer import _sinusoidal_pe
 from model.config import ModelConfig
-from model.games.base import ActionDecoder, ObservationEncoder
+from model.games.base import ActionDecoder, ObservationEncoder, masked_sample
 
 
 class GeneralsEncoder(ObservationEncoder):
@@ -148,22 +148,11 @@ class GeneralsDecoder(ActionDecoder):
 
         ``legal_mask`` (flattened-able to [BT, N]) restricts sampling when
         given; without it the model may select any position (RL mode).
+        Delegates to the shared :func:`masked_sample` guard (all-masked-row
+        fallback + NaN-from-bf16 uniform fallback).
         """
-        with torch.no_grad():
-            logits_safe = source_logits.detach().clone().float()
-            if legal_mask is not None:
-                lm = legal_mask.reshape(BT, N)
-                logits_safe = logits_safe.masked_fill(~lm, float("-inf"))
-                all_masked = logits_safe.isinf() & (logits_safe < 0)
-                bad_rows = all_masked.all(dim=-1)
-                if bad_rows.any():
-                    logits_safe[bad_rows, 0] = 0.0
-            # Handle NaN from bf16 overflow: fall back to uniform sampling
-            nan_rows = logits_safe.isnan().any(dim=-1)
-            if nan_rows.any():
-                logits_safe[nan_rows] = 0.0
-            probs = F.softmax(logits_safe, dim=-1)
-            return torch.multinomial(probs, 1).squeeze(-1)
+        mask = legal_mask.reshape(BT, N) if legal_mask is not None else None
+        return masked_sample(source_logits, mask)
 
     # ------------------------------------------------------------------
     # Decode: tokens → logits
