@@ -183,8 +183,8 @@ training memory at the default model size in bf16 is roughly **11–14 GB per
 sequence** (ST checkpoint boundaries + TRM carry states + encoder conv
 activations + transient scan buffers), i.e. ~45–55 GB at `--batch_size 4`.
 On an H200 (141 GB) that allows **8–12 sequences per GPU**; scale the
-*effective* batch with `--grad_accum` (DDP allreduce fires once per
-optimizer step via `no_sync`):
+*effective* batch with `--grad_accum` (the manual gradient allreduce fires
+once per optimizer step):
 
 ```
 effective batch = batch_size × world_size × grad_accum
@@ -207,8 +207,28 @@ on the target hardware before committing to a batch size.
 
 ## Older checkpoints
 
-Checkpoints trained before the 2026-07 audit fixes load cleanly (no key
-changes), but two head semantics changed underneath them:
+**Pre-refactor key names.** The multi-game refactor moved the generals
+modules into `obs_encoder.*` / `action_decoder.*`; checkpoints saved before
+it use the old flat names (`spatial_encoder.*`, `source_head.*`, …).
+`GeneralsNetwork.load_state_dict` remaps old keys automatically
+(`LEGACY_KEY_MAP`), and every loader routes through it — both trainers,
+`play_model.py`, `simulate_model.py` — so old checkpoints keep working with
+`--finetune_from`, `--resume`, and the evaluation tools
+(`tests/test_legacy_checkpoint.py` pins this). Two caveats:
+
+- **Optimizer state does not survive the rename.** torch matches optimizer
+  state to parameters by position and the registration order changed, so
+  `--resume` of a pre-refactor checkpoint skips its `optimizer_state` (with
+  a warning) and starts a fresh optimizer; weights still load exactly. The
+  LR-scheduler position is still restored — pass `--reset_scheduler` if you
+  want a fresh schedule too. For phase-style fine-tuning use
+  `--finetune_from`, which never reuses optimizer or scheduler state.
+- **New checkpoints are one-way.** Post-refactor checkpoints use the new
+  names and pre-refactor code fails loudly on them. To export one for old
+  tools, rewrite it with `GeneralsNetwork.remap_to_legacy_keys`.
+
+Checkpoints trained before the 2026-07 audit fixes additionally have two
+head semantics changed underneath them:
 
 - `q_halt` is now read from the HL decision token instead of the board's
   top-left tile — an old checkpoint's q-gated ACT loop is uncalibrated.
