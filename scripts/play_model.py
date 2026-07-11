@@ -171,7 +171,6 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None,
         max_turn = min(max_turn, max_steps)
 
     move_idx = 0
-    hidden = None
     st_cache = None
     frames = []
     pending_model_move = None
@@ -212,7 +211,7 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None,
         with torch.no_grad():
             out = model.step(grid_t, globals_t,
                              legal_mask=legal_t if use_mask else None,
-                             hidden=hidden, st_cache=st_cache, step_idx=turn,
+                             st_cache=st_cache, step_idx=turn,
                              act_steps=act_steps)
 
             # Direction masking: re-sample direction with invalid dirs masked out
@@ -228,7 +227,6 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None,
                     dir_probs = F.softmax(dir_logits, dim=-1)
                     out["action_direction"] = torch.multinomial(dir_probs, 1).squeeze(-1)
 
-        hidden = out.get("hidden")
         st_cache = out.get("st_cache")
 
         # ── 7. Decode model's move → pending for next turn ──
