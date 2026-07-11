@@ -13,6 +13,7 @@ import math
 from typing import Dict, List, Optional, Tuple
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -269,6 +270,54 @@ def compute_policy_kl_rl(
         kl = kl.mean()
 
     return kl
+
+
+# ======================================================================
+# Distributed gradient sync (manual DDP replacement)
+# ======================================================================
+
+def sync_gradients(model: nn.Module, world_size: int) -> None:
+    """All-reduce gradients across ranks with a RANK-INVARIANT collective
+    schedule.
+
+    The naive per-parameter loop guarded by ``p.grad is not None`` posts a
+    different number of collectives on a rank whose autograd left some
+    parameter without a gradient. NCCL pairs collectives by order, so the
+    streams shift: same-size pairs complete with silently corrupted data
+    and the first size mismatch deadlocks until the 600 s watchdog kills
+    the job. (Observed in production: one rank missing the two TRM q_head
+    gradients for a single accumulation window desynced a 4-GPU phase-2
+    run at NCCL work #648.)
+
+    Schedule invariance: a fixed-size presence mask is MAX-reduced first,
+    so every rank agrees which parameters participate this round. A rank
+    missing a gradient for a participating parameter contributes zeros —
+    and prints which ones, since that asymmetry is an autograd anomaly
+    worth investigating. Parameters with no gradient on ANY rank are
+    skipped by all ranks alike, preserving the previous semantics (heads
+    untouched by the objective are never allreduced, never stepped).
+    """
+    named = list(model.named_parameters())
+    device = named[0][1].device
+    local = torch.tensor([p.grad is not None for _, p in named],
+                         dtype=torch.float32, device=device)
+    participating = local.clone()
+    dist.all_reduce(participating, op=dist.ReduceOp.MAX)
+
+    gap = (participating - local) > 0
+    if bool(gap.any()):
+        names = [named[i][0] for i in gap.nonzero(as_tuple=True)[0].tolist()]
+        print(f"  [grad-sync] rank {dist.get_rank()}: no local gradient for "
+              f"{len(names)} participating parameter(s), contributing zeros "
+              f"— autograd anomaly, e.g. {names[:6]}", flush=True)
+
+    for has_grad, (_, p) in zip(participating.tolist(), named):
+        if not has_grad:
+            continue
+        if p.grad is None:
+            p.grad = torch.zeros_like(p)
+        dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
+        p.grad.div_(world_size)
 
 
 # ======================================================================

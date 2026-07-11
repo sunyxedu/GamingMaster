@@ -24,7 +24,7 @@ from data_processing.dataset_seq import SeqReplayDataset, collate_variable_lengt
 from model.config import ModelConfig
 from model.losses import ImitationLoss, next_obs_loss
 from model.network import GeneralsNetwork
-from model.rl_utils import load_model_state
+from model.rl_utils import load_model_state, sync_gradients
 
 
 def parse_args():
@@ -186,12 +186,13 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                 if distributed:
                     # replaces DDP's bucketed allreduce; grads are averaged so
                     # every rank steps identically (results are bitwise-equal
-                    # across ranks, keeping the NaN drop below collective)
-                    world = dist.get_world_size()
-                    for p in model.parameters():
-                        if p.grad is not None:
-                            dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
-                            p.grad.div_(world)
+                    # across ranks, keeping the NaN drop below collective).
+                    # sync_gradients keeps the collective schedule identical
+                    # on every rank even if autograd left a parameter without
+                    # a gradient on one of them — a bare `grad is not None`
+                    # loop desynced the NCCL stream and deadlocked a phase-2
+                    # run when one rank missed the q_head grads for a window.
+                    sync_gradients(model, dist.get_world_size())
                 if args.grad_clip > 0:
                     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
                 else:

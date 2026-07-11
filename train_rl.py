@@ -45,6 +45,7 @@ from model.rl_utils import (
     load_model_state,
     optim_param_groups,
     optim_state_mismatch,
+    sync_gradients,
     unfreeze_all,
 )
 
@@ -330,18 +331,6 @@ def collect_selfplay_episode(
     )
 
     return buffer, replay_log, reward_totals
-
-
-# ======================================================================
-# Gradient sync (replaces DDP)
-# ======================================================================
-
-def sync_gradients(model: torch.nn.Module, world_size: int) -> None:
-    """All-reduce gradients across GPUs (manual DDP replacement)."""
-    for param in model.parameters():
-        if param.grad is not None:
-            dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
-            param.grad.div_(world_size)
 
 
 # ======================================================================

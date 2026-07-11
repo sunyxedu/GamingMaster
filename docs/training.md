@@ -79,6 +79,18 @@ SDPA). Skipping a bad batch (non-finite loss) is decided by a collective vote
 across ranks — a rank-local skip would desynchronize gradient allreduce and
 silently corrupt every later step of the epoch.
 
+The gradient sync itself (`model/rl_utils.py::sync_gradients`, shared with
+`train_rl.py`) keeps the collective schedule rank-invariant: a fixed-size
+presence mask is MAX-reduced first so every rank agrees which parameters
+participate; a rank whose autograd left a participating parameter without a
+gradient contributes zeros and prints a `[grad-sync]` warning naming the
+parameters. A bare `if p.grad is not None` loop shifted one rank's NCCL
+stream when it missed the q_head gradients for one accumulation window —
+same-size pairs completed with silently corrupted data, the first size
+mismatch deadlocked into the 600 s watchdog (`tests/test_grad_sync.py`
+reproduces this on gloo). Parameters with gradients on NO rank are skipped
+by all ranks alike, so heads untouched by an objective are never stepped.
+
 ## RL self-play
 
 ```bash
