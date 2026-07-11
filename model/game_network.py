@@ -134,6 +134,15 @@ class GameNetwork(nn.Module):
             with torch.no_grad():
                 for _ in range(steps - 1):
                     _, _, carry = self.trm(x, carry)
+            # bf16 autocast caches each weight's half-precision cast on
+            # first use — here that first use happens under no_grad, so the
+            # cached copy carries no graph edge back to the fp32 weight.
+            # torch 2.5 reuses it in the grad-enabled step below, silently
+            # severing q_head's weight gradient (q_halt still requires grad
+            # via its input; checkpointed modules re-cast during backward
+            # recompute and are immune). Drop the poisoned entries so the
+            # final step re-casts with autograd tracking.
+            torch.clear_autocast_cache()
         z_H, q_halt, _ = self.trm(x, carry)
         return z_H, q_halt
 

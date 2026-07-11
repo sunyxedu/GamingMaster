@@ -167,3 +167,41 @@ def test_forward_accepts_conforming_encoder():
         out = net(obs, act_steps=1)
     assert out["source_logits"].shape == (1, 2, 625)
     assert out["value"].shape == (1, 2)
+
+
+# ======================================================================
+# q_head gradient contract across ACT depths (autocast cache poisoning)
+# ======================================================================
+
+@pytest.mark.parametrize("act_steps", [1, 2, 5])
+@pytest.mark.parametrize("use_autocast", [False, True])
+def test_qhead_receives_gradient_at_every_act_depth(act_steps, use_autocast):
+    """Every parameter — q_head above all — must receive a gradient at
+    every TRM ACT depth, with and without bf16 autocast.
+
+    On torch 2.5.0a0 (NGC 24.09) the autocast weight-cast cache was
+    poisoned by the no_grad ponder loop when act_steps > 1: the cached
+    bf16 copy of q_head.weight carried no graph edge, q_halt still
+    required grad via its input, and q_head.grad came back None — which
+    desynced the manual NCCL gradient sync in production.
+    ``_trm_ponder`` now clears the autocast cache after the no_grad loop.
+    """
+    torch.manual_seed(0)
+    cfg = ModelConfig(**SMALL_CFG, temporal_mixer="recurrent")
+    net = GameNetwork(cfg, GeneralsEncoder(cfg), GeneralsDecoder(cfg))
+    net.train()
+    obs = {"grid_seq": torch.randn(1, 3, 12, 25, 25),
+           "globals_seq": torch.randn(1, 3, 4)}
+
+    ctx = torch.amp.autocast("cpu", dtype=torch.bfloat16, enabled=use_autocast)
+    with ctx:
+        out = net(obs, act_steps=act_steps)
+        # Touch every differentiable output, as the real loss does — heads
+        # excluded from the loss legitimately have no gradient.
+        loss = sum(v.float().sum() for v in out.values()
+                   if torch.is_tensor(v) and v.requires_grad)
+    loss.backward()
+
+    assert out["q_halt"].requires_grad
+    missing = [n for n, p in net.named_parameters() if p.grad is None]
+    assert not missing, f"act_steps={act_steps} autocast={use_autocast}: {missing}"
