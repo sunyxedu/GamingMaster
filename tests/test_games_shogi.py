@@ -318,3 +318,137 @@ def test_il_loss_unlabeled_mode_frames():
     out = model.action_decoder.il_loss(pred, tgt, torch.ones(B, T, dtype=torch.bool))
     assert torch.isfinite(out["loss"])
     assert out["loss"].item() == pytest.approx(0.0, abs=1e-6)
+
+
+# ======================================================================
+# 7. il_loss: branch supervision is gated on the TRUE mode label only
+# ======================================================================
+#
+# No branch logit conditions on the mode (decode always evaluates both
+# branches), so a frame's branch heads must be supervised whenever its
+# ground-truth mode is labeled — even when the mode head's own argmax is
+# wrong on EVERY frame.  The old `* mode_ok` gating on move_w / drop_w
+# would zero the true-mode branch out entirely here, so these tests fail
+# if it is ever reintroduced.
+
+def head_has_grad(head: torch.nn.Module) -> bool:
+    return any(
+        p.grad is not None and p.grad.abs().sum() > 0 for p in head.parameters()
+    )
+
+
+def forced_pred(model: GameNetwork, cfg: ShogiConfig, tgt: dict) -> dict:
+    """Forward pass with all conditioning teacher-forced from tgt, so the
+    downstream chain weights (to_w, promo_w, drop_to_w) are fully on."""
+    labels = {
+        "dropped": tgt["dropped"],
+        "from_idx": tgt["from_idx"],
+        "to_idx": tgt["to_idx"],
+        "piece_idx": tgt["piece_idx"],
+    }
+    return model(make_obs(cfg, *tgt["dropped"].shape), labels=labels)
+
+
+def test_il_loss_move_supervision_independent_of_mode_head():
+    """All-move batch, mode head confidently (and wrongly) says drop on
+    every frame: the move branch must still be fully supervised."""
+    torch.manual_seed(7)
+    cfg = make_cfg()
+    model = build(cfg)
+    model.train()
+    B, T = 2, 3
+    tgt = make_targets(B, T)
+    tgt["dropped"] = torch.zeros(B, T, dtype=torch.long)
+    pred = forced_pred(model, cfg, tgt)
+    pred["mode_logits"] = torch.full((B, T), 8.0, requires_grad=True)
+
+    out = model.action_decoder.il_loss(pred, tgt, torch.ones(B, T, dtype=torch.bool))
+    assert out["mode_acc"].item() == 0.0  # mode argmax contradicts every label
+
+    # true-mode branch supervised despite the wrong mode head
+    assert out["from_loss"].item() > 0.0
+    assert out["to_loss"].item() > 0.0
+    assert out["promo_loss"].item() > 0.0
+
+    out["loss"].backward()
+    dec = model.action_decoder
+    for name, head in [
+        ("from_head", dec.from_head),
+        ("to_head", dec.to_head),
+        ("promo_head", dec.promo_head),
+    ]:
+        assert head_has_grad(head), f"no gradient reached {name}"
+    for name, head in [
+        ("piece_head", dec.piece_head),
+        ("drop_to_head", dec.drop_to_head),
+    ]:
+        assert not head_has_grad(head), f"unexpected gradient reached {name}"
+
+
+def test_il_loss_drop_supervision_independent_of_mode_head():
+    """All-drop batch, mode head confidently (and wrongly) says move on
+    every frame: the drop branch must still be fully supervised."""
+    torch.manual_seed(8)
+    cfg = make_cfg()
+    model = build(cfg)
+    model.train()
+    B, T = 2, 3
+    tgt = make_targets(B, T)
+    tgt["dropped"] = torch.ones(B, T, dtype=torch.long)
+    pred = forced_pred(model, cfg, tgt)
+    pred["mode_logits"] = torch.full((B, T), -8.0, requires_grad=True)
+
+    out = model.action_decoder.il_loss(pred, tgt, torch.ones(B, T, dtype=torch.bool))
+    assert out["mode_acc"].item() == 0.0  # mode argmax contradicts every label
+
+    # true-mode branch supervised despite the wrong mode head
+    assert out["piece_loss"].item() > 0.0
+    assert out["drop_to_loss"].item() > 0.0
+
+    out["loss"].backward()
+    dec = model.action_decoder
+    for name, head in [
+        ("piece_head", dec.piece_head),
+        ("drop_to_head", dec.drop_to_head),
+    ]:
+        assert head_has_grad(head), f"no gradient reached {name}"
+    for name, head in [
+        ("from_head", dec.from_head),
+        ("to_head", dec.to_head),
+        ("promo_head", dec.promo_head),
+    ]:
+        assert not head_has_grad(head), f"unexpected gradient reached {name}"
+
+
+def test_il_loss_single_mode_batch_denominators():
+    """Single-mode batches pin the clamp(min=1) normalization: the absent
+    branch's losses are exactly 0 (not NaN from a 0/0), every metric stays
+    finite, and the present branch keeps its full weight."""
+    torch.manual_seed(9)
+    cfg = make_cfg()
+    model = build(cfg)
+    model.train()
+    B, T = 2, 3
+    tgt = make_targets(B, T)
+    tgt["dropped"] = torch.zeros(B, T, dtype=torch.long)
+    pred = forced_pred(model, cfg, tgt)
+    seq_mask = torch.ones(B, T, dtype=torch.bool)
+
+    all_move = model.action_decoder.il_loss(pred, tgt, seq_mask)
+    tgt["dropped"] = torch.ones(B, T, dtype=torch.long)
+    all_drop = model.action_decoder.il_loss(pred, tgt, seq_mask)
+
+    for out in (all_move, all_drop):
+        assert torch.isfinite(out["loss"])
+        for v in out.values():
+            assert torch.isfinite(v)
+
+    # all-move batch: drop branch contributes exactly nothing …
+    assert all_move["piece_loss"].item() == 0.0
+    assert all_move["drop_to_loss"].item() == 0.0
+    assert all_move["from_loss"].item() > 0.0
+    # … and vice versa
+    assert all_drop["from_loss"].item() == 0.0
+    assert all_drop["to_loss"].item() == 0.0
+    assert all_drop["promo_loss"].item() == 0.0
+    assert all_drop["piece_loss"].item() > 0.0
