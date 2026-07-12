@@ -404,6 +404,20 @@ def _discard_calls(events: List[Dict], i: int, discarder: int) -> Dict[int, Tupl
     return calls
 
 
+def _apply_bookkeeping(st: KyokuState, ev: Dict) -> bool:
+    """Apply a bookkeeping event (kan-dora reveal / riichi acceptance);
+    False if ``ev`` is not one."""
+    t = ev["type"]
+    if t == "dora":
+        st.dora_markers.append(tile_kind(ev["dora_marker"]))
+    elif t == "reach_accepted":
+        st.scores[ev["actor"]] -= 1000
+        st.kyotaku += 1
+    else:
+        return False
+    return True
+
+
 def convert_game(events: List[Dict], name: str = "",
                  min_frames: int = 1) -> List[Dict]:
     """One mjai event stream → up to 4 samples (one per seat).
@@ -426,7 +440,23 @@ def convert_game(events: List[Dict], name: str = "",
 
     st: Optional[KyokuState] = None
     n_kyoku = 0
+    consumed = set()   # indices of bookkeeping events applied early
+
+    def apply_interleaved(i: int) -> None:
+        """Apply the dora / reach_accepted events sitting between
+        ``events[i]`` and the decision they precede, so frames emitted
+        at ``events[i]`` show what the decider actually saw (stream
+        order is ground truth for observability).  Marking them consumed
+        keeps the main loop from applying them again — reach_accepted
+        moves 1000 points, so a double-apply would corrupt scores."""
+        j = i + 1
+        while j < len(events) and _apply_bookkeeping(st, events[j]):
+            consumed.add(j)
+            j += 1
+
     for i, ev in enumerate(events):
+        if i in consumed:
+            continue
         t = ev["type"]
         if t == "start_kyoku":
             st = KyokuState(ev)
@@ -438,12 +468,14 @@ def convert_game(events: List[Dict], name: str = "",
         if t == "tsumo":
             a = ev["actor"]
             drawn = st.draw(a, ev["pai"])
+            apply_interleaved(i)
             label = _own_turn_label(events, i, a)
             if label is not None:
                 emit(a, label, drawn, own_turn=True)
         elif t == "dahai":
             a = ev["actor"]
             k = st.discard(a, ev["pai"])
+            apply_interleaved(i)
             calls = _discard_calls(events, i, a)
             for rel in (1, 2, 3):
                 s = (a + rel) % 4
@@ -469,16 +501,13 @@ def convert_game(events: List[Dict], name: str = "",
             st.kakan(ev)
         elif t == "reach":
             st.riichi_pending[ev["actor"]] = True
-        elif t == "reach_accepted":
-            st.scores[ev["actor"]] -= 1000
-            st.kyotaku += 1
+        elif t in ("reach_accepted", "dora"):
+            _apply_bookkeeping(st, ev)   # not consumed by a decision site
         elif t == "hora":
             st.scores = [s0 + d for s0, d in zip(st.scores, ev.get("deltas", [0] * 4))]
             st.kyotaku = 0
         elif t == "ryukyoku":
             st.scores = [s0 + d for s0, d in zip(st.scores, ev.get("deltas", [0] * 4))]
-        elif t == "dora":
-            st.dora_markers.append(tile_kind(ev["dora_marker"]))
         # start_game / end_kyoku / end_game: nothing to do
 
     if st is None or n_kyoku == 0:

@@ -442,6 +442,121 @@ def test_own_turn_label_skips_kan_dora_reveal():
 
 
 # ----------------------------------------------------------------------
+# 7c. rescued frames see interleaved bookkeeping (observation fidelity)
+# ----------------------------------------------------------------------
+
+# kakan → tsumo → dora → dahai (real-log order, e.g. fixture
+# 2009122005gm): the kan-dora reveal precedes the post-kan discard.
+KANDORA_GAME = [
+    {"type": "start_game", "names": ["A", "B", "C", "D"]},
+    {"type": "start_kyoku", "bakaze": "E", "dora_marker": "1m", "kyoku": 1,
+     "honba": 0, "kyotaku": 0, "oya": 0, "scores": [25000] * 4,
+     "tehais": [
+         ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "1p", "1p", "E", "P"],
+         ["1s", "2s", "3s", "4s", "5s", "6s", "7s", "8s", "9s", "S", "S", "C", "C"],
+         ["2m", "3m", "4m", "6m", "7m", "8m", "2p", "5p", "8p", "2s", "W", "F", "P"],
+         ["5p", "6p", "7p", "9p", "9p", "1s", "3s", "6s", "W", "N", "F", "C", "S"],
+     ]},
+    {"type": "tsumo", "actor": 0, "pai": "2p"},
+    {"type": "kakan", "actor": 0, "pai": "E", "consumed": ["E", "E", "E"]},
+    {"type": "tsumo", "actor": 0, "pai": "3p"},
+    {"type": "dora", "dora_marker": "5m"},
+    {"type": "dahai", "actor": 0, "pai": "3p", "tsumogiri": True},
+    {"type": "tsumo", "actor": 1, "pai": "W"},
+    {"type": "dahai", "actor": 1, "pai": "W", "tsumogiri": True},
+    {"type": "tsumo", "actor": 2, "pai": "N"},
+    {"type": "dahai", "actor": 2, "pai": "N", "tsumogiri": True},
+    {"type": "tsumo", "actor": 3, "pai": "F"},
+    {"type": "dahai", "actor": 3, "pai": "F", "tsumogiri": True},
+    {"type": "tsumo", "actor": 0, "pai": "4p"},
+    {"type": "dahai", "actor": 0, "pai": "4p", "tsumogiri": True},
+    {"type": "ryukyoku", "deltas": [0, 0, 0, 0]},
+    {"type": "end_kyoku"},
+    {"type": "end_game"},
+]
+
+# reach → dahai → reach_accepted → pon: the acceptance precedes the
+# caller's decision, so the caller sees the paid riichi stick.
+RIICHI_PON_GAME = [
+    {"type": "start_game", "names": ["A", "B", "C", "D"]},
+    {"type": "start_kyoku", "bakaze": "E", "dora_marker": "1m", "kyoku": 1,
+     "honba": 0, "kyotaku": 0, "oya": 0, "scores": [25000] * 4,
+     "tehais": [
+         ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "1s", "2s", "3s", "S"],
+         ["3p", "4p", "5p", "6p", "7p", "8p", "1p", "1p", "4s", "5s", "6s", "W", "W"],
+         ["3p", "3p", "2m", "2m", "6m", "6m", "7s", "8s", "9s", "N", "N", "F", "F"],
+         ["1m", "9m", "1p", "9p", "1s", "9s", "E", "E", "S", "W", "N", "F", "C"],
+     ]},
+    {"type": "tsumo", "actor": 0, "pai": "P"},
+    {"type": "dahai", "actor": 0, "pai": "P", "tsumogiri": True},
+    {"type": "tsumo", "actor": 1, "pai": "C"},
+    {"type": "reach", "actor": 1},
+    {"type": "dahai", "actor": 1, "pai": "3p", "tsumogiri": False},
+    {"type": "reach_accepted", "actor": 1},
+    {"type": "pon", "actor": 2, "target": 1, "pai": "3p", "consumed": ["3p", "3p"]},
+    {"type": "dahai", "actor": 2, "pai": "F", "tsumogiri": False},
+    {"type": "tsumo", "actor": 3, "pai": "W"},
+    {"type": "dahai", "actor": 3, "pai": "W", "tsumogiri": True},
+    {"type": "ryukyoku", "deltas": [0, 0, 0, 0]},
+    {"type": "end_kyoku"},
+    {"type": "end_game"},
+]
+
+
+def test_post_kan_frame_sees_new_dora_marker():
+    """The rescued post-kan discard frame must include the kan-dora
+    marker revealed between the replacement tsumo and the dahai — and
+    the marker must not be appended twice when the main loop passes the
+    dora event."""
+    by_seat = {s["meta"]["seat"]: s for s in convert_game(KANDORA_GAME)}
+    s0 = by_seat[0]
+    assert s0["tgt"]["action_type"].tolist() == [
+        ACTION_KAN, ACTION_DAHAI, ACTION_DAHAI]
+    assert s0["tgt"]["tile_idx"].tolist() == [
+        TILE_KIND["E"], TILE_KIND["3p"], TILE_KIND["4p"]]
+    tiles, table = s0["obs"]["tiles_seq"], s0["obs"]["table_seq"]
+    assert table[0, 8] == pytest.approx(1 / 5)   # kan decision: pre-reveal
+    assert table[1, 8] == pytest.approx(2 / 5)   # post-kan discard sees it
+    assert tiles[1, TILE_KIND["6m"], 11] == 1.0  # 5m marker → 6m dora live
+    assert table[2, 8] == pytest.approx(2 / 5)   # next frame: no re-apply
+
+
+def test_reaction_frame_sees_accepted_riichi():
+    """A call decision on a riichi discard follows reach_accepted in the
+    stream: the caller's frame must show the declarer at score − 1000
+    with the stick on the table; the declarer's own riichi decision
+    frame predates the payment."""
+    by_seat = {s["meta"]["seat"]: s for s in convert_game(RIICHI_PON_GAME)}
+    s2 = by_seat[2]
+    assert s2["tgt"]["action_type"].tolist() == [ACTION_PON, ACTION_DAHAI]
+    players, table = s2["obs"]["players_seq"], s2["obs"]["table_seq"]
+    # declarer (seat 1) is seat 2's kamicha → relative row 3
+    assert players[0, 3, 1] == 1.0                  # riichi flag set
+    assert players[0, 3, 0] == pytest.approx(0.24)  # 25000 − 1000
+    assert table[0, 6] == 0.25                      # kyotaku 1
+    s1 = by_seat[1]
+    assert s1["tgt"]["action_type"].tolist() == [ACTION_RIICHI]
+    assert s1["obs"]["players_seq"][0, 0, 0] == pytest.approx(0.25)
+    assert s1["obs"]["table_seq"][0, 6] == 0.0
+
+
+def test_reach_accepted_not_double_applied():
+    """Consuming reach_accepted at the reaction site must not let the
+    main loop apply it again: exactly 1000 points, exactly one stick."""
+    by_seat = {s["meta"]["seat"]: s for s in convert_game(RIICHI_PON_GAME)}
+    s2 = by_seat[2]
+    # post-pon forced-discard frame: still −1000, not −2000
+    assert s2["obs"]["players_seq"][1, 3, 0] == pytest.approx(0.24)
+    assert s2["obs"]["table_seq"][1, 6] == 0.25
+    # seat 3's later frame agrees (declarer is seat 3's toimen → row 2)
+    s3 = by_seat[3]
+    assert s3["obs"]["players_seq"][0, 2, 0] == pytest.approx(0.24)
+    assert s3["obs"]["table_seq"][0, 6] == 0.25
+    for seat, score in ((0, 25000), (1, 24000), (2, 25000), (3, 25000)):
+        assert by_seat[seat]["meta"]["final_score"] == score
+
+
+# ----------------------------------------------------------------------
 # 8. e2e: CLI (dir + zip) → shards → dataset → collate → network
 # ----------------------------------------------------------------------
 
