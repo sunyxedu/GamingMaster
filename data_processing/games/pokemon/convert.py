@@ -40,6 +40,7 @@ def convert(
     min_rating: int = 0,
     max_replays: Optional[int] = None,
     species_buckets: int = 512,
+    move_buckets: int = 256,
 ) -> Dict:
     """Convert every replay JSON under ``input_dir`` into shards.
 
@@ -85,7 +86,8 @@ def convert(
                 stats["low_rating"] += 1
                 continue
 
-        samples, result = replay_to_samples(replay, species_buckets=species_buckets)
+        samples, result = replay_to_samples(
+            replay, species_buckets=species_buckets, move_buckets=move_buckets)
         for k, v in result.skipped.items():
             stats["skipped"][k] = stats["skipped"].get(k, 0) + v
         for k, v in result.unknown.items():
@@ -118,12 +120,15 @@ def main() -> None:
                    help="stop after keeping this many replays")
     p.add_argument("--species_buckets", type=int, default=512,
                    help="must match the model's pokemon_species_buckets")
+    p.add_argument("--move_buckets", type=int, default=256,
+                   help="must match the model's pokemon_move_buckets")
     args = p.parse_args()
 
     stats = convert(
         args.input, args.output_dir,
         shard_size=args.shard_size, min_rating=args.min_rating,
         max_replays=args.max_replays, species_buckets=args.species_buckets,
+        move_buckets=args.move_buckets,
     )
     print(f"[pokemon] seen={stats['seen']} kept={stats['kept']} "
           f"samples={stats['samples']} frames={stats['frames']} "

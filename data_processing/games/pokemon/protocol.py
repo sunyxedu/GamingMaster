@@ -113,6 +113,14 @@ def _norm(name: str) -> str:
     return "".join(c for c in name.lower() if c.isalnum())
 
 
+def move_to_id(move: str, buckets: int) -> int:
+    """Stable hash-bucket id for a move name; 0 is reserved for
+    "slot not yet revealed" (same scheme as :func:`species_to_id`)."""
+    if not move:
+        return 0
+    return zlib.crc32(_norm(move).encode()) % (buckets - 1) + 1
+
+
 def species_to_id(species: str, buckets: int) -> int:
     """Stable hash-bucket id for a species name; 0 is reserved for unknown."""
     if not species:
@@ -262,11 +270,20 @@ def encode_frame(battle: Battle, side: str) -> Dict[str, torch.Tensor]:
         fld[off + 4] = min(sum(h.get(sc, 0) > 0 for sc in SIDE_SCREENS), 3) / 3.0
 
     active = battle.sides[side].active
+    # Revealed moves of the OWN active mon, in revelation order — the
+    # same list the move_idx label indexes, so the label refers to
+    # observable content ("" = slot not yet revealed).
+    own_team = battle.sides[side].team
+    active_moves = [""] * N_MOVE_SLOTS
+    if active is not None and active < len(own_team):
+        for k, m in enumerate(own_team[active].moves[:N_MOVE_SLOTS]):
+            active_moves[k] = m
     return {
         "species": [p.species for p in battle.sides[side].team]
                    + [""] * (TEAM_SLOTS - len(battle.sides[side].team))
                    + [p.species for p in battle.sides[other].team]
                    + [""] * (TEAM_SLOTS - len(battle.sides[other].team)),
+        "moves": active_moves,
         "poke_feats": feats,
         "slot_mask": mask,
         "field_seq": fld,
@@ -329,6 +346,10 @@ def parse_log(log: str) -> ParseResult:
     frames: Dict[str, Optional[Dict]] = {"p1": None, "p2": None}
     actions: Dict[str, Optional[TurnRecord]] = {"p1": None, "p2": None}
     consumed: Dict[str, bool] = {"p1": False, "p2": False}   # action seen but unusable
+    # Emergency Exit / Wimp Out / Eject Button / Eject Pack force the
+    # holder out mid-turn WITHOUT a faint: the replacement |switch| is not
+    # the side's turn-start decision and must not be labeled as one.
+    forced_pivot: Dict[str, bool] = {"p1": False, "p2": False}
     tera_pending: Dict[str, bool] = {"p1": False, "p2": False}
     active_fainted: Dict[str, bool] = {"p1": False, "p2": False}
 
@@ -347,6 +368,7 @@ def parse_log(log: str) -> ParseResult:
             consumed[side] = False
             tera_pending[side] = False
             active_fainted[side] = False
+            forced_pivot[side] = False
 
     def snapshot_turn(n: int) -> None:
         battle.turn = n
@@ -384,10 +406,18 @@ def parse_log(log: str) -> ParseResult:
                 and actions[pos] is None
                 and not consumed[pos]
                 and not active_fainted[pos]
+                and not forced_pivot[pos]
                 and frames[pos] is not None
             )
             if cmd == "switch" and battle.turn > 0 and not is_choice:
-                if active_fainted[pos]:
+                if forced_pivot[pos]:
+                    # Emergency Exit / Eject pivot: the player's actual
+                    # turn decision was (usually) a cancelled move that
+                    # never reached the log — no valid label this turn.
+                    forced_pivot[pos] = False
+                    consumed[pos] = True
+                    _skip("forced_pivot_switch")
+                elif active_fainted[pos]:
                     _skip("forced_replacement_switch")
                 elif actions[pos] is not None or consumed[pos]:
                     _skip("mid_turn_switch")
@@ -451,6 +481,18 @@ def parse_log(log: str) -> ParseResult:
             if pos in consumed and actions.get(pos) is None:
                 consumed[pos] = True
                 _skip("cant")
+            continue
+
+        if cmd in ("-activate", "-enditem") and len(args) >= 2:
+            # Mid-turn pivot triggers: the holder's next |switch| this
+            # turn is forced by the ability/item, not a turn decision.
+            pos, _ = _ident(args[0])
+            effect = args[1]
+            if pos in forced_pivot and effect in (
+                "ability: Emergency Exit", "ability: Wimp Out",
+                "Eject Button", "Eject Pack",
+            ):
+                forced_pivot[pos] = True
             continue
 
         if cmd in ("-damage", "-heal", "-sethp") and len(args) >= 2:
@@ -661,7 +703,7 @@ def parse_log(log: str) -> ParseResult:
 # ----------------------------------------------------------------------
 
 def replay_to_samples(
-    replay: Dict, species_buckets: int = 512,
+    replay: Dict, species_buckets: int = 512, move_buckets: int = 256,
 ) -> Tuple[List[Dict], ParseResult]:
     """One replay JSON dict → list of shard samples (one per side with ≥1
     labeled frame; empty when there is no winner)."""
@@ -676,6 +718,7 @@ def replay_to_samples(
             continue
         T = len(recs)
         species_ids = torch.zeros(T, 2 * TEAM_SLOTS, dtype=torch.long)
+        move_ids = torch.zeros(T, N_MOVE_SLOTS, dtype=torch.long)
         poke_feats = torch.zeros(T, 2 * TEAM_SLOTS, POKE_FEATURE_DIM)
         slot_mask = torch.zeros(T, 2 * TEAM_SLOTS, dtype=torch.bool)
         field_seq = torch.zeros(T, FIELD_FEATURE_DIM)
@@ -689,6 +732,8 @@ def replay_to_samples(
             f = rec.frame
             for j, sp in enumerate(f["species"]):
                 species_ids[t, j] = species_to_id(sp, species_buckets)
+            for k, mv in enumerate(f.get("moves", [])[:N_MOVE_SLOTS]):
+                move_ids[t, k] = move_to_id(mv, move_buckets)
             poke_feats[t] = f["poke_feats"]
             slot_mask[t] = f["slot_mask"]
             field_seq[t] = f["field_seq"]
@@ -702,6 +747,7 @@ def replay_to_samples(
         samples.append({
             "obs": {
                 "species_ids": species_ids,
+                "move_ids": move_ids,
                 "poke_feats": poke_feats,
                 "slot_mask": slot_mask,
                 "field_seq": field_seq,

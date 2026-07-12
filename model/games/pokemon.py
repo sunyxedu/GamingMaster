@@ -52,19 +52,27 @@ so padded frames cannot leak into real frames; they are excluded
 downstream by loss masks and the causal temporal mixers, per the base
 contract.
 
-Action space (v1 simplification — move slots are NOT tokens):
+Action space:
 
-    type 0 = move    argument: categorical over 4 move slots, an MLP on
-                     [active_own_embed, type_embed, ll].  The label is
-                     the index of the used move in that Pokémon's
-                     revealed-move list (converter clamps >4 to 3).
-                     Plus an optional Bernoulli terastallize flag.
+    type 0 = move    argument: categorical over 4 move slots.  Slot k is
+                     scored by the identity of the k-th REVEALED move of
+                     the active mon: the converter emits
+                     ``obs["move_ids"]`` [T, 4] hash-bucket ids (0 = not
+                     yet revealed) in the same revelation order the
+                     ``move_idx`` label indexes, the trainer forwards
+                     them via ``legal`` (LEGAL_FROM_OBS), and the head
+                     scores each slot's move embedding against
+                     (active_embed, type_embed, ll).  Plus an optional
+                     Bernoulli terastallize flag.
     type 1 = switch  argument: pointer over the 6 own slot tokens.
 
 Because the acting Pokémon is state, not a decision, the decoder needs
 its own-slot index from outside: ``decode`` reads ``active_idx`` [B, T]
 long from ``labels`` (IL: the converter stores it in ``tgt``) or from
 ``legal`` (rollout / PPO replay), defaulting to slot 0 if absent.
+``move_ids`` travels the same way (legal or labels); without it every
+slot shares the id-0 embedding and the move head degrades to the old
+positional prior.
 """
 
 from __future__ import annotations
@@ -113,6 +121,10 @@ class PokemonConfig(ModelConfig):
     pokemon_feature_dim: int = POKE_FEATURE_DIM
     #: hash buckets for the species embedding (id 0 = unknown)
     pokemon_species_buckets: int = 512
+    #: hash buckets for the revealed-move embedding (id 0 = unrevealed
+    #: slot) — the move head scores slots by their move identity, so the
+    #: within-battle revelation-order labels refer to observable content
+    pokemon_move_buckets: int = 256
     #: field-token features (weather/terrain/turn/side conditions)
     pokemon_field_features: int = FIELD_FEATURE_DIM
     #: 0 = move, 1 = switch
@@ -218,15 +230,23 @@ class PokemonDecoder(ActionDecoder):
         d = cfg.d_model
         self.type_head = MLPHead(d, cfg.n_action_types)
         self.type_embed = nn.Embedding(cfg.n_action_types, d)
-        # Move slots are not tokens in v1: a plain MLP on
-        # [active_own_embed, type_embed, ll] scores the 4 slots.
-        self.move_head = MLPHead(d * 3, cfg.n_move_slots, hidden=d)
+        # Move slots are scored by their revealed-move identity: slot k's
+        # hash-bucket move id (0 = not yet revealed, from legal/labels
+        # "move_ids") is embedded and scored against (active_embed, type,
+        # ll).  Without move_ids all slots share the id-0 embedding and
+        # the head degrades to a positional prior.
+        self.move_embed = nn.Embedding(cfg.pokemon_move_buckets, d)
+        self.move_slot_embed = nn.Parameter(
+            torch.randn(1, cfg.n_move_slots, d) * 0.02,
+        )
+        self.move_head = PointerHead(d, n_queries=3)  # move slots ⊗ (active, type, ll)
         # Switch target: pointer over the 6 own slot tokens ⊗ (type, ll).
         self.switch_head = PointerHead(d, n_queries=2)
         self.tera_head = MLPHead(d * 2, 1, hidden=d)
 
         # The core only re-inits Linear/Conv/Norm; Embedding is ours to init.
         nn.init.trunc_normal_(self.type_embed.weight, std=0.02)
+        nn.init.trunc_normal_(self.move_embed.weight, std=0.02)
 
     # ------------------------------------------------------------------
     # Decode: tokens → logits
@@ -282,7 +302,22 @@ class PokemonDecoder(ActionDecoder):
             active_idx = torch.zeros(BT, dtype=torch.long, device=device)
         active_embed = own_tokens[torch.arange(BT, device=device), active_idx]
 
-        move_logits = self.move_head(torch.cat([active_embed, te, ll], dim=-1))
+        # Revealed-move ids of the active mon (state, like active_idx):
+        # labels (IL, via LEGAL_FROM_OBS→legal in the trainer) or legal
+        # (rollout/replay); absent → all slots id 0 ("unrevealed").
+        move_ids = None
+        if labels is not None and labels.get("move_ids") is not None:
+            move_ids = labels["move_ids"]
+        elif legal is not None and legal.get("move_ids") is not None:
+            move_ids = legal["move_ids"]
+        if move_ids is not None:
+            move_ids = move_ids.reshape(BT, cfg.n_move_slots).long().clamp(
+                0, cfg.pokemon_move_buckets - 1)
+        else:
+            move_ids = torch.zeros(BT, cfg.n_move_slots, dtype=torch.long,
+                                   device=device)
+        move_tokens = self.move_embed(move_ids) + self.move_slot_embed
+        move_logits = self.move_head(move_tokens, active_embed, te, ll)
         switch_logits = self.switch_head(own_tokens, te, ll)           # [BT, 6]
         tera_logit = self.tera_head(
             torch.cat([active_embed, ll], dim=-1)
