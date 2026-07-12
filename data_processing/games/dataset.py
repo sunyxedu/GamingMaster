@@ -41,8 +41,18 @@ from torch.utils.data import Dataset
 FORMAT_VERSION = 1
 
 
-def save_shard(path: str, game: str, samples: List[Dict]) -> None:
-    """Write one shard; converters' single entry point for output."""
+def save_shard(path: str, game: str, samples: List[Dict],
+               converter_version: int = 1,
+               meta: Optional[Dict] = None) -> None:
+    """Write one shard; converters' single entry point for output.
+
+    ``converter_version`` marks semantic revisions of a converter's
+    output (bump it when re-converted shards are incompatible with older
+    ones — e.g. the chess rank-mirror fix); ``meta`` carries shard-level
+    facts the model config must match (board_size, move_buckets, …).
+    GameShardDataset enforces both uniform across a data_dir, so stale
+    and fresh generations can never be mixed silently.
+    """
     for s in samples:
         T = next(iter(s["obs"].values())).shape[0]
         for k, v in {**s["obs"], **s["tgt"]}.items():
@@ -52,7 +62,9 @@ def save_shard(path: str, game: str, samples: List[Dict]) -> None:
                 )
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     torch.save(
-        {"format_version": FORMAT_VERSION, "game": game, "samples": samples},
+        {"format_version": FORMAT_VERSION, "game": game,
+         "converter_version": converter_version, "meta": dict(meta or {}),
+         "samples": samples},
         path,
     )
 
@@ -79,6 +91,11 @@ class GameShardDataset(Dataset):
 
         # Build the (shard_idx, sample_idx) index once up front.
         self._index: List[Tuple[int, int]] = []
+        self.converter_version: Optional[int] = None
+        self.shard_meta: Dict = {}
+        self._ref_path: Optional[str] = None
+        self._obs_keys: Optional[frozenset] = None
+        self._tgt_keys: Optional[frozenset] = None
         for si, p in enumerate(self.paths):
             shard = torch.load(p, map_location="cpu", weights_only=False)
             self._check(shard, p)
@@ -96,6 +113,41 @@ class GameShardDataset(Dataset):
             raise ValueError(
                 f"{path}: shard is for game {shard['game']!r}, expected {self.game!r}"
             )
+        # Converter generation + shard meta + sample schema must be
+        # uniform across the directory: shards from different converter
+        # revisions (e.g. chess pre/post rank-mirror) look identical at
+        # the tensor level, so this is the only place mixing is caught.
+        cv = shard.get("converter_version", 1)
+        meta = shard.get("meta", {})
+        samples = shard["samples"]
+        obs_keys = frozenset(samples[0]["obs"]) if samples else None
+        tgt_keys = frozenset(samples[0]["tgt"]) if samples else None
+        if self.converter_version is None:
+            self.converter_version = cv
+            self.shard_meta = meta
+            self._ref_path = path
+            self._obs_keys, self._tgt_keys = obs_keys, tgt_keys
+            return
+        if cv != self.converter_version:
+            raise ValueError(
+                f"{path}: converter_version {cv} but {self._ref_path} has "
+                f"{self.converter_version} — the directory mixes shard "
+                f"generations; re-convert everything with the current converter"
+            )
+        if meta != self.shard_meta:
+            raise ValueError(
+                f"{path}: shard meta {meta!r} but {self._ref_path} has "
+                f"{self.shard_meta!r} — shards were converted with different "
+                f"settings; re-convert to one configuration"
+            )
+        for kind, ks, ref in (("obs", obs_keys, self._obs_keys),
+                              ("tgt", tgt_keys, self._tgt_keys)):
+            if ks is not None and ref is not None and ks != ref:
+                raise ValueError(
+                    f"{path}: sample {kind} keys {sorted(ks)} but "
+                    f"{self._ref_path} has {sorted(ref)} — the directory "
+                    f"mixes converter outputs; re-convert everything"
+                )
 
     def __len__(self) -> int:
         return len(self._index)
@@ -166,6 +218,19 @@ def collate_game_sequences(batch: List[Dict]) -> Dict:
     lengths = [next(iter(s["obs"].values())).shape[0] for s in batch]
     T_max = max(lengths)
     B = len(batch)
+
+    # Backstop for datasets not built via GameShardDataset: keys are
+    # taken from batch[0], so a schema mismatch would otherwise KeyError
+    # or silently drop the extra keys for the whole batch.
+    obs_keys, tgt_keys = set(batch[0]["obs"]), set(batch[0]["tgt"])
+    for s in batch[1:]:
+        if set(s["obs"]) != obs_keys or set(s["tgt"]) != tgt_keys:
+            raise ValueError(
+                "collate: samples disagree on obs/tgt keys "
+                f"({sorted(obs_keys)}/{sorted(tgt_keys)} vs "
+                f"{sorted(s['obs'])}/{sorted(s['tgt'])}) — mixed shard "
+                "generations in one directory? Re-convert everything"
+            )
 
     def _pad_stack(key_group: str, key: str) -> torch.Tensor:
         ref = batch[0][key_group][key]

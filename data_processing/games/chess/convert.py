@@ -79,6 +79,10 @@ import torch
 
 from data_processing.games.dataset import save_shard
 
+# v2 = rank-only Maia mirror for black-to-move frames (a7f5242); v1
+# shards are 180°-rotated for black and must not be mixed with v2.
+CONVERTER_VERSION = 2
+
 # promotion piece_type → label index (0 = no promotion)
 PROMO_TO_IDX: Dict[Optional[int], int] = {
     None: 0,
@@ -318,6 +322,7 @@ def convert(
                 os.path.join(output_dir, f"chess_{shard_i:05d}.pt"),
                 game="chess",
                 samples=samples,
+                converter_version=CONVERTER_VERSION,
             )
             shard_i += 1
             samples = []

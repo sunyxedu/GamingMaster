@@ -22,8 +22,9 @@ import argparse
 import ast
 import os
 import random
+import re
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -72,12 +73,29 @@ STATE_LABEL_KEYS = {
 LEGAL_FROM_OBS = {
     "lux": lambda obs: {"unit": obs["unit_mask"].bool()},
     "starcraft": lambda obs: {"actor": obs["unit_mask"].bool()},
+    # entity_mask (True = slot occupied) keeps tf_prob<1 actor
+    # self-sampling off empty entity slots, same as starcraft above.
+    "hearthstone": lambda obs: {"actor": obs["entity_mask"].bool()},
     # move_ids is state (revealed moves of the active mon) consumed by
     # the move head at decode time; guarded for pre-move_ids shards.
     "pokemon": lambda obs: (
         {"move_ids": obs["move_ids"]} if "move_ids" in obs else None
     ),
 }
+
+# Shard-level meta facts (written by the converters) that must match the
+# model config: {game: {meta_key: (config_field, ...)}}.  Fresh runs
+# default the config from the data; every run hard-fails on a mismatch.
+META_ARCH_KEYS = {
+    "gomoku": {"board_size": ("board_h", "board_w")},
+    "pokemon": {"move_buckets": ("pokemon_move_buckets",),
+                "species_buckets": ("pokemon_species_buckets",)},
+}
+
+# Converter generations with semantic changes: shards older than this
+# train, but against re-converted data they are a different game (chess
+# v2 = rank-mirror a7f5242; v1 frames are 180°-rotated for black).
+MIN_CONVERTER_VERSION = {"chess": 2}
 
 
 def parse_args() -> argparse.Namespace:
@@ -131,6 +149,65 @@ def pick_device() -> torch.device:
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def resume_arch_overrides(resume_ckpt: Dict, cli_overrides: Dict) -> Dict:
+    """Architecture kwargs for build_game_network on resume.
+
+    The checkpoint's full saved config wins — rebuilding from saved
+    *overrides* + current registry defaults would silently reshape the
+    net whenever a registry default drifts between save and resume.
+    Explicit CLI overrides still apply on top (loudly): they are the
+    escape hatch when the saved config itself must be corrected.
+    """
+    arch = resume_ckpt.get("config")
+    if arch is None:
+        arch = resume_ckpt.get("config_overrides", {})
+        print(f"[warn] checkpoint predates full-config saving; rebuilding "
+              f"from saved overrides + current defaults: {arch}")
+    arch = dict(arch)
+    if cli_overrides:
+        changed = {k: v for k, v in cli_overrides.items() if arch.get(k) != v}
+        if changed:
+            print(f"[warn] --override replaces checkpoint arch values: {changed}")
+        arch.update(cli_overrides)
+    return arch
+
+
+def check_meta_arch(game: str, cfg, shard_meta: Dict) -> None:
+    """Hard-fail when shard-level converter meta contradicts the model
+    config (e.g. 20×20 gomoku shards vs a 15×15 net)."""
+    for meta_key, cfg_keys in META_ARCH_KEYS.get(game, {}).items():
+        if meta_key not in shard_meta:
+            continue
+        for ck in cfg_keys:
+            if getattr(cfg, ck) != shard_meta[meta_key]:
+                raise ValueError(
+                    f"shards were converted with {meta_key}="
+                    f"{shard_meta[meta_key]} but the model has "
+                    f"{ck}={getattr(cfg, ck)}; re-convert the data or "
+                    f"use a matching checkpoint/--override"
+                )
+
+
+_UNEXPECTED_KW = re.compile(r"unexpected keyword argument '([^']+)'")
+
+
+def build_net_tolerant(game: str, arch: Dict) -> Tuple[torch.nn.Module, List[str]]:
+    """build_game_network, dropping saved-config keys the current config
+    class no longer accepts (checkpoints carry fields from the code that
+    wrote them).  Returns (net, dropped_keys)."""
+    arch = dict(arch)
+    dropped: List[str] = []
+    while True:
+        try:
+            return build_game_network(game, **arch), dropped
+        except TypeError as e:
+            m = _UNEXPECTED_KW.search(str(e))
+            if m is None or m.group(1) not in arch:
+                raise
+            dropped.append(m.group(1))
+            arch.pop(m.group(1))
 
 
 def build_labels(
@@ -210,9 +287,14 @@ def main() -> None:
     device = pick_device()
     overrides = parse_overrides(args.override)
 
-    # A resume checkpoint defines the architecture (same invariant as
-    # train_il/train_rl): rebuilding from CLI overrides would silently
-    # change the model shape and crash — or worse, drift — on load.
+    if args.game == "clash_royale" and args.max_len is not None:
+        raise SystemExit(
+            "--max_len random-crops sequences, but the clash_royale wait "
+            "head derives absolute time from t0=0 (model/games/"
+            "clash_royale.py decode), so cropped frames get wrong time "
+            "features; train clash_royale without --max_len"
+        )
+
     resume_ckpt = None
     if args.resume:
         resume_ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
@@ -220,18 +302,50 @@ def main() -> None:
             raise ValueError(
                 f"checkpoint is for game {resume_ckpt.get('game')!r}, not {args.game!r}"
             )
-        saved_overrides = resume_ckpt.get("config_overrides", {})
-        if overrides and overrides != saved_overrides:
-            print(f"  [note] --override ignored on resume "
-                  f"(checkpoint overrides: {saved_overrides})")
-        overrides = saved_overrides
 
-    net = build_game_network(args.game, **overrides).to(device)
+    dataset = GameShardDataset(args.data_dir, game=args.game, max_len=args.max_len)
+    val_dataset = None
+    if args.val_dir:
+        val_dataset = GameShardDataset(args.val_dir, game=args.game,
+                                       max_len=args.max_len)
+        if (val_dataset.converter_version != dataset.converter_version
+                or val_dataset.shard_meta != dataset.shard_meta):
+            raise ValueError(
+                f"val shards (converter_version="
+                f"{val_dataset.converter_version}, meta={val_dataset.shard_meta}) "
+                f"were converted differently from train shards "
+                f"(converter_version={dataset.converter_version}, "
+                f"meta={dataset.shard_meta}); re-convert both together"
+            )
+    min_cv = MIN_CONVERTER_VERSION.get(args.game)
+    if min_cv is not None and (dataset.converter_version or 1) < min_cv:
+        print(f"[WARN] {args.game} shards have converter_version "
+              f"{dataset.converter_version} < {min_cv}: they predate a "
+              f"semantic converter fix — re-convert with the current "
+              f"converter, and never mix generations in one directory")
+
+    # A resume checkpoint defines the architecture (same invariant as
+    # train_il/train_rl): rebuilding from CLI overrides would silently
+    # change the model shape and crash — or worse, drift — on load.
+    if resume_ckpt is not None:
+        arch = resume_arch_overrides(resume_ckpt, overrides)
+    else:
+        arch = dict(overrides)
+        for meta_key, cfg_keys in META_ARCH_KEYS.get(args.game, {}).items():
+            if meta_key in dataset.shard_meta:
+                for ck in cfg_keys:
+                    arch.setdefault(ck, dataset.shard_meta[meta_key])
+    net, dropped = build_net_tolerant(args.game, arch)
+    if dropped:
+        print(f"[warn] checkpoint config fields unknown to current code, "
+              f"ignored: {dropped}")
+    net = net.to(device)
     cfg = net.cfg
+    check_meta_arch(args.game, cfg, dataset.shard_meta)
+    overrides = arch
     n_params = sum(p.numel() for p in net.parameters())
     print(f"[init] game={args.game} device={device.type} params={n_params:,}")
 
-    dataset = GameShardDataset(args.data_dir, game=args.game, max_len=args.max_len)
     # Shard-locality shuffling: plain shuffle=True would reload a whole
     # shard from disk for nearly every sample (the dataset caches one
     # shard); this sampler shuffles shard order + within-shard order.
@@ -240,9 +354,9 @@ def main() -> None:
                         num_workers=args.num_workers,
                         collate_fn=collate_game_sequences, drop_last=False)
     val_loader = None
-    if args.val_dir:
+    if val_dataset is not None:
         val_loader = DataLoader(
-            GameShardDataset(args.val_dir, game=args.game, max_len=args.max_len),
+            val_dataset,
             batch_size=args.batch_size, collate_fn=collate_game_sequences,
         )
     print(f"[data] {len(dataset)} games, {len(loader)} batches/epoch")

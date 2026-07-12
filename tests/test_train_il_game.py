@@ -106,6 +106,162 @@ def test_run_batch_trains_othello(tmp_path):
     assert any(g is not None and g.abs().sum() > 0 for g in grads)
 
 
+def test_shard_locality_sampler_coverage_and_locality(tmp_path):
+    from data_processing.games.dataset import ShardLocalitySampler
+
+    save_shard(str(tmp_path / "a.pt"), "othello", _othello_samples(4))
+    save_shard(str(tmp_path / "b.pt"), "othello", _othello_samples(3))
+    save_shard(str(tmp_path / "c.pt"), "othello", _othello_samples(5))
+    ds = GameShardDataset(str(tmp_path), game="othello")
+    sampler = ShardLocalitySampler(ds)
+    torch.manual_seed(0)
+    order = list(iter(sampler))
+    assert sorted(order) == list(range(len(ds)))
+    # shard-contiguous: one cache reload per shard per epoch, no more
+    shards = [ds._index[i][0] for i in order]
+    switches = sum(1 for x, y in zip(shards, shards[1:]) if x != y)
+    assert switches == len(ds.paths) - 1
+    # reshuffles from the global RNG between epochs
+    assert list(iter(sampler)) != order
+
+
+def test_resume_arch_prefers_checkpoint_config(capsys):
+    from train_il_game import resume_arch_overrides
+
+    ckpt = {"config": {"d_model": 48, "board_h": 6}, "config_overrides": {}}
+    assert resume_arch_overrides(ckpt, {}) == {"d_model": 48, "board_h": 6}
+    # explicit CLI override is the escape hatch and applies loudly
+    arch = resume_arch_overrides(ckpt, {"d_model": 64})
+    assert arch == {"d_model": 64, "board_h": 6}
+    assert "replaces checkpoint arch values" in capsys.readouterr().out
+    # legacy checkpoint without a full config falls back to overrides
+    assert resume_arch_overrides({"config_overrides": {"d_ff": 32}}, {}) == {"d_ff": 32}
+
+
+def test_resume_rebuilds_exact_arch_from_config():
+    """A checkpoint with empty config_overrides but a non-default config
+    must resume with the saved shapes (the pre-fix code rebuilt from
+    overrides + registry defaults and crashed or silently drifted)."""
+    from model.games import build_game_network
+    from train_il_game import build_net_tolerant, resume_arch_overrides
+
+    net = build_game_network("othello", **SMALL)
+    ckpt = {
+        "game": "othello",
+        "model_state": net.state_dict(),
+        "config": dict(net.cfg.__dict__),
+        "config_overrides": {},
+    }
+    net2, _ = build_net_tolerant("othello", resume_arch_overrides(ckpt, {}))
+    net2.load_state_dict(ckpt["model_state"])  # exact shapes or it raises
+
+
+def test_build_net_tolerant_drops_unknown_keys():
+    from train_il_game import build_net_tolerant
+
+    net, dropped = build_net_tolerant(
+        "othello", {**SMALL, "some_removed_field": 1},
+    )
+    assert dropped == ["some_removed_field"]
+    assert net.cfg.d_model == SMALL["d_model"]
+
+
+def test_build_labels_state_keys_never_dropped():
+    tgt = {
+        "action_type": torch.ones(2, 6, dtype=torch.long),
+        "active_idx": torch.full((2, 6), 3, dtype=torch.long),
+    }
+    fm = torch.ones(2, 6, dtype=torch.bool)
+    torch.manual_seed(0)
+    labels = build_labels("pokemon", tgt, tf_prob=0.0, frame_mask=fm)
+    assert (labels["active_idx"] == 3).all()
+    assert (labels["action_type"] == -1).all()
+
+
+def test_legal_from_obs_wiring():
+    from train_il_game import LEGAL_FROM_OBS
+
+    hs = LEGAL_FROM_OBS["hearthstone"](
+        {"entity_mask": torch.tensor([[[1, 0, 1]]], dtype=torch.uint8)},
+    )
+    assert hs["actor"].dtype == torch.bool
+    assert hs["actor"].tolist() == [[[True, False, True]]]
+    sc = LEGAL_FROM_OBS["starcraft"]({"unit_mask": torch.ones(1, 2, 4)})
+    assert sc["actor"].dtype == torch.bool
+    ids = torch.arange(8).reshape(1, 2, 4)
+    assert torch.equal(LEGAL_FROM_OBS["pokemon"]({"move_ids": ids})["move_ids"], ids)
+    assert LEGAL_FROM_OBS["pokemon"]({"other": ids}) is None
+
+
+def test_mixed_converter_versions_rejected(tmp_path):
+    save_shard(str(tmp_path / "a.pt"), "othello", _othello_samples(2))
+    save_shard(str(tmp_path / "b.pt"), "othello", _othello_samples(2),
+               converter_version=2)
+    with pytest.raises(ValueError, match="mixes shard generations"):
+        GameShardDataset(str(tmp_path), game="othello")
+
+
+def test_mixed_shard_meta_rejected(tmp_path):
+    save_shard(str(tmp_path / "a.pt"), "othello", _othello_samples(2),
+               meta={"board_size": 15})
+    save_shard(str(tmp_path / "b.pt"), "othello", _othello_samples(2),
+               meta={"board_size": 20})
+    with pytest.raises(ValueError, match="different settings"):
+        GameShardDataset(str(tmp_path), game="othello")
+
+
+def test_mixed_sample_schema_rejected(tmp_path):
+    old = _othello_samples(2)
+    new = _othello_samples(2)
+    for s in new:
+        T = s["obs"]["board_seq"].shape[0]
+        s["obs"]["move_ids"] = torch.zeros(T, 4, dtype=torch.long)
+    save_shard(str(tmp_path / "a.pt"), "othello", old)
+    save_shard(str(tmp_path / "b.pt"), "othello", new)
+    with pytest.raises(ValueError, match="mixes converter outputs"):
+        GameShardDataset(str(tmp_path), game="othello")
+
+
+def test_collate_schema_mismatch_rejected():
+    a, b = _othello_samples(2)
+    del b["tgt"]["value"]
+    with pytest.raises(ValueError, match="disagree on obs/tgt keys"):
+        collate_game_sequences([a, b])
+
+
+def test_dataset_exposes_converter_version_and_meta(tmp_path):
+    save_shard(str(tmp_path / "a.pt"), "gomoku", _othello_samples(1),
+               converter_version=3, meta={"board_size": 9})
+    ds = GameShardDataset(str(tmp_path), game="gomoku")
+    assert ds.converter_version == 3
+    assert ds.shard_meta == {"board_size": 9}
+
+
+def test_check_meta_arch():
+    from types import SimpleNamespace
+
+    from train_il_game import check_meta_arch
+
+    cfg = SimpleNamespace(board_h=15, board_w=15)
+    check_meta_arch("gomoku", cfg, {"board_size": 15})
+    check_meta_arch("gomoku", cfg, {})
+    with pytest.raises(ValueError, match="board_h=15"):
+        check_meta_arch("gomoku", cfg, {"board_size": 20})
+
+
+def test_clash_royale_max_len_guard(monkeypatch, tmp_path):
+    import sys
+
+    import train_il_game
+
+    monkeypatch.setattr(sys, "argv", [
+        "train_il_game.py", "--game", "clash_royale",
+        "--data_dir", str(tmp_path), "--max_len", "64",
+    ])
+    with pytest.raises(SystemExit, match="max_len"):
+        train_il_game.main()
+
+
 def test_run_batch_teacher_forced_chess():
     from model.games import build_game_network
 

@@ -127,10 +127,10 @@ download each dataset.
 
 | Game | Source format | Converter | Notes |
 |---|---|---|---|
-| chess | Lichess PGN / `.pgn.zst` | `data_processing/games/chess/convert.py` | streams zst; side-to-move POV with 180° flip; labels replay-verified via python-chess |
+| chess | Lichess PGN / `.pgn.zst` | `data_processing/games/chess/convert.py` | streams zst; side-to-move POV with rank-only (Maia) mirror for black; labels replay-verified via python-chess; `converter_version` 2 — pre-mirror v1 shards must be re-converted, mixing generations is rejected at load |
 | go | SGF (OGS / KGS / Tygem) | `data_processing/games/go/convert.py` | own rules engine (captures, simple ko); POV = channel swap |
 | othello | WTHOR `.wtb` | `data_processing/games/othello/convert.py` | exact rules replay, implicit passes reinserted; truncated (non-terminal) records rejected; byte format validated on real WTHOR archives |
-| gomoku | Gomocup `.psq` | `data_processing/games/gomoku/convert.py` | freestyle rules replay (win = ≥5); only games ending with a completed five get labels (`--keep_undecided` opts into the resignation convention) |
+| gomoku | Gomocup `.psq` | `data_processing/games/gomoku/convert.py` | `--board_size` 15 (default) or 20 (the main Gomocup freestyle league); `--rule freestyle` (win = ≥5) or `standard` (exact five, overlines don't win); caro archives unsupported; only games ending with a completed five get labels (`--keep_undecided` opts into the resignation convention); board size recorded in shard meta and checked against the model config by the trainer |
 | shogi | floodgate CSA | `data_processing/games/shogi/convert.py` | python-shogi replay; move-or-drop labels; POV = 180° rotation |
 | mahjong | Tenhou mjai `.mjson` (tenhou-to-mjai yearly zips) | `data_processing/games/mahjong/convert.py` | full state tracking from mjai events; decision-point frames incl. call opportunities; placement-based value |
 | pokemon | Showdown replay JSON (`replay.pokemonshowdown.com`) | `data_processing/games/pokemon/convert.py` | observer-view sim-protocol parser; one sample per side; revealed-move indices as labels |
@@ -142,7 +142,12 @@ Shared infrastructure:
   `{obs: {...[T,...]}, tgt: {...[T,...]}, meta}` samples; `GameShardDataset` +
   `collate_game_sequences` tail-pad to the batch max and emit `frame_mask`.
   Obs keys match the game's encoder; tgt keys match its decoder's `il_loss`
-  (plus `value [T]` for the shared value head).
+  (plus `value [T]` for the shared value head). Shards also carry a
+  `converter_version` (bumped on semantic converter changes, e.g. the chess
+  rank-mirror) and shard-level `meta` (facts the model config must match,
+  e.g. gomoku `board_size`, pokemon `move_buckets`); `GameShardDataset`
+  rejects a directory that mixes versions, metas, or sample schemas, and
+  `train_il_game.py` cross-checks meta against the model config.
 - **Generic trainer** — `train_il_game.py`: one code path for every adapter —
   decoder `il_loss` + value MSE, random-depth ACT (`--max_act_steps`),
   teacher-forcing schedule on the decoder's conditioning labels
