@@ -38,6 +38,10 @@ class SGFGame:
     moves: List[Move] = field(default_factory=list)
     setup_black: List[Point] = field(default_factory=list)   # AB stones
     setup_white: List[Point] = field(default_factory=list)   # AW stones
+    #: an AB/AW property appeared AFTER the first B/W move — the flat
+    #: setup lists lose the ordering, so pre-placing them before move 0
+    #: would corrupt every earlier frame (teaching/position-setup SGFs).
+    setup_after_move: bool = False
 
     # -- typed accessors -------------------------------------------------
 
@@ -170,6 +174,8 @@ def _finish(events: List[Tuple[str, List[str]]]) -> SGFGame:
             game.moves.append((ident, _parse_point(values[0] if values else "",
                                                    size)))
         elif ident in ("AB", "AW"):
+            if game.moves:
+                game.setup_after_move = True
             dst = game.setup_black if ident == "AB" else game.setup_white
             for v in values:
                 p = _parse_point(v, size)

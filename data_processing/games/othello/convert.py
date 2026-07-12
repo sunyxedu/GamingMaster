@@ -97,6 +97,14 @@ def replay_frames(
         )
         apply_move(board, player, row, col)
         player = opponent(player)
+    # The symmetric check to the moves-remain-after-double-pass guard
+    # above: a record whose move list stops BEFORE the game is over would
+    # otherwise replay cleanly and stamp value labels from a non-terminal
+    # disc count (mid-game disc lead is a famously poor outcome proxy).
+    if has_legal_move(board, player) or has_legal_move(board, opponent(player)):
+        raise IllegalGameError(
+            "record truncated: game not over after last recorded move"
+        )
     return frames, board
 
 

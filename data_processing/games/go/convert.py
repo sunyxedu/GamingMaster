@@ -118,6 +118,15 @@ def game_to_sample(
     if (game.handicap > 0 or game.setup_black or game.setup_white) \
             and not allow_handicap:
         return None, "handicap"
+    if allow_handicap:
+        # Only well-formed root-node handicap records convert: mid-game
+        # AB/AW setup would be pre-placed before move 0 (corrupting every
+        # earlier frame), and HA>0 with a mismatched AB count means the
+        # server implied placements the record does not carry.
+        if game.setup_after_move:
+            return None, "handicap"
+        if game.handicap > 0 and len(game.setup_black) != game.handicap:
+            return None, "handicap"
     if len(game.moves) < max(min_moves, 1):
         return None, "too_short"
 
