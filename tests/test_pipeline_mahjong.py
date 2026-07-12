@@ -382,6 +382,66 @@ def test_skip_no_kyoku():
 
 
 # ----------------------------------------------------------------------
+# 7b. bookkeeping events between decision and reaction (regressions)
+# ----------------------------------------------------------------------
+
+def test_discard_calls_skip_reach_accepted_and_dora():
+    """Tenhou orders a called riichi discard as reach → dahai →
+    reach_accepted → call; a post-kan discard as dahai → dora → call.
+    Both bookkeeping events must be skipped or the call is lost and the
+    caller's frame mislabeled as a PASS."""
+    from data_processing.games.mahjong.convert import _discard_calls
+
+    # riichi discard gets ponned across a reach_accepted
+    ev = [
+        {"type": "dahai", "actor": 0, "pai": "3p", "tsumogiri": False},
+        {"type": "reach_accepted", "actor": 0},
+        {"type": "pon", "actor": 1, "target": 0, "pai": "3p",
+         "consumed": ["3p", "3p"]},
+    ]
+    assert _discard_calls(ev, 0, 0) == {1: (ACTION_PON, TILE_KIND["3p"])}
+
+    # ron across a reach_accepted
+    ev = [
+        {"type": "dahai", "actor": 0, "pai": "3p", "tsumogiri": False},
+        {"type": "reach_accepted", "actor": 0},
+        {"type": "hora", "actor": 2, "target": 0, "deltas": [0, 0, 0, 0]},
+    ]
+    assert _discard_calls(ev, 0, 0) == {2: (ACTION_HORA, 0)}
+
+    # post-kan discard called across a dora reveal
+    ev = [
+        {"type": "dahai", "actor": 3, "pai": "W", "tsumogiri": True},
+        {"type": "dora", "dora_marker": "2p"},
+        {"type": "pon", "actor": 1, "target": 3, "pai": "W",
+         "consumed": ["W", "W"]},
+    ]
+    assert _discard_calls(ev, 0, 3) == {1: (ACTION_PON, TILE_KIND["W"])}
+
+
+def test_own_turn_label_skips_kan_dora_reveal():
+    """Real mjai logs place the kan-dora reveal between the replacement
+    tsumo and the following action (kakan → tsumo → dora → dahai); the
+    post-kan decision frame must not be dropped."""
+    from data_processing.games.mahjong.convert import _own_turn_label
+
+    ev = [
+        {"type": "tsumo", "actor": 0, "pai": "6s"},
+        {"type": "dora", "dora_marker": "1s"},
+        {"type": "dahai", "actor": 0, "pai": "9s", "tsumogiri": False},
+    ]
+    assert _own_turn_label(ev, 0, 0) == (ACTION_DAHAI, TILE_KIND["9s"])
+
+    # rinshan tsumo-hora across the dora reveal
+    ev = [
+        {"type": "tsumo", "actor": 0, "pai": "6s"},
+        {"type": "dora", "dora_marker": "1s"},
+        {"type": "hora", "actor": 0, "target": 0, "deltas": [0, 0, 0, 0]},
+    ]
+    assert _own_turn_label(ev, 0, 0) == (ACTION_HORA, 0)
+
+
+# ----------------------------------------------------------------------
 # 8. e2e: CLI (dir + zip) → shards → dataset → collate → network
 # ----------------------------------------------------------------------
 

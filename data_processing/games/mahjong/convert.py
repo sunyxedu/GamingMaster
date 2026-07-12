@@ -339,17 +339,27 @@ def encode_frame(
 # ---------------------------------------------------------------------------
 
 def _own_turn_label(events: List[Dict], i: int, actor: int) -> Optional[Tuple[int, int]]:
-    """Label for the decision after ``events[i]`` (the actor's tsumo)."""
-    if i + 1 >= len(events):
+    """Label for the decision after ``events[i]`` (the actor's tsumo).
+
+    Kan-dora reveals sit between the replacement tsumo and the actor's
+    next action in real mjai logs (kakan → tsumo → dora → dahai) — skip
+    them in the lookahead or every post-kan decision frame is lost.
+    State mutation stays in the main event loop, so skipping here has no
+    side effects.
+    """
+    j = i + 1
+    while j < len(events) and events[j]["type"] == "dora":
+        j += 1
+    if j >= len(events):
         return None
-    nxt = events[i + 1]
+    nxt = events[j]
     t = nxt["type"]
     if t == "dahai" and nxt["actor"] == actor:
         return ACTION_DAHAI, tile_kind(nxt["pai"])
     if t == "reach" and nxt["actor"] == actor:
-        if i + 2 < len(events) and events[i + 2]["type"] == "dahai" \
-                and events[i + 2]["actor"] == actor:
-            return ACTION_RIICHI, tile_kind(events[i + 2]["pai"])
+        if j + 1 < len(events) and events[j + 1]["type"] == "dahai" \
+                and events[j + 1]["actor"] == actor:
+            return ACTION_RIICHI, tile_kind(events[j + 1]["pai"])
         return None
     if t == "ankan" and nxt["actor"] == actor:
         return ACTION_KAN, tile_kind(nxt["consumed"][0])
@@ -363,9 +373,18 @@ def _own_turn_label(events: List[Dict], i: int, actor: int) -> Optional[Tuple[in
 
 
 def _discard_calls(events: List[Dict], i: int, discarder: int) -> Dict[int, Tuple[int, int]]:
-    """Actual calls made on the discard at ``events[i]`` → {seat: (type, tile)}."""
+    """Actual calls made on the discard at ``events[i]`` → {seat: (type, tile)}.
+
+    Tenhou-derived streams interleave bookkeeping events between a
+    discard and the reaction to it — ``reach_accepted`` after a riichi
+    discard nobody rons, ``dora`` after a post-kan discard.  Skip them
+    before matching, or a call on such a discard is silently returned as
+    "no calls" and the caller's frame gets mislabeled as a PASS.
+    """
     calls: Dict[int, Tuple[int, int]] = {}
     j = i + 1
+    while j < len(events) and events[j]["type"] in ("reach_accepted", "dora"):
+        j += 1
     while j < len(events) and events[j]["type"] == "hora" \
             and events[j].get("target") == discarder \
             and events[j]["actor"] != discarder:
