@@ -242,6 +242,11 @@ class CardPlacementDecoder(ActionDecoder):
 
         # Absolute-time PE (indices t0 .. t0+T-1) so step() at frame t and
         # forward() at position t see the same wait feature.
+        # CAVEAT: GameNetwork.forward always decodes at t0=0, so training
+        # with GameShardDataset's max_len random crop feeds late-game
+        # frames early-game time features.  Train clash_royale WITHOUT
+        # --max_len (or source match time from globals_seq instead) until
+        # a converter lands and this is settled.
         pe = _sinusoidal_pe(t0 + T, self.time_pe_dim, device)[t0: t0 + T]
         pe = pe.unsqueeze(0).expand(B, T, self.time_pe_dim).reshape(BT, self.time_pe_dim)
         wait_logits = self.wait_head(torch.cat([ll, pe], dim=-1)).squeeze(-1)

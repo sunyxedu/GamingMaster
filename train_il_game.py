@@ -29,7 +29,11 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from data_processing.games.dataset import GameShardDataset, collate_game_sequences
+from data_processing.games.dataset import (
+    GameShardDataset,
+    ShardLocalitySampler,
+    collate_game_sequences,
+)
 from model.games import build_game_network
 from model.rl_utils import load_model_state, optim_param_groups
 
@@ -51,12 +55,28 @@ LABEL_KEYS = {
     "pokemon": ("action_type", "active_idx"),
 }
 
+# STATE keys are facts about the position, not decisions: the decoder
+# must ALWAYS receive them.  build_labels never drops these to −1 under
+# the teacher-forcing schedule — pokemon's decode() would clamp −1 to
+# slot 0 and condition the move/tera heads on the wrong Pokémon.
+STATE_LABEL_KEYS = {
+    "pokemon": ("active_idx",),
+}
+
 # Per-game legality derived from the observation itself: some decoders
 # need ``legal`` at decode time even during IL (lux's il_loss masks by
-# pred["unit_present"], which decode() reads from legal["unit"]).
+# pred["unit_present"], which decode() reads from legal["unit"]; the
+# starcraft actor mask keeps tf_prob<1 self-sampling off empty unit
+# slots — at tf_prob=1.0 it is never consulted).
 # Applied inside run_batch, so training and evaluate() share the mask.
 LEGAL_FROM_OBS = {
     "lux": lambda obs: {"unit": obs["unit_mask"].bool()},
+    "starcraft": lambda obs: {"actor": obs["unit_mask"].bool()},
+    # move_ids is state (revealed moves of the active mon) consumed by
+    # the move head at decode time; guarded for pre-move_ids shards.
+    "pokemon": lambda obs: (
+        {"move_ids": obs["move_ids"]} if "move_ids" in obs else None
+    ),
 }
 
 
@@ -118,10 +138,13 @@ def build_labels(
     frame_mask: torch.Tensor,
 ) -> Optional[Dict[str, torch.Tensor]]:
     """Teacher-forcing labels: keep the ground-truth conditioning with
-    probability ``tf_prob`` per frame, else −1 (decoder self-samples)."""
+    probability ``tf_prob`` per frame, else −1 (decoder self-samples).
+    STATE_LABEL_KEYS entries are copied unconditionally — they are game
+    state, not decisions, and must never be dropped to −1."""
     keys = [k for k in LABEL_KEYS[game] if k in tgt]
     if not keys:
         return None
+    state_keys = set(STATE_LABEL_KEYS.get(game, ()))
     labels = {}
     if tf_prob >= 1.0:
         for k in keys:
@@ -129,7 +152,10 @@ def build_labels(
         return labels
     keep = (torch.rand(frame_mask.shape, device=frame_mask.device) < tf_prob)
     for k in keys:
-        labels[k] = torch.where(keep, tgt[k], torch.full_like(tgt[k], -1))
+        if k in state_keys:
+            labels[k] = tgt[k]
+        else:
+            labels[k] = torch.where(keep, tgt[k], torch.full_like(tgt[k], -1))
     return labels
 
 
@@ -184,13 +210,33 @@ def main() -> None:
     device = pick_device()
     overrides = parse_overrides(args.override)
 
+    # A resume checkpoint defines the architecture (same invariant as
+    # train_il/train_rl): rebuilding from CLI overrides would silently
+    # change the model shape and crash — or worse, drift — on load.
+    resume_ckpt = None
+    if args.resume:
+        resume_ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
+        if resume_ckpt.get("game") != args.game:
+            raise ValueError(
+                f"checkpoint is for game {resume_ckpt.get('game')!r}, not {args.game!r}"
+            )
+        saved_overrides = resume_ckpt.get("config_overrides", {})
+        if overrides and overrides != saved_overrides:
+            print(f"  [note] --override ignored on resume "
+                  f"(checkpoint overrides: {saved_overrides})")
+        overrides = saved_overrides
+
     net = build_game_network(args.game, **overrides).to(device)
     cfg = net.cfg
     n_params = sum(p.numel() for p in net.parameters())
     print(f"[init] game={args.game} device={device.type} params={n_params:,}")
 
     dataset = GameShardDataset(args.data_dir, game=args.game, max_len=args.max_len)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
+    # Shard-locality shuffling: plain shuffle=True would reload a whole
+    # shard from disk for nearly every sample (the dataset caches one
+    # shard); this sampler shuffles shard order + within-shard order.
+    loader = DataLoader(dataset, batch_size=args.batch_size,
+                        sampler=ShardLocalitySampler(dataset),
                         num_workers=args.num_workers,
                         collate_fn=collate_game_sequences, drop_last=False)
     val_loader = None
@@ -215,19 +261,15 @@ def main() -> None:
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     start_epoch = 0
-    if args.resume:
-        ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
-        if ckpt.get("game") != args.game:
-            raise ValueError(
-                f"checkpoint is for game {ckpt.get('game')!r}, not {args.game!r}"
-            )
-        load_model_state(net, ckpt["model_state"], ctx=args.resume)
-        if "optimizer_state" in ckpt:
-            optimizer.load_state_dict(ckpt["optimizer_state"])
-        if "scheduler_state" in ckpt:
-            scheduler.load_state_dict(ckpt["scheduler_state"])
-        start_epoch = ckpt.get("epoch", -1) + 1
+    if resume_ckpt is not None:
+        load_model_state(net, resume_ckpt["model_state"], ctx=args.resume)
+        if "optimizer_state" in resume_ckpt:
+            optimizer.load_state_dict(resume_ckpt["optimizer_state"])
+        if "scheduler_state" in resume_ckpt:
+            scheduler.load_state_dict(resume_ckpt["scheduler_state"])
+        start_epoch = resume_ckpt.get("epoch", -1) + 1
         print(f"[resume] {args.resume} → epoch {start_epoch}")
+        resume_ckpt = None  # release checkpoint tensors
 
     os.makedirs(args.save_dir, exist_ok=True)
     net.train()

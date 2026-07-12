@@ -60,10 +60,12 @@ def save_shard(path: str, game: str, samples: List[Dict]) -> None:
 class GameShardDataset(Dataset):
     """Index over every sample in every ``*.pt`` shard under ``data_dir``.
 
-    Shards are loaded lazily and the most recent one is cached — with
-    shuffling this still averages far fewer loads than samples because
-    the DataLoader touches shards in runs when ``num_workers > 0`` splits
-    by index blocks. Good enough until a game outgrows RAM-per-shard.
+    Shards are loaded lazily and the most recent one is cached.  The
+    cache only helps when consecutive accesses hit the same shard:
+    plain ``shuffle=True`` yields i.i.d. indices and reloads a full
+    shard for almost every sample.  Use :class:`ShardLocalitySampler`
+    (shuffles shard order, then sample order within each shard) to get
+    shuffling with cache hits.
     """
 
     def __init__(self, data_dir: str, game: Optional[str] = None,
@@ -117,6 +119,38 @@ class GameShardDataset(Dataset):
                     "meta": sample.get("meta", {}),
                 }
         return sample
+
+
+class ShardLocalitySampler(torch.utils.data.Sampler):
+    """Shuffled sampling that keeps shard locality.
+
+    Visits shards in a fresh random order each epoch and shuffles the
+    sample order WITHIN each shard, so :class:`GameShardDataset`'s
+    one-shard cache gets a hit on nearly every access instead of
+    reloading a shard per sample (i.i.d. ``shuffle=True`` behavior).
+    Randomness comes from the global torch RNG (seed it for
+    reproducibility).
+    """
+
+    def __init__(self, dataset: GameShardDataset):
+        self.dataset = dataset
+        # global index ranges per shard (dataset._index is built in
+        # shard-major order, so each shard's samples are contiguous)
+        self._by_shard: Dict[int, List[int]] = {}
+        for gi, (si, _) in enumerate(dataset._index):
+            self._by_shard.setdefault(si, []).append(gi)
+
+    def __iter__(self):
+        shard_order = torch.randperm(len(self.dataset.paths)).tolist()
+        for si in shard_order:
+            idxs = self._by_shard.get(si, [])
+            if not idxs:
+                continue
+            for j in torch.randperm(len(idxs)).tolist():
+                yield idxs[j]
+
+    def __len__(self) -> int:
+        return len(self.dataset)
 
 
 def collate_game_sequences(batch: List[Dict]) -> Dict:

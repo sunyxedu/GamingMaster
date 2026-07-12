@@ -34,11 +34,14 @@ from data_processing.games.lux.convert import (
     episode_to_samples,
 )
 
-REAL_EPISODE = (
-    "/private/tmp/claude-501/-Users-hemlix-Documents-GamingMaster/"
-    "837e798b-4715-479c-acd1-e6ef647606ca/scratchpad/tier2_samples/"
-    "luxai/episode-71903094-replay.json"
-)
+# Real Kaggle episode for schema verification — the only test that can
+# falsify the converter's [x][y]-transposition and obs[t]↔steps[t+1]
+# alignment assumptions against ground truth (the synthetic fixture below
+# is built FROM those assumptions, so it cannot).  The asserts are pinned
+# to episode 71903094; download it from the Kaggle Lux S3 episode dump
+# and opt in via:
+#     LUX_REAL_EPISODE=/path/to/episode-71903094-replay.json pytest ...
+REAL_EPISODE = os.environ.get("LUX_REAL_EPISODE", "")
 
 SMALL = dict(
     d_model=48, n_heads=4, d_ff=64, n_st_layers=1,
