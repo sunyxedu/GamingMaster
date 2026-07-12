@@ -5,10 +5,13 @@ file) and emits shards in the shared format of
 :mod:`data_processing.games.dataset` via :func:`save_shard`.
 
 One sample per game.  Every frame ``t`` is the position BEFORE move ``t``
-observed from the SIDE TO MOVE (the Maia convention): the board is rotated
-180° when black is to move so "own" pieces always advance toward row 0.
-The label is that player's move — an IL policy trained on this always
-predicts the mover.
+observed from the SIDE TO MOVE (the Maia/Leela convention): ranks are
+mirrored when black is to move so "own" pieces always advance toward
+row 0.  Files are NOT mirrored — chess is color-symmetric under the
+rank mirror (a1↔a8) but not under a 180° rotation: kingside castling
+must land in the same POV columns for both colors so spatial patterns
+transfer across colors.  The label is that player's move — an IL policy
+trained on this always predicts the mover.
 
 Observation layout
 ------------------
@@ -25,10 +28,11 @@ used for board planes, the ep square AND the from/to labels so they can
 never disagree):
 
     white to move (flip=False):  row = 7 - rank, col = file
-    black to move (flip=True):   row = rank,     col = 7 - file   (180°)
+    black to move (flip=True):   row = rank,     col = file   (rank mirror)
 
 so the mover's back rank is row 7 (e.g. white's e2 → row 6, col 4 →
-index 52) and its pawns advance toward row 0.
+index 52; black's e7 maps to the same index 52) and its pawns advance
+toward row 0.
 
 ``obs["globals_seq"]`` [T, 8] float32:
 
@@ -100,11 +104,13 @@ def square_to_pov_idx(square: int, flip: bool) -> int:
     """0..63 square → POV index (row*8 + col).
 
     flip=False (white to move): row = 7 - rank, col = file.
-    flip=True  (black to move): 180° rotation — row = rank, col = 7 - file.
+    flip=True  (black to move): rank mirror — row = rank, col = file.
+    Files are never mirrored: e8→g8 castling must encode as the same
+    POV pattern as e1→g1 (60→62) so color symmetry is preserved.
     """
     file, rank = chess.square_file(square), chess.square_rank(square)
     if flip:
-        return rank * 8 + (7 - file)
+        return rank * 8 + file
     return (7 - rank) * 8 + file
 
 
@@ -113,7 +119,7 @@ def pov_idx_to_square(idx: int, flip: bool) -> int:
     on (row, col) → (rank, file), so this mirrors it exactly)."""
     row, col = divmod(idx, 8)
     if flip:
-        return chess.square(7 - col, row)
+        return chess.square(col, row)
     return chess.square(col, 7 - row)
 
 
@@ -196,18 +202,29 @@ def game_passes_filters(
             return False
     if skip_bullet and _is_bullet(h):
         return False
-    if sum(1 for _ in game.mainline_moves()) < min_plies:
+    n_plies = sum(1 for _ in game.mainline_moves())
+    # n_plies == 0 must always fail: encode_game would torch.stack empty
+    # lists and a T=0 sample is malformed for collate regardless.
+    if n_plies < max(min_plies, 1):
         return False
     return True
 
 
-def encode_game(game: chess.pgn.Game, self_check: bool = False) -> Dict:
-    """One shard sample from a filtered game (side-to-move POV frames)."""
+def encode_game(game: chess.pgn.Game, self_check: bool = False) -> Optional[Dict]:
+    """One shard sample from a filtered game (side-to-move POV frames).
+
+    Returns ``None`` for games containing a non-legal mainline move —
+    SAN parse errors land in ``game.errors``, but null moves ('--',
+    'Z0', '0000') parse cleanly into ``Move.null()`` and would emit a
+    from==to label that no policy can ever replay.
+    """
     white_value = RESULT_TO_WHITE_VALUE[game.headers["Result"]]
 
     boards, globals_, from_idx, to_idx, promotion, value = [], [], [], [], [], []
     board = game.board()
     for move in game.mainline_moves():
+        if not move or move not in board.legal_moves:
+            return None  # null move or other non-legal escape from SAN parsing
         flip = board.turn == chess.BLACK
         planes, glb = encode_frame(board)
         f = square_to_pov_idx(move.from_square, flip)
@@ -311,7 +328,10 @@ def convert(
             seen += 1
             if not game_passes_filters(game, min_elo, min_plies, skip_bullet):
                 continue
-            samples.append(encode_game(game, self_check=kept < self_check_games))
+            sample = encode_game(game, self_check=kept < self_check_games)
+            if sample is None:  # null move in mainline — unreplayable label
+                continue
+            samples.append(sample)
             kept += 1
             if len(samples) >= shard_size:
                 flush()

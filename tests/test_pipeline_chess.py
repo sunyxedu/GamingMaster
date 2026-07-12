@@ -121,10 +121,15 @@ def test_pov_mapping_invertible_and_known_squares():
     # White POV: e2 → row 6 (rank 1), col 4 (file e) → 52; e4 → 36.
     assert square_to_pov_idx(chess.E2, flip=False) == 6 * 8 + 4
     assert square_to_pov_idx(chess.E4, flip=False) == 4 * 8 + 4
-    # Black POV (180°): e7 → row 6, col 3 → 51; a8 (black's own left
-    # rook from white's view) lands on row 7, col 7.
-    assert square_to_pov_idx(chess.E7, flip=True) == 6 * 8 + 3
-    assert square_to_pov_idx(chess.A8, flip=True) == 7 * 8 + 7
+    # Black POV (rank mirror, files kept): e7 lands on the SAME index as
+    # white's e2 — that is the color symmetry the mapping exists for.
+    assert square_to_pov_idx(chess.E7, flip=True) == 6 * 8 + 4
+    assert square_to_pov_idx(chess.A8, flip=True) == 7 * 8 + 0
+    # Kingside castling encodes identically for both colors: 60 → 62.
+    assert square_to_pov_idx(chess.E1, flip=False) == 60
+    assert square_to_pov_idx(chess.G1, flip=False) == 62
+    assert square_to_pov_idx(chess.E8, flip=True) == 60
+    assert square_to_pov_idx(chess.G8, flip=True) == 62
 
 
 # ======================================================================
@@ -169,6 +174,44 @@ def test_filters_min_elo_and_min_plies(tmp_path):
     assert stats["kept"] == 2
 
 
+NULL_MOVE_PGN = """\
+[Event "Null Move"]
+[White "Gwen"]
+[Black "Hal"]
+[Result "1-0"]
+
+1. e4 e5 2. -- Nc6 3. Nf3 Nf6 4. Nc3 Bb4 5. a3 Ba5 1-0
+"""
+
+EMPTY_GAME_PGN = """\
+[Event "Empty"]
+[White "Ivy"]
+[Black "Jon"]
+[Result "1/2-1/2"]
+
+1/2-1/2
+"""
+
+
+def test_null_move_game_is_dropped(tmp_path):
+    """'--' parses into Move.null() with NO game.errors entry — the game
+    must be dropped, not emitted with an unreplayable from==to label."""
+    pgn_path = tmp_path / "null.pgn"
+    pgn_path.write_text(NULL_MOVE_PGN)
+    stats = convert(str(pgn_path), str(tmp_path / "out"), min_plies=1)
+    assert stats["kept"] == 0
+    assert encode_game(chess.pgn.read_game(io.StringIO(NULL_MOVE_PGN))) is None
+
+
+def test_zero_ply_game_never_crashes(tmp_path):
+    """A result-tagged game with an empty mainline must be filtered even
+    with --min_plies 0 (encode_game would torch.stack empty lists)."""
+    pgn_path = tmp_path / "empty.pgn"
+    pgn_path.write_text(EMPTY_GAME_PGN)
+    stats = convert(str(pgn_path), str(tmp_path / "out"), min_plies=0)
+    assert stats == {"seen": 1, "kept": 0, "shards": 0}
+
+
 # ======================================================================
 # 2. POV correctness on known opening frames
 # ======================================================================
@@ -188,16 +231,17 @@ def test_pov_frames_e4_e5(shard_dir):
     assert board0[5, 7, 4] == 1.0           # own king e1 → row 7, col 4
     assert board0[6, 1].sum() == 8          # opp pawns on row 1
 
-    # Frame 1: black to move, 1... e5 — flipped: e7 → 51, e5 → 35.
-    e7, e5 = 6 * 8 + 3, 4 * 8 + 3
+    # Frame 1: black to move, 1... e5 — rank-mirrored: e7 → 52, e5 → 36
+    # (same POV indices as white's e2/e4 — color symmetry).
+    e7, e5 = 6 * 8 + 4, 4 * 8 + 4
     board1 = s["obs"]["board_seq"][1]
     assert board1[0].reshape(64)[e7] == 1.0
     assert s["tgt"]["from_idx"][1] == e7
     assert s["tgt"]["to_idx"][1] == e5
     assert board1[0, 6].sum() == 8          # own (black) pawns also row 6
-    assert board1[5, 7, 3] == 1.0           # own king e8 → row 7, col 3
-    # White's e4 pawn is now an opponent pawn at row 3, col 3 (flipped e4).
-    assert board1[6, 3, 3] == 1.0
+    assert board1[5, 7, 4] == 1.0           # own king e8 → row 7, col 4
+    # White's e4 pawn is now an opponent pawn at row 3, col 4 (mirrored e4).
+    assert board1[6, 3, 4] == 1.0
 
     # Globals: side_to_move_is_white flag alternates; castling rights on.
     assert s["obs"]["globals_seq"][0][4] == 1.0
@@ -254,10 +298,10 @@ def test_en_passant_frame(shard_dir):
     assert s["tgt"]["from_idx"][4] == 3 * 8 + 4
     assert s["tgt"]["to_idx"][4] == d6
     assert s["tgt"]["promotion"][4] == 0
-    # Frame 1 (black to move after 1. e4): ep target e3, flipped → 19 too
-    # (rank 2 → row 2, file e → col 3): the POV mapping applies to plane 12.
+    # Frame 1 (black to move after 1. e4): ep target e3, rank-mirrored →
+    # rank 2 → row 2, file e → col 4: the POV mapping applies to plane 12.
     ep1 = s["obs"]["board_seq"][1, EP_PLANE].reshape(64)
-    assert ep1[2 * 8 + 3] == 1.0 and ep1.sum() == 1.0
+    assert ep1[2 * 8 + 4] == 1.0 and ep1.sum() == 1.0
     # Frame 0 (initial position): no ep square anywhere.
     assert s["obs"]["board_seq"][0, EP_PLANE].sum() == 0.0
 
@@ -269,13 +313,13 @@ def test_promotion_frame(shard_dir):
     # Only the final frame (black's gxh1=Q) promotes; label 4 = queen.
     assert promo[-1] == 4
     assert (promo[:-1] == 0).all()
-    # Black POV: g2 → row 1, col 1 → 9; h1 → row 0, col 0 → 0.
-    assert s["tgt"]["from_idx"][-1] == 1 * 8 + 1
-    assert s["tgt"]["to_idx"][-1] == 0
+    # Black POV (rank mirror): g2 → row 1, col 6 → 14; h1 → row 0, col 7 → 7.
+    assert s["tgt"]["from_idx"][-1] == 1 * 8 + 6
+    assert s["tgt"]["to_idx"][-1] == 0 * 8 + 7
     # The capturing pawn sits on g2 in the own-pawn plane.
-    assert s["obs"]["board_seq"][-1, 0, 1, 1] == 1.0
-    # The captured rook (h1) is an opponent rook at POV (0, 0).
-    assert s["obs"]["board_seq"][-1, 6 + chess.ROOK - 1, 0, 0] == 1.0
+    assert s["obs"]["board_seq"][-1, 0, 1, 6] == 1.0
+    # The captured rook (h1) is an opponent rook at POV (0, 7).
+    assert s["obs"]["board_seq"][-1, 6 + chess.ROOK - 1, 0, 7] == 1.0
 
 
 # ======================================================================
