@@ -10,6 +10,8 @@ Covers:
      illegal move, wrong board size, too short
   5. e2e: convert → GameShardDataset → collate → build_game_network("gomoku")
      forward → il_loss (pure placement, allow_pass=False) → backward finite
+  6. --board_size 20 (Gomocup freestyle league size) + shard meta,
+     --rule standard (exact five; overlines are not wins) vs freestyle
 """
 
 import os
@@ -46,6 +48,29 @@ BLACK_WIN_MOVES = [
     (7, 5), (8, 5),
     (7, 6), (8, 6),
     (7, 7),
+]
+
+# 20x20 variant: black's winning five ends in the very last cell (19,19)
+# so place_idx pins row*20+col indexing; white answers on row 18.
+BLACK_WIN_MOVES_20 = [
+    (19, 15), (18, 15),
+    (19, 16), (18, 16),
+    (19, 17), (18, 17),
+    (19, 18), (18, 18),
+    (19, 19),
+]
+
+# Move 11 joins black's row-0 stones (cols 0..3 and 5) into a 6-run
+# overline; move 12 gives white an exact five on row 5.  Freestyle: the
+# overline wins at move 11 → move 12 is moves_after_win.  Standard: the
+# overline is not a win, white's exact five decides.
+OVERLINE_THEN_FIVE_MOVES = [
+    (0, 0), (5, 0),
+    (0, 1), (5, 1),
+    (0, 2), (5, 2),
+    (0, 3), (5, 3),
+    (0, 5), (9, 9),
+    (0, 4), (5, 4),
 ]
 
 
@@ -96,6 +121,19 @@ def test_four_is_not_a_win():
     for c in range(4):
         apply_move(board, BOARD_SIZE, BLACK, 7, c)
     assert not wins(board, BOARD_SIZE, BLACK, 7, 3)
+
+
+def test_exact_five_rejects_overline_accepts_five():
+    board = initial_board(BOARD_SIZE)
+    for c in range(6):                              # overline, cols 0..5
+        apply_move(board, BOARD_SIZE, BLACK, 0, c)
+    assert wins(board, BOARD_SIZE, BLACK, 0, 3)     # freestyle: 6 wins
+    assert not wins(board, BOARD_SIZE, BLACK, 0, 3, exact_five=True)
+
+    board = initial_board(BOARD_SIZE)
+    for c in range(5):                              # exactly five
+        apply_move(board, BOARD_SIZE, BLACK, 3, c)
+    assert wins(board, BOARD_SIZE, BLACK, 3, 4, exact_five=True)
 
 
 def test_occupied_cell_is_illegal():
@@ -168,8 +206,87 @@ def test_too_short_skipped():
         game_to_sample(BLACK_WIN_MOVES[:4])
 
 
+def test_overline_game_freestyle_vs_standard():
+    # Same game: freestyle treats the mid-game overline as a win (so the
+    # remaining moves make it unusable), standard plays on and white's
+    # exact five on the last move decides.
+    with pytest.raises(SkipGame, match="moves_after_win"):
+        game_to_sample(OVERLINE_THEN_FIVE_MOVES)
+    s = game_to_sample(OVERLINE_THEN_FIVE_MOVES, exact_five=True)
+    assert s["meta"]["winner"] == "white"
+    v = s["tgt"]["value"]
+    assert (v[1::2] == 1.0).all() and (v[0::2] == -1.0).all()
+
+
 # ----------------------------------------------------------------------
-# 5. e2e: convert → dataset → network → il_loss → backward
+# 5. --board_size / --rule / shard meta
+# ----------------------------------------------------------------------
+
+def test_convert_board_size_20(tmp_path):
+    src = tmp_path / "psq"
+    src.mkdir()
+    (src / "win20.psq").write_text(
+        psq_text(BLACK_WIN_MOVES_20, header="Piskvorky 20x20, 11:11, 0"))
+    (src / "win15.psq").write_text(psq_text(BLACK_WIN_MOVES))
+    out = tmp_path / "shards"
+
+    stats = convert(str(src), str(out), board_size=20)
+    assert stats["kept"] == 1
+    assert stats["wrong_board_size"] == 1       # 15x15 file skipped in turn
+
+    ds = GameShardDataset(str(out), game="gomoku")
+    assert len(ds) == 1
+    s = ds[0]
+    T = len(BLACK_WIN_MOVES_20)
+    assert s["obs"]["board_seq"].shape == (T, 3, 20, 20)
+    assert s["tgt"]["place_idx"].tolist() == [
+        r * 20 + c for r, c in BLACK_WIN_MOVES_20
+    ]
+    assert s["tgt"]["place_idx"][-1] == 19 * 20 + 19
+    assert s["meta"]["winner"] == "black"
+    v = s["tgt"]["value"]
+    assert (v[0::2] == 1.0).all() and (v[1::2] == -1.0).all()
+
+
+def test_convert_rejects_bad_board_size(tmp_path):
+    for bad in (4, 26):
+        with pytest.raises(ValueError, match="board_size"):
+            convert(str(tmp_path), str(tmp_path / "out"), board_size=bad)
+
+
+def test_convert_rule_standard_vs_freestyle(tmp_path):
+    src = tmp_path / "psq"
+    src.mkdir()
+    (src / "overline.psq").write_text(psq_text(OVERLINE_THEN_FIVE_MOVES))
+
+    stats = convert(str(src), str(tmp_path / "std"), rule="standard")
+    assert stats["kept"] == 1
+    ds = GameShardDataset(str(tmp_path / "std"), game="gomoku")
+    assert ds[0]["meta"]["winner"] == "white"
+
+    stats = convert(str(src), str(tmp_path / "free"), rule="freestyle")
+    assert stats["kept"] == 0
+    assert stats["moves_after_win"] == 1
+
+
+def test_shard_meta_records_board_size(tmp_path):
+    for size, moves, header in (
+        (15, BLACK_WIN_MOVES, "Piskvorky 15x15, 11:11, 0"),
+        (20, BLACK_WIN_MOVES_20, "Piskvorky 20x20, 11:11, 0"),
+    ):
+        src = tmp_path / f"psq{size}"
+        src.mkdir()
+        (src / "win.psq").write_text(psq_text(moves, header=header))
+        out = tmp_path / f"shards{size}"
+        stats = convert(str(src), str(out), board_size=size)
+        assert stats["kept"] == 1
+        shard = torch.load(out / "gomoku_00000.pt", map_location="cpu",
+                           weights_only=False)
+        assert shard["meta"]["board_size"] == size
+
+
+# ----------------------------------------------------------------------
+# 6. e2e: convert → dataset → network → il_loss → backward
 # ----------------------------------------------------------------------
 
 def test_e2e_convert_dataset_network(tmp_path):

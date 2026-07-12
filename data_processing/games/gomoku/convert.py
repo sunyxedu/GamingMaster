@@ -1,21 +1,27 @@
 """Convert Gomocup ``.psq`` records into training shards for the
-"gomoku" adapter (BoardEncoder + PlacementDecoder, 15×15, 3 planes,
-``allow_pass=False``).
+"gomoku" adapter (BoardEncoder + PlacementDecoder, 3 planes,
+``allow_pass=False``; board side = ``--board_size``, default 15 — the
+main Gomocup freestyle league plays 20×20).
 
     uv run python -m data_processing.games.gomoku.convert \
         --input data/gomoku/gomocup/ --output_dir data/gomoku/train \
-        --shard_size 512
+        --board_size 20 --shard_size 512
 
 One sample = one full game seen from the SIDE-TO-MOVE perspective at
 every frame; frame t is the position BEFORE the t-th half-move.
 Perspective is a channel swap only — no geometric flip (same convention
 as the othello converter).
 
-    obs["board_seq"]  [T, 3, 15, 15] float32 — plane 0 mover's stones,
+    obs["board_seq"]  [T, 3, N, N] float32 — plane 0 mover's stones,
                       plane 1 opponent's stones, plane 2 empty
-    tgt["place_idx"]  [T] long   row*15+col
+    tgt["place_idx"]  [T] long   row*N+col
     tgt["passed"]     [T] bool   all False (gomoku has no pass)
     tgt["value"]      [T] float  ±1 from the frame mover's perspective
+
+The board size used is written to shard-level ``meta`` so the trainer
+can validate/auto-configure the model's board_h/board_w.  ``--rule``
+selects the win condition: freestyle (five or more) or standard
+(exactly five; overlines are not wins).
 
 ``.psq`` parsing is defensive: the header line gives the board size,
 subsequent lines matching ``x,y[,time]`` (1-based, x = column) are
@@ -101,6 +107,7 @@ def game_to_sample(
     moves: Sequence[Tuple[int, int]],
     *,
     board_size: int = BOARD_SIZE,
+    exact_five: bool = False,
     keep_undecided: bool = False,
     min_moves: int = 9,
     meta: Optional[Dict] = None,
@@ -126,7 +133,7 @@ def game_to_sample(
         except IllegalMove as e:
             raise SkipGame(f"illegal_move ({e})") from None
         place_idx.append(row * board_size + col)
-        if wins(board, board_size, player, row, col):
+        if wins(board, board_size, player, row, col, exact_five=exact_five):
             winner = player
         player = opponent(player)
 
@@ -156,11 +163,18 @@ def convert(
     max_games: Optional[int] = None,
     keep_undecided: bool = False,
     min_moves: int = 9,
+    board_size: int = BOARD_SIZE,
+    rule: str = "freestyle",
 ) -> Dict[str, int]:
     """Convert every ``*.psq`` under ``input_dir`` (recursively).
 
     Returns counters: seen / kept / shards plus a skip-reason histogram.
     """
+    if not 5 <= board_size <= 25:
+        raise ValueError(f"board_size must be within [5, 25], got {board_size}")
+    if rule not in ("freestyle", "standard"):
+        raise ValueError(f"unknown rule {rule!r}")
+    exact_five = rule == "standard"
     os.makedirs(output_dir, exist_ok=True)
     paths = sorted(glob.glob(os.path.join(input_dir, "**", "*.psq"),
                              recursive=True))
@@ -174,6 +188,7 @@ def convert(
             save_shard(
                 os.path.join(output_dir, f"gomoku_{shard_i:05d}.pt"),
                 game="gomoku", samples=samples,
+                meta={"board_size": board_size},
             )
             shard_i += 1
             stats["shards"] = shard_i
@@ -184,10 +199,11 @@ def convert(
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
                 w, h, moves = parse_psq(f.read())
-            if (w, h) != (BOARD_SIZE, BOARD_SIZE):
+            if (w, h) != (board_size, board_size):
                 raise SkipGame("wrong_board_size")
             samples.append(game_to_sample(
-                moves, keep_undecided=keep_undecided, min_moves=min_moves,
+                moves, board_size=board_size, exact_five=exact_five,
+                keep_undecided=keep_undecided, min_moves=min_moves,
                 meta={"source": os.path.basename(path)},
             ))
         except SkipGame as e:
@@ -210,6 +226,17 @@ def main() -> None:
     p.add_argument("--shard_size", type=int, default=512)
     p.add_argument("--max_games", type=int, default=None)
     p.add_argument("--min_moves", type=int, default=9)
+    p.add_argument("--board_size", type=int, default=BOARD_SIZE,
+                   help="board side length (5..25); .psq files with any "
+                        "other header size are skipped.  Gomocup's main "
+                        "freestyle league plays 20x20 (default: 15)")
+    p.add_argument("--rule", choices=("freestyle", "standard"),
+                   default="freestyle",
+                   help="win condition: freestyle = five or more in a row "
+                        "(Gomocup default), standard = exactly five (an "
+                        "overline of 6+ is not a win).  Caro (blocked-ends) "
+                        "rules are NOT supported; do not convert caro "
+                        "archives with this tool")
     p.add_argument("--keep_undecided", action="store_true",
                    help="label games without a completed five as won by "
                         "the last mover (resignation convention)")
@@ -217,7 +244,8 @@ def main() -> None:
     stats = convert(
         args.input, args.output_dir, shard_size=args.shard_size,
         max_games=args.max_games, keep_undecided=args.keep_undecided,
-        min_moves=args.min_moves,
+        min_moves=args.min_moves, board_size=args.board_size,
+        rule=args.rule,
     )
     print(f"[gomoku] {stats}")
 
