@@ -18,10 +18,12 @@ Label conventions
 -----------------
 move:    ``move_idx`` = the used move's index in the acting Pokémon's
          revealed-move list (the move is appended on first use, so a
-         first-time move labels the next free slot; if more than 4 moves
-         are ever revealed — transform/dynamic movesets — the index is
-         clamped to 3).  ``tera`` = 1 when the side terastallized this
-         turn (``|-terastallize|`` precedes the move in the log).
+         first-time move labels the next free slot; a 5th+ revealed move
+         — Transform/dynamic movesets — has no observed slot, so the
+         label is −1: the frame is kept for type/tera/value supervision
+         but the move head gets no target).  ``tera`` = 1 when the side
+         terastallized this turn (``|-terastallize|`` precedes the move
+         in the log).
 switch:  ``switch_idx`` = the incoming Pokémon's own-team slot (0-5,
          team-preview order).
 
@@ -469,9 +471,13 @@ def parse_log(log: str) -> ParseResult:
                 p.moves.append(move_name)
                 idx = len(p.moves) - 1
             if actions[pos] is None and not consumed[pos] and frames[pos] is not None:
+                # A 5th+ revealed move is not representable in the 4
+                # observed move-id slots: label −1 (no move-head target)
+                # rather than a slot whose observed identity is a
+                # different move.
                 actions[pos] = TurnRecord(
                     frame=frames[pos], action_type=0,
-                    move_idx=min(idx, N_MOVE_SLOTS - 1),
+                    move_idx=idx if idx < N_MOVE_SLOTS else -1,
                     tera=int(tera_pending[pos]), turn=battle.turn,
                 )
             continue

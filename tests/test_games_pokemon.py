@@ -7,7 +7,9 @@ Hearthstone suite):
   3. step() chaining with the Stage-1 attention cache
   4. PPO exactness: rollout log-probs == teacher-forced replay log-probs
   5. legal-mask respect during sampling (incl. the tera gate)
-  6. il_loss: finite, differentiable, robust to degenerate masks
+  6. il_loss: finite, differentiable, robust to degenerate masks; a −1
+     move label on a move frame (5th+ revealed move — no observed slot)
+     contributes zero move loss and is safe through decode()/sample()
 
 Plus the ARG_USES invariant: the move head + tera Bernoulli contribute
 log-prob only on move frames, the switch pointer only on switch frames.
@@ -335,3 +337,64 @@ def test_il_loss_degenerate_masks(cfg, model):
     }
     out = model.action_decoder.il_loss(pred, tgt_switch, torch.ones(B, T, dtype=torch.bool))
     assert torch.isfinite(out["loss"])
+
+
+def test_il_loss_unrepresentable_move_label_zero_loss(cfg, model):
+    """move_idx = −1 on a GT MOVE frame (5th+ revealed move, no observed
+    slot) must contribute zero move loss: perturbing the move logits at
+    exactly those frames leaves every il_loss output unchanged — a
+    clamped gather would instead train the clamp target's slot."""
+    B, T = 2, 3
+    g = torch.Generator().manual_seed(3)
+    tgt = _make_tgt(cfg, B, T)
+    tgt["action_type"] = torch.zeros(B, T, dtype=torch.long)   # all move frames
+    tgt["move_idx"][0, 1] = -1
+    tgt["move_idx"][1, 2] = -1
+    pred = model(_make_obs(cfg, B, T),
+                 labels={"action_type": tgt["action_type"],
+                         "active_idx": tgt["active_idx"]})
+    pred = {k: v.detach() for k, v in pred.items()}
+    mask = torch.ones(B, T, dtype=torch.bool)
+    out1 = model.action_decoder.il_loss(pred, tgt, mask)
+    assert torch.isfinite(out1["loss"])
+
+    pred2 = {k: v.clone() for k, v in pred.items()}
+    pred2["move_logits"][0, 1] = torch.randn(cfg.n_move_slots, generator=g) * 10
+    pred2["move_logits"][1, 2] = torch.randn(cfg.n_move_slots, generator=g) * 10
+    out2 = model.action_decoder.il_loss(pred2, tgt, mask)
+    for k in ("loss", "move_loss", "move_acc"):
+        torch.testing.assert_close(out1[k], out2[k], msg=k)
+
+    # every move label −1 → the move head goes fully silent, no NaN
+    tgt["move_idx"] = torch.full((B, T), -1)
+    out3 = model.action_decoder.il_loss(pred, tgt, mask)
+    assert out3["move_loss"] == 0.0
+    assert torch.isfinite(out3["loss"])
+
+
+def test_decode_negative_move_label_no_crash_self_samples(cfg, model):
+    """labels carrying move_idx = −1 must be conditioning-safe: decode()
+    never teacher-forces the move slot (moves are sampled downstream), so
+    a −1 label neither crashes nor leaks into the outputs, and sample()
+    still picks a real slot."""
+    model.eval()
+    B, T = 2, 3
+    obs = _make_obs(cfg, B, T)
+    tgt_type = torch.zeros(B, T, dtype=torch.long)
+    labels = {
+        "action_type": tgt_type,
+        "active_idx": torch.randint(0, cfg.team_slots, (B, T)),
+        "move_idx": torch.full((B, T), -1),
+    }
+    with torch.no_grad():
+        out = model(obs, labels=labels)
+    for k in ("action_type_logits", "move_logits", "switch_logits", "tera_logit"):
+        assert torch.isfinite(out[k]).all(), k
+    assert torch.equal(out["action_type_used"], tgt_type)
+
+    # rollout self-sampling picks a real slot regardless of the −1 label
+    pred0 = {k: v[:, 0] for k, v in out.items()}
+    sampled = model.action_decoder.sample(pred0, legal=None)
+    assert ((sampled["move_idx"] >= 0)
+            & (sampled["move_idx"] < cfg.n_move_slots)).all()
+    assert torch.isfinite(sampled["action_log_prob"]).all()

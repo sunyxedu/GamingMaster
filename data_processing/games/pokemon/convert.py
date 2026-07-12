@@ -63,6 +63,10 @@ def convert(
             save_shard(
                 os.path.join(output_dir, f"pokemon_{shard_i:05d}.pt"),
                 game="pokemon", samples=buf,
+                # hash-bucket sizes bake into the ids; record them so the
+                # trainer can validate against the model config
+                meta={"move_buckets": move_buckets,
+                      "species_buckets": species_buckets},
             )
             shard_i += 1
             buf = []

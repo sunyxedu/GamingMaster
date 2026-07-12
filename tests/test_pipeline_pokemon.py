@@ -12,6 +12,9 @@ Covers:
      and produce ≥1 sample per side
   5. shard → GameShardDataset → collate → GameNetwork(PokemonConfig tiny)
      forward + il_loss finite + backward
+  6. c8f7b28 pins: obs["move_ids"] labeled-slot identity invariant,
+     forced-pivot switches (Emergency Exit / Eject Button) never labeled,
+     a 5th revealed move labels −1, shard meta carries the bucket config
 """
 
 import json
@@ -30,6 +33,7 @@ from data_processing.games.pokemon.protocol import (
     POKE_FEAT_REVEALED,
     POKE_FEAT_STATUS,
     POKE_FEAT_TERA,
+    move_to_id,
     parse_log,
     replay_to_samples,
     species_to_id,
@@ -218,6 +222,172 @@ def test_no_winner_no_samples():
     samples, res = replay_to_samples({"id": "x", "log": log})
     assert res.winner is None
     assert samples == []
+
+
+# ======================================================================
+# 6. c8f7b28 pins: move_ids identity / forced pivots / 5th reveal / meta
+# ======================================================================
+
+def _first_moves_by_turn(log):
+    """(side, turn) → the side's first genuine ``|move|`` name that turn —
+    the same line the parser labels ([from]-called moves skipped)."""
+    used, turn = {}, 0
+    for line in log.split("\n"):
+        parts = line.split("|")
+        cmd = parts[1] if len(parts) > 1 else ""
+        if cmd == "turn":
+            turn = int(parts[2])
+        elif cmd == "move" and turn > 0 and len(parts) >= 4:
+            if any("[from]" in a for a in parts[4:]):
+                continue
+            used.setdefault((parts[2][:2], turn), parts[3])
+    return used
+
+
+def test_move_ids_labeled_slot_identity():
+    """The by-identity scoring contract: at every move-labeled frame the
+    observed id at the labeled slot is either 0 (first reveal — the label
+    points at the next free slot) or exactly the hash-id of the move the
+    expert used, never a different move's identity."""
+    logs = [("mini", MINI_LOG)]
+    for name in sorted(os.listdir(REAL_DIR)):
+        with open(os.path.join(REAL_DIR, name), encoding="utf-8") as fh:
+            logs.append((name, json.load(fh)["log"]))
+
+    n_repeat_use = 0
+    for name, log in logs:
+        used = _first_moves_by_turn(log)
+        samples, res = replay_to_samples(
+            {"id": name, "log": log}, species_buckets=64, move_buckets=256)
+        for s in samples:
+            side = s["meta"]["side"]
+            recs = res.records[side]
+            at, mi = s["tgt"]["action_type"], s["tgt"]["move_idx"]
+            assert len(recs) == at.shape[0]
+            for t, rec in enumerate(recs):
+                if at[t].item() != 0 or mi[t].item() < 0:
+                    continue
+                slot_ids = s["obs"]["move_ids"][t]
+                labeled = slot_ids[mi[t]].item()
+                expect = move_to_id(used[(side, rec.turn)], 256)
+                assert labeled in (0, expect), (name, side, rec.turn)
+                if labeled == 0:
+                    # first reveal: all slots before the labeled one filled
+                    assert (slot_ids[: mi[t]] != 0).all(), (name, side, rec.turn)
+                else:
+                    n_repeat_use += 1
+    assert n_repeat_use > 0        # exercised on genuine repeat uses
+
+
+@pytest.mark.parametrize("trigger", [
+    "|-activate|p2a: Goli|ability: Emergency Exit",
+    "|-enditem|p2a: Goli|Eject Button",
+])
+def test_forced_pivot_switch_not_labeled(trigger):
+    """A mid-turn forced pivot (Emergency Exit / Eject Button) must not be
+    emitted as a labeled switch decision; the surrounding genuine
+    decisions must all be labeled."""
+    log = "\n".join([
+        "|player|p1|Alice|1|1500",
+        "|player|p2|Bob|2|1490",
+        "|gen|9",
+        "|poke|p1|Garchomp, M|",
+        "|poke|p1|Rotom-Wash|",
+        "|poke|p2|Golisopod, M|",
+        "|poke|p2|Heatran, M|",
+        "|teampreview",
+        "|start",
+        "|switch|p1a: Chompy|Garchomp, M|100/100",
+        "|switch|p2a: Goli|Golisopod, M|100/100",
+        "|turn|1",
+        # T1: p1 Earthquake triggers the pivot; p2's replacement switch is
+        # forced (their real decision — a cancelled move — never logged)
+        "|move|p1a: Chompy|Earthquake|p2a: Goli",
+        "|-damage|p2a: Goli|40/100",
+        trigger,
+        "|switch|p2a: Tran|Heatran, M|100/100",
+        "|upkeep",
+        "|turn|2",
+        # T2: both sides act normally — genuine decisions
+        "|move|p1a: Chompy|Earthquake|p2a: Tran",
+        "|-damage|p2a: Tran|60/100",
+        "|move|p2a: Tran|Magma Storm|p1a: Chompy",
+        "|-damage|p1a: Chompy|50/100",
+        "|upkeep",
+        "|turn|3",
+        "|move|p1a: Chompy|Earthquake|p2a: Tran",
+        "|-damage|p2a: Tran|0 fnt",
+        "|faint|p2a: Tran",
+        "|win|Alice",
+    ])
+    res = parse_log(log)
+    assert res.skipped.get("forced_pivot_switch") == 1
+    # p2's only labeled decision is the genuine turn-2 move
+    p2 = res.records["p2"]
+    assert [r.turn for r in p2] == [2]
+    assert p2[0].action_type == 0 and p2[0].move_idx == 0
+    # p1's genuine decisions all present
+    p1 = res.records["p1"]
+    assert [r.turn for r in p1] == [1, 2, 3]
+    assert all(r.action_type == 0 for r in p1)
+
+
+FIFTH_MOVES = ["Swords Dance", "Earthquake", "Scale Shot", "Fire Fang",
+               "Stone Edge"]
+
+
+def test_fifth_revealed_move_labels_unsupervisable():
+    """A 5th revealed move (Transform-style dynamic movesets) has no
+    observed slot: the label must be −1, not clamped to 3 — slot 3's
+    observed identity is the 4th move, not the one used."""
+    lines = [
+        "|player|p1|Alice|1|1500",
+        "|player|p2|Bob|2|1490",
+        "|gen|9",
+        "|poke|p1|Garchomp, M|",
+        "|poke|p2|Corviknight, M|",
+        "|teampreview",
+        "|start",
+        "|switch|p1a: Chompy|Garchomp, M|100/100",
+        "|switch|p2a: Corv|Corviknight, M|100/100",
+    ]
+    for t, mv in enumerate(FIFTH_MOVES, start=1):
+        lines += [
+            f"|turn|{t}",
+            f"|move|p1a: Chompy|{mv}|p2a: Corv",
+            "|move|p2a: Corv|Roost|p2a: Corv",
+            "|upkeep",
+        ]
+    lines.append("|win|Alice")
+    log = "\n".join(lines)
+
+    res = parse_log(log)
+    p1 = res.records["p1"]
+    assert [r.action_type for r in p1] == [0] * 5
+    assert [r.move_idx for r in p1] == [0, 1, 2, 3, -1]
+
+    samples, _ = replay_to_samples(
+        {"id": "fifth", "log": log}, species_buckets=64, move_buckets=256)
+    p1s = next(s for s in samples if s["meta"]["side"] == "p1")
+    assert p1s["tgt"]["action_type"].tolist() == [0] * 5
+    assert p1s["tgt"]["move_idx"].tolist() == [0, 1, 2, 3, -1]
+    # the −1 frame observes the FIRST four moves; the used move's id is
+    # in none of the slots, so any slot label would be a wrong identity
+    ids5 = p1s["obs"]["move_ids"][4].tolist()
+    assert ids5 == [move_to_id(m, 256) for m in FIFTH_MOVES[:4]]
+    assert move_to_id(FIFTH_MOVES[4], 256) not in ids5
+
+
+def test_shard_meta_pins_bucket_config(real_shard_dir):
+    """save_shard meta must record the hash-bucket sizes so trainer-side
+    validation against the model config is possible."""
+    expected = {"move_buckets": 256, "species_buckets": 64}
+    names = [n for n in sorted(os.listdir(real_shard_dir)) if n.endswith(".pt")]
+    assert names
+    shard = torch.load(os.path.join(real_shard_dir, names[0]),
+                       map_location="cpu", weights_only=False)
+    assert shard["meta"] == expected
+    assert GameShardDataset(real_shard_dir, game="pokemon").shard_meta == expected
 
 
 # ======================================================================

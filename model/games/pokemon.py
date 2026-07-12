@@ -473,7 +473,9 @@ class PokemonDecoder(ActionDecoder):
         needs no condition weight; its BCE runs on all GT move frames.
 
         tgt keys: action_type / move_idx / switch_idx / tera [B, T] long
-        (unused arguments may be −1; extra keys like value / active_idx
+        (unused arguments may be −1; a −1 ``move_idx`` on a move frame
+        marks an expert move outside the 4 observed slots — 5th+ reveal —
+        and contributes no move loss; extra keys like value / active_idx
         are ignored).
         """
         cfg = self.cfg
@@ -486,7 +488,11 @@ class PokemonDecoder(ActionDecoder):
 
         with torch.no_grad():
             type_match = (pred["action_type_used"] == tgt_type).float()
-            w_move = uses[..., 0].float() * type_match * seq_f
+            # move_idx −1 on a move frame is unsupervisable (the used
+            # move has no observed slot); _ce's clamp would otherwise
+            # silently train slot 0.
+            w_move = (uses[..., 0].float() * (tgt["move_idx"] >= 0).float()
+                      * type_match * seq_f)
             w_switch = uses[..., 1].float() * type_match * seq_f
             w_tera = uses[..., 2].float() * seq_f
             n_move = w_move.sum().clamp(min=1)
