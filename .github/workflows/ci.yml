@@ -23,7 +23,7 @@ jobs:
           enable-cache: true
       - name: Install (CPU torch)
         run: |
-          uv venv
+          uv venv --clear
           uv pip install torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install -e .
           uv pip install pytest
