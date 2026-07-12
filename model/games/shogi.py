@@ -433,11 +433,12 @@ class ShogiDecoder(ActionDecoder):
         tgt: Dict[str, torch.Tensor],
         seq_mask: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        """Mode BCE on every labeled frame; each branch's heads are then
-        condition-weighted by (mode correct ∧ upstream conditioning
-        correct), because conditioned logits are meaningless under wrong
-        conditioning — same discipline as ``FromToDecoder.il_loss``.
-        Denominators are clamped so degenerate masks give a finite zero.
+        """Mode BCE on every labeled frame; branch heads are supervised on
+        every labeled frame of their true mode (the mode conditions no
+        branch logits), with the genuine downstream conditioning chains
+        (from→to→promo, piece→drop-square) condition-weighted exactly like
+        ``FromToDecoder.il_loss``.  Denominators are clamped so degenerate
+        masks give a finite zero.
 
         ``tgt['dropped']`` may be long with −1 = unlabeled mode; such
         frames contribute to no head.
@@ -458,10 +459,15 @@ class ShogiDecoder(ActionDecoder):
         mode_loss = (mode_bce * labeled).sum() / n_labeled
 
         mode_pred_drop = (pred["mode_logits"] > 0).long()
-        mode_ok = (mode_pred_drop == d_lbl).float()
+        mode_ok = (mode_pred_drop == d_lbl).float()  # metric only
 
-        move_w = labeled * (d_lbl == 0).float() * mode_ok
-        drop_w = labeled * (d_lbl == 1).float() * mode_ok
+        # No branch logit conditions on the mode (from/piece heads see
+        # tokens + ll only; decode always evaluates both branches), so —
+        # unlike the from→to→promo chains below — branch supervision must
+        # NOT be gated on the mode head being right: that would zero out
+        # exactly the ambiguous move-vs-drop positions.
+        move_w = labeled * (d_lbl == 0).float()
+        drop_w = labeled * (d_lbl == 1).float()
 
         def _ce(logits: torch.Tensor, idx: torch.Tensor, n: int) -> torch.Tensor:
             safe = idx.long().clamp(0, n - 1)
