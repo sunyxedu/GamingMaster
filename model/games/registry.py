@@ -50,7 +50,10 @@ def _build_go(**overrides) -> nn.Module:
 
 
 def _build_othello(**overrides) -> nn.Module:
-    """Othello/Reversi: 8×8 placement + pass.  2 piece planes + side-to-move.
+    """Othello/Reversi: 8×8 placement + pass.  3 planes: own discs /
+    opponent discs / empty, from the side-to-move perspective (channel
+    swap, no geometric flip) — matches
+    ``data_processing.games.othello.convert.board_planes``.
 
     The cheapest full-pipeline smoke-test game (WTHOR human data, trivial
     exact rules) — see docs/game-data-sources.md.
@@ -68,7 +71,9 @@ def _build_othello(**overrides) -> nn.Module:
 
 
 def _build_gomoku(**overrides) -> nn.Module:
-    """Gomoku: 15×15 placement (no pass in practice; mask handles it)."""
+    """Gomoku: 15×15 placement.  Gomoku has no pass move, and the placement
+    legal mask cannot suppress the pass Bernoulli — ``allow_pass=False``
+    removes the pass head so the action space is pure placement."""
     from model.game_network import GameNetwork
     from model.games.board import BoardConfig, BoardEncoder, PlacementDecoder
 
@@ -77,6 +82,7 @@ def _build_gomoku(**overrides) -> nn.Module:
     overrides.setdefault("piece_channels", 3)
     overrides.setdefault("board_global_features", 0)
     overrides.setdefault("n_promotions", 0)
+    overrides.setdefault("allow_pass", False)
     cfg = BoardConfig(**overrides)
     return GameNetwork(cfg, BoardEncoder(cfg), PlacementDecoder(cfg))
 

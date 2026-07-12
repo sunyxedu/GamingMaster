@@ -71,8 +71,11 @@ def masked_log_prob(
     """Differentiable log-prob of ``index`` under (optionally masked) logits.
 
     Unlike :func:`safe_masked_logits` this keeps the gradient path; only the
-    degenerate all-masked guard is applied.
+    degenerate all-masked guard is applied.  Always evaluates in float32 so
+    rollout bookkeeping and PPO replay see the same distribution regardless
+    of the logits' compute dtype.
     """
+    logits = logits.float()
     if mask is not None:
         safe = logits.masked_fill(~mask, float("-inf"))
         all_masked = (safe.isinf() & (safe < 0)).all(dim=-1)
@@ -95,7 +98,10 @@ def categorical_entropy(logits: torch.Tensor) -> torch.Tensor:
 def bernoulli_log_prob_entropy(
     logit: torch.Tensor, value: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """(log-prob, entropy) of a Bernoulli given a single logit and bool value."""
+    """(log-prob, entropy) of a Bernoulli given a single logit and bool value.
+
+    Evaluated in float32 so rollout and PPO replay agree bit-for-bit."""
+    logit = logit.float()
     lp = torch.where(value, F.logsigmoid(logit), F.logsigmoid(-logit))
     p = torch.sigmoid(logit)
     ent = -(p * F.logsigmoid(logit) + (1 - p) * F.logsigmoid(-logit))

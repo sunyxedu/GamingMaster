@@ -41,7 +41,10 @@ class BoardConfig(ModelConfig):
 
     ``board_global_features=0`` disables the global-vector projection;
     ``n_promotions`` ∈ {0, 1} disables the promotion head (a single
-    "promotion" class carries no information — index 0 means "none").
+    "promotion" class carries no information — index 0 means "none");
+    ``allow_pass=False`` removes the PlacementDecoder pass head entirely
+    (games like gomoku have no pass move — the placement legal mask
+    cannot suppress the pass Bernoulli, only this flag can).
     """
 
     board_h: int = 8
@@ -49,6 +52,7 @@ class BoardConfig(ModelConfig):
     piece_channels: int = 14       # input planes (piece type × color, history, ...)
     board_global_features: int = 8  # side-to-move, castling rights, move counters, ...
     n_promotions: int = 5           # 0 = none, 1..4 = promotion piece
+    allow_pass: bool = True         # PlacementDecoder only; False = no pass action
 
 
 def _masked_policy_logits(
@@ -78,8 +82,11 @@ def _log_prob_and_entropy(
 
     One log_softmax serves both quantities so they cannot drift apart.
     ``nan_to_num`` kills the 0·(−inf) terms produced by masked entries.
+    Computed in float32 (differentiable cast) so the PPO replay path
+    evaluates the same distribution as the fp32 rollout bookkeeping in
+    ``sample()`` even when the logits arrive in bf16.
     """
-    log_p = F.log_softmax(_masked_policy_logits(logits, mask), dim=-1)
+    log_p = F.log_softmax(_masked_policy_logits(logits.float(), mask), dim=-1)
     lp = log_p.gather(-1, index.unsqueeze(-1)).squeeze(-1)
     ent = -(torch.exp(log_p) * log_p).nan_to_num(0.0).sum(-1)
     return lp, ent
@@ -409,13 +416,22 @@ class PlacementDecoder(ActionDecoder):
     so ``decode`` is fully deterministic and returns no conditioning index.
     Hierarchical log-prob is pass-gated exactly like generals: a pass frame
     is scored by the pass head alone; a move frame by pass + placement.
+
+    ``cfg.allow_pass=False`` (gomoku) removes the pass action entirely:
+    no pass head exists, sample() never passes, and log-prob / entropy /
+    il_loss are pure placement — all three paths branch on the same flag,
+    which is what keeps PPO replay exact.  The placement legal mask alone
+    can NOT suppress the pass Bernoulli, hence the config flag.
     """
 
     def __init__(self, cfg: BoardConfig):
         super().__init__()
         self.cfg = cfg
+        self.allow_pass = getattr(cfg, "allow_pass", True)
         self.place_head = PointerHead(cfg.d_model, n_queries=1)
-        self.pass_head = MLPHead(cfg.d_model, 1)
+        self.pass_head: Optional[MLPHead] = (
+            MLPHead(cfg.d_model, 1) if self.allow_pass else None
+        )
 
     # ------------------------------------------------------------------
 
@@ -432,11 +448,10 @@ class PlacementDecoder(ActionDecoder):
     ) -> Dict[str, torch.Tensor]:
         N = tokens.shape[1]
         place_logits = self.place_head(tokens, ll)      # [BT, N] raw
-        pass_logits = self.pass_head(ll).squeeze(-1)    # [BT]
-        return {
-            "place_logits": place_logits.reshape(B, T, N),
-            "pass_logits": pass_logits.reshape(B, T),
-        }
+        out = {"place_logits": place_logits.reshape(B, T, N)}
+        if self.pass_head is not None:
+            out["pass_logits"] = self.pass_head(ll).squeeze(-1).reshape(B, T)
+        return out
 
     # ------------------------------------------------------------------
 
@@ -446,22 +461,25 @@ class PlacementDecoder(ActionDecoder):
         legal: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
         place_logits = pred["place_logits"]
-        pass_logits = pred["pass_logits"]
         legal_mask = legal.get("place") if legal else None
 
         with torch.no_grad():
-            did_pass = torch.bernoulli(torch.sigmoid(pass_logits)).bool()
-            pass_lp = torch.where(
-                did_pass,
-                F.logsigmoid(pass_logits),
-                F.logsigmoid(-pass_logits),
-            )
             place_idx = masked_sample(place_logits, legal_mask)
-            place_lp = masked_log_prob(
-                place_logits.float(), place_idx, legal_mask,
-            )
-            # Hierarchical: pass → only pass_lp; move → pass_lp + place_lp
-            total_lp = torch.where(did_pass, pass_lp, pass_lp + place_lp)
+            place_lp = masked_log_prob(place_logits, place_idx, legal_mask)
+
+            if self.pass_head is None:
+                did_pass = torch.zeros_like(place_idx, dtype=torch.bool)
+                total_lp = place_lp
+            else:
+                pass_logits = pred["pass_logits"].float()
+                did_pass = torch.bernoulli(torch.sigmoid(pass_logits)).bool()
+                pass_lp = torch.where(
+                    did_pass,
+                    F.logsigmoid(pass_logits),
+                    F.logsigmoid(-pass_logits),
+                )
+                # Hierarchical: pass → only pass_lp; move → pass_lp + place_lp
+                total_lp = torch.where(did_pass, pass_lp, pass_lp + place_lp)
 
         return {
             "action_place": place_idx,
@@ -477,7 +495,17 @@ class PlacementDecoder(ActionDecoder):
         actions: Dict[str, torch.Tensor],
         legal: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
-        pass_logits = pred["pass_logits"]
+        place_lp, place_ent = _log_prob_and_entropy(
+            pred["place_logits"], actions["place_idx"],
+            legal.get("place") if legal else None,
+        )
+
+        if self.pass_head is None:
+            with torch.no_grad():
+                head_entropy = {"ent_place": place_ent.detach().mean()}
+            return place_lp, place_ent, head_entropy
+
+        pass_logits = pred["pass_logits"].float()
         passed = actions["passed"].bool()
 
         pass_lp = torch.where(
@@ -487,11 +515,6 @@ class PlacementDecoder(ActionDecoder):
         pass_ent = -(
             p_pass * F.logsigmoid(pass_logits)
             + (1 - p_pass) * F.logsigmoid(-pass_logits)
-        )
-
-        place_lp, place_ent = _log_prob_and_entropy(
-            pred["place_logits"], actions["place_idx"],
-            legal.get("place") if legal else None,
         )
 
         total_lp = torch.where(passed, pass_lp, pass_lp + place_lp)
@@ -515,18 +538,22 @@ class PlacementDecoder(ActionDecoder):
         seq_mask: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
         """Pass BCE on every valid frame; placement CE only on move frames
-        (a pass frame carries no placement target)."""
+        (a pass frame carries no placement target).  With ``allow_pass``
+        off, every valid frame is a move frame and no pass loss exists."""
         B, T, N = pred["place_logits"].shape
         valid = seq_mask.float()
         n_valid = valid.sum().clamp(min=1.0)
 
-        tgt_pass = tgt["passed"].float()
-        pass_bce = F.binary_cross_entropy_with_logits(
-            pred["pass_logits"], tgt_pass, reduction="none",
-        ).nan_to_num(0.0)
-        pass_loss = (pass_bce * valid).sum() / n_valid
+        if self.pass_head is None:
+            move_w = valid
+        else:
+            tgt_pass = tgt["passed"].float()
+            pass_bce = F.binary_cross_entropy_with_logits(
+                pred["pass_logits"], tgt_pass, reduction="none",
+            ).nan_to_num(0.0)
+            pass_loss = (pass_bce * valid).sum() / n_valid
+            move_w = valid * (1.0 - tgt_pass)
 
-        move_w = valid * (1.0 - tgt_pass)
         n_moves = move_w.sum().clamp(min=1.0)
         tgt_place = tgt["place_idx"].long().clamp(0, N - 1)
         place_ce = F.cross_entropy(
@@ -535,14 +562,17 @@ class PlacementDecoder(ActionDecoder):
         ).reshape(B, T).nan_to_num(0.0)
         place_loss = (place_ce * move_w).sum() / n_moves
 
-        loss = pass_loss + place_loss
         with torch.no_grad():
             place_ok = pred["place_logits"].argmax(-1) == tgt_place
-            pass_ok = (pred["pass_logits"] > 0) == tgt["passed"].bool()
             metrics = {
-                "pass_loss": pass_loss.detach(),
                 "place_loss": place_loss.detach(),
-                "pass_acc": (pass_ok.float() * valid).sum() / n_valid,
                 "place_acc": (place_ok.float() * move_w).sum() / n_moves,
             }
-        return {"loss": loss, **metrics}
+        if self.pass_head is None:
+            return {"loss": place_loss, **metrics}
+
+        with torch.no_grad():
+            pass_ok = (pred["pass_logits"] > 0) == tgt["passed"].bool()
+            metrics["pass_loss"] = pass_loss.detach()
+            metrics["pass_acc"] = (pass_ok.float() * valid).sum() / n_valid
+        return {"loss": pass_loss + place_loss, **metrics}

@@ -76,7 +76,7 @@ net = build_game_network("go", board_h=9, board_w=9)
 | `chess` | `BoardEncoder` — piece-plane conv | `FromToDecoder` | from-square → to-square → promotion |
 | `go` | `BoardEncoder` | `PlacementDecoder` | point + pass |
 | `othello` | `BoardEncoder` (8×8, 3 planes) | `PlacementDecoder` | point + pass |
-| `gomoku` | `BoardEncoder` (15×15, 3 planes) | `PlacementDecoder` | point (+ pass, maskable) |
+| `gomoku` | `BoardEncoder` (15×15, 3 planes) | `PlacementDecoder` | point only (`allow_pass=False` — the placement mask cannot suppress the pass head; the config flag removes it) |
 | `shogi` | `ShogiEncoder` — board conv + 14 pieces-in-hand tokens | `ShogiDecoder` | move (from → to → promote?) OR drop (piece → square) |
 | `lux` | `LuxEncoder` — resource-map conv + unit slots | `LuxDecoder` | **simultaneous** per-unit categorical (factored joint policy) |
 | `mahjong` | `MahjongEncoder` — 34 tile-kind + 4 player + table tokens | `MahjongDecoder` | action-type (discard/riichi/chi/pon/kan/hora/pass) → tile pointer |
@@ -129,7 +129,8 @@ download each dataset.
 |---|---|---|---|
 | chess | Lichess PGN / `.pgn.zst` | `data_processing/games/chess/convert.py` | streams zst; side-to-move POV with 180° flip; labels replay-verified via python-chess |
 | go | SGF (OGS / KGS / Tygem) | `data_processing/games/go/convert.py` | own rules engine (captures, simple ko); POV = channel swap |
-| othello | WTHOR `.wtb` | `data_processing/games/othello/convert.py` | exact rules replay, implicit passes reinserted; byte format validated on real WTHOR archives |
+| othello | WTHOR `.wtb` | `data_processing/games/othello/convert.py` | exact rules replay, implicit passes reinserted; truncated (non-terminal) records rejected; byte format validated on real WTHOR archives |
+| gomoku | Gomocup `.psq` | `data_processing/games/gomoku/convert.py` | freestyle rules replay (win = ≥5); only games ending with a completed five get labels (`--keep_undecided` opts into the resignation convention) |
 | shogi | floodgate CSA | `data_processing/games/shogi/convert.py` | python-shogi replay; move-or-drop labels; POV = 180° rotation |
 | mahjong | Tenhou mjai `.mjson` (tenhou-to-mjai yearly zips) | `data_processing/games/mahjong/convert.py` | full state tracking from mjai events; decision-point frames incl. call opportunities; placement-based value |
 | pokemon | Showdown replay JSON (`replay.pokemonshowdown.com`) | `data_processing/games/pokemon/convert.py` | observer-view sim-protocol parser; one sample per side; revealed-move indices as labels |
