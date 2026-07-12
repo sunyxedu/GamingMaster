@@ -1,0 +1,31 @@
+# Full test suite on every push. Torch is installed from the CPU wheel
+# index (the lockfile pins the CUDA build, ~2.5 GB of wheels CI can't
+# use); everything else resolves from pyproject as usual.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install (CPU torch)
+        run: |
+          uv venv
+          uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install -e .
+          uv pip install pytest
+      - name: Run tests
+        run: uv run --no-sync python -m pytest tests/ -q -p no:cacheprovider
