@@ -81,14 +81,20 @@ def _log_prob_and_entropy(
     """(log-prob of ``index``, entropy) under optionally-masked logits.
 
     One log_softmax serves both quantities so they cannot drift apart.
-    ``nan_to_num`` kills the 0·(−inf) terms produced by masked entries.
     Computed in float32 (differentiable cast) so the PPO replay path
     evaluates the same distribution as the fp32 rollout bookkeeping in
     ``sample()`` even when the logits arrive in bf16.
+
+    The entropy term clamps −inf masked entries BEFORE the p·log p
+    product: ``nan_to_num`` on the product cleans only the forward —
+    mul's backward still computes 0·(−inf) = NaN and log_softmax's
+    backward spreads it to the unmasked positions.  exp underflows to 0
+    long before the clamp value, so the entropy itself is unchanged.
     """
     log_p = F.log_softmax(_masked_policy_logits(logits.float(), mask), dim=-1)
     lp = log_p.gather(-1, index.unsqueeze(-1)).squeeze(-1)
-    ent = -(torch.exp(log_p) * log_p).nan_to_num(0.0).sum(-1)
+    ent_log_p = log_p.clamp_min(-1e4)
+    ent = -(torch.exp(ent_log_p) * ent_log_p).nan_to_num(0.0).sum(-1)
     return lp, ent
 
 

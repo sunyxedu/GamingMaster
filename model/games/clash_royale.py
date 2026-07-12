@@ -58,7 +58,9 @@ class ClashRoyaleConfig(ModelConfig):
 
 def _mask_logits(logits: torch.Tensor, mask: Optional[torch.Tensor]) -> torch.Tensor:
     """Apply a legality mask with the same degenerate-row guard as
-    ``masked_log_prob`` so lp/entropy and sampling see the same distribution."""
+    ``masked_log_prob`` so entropy is evaluated under the same distribution
+    sampling and log-prob bookkeeping use (callers cast to fp32 to match
+    the fp32 log-prob path)."""
     if mask is None:
         return logits
     safe = logits.masked_fill(~mask, float("-inf"))
@@ -312,17 +314,22 @@ class CardPlacementDecoder(ActionDecoder):
 
         wait_lp, wait_ent = bernoulli_log_prob_entropy(pred["wait_logits"], waited)
 
-        card_masked = _mask_logits(pred["card_logits"], card_mask)
-        card_lp = F.log_softmax(card_masked, dim=-1).gather(
-            -1, actions["card_slot"].unsqueeze(-1),
-        ).squeeze(-1)
-        card_ent = categorical_entropy(card_masked)
+        # Log-probs go through masked_log_prob — the exact fp32 path
+        # sample() used for rollout bookkeeping — so bf16 rollout and PPO
+        # replay agree bit-for-bit; entropy sees the same fp32 distribution.
+        card_lp = masked_log_prob(
+            pred["card_logits"], actions["card_slot"], card_mask,
+        )
+        card_ent = categorical_entropy(
+            _mask_logits(pred["card_logits"].float(), card_mask),
+        )
 
-        place_masked = _mask_logits(pred["placement_logits"], place_mask)
-        place_lp = F.log_softmax(place_masked, dim=-1).gather(
-            -1, actions["place_idx"].unsqueeze(-1),
-        ).squeeze(-1)
-        place_ent = categorical_entropy(place_masked)
+        place_lp = masked_log_prob(
+            pred["placement_logits"], actions["place_idx"], place_mask,
+        )
+        place_ent = categorical_entropy(
+            _mask_logits(pred["placement_logits"].float(), place_mask),
+        )
 
         total_lp = torch.where(waited, wait_lp, wait_lp + card_lp + place_lp)
         total_ent = torch.where(waited, wait_ent, wait_ent + card_ent + place_ent)

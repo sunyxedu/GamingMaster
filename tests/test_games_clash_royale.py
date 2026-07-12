@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from model.game_network import GameNetwork
+from model.games.base import masked_sample
 from model.games.clash_royale import (
     CardPlacementDecoder,
     ClashRoyaleConfig,
@@ -182,6 +183,67 @@ def test_step_vs_full_consistency_act_steps(cfg, model):
     torch.testing.assert_close(lp, rollout_lp, atol=1e-5, rtol=1e-5)
     assert ent.shape == (B, T) and (ent >= 0).all()
     assert set(head_ent) == {"ent_wait", "ent_card", "ent_place"}
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_sample_replay_log_prob_parity(cfg, dtype):
+    """sample()'s rollout bookkeeping and log_prob_entropy()'s replay must
+    agree bit-for-bit on the same pred — including bf16 logits, where both
+    sides must evaluate the fp32 distribution (the e25e464 invariant)."""
+    torch.manual_seed(0)
+    decoder = CardPlacementDecoder(cfg)
+    B, T = 4, 6
+    n_arena = cfg.arena_h * cfg.arena_w
+    g = torch.Generator().manual_seed(3)
+
+    wait = torch.randn(B, T, generator=g) * 5
+    wait[:, 0] = 20.0   # sigmoid ≈ 1: guaranteed-wait frames
+    wait[:, 1] = -20.0  # sigmoid ≈ 0: guaranteed-play frames
+    pred = {
+        "wait_logits": wait.to(dtype).requires_grad_(),
+        "card_logits": (torch.randn(B, T, cfg.hand_size, generator=g) * 5)
+        .to(dtype).requires_grad_(),
+        "placement_logits": (torch.randn(B, T, n_arena, generator=g) * 5)
+        .to(dtype).requires_grad_(),
+    }
+    legal = _make_legal(cfg, B, T, seed=3)
+
+    lps, slots, places, waits = [], [], [], []
+    for t in range(T):
+        pred_t = {k: v[:, t] for k, v in pred.items()}
+        legal_t = {k: v[:, t] for k, v in legal.items()}
+        # decode() commits the card via masked_sample; replicate that here
+        pred_t["card_slot"] = masked_sample(pred_t["card_logits"], legal_t["card"])
+        out = decoder.sample(pred_t, legal_t)
+        lps.append(out["action_log_prob"])
+        slots.append(out["card_slot"])
+        places.append(out["place_idx"])
+        waits.append(out["waited"])
+
+    actions = {
+        "card_slot": torch.stack(slots, dim=1),
+        "place_idx": torch.stack(places, dim=1),
+        "waited": torch.stack(waits, dim=1),
+    }
+    assert actions["waited"][:, 0].all() and not actions["waited"][:, 1].any()
+
+    pred["card_slot"] = actions["card_slot"]
+    lp, ent, head_ent = decoder.log_prob_entropy(pred, actions, legal)
+
+    rollout_lp = torch.stack(lps, dim=1)
+    assert lp.dtype == torch.float32 and rollout_lp.dtype == torch.float32
+    assert torch.equal(lp, rollout_lp)  # bitwise: PPO ratio is exactly 1
+    assert ent.dtype == torch.float32 and torch.isfinite(ent).all()
+
+    # Replay is the PPO training path — it must stay differentiable.
+    # (Entropy backward under -inf masks NaNs at HEAD for every adapter —
+    # pre-existing, so only the ratio path is checked for finite grads.)
+    assert ent.requires_grad
+    lp.sum().backward()
+    for key in ("wait_logits", "card_logits", "placement_logits"):
+        grad = pred[key].grad
+        assert grad is not None and torch.isfinite(grad).all(), key
+        assert grad.abs().sum() > 0, key
 
 
 # ======================================================================

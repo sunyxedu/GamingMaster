@@ -90,8 +90,14 @@ def masked_log_prob(
 
 
 def categorical_entropy(logits: torch.Tensor) -> torch.Tensor:
-    """Entropy of a categorical distribution given (possibly -inf) logits."""
-    log_p = F.log_softmax(logits, dim=-1)
+    """Entropy of a categorical distribution given (possibly -inf) logits.
+
+    The −inf entries must be clamped BEFORE the p·log p product:
+    ``nan_to_num`` on the product cleans only the forward — mul's
+    backward still computes 0·(−inf) = NaN, and log_softmax's backward
+    spreads it to the unmasked positions.  exp underflows to 0 long
+    before the clamp value, so the entropy itself is unchanged."""
+    log_p = F.log_softmax(logits, dim=-1).clamp_min(-1e4)
     return -(torch.exp(log_p) * log_p).nan_to_num(0.0).sum(-1)
 
 

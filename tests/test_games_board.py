@@ -11,8 +11,10 @@ Covers the frozen adapter contract:
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 from model.game_network import GameNetwork
+from model.games.base import masked_sample
 from model.games.board import (
     BoardConfig,
     BoardEncoder,
@@ -249,6 +251,98 @@ def test_ppo_exactness_placement():
     assert set(head_ent) == {"ent_pass", "ent_place"}
 
 
+def test_ppo_exactness_fromto_bf16():
+    """With bf16 logits, sample()'s bookkeeping and log_prob_entropy()'s
+    replay must still agree bit-for-bit — both evaluate the fp32
+    distribution (masked_log_prob / _log_prob_and_entropy cast to float32).
+    Decoder-level so the two paths see literally the same logits."""
+    torch.manual_seed(7)
+    cfg = make_cfg()
+    decoder = FromToDecoder(cfg)
+    B, T = 4, 5
+    legal = {
+        "from": torch.stack([random_mask(B, N) for _ in range(T)], 1),
+        "to": torch.stack([random_mask(B, N) for _ in range(T)], 1),
+    }
+    pred = {
+        "from_logits": (torch.randn(B, T, N) * 5).bfloat16(),
+        "to_logits": (torch.randn(B, T, N) * 5).bfloat16(),
+        "promotion_logits": (torch.randn(B, T, cfg.n_promotions) * 5).bfloat16(),
+    }
+
+    lps, froms, tos, promos = [], [], [], []
+    for t in range(T):
+        pred_t = {k: v[:, t] for k, v in pred.items()}
+        legal_t = {k: v[:, t] for k, v in legal.items()}
+        # decode() commits from/to via masked_sample; replicate that here
+        pred_t["from_idx"] = masked_sample(pred_t["from_logits"], legal_t["from"])
+        pred_t["to_idx"] = masked_sample(pred_t["to_logits"], legal_t["to"])
+        out = decoder.sample(pred_t, legal_t)
+        lps.append(out["action_log_prob"])
+        froms.append(out["action_from"])
+        tos.append(out["action_to"])
+        promos.append(out["action_promotion"])
+
+    actions = {
+        "from_idx": torch.stack(froms, 1),
+        "to_idx": torch.stack(tos, 1),
+        "promotion": torch.stack(promos, 1),
+    }
+    lp, ent, head_ent = decoder.log_prob_entropy(pred, actions, legal)
+
+    rollout_lp = torch.stack(lps, 1)
+    assert lp.dtype == torch.float32 and rollout_lp.dtype == torch.float32
+    assert torch.equal(lp, rollout_lp)  # bitwise: PPO ratio is exactly 1
+    assert ent.dtype == torch.float32 and torch.isfinite(ent).all()
+
+
+def test_ppo_exactness_placement_bf16():
+    torch.manual_seed(8)
+    cfg = make_cfg()
+    decoder = PlacementDecoder(cfg)
+    B, T = 4, 6
+    legal = {"place": torch.stack([random_mask(B, N) for _ in range(T)], 1)}
+    pass_logits = torch.randn(B, T) * 5
+    pass_logits[:, 0] = 20.0   # sigmoid ≈ 1: guaranteed pass frames
+    pass_logits[:, 1] = -20.0  # sigmoid ≈ 0: guaranteed move frames
+    pred = {
+        "place_logits": (torch.randn(B, T, N) * 5).bfloat16(),
+        "pass_logits": pass_logits.bfloat16(),
+    }
+
+    lps, places, passes = [], [], []
+    for t in range(T):
+        out = decoder.sample(
+            {k: v[:, t] for k, v in pred.items()},
+            {"place": legal["place"][:, t]},
+        )
+        lps.append(out["action_log_prob"])
+        places.append(out["action_place"])
+        passes.append(out["action_pass"])
+
+    actions = {"place_idx": torch.stack(places, 1), "passed": torch.stack(passes, 1)}
+    assert actions["passed"][:, 0].all() and not actions["passed"][:, 1].any()
+
+    lp, ent, head_ent = decoder.log_prob_entropy(pred, actions, legal)
+    rollout_lp = torch.stack(lps, 1)
+    assert lp.dtype == torch.float32 and rollout_lp.dtype == torch.float32
+    assert torch.equal(lp, rollout_lp)
+    assert ent.dtype == torch.float32 and torch.isfinite(ent).all()
+
+    # Sample/replay agreeing is not enough — a bf16 bookkeeping pair would
+    # also agree with itself.  Pin both to the fp32 evaluation of the same
+    # masked distribution (every row has a legal entry, so no guard needed).
+    place_f = pred["place_logits"].float().masked_fill(~legal["place"], float("-inf"))
+    ref_place = F.log_softmax(place_f, -1).gather(
+        -1, actions["place_idx"].unsqueeze(-1),
+    ).squeeze(-1)
+    pass_f = pred["pass_logits"].float()
+    ref_pass = torch.where(
+        actions["passed"], F.logsigmoid(pass_f), F.logsigmoid(-pass_f),
+    )
+    assert torch.equal(lp, torch.where(actions["passed"], ref_pass, ref_pass + ref_place))
+
+
 # ======================================================================
 # 5. Legal-mask respect
 # ======================================================================
@@ -339,3 +433,38 @@ def test_il_loss_placement():
 
     (full["loss"] + empty["loss"]).backward()
     assert_grad_flow(model)
+
+
+# ---------------------------------------------------------------------------
+# 7. masked entropy gradients — 0·(−inf) must not NaN the backward
+# ---------------------------------------------------------------------------
+
+
+def test_categorical_entropy_masked_backward_finite():
+    from model.games.base import categorical_entropy
+
+    torch.manual_seed(0)
+    logits = torch.randn(4, 7, requires_grad=True)
+    mask = torch.zeros(4, 7, dtype=torch.bool)
+    mask[:, :3] = True
+    ent = categorical_entropy(logits.masked_fill(~mask, float("-inf")))
+    # forward: entropy of the 3 unmasked entries only (≤ log 3)
+    assert torch.isfinite(ent).all()
+    assert (ent <= torch.log(torch.tensor(3.0)) + 1e-5).all()
+    ent.sum().backward()
+    assert torch.isfinite(logits.grad).all()
+    assert logits.grad[:, 3:].abs().sum() == 0
+
+
+def test_log_prob_and_entropy_masked_backward_finite():
+    from model.games.board import _log_prob_and_entropy
+
+    torch.manual_seed(0)
+    logits = torch.randn(5, N, requires_grad=True)
+    mask = torch.zeros(5, N, dtype=torch.bool)
+    mask[:, :4] = True
+    idx = torch.randint(0, 4, (5,))
+    lp, ent = _log_prob_and_entropy(logits, idx, mask)
+    assert torch.isfinite(lp).all() and torch.isfinite(ent).all()
+    (lp.sum() + ent.sum()).backward()
+    assert torch.isfinite(logits.grad).all()
