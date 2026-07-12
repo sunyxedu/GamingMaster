@@ -250,7 +250,12 @@ def test_sampling_respects_legal_masks(cfg, model):
             out = model.step(obs, legal=legal)
         b = torch.arange(B)
         assert legal["action_type"][b, out["action_type"]].all(), "sampled illegal type"
-        assert legal["actor"][b, out["actor_idx"]].all(), "sampled illegal actor"
+        # Actor legality only applies where the type USES an actor: actor-
+        # less types pin the actor to the own-hero token for conditioning,
+        # deliberately bypassing the mask (the actor is not part of the
+        # action there — its log-prob is ARG_USES-gated off).
+        uses_actor = model.action_decoder.ARG_USES[out["action_type"], 0]
+        assert legal["actor"][b, out["actor_idx"]][uses_actor].all(), "sampled illegal actor"
         assert legal["target"][b, out["target_idx"]].all(), "sampled illegal target"
         assert torch.isfinite(out["action_log_prob"]).all()
 
@@ -311,3 +316,131 @@ def test_il_loss_degenerate_masks(cfg, model):
     }
     out = model.action_decoder.il_loss(pred, tgt_end, torch.ones(B, T, dtype=torch.bool))
     assert torch.isfinite(out["loss"])
+
+
+# ======================================================================
+# 7. Actor-less conditioning pin (own-hero token)
+# ======================================================================
+
+def _hero_power_only_legal(cfg, B):
+    """Legal masks whose only legal action type is hero_power (actor-less);
+    every entity is a legal actor so a policy-sampled actor would spread
+    across all tokens."""
+    S = _n_tokens(cfg)
+    legal = {
+        "action_type": torch.zeros(B, cfg.n_action_types, dtype=torch.bool),
+        "actor": torch.ones(B, S, dtype=torch.bool),
+        "target": torch.ones(B, S, dtype=torch.bool),
+    }
+    legal["action_type"][:, 3] = True  # 3 = hero_power: (F, T, F)
+    return legal
+
+
+def test_rollout_pins_actorless_conditioning_to_own_hero(cfg):
+    """With hero_power forced as the only legal type, step() (labels=None)
+    must always commit the own-hero token as the actor — never a policy
+    sample over all entities.  IL trains the hero_power target head
+    conditioned exclusively on the own-hero embedding, so rollout must
+    condition identically."""
+    from dataclasses import asdict
+
+    from model.games import build_game_network
+
+    torch.manual_seed(0)
+    net = build_game_network("hearthstone", **asdict(cfg))
+    net.eval()
+    own_hero = net.obs_encoder.own_hero_idx
+    B = 4
+    for trial in range(50):
+        obs = {k: v[:, 0] for k, v in _make_obs(cfg, B, T=1, seed=trial).items()}
+        with torch.no_grad():
+            out = net.step(obs, legal=_hero_power_only_legal(cfg, B))
+        assert (out["action_type"] == 3).all()
+        assert (out["actor_idx"] == own_hero).all(), (
+            f"trial {trial}: actor conditioning not pinned: {out['actor_idx']}"
+        )
+
+
+def test_teacher_forced_actorless_pin(cfg, model):
+    """Actor-less frames carry a −1 actor label by convention; decode must
+    pin the committed actor to the own-hero token instead of treating −1
+    as 'sample from own policy'."""
+    model.eval()
+    B, T = 2, 4
+    labels = {
+        "action_type": torch.full((B, T), 3, dtype=torch.long),  # hero_power
+        "actor_idx": torch.full((B, T), -1, dtype=torch.long),
+    }
+    own_hero = cfg.hand_slots + 2 * cfg.board_slots
+    with torch.no_grad():
+        out = model(_make_obs(cfg, B, T), labels=labels)
+    assert (out["actor_idx"] == own_hero).all()
+    assert torch.equal(out["action_type_used"], labels["action_type"])
+
+
+def test_il_loss_ignores_logits_at_neg1_arg_frames(cfg, model):
+    """−1 target/position labels on arg-USING types mark a per-instance
+    absent argument: those frames' CE must be gated out of il_loss, so
+    perturbing their logits cannot change the loss (the clamp in _ce is a
+    crash guard, never a training label)."""
+    B, T = 2, 4
+    S = _n_tokens(cfg)
+    g = torch.Generator().manual_seed(7)
+    tgt = {
+        "action_type": torch.ones(B, T, dtype=torch.long),  # play_card (T,T,T)
+        "actor_idx": torch.randint(0, S, (B, T), generator=g),
+        "target_idx": torch.randint(0, S, (B, T), generator=g),
+        "position": torch.randint(0, cfg.board_slots + 1, (B, T), generator=g),
+    }
+    absent = torch.zeros(B, T, dtype=torch.bool)
+    absent[:, ::2] = True  # alternate frames: untargeted / positionless
+    tgt["target_idx"][absent] = -1
+    tgt["position"][absent] = -1
+
+    with torch.no_grad():
+        pred = model(_make_obs(cfg, B, T),
+                     labels={"action_type": tgt["action_type"],
+                             "actor_idx": tgt["actor_idx"]})
+    pred = {k: v.detach() for k, v in pred.items()}
+    perturbed = {k: v.clone() for k, v in pred.items()}
+    n_abs = int(absent.sum())
+    perturbed["target_logits"][absent] = torch.randn(n_abs, S, generator=g) * 10
+    perturbed["position_logits"][absent] = (
+        torch.randn(n_abs, cfg.board_slots + 1, generator=g) * 10
+    )
+
+    seq_mask = torch.ones(B, T, dtype=torch.bool)
+    out1 = model.action_decoder.il_loss(pred, tgt, seq_mask)
+    out2 = model.action_decoder.il_loss(perturbed, tgt, seq_mask)
+    assert torch.equal(out1["loss"], out2["loss"])
+    assert torch.equal(out1["target_loss"], out2["target_loss"])
+    assert torch.equal(out1["position_loss"], out2["position_loss"])
+
+
+def test_sample_replay_logprob_exactness_with_pin(cfg, model):
+    """sample() and log_prob_entropy() must assign the same log-prob to
+    the sampled action even when the committed actor was pinned rather
+    than sampled — the pinned own-hero index may be ILLEGAL under the
+    actor mask (−inf actor lp), and the ARG_USES gate must keep it out of
+    the total in both paths identically."""
+    model.eval()
+    B = 4
+    for trial in range(10):
+        obs = {k: v[:, 0] for k, v in _make_obs(cfg, B, T=1, seed=trial).items()}
+        legal = _make_legal(cfg, B, seed=trial + 100)
+        # Only actor-less types legal: 0 = end_turn, 3 = hero_power
+        legal["action_type"][:, 1:3] = False
+        legal["action_type"][:, 0] |= ~legal["action_type"].any(-1)
+        with torch.no_grad():
+            out = model.step(obs, legal=legal)
+        actions = {k: out[k].unsqueeze(1)
+                   for k in ("action_type", "actor_idx", "target_idx", "position")}
+        pred = {k: out[k].unsqueeze(1)
+                for k in ("action_type_logits", "actor_logits",
+                          "target_logits", "position_logits")}
+        legal_seq = {k: v.unsqueeze(1) for k, v in legal.items()}
+        with torch.no_grad():
+            lp, ent, _ = model.compute_log_prob(pred, actions, legal_seq)
+        assert torch.equal(lp.squeeze(1), out["action_log_prob"])
+        assert torch.isfinite(out["action_log_prob"]).all()
+        assert torch.isfinite(ent).all()

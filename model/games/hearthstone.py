@@ -142,9 +142,11 @@ class EntityActionDecoder(ActionDecoder):
                   actor       [B, T, n_tokens]       bool
                   target      [B, T, n_tokens]       bool
     labels keys:  action_type / actor_idx [B, T]  teacher forcing
-                  (−1 → sample) — actor conditions on the type embedding,
-                  target/position condition on the actor embedding, so both
-                  choices must be replayable.
+                  (−1 → sample; actor-less types pin the actor to the
+                  own-hero token, with or without labels) — actor
+                  conditions on the type embedding, target/position
+                  condition on the actor embedding, so both choices must
+                  be replayable.
 
     Hierarchical log-prob: type_lp plus each argument head's lp only where
     ARG_USES[action_type] says the argument exists for that type — an
@@ -225,22 +227,30 @@ class EntityActionDecoder(ActionDecoder):
 
         actor_logits = self.actor_head(tokens, self.type_embed(action_type), ll)
         actor_label = labels.get("actor_idx") if labels else None
-        if actor_label is not None:
-            # Actor-less action types (ARG_USES[type][0] == False) carry a
-            # −1 label by convention.  _pick would treat that as "sample
-            # from own policy", conditioning the target head on a random
-            # entity that differs between IL, rollout and replay.  Pin
-            # those rows to the own-hero token instead — a fixed, always-
-            # present entity — so the conditioning is deterministic.  The
-            # actor's log-prob is already gated off by ARG_USES.
-            own_hero = cfg.hand_slots + 2 * cfg.board_slots
-            uses_actor = self.ARG_USES[action_type.reshape(BT), 0]
+        # Actor-less action types (ARG_USES[type][0] == False) carry a
+        # −1 label by convention, and the label-less rollout path carries
+        # no actor label at all.  Either way the actor would be sampled
+        # from own policy, conditioning the target head on a random
+        # entity that differs between IL, rollout and replay.  Pin those
+        # rows to the own-hero token instead — a fixed, always-present
+        # entity — so the conditioning is deterministic in every path.
+        # The pin deliberately bypasses legal["actor"]: for actor-less
+        # types the actor is pure conditioning, never part of the action
+        # (its log-prob is gated off by ARG_USES), and matching the
+        # IL-time conditioning matters more than an actor mask written
+        # for actor-USING types.  Explicit ≥0 labels still win, and
+        # actor-USING types with a −1 label keep scheduled sampling.
+        own_hero = cfg.hand_slots + 2 * cfg.board_slots
+        uses_actor = self.ARG_USES[action_type.reshape(BT), 0]
+        if actor_label is None:
+            actor_label = torch.full((BT,), -1, dtype=torch.long, device=device)
+        else:
             actor_label = actor_label.reshape(BT).long()
-            actor_label = torch.where(
-                ~uses_actor & (actor_label < 0),
-                torch.full_like(actor_label, own_hero),
-                actor_label,
-            )
+        actor_label = torch.where(
+            ~uses_actor & (actor_label < 0),
+            torch.full_like(actor_label, own_hero),
+            actor_label,
+        )
         actor_idx = self._pick(
             actor_logits, actor_label,
             _legal("actor", S), BT, S,
