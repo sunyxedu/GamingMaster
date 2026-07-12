@@ -224,8 +224,25 @@ class EntityActionDecoder(ActionDecoder):
         )
 
         actor_logits = self.actor_head(tokens, self.type_embed(action_type), ll)
+        actor_label = labels.get("actor_idx") if labels else None
+        if actor_label is not None:
+            # Actor-less action types (ARG_USES[type][0] == False) carry a
+            # −1 label by convention.  _pick would treat that as "sample
+            # from own policy", conditioning the target head on a random
+            # entity that differs between IL, rollout and replay.  Pin
+            # those rows to the own-hero token instead — a fixed, always-
+            # present entity — so the conditioning is deterministic.  The
+            # actor's log-prob is already gated off by ARG_USES.
+            own_hero = cfg.hand_slots + 2 * cfg.board_slots
+            uses_actor = self.ARG_USES[action_type.reshape(BT), 0]
+            actor_label = actor_label.reshape(BT).long()
+            actor_label = torch.where(
+                ~uses_actor & (actor_label < 0),
+                torch.full_like(actor_label, own_hero),
+                actor_label,
+            )
         actor_idx = self._pick(
-            actor_logits, labels.get("actor_idx") if labels else None,
+            actor_logits, actor_label,
             _legal("actor", S), BT, S,
         )
 
@@ -359,7 +376,10 @@ class EntityActionDecoder(ActionDecoder):
         signal (same discipline as ImitationLoss's cond_weight).
 
         tgt keys: action_type / actor_idx / target_idx / position [B,T]
-        long (unused arguments may be −1).
+        long.  Per-INSTANCE absent arguments are −1 (untargeted plays,
+        spell positions, untargeted hero powers): ARG_USES gating is per
+        TYPE, so validity is additionally gated on ``tgt >= 0`` — the
+        clamp in ``_ce`` is purely a crash guard, never a training label.
         """
         cfg = self.cfg
         B, T, S = pred["actor_logits"].shape
@@ -375,9 +395,12 @@ class EntityActionDecoder(ActionDecoder):
             # position when either the actor matched or the type never had
             # an actor to begin with.
             actor_ok = (pred["actor_idx"] == tgt["actor_idx"]) | ~uses[..., 0]
-            w_actor = uses[..., 0].float() * type_match.float() * seq_f
-            w_target = uses[..., 1].float() * (type_match & actor_ok).float() * seq_f
-            w_pos = uses[..., 2].float() * (type_match & actor_ok).float() * seq_f
+            w_actor = (uses[..., 0].float() * type_match.float() * seq_f
+                       * (tgt["actor_idx"] >= 0).float())
+            w_target = (uses[..., 1].float() * (type_match & actor_ok).float() * seq_f
+                        * (tgt["target_idx"] >= 0).float())
+            w_pos = (uses[..., 2].float() * (type_match & actor_ok).float() * seq_f
+                     * (tgt["position"] >= 0).float())
             n_actor = w_actor.sum().clamp(min=1)
             n_target = w_target.sum().clamp(min=1)
             n_pos = w_pos.sum().clamp(min=1)
