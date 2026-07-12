@@ -287,6 +287,41 @@ def test_illegal_recorded_move_skips_game(tmp_path):
     assert ds[0]["meta"]["n_recorded_moves"] == len(good.moves)
 
 
+def test_truncated_record_rejected():
+    # A record that stops while either side can still move must not
+    # replay: its value labels would come from a non-terminal disc count.
+    moves, _, _, _ = random_playout(seed=0)
+    truncated = moves[: len(moves) // 2]
+    with pytest.raises(IllegalGameError, match="truncated"):
+        replay_frames(truncated)
+    game = WthorGame(0, 1, 2, 33, 33, moves=truncated)
+    with pytest.raises(IllegalGameError, match="truncated"):
+        game_to_sample(game, "synthetic", 0)
+
+
+# Shortest possible game: Black wipes White out in 9 moves
+# (e6 f4 e3 f6 g5 d6 e7 f5 c5) — (row, col) 0-based.
+WIPEOUT_MOVES = [
+    (5, 4), (3, 5), (2, 4), (5, 5), (4, 6), (5, 3), (6, 4), (4, 5), (4, 2),
+]
+
+
+def test_early_wipeout_accepted():
+    # A legitimate early finish well before 60 moves is game-over (no side
+    # can move) and must convert despite being far shorter than a full game.
+    frames, board = replay_frames(WIPEOUT_MOVES)
+    b, w = disc_counts(board)
+    assert w == 0 and b == 13                    # true wipeout
+    assert len(frames) == 9 and not any(f[3] for f in frames)
+
+    game = WthorGame(0, 1, 2, adjusted_black_score(b, w), 64,
+                     moves=WIPEOUT_MOVES)
+    sample, score_ok = game_to_sample(game, "wipeout", 0)
+    assert score_ok                              # 13 + 51 empties = 64
+    assert sample["meta"]["replayed_white"] == 0
+    assert sample["tgt"]["value"].tolist() == [1, -1] * 4 + [1]
+
+
 def test_e2e_shard_to_gradients(tmp_path):
     torch.manual_seed(0)
     games = [_wthor_game_from_playout(s) for s in (6, 7)]

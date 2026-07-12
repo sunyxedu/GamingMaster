@@ -32,10 +32,13 @@ Targets:
                          folded into RE), 0 for jigo/draw.
 
 Skipping policy (each with its own counter):
-    wrong board size; handicap games (HA>0 or AB/AW setup) unless
-    --allow_handicap (setup stones are then pre-placed); unknown or
-    unfinished RE unless --allow_no_result (value 0); games shorter than
-    --min_moves; games with an illegal/unreplayable move.
+    wrong board size; mid-game AB/AW/AE setup (always — pre-placing it
+    would corrupt earlier frames); handicap games (HA>0 or AB/AW setup)
+    unless --allow_handicap (root setup stones are then pre-placed; HA>0
+    needs len(AB)==HA, or no AB with the placements carried as the first
+    HA Black moves); unknown or unfinished RE unless --allow_no_result
+    (value 0); games shorter than --min_moves; games with an
+    illegal/unreplayable move.
 """
 
 from __future__ import annotations
@@ -115,17 +118,27 @@ def game_to_sample(
     except SGFError:
         return None, "wrong_board_size"
 
+    # Mid-game AB/AW/AE setup would be applied before move 0 (the flat
+    # setup lists lose the ordering), corrupting every frame before the
+    # setup node — unreplayable regardless of --allow_handicap.
+    if game.setup_after_move:
+        return None, "handicap"
     if (game.handicap > 0 or game.setup_black or game.setup_white) \
             and not allow_handicap:
         return None, "handicap"
-    if allow_handicap:
-        # Only well-formed root-node handicap records convert: mid-game
-        # AB/AW setup would be pre-placed before move 0 (corrupting every
-        # earlier frame), and HA>0 with a mismatched AB count means the
-        # server implied placements the record does not carry.
-        if game.setup_after_move:
-            return None, "handicap"
-        if game.handicap > 0 and len(game.setup_black) != game.handicap:
+    if allow_handicap and game.handicap > 0 \
+            and len(game.setup_black) != game.handicap:
+        # No AB at all can still be complete: free-placement servers record
+        # the handicap stones as the first HA consecutive Black moves, and
+        # those replay correctly as-is (go rules don't enforce alternation).
+        # Any other mismatch means the server implied placements the record
+        # does not carry.
+        free_placement = (
+            not game.setup_black
+            and len(game.moves) >= game.handicap
+            and all(c == "B" for c, _ in game.moves[:game.handicap])
+        )
+        if not free_placement:
             return None, "handicap"
     if len(game.moves) < max(min_moves, 1):
         return None, "too_short"

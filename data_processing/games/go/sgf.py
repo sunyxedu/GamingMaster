@@ -7,7 +7,8 @@ Scope (all this pipeline needs — NOT a general SGF library):
     (one game per file is the typical case);
   - properties: root props are kept verbatim in ``SGFGame.props``
     (SZ / HA / KM / RE / PB / PW / BR / WR are given typed accessors),
-    AB / AW setup stones and B / W moves are parsed into points;
+    AB / AW setup stones and B / W moves are parsed into points,
+    AE clears setup points (applied after the same node's AB/AW);
   - pass moves: ``[]`` always, and ``[tt]`` on boards of size ≤ 19;
   - markup, comments, time stamps etc. are carried in ``props`` but never
     interpreted; ``\\]`` escapes inside property values are honoured so
@@ -38,8 +39,8 @@ class SGFGame:
     moves: List[Move] = field(default_factory=list)
     setup_black: List[Point] = field(default_factory=list)   # AB stones
     setup_white: List[Point] = field(default_factory=list)   # AW stones
-    #: an AB/AW property appeared AFTER the first B/W move — the flat
-    #: setup lists lose the ordering, so pre-placing them before move 0
+    #: an AB/AW/AE property appeared AFTER the first B/W move — the flat
+    #: setup lists lose the ordering, so applying them before move 0
     #: would corrupt every earlier frame (teaching/position-setup SGFs).
     setup_after_move: bool = False
 
@@ -169,8 +170,25 @@ def _finish(events: List[Tuple[str, List[str]]]) -> SGFGame:
             break
 
     game = SGFGame()
+    pending_ae: List[Point] = []
+
+    def apply_ae() -> None:
+        # AE clears points only AFTER the same node's AB/AW additions —
+        # deferred to the node boundary so within-node property order
+        # cannot matter (FF[4] forbids overlapping setup lists anyway).
+        for p in pending_ae:
+            if p in game.setup_black:
+                game.setup_black.remove(p)
+            elif p in game.setup_white:
+                game.setup_white.remove(p)
+            # clearing an already-empty point is a no-op
+        pending_ae.clear()
+
     for ident, values in events:
-        if ident in ("B", "W"):
+        if ident == ";":                        # node boundary
+            apply_ae()
+        elif ident in ("B", "W"):
+            apply_ae()
             game.moves.append((ident, _parse_point(values[0] if values else "",
                                                    size)))
         elif ident in ("AB", "AW"):
@@ -181,8 +199,17 @@ def _finish(events: List[Tuple[str, List[str]]]) -> SGFGame:
                 p = _parse_point(v, size)
                 if p is not None:               # a setup stone cannot pass
                     dst.append(p)
+        elif ident == "AE":
+            if game.moves:
+                game.setup_after_move = True    # same corruption as AB/AW
+            else:
+                for v in values:
+                    p = _parse_point(v, size)
+                    if p is not None:           # "[]" in a setup list is junk
+                        pending_ae.append(p)
         else:
             game.props.setdefault(ident, []).extend(values)
+    apply_ae()
     return game
 
 
@@ -220,10 +247,11 @@ def parse_sgf(text: str) -> List[SGFGame]:
                 events = None
         elif not collecting:
             continue
+        elif kind == ";":
+            events.append((";", []))            # node boundary (AE ordering)
         elif kind == "IDENT":
             events.append((val, []))
         elif kind == "VALUE":
             if events:                          # ignore values before an ident
                 events[-1][1].append(val)
-        # ";" needs no action: idents/values already attach in order
     return games

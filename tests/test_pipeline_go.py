@@ -62,6 +62,41 @@ HANDICAP_SGF = (
 # Corrupt record: White plays onto an occupied point.
 CORRUPT_SGF = "(;GM[1]FF[4]SZ[9]RE[B+R];B[ee];W[ee];B[cc])"
 
+# HA declared but only one AB stone recorded: the server implied a second
+# placement the record does not carry.
+HA_MISMATCH_SGF = (
+    "(;GM[1]FF[4]SZ[9]HA[2]KM[0.5]RE[W+R]AB[cc];W[ee];B[ce];W[cg];B[eg])"
+)
+
+# Free placement: HA[2] with NO AB — the handicap stones are carried as
+# consecutive Black moves before White's first move.
+FREE_PLACEMENT_SGF = (
+    "(;GM[1]FF[4]SZ[9]HA[2]KM[0.5]RE[W+R];B[cc];B[gg];W[ee];B[ce];W[cg])"
+)
+
+# HA[2] with no AB but strictly alternating colors from move 0: the
+# placements are genuinely missing from the record.
+FREE_PLACEMENT_MISSING_SGF = (
+    "(;GM[1]FF[4]SZ[9]HA[2]KM[0.5]RE[W+R];B[cc];W[ee];B[ce];W[cg])"
+)
+
+# Teaching-style record: an AB setup stone injected after move 2.
+MIDGAME_AB_SGF = (
+    "(;GM[1]FF[4]SZ[9]RE[B+R];B[cc];W[gg];B[ee]AB[dd];W[ge];B[ec];W[gc])"
+)
+
+# Root-node AE: a pre-move setup node clears one of the two AB stones.
+ROOT_AE_SGF = (
+    "(;GM[1]FF[4]SZ[9]RE[B+R]AB[cc][gg];AE[cc];B[ee];W[ge];B[ec];W[gc])"
+)
+
+# Mid-game AE: the exact corruption record from the audit finding — before
+# AE was interpreted this converted "ok" with the removed stone still
+# present on every frame after the AE node.
+MIDGAME_AE_SGF = (
+    "(;GM[1]SZ[9]RE[B+R];B[cc];W[gg];B[ee]AE[cc];W[ge];B[ec];W[gc])"
+)
+
 # Tiny 19x19 game with [tt] passes.
 TINY19_SGF = (
     "(;GM[1]FF[4]SZ[19]KM[6.5]RE[W+3.5]PB[P1]PW[P2]"
@@ -332,6 +367,94 @@ def test_corrupt_record_skipped():
         one_game(CORRUPT_SGF), 9, min_moves=1,
     )
     assert sample is None and reason == "illegal_move"
+
+
+# ---------------------------------------------------------------------------
+# 5b. Setup hygiene: mid-game AB/AW/AE, HA↔AB consistency, free placement
+# ---------------------------------------------------------------------------
+
+def test_midgame_ab_rejected():
+    g = one_game(MIDGAME_AB_SGF)
+    assert g.setup_after_move
+    for kwargs in ({}, {"allow_handicap": True}):
+        sample, reason = goconvert.game_to_sample(g, 9, min_moves=1, **kwargs)
+        assert sample is None and reason == "handicap"
+
+
+def test_root_handicap_accepted_when_ha_matches_ab():
+    sample, reason = goconvert.game_to_sample(
+        one_game(HANDICAP_SGF), 9, min_moves=1, allow_handicap=True,
+    )
+    assert reason == "ok"
+    f = sample["obs"]["board_seq"].numpy()
+    # Frame 0: White moves first, both AB stones are opponent stones.
+    assert f[0, 0].sum() == 0
+    assert f[0, 1, 2, 2] == 1 and f[0, 1, 6, 6] == 1 and f[0, 1].sum() == 2
+    assert sample["tgt"]["value"][0] == 1               # W won, W to move
+
+
+def test_ha_ab_count_mismatch_rejected():
+    sample, reason = goconvert.game_to_sample(
+        one_game(HA_MISMATCH_SGF), 9, min_moves=1, allow_handicap=True,
+    )
+    assert sample is None and reason == "handicap"
+
+
+def test_free_placement_handicap_accepted():
+    g = one_game(FREE_PLACEMENT_SGF)
+    assert g.handicap == 2 and not g.setup_black
+
+    # Without --allow_handicap: still rejected (HA > 0).
+    sample, reason = goconvert.game_to_sample(g, 9, min_moves=1)
+    assert sample is None and reason == "handicap"
+
+    sample, reason = goconvert.game_to_sample(
+        g, 9, min_moves=1, allow_handicap=True,
+    )
+    assert reason == "ok"
+    f = sample["obs"]["board_seq"].numpy()
+    # Frame 0: empty board — the placements happen AS moves 0 and 1.
+    assert f[0, 0].sum() == 0 and f[0, 1].sum() == 0
+    # Frame 2 = position before White's first move: both handicap stones
+    # on the board, as opponent stones from White's POV.
+    assert f[2, 0].sum() == 0
+    assert f[2, 1, 2, 2] == 1 and f[2, 1, 6, 6] == 1 and f[2, 1].sum() == 2
+    # W won → mover-POV values follow the B,B,W,B,W move colors.
+    assert sample["tgt"]["value"].tolist() == [-1, -1, 1, -1, 1]
+
+
+def test_free_placement_missing_stones_rejected():
+    # HA[2] but alternating colors from move 0: the record carries neither
+    # AB setup nor leading Black placement moves.
+    sample, reason = goconvert.game_to_sample(
+        one_game(FREE_PLACEMENT_MISSING_SGF), 9, min_moves=1,
+        allow_handicap=True,
+    )
+    assert sample is None and reason == "handicap"
+
+
+def test_root_ae_clears_setup_stone():
+    g = one_game(ROOT_AE_SGF)
+    assert g.setup_black == [(6, 6)] and not g.setup_after_move
+    sample, reason = goconvert.game_to_sample(
+        g, 9, min_moves=1, allow_handicap=True,
+    )
+    assert reason == "ok"
+    f = sample["obs"]["board_seq"].numpy()
+    # Frame 0 (B to move): the cleared point is empty, the survivor is own.
+    assert f[0, 2, 2, 2] == 1
+    assert f[0, 0, 6, 6] == 1 and f[0, 0].sum() == 1 and f[0, 1].sum() == 0
+
+
+def test_midgame_ae_rejected():
+    # The audit-finding record must never convert again: AE after a move
+    # sets setup_after_move and the game is rejected like mid-game AB.
+    g = one_game(MIDGAME_AE_SGF)
+    assert g.setup_after_move
+    assert not g.setup_black and not g.setup_white      # nothing pre-placed
+    for kwargs in ({}, {"allow_handicap": True}):
+        sample, reason = goconvert.game_to_sample(g, 9, min_moves=1, **kwargs)
+        assert sample is None and reason == "handicap"
 
 
 # ---------------------------------------------------------------------------
