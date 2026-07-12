@@ -486,24 +486,31 @@ def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint"
 # ======================================================================
 
 def freeze_encoder(model: nn.Module) -> None:
-    """Freeze Stage-1 encoder weights (SpatialEncoder + global_proj + ST layers).
+    """Freeze Stage-1 encoder weights (obs encoder + ST layers).
 
     Useful during early RL fine-tuning to stabilise representations
-    learned during IL pre-training.
+    learned during IL pre-training.  GeneralsNetwork exposes the legacy
+    attribute layout (spatial_encoder / global_proj / row+col embeds);
+    every other GameNetwork freezes its obs_encoder, which owns the
+    game's spatial PE.
     """
-    for param in model.spatial_encoder.parameters():
-        param.requires_grad = False
-    for param in model.global_proj.parameters():
-        param.requires_grad = False
+    if hasattr(model, "spatial_encoder"):
+        for param in model.spatial_encoder.parameters():
+            param.requires_grad = False
+        for param in model.global_proj.parameters():
+            param.requires_grad = False
+        # Positional embeddings
+        model.row_embed.requires_grad = False
+        model.col_embed.requires_grad = False
+    else:
+        for param in model.obs_encoder.parameters():
+            param.requires_grad = False
     if hasattr(model, "st_layers"):
         for param in model.st_layers.parameters():
             param.requires_grad = False
     if hasattr(model, "history_encoder"):
         for param in model.history_encoder.parameters():
             param.requires_grad = False
-    # Positional embeddings
-    model.row_embed.requires_grad = False
-    model.col_embed.requires_grad = False
 
 
 def unfreeze_all(model: nn.Module) -> None:

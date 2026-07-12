@@ -55,8 +55,9 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 │       ├── recurrence.py     #     GatedRecurrence — fixed-size neural episode memory
 │       ├── trm.py            #     TRM (Tiny Recursive Model) two-state pondering
 │       ├── heads.py          #     Source / Direction / Split / Pass / Value heads
-├── env/                      # RL environment
-│   └── generals_env.py       #   Two-player simultaneous-move Gym-like env
+├── env/                      # RL environments
+│   ├── generals_env.py       #   Two-player simultaneous-move Gym-like env
+│   └── board_selfplay_env.py #   Alternating-move self-play env (othello/gomoku)
 ├── scripts/
 │   ├── prepare_data.py       # CLI: unified resumable pipeline (fetch→filter→simulate→convert)
 │   ├── replay_to_visual.py   # CLI: download one replay → simulate → HTML viewer
@@ -67,7 +68,8 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 ├── docs/                     # Training guide, data pipeline, known limitations
 ├── train_il.py               # generals.io IL training (world model, multi-node)
 ├── train_il_game.py          # Generic IL trainer for every other game adapter
-├── train_rl.py               # RL training script (PPO self-play + IL regularisation)
+├── train_rl.py               # generals.io RL (PPO self-play + IL regularisation)
+├── train_rl_game.py          # PPO self-play for placement board games (othello/gomoku)
 ├── tests/
 │   ├── test_verify_simulator.py       # Simulator correctness (real replay)
 │   ├── test_model.py                  # Unit tests for every model component

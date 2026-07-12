@@ -153,6 +153,16 @@ Shared infrastructure:
   teacher-forcing schedule on the decoder's conditioning labels
   (`--tf_start/--tf_end`), grad accumulation, warmup+linear decay, resume.
   generals keeps its dedicated `train_il.py` (world model + multi-node).
+- **RL self-play (placement games)** — `train_rl_game.py` +
+  `env/board_selfplay_env.py`: PPO self-play fine-tuning from a
+  `train_il_game.py` checkpoint for othello and gomoku. The env wraps the
+  converters' exact rules engines and `board_planes` helpers, so RL
+  observations match the IL shards by construction; rollout (`step()` with
+  cache) and replay (full `forward`) share the fp32 log-prob path at a fixed
+  ACT depth in eval mode, so the PPO ratio is exactly 1 before the first
+  update (pinned by `tests/test_rl_selfplay.py`). Othello passes are
+  rules-forced and carry no policy loss. generals keeps `train_rl.py`;
+  chess needs from→to legality threading in `FromToDecoder.sample` first.
 
 ```bash
 # example: chess from a Lichess monthly dump
