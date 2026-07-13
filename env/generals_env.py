@@ -772,6 +772,7 @@ class GeneralsEnv:
             filtered = _json.load(f)
 
         self.map_pool = []
+        n_invalid = 0
         for entry in filtered:
             replay_id = entry["id"]
             replay_path = os.path.join(replay_dir, f"{replay_id}.json")
@@ -785,6 +786,19 @@ class GeneralsEnv:
                     continue
                 if data["mapHeight"] > self.grid_h or data["mapWidth"] > self.grid_w:
                     continue
+                # A few replays carry special-mode encodings (e.g. negative
+                # cityArmies) or out-of-range tile indices; a bad garrison
+                # poisons reset() (log1p of a negative army) mid-training,
+                # so drop the whole map loudly rather than clamp silently.
+                n_tiles = data["mapHeight"] * data["mapWidth"]
+                generals = data["generals"]
+                if (any(not (0 <= g < n_tiles) for g in generals)
+                        or generals[0] == generals[1]
+                        or any(not (0 <= c < n_tiles) for c in data.get("cities", []))
+                        or any(not (0 <= m < n_tiles) for m in data.get("mountains", []))
+                        or any(a < 0 for a in data.get("cityArmies", []))):
+                    n_invalid += 1
+                    continue
                 self.map_pool.append({
                     "replay_id": replay_id,
                     "map_w": data["mapWidth"],
@@ -797,6 +811,9 @@ class GeneralsEnv:
             except (KeyError, _json.JSONDecodeError):
                 continue
 
+        if n_invalid:
+            print(f"  [map-pool] dropped {n_invalid} replays with invalid "
+                  f"map data (bad tile indices or negative city armies)")
         return len(self.map_pool)
 
     def _generate_map_from_replay(self, map_data: Dict) -> None:
