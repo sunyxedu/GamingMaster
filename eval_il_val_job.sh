@@ -15,6 +15,11 @@
 #
 #   sbatch eval_il_val_job.sh                                # last 5, 4 GPUs
 #   LAST=10 sbatch --gres=gpu:nvidia_h200_nvl:2 eval_il_val_job.sh
+#   EPOCHS="10 15 20 23" sbatch eval_il_val_job.sh           # explicit epochs
+#
+# Per-GPU CSVs are APPENDED across runs, so the merged table at the end
+# accumulates every epoch evaluated so far — rerunning with new EPOCHS
+# extends the same sorted summary.
 #
 # Override the checkpoint dir or output:
 #   CKPT_DIR=... OUT_DIR=... sbatch eval_il_val_job.sh
@@ -46,9 +51,17 @@ VAL_DIRS=(
 )
 
 # Epoch checkpoints only (skip the mid-epoch _step500 saves), numeric
-# order, keep the last $LAST.
-mapfile -t CKPTS < <(ls "$CKPT_DIR"/checkpoint_epoch*.pt | grep -v _step | sort -V)
-CKPTS=("${CKPTS[@]: -$LAST}")
+# order. EPOCHS="10 15 20" picks those exact epochs; otherwise the last $LAST.
+if [ -n "${EPOCHS:-}" ]; then
+    CKPTS=()
+    for e in $EPOCHS; do
+        f="$CKPT_DIR/checkpoint_epoch$e.pt"
+        [ -f "$f" ] && CKPTS+=("$f") || echo "[warn] missing $f — skipped"
+    done
+else
+    mapfile -t CKPTS < <(ls "$CKPT_DIR"/checkpoint_epoch*.pt | grep -v _step | sort -V)
+    CKPTS=("${CKPTS[@]: -$LAST}")
+fi
 echo "Evaluating ${#CKPTS[@]} checkpoints (${CKPTS[0]##*/} .. ${CKPTS[-1]##*/}) on ${GPUS} GPUs"
 
 for i in $(seq 0 $((GPUS - 1))); do
