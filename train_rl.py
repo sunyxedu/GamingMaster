@@ -59,8 +59,8 @@ def parse_args():
     # Checkpoint & data
     p.add_argument("--il_checkpoint", type=str, default=None,
                    help="Path to IL-pretrained checkpoint (.pt)")
-    p.add_argument("--il_data_dir", type=str, default=None,
-                   help="Directory with .json IL training data (for joint training)")
+    p.add_argument("--il_data_dir", type=str, nargs="+", default=None,
+                   help="Directory(s) with .json IL training data (for joint training)")
     p.add_argument("--output_dir", type=str, default="checkpoints_rl")
     p.add_argument("--resume", type=str, default=None,
                    help="Resume from RL checkpoint")
@@ -684,7 +684,14 @@ def main():
     il_loader = None
     il_iter = None
     if args.il_data_dir:
-        il_dataset = SeqReplayDataset(args.il_data_dir, max_sequence_length=200)
+        if len(args.il_data_dir) == 1:
+            il_dataset = SeqReplayDataset(args.il_data_dir[0], max_sequence_length=200)
+        else:
+            from torch.utils.data import ConcatDataset
+            il_dataset = ConcatDataset([
+                SeqReplayDataset(d, max_sequence_length=200)
+                for d in args.il_data_dir
+            ])
         il_sampler = DistributedSampler(il_dataset, shuffle=True) if distributed else None
         il_loader = DataLoader(
             il_dataset, batch_size=1, shuffle=(il_sampler is None),
