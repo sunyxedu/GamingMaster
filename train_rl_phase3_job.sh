@@ -3,7 +3,7 @@
 #SBATCH --partition=batch
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:nvidia_h200_nvl:6
+#SBATCH --gres=gpu:nvidia_h200_nvl:4
 #SBATCH --time=5-00:00:00
 #SBATCH --output=slurm-rl-%j.out
 
@@ -29,8 +29,8 @@ export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TMPDIR=/tmp
 
-GPUS_PER_NODE=${GPUS_PER_NODE:-6}
-EPISODES=${EPISODES:-4}
+GPUS_PER_NODE=${GPUS_PER_NODE:-4}
+EPISODES=${EPISODES:-6}
 CKPT=${CKPT:-/scratch/$USER/gaming-master/checkpoints/il_phase2/checkpoint_epoch5.pt}
 
 if [ -n "${RESUME:-}" ]; then
