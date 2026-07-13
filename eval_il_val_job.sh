@@ -3,16 +3,18 @@
 #SBATCH --partition=batch
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:nvidia_h200_nvl:8
-#SBATCH --time=12:00:00
+#SBATCH --gres=gpu:nvidia_h200_nvl:4
+#SBATCH --time=06:00:00
 #SBATCH --output=slurm-%j.out
 
-# Evaluate phase-2 IL checkpoints on the held-out *-val splits.
-# Embarrassingly parallel: the epoch checkpoints are sharded round-robin
-# across the node's GPUs, one eval_il.py process per GPU. Each process
-# writes its own CSV; a merged, loss-sorted summary is printed at the end.
+# Evaluate the LAST few phase-2 IL epoch checkpoints on the held-out *-val
+# splits (mid-epoch _step saves are ignored). Checkpoints are sharded
+# round-robin across however many GPUs the job was granted (auto-detected),
+# one eval_il.py process per GPU; a merged, loss-sorted summary is printed
+# at the end.
 #
-#   sbatch eval_il_val_job.sh
+#   sbatch eval_il_val_job.sh                                # last 5, 4 GPUs
+#   LAST=10 sbatch --gres=gpu:nvidia_h200_nvl:2 eval_il_val_job.sh
 #
 # Override the checkpoint dir or output:
 #   CKPT_DIR=... OUT_DIR=... sbatch eval_il_val_job.sh
@@ -24,7 +26,9 @@ export TMPDIR=/tmp
 
 CKPT_DIR=${CKPT_DIR:-/scratch/$USER/gaming-master/checkpoints/il_phase2}
 OUT_DIR=${OUT_DIR:-$CKPT_DIR/val_eval}
-GPUS=${GPUS:-8}
+# One shard per granted GPU — follows whatever --gres the job was submitted with
+GPUS=${GPUS:-${SLURM_GPUS_ON_NODE:-$(nvidia-smi -L | wc -l)}}
+LAST=${LAST:-5}
 mkdir -p "$OUT_DIR"
 
 TRAIN_ROOT=/scratch/$USER/gaming-master/data-v2/training
@@ -41,9 +45,11 @@ VAL_DIRS=(
     "$TRAIN_ROOT/d3st1ny-val"
 )
 
-# Epoch checkpoints only (skip the mid-epoch _step500 saves), numeric order.
+# Epoch checkpoints only (skip the mid-epoch _step500 saves), numeric
+# order, keep the last $LAST.
 mapfile -t CKPTS < <(ls "$CKPT_DIR"/checkpoint_epoch*.pt | grep -v _step | sort -V)
-echo "Evaluating ${#CKPTS[@]} checkpoints on ${GPUS} GPUs"
+CKPTS=("${CKPTS[@]: -$LAST}")
+echo "Evaluating ${#CKPTS[@]} checkpoints (${CKPTS[0]##*/} .. ${CKPTS[-1]##*/}) on ${GPUS} GPUs"
 
 for i in $(seq 0 $((GPUS - 1))); do
     # Round-robin shard: GPU i takes checkpoints i, i+GPUS, i+2*GPUS, ...
