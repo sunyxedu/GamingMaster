@@ -90,12 +90,23 @@ def parse_args():
                    help="Per-iteration decay for il_weight")
     p.add_argument("--kl_weight", type=float, default=0.01,
                    help="KL regularisation against reference policy")
+    p.add_argument("--kl_ref", type=str, default=None,
+                   help="Checkpoint whose weights define the frozen KL "
+                        "reference policy. Default: this run's starting "
+                        "weights — on --resume that is the RESUMED policy, "
+                        "so pass the IL checkpoint here to keep the human "
+                        "anchor across restarts.")
     p.add_argument("--invalidity_weight", type=float, default=0.1,
                    help="Weight for source/direction invalidity auxiliary loss")
     p.add_argument("--city_reward_decay", type=float, default=0.9999,
                    help="Per-iteration decay for city capture reward scale")
     p.add_argument("--dense_reward_decay", type=float, default=0.9999,
                    help="Per-iteration decay for dense heuristic reward scale")
+    p.add_argument("--reset_reward_decay", action="store_true",
+                   help="On --resume, restart the city/dense reward decay "
+                        "schedules at 1.0 instead of decay^done_iters. Use "
+                        "when a phase boundary changes the reward structure "
+                        "and the new shaping should not enter pre-annealed.")
 
     # Encoder freeze schedule
     p.add_argument("--freeze_encoder_iters", type=int, default=1000,
@@ -146,7 +157,14 @@ def parse_args():
                    help="Save a game replay every N iterations (0 = never)")
     p.add_argument("--device", type=str, default="auto")
 
-    return p.parse_args()
+    args = p.parse_args()
+    # An empty path (e.g. a shell glob that matched nothing) is falsy at
+    # every `if args.resume:` check and would silently start from scratch.
+    for flag in ("resume", "il_checkpoint", "kl_ref"):
+        val = getattr(args, flag)
+        if val is not None and not val.strip():
+            p.error(f"--{flag} given an empty path")
+    return args
 
 
 # ======================================================================
@@ -625,11 +643,17 @@ def main():
     ref_model: Optional[GeneralsNetwork] = None
     if args.kl_weight > 0:
         ref_model = copy.deepcopy(model)
+        if args.kl_ref:
+            ref_ckpt = torch.load(args.kl_ref, map_location="cpu", weights_only=False)
+            load_model_state(ref_model, ref_ckpt["model_state"],
+                             ctx="KL reference checkpoint")
+            del ref_ckpt
         ref_model.eval()
         for p in ref_model.parameters():
             p.requires_grad = False
         if rank0:
-            print("Created frozen reference model for KL regularisation")
+            src = args.kl_ref if args.kl_ref else "this run's starting weights"
+            print(f"Created frozen reference model for KL regularisation ({src})")
 
     # ---- Opponent pool -------------------------------------------------
     opponent_pool = OpponentPool(
@@ -743,9 +767,19 @@ def main():
         if rank0:
             print(f"  LR restored to {resume_lr:.3e} (decay^{done_iters})")
 
-        # Recompute decayed reward scales based on iterations already done
-        env.city_reward_scale = args.city_reward_decay ** done_iters
-        env.dense_reward_scale = args.dense_reward_decay ** done_iters
+        # Restore reward scales. Checkpoints that carry them (saved by this
+        # code) continue exactly — --reset_reward_decay must NOT re-zero the
+        # clock on every within-phase crash recovery. Older checkpoints
+        # (previous phase) fall back to the flag / recompute.
+        if "city_reward_scale" in rl_ckpt:
+            env.city_reward_scale = rl_ckpt["city_reward_scale"]
+            env.dense_reward_scale = rl_ckpt["dense_reward_scale"]
+        elif args.reset_reward_decay:
+            env.city_reward_scale = 1.0
+            env.dense_reward_scale = 1.0
+        else:
+            env.city_reward_scale = args.city_reward_decay ** done_iters
+            env.dense_reward_scale = args.dense_reward_decay ** done_iters
         rl_criterion.entropy_weight = max(
             args.entropy_weight * (args.entropy_weight_decay ** done_iters),
             args.entropy_weight_min,
@@ -761,7 +795,11 @@ def main():
     # Win rate history for conditional pool updates
     from collections import deque
     winrate_history: deque = deque(maxlen=args.pool_update_window)
-    last_pool_update_iter = start_iter - args.pool_update_interval  # allow immediate check
+    # Fresh runs may add to the pool immediately; a resume waits a full
+    # interval so a 1-sample winrate window can't evict a historical
+    # opponent on the first iteration after every restart.
+    last_pool_update_iter = start_iter if args.resume \
+        else start_iter - args.pool_update_interval
 
     # ---- Training loop -------------------------------------------------
     for iteration in range(start_iter, args.iterations + 1):
@@ -1045,7 +1083,14 @@ def main():
                 "il_weight": il_weight,
                 "wins": wins,
                 "opponent_pool": opponent_pool.pool,
-            }, ckpt_path)
+                # Shaping decay state — lets a resume continue the schedule
+                # exactly instead of recomputing from the iteration counter.
+                "city_reward_scale": env.city_reward_scale,
+                "dense_reward_scale": env.dense_reward_scale,
+            }, ckpt_path + ".tmp")
+            # Atomic publish: a reader (or a resume glob) must never see a
+            # half-written checkpoint.
+            os.replace(ckpt_path + ".tmp", ckpt_path)
             print(f"  Saved {ckpt_path}")
 
     if rank0:
