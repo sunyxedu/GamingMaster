@@ -215,6 +215,7 @@ def collect_selfplay_episode(
     replay_log: Optional[List[Dict]] = [] if record else None
     reward_totals: Dict[str, float] = {
         "r_invalid": 0.0, "r_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
+        "c_cap": 0.0, "c_bash": 0.0, "c_steal": 0.0, "c_loss": 0.0,
     }
 
     # Record initial state before any moves
@@ -798,6 +799,7 @@ def main():
         replay_log = None
         reward_totals: Dict[str, float] = {
             "r_invalid": 0.0, "r_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
+            "c_cap": 0.0, "c_bash": 0.0, "c_steal": 0.0, "c_loss": 0.0,
         }
         local_ep_len = 0.0
         local_ep_reward = 0.0
@@ -934,7 +936,8 @@ def main():
         # ---- 5. Aggregate stats across all GPUs ----
         total_games = args.episodes_per_gpu * world_size
         if dist.is_initialized():
-            rw_keys = ["r_invalid", "r_city", "r_dense", "r_winlose"]
+            rw_keys = ["r_invalid", "r_city", "r_dense", "r_winlose",
+                       "c_cap", "c_bash", "c_steal", "c_loss"]
             local_stats = torch.tensor([
                 float(local_p0),
                 float(local_p1),
@@ -996,7 +999,11 @@ def main():
                 f"    rw: inv={reward_totals['r_invalid']:.3f}  "
                 f"city={reward_totals['r_city']:.3f}  "
                 f"dense={reward_totals['r_dense']:.3f}  "
-                f"wl={reward_totals['r_winlose']:.1f}"
+                f"wl={reward_totals['r_winlose']:.1f} | "
+                f"city/game: cap={reward_totals['c_cap']:.2f}  "
+                f"bash={reward_totals['c_bash']:.2f}  "
+                f"steal={reward_totals['c_steal']:.2f}  "
+                f"loss={reward_totals['c_loss']:.2f}"
             )
 
         # ---- 7. Save game replay ----

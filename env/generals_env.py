@@ -15,7 +15,7 @@ the value head is deliberately unbounded):
     Terminal:  win +1.0, loss -1.0 (turn-limit truncation gives neither)
     Dense:     0.6 × delta_heuristic × dense_reward_scale (potential-based)
     Events:    enemy city capture +0.16 / loss -0.16 (symmetric),
-               neutral city capture +0.04..0.12,
+               neutral city capture +0.25..0.33,
                invalid move -0.05
 """
 
@@ -202,6 +202,9 @@ class GeneralsEnv:
         reward_breakdown: Dict[str, float] = {
             "r_invalid": 0.0, "r_city": 0.0,
             "r_dense": 0.0, "r_winlose": 0.0,
+            # Player-0 city event counts (not rewards): neutral captures,
+            # failed neutral hits, opponent-city steals, own-city losses.
+            "c_cap": 0.0, "c_bash": 0.0, "c_steal": 0.0, "c_loss": 0.0,
         }
 
         # Convert actions → simulator format (detect illegal moves)
@@ -228,6 +231,13 @@ class GeneralsEnv:
             1: set(idx for idx in self.player_land[1]
                    if self.map[idx // self.grid_w][idx % self.grid_w].terrain == _CITY),
         }
+        # Neutral garrisons before moves — for failed-hit (bash) counting;
+        # neutral cities never regrow, so any decrease is a hit.
+        neutral_before = {
+            idx: self.map[idx // self.grid_w][idx % self.grid_w].army
+            for idx in self.cities
+            if self.map[idx // self.grid_w][idx % self.grid_w].occupied == -1
+        }
 
         # Execute moves (with priority ordering)
         self._process_moves(move_0, move_1)
@@ -253,17 +263,33 @@ class GeneralsEnv:
                     rewards[opp] -= city_r
                     if pid == 0:
                         reward_breakdown["r_city"] += city_r
+                        reward_breakdown["c_steal"] += 1
                     else:
                         reward_breakdown["r_city"] -= city_r
+                        reward_breakdown["c_loss"] += 1
                 else:
-                    # Captured neutral city — bonus for efficiency
+                    # Captured neutral city — one-time bonus per city (a
+                    # captured city never returns to neutral, so this cannot
+                    # be farmed) plus a small efficiency bonus. Sized at ~5%
+                    # of the terminal reward: city economy is core domain
+                    # knowledge worth paying for, without drowning win/loss.
                     r, c = divmod(city_idx, self.grid_w)
                     remaining = self.map[r][c].army
                     bonus = 0.08 * math.exp(-0.1 * remaining)
-                    city_r = (0.04 + bonus) * self.city_reward_scale
+                    city_r = (0.25 + bonus) * self.city_reward_scale
                     rewards[pid] += city_r
                     if pid == 0:
                         reward_breakdown["r_city"] += city_r
+                        reward_breakdown["c_cap"] += 1
+
+        # Player-0 failed neutral-city hit (whittle without capture)
+        if move_0 is not None:
+            end = move_0["end"]
+            if end in neutral_before:
+                er, ec = divmod(end, self.grid_w)
+                end_tile = self.map[er][ec]
+                if end_tile.occupied == -1 and end_tile.army < neutral_before[end]:
+                    reward_breakdown["c_bash"] += 1
 
         # Check win
         winner = self._check_winner()
