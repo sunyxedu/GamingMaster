@@ -37,7 +37,9 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TMPDIR=/tmp
 
 GPUS_PER_NODE=${GPUS_PER_NODE:-4}
-EPISODES=${EPISODES:-6}
+# 8 episodes x 4 GPUs = 32 games/iteration — matches phase 3's effective
+# batch so PPO gradient noise and pool-gate winrate stats stay comparable.
+EPISODES=${EPISODES:-8}
 IL_ANCHOR=/scratch/$USER/gaming-master/checkpoints/il_phase2/checkpoint_epoch5.pt
 P4_DIR=/scratch/$USER/gaming-master/checkpoints/rl_phase4
 P3_DIR=/scratch/$USER/gaming-master/checkpoints/rl_v2
