@@ -102,6 +102,11 @@ def parse_args():
                    help="Weight for source/direction invalidity auxiliary "
                         "loss (ignored when --rl_legal_mask is on: masked "
                         "policies place no mass on invalid actions)")
+    p.add_argument("--randomize_seat", type=int, default=1,
+                   help="1 = sample the learner's seat per episode (the env "
+                        "move-priority tiebreak favors P0; a learner pinned "
+                        "to P0 trains on a rules advantage it won't have on "
+                        "the real server); 0 = legacy always-P0")
     p.add_argument("--rl_legal_mask", type=int, default=1,
                    help="1 = hard-mask illegal sources and directions in "
                         "BOTH rollout and PPO replay (entropy, log-probs and "
@@ -177,7 +182,8 @@ def parse_args():
                         "KL reference policy (0 = never; requires --kl_weight"
                         " > 0 so the reference model exists)")
     p.add_argument("--eval_games", type=int, default=4,
-                   help="Eval games per GPU per evaluation round")
+                   help="Eval SEED PAIRS per GPU per round — each seed is "
+                        "played twice, greedy, with seats swapped")
 
     # Logging
     p.add_argument("--log_interval", type=int, default=10)
@@ -287,19 +293,27 @@ def collect_selfplay_episode(
     record: bool = False,
     act_steps: int = 1,
     legal_mask: bool = True,
+    learner_pid: int = 0,
+    reset_seed: Optional[int] = None,
 ) -> Tuple[RolloutBuffer, Optional[List[Dict]]]:
-    """Run one self-play episode: model (player 0) vs opponent (player 1).
+    """Run one self-play episode: model as ``learner_pid``, opponent as the
+    other seat.
 
-    Only collects trajectory for player 0 (the model being trained).
+    Only collects the learner's trajectory. The learner's seat matters:
+    the env's move-priority tiebreak favors P0, so training/eval pinned to
+    P0 would learn (and measure) a rules advantage that doesn't transfer.
     With ``legal_mask`` both players sample from source/direction
     distributions hard-masked to legal actions (the PPO update must replay
     with the same masks); without it, the legacy unmasked RL mode.
+    ``reset_seed`` reproduces a map (paired seat-swapped evaluation).
 
     If ``record=True``, returns a list of per-step dicts for replay viewing.
     """
     model.eval()
     opponent.eval()
-    obs = env.reset()
+    env.breakdown_pid = learner_pid
+    obs = env.reset(seed=reset_seed)
+    nets = {learner_pid: model, 1 - learner_pid: opponent}
     buffer = RolloutBuffer()
     caches = {0: None, 1: None}    # spatiotemporal KV caches
     replay_log: Optional[List[Dict]] = [] if record else None
@@ -326,7 +340,8 @@ def collect_selfplay_episode(
     for _step in range(max_steps):
         step_out = {}
 
-        for pid, net in [(0, model), (1, opponent)]:
+        for pid in (0, 1):
+            net = nets[pid]
             grid = obs[pid]["grid"].unsqueeze(0).to(device)
             glb = obs[pid]["globals"].unsqueeze(0).to(device)
 
@@ -391,21 +406,22 @@ def collect_selfplay_episode(
             for k, v in info["reward_breakdown"].items():
                 reward_totals[k] += v
 
-        # Store transition for player 0 only
+        # Store the learner's transition only
+        lp_ = learner_pid
         action_dict = {
-            "source_idx": step_out[0]["action_source"].item(),
-            "direction": step_out[0]["action_direction"].item(),
-            "split": step_out[0]["action_split"].item(),
-            "passed": step_out[0]["action_pass"].item(),
+            "source_idx": step_out[lp_]["action_source"].item(),
+            "direction": step_out[lp_]["action_direction"].item(),
+            "split": step_out[lp_]["action_split"].item(),
+            "passed": step_out[lp_]["action_pass"].item(),
         }
         # Compute valid directions for chosen source
         valid_dirs = env.get_valid_directions(action_dict["source_idx"])
         buffer.add(
-            obs=obs[0],
+            obs=obs[lp_],
             action=action_dict,
-            log_prob=step_out[0]["action_log_prob"].item(),
-            value=step_out[0]["value"].item(),
-            reward=rewards[0],
+            log_prob=step_out[lp_]["action_log_prob"].item(),
+            value=step_out[lp_]["value"].item(),
+            reward=rewards[lp_],
             # Truncation (env turn limit) is a SOFT terminal: the env already
             # scored it by material, so GAE must not bootstrap on top.
             done=done,
@@ -420,9 +436,9 @@ def collect_selfplay_episode(
     # apply the same material-based truncation score here and close the
     # episode — mirrors the env's own turn-limit handling.
     if not done and len(buffer) > 0:
-        buffer.rewards[-1] += env.truncation_score(0)
+        buffer.rewards[-1] += env.truncation_score(learner_pid)
         buffer.dones[-1] = True
-        reward_totals["r_winlose"] += env.truncation_score(0)
+        reward_totals["r_winlose"] += env.truncation_score(learner_pid)
 
     buffer.compute_returns_and_advantages(
         gamma=gamma, lam=gae_lambda, last_value=0.0,
@@ -1021,6 +1037,7 @@ def main():
         replay_env_snapshot = None  # env state for the recorded episode
         for ep_i in range(args.episodes_per_gpu):
             record_this = should_record and ep_i == 0
+            learner_pid = random.randint(0, 1) if args.randomize_seat else 0
             buf, ep_replay, ep_rw = collect_selfplay_episode(
                 model, opponent_model, env, device,
                 max_steps=args.rollout_steps,
@@ -1029,6 +1046,7 @@ def main():
                 record=record_this,
                 act_steps=args.act_steps,
                 legal_mask=bool(args.rl_legal_mask),
+                learner_pid=learner_pid,
             )
             if ep_replay is not None:
                 replay_log = ep_replay
@@ -1046,10 +1064,11 @@ def main():
             for k in reward_totals:
                 reward_totals[k] += ep_rw[k]
 
-            if env.winner == 0:
+            # Win counters are LEARNER-relative (seat is randomized).
+            if env.winner == learner_pid:
                 wins[0] += 1
                 local_p0 += 1
-            elif env.winner == 1:
+            elif env.winner == 1 - learner_pid:
                 wins[1] += 1
                 local_p1 += 1
             else:
@@ -1194,30 +1213,55 @@ def main():
                 print(f"  Pool update skipped: winrate={recent_wr:.2f} < {args.pool_update_winrate}")
 
         # ---- 6b. Fixed-opponent evaluation vs the KL anchor ----
-        # Progress signal independent of shaping rewards and of the moving
-        # opponent pool: winrate here separates "actually stronger" from
-        # "better at farming shaped reward".
+        # Paired, seat-swapped, GREEDY: each seed is played twice with seats
+        # exchanged so the P0 priority advantage cancels, actions are argmax
+        # so the pair is reproducible, and won_both/lost_both separates
+        # dominance from map luck. Progress signal independent of shaping
+        # rewards and of the moving opponent pool.
         if (args.eval_interval > 0 and ref_model is not None
                 and iteration % args.eval_interval == 0):
-            ev = {0: 0, 1: 0, None: 0}
-            for _ in range(args.eval_games):
-                collect_selfplay_episode(
-                    model, ref_model, env, device,
-                    max_steps=args.rollout_steps,
-                    gamma=args.gamma, gae_lambda=args.gae_lambda,
-                    act_steps=args.act_steps,
-                    legal_mask=bool(args.rl_legal_mask),
-                )
-                ev[env.winner if env.winner in (0, 1) else None] += 1
+            rng_state = random.getstate()  # reset(seed) reseeds global RNG
+            model.action_decoder.greedy = True
+            ref_model.action_decoder.greedy = True
+            rank = dist.get_rank() if dist.is_initialized() else 0
+            w = l = d = won_both = lost_both = 0
+            try:
+                for i in range(args.eval_games):
+                    seed = 9_000_000 + iteration * 10_000 + rank * 100 + i
+                    outcome = []
+                    for lp in (0, 1):
+                        collect_selfplay_episode(
+                            model, ref_model, env, device,
+                            max_steps=args.rollout_steps,
+                            gamma=args.gamma, gae_lambda=args.gae_lambda,
+                            act_steps=args.act_steps,
+                            legal_mask=bool(args.rl_legal_mask),
+                            learner_pid=lp, reset_seed=seed,
+                        )
+                        outcome.append(
+                            1 if env.winner == lp
+                            else (-1 if env.winner == 1 - lp else 0))
+                    w += sum(1 for o in outcome if o == 1)
+                    l += sum(1 for o in outcome if o == -1)
+                    d += sum(1 for o in outcome if o == 0)
+                    won_both += int(outcome[0] == 1 and outcome[1] == 1)
+                    lost_both += int(outcome[0] == -1 and outcome[1] == -1)
+            finally:
+                model.action_decoder.greedy = False
+                ref_model.action_decoder.greedy = False
+                random.setstate(rng_state)
             if dist.is_initialized():
-                ev_t = torch.tensor(
-                    [ev[0], ev[1], ev[None]], dtype=torch.float32, device=device)
+                ev_t = torch.tensor([w, l, d, won_both, lost_both],
+                                    dtype=torch.float32, device=device)
                 dist.all_reduce(ev_t)
-                ev = {0: int(ev_t[0]), 1: int(ev_t[1]), None: int(ev_t[2])}
+                w, l, d, won_both, lost_both = (int(x) for x in ev_t)
             if rank0:
-                n_ev = max(ev[0] + ev[1] + ev[None], 1)
-                print(f"  Eval vs anchor: {ev[0]}/{ev[1]}/{ev[None]} "
-                      f"(W/L/D of {n_ev})  wr={ev[0] / n_ev:.2f}")
+                n_ev = max(w + l + d, 1)
+                n_pairs = n_ev // 2
+                print(f"  Eval vs anchor (paired greedy): {w}/{l}/{d} "
+                      f"(W/L/D of {n_ev})  wr={w / n_ev:.2f}  "
+                      f"pairs: won_both={won_both}/{n_pairs} "
+                      f"lost_both={lost_both}/{n_pairs}")
 
         # ---- 7. Logging ----
         if rank0 and iteration % args.log_interval == 0:
@@ -1225,7 +1269,7 @@ def main():
                 f"Iter {iteration:>6d} | "
                 f"ep_len={global_avg_len:>6.0f}  "
                 f"r={global_avg_r:+.3f}  "
-                f"p0/p1/draw={global_p0}/{global_p1}/{global_draw}({total_games}) | "
+                f"w/l/d={global_p0}/{global_p1}/{global_draw}({total_games}) | "
                 f"pol={ppo_avg.get('policy_loss', 0):.4f}  "
                 f"val={ppo_avg.get('value_loss', 0):.4f}  "
                 f"ent={ppo_avg.get('entropy', 0):.4f}  "

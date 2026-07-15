@@ -137,6 +137,44 @@ class TestMaskedPPOExactness:
                 break
 
 
+class TestGreedyEval:
+    def test_greedy_rollout_deterministic(self, model, cfg):
+        """decoder.greedy=True + same reset seed => identical action streams
+        (the paired seat-swapped eval depends on this)."""
+        env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w)
+        model.action_decoder.greedy = True
+        try:
+            streams = []
+            for _ in range(2):
+                obs = env.reset(seed=99)
+                cache = None
+                acts = []
+                for t in range(8):
+                    with torch.no_grad():
+                        out = model.step(
+                            obs[0]["grid"].unsqueeze(0),
+                            obs[0]["globals"].unsqueeze(0),
+                            legal_mask=obs[0]["legal_mask"].unsqueeze(0),
+                            st_cache=cache, step_idx=t, act_steps=1,
+                            direction_mask=obs[0]["dir_mask"].unsqueeze(0))
+                    cache = out["st_cache"]
+                    acts.append((out["action_source"].item(),
+                                 out["action_direction"].item(),
+                                 out["action_split"].item(),
+                                 bool(out["action_pass"].item())))
+                    a = None
+                    if not acts[-1][3] and bool(obs[0]["legal_mask"].any()):
+                        a = {"source_idx": acts[-1][0],
+                             "direction": acts[-1][1], "split": acts[-1][2]}
+                    obs, _, done, _ = env.step(a, None)
+                    if done:
+                        break
+                streams.append(acts)
+        finally:
+            model.action_decoder.greedy = False
+        assert streams[0] == streams[1]
+
+
 class TestDirMask:
     def test_env_dir_mask_matches_get_valid_directions(self):
         env = GeneralsEnv(n_mountains=25, n_cities=3)

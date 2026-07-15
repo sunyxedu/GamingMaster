@@ -21,7 +21,12 @@ from model.components.encoder import SpatialEncoder
 from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead
 from model.components.transformer import _sinusoidal_pe
 from model.config import ModelConfig
-from model.games.base import ActionDecoder, ObservationEncoder, masked_sample
+from model.games.base import (
+    ActionDecoder,
+    ObservationEncoder,
+    masked_sample,
+    safe_masked_logits,
+)
 
 
 class GeneralsEncoder(ObservationEncoder):
@@ -157,6 +162,9 @@ class GeneralsDecoder(ActionDecoder):
         fallback + NaN-from-bf16 uniform fallback).
         """
         mask = legal_mask.reshape(BT, N) if legal_mask is not None else None
+        if self.greedy:
+            with torch.no_grad():
+                return safe_masked_logits(source_logits, mask).argmax(-1)
         return masked_sample(source_logits, mask)
 
     # ------------------------------------------------------------------
@@ -270,8 +278,11 @@ class GeneralsDecoder(ActionDecoder):
         arange_B = torch.arange(B, device=device)
 
         with torch.no_grad():
-            # --- pass decision (sampled, not deterministic) ---
-            did_pass = torch.bernoulli(torch.sigmoid(pass_logits)).bool()
+            # --- pass decision (Bernoulli; argmax when self.greedy) ---
+            if self.greedy:
+                did_pass = torch.sigmoid(pass_logits) > 0.5
+            else:
+                did_pass = torch.bernoulli(torch.sigmoid(pass_logits)).bool()
             pass_lp = torch.where(
                 did_pass,
                 F.logsigmoid(pass_logits),
@@ -294,13 +305,19 @@ class GeneralsDecoder(ActionDecoder):
                 )[arange_B, src_idx]
 
             # --- direction ---
-            dir_probs = F.softmax(direction_logits, dim=-1)
-            dir_idx = torch.multinomial(dir_probs, 1).squeeze(-1)
+            if self.greedy:
+                dir_idx = direction_logits.argmax(-1)
+            else:
+                dir_probs = F.softmax(direction_logits, dim=-1)
+                dir_idx = torch.multinomial(dir_probs, 1).squeeze(-1)
             dir_lp = F.log_softmax(direction_logits, dim=-1)[arange_B, dir_idx]
 
             # --- split ---
-            spl_probs = F.softmax(split_logits, dim=-1)
-            spl_idx = torch.multinomial(spl_probs, 1).squeeze(-1)
+            if self.greedy:
+                spl_idx = split_logits.argmax(-1)
+            else:
+                spl_probs = F.softmax(split_logits, dim=-1)
+                spl_idx = torch.multinomial(spl_probs, 1).squeeze(-1)
             spl_lp = F.log_softmax(split_logits, dim=-1)[arange_B, spl_idx]
 
             # Hierarchical: pass → only pass_lp; move → pass_lp + move heads
@@ -330,11 +347,18 @@ class GeneralsDecoder(ActionDecoder):
         legal_mask = legal.get("source") if legal else None
 
         # --- apply legal mask to source logits ---
+        # -1e9, NOT -inf: this tensor sits on the GRADIENT path (entropy
+        # bonus + policy loss). With -inf, p·log p is 0·(−inf) — the forward
+        # is cleaned by nan_to_num but mul's backward still produces NaN and
+        # log_softmax's backward spreads it to the unmasked positions (see
+        # categorical_entropy in games/base.py). exp(-1e9) == 0 exactly in
+        # fp32, so log-probs match the -inf-masked rollout bookkeeping
+        # bit-for-bit. All-masked rows fall back to one-hot index 0,
+        # mirroring safe_masked_logits / sample().
         if legal_mask is not None:
             lm = legal_mask.reshape(B, T, N)
-            sl_masked = source_logits.masked_fill(~lm, float("-inf"))
-            all_inf = sl_masked.isinf() & (sl_masked < 0)
-            bad_rows = all_inf.all(dim=-1)                       # [B, T]
+            sl_masked = source_logits.masked_fill(~lm, -1e9)
+            bad_rows = ~lm.any(dim=-1)                           # [B, T]
             if bad_rows.any():
                 sl_masked = sl_masked.clone()
                 sl_masked[bad_rows, 0] = 0.0

@@ -232,23 +232,23 @@ def compute_policy_kl(
     """
     B, T, N = current_source_logits.shape
 
-    # Apply legal mask
+    # Apply legal mask. -1e9 instead of -inf: this KL is differentiated
+    # w.r.t. the current logits, and -inf masking yields (-inf − -inf) = NaN
+    # log-ratios at masked cells whose backward poisons the whole row;
+    # exp(-1e9) == 0 exactly in fp32 so the KL value is unchanged.
     if legal_mask is not None:
         lm = legal_mask.reshape(B, T, N)
-        cur_masked = current_source_logits.masked_fill(~lm, float("-inf"))
-        ref_masked = reference_source_logits.masked_fill(~lm, float("-inf"))
+        cur_masked = current_source_logits.masked_fill(~lm, -1e9)
+        ref_masked = reference_source_logits.masked_fill(~lm, -1e9)
+        bad = ~lm.any(dim=-1)
+        if bad.any():
+            cur_masked = cur_masked.clone()
+            ref_masked = ref_masked.clone()
+            cur_masked[bad, 0] = 0.0
+            ref_masked[bad, 0] = 0.0
     else:
         cur_masked = current_source_logits
         ref_masked = reference_source_logits
-
-    # Handle fully-masked rows
-    all_inf = cur_masked.isinf() & (cur_masked < 0)
-    bad = all_inf.all(dim=-1)
-    if bad.any():
-        cur_masked = cur_masked.clone()
-        ref_masked = ref_masked.clone()
-        cur_masked[bad, 0] = 0.0
-        ref_masked[bad, 0] = 0.0
 
     log_p_ref = F.log_softmax(ref_masked, dim=-1)
     log_p_cur = F.log_softmax(cur_masked, dim=-1)

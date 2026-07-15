@@ -111,6 +111,13 @@ class GeneralsEnv:
         self.city_reward_scale: float = 1.0
         self.dense_reward_scale: float = 1.0
 
+        # Which player's rewards/events go into info["reward_breakdown"].
+        # The learner's seat is randomized per episode during training (the
+        # move-priority tiebreak favors P0, and a learner pinned to P0
+        # trains against — and is measured with — a rules advantage it
+        # won't have on the real server), so the breakdown must follow it.
+        self.breakdown_pid: int = 0
+
         # Neutral-city reward budget for the WHOLE map: the per-city unit is
         # budget / n_cities (capped at 0.25). A flat per-city bonus let
         # city-dense replay maps pay out 2-3× the terminal reward per game,
@@ -259,13 +266,15 @@ class GeneralsEnv:
         move_0, illegal_0 = self._action_to_move(0, action_0)
         move_1, illegal_1 = self._action_to_move(1, action_1)
 
+        bp = self.breakdown_pid
         if illegal_0:
             rewards[0] -= 0.05
-            reward_breakdown["r_invalid"] -= 0.05
             info["illegal"][0] = True
         if illegal_1:
             rewards[1] -= 0.05
             info["illegal"][1] = True
+        if info["illegal"][bp]:
+            reward_breakdown["r_invalid"] -= 0.05
 
         # NOTE: no pass penalty — it was trivially dodged by shuffling army
         # between owned tiles and punished legitimate accumulation; and no
@@ -309,7 +318,7 @@ class GeneralsEnv:
                     city_r = 0.16 * self.city_reward_scale
                     rewards[pid] += city_r
                     rewards[opp] -= city_r
-                    if pid == 0:
+                    if pid == bp:
                         reward_breakdown["r_city"] += city_r
                         reward_breakdown["c_steal"] += 1
                     else:
@@ -328,7 +337,7 @@ class GeneralsEnv:
                              * math.exp(-0.1 * remaining)
                              * self.city_reward_scale)
                     rewards[pid] += bonus
-                    if pid == 0:
+                    if pid == bp:
                         reward_breakdown["r_city"] += bonus
                         reward_breakdown["c_cap"] += 1
 
@@ -364,7 +373,7 @@ class GeneralsEnv:
                 whittle_r = (self.city_reward_unit * (share / g0)
                              * self.city_reward_scale)
                 rewards[pid] += whittle_r
-                if pid == 0:
+                if pid == bp:
                     reward_breakdown["r_city"] += whittle_r
                     if tile.occupied == -1:
                         # Whittled without capturing (failed hit).
@@ -379,7 +388,7 @@ class GeneralsEnv:
             rewards[winner] += 1.0
             rewards[1 - winner] += -1.0
             info["winner"] = winner
-            if winner == 0:
+            if winner == bp:
                 reward_breakdown["r_winlose"] += 1.0
             else:
                 reward_breakdown["r_winlose"] -= 1.0
@@ -394,7 +403,7 @@ class GeneralsEnv:
             for pid in [0, 1]:
                 r_trunc = self.truncation_score(pid)
                 rewards[pid] += r_trunc
-                if pid == 0:
+                if pid == bp:
                     reward_breakdown["r_winlose"] += r_trunc
 
         # Dense reward: heuristic delta
@@ -403,7 +412,7 @@ class GeneralsEnv:
                 curr_h = self._heuristic(pid)
                 dense_r = 0.6 * (curr_h - self.prev_heuristic[pid]) * self.dense_reward_scale
                 rewards[pid] += dense_r
-                if pid == 0:
+                if pid == bp:
                     reward_breakdown["r_dense"] += dense_r
                 self.prev_heuristic[pid] = curr_h
 

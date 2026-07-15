@@ -252,6 +252,15 @@ class ActionDecoder(nn.Module, ABC):
         prediction dict.
     """
 
+    def __init__(self):
+        super().__init__()
+        # Greedy (argmax) action selection for deterministic evaluation.
+        # Default False = stochastic sampling. Adapters MAY honor it in
+        # their decode/sample paths (generals does); training code never
+        # sets it — evaluation harnesses toggle it around eval games so
+        # paired seat-swapped matches are reproducible.
+        self.greedy: bool = False
+
     @abstractmethod
     def decode(
         self,
