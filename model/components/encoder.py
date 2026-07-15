@@ -34,11 +34,13 @@ class SpatialEncoder(nn.Module):
     Output: [B, d_model, H, W]
     """
 
-    def __init__(self, cfg: ModelConfig):
+    def __init__(self, cfg: ModelConfig, in_channels: Optional[int] = None):
         super().__init__()
         c_mid = cfg.encoder_channels
+        if in_channels is None:
+            in_channels = cfg.grid_channels
         self.net = nn.Sequential(
-            nn.Conv2d(cfg.grid_channels, c_mid, 3, padding=1, bias=False),
+            nn.Conv2d(in_channels, c_mid, 3, padding=1, bias=False),
             nn.BatchNorm2d(c_mid),
             nn.ReLU(inplace=True),
             ResBlock(c_mid),

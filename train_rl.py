@@ -111,6 +111,19 @@ def parse_args():
                    help="Weight for source/direction invalidity auxiliary "
                         "loss (ignored when --rl_legal_mask is on: masked "
                         "policies place no mass on invalid actions)")
+    p.add_argument("--derive_army_channels", type=int, default=0,
+                   help="1 = derive 3 LINEAR army channels (own/enemy/"
+                        "neutral, army/50) inside the encoder — exact army "
+                        "comparisons are nearly invisible in the single "
+                        "log-compressed channel. Function-preserving "
+                        "zero-pad migration; sticky via checkpoint config.")
+    p.add_argument("--turn_globals", type=int, default=0,
+                   help="1 = append production-cycle features "
+                        "((turn%%50)/50, turn%%2, turn/500) to the globals "
+                        "(global_features -> 7). The temporal attention has "
+                        "no positional encoding, so the policy otherwise "
+                        "cannot see the production clock. Sticky via "
+                        "checkpoint config.")
     p.add_argument("--mirror_prob", type=float, default=0.5,
                    help="Probability an episode is MIRROR self-play (live "
                         "model vs itself, BOTH seats' trajectories train — "
@@ -770,6 +783,16 @@ def il_auxiliary_update(
 
     grid_seq = il_batch["obs"]["grid_seq"].to(device)
     globals_seq = il_batch["obs"]["globals_seq"].to(device)
+    # IL shards carry 4 globals; under cfg.turn_globals synthesize the
+    # production-cycle features from the frame index — the dataset
+    # truncates tail-only, so frame i IS turn i.
+    if (model.cfg.turn_globals
+            and globals_seq.shape[-1] < model.cfg.global_features):
+        B_il, T_il, _ = globals_seq.shape
+        t = torch.arange(T_il, device=device, dtype=torch.float32)
+        t = t.view(1, T_il, 1).expand(B_il, -1, -1)
+        extra = torch.cat([(t % 50) / 50.0, t % 2, t / 500.0], dim=-1)
+        globals_seq = torch.cat([globals_seq, extra], dim=-1)
     legal_mask = il_batch["obs"]["legal_source_mask_seq"].to(device)
     tgt = {k: v.to(device) for k, v in il_batch["tgt"].items()}
     lengths = il_batch["meta"]["lengths"]
@@ -833,22 +856,16 @@ def main():
         # and load_state_dict copies to the right devices on its own.
         rl_ckpt = torch.load(args.resume, map_location="cpu", weights_only=False)
 
+    il_ckpt = None
     if rl_ckpt is not None and "config" in rl_ckpt:
         cfg = ModelConfig(**{k: v for k, v in rl_ckpt["config"].items()
                              if k in ModelConfig.__dataclass_fields__})
-        model = GeneralsNetwork(cfg).to(device)
-        if rank0:
-            print(f"Architecture from resume checkpoint {args.resume}")
-            if args.il_checkpoint:
-                print("  [note] --il_checkpoint ignored on resume (weights and "
-                      "architecture come from the resume checkpoint)")
+        src_msg = f"Architecture from resume checkpoint {args.resume}"
     elif args.il_checkpoint:
-        ckpt = torch.load(args.il_checkpoint, map_location=device, weights_only=False)
-        cfg = ModelConfig(**ckpt["config"])
-        model = GeneralsNetwork(cfg).to(device)
-        load_model_state(model, ckpt["model_state"], ctx="IL checkpoint")
-        if rank0:
-            print(f"Loaded IL checkpoint from {args.il_checkpoint}")
+        il_ckpt = torch.load(args.il_checkpoint, map_location=device,
+                             weights_only=False)
+        cfg = ModelConfig(**il_ckpt["config"])
+        src_msg = f"Loaded IL checkpoint from {args.il_checkpoint}"
     else:
         cfg = ModelConfig(
             d_model=args.d_model,
@@ -858,9 +875,33 @@ def main():
             trm_block_layers=args.trm_block_layers,
             temporal_mixer=args.temporal_mixer,
         )
-        model = GeneralsNetwork(cfg).to(device)
-        if rank0:
-            print("No IL checkpoint — training from scratch")
+        src_msg = "No IL checkpoint — training from scratch"
+
+    # Input-feature upgrades (one-way; checkpoints saved after this carry
+    # the flags in their config, so plain resumes keep them without the
+    # CLI). Enabling widens conv1 / global_proj — the shape-adaptive loader
+    # zero-pads every old state dict (resume weights, IL weights, KL ref,
+    # each pool snapshot), which is exactly function-preserving.
+    if args.derive_army_channels:
+        cfg.derive_army_channels = True
+    if args.turn_globals:
+        cfg.turn_globals = True
+    if cfg.turn_globals:
+        cfg.global_features = max(cfg.global_features, 7)
+
+    model = GeneralsNetwork(cfg).to(device)
+    if il_ckpt is not None:
+        load_model_state(model, il_ckpt["model_state"], ctx="IL checkpoint")
+        del il_ckpt
+    if rank0:
+        print(src_msg)
+        if rl_ckpt is not None and args.il_checkpoint:
+            print("  [note] --il_checkpoint ignored on resume (weights and "
+                  "architecture come from the resume checkpoint)")
+        if cfg.derive_army_channels or cfg.turn_globals:
+            print(f"  Input features: derive_army_channels="
+                  f"{cfg.derive_army_channels} turn_globals={cfg.turn_globals}"
+                  f" (global_features={cfg.global_features})")
 
     n_params = sum(p.numel() for p in model.parameters())
     if rank0:
@@ -921,8 +962,18 @@ def main():
     # ---- EMA shadow weights (post-broadcast so all ranks agree) --------
     ema_state: Optional[Dict[str, torch.Tensor]] = None
     if args.ema_decay > 0:
-        if rl_ckpt is not None and "ema_state" in rl_ckpt:
-            ema_state = {k: v.clone() for k, v in rl_ckpt["ema_state"].items()}
+        saved_ema = rl_ckpt.get("ema_state") if rl_ckpt is not None else None
+        if saved_ema is not None and any(
+                k not in saved_ema or saved_ema[k].shape != v.shape
+                for k, v in model.state_dict().items()):
+            # Input-feature migration widened conv1/global_proj: restart the
+            # EMA from the (function-preserved) current weights.
+            saved_ema = None
+            if rank0:
+                print("  EMA restarted: checkpoint EMA shapes predate the "
+                      "input-feature migration")
+        if saved_ema is not None:
+            ema_state = {k: v.clone() for k, v in saved_ema.items()}
             if rank0:
                 print("  EMA weights resumed from checkpoint")
         else:
@@ -1026,6 +1077,7 @@ def main():
     env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w,
                       max_turns=args.rollout_steps)
     env.city_budget_total = args.city_budget
+    env.turn_globals = cfg.turn_globals
     if args.replay_dir and args.filtered_file:
         n_maps = env.load_map_pool(args.replay_dir, args.filtered_file)
         if rank0:

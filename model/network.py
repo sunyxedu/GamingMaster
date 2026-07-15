@@ -127,9 +127,36 @@ class GeneralsNetwork(GameNetwork):
             remapped[k] = v
         return remapped
 
+    #: input-layer weights that may legitimately be WIDER in the current
+    #: model than in a checkpoint: enabling derive_army_channels /
+    #: turn_globals widens conv1 / global_proj along dim 1. Zero-padding
+    #: the checkpoint slice is exactly function-preserving (the new input
+    #: channels contribute 0 until trained), so resumed policies, the KL
+    #: anchor and every pool snapshot keep their behavior bit-for-bit.
+    _EXPANDABLE_DIM1 = (
+        "obs_encoder.spatial_encoder.net.0.weight",
+        "obs_encoder.global_proj.0.weight",
+    )
+
+    def _adapt_input_shapes(self, sd: Dict) -> Dict:
+        own = self.state_dict()
+        for key in self._EXPANDABLE_DIM1:
+            if key not in sd or key not in own:
+                continue
+            v, target = sd[key], own[key]
+            if (v.dim() == target.dim() and v.shape[0] == target.shape[0]
+                    and v.shape[2:] == target.shape[2:]
+                    and v.shape[1] < target.shape[1]):
+                pad = torch.zeros(
+                    v.shape[0], target.shape[1] - v.shape[1], *v.shape[2:],
+                    dtype=v.dtype, device=v.device)
+                sd[key] = torch.cat([v, pad], dim=1)
+        return sd
+
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
         return super().load_state_dict(
-            self.remap_legacy_keys(dict(state_dict)), strict=strict, assign=assign,
+            self._adapt_input_shapes(self.remap_legacy_keys(dict(state_dict))),
+            strict=strict, assign=assign,
         )
 
     # ------------------------------------------------------------------

@@ -42,7 +42,11 @@ class GeneralsEncoder(ObservationEncoder):
         self.cfg = cfg
         self.n_tokens = cfg.grid_h * cfg.grid_w
 
-        self.spatial_encoder = SpatialEncoder(cfg)
+        # Optional derived linear army channels (cfg.derive_army_channels):
+        # the conv stack widens by 3; grid_channels stays 12 because it also
+        # defines the RAW obs format (next-obs head target, env, IL data).
+        in_channels = cfg.grid_channels + (3 if cfg.derive_army_channels else 0)
+        self.spatial_encoder = SpatialEncoder(cfg, in_channels=in_channels)
         self.global_proj = nn.Sequential(
             nn.Linear(cfg.global_features, cfg.d_model),
             nn.ReLU(),
@@ -67,6 +71,27 @@ class GeneralsEncoder(ObservationEncoder):
 
     # ------------------------------------------------------------------
 
+    def _augment(self, grid: torch.Tensor) -> torch.Tensor:
+        """Append 3 derived LINEAR army channels: own / enemy / neutral-city
+        army as army/50 (clipped at 10 ~ 500 army).
+
+        grid: [..., C, H, W] with the standard 12-channel layout. Channel
+        11 stores log1p(army)/10, so army = expm1(10*ch11), inverted in
+        fp32 BEFORE any autocast cast — bf16 would destroy exactly the
+        precision this feature exists to expose.
+        """
+        if not self.cfg.derive_army_channels:
+            return grid
+        army = torch.expm1(grid[..., 11, :, :].float() * 10.0)
+        lin = (army / 50.0).clamp(max=10.0)
+        own = grid[..., 5, :, :] + grid[..., 6, :, :] + grid[..., 7, :, :]
+        enemy = grid[..., 8, :, :] + grid[..., 9, :, :] + grid[..., 10, :, :]
+        neutral_city = grid[..., 3, :, :]
+        extra = torch.stack(
+            [lin * own.float(), lin * enemy.float(),
+             lin * neutral_city.float()], dim=-3)
+        return torch.cat([grid, extra.to(grid.dtype)], dim=-3)
+
     def _encode_frames(self, grid_seq, frame_mask):
         """Run the spatial encoder, excluding padded frames from BatchNorm
         statistics when ``frame_mask`` ([B, T] bool, True = real frame) is
@@ -76,7 +101,7 @@ class GeneralsEncoder(ObservationEncoder):
         the future; the recurrence only carries state forward)."""
         B, T, C, H, W = grid_seq.shape
         BT = B * T
-        flat = grid_seq.reshape(BT, C, H, W)
+        flat = self._augment(grid_seq.reshape(BT, C, H, W))
         if frame_mask is None or bool(frame_mask.all()):
             return self.spatial_encoder(flat).reshape(B, T, -1, H, W)
         fm = frame_mask.reshape(BT)
@@ -104,7 +129,7 @@ class GeneralsEncoder(ObservationEncoder):
         globals_vec = obs["globals_seq"]    # [B, G]
         B, d = grid.shape[0], self.cfg.d_model
 
-        spatial = self.spatial_encoder(grid)
+        spatial = self.spatial_encoder(self._augment(grid))
         spatial = spatial + self.global_proj(globals_vec).unsqueeze(-1).unsqueeze(-1)
         return spatial.reshape(B, d, self.n_tokens).permute(0, 2, 1)
 

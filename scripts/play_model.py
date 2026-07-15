@@ -74,20 +74,27 @@ def state_to_grid(state, army):
     return grid
 
 
-def compute_globals(sim, player_id):
-    """Compute [4] globals vector from simulator state."""
+def compute_globals(sim, player_id, turn_globals=False, turn=0):
+    """Compute the globals vector from simulator state.
+
+    ``turn_globals`` must mirror the checkpoint's cfg.turn_globals: models
+    trained with production-cycle features expect 7 inputs, not 4.
+    """
     my = sim.players[player_id]
     op = sim.players[1 - player_id]
     my_army = my.army
     my_land = len(my.land)
     op_army = op.army
     op_land = len(op.land)
-    return [
+    glb = [
         np.log1p(my_army) / 10.0,
         np.log1p(my_land) / 10.0,
         np.log1p(op_army) / 10.0,
         np.log1p(op_land) / 10.0,
     ]
+    if turn_globals:
+        glb += [(turn % 50) / 50.0, float(turn % 2), turn / 500.0]
+    return glb
 
 
 def compute_legal_mask(state, army):
@@ -201,7 +208,9 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None,
 
         # ── 6. Feed to model ──
         grid = state_to_grid(state, army)
-        globals_vec = compute_globals(sim, player_id)
+        globals_vec = compute_globals(
+            sim, player_id,
+            turn_globals=getattr(model.cfg, "turn_globals", False), turn=turn)
         legal_mask = compute_legal_mask(state, army)
 
         grid_t = torch.tensor(grid, dtype=torch.float32).unsqueeze(0).to(device)

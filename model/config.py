@@ -13,6 +13,24 @@ class ModelConfig:
     grid_channels: int = 12
     n_grid_types: int = 11
     global_features: int = 4  # myArmy, myLand, opArmy, opLand
+                              # (7 with turn_globals: + production-cycle
+                              #  phase, half-turn parity, scaled turn)
+
+    # Generals-adapter input features (both default OFF for byte-compatible
+    # behavior with existing checkpoints; enabling them zero-pads the first
+    # conv / global projection — function-preserving — via the
+    # shape-adaptive loader in GeneralsNetwork.load_state_dict):
+    #   derive_army_channels — GeneralsEncoder derives 3 LINEAR army
+    #     channels (own/enemy/neutral-city, army/50 clipped) from the grid
+    #     before the spatial encoder. The single log1p(army)/10 channel
+    #     makes exact army comparisons nearly invisible in input space
+    #     (200-vs-250 differs by ~0.02); combat arithmetic is linear.
+    #   turn_globals — the env appends (turn%50)/50, turn%2, turn/500 to
+    #     the globals (set global_features=7 together with this): the
+    #     temporal attention has no positional encoding, so the policy
+    #     otherwise cannot see the 50-tick production cycle at all.
+    derive_army_channels: bool = False
+    turn_globals: bool = False
 
     # Core model dimensions
     d_model: int = 384

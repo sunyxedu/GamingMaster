@@ -111,6 +111,13 @@ class GeneralsEnv:
         self.city_reward_scale: float = 1.0
         self.dense_reward_scale: float = 1.0
 
+        # Append production-cycle features to the globals vector (must match
+        # the model's cfg.turn_globals / global_features=7): the temporal
+        # attention carries no positional encoding, so without these the
+        # policy cannot see the 50-turn all-land production cycle or the
+        # city/general half-turn tick at all.
+        self.turn_globals: bool = False
+
         # Which player's rewards/events go into info["reward_breakdown"].
         # The learner's seat is randomized per episode during training (the
         # move-priority tiebreak favors P0, and a learner pinned to P0
@@ -458,12 +465,21 @@ class GeneralsEnv:
         # --- globals ---
         stats = self._player_stats(player_id)
         opp_stats = self._player_stats(1 - player_id)
-        globals_vec = torch.tensor([
+        glb = [
             math.log1p(stats["army"]) / 10.0,
             math.log1p(stats["land"]) / 10.0,
             math.log1p(opp_stats["army"]) / 10.0,
             math.log1p(opp_stats["land"]) / 10.0,
-        ], dtype=torch.float32)
+        ]
+        if self.turn_globals:
+            # Production clock (see _increment_armies): all land +1 every
+            # 50 turns, cities/generals +1 every 2 turns.
+            glb += [
+                (self.turn % 50) / 50.0,
+                float(self.turn % 2),
+                self.turn / 500.0,
+            ]
+        globals_vec = torch.tensor(glb, dtype=torch.float32)
 
         # --- legal mask (owned tiles with army > 1) ---
         legal = torch.zeros(1, H, W, dtype=torch.bool)
