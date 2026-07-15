@@ -102,6 +102,14 @@ def parse_args():
                    help="Weight for source/direction invalidity auxiliary "
                         "loss (ignored when --rl_legal_mask is on: masked "
                         "policies place no mass on invalid actions)")
+    p.add_argument("--mirror_prob", type=float, default=0.5,
+                   help="Probability an episode is MIRROR self-play (live "
+                        "model vs itself, BOTH seats' trajectories train — "
+                        "the opponent forward pass is computed every step "
+                        "anyway). Mirror games are excluded from the pool-"
+                        "gate winrate (they are ~0.5 by construction). "
+                        "Non-mirror games draw a fresh pool opponent per "
+                        "episode.")
     p.add_argument("--randomize_seat", type=int, default=1,
                    help="1 = sample the learner's seat per episode (the env "
                         "move-priority tiebreak favors P0; a learner pinned "
@@ -329,13 +337,18 @@ def collect_selfplay_episode(
     legal_mask: bool = True,
     learner_pid: int = 0,
     reset_seed: Optional[int] = None,
-) -> Tuple[RolloutBuffer, Optional[List[Dict]]]:
+    collect_both: bool = False,
+) -> Tuple[List[RolloutBuffer], Optional[List[Dict]], Dict[str, float]]:
     """Run one self-play episode: model as ``learner_pid``, opponent as the
     other seat.
 
-    Only collects the learner's trajectory. The learner's seat matters:
-    the env's move-priority tiebreak favors P0, so training/eval pinned to
-    P0 would learn (and measure) a rules advantage that doesn't transfer.
+    Collects the learner's trajectory — or BOTH seats' trajectories with
+    ``collect_both`` (mirror self-play: the opponent's forward pass happens
+    every step anyway; a mirror game turns it into a second training
+    trajectory for free). Returned buffers are ordered [learner, (other)].
+    The learner's seat matters: the env's move-priority tiebreak favors P0,
+    so training/eval pinned to P0 would learn (and measure) a rules
+    advantage that doesn't transfer.
     With ``legal_mask`` both players sample from source/direction
     distributions hard-masked to legal actions (the PPO update must replay
     with the same masks); without it, the legacy unmasked RL mode.
@@ -348,7 +361,8 @@ def collect_selfplay_episode(
     env.breakdown_pid = learner_pid
     obs = env.reset(seed=reset_seed)
     nets = {learner_pid: model, 1 - learner_pid: opponent}
-    buffer = RolloutBuffer()
+    seats = (learner_pid, 1 - learner_pid) if collect_both else (learner_pid,)
+    buffers = {pid: RolloutBuffer() for pid in seats}
     caches = {0: None, 1: None}    # spatiotemporal KV caches
     replay_log: Optional[List[Dict]] = [] if record else None
     reward_totals: Dict[str, float] = {
@@ -440,27 +454,27 @@ def collect_selfplay_episode(
             for k, v in info["reward_breakdown"].items():
                 reward_totals[k] += v
 
-        # Store the learner's transition only
-        lp_ = learner_pid
-        action_dict = {
-            "source_idx": step_out[lp_]["action_source"].item(),
-            "direction": step_out[lp_]["action_direction"].item(),
-            "split": step_out[lp_]["action_split"].item(),
-            "passed": step_out[lp_]["action_pass"].item(),
-        }
-        # Compute valid directions for chosen source
-        valid_dirs = env.get_valid_directions(action_dict["source_idx"])
-        buffer.add(
-            obs=obs[lp_],
-            action=action_dict,
-            log_prob=step_out[lp_]["action_log_prob"].item(),
-            value=step_out[lp_]["value"].item(),
-            reward=rewards[lp_],
-            # Truncation (env turn limit) is a SOFT terminal: the env already
-            # scored it by material, so GAE must not bootstrap on top.
-            done=done,
-            valid_directions=valid_dirs,
-        )
+        # Store the collected seats' transitions
+        for pid in seats:
+            action_dict = {
+                "source_idx": step_out[pid]["action_source"].item(),
+                "direction": step_out[pid]["action_direction"].item(),
+                "split": step_out[pid]["action_split"].item(),
+                "passed": step_out[pid]["action_pass"].item(),
+            }
+            # Compute valid directions for chosen source
+            valid_dirs = env.get_valid_directions(action_dict["source_idx"])
+            buffers[pid].add(
+                obs=obs[pid],
+                action=action_dict,
+                log_prob=step_out[pid]["action_log_prob"].item(),
+                value=step_out[pid]["value"].item(),
+                reward=rewards[pid],
+                # Truncation (env turn limit) is a SOFT terminal: the env
+                # already scored it by material — GAE must not bootstrap.
+                done=done,
+                valid_directions=valid_dirs,
+            )
 
         obs = new_obs
         if done:
@@ -469,16 +483,18 @@ def collect_selfplay_episode(
     # Rollout budget exhausted mid-game: the env never saw a terminal, so
     # apply the same material-based truncation score here and close the
     # episode — mirrors the env's own turn-limit handling.
-    if not done and len(buffer) > 0:
-        buffer.rewards[-1] += env.truncation_score(learner_pid)
-        buffer.dones[-1] = True
-        reward_totals["r_winlose"] += env.truncation_score(learner_pid)
+    for pid in seats:
+        buf = buffers[pid]
+        if not done and len(buf) > 0:
+            buf.rewards[-1] += env.truncation_score(pid)
+            buf.dones[-1] = True
+            if pid == learner_pid:
+                reward_totals["r_winlose"] += env.truncation_score(pid)
+        buf.compute_returns_and_advantages(
+            gamma=gamma, lam=gae_lambda, last_value=0.0,
+        )
 
-    buffer.compute_returns_and_advantages(
-        gamma=gamma, lam=gae_lambda, last_value=0.0,
-    )
-
-    return buffer, replay_log, reward_totals
+    return [buffers[pid] for pid in seats], replay_log, reward_totals
 
 
 # ======================================================================
@@ -1056,14 +1072,10 @@ def main():
             if rank0:
                 print(f"Iteration {iteration}: encoder unfrozen, LR reduced to {current_lr * 0.5:.3e}")
 
-        # ---- 1. Load opponent from pool ----
-        # Each GPU picks one opponent for all its local episodes.
-        # Local games share the same opponent (clean gradient), but different
-        # GPUs may face different opponents (diversity via all-reduce).
-        opp_state = opponent_pool.sample()
-        opponent_model.load_state_dict(opp_state)
-
-        # ---- 2. Collect multiple self-play episodes per GPU ----
+        # ---- 1/2. Collect self-play episodes (opponent drawn per episode:
+        # a load is ~10-30ms against a multi-second episode, and per-episode
+        # draws expose the learner to up to episodes_per_gpu distinct
+        # opponents per gate window instead of one) ----
         should_record = (
             rank0
             and args.save_replay_interval > 0
@@ -1080,13 +1092,21 @@ def main():
         local_p0 = 0
         local_p1 = 0
         local_draw = 0
+        local_mirror = 0
 
         replay_env_snapshot = None  # env state for the recorded episode
         for ep_i in range(args.episodes_per_gpu):
             record_this = should_record and ep_i == 0
-            learner_pid = random.randint(0, 1) if args.randomize_seat else 0
-            buf, ep_replay, ep_rw = collect_selfplay_episode(
-                model, opponent_model, env, device,
+            mirror = args.mirror_prob > 0 and random.random() < args.mirror_prob
+            if mirror:
+                opp_net = model
+                learner_pid = 0  # both seats collected; seat is symmetric
+            else:
+                opponent_model.load_state_dict(opponent_pool.sample())
+                opp_net = opponent_model
+                learner_pid = random.randint(0, 1) if args.randomize_seat else 0
+            bufs, ep_replay, ep_rw = collect_selfplay_episode(
+                model, opp_net, env, device,
                 max_steps=args.rollout_steps,
                 gamma=args.gamma,
                 gae_lambda=args.gae_lambda,
@@ -1094,6 +1114,7 @@ def main():
                 act_steps=args.act_steps,
                 legal_mask=bool(args.rl_legal_mask),
                 learner_pid=learner_pid,
+                collect_both=mirror,
             )
             if ep_replay is not None:
                 replay_log = ep_replay
@@ -1105,14 +1126,18 @@ def main():
                     "generals": env.generals, "cities": env.cities,
                     "mountains": env.mountains,
                 }
-            ep_buffers.append(buf)
-            local_ep_len += len(buf)
-            local_ep_reward += sum(buf.rewards)
+            ep_buffers.extend(bufs)
+            local_ep_len += len(bufs[0])
+            local_ep_reward += sum(bufs[0].rewards)
             for k in reward_totals:
                 reward_totals[k] += ep_rw[k]
 
-            # Win counters are LEARNER-relative (seat is randomized).
-            if env.winner == learner_pid:
+            # Win counters are LEARNER-relative (seat is randomized) and
+            # exclude mirror games — a mirror winrate is ~0.5 by
+            # construction and would jam the pool gate.
+            if mirror:
+                local_mirror += 1
+            elif env.winner == learner_pid:
                 wins[0] += 1
                 local_p0 += 1
             elif env.winner == 1 - learner_pid:
@@ -1232,6 +1257,7 @@ def main():
                 float(local_p0),
                 float(local_p1),
                 float(local_draw),
+                float(local_mirror),
                 local_ep_reward,
                 local_ep_len,
             ] + [reward_totals[k] for k in rw_keys], device=device)
@@ -1239,14 +1265,16 @@ def main():
             global_p0 = int(local_stats[0].item())
             global_p1 = int(local_stats[1].item())
             global_draw = int(local_stats[2].item())
-            global_avg_r = local_stats[3].item() / world_size
-            global_avg_len = local_stats[4].item() / world_size
+            global_mirror = int(local_stats[3].item())
+            global_avg_r = local_stats[4].item() / world_size
+            global_avg_len = local_stats[5].item() / world_size
             for i, k in enumerate(rw_keys):
-                reward_totals[k] = local_stats[5 + i].item() / world_size
+                reward_totals[k] = local_stats[6 + i].item() / world_size
         else:
             global_p0 = local_p0
             global_p1 = local_p1
             global_draw = local_draw
+            global_mirror = local_mirror
             global_avg_r = local_ep_reward
             global_avg_len = local_ep_len
 
@@ -1334,7 +1362,8 @@ def main():
                 f"Iter {iteration:>6d} | "
                 f"ep_len={global_avg_len:>6.0f}  "
                 f"r={global_avg_r:+.3f}  "
-                f"w/l/d={global_p0}/{global_p1}/{global_draw}({total_games}) | "
+                f"w/l/d={global_p0}/{global_p1}/{global_draw}"
+                f"+mir{global_mirror}({total_games}) | "
                 f"pol={ppo_avg.get('policy_loss', 0):.4f}  "
                 f"val={ppo_avg.get('value_loss', 0):.4f}  "
                 f"ent={ppo_avg.get('entropy', 0):.4f}  "
