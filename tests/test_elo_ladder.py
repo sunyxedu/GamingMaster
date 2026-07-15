@@ -56,10 +56,17 @@ class TestEloLadderEndToEnd:
             torch.save({"model_state": net.state_dict(),
                         "config": cfg.__dict__},
                        refs / f"{name}.pt")
+        # Candidate is a PHASE-5-STYLE checkpoint (turn_globals, 7 globals,
+        # derived army channels): the ladder must mix it with the 4-global
+        # refs in the same games.
+        cfg5 = ModelConfig(d_model=64, n_heads=4, trm_H_cycles=1,
+                           trm_L_cycles=2, trm_block_layers=1,
+                           turn_globals=True, global_features=7,
+                           derive_army_channels=True)
         torch.manual_seed(2)
         cand = tmp_path / "cand.pt"
-        torch.save({"model_state": GeneralsNetwork(cfg).state_dict(),
-                    "config": cfg.__dict__}, cand)
+        torch.save({"model_state": GeneralsNetwork(cfg5).state_dict(),
+                    "config": cfg5.__dict__}, cand)
 
         out = subprocess.run(
             [sys.executable, os.path.join(ROOT, "scripts", "elo_ladder.py"),

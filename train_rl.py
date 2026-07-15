@@ -360,6 +360,7 @@ def collect_selfplay_episode(
     learner_pid: int = 0,
     reset_seed: Optional[int] = None,
     collect_both: bool = False,
+    collect_buffers: bool = True,
 ) -> Tuple[List[RolloutBuffer], Optional[List[Dict]], Dict[str, float]]:
     """Run one self-play episode: model as ``learner_pid``, opponent as the
     other seat.
@@ -375,6 +376,9 @@ def collect_selfplay_episode(
     distributions hard-masked to legal actions (the PPO update must replay
     with the same masks); without it, the legacy unmasked RL mode.
     ``reset_seed`` reproduces a map (paired seat-swapped evaluation).
+    ``collect_buffers=False`` plays the game without storing transitions or
+    computing GAE (evaluation only reads env.winner — a 2048-step buffer is
+    ~90MB of immediately-discarded allocations per game).
 
     If ``record=True``, returns a list of per-step dicts for replay viewing.
     """
@@ -477,7 +481,7 @@ def collect_selfplay_episode(
                 reward_totals[k] += v
 
         # Store the collected seats' transitions
-        for pid in seats:
+        for pid in seats if collect_buffers else ():
             action_dict = {
                 "source_idx": step_out[pid]["action_source"].item(),
                 "direction": step_out[pid]["action_direction"].item(),
@@ -505,7 +509,7 @@ def collect_selfplay_episode(
     # Rollout budget exhausted mid-game: the env never saw a terminal, so
     # apply the same material-based truncation score here and close the
     # episode — mirrors the env's own turn-limit handling.
-    for pid in seats:
+    for pid in seats if collect_buffers else ():
         buf = buffers[pid]
         if not done and len(buf) > 0:
             buf.rewards[-1] += env.truncation_score(pid)
@@ -568,19 +572,16 @@ def ppo_update(
     n_buffers = len(buffers)
     metrics_accum: Dict[str, float] = {}
 
-    def _flush_step(chunk_empty: bool) -> None:
-        """Sync, clip and apply one optimizer step (both optimizers)."""
-        if chunk_empty:
-            # Uniform gradient presence across ranks: a rank whose chunk is
-            # empty contributes explicit zeros instead of triggering the
-            # missing-gradient anomaly path inside sync_gradients.
-            for p in model.parameters():
-                if p.requires_grad and p.grad is None:
-                    p.grad = torch.zeros_like(p)
-            if use_capture:
-                for p in capture_head.parameters():
-                    if p.grad is None:
-                        p.grad = torch.zeros_like(p)
+    def _flush_step() -> None:
+        """Sync, clip and apply one optimizer step (both optimizers).
+
+        An empty local chunk needs NO explicit zero grads: sync_gradients'
+        presence mask is MAX-reduced, so the data-holding ranks define
+        participation and this rank contributes zeros with an identical
+        collective count. Pre-filling zeros here would instead mark heads
+        untouched by the objective as present everywhere, silently breaking
+        the never-allreduced/never-stepped semantics for skipped modules.
+        """
         if world_size > 1:
             sync_gradients(model, world_size)
             if use_capture:
@@ -757,7 +758,7 @@ def ppo_update(
     for chunk in chunks:
         for buf in chunk:
             _process_buffer(buf, denom=len(chunk))
-        _flush_step(chunk_empty=len(chunk) == 0)
+        _flush_step()
 
     return {k: v / max(n_buffers, 1) for k, v in metrics_accum.items()}
 
@@ -1119,11 +1120,21 @@ def main():
         if rank0:
             print(f"  LR restored to {resume_lr:.3e} (decay^{done_iters})")
 
-        # Restore reward scales. Checkpoints that carry them (saved by this
-        # code) continue exactly — --reset_reward_decay must NOT re-zero the
-        # clock on every within-phase crash recovery. Older checkpoints
-        # (previous phase) fall back to the flag / recompute.
-        if "city_reward_scale" in rl_ckpt:
+        # Restore reward scales. A checkpoint from THIS phase (same
+        # output_dir) continues its schedule exactly — --reset_reward_decay
+        # must NOT re-zero the clock on every within-phase crash recovery.
+        # A checkpoint from a DIFFERENT directory is a phase boundary: the
+        # reset flag wins there, otherwise it is a silent no-op and the new
+        # phase's shaping enters pre-annealed by however long the previous
+        # phase ran.
+        cross_phase = (os.path.dirname(os.path.abspath(args.resume))
+                       != os.path.abspath(args.output_dir))
+        if args.reset_reward_decay and cross_phase:
+            env.city_reward_scale = 1.0
+            env.dense_reward_scale = 1.0
+            if rank0:
+                print("  Reward decay clocks reset (cross-phase resume)")
+        elif "city_reward_scale" in rl_ckpt:
             env.city_reward_scale = rl_ckpt["city_reward_scale"]
             env.dense_reward_scale = rl_ckpt["dense_reward_scale"]
         elif args.reset_reward_decay:
@@ -1358,6 +1369,14 @@ def main():
             )
             il_weight *= args.il_decay
 
+            # The IL forward runs in train mode: BatchNorm running stats
+            # chase each rank's own IL batch, and buffers are NOT covered
+            # by gradient sync. Realign so EMA/eval/pool snapshots stay
+            # rank-identical (mirrors the startup broadcast).
+            if dist.is_initialized():
+                for b in model.buffers():
+                    dist.broadcast(b, src=0)
+
         # ---- 4b. EMA update (once per iteration, after all optimizer
         # steps; ranks hold identical weights so their EMAs stay in sync) --
         if ema_state is not None:
@@ -1463,6 +1482,7 @@ def main():
                             act_steps=args.act_steps,
                             legal_mask=bool(args.rl_legal_mask),
                             learner_pid=lp, reset_seed=seed,
+                            collect_buffers=False,
                         )
                         outcome.append(
                             1 if env.winner == lp
@@ -1537,22 +1557,25 @@ def main():
                 args.output_dir, f"replay_iter{iteration}.json",
             )
             snap = replay_env_snapshot
-            _json.dump({
-                "iteration": iteration,
-                "ep_len": len(ep_buffers[0]),
-                "total_reward_p0": sum(ep_buffers[0].rewards),
-                "winner": snap["winner"],
-                "map_pool_idx": snap["map_pool_idx"],
-                "replay_id": snap["replay_id"],
-                "map": {
-                    "real_h": snap["real_h"],
-                    "real_w": snap["real_w"],
-                    "generals": snap["generals"],
-                    "cities": snap["cities"],
-                    "mountains": snap["mountains"],
-                },
-                "steps": replay_log,
-            }, open(replay_path, "w"), indent=2)
+            # Compact dump: at 2048-step episodes an indented file is
+            # ~50MB written synchronously on rank0 while other ranks idle.
+            with open(replay_path, "w") as fh:
+                _json.dump({
+                    "iteration": iteration,
+                    "ep_len": len(ep_buffers[0]),
+                    "total_reward_p0": sum(ep_buffers[0].rewards),
+                    "winner": snap["winner"],
+                    "map_pool_idx": snap["map_pool_idx"],
+                    "replay_id": snap["replay_id"],
+                    "map": {
+                        "real_h": snap["real_h"],
+                        "real_w": snap["real_w"],
+                        "generals": snap["generals"],
+                        "cities": snap["cities"],
+                        "mountains": snap["mountains"],
+                    },
+                    "steps": replay_log,
+                }, fh)
             print(f"  Saved replay {replay_path}")
 
         # ---- 8. Save checkpoint ----

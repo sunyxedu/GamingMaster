@@ -315,19 +315,14 @@ class GeneralsDecoder(ActionDecoder):
             )
 
             # --- source log-prob ---
-            if legal_mask is not None:
-                sl_masked = source_logits.detach().clone()
-                lm = legal_mask.reshape(B, N)
-                sl_masked = sl_masked.masked_fill(~lm, float("-inf"))
-                all_inf = sl_masked.isinf() & (sl_masked < 0)
-                bad_rows = all_inf.all(dim=-1)
-                if bad_rows.any():
-                    sl_masked[bad_rows, 0] = 0.0
-                source_lp = F.log_softmax(sl_masked, dim=-1)[arange_B, src_idx]
-            else:
-                source_lp = F.log_softmax(
-                    source_logits.float(), dim=-1,
-                )[arange_B, src_idx]
+            # safe_masked_logits is EXACTLY the distribution masked_sample
+            # drew the source from in decode() (same all-masked one-hot-0
+            # fallback AND the same NaN-row uniform fallback) — computing
+            # the bookkeeping from anything else lets the recorded log-prob
+            # diverge from the acted distribution when logits go non-finite.
+            lm = legal_mask.reshape(B, N) if legal_mask is not None else None
+            safe = safe_masked_logits(source_logits, lm)
+            source_lp = F.log_softmax(safe, dim=-1)[arange_B, src_idx]
 
             # --- direction ---
             if self.greedy:
@@ -389,6 +384,16 @@ class GeneralsDecoder(ActionDecoder):
                 sl_masked[bad_rows, 0] = 0.0
         else:
             sl_masked = source_logits
+        # NaN-row fallback mirroring safe_masked_logits: the rollout sampled
+        # such rows UNIFORMLY, so the replay must reproduce that (all-zero
+        # logits, detached — no gradient through a numerically broken row)
+        # instead of propagating NaN into ratio/losses where it would also
+        # blind the target_kl guard (NaN > x is False).
+        nan_rows = sl_masked.isnan().any(dim=-1)                 # [B, T]
+        if nan_rows.any():
+            sl_masked = torch.where(
+                nan_rows.unsqueeze(-1), torch.zeros_like(sl_masked),
+                sl_masked)
 
         # --- pass ---
         pass_logits = pred["pass_logits"]              # [B, T]

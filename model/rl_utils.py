@@ -392,7 +392,10 @@ def sync_gradients(model: nn.Module, world_size: int) -> None:
     dist.all_reduce(participating, op=dist.ReduceOp.MAX)
 
     gap = (participating - local) > 0
-    if bool(gap.any()):
+    # A rank with NO local gradients at all is a legitimate empty
+    # accumulation chunk (buffer counts vary across ranks under mirror
+    # self-play) — only a PARTIAL gap is an autograd anomaly worth noise.
+    if bool(gap.any()) and bool(local.any()):
         names = [named[i][0] for i in gap.nonzero(as_tuple=True)[0].tolist()]
         print(f"  [grad-sync] rank {dist.get_rank()}: no local gradient for "
               f"{len(names)} participating parameter(s), contributing zeros "
