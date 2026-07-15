@@ -175,6 +175,15 @@ def parse_args():
                    help="Temporal mixer for from-scratch models (checkpoints "
                         "carry their own setting in the saved config)")
 
+    # EMA policy weights — smoother snapshots for evaluation, the opponent
+    # pool and deployment (AverageJoe's #1 ladder agent IS its EMA copy).
+    # Never fed back into training.
+    p.add_argument("--ema_decay", type=float, default=0.998,
+                   help="Per-iteration EMA decay for a CPU shadow copy of "
+                        "the weights; used for eval, pool snapshots and the "
+                        "exported bot (0 = disabled). 0.998 ~ 500-iter "
+                        "time constant.")
+
     # Fixed-opponent evaluation (progress signal independent of shaping
     # rewards and of the moving opponent pool)
     p.add_argument("--eval_interval", type=int, default=50,
@@ -236,6 +245,31 @@ class OpponentPool:
 
     def __len__(self) -> int:
         return len(self.pool)
+
+
+def init_ema(model: torch.nn.Module) -> Dict[str, torch.Tensor]:
+    """Detached fp32 CPU copy of the full state dict (params AND buffers —
+    BatchNorm running stats must shadow too or the EMA net sees stale
+    normalization)."""
+    return {
+        k: v.detach().to("cpu", torch.float32, copy=True)
+        if v.dtype.is_floating_point else v.detach().to("cpu", copy=True)
+        for k, v in model.state_dict().items()
+    }
+
+
+def update_ema(ema_state: Dict[str, torch.Tensor], model: torch.nn.Module,
+               decay: float) -> None:
+    """ema = decay*ema + (1-decay)*current for float tensors; integer
+    buffers (e.g. num_batches_tracked) are copied through."""
+    with torch.no_grad():
+        for k, v in model.state_dict().items():
+            e = ema_state[k]
+            if v.dtype.is_floating_point:
+                e.mul_(decay).add_(v.detach().to("cpu", torch.float32),
+                                   alpha=1.0 - decay)
+            else:
+                e.copy_(v.detach().to("cpu"))
 
 
 # Relative weights of the per-head KL-anchor terms (source dominates the
@@ -820,6 +854,19 @@ def main():
                 if isinstance(t, torch.Tensor):
                     dist.broadcast(t, src=0)
 
+    # ---- EMA shadow weights (post-broadcast so all ranks agree) --------
+    ema_state: Optional[Dict[str, torch.Tensor]] = None
+    if args.ema_decay > 0:
+        if rl_ckpt is not None and "ema_state" in rl_ckpt:
+            ema_state = {k: v.clone() for k, v in rl_ckpt["ema_state"].items()}
+            if rank0:
+                print("  EMA weights resumed from checkpoint")
+        else:
+            ema_state = init_ema(model)
+            if rank0:
+                print(f"EMA enabled (decay={args.ema_decay}, "
+                      f"initialized from current weights)")
+
     # ---- Reference model (frozen copy for KL regularisation) -----------
     ref_model: Optional[GeneralsNetwork] = None
     if args.kl_weight > 0:
@@ -1152,6 +1199,11 @@ def main():
             )
             il_weight *= args.il_decay
 
+        # ---- 4b. EMA update (once per iteration, after all optimizer
+        # steps; ranks hold identical weights so their EMAs stay in sync) --
+        if ema_state is not None:
+            update_ema(ema_state, model, args.ema_decay)
+
         # Decay shaping rewards
         env.city_reward_scale *= args.city_reward_decay
         env.dense_reward_scale *= args.dense_reward_decay
@@ -1204,11 +1256,16 @@ def main():
         if iters_since_update >= args.pool_update_interval:
             recent_wr = sum(winrate_history) / len(winrate_history) if winrate_history else 0
             if recent_wr >= args.pool_update_winrate:
-                raw = model
-                opponent_pool.add(raw.state_dict())
+                # Pool snapshots use the EMA when available — smoother
+                # opponents damp self-play cycling vs high-variance
+                # single-iteration snapshots.
+                opponent_pool.add(
+                    ema_state if ema_state is not None else model.state_dict())
                 last_pool_update_iter = iteration
                 if rank0:
-                    print(f"  Pool updated: {len(opponent_pool)} opponents (winrate={recent_wr:.2f})")
+                    print(f"  Pool updated: {len(opponent_pool)} opponents "
+                          f"(winrate={recent_wr:.2f}"
+                          f"{', ema' if ema_state is not None else ''})")
             elif rank0:
                 print(f"  Pool update skipped: winrate={recent_wr:.2f} < {args.pool_update_winrate}")
 
@@ -1221,7 +1278,14 @@ def main():
         if (args.eval_interval > 0 and ref_model is not None
                 and iteration % args.eval_interval == 0):
             rng_state = random.getstate()  # reset(seed) reseeds global RNG
-            model.action_decoder.greedy = True
+            # Evaluate the EMA policy when available — it is what gets
+            # deployed and pooled. opponent_model is reloaded from the pool
+            # at the top of the next iteration, so borrowing it is free.
+            eval_net = model
+            if ema_state is not None:
+                opponent_model.load_state_dict(ema_state)
+                eval_net = opponent_model
+            eval_net.action_decoder.greedy = True
             ref_model.action_decoder.greedy = True
             rank = dist.get_rank() if dist.is_initialized() else 0
             w = l = d = won_both = lost_both = 0
@@ -1231,7 +1295,7 @@ def main():
                     outcome = []
                     for lp in (0, 1):
                         collect_selfplay_episode(
-                            model, ref_model, env, device,
+                            eval_net, ref_model, env, device,
                             max_steps=args.rollout_steps,
                             gamma=args.gamma, gae_lambda=args.gae_lambda,
                             act_steps=args.act_steps,
@@ -1247,7 +1311,7 @@ def main():
                     won_both += int(outcome[0] == 1 and outcome[1] == 1)
                     lost_both += int(outcome[0] == -1 and outcome[1] == -1)
             finally:
-                model.action_decoder.greedy = False
+                eval_net.action_decoder.greedy = False
                 ref_model.action_decoder.greedy = False
                 random.setstate(rng_state)
             if dist.is_initialized():
@@ -1258,7 +1322,8 @@ def main():
             if rank0:
                 n_ev = max(w + l + d, 1)
                 n_pairs = n_ev // 2
-                print(f"  Eval vs anchor (paired greedy): {w}/{l}/{d} "
+                tag = "ema" if ema_state is not None else "raw"
+                print(f"  Eval vs anchor (paired greedy, {tag}): {w}/{l}/{d} "
                       f"(W/L/D of {n_ev})  wr={w / n_ev:.2f}  "
                       f"pairs: won_both={won_both}/{n_pairs} "
                       f"lost_both={lost_both}/{n_pairs}")
@@ -1349,11 +1414,27 @@ def main():
             if capture_head is not None:
                 ckpt_data["capture_head_state"] = capture_head.state_dict()
                 ckpt_data["capture_optim_state"] = capture_optimizer.state_dict()
+            if ema_state is not None:
+                ckpt_data["ema_state"] = ema_state
             torch.save(ckpt_data, ckpt_path + ".tmp")
             # Atomic publish: a reader (or a resume glob) must never see a
             # half-written checkpoint.
             os.replace(ckpt_path + ".tmp", ckpt_path)
             print(f"  Saved {ckpt_path}")
+            if ema_state is not None:
+                # Standalone strict-loadable EMA checkpoint — this is the
+                # deployment/eval artifact (no optimizer state, no pool).
+                # Distinct prefix so the crash-recovery resume glob
+                # (rl_checkpoint_iter*.pt) can never pick it up.
+                ema_path = os.path.join(
+                    args.output_dir, f"rl_ema_iter{iteration}.pt")
+                torch.save({
+                    "iteration": iteration,
+                    "model_state": ema_state,
+                    "config": cfg.__dict__,
+                    "ema": True,
+                }, ema_path + ".tmp")
+                os.replace(ema_path + ".tmp", ema_path)
 
     if rank0:
         print("RL training complete.")

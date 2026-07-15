@@ -81,3 +81,39 @@ class TestKLHeads:
         total.backward()
         for k, v in cur.items():
             assert v.grad is not None and torch.isfinite(v.grad).all(), k
+
+
+class TestEMA:
+    def test_update_ema_math_and_buffers(self):
+        import torch.nn as nn
+        from train_rl import init_ema, update_ema
+
+        m = nn.Sequential(nn.Linear(4, 4), nn.BatchNorm1d(4))
+        ema = init_ema(m)
+        before = {k: v.clone() for k, v in ema.items()}
+        # perturb weights and BN stats
+        with torch.no_grad():
+            for p in m.parameters():
+                p.add_(1.0)
+            m[1].running_mean.add_(2.0)
+            m[1].num_batches_tracked.add_(3)
+        update_ema(ema, m, decay=0.9)
+        sd = m.state_dict()
+        for k, v in sd.items():
+            if v.dtype.is_floating_point:
+                expected = 0.9 * before[k] + 0.1 * v.cpu().float()
+                assert torch.allclose(ema[k], expected, atol=1e-6), k
+            else:
+                assert torch.equal(ema[k], v.cpu()), k
+
+    def test_ema_state_loads_strict(self):
+        from model.config import ModelConfig
+        from model.network import GeneralsNetwork
+        from train_rl import init_ema
+
+        cfg = ModelConfig(d_model=64, n_heads=4, trm_H_cycles=1,
+                          trm_L_cycles=2, trm_block_layers=1)
+        m = GeneralsNetwork(cfg)
+        ema = init_ema(m)
+        m2 = GeneralsNetwork(cfg)
+        m2.load_state_dict(ema)  # strict — must not raise
