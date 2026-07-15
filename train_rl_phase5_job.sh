@@ -14,8 +14,12 @@
 #   - Hard legal masking of sources AND directions in rollout + PPO replay
 #     (--rl_legal_mask): no reward/entropy budget spent on legality, KL
 #     anchor compares masked (trained) distributions.
-#   - Undiscounted horizon fit: gamma 1.0, lambda 0.9, 2048-step episodes
-#     — long economic games reach the real ±1 terminal.
+#   - Undiscounted horizon fit: gamma 1.0, lambda 0.9, 1536-step episodes
+#     — long economic games reach the real ±1 terminal. (1536, not 2048:
+#     the full-sequence PPO backward peaks an estimated ~145GB at T=2048
+#     vs the H200's 141GB. ~109GB at 1536 leaves real headroom; measure
+#     the true peak with scripts/check_training_memory.py before pushing
+#     the cap higher.)
 #   - Learner seat randomized per episode (--randomize_seat): the P0
 #     move-priority advantage no longer trains or inflates statistics.
 #   - Mirror self-play (--mirror_prob 0.5): both seats of model-vs-model
@@ -115,7 +119,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --output_dir "$P5_DIR" \
         --il_data_dir "${IL_DIRS[@]}" \
         --episodes_per_gpu $EPISODES \
-        --rollout_steps 2048 \
+        --rollout_steps 1536 \
         --act_steps 1 \
         --ppo_epochs 2 \
         --accum_episodes 4 \

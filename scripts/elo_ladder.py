@@ -101,6 +101,38 @@ def fit_elo(records, init=1500.0, k=4.0, passes=200, seed=0):
 # Match harness
 # ----------------------------------------------------------------------
 
+class WidthAdapter:
+    """Feeds a net the globals width its config expects.
+
+    The ladder mixes checkpoints across phases: turn_globals nets expect 7
+    globals, older nets 4. The env emits the 7-feature SUPERSET (the first
+    4 are a prefix) and this shim slices per net, so a 4-global phase-4 ref
+    and a 7-global phase-5 candidate can play the same game.
+    """
+
+    def __init__(self, net):
+        self.net = net
+        self.g = net.cfg.global_features
+
+    @property
+    def cfg(self):
+        return self.net.cfg
+
+    @property
+    def action_decoder(self):
+        return self.net.action_decoder
+
+    def eval(self):
+        self.net.eval()
+        return self
+
+    def step(self, grid, glb, **kw):
+        return self.net.step(grid, glb[..., :self.g], **kw)
+
+    def step_rl(self, grid, glb, **kw):
+        return self.net.step_rl(grid, glb[..., :self.g], **kw)
+
+
 def load_net(path, device):
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     cfg = ModelConfig(**{k: v for k, v in ckpt["config"].items()
@@ -111,7 +143,7 @@ def load_net(path, device):
     net.eval()
     for p in net.parameters():
         p.requires_grad = False
-    return net, cfg
+    return WidthAdapter(net), cfg
 
 
 def play_pairing(net_a, net_b, env, device, games, seed_base, rollout_steps,
@@ -129,6 +161,7 @@ def play_pairing(net_a, net_b, env, device, games, seed_base, rollout_steps,
                     max_steps=rollout_steps,
                     record=False, act_steps=act_steps,
                     legal_mask=True, learner_pid=lp, reset_seed=seed,
+                    collect_buffers=False,
                 )
                 if env.winner == lp:
                     wins_a += 1
@@ -192,6 +225,8 @@ def main():
         if env is None:
             env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w,
                               max_turns=args.rollout_steps)
+            # Emit the 7-feature superset; WidthAdapter slices per net.
+            env.turn_globals = True
             if args.replay_dir and args.filtered_file:
                 n_maps = env.load_map_pool(args.replay_dir,
                                            args.filtered_file)
