@@ -266,6 +266,74 @@ def compute_policy_kl(
     return kl
 
 
+def compute_policy_kl_heads(
+    cur_pred: Dict[str, torch.Tensor],
+    ref_pred: Dict[str, torch.Tensor],
+    legal_mask: Optional[torch.Tensor] = None,
+    passed: Optional[torch.Tensor] = None,
+) -> Dict[str, torch.Tensor]:
+    """Per-head KL( π_ref ‖ π_current ) over ALL four generals action heads.
+
+    The source-only anchor left pass-rate, direction and split free to
+    drift from the IL prior — and the entropy bonus actively pushes the
+    pass Bernoulli toward 50%. Both predictions must come from forwards
+    teacher-forced on the SAME stored sources (direction/split are
+    conditional distributions at those sources) and, under masking, the
+    same legal/direction masks.
+
+    Args:
+        cur_pred / ref_pred  decoder outputs with source_logits [B,T,N],
+                             direction_logits [B,T,4], split_logits [B,T,2],
+                             pass_logits [B,T]
+        legal_mask           [B, T, 1, H, W] or None — masks the source KL
+        passed               [B, T] bool — direction/split KLs are averaged
+                             over move (non-pass) steps only
+
+    Returns:
+        dict with kl_src / kl_dir / kl_spl / kl_pass scalars (all
+        differentiable w.r.t. cur_pred).
+    """
+    out: Dict[str, torch.Tensor] = {}
+    if legal_mask is not None:
+        out["kl_src"] = compute_policy_kl(
+            cur_pred["source_logits"],
+            ref_pred["source_logits"].detach(),
+            legal_mask=legal_mask,
+        )
+    else:
+        out["kl_src"] = compute_policy_kl_rl(
+            cur_pred["source_logits"],
+            ref_pred["source_logits"].detach(),
+        )
+
+    move_mask = (~passed).float() if passed is not None else None
+
+    def _cat_kl(cur_logits: torch.Tensor, ref_logits: torch.Tensor):
+        # Identically-masked (-1e9) entries carry ~zero ref probability and
+        # a finite log-ratio, so they contribute ~0 without special casing.
+        lp_c = F.log_softmax(cur_logits.float(), dim=-1)
+        lp_r = F.log_softmax(ref_logits.float().detach(), dim=-1)
+        kl = (lp_r.exp() * (lp_r - lp_c)).nan_to_num(0.0).sum(-1)  # [B, T]
+        if move_mask is not None:
+            return (kl * move_mask).sum() / move_mask.sum().clamp(min=1)
+        return kl.mean()
+
+    out["kl_dir"] = _cat_kl(cur_pred["direction_logits"],
+                            ref_pred["direction_logits"])
+    out["kl_spl"] = _cat_kl(cur_pred["split_logits"],
+                            ref_pred["split_logits"])
+
+    # Bernoulli KL over the pass head (all steps — passing is always live)
+    pc = cur_pred["pass_logits"].float()
+    pr = ref_pred["pass_logits"].float().detach()
+    lp_c1, lp_c0 = F.logsigmoid(pc), F.logsigmoid(-pc)
+    lp_r1, lp_r0 = F.logsigmoid(pr), F.logsigmoid(-pr)
+    out["kl_pass"] = (
+        lp_r1.exp() * (lp_r1 - lp_c1) + lp_r0.exp() * (lp_r0 - lp_c0)
+    ).mean()
+    return out
+
+
 def compute_policy_kl_rl(
     current_source_logits: torch.Tensor,
     reference_source_logits: torch.Tensor,

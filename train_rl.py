@@ -41,8 +41,7 @@ from model.losses import ImitationLoss, RLLoss
 from model.network import GeneralsNetwork
 from model.rl_utils import (
     RolloutBuffer,
-    compute_policy_kl,
-    compute_policy_kl_rl,
+    compute_policy_kl_heads,
     freeze_encoder,
     is_legacy_state_dict,
     load_model_state,
@@ -231,6 +230,13 @@ class OpponentPool:
 
     def __len__(self) -> int:
         return len(self.pool)
+
+
+# Relative weights of the per-head KL-anchor terms (source dominates the
+# action space; direction/split are conditional micro; pass guards against
+# the entropy bonus dragging the pass Bernoulli toward 50%). The composite
+# is scaled by --kl_weight.
+KL_HEAD_WEIGHTS = {"kl_src": 1.0, "kl_dir": 0.5, "kl_spl": 0.25, "kl_pass": 0.5}
 
 
 # ======================================================================
@@ -508,11 +514,15 @@ def ppo_update(
 
         total = rl_losses["loss"]
 
-        # KL regularisation against reference policy. Under masking the KL
+        # KL regularisation against reference policy, over ALL four heads.
+        # Source-only anchoring left pass-rate/direction/split free to
+        # drift (and the entropy bonus pushes pass toward 50%); the ref
+        # forward computes those logits anyway. Under masking the KL
         # compares the MASKED distributions — the IL reference was trained
         # with the mask, so its illegal-cell logits never received gradient
         # and are noise; the unmasked KL was anchoring to that noise.
         kl_loss = torch.tensor(0.0, device=device)
+        kl_heads: Dict[str, float] = {}
         if ref_model is not None and kl_weight > 0:
             with torch.no_grad():
                 ref_pred = ref_model(
@@ -523,17 +533,13 @@ def ppo_update(
                     act_steps=act_steps,
                     direction_mask=dir_mask,
                 )
-            if use_mask:
-                kl_loss = compute_policy_kl(
-                    pred["source_logits"],
-                    ref_pred["source_logits"].detach(),
-                    legal_mask=src_mask,
-                )
-            else:
-                kl_loss = compute_policy_kl_rl(
-                    pred["source_logits"],
-                    ref_pred["source_logits"].detach(),
-                )
+            kls = compute_policy_kl_heads(
+                pred, ref_pred,
+                legal_mask=src_mask,
+                passed=actions["passed"],
+            )
+            kl_loss = sum(KL_HEAD_WEIGHTS[k] * v for k, v in kls.items())
+            kl_heads = {k: v.item() for k, v in kls.items()}
             total = total + kl_weight * kl_loss
 
         # Invalidity loss: push probability toward legal sources & valid
@@ -610,6 +616,7 @@ def ppo_update(
             "cap_loss": cap_loss.item() if isinstance(cap_loss, torch.Tensor) else cap_loss,
             "cap_acc": cap_acc,
         }
+        step_metrics.update(kl_heads)
         for k, v in step_metrics.items():
             metrics_accum[k] = metrics_accum.get(k, 0.0) + v
 
@@ -1225,6 +1232,8 @@ def main():
                 f"kl={ppo_avg.get('approx_kl', 0):.4f}  "
                 f"clip={ppo_avg.get('clip_frac', 0):.3f}  "
                 f"kl_reg={ppo_avg.get('kl_reg', 0):.4f}  "
+                f"klh={ppo_avg.get('kl_src', 0):.3f}/{ppo_avg.get('kl_dir', 0):.3f}/"
+                f"{ppo_avg.get('kl_spl', 0):.3f}/{ppo_avg.get('kl_pass', 0):.3f}  "
                 f"inv={ppo_avg.get('inv_loss', 0):.4f}  "
                 f"e_p={ppo_avg.get('ent_pass', 0):.3f}  "
                 f"e_s={ppo_avg.get('ent_src', 0):.3f}  "
