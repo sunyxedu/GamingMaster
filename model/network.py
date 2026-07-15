@@ -143,9 +143,16 @@ class GeneralsNetwork(GameNetwork):
         legal_mask: Optional[torch.Tensor],
         source_y: Optional[torch.Tensor] = None,
         source_x: Optional[torch.Tensor] = None,
+        direction_mask: Optional[torch.Tensor] = None,
     ):
         obs = {"grid_seq": grid_seq, "globals_seq": globals_seq}
-        legal = {"source": legal_mask} if legal_mask is not None else None
+        legal = None
+        if legal_mask is not None or direction_mask is not None:
+            legal = {}
+            if legal_mask is not None:
+                legal["source"] = legal_mask
+            if direction_mask is not None:
+                legal["direction"] = direction_mask
         labels = None
         if source_y is not None and source_x is not None:
             labels = {"source_y": source_y, "source_x": source_x}
@@ -160,9 +167,11 @@ class GeneralsNetwork(GameNetwork):
         source_x: Optional[torch.Tensor] = None,
         act_steps: Optional[int] = None,
         frame_mask: Optional[torch.Tensor] = None,
+        direction_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         obs, legal, labels = self._pack(
             grid_seq, globals_seq, legal_mask, source_y, source_x,
+            direction_mask,
         )
         return super().forward(
             obs, legal=legal, labels=labels,
@@ -181,8 +190,10 @@ class GeneralsNetwork(GameNetwork):
         st_cache: Optional[List[torch.Tensor]] = None,
         step_idx: int = 0,
         act_steps: Optional[int] = None,
+        direction_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        obs, legal, _ = self._pack(grid, globals_vec, legal_mask)
+        obs, legal, _ = self._pack(grid, globals_vec, legal_mask,
+                                   direction_mask=direction_mask)
         return super().step(
             obs, legal=legal, st_cache=st_cache,
             step_idx=step_idx, act_steps=act_steps,

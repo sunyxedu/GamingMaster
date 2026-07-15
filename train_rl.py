@@ -3,7 +3,9 @@ Reinforcement Learning training script for the generals.io bot.
 
 Implements distributed PPO self-play with:
   - Dense reward (heuristic delta + event rewards + terminal ±5.0)
-  - No legal mask (model learns legality through reward)
+  - Hard legal masking of sources and directions in rollout AND replay
+    (--rl_legal_mask, default on; 0 restores the legacy learn-legality-
+    through-reward mode)
   - IL auxiliary regularisation (AlphaStar-style)
   - KL regularisation against frozen reference policy
   - Opponent pool (league training)
@@ -39,6 +41,7 @@ from model.losses import ImitationLoss, RLLoss
 from model.network import GeneralsNetwork
 from model.rl_utils import (
     RolloutBuffer,
+    compute_policy_kl,
     compute_policy_kl_rl,
     freeze_encoder,
     is_legacy_state_dict,
@@ -97,7 +100,15 @@ def parse_args():
                         "so pass the IL checkpoint here to keep the human "
                         "anchor across restarts.")
     p.add_argument("--invalidity_weight", type=float, default=0.1,
-                   help="Weight for source/direction invalidity auxiliary loss")
+                   help="Weight for source/direction invalidity auxiliary "
+                        "loss (ignored when --rl_legal_mask is on: masked "
+                        "policies place no mass on invalid actions)")
+    p.add_argument("--rl_legal_mask", type=int, default=1,
+                   help="1 = hard-mask illegal sources and directions in "
+                        "BOTH rollout and PPO replay (entropy, log-probs and "
+                        "the KL anchor all see the masked distributions); "
+                        "0 = legacy unmasked RL where legality was learned "
+                        "through the -0.05 penalty")
     p.add_argument("--capture_aux_weight", type=float, default=0.05,
                    help="Weight of the auxiliary capture-feasibility BCE "
                         "head (0 = disabled). Supervises 'would a full move "
@@ -269,11 +280,14 @@ def collect_selfplay_episode(
     gae_lambda: float = 0.95,
     record: bool = False,
     act_steps: int = 1,
+    legal_mask: bool = True,
 ) -> Tuple[RolloutBuffer, Optional[List[Dict]]]:
     """Run one self-play episode: model (player 0) vs opponent (player 1).
 
     Only collects trajectory for player 0 (the model being trained).
-    Uses step_rl (no legal mask) for both players.
+    With ``legal_mask`` both players sample from source/direction
+    distributions hard-masked to legal actions (the PPO update must replay
+    with the same masks); without it, the legacy unmasked RL mode.
 
     If ``record=True``, returns a list of per-step dicts for replay viewing.
     """
@@ -311,18 +325,30 @@ def collect_selfplay_episode(
             glb = obs[pid]["globals"].unsqueeze(0).to(device)
 
             with torch.no_grad():
-                out = net.step_rl(grid, glb,
-                                  st_cache=caches[pid], step_idx=_step,
-                                  act_steps=act_steps)
+                if legal_mask:
+                    out = net.step(
+                        grid, glb,
+                        legal_mask=obs[pid]["legal_mask"].unsqueeze(0).to(device),
+                        direction_mask=obs[pid]["dir_mask"].unsqueeze(0).to(device),
+                        st_cache=caches[pid], step_idx=_step,
+                        act_steps=act_steps)
+                else:
+                    out = net.step_rl(grid, glb,
+                                      st_cache=caches[pid], step_idx=_step,
+                                      act_steps=act_steps)
 
             caches[pid] = out.get("st_cache")
             step_out[pid] = out
 
-        # Build env actions
+        # Build env actions. With masking, a player with NO legal source
+        # (e.g. turn 0, all armies == 1) sampled through the all-masked
+        # fallback — send a pass instead: the env treats any illegal move
+        # as a no-op anyway, this just skips the unavoidable -0.05 noise.
         actions_for_env = {}
         for pid in [0, 1]:
             did_pass = step_out[pid]["action_pass"].item()
-            if not did_pass:
+            no_moves = legal_mask and not bool(obs[pid]["legal_mask"].any())
+            if not did_pass and not no_moves:
                 actions_for_env[pid] = {
                     "source_idx": step_out[pid]["action_source"].item(),
                     "direction": step_out[pid]["action_direction"].item(),
@@ -419,6 +445,7 @@ def ppo_update(
     capture_head: Optional[CaptureHead] = None,
     capture_optimizer: Optional[torch.optim.Optimizer] = None,
     capture_weight: float = 0.0,
+    legal_masked: bool = True,
 ) -> Dict[str, float]:
     """Run one PPO update epoch with gradient accumulation over multiple trajectories."""
     # eval mode: rollout log-probs were collected in eval mode, so the update
@@ -445,19 +472,29 @@ def ppo_update(
         advantages = batch["advantages"]    # [1, T]
         returns = batch["returns"]          # [1, T]
 
-        # Forward with stored source positions (no legal mask)
+        # Forward with stored source positions. Masks must match the rollout
+        # exactly (masked there => masked here) or the PPO ratio is invalid.
         source_y = actions["source_idx"] // cfg.grid_w
         source_x = actions["source_idx"] % cfg.grid_w
+        use_mask = legal_masked and "dir_mask" in batch
+        src_mask = batch["legal_mask"] if use_mask else None
+        dir_mask = batch["dir_mask"] if use_mask else None
 
         pred = model(
             grid_seq, globals_seq,
-            legal_mask=None,
+            legal_mask=src_mask,
             source_y=source_y,
             source_x=source_x,
             act_steps=act_steps,
+            direction_mask=dir_mask,
         )
 
-        log_probs, entropy, head_entropy = model.compute_action_log_prob_rl(pred, actions)
+        if use_mask:
+            log_probs, entropy, head_entropy = model.compute_log_prob(
+                pred, actions, legal={"source": src_mask})
+        else:
+            log_probs, entropy, head_entropy = \
+                model.compute_action_log_prob_rl(pred, actions)
 
         # RL loss
         rl_losses = rl_criterion(
@@ -471,26 +508,39 @@ def ppo_update(
 
         total = rl_losses["loss"]
 
-        # KL regularisation against reference policy (no legal mask)
+        # KL regularisation against reference policy. Under masking the KL
+        # compares the MASKED distributions — the IL reference was trained
+        # with the mask, so its illegal-cell logits never received gradient
+        # and are noise; the unmasked KL was anchoring to that noise.
         kl_loss = torch.tensor(0.0, device=device)
         if ref_model is not None and kl_weight > 0:
             with torch.no_grad():
                 ref_pred = ref_model(
                     grid_seq, globals_seq,
-                    legal_mask=None,
+                    legal_mask=src_mask,
                     source_y=source_y,
                     source_x=source_x,
                     act_steps=act_steps,
+                    direction_mask=dir_mask,
                 )
-            kl_loss = compute_policy_kl_rl(
-                pred["source_logits"],
-                ref_pred["source_logits"].detach(),
-            )
+            if use_mask:
+                kl_loss = compute_policy_kl(
+                    pred["source_logits"],
+                    ref_pred["source_logits"].detach(),
+                    legal_mask=src_mask,
+                )
+            else:
+                kl_loss = compute_policy_kl_rl(
+                    pred["source_logits"],
+                    ref_pred["source_logits"].detach(),
+                )
             total = total + kl_weight * kl_loss
 
-        # Invalidity loss: push probability toward legal sources & valid directions
+        # Invalidity loss: push probability toward legal sources & valid
+        # directions. Redundant under hard masking (the masked policy places
+        # zero mass on invalid actions by construction) — skip it there.
         inv_loss = torch.tensor(0.0, device=device)
-        if invalidity_weight > 0:
+        if invalidity_weight > 0 and not use_mask:
             T = grid_seq.size(1)
             not_passed = ~actions["passed"]  # [1, T]
 
@@ -971,6 +1021,7 @@ def main():
                 gae_lambda=args.gae_lambda,
                 record=record_this,
                 act_steps=args.act_steps,
+                legal_mask=bool(args.rl_legal_mask),
             )
             if ep_replay is not None:
                 replay_log = ep_replay
@@ -1047,6 +1098,7 @@ def main():
                     capture_head=capture_head,
                     capture_optimizer=capture_optimizer,
                     capture_weight=args.capture_aux_weight,
+                    legal_masked=bool(args.rl_legal_mask),
                 )
                 for k, v in metrics.items():
                     ppo_metrics_agg[k] = ppo_metrics_agg.get(k, 0.0) + v
@@ -1147,6 +1199,7 @@ def main():
                     max_steps=args.rollout_steps,
                     gamma=args.gamma, gae_lambda=args.gae_lambda,
                     act_steps=args.act_steps,
+                    legal_mask=bool(args.rl_legal_mask),
                 )
                 ev[env.winner if env.winner in (0, 1) else None] += 1
             if dist.is_initialized():

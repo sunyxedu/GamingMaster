@@ -126,7 +126,12 @@ class GeneralsEncoder(ObservationEncoder):
 class GeneralsDecoder(ActionDecoder):
     """Autoregressive move decoder: Source → Direction / Split → Pass.
 
-    legal keys:   source [B, T, 1, H, W] bool — owned tiles with army > 1
+    legal keys:   source    [B, T, 1, H, W] bool — owned tiles with army > 1
+                  direction [B, T, 4, H, W] bool (optional) — per-cell
+                  direction validity (in-bounds, not a mountain). When given,
+                  the returned direction logits are hard-masked (-1e9) at the
+                  selected source, so illegal directions are never sampled
+                  and carry no mass in log-prob/entropy/KL computations.
     labels keys:  source_y / source_x [B, T]  — teacher-forcing source
                   (−1 → sample from the model's own source distribution)
     """
@@ -205,9 +210,28 @@ class GeneralsDecoder(ActionDecoder):
         time_pe = _sinusoidal_pe(t0 + T, pe_dim, device)[t0: t0 + T]  # [T, pe]
         time_pe = time_pe.unsqueeze(0).expand(B, T, pe_dim).reshape(BT, pe_dim)
 
+        # PassHead reads the RAW direction logits (masking first would feed
+        # it -1e9 saturation); the mask is applied to what the policy over
+        # directions actually sees, below.
         pass_logits = self.pass_head(
             ll, source_embed, direction_logits, split_logits, time_pe,
         )  # [BT]
+
+        # Hard direction mask at the selected source. -1e9 (finite) instead
+        # of -inf keeps p*log_p and its backward NaN-free without special
+        # casing. Rows with no valid direction (a cell fully enclosed by
+        # mountains/borders) fall back to the raw logits.
+        dir_legal = legal.get("direction") if legal else None
+        if dir_legal is not None:
+            dm = dir_legal.reshape(BT, cfg.n_directions, N).gather(
+                2, src_idx.view(BT, 1, 1).expand(BT, cfg.n_directions, 1),
+            ).squeeze(-1)                                     # [BT, 4]
+            masked_dir = direction_logits.masked_fill(~dm, -1e9)
+            dead = ~dm.any(-1)
+            if dead.any():
+                masked_dir = torch.where(
+                    dead.unsqueeze(-1), direction_logits, masked_dir)
+            direction_logits = masked_dir
 
         return {
             "source_logits": source_logits.reshape(B, T, N),

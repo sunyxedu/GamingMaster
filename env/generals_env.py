@@ -187,6 +187,22 @@ class GeneralsEnv:
         self.done = False
         self.winner = None
 
+        # Direction-validity grid [4, H, W]: moving from (r, c) in direction
+        # d stays in real bounds and does not enter a mountain. Static per
+        # map and player-independent — used to hard-mask the direction head
+        # so illegal moves are never sampled.
+        dir_valid = torch.zeros(4, self.grid_h, self.grid_w, dtype=torch.bool)
+        for r in range(self.real_h):
+            for c in range(self.real_w):
+                if self.map[r][c].terrain == _MOUNTAIN:
+                    continue
+                for d in range(4):
+                    nr, nc = r + _DIR_DR[d], c + _DIR_DC[d]
+                    if (0 <= nr < self.real_h and 0 <= nc < self.real_w
+                            and self.map[nr][nc].terrain != _MOUNTAIN):
+                        dir_valid[d, r, c] = True
+        self.dir_valid = dir_valid
+
         # Neutral-city payout bookkeeping: every city starts neutral, so the
         # per-city unit and initial garrisons are fixed for the whole game.
         self.city_initial_army = {
@@ -478,7 +494,8 @@ class GeneralsEnv:
                     cap_label[d, r, c] = 1.0
 
         return {"grid": grid, "globals": globals_vec, "legal_mask": legal,
-                "capture_label": cap_label, "capture_mask": cap_mask}
+                "capture_label": cap_label, "capture_mask": cap_mask,
+                "dir_mask": self.dir_valid}
 
     # ==================================================================
     # Internal: state encoding (same as simulator)

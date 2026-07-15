@@ -99,6 +99,8 @@ class RolloutBuffer:
         # Capture-feasibility supervision (optional obs keys): [4, H, W]
         self.capture_labels: List[Optional[torch.Tensor]] = []
         self.capture_masks: List[Optional[torch.Tensor]] = []
+        # Direction-validity grids (optional obs key): [4, H, W] bool
+        self.dir_masks: List[Optional[torch.Tensor]] = []
 
         self.advantages: Optional[torch.Tensor] = None
         self.returns: Optional[torch.Tensor] = None
@@ -129,6 +131,7 @@ class RolloutBuffer:
         self.valid_directions.append(valid_directions or [True, True, True, True])
         self.capture_labels.append(obs.get("capture_label"))
         self.capture_masks.append(obs.get("capture_mask"))
+        self.dir_masks.append(obs.get("dir_mask"))
 
     # ---- advantage computation -----------------------------------------
 
@@ -188,6 +191,9 @@ class RolloutBuffer:
                 torch.stack(self.capture_labels).unsqueeze(0).to(device))
             batch["capture_mask"] = (
                 torch.stack(self.capture_masks).unsqueeze(0).to(device))
+        if all(t is not None for t in self.dir_masks):
+            batch["dir_mask"] = (
+                torch.stack(self.dir_masks).unsqueeze(0).to(device))  # [1,T,4,H,W]
         return batch
 
     # ---- housekeeping --------------------------------------------------

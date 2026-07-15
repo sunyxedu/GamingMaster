@@ -117,7 +117,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --kl_weight 0.05 \
         --il_weight 0.5 \
         --il_decay 0.995 \
-        --invalidity_weight 0.5 \
+        --rl_legal_mask 1 \
         --capture_aux_weight 0.05 \
         --city_budget 0.8 \
         --eval_interval 50 \
