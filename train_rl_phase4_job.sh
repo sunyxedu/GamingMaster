@@ -105,12 +105,12 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --output_dir "$P4_DIR" \
         --il_data_dir "${IL_DIRS[@]}" \
         --episodes_per_gpu $EPISODES \
-        --rollout_steps 1000 \
+        --rollout_steps 2048 \
         --act_steps 1 \
         --ppo_epochs 2 \
         --clip_range 0.15 \
-        --gamma 0.999 \
-        --gae_lambda 0.95 \
+        --gamma 1.0 \
+        --gae_lambda 0.9 \
         --entropy_weight 0.02 \
         --entropy_weight_decay 0.9998 \
         --entropy_weight_min 0.008 \

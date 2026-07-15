@@ -836,7 +836,11 @@ def main():
             print(f"IL dataset: {len(il_dataset)} replays from {args.il_data_dir}")
 
     # ---- Environment (each rank gets its own) --------------------------
-    env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w)
+    # max_turns == rollout_steps: truncation is decided in ONE place (the
+    # env's material-scored soft terminal); the collect-loop timeout patch
+    # becomes a backstop instead of the common path.
+    env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w,
+                      max_turns=args.rollout_steps)
     env.city_budget_total = args.city_budget
     if args.replay_dir and args.filtered_file:
         n_maps = env.load_map_pool(args.replay_dir, args.filtered_file)
