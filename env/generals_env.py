@@ -94,6 +94,9 @@ class GeneralsEnv:
         self.real_h = grid_h
         self.real_w = grid_w
 
+        # Per-step move-execution trace (see _execute_single_move)
+        self._move_trace: List[Dict[str, int]] = []
+
         # State (set by reset)
         self.map: List[List[_Tile]] = []
         self.generals: List[int] = []       # flat index per player (in 25-wide grid)
@@ -303,7 +306,9 @@ class GeneralsEnv:
             if self.map[idx // self.grid_w][idx % self.grid_w].occupied == -1
         }
 
-        # Execute moves (with priority ordering)
+        # Execute moves (with priority ordering); the trace records each
+        # executed move's destination pre-state for exact reward attribution.
+        self._move_trace = []
         self._process_moves(move_0, move_1)
 
         # Increment armies
@@ -331,22 +336,9 @@ class GeneralsEnv:
                     else:
                         reward_breakdown["r_city"] -= city_r
                         reward_breakdown["c_loss"] += 1
-                else:
-                    # Captured neutral city — the damage payout below already
-                    # pays the final hit (the whole remaining garrison), so
-                    # here only count the event and pay a small precision
-                    # bonus for capturing with minimal overkill: it rewards
-                    # judging the garrison number correctly, which is the
-                    # skill the payout is meant to teach.
-                    r, c = divmod(city_idx, self.grid_w)
-                    remaining = self.map[r][c].army
-                    bonus = (0.3 * self.city_reward_unit
-                             * math.exp(-0.1 * remaining)
-                             * self.city_reward_scale)
-                    rewards[pid] += bonus
-                    if pid == bp:
-                        reward_breakdown["r_city"] += bonus
-                        reward_breakdown["c_cap"] += 1
+                # Neutral captures are handled exactly from the move trace
+                # below (per-move pre-state — a post-hoc diff would mis-pay
+                # same-tick double attacks and read post-increment armies).
 
         # Neutral-city damage payout: each garrison point whittled off pays
         # unit × damage/G0, so a full capture sums to exactly `unit` across
@@ -354,37 +346,53 @@ class GeneralsEnv:
         # that cannot yet judge garrison numbers still gets a gradient from
         # every attempt instead of all-or-nothing on completion. Neutral
         # garrisons never regrow, so the payout per city is bounded by
-        # `unit` and cannot be farmed.
-        hits: Dict[int, List[int]] = {}
-        for pid, move in ((0, move_0), (1, move_1)):
-            if move is not None and move["end"] in neutral_before:
-                hits.setdefault(move["end"], []).append(pid)
-        for city_idx, pids in hits.items():
-            er, ec = divmod(city_idx, self.grid_w)
-            tile = self.map[er][ec]
-            if tile.occupied == -1:
-                damage = neutral_before[city_idx] - tile.army
-            else:
-                # Captured this step: the final hit destroyed the whole
-                # remaining garrison.
-                damage = neutral_before[city_idx]
-            if damage <= 0:
+        # `unit` and cannot be farmed. Attribution is per executed move
+        # via the trace: each attacker is paid for exactly the garrison it
+        # destroyed, at the state the move actually saw.
+        for mv in self._move_trace:
+            city_idx = mv["end"]
+            if city_idx not in neutral_before:
                 continue
-            g0 = max(self.city_initial_army.get(
-                city_idx, neutral_before[city_idx]), 1)
-            # Both players hitting the same city in one step is rare; exact
-            # per-move attribution would need mid-step snapshots, so split
-            # the damage evenly.
-            share = damage / len(pids)
-            for pid in pids:
-                whittle_r = (self.city_reward_unit * (share / g0)
+            pid, opp = mv["player"], 1 - mv["player"]
+            captured = mv["moved"] > mv["pre_army"]
+            if mv["pre_occupied"] == -1:
+                damage = mv["pre_army"] if captured else mv["moved"]
+                if damage > 0:
+                    g0 = max(self.city_initial_army.get(
+                        city_idx, neutral_before[city_idx]), 1)
+                    whittle_r = (self.city_reward_unit * (damage / g0)
+                                 * self.city_reward_scale)
+                    rewards[pid] += whittle_r
+                    if pid == bp:
+                        reward_breakdown["r_city"] += whittle_r
+                        if not captured:
+                            # Whittled without capturing (failed hit).
+                            reward_breakdown["c_bash"] += 1
+                if captured:
+                    # Precision bonus for minimal overkill — from the
+                    # move's own arithmetic (pre-increment, exact).
+                    leftover = mv["moved"] - mv["pre_army"]
+                    bonus = (0.3 * self.city_reward_unit
+                             * math.exp(-0.1 * leftover)
                              * self.city_reward_scale)
-                rewards[pid] += whittle_r
+                    rewards[pid] += bonus
+                    if pid == bp:
+                        reward_breakdown["r_city"] += bonus
+                        reward_breakdown["c_cap"] += 1
+            elif mv["pre_occupied"] == opp and captured:
+                # Same-tick recapture: the opponent took this city moments
+                # earlier in the SAME step, so the snapshot-based steal
+                # branch above cannot see it — apply the symmetric
+                # steal/loss event here instead.
+                city_r = 0.16 * self.city_reward_scale
+                rewards[pid] += city_r
+                rewards[opp] -= city_r
                 if pid == bp:
-                    reward_breakdown["r_city"] += whittle_r
-                    if tile.occupied == -1:
-                        # Whittled without capturing (failed hit).
-                        reward_breakdown["c_bash"] += 1
+                    reward_breakdown["r_city"] += city_r
+                    reward_breakdown["c_steal"] += 1
+                else:
+                    reward_breakdown["r_city"] -= city_r
+                    reward_breakdown["c_loss"] += 1
 
         # Check win
         winner = self._check_winner()
@@ -704,6 +712,16 @@ class GeneralsEnv:
         else:
             army_to_move = start_tile.army - 1
         army_remaining = start_tile.army - army_to_move
+
+        # Trace the destination's PRE-move state: rewards need exact
+        # per-move attribution (who damaged which garrison by how much) —
+        # a pooled post-hoc diff mis-pays same-tick double attacks and
+        # reads garrisons after _increment_armies.
+        self._move_trace.append({
+            "player": player_idx, "end": end_idx,
+            "pre_occupied": end_tile.occupied, "pre_army": end_tile.army,
+            "moved": army_to_move,
+        })
 
         if end_tile.occupied == player_idx:
             end_tile.army += army_to_move

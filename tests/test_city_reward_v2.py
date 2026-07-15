@@ -8,6 +8,8 @@
   4. RolloutBuffer round-trip of the capture labels.
 """
 
+import math
+
 import pytest
 import torch
 
@@ -145,6 +147,66 @@ class TestCityDamagePayout:
         bd = info["reward_breakdown"]
         assert bd["c_steal"] == 1
         assert bd["r_city"] == pytest.approx(0.16)
+
+
+class TestPerMoveAttribution:
+    def test_same_tick_double_attack_pays_each_mover_exactly(self):
+        """P1 captures (army priority), P0's same-tick hit lands on the now
+        P1-owned tile: P1 gets the full payout + bonus, P0 gets nothing."""
+        env = make_bare_env()
+        add_city(env, 5, 6, 10)
+        add_troops(env, 0, 5, 5, 20)   # moves 19 — would capture alone
+        add_troops(env, 1, 5, 7, 60)   # moves 59 — bigger, executes first
+        env.breakdown_pid = 1
+        _, rewards, done, info = env.step(
+            {"source_idx": idx(5, 5), "direction": 1, "split": 0},
+            {"source_idx": idx(5, 7), "direction": 3, "split": 0})
+        bd = info["reward_breakdown"]
+        assert env.map[5][6].occupied == 1
+        assert bd["c_cap"] == 1
+        # P1: full damage payout (10/10 of unit) + precision bonus for
+        # leftover 49 (~0), computed pre-increment.
+        assert bd["r_city"] == pytest.approx(
+            0.2 + 0.3 * 0.2 * math.exp(-0.1 * 49), rel=1e-6)
+        # P0 whittled P1's freshly-captured stack, not a neutral garrison:
+        # no bash event, no city payout on P0's side either.
+        env.breakdown_pid = 0  # (post-hoc: breakdown already recorded)
+        assert bd["c_bash"] == 0
+
+    def test_precision_bonus_independent_of_turn_parity(self):
+        """Identical captures landing on odd vs even turns pay the same
+        bonus (the garrison used to be read after _increment_armies)."""
+        totals = []
+        for skip_turns in (0, 1):
+            env = make_bare_env()
+            add_city(env, 5, 6, 10)
+            for _ in range(skip_turns):
+                env.step(None, None)
+            add_troops(env, 0, 5, 5, 13)  # moves 12, leftover 2
+            _, _, _, info = env.step(
+                {"source_idx": idx(5, 5), "direction": 1, "split": 0}, None)
+            totals.append(info["reward_breakdown"]["r_city"])
+        assert totals[0] == pytest.approx(totals[1], rel=1e-9)
+
+    def test_same_tick_recapture_is_a_steal(self):
+        """Opponent captures a neutral city and the learner takes it back
+        in the SAME step: symmetric ±0.16, not a fresh neutral capture."""
+        # Priority favors the larger source stack: P1 (100) executes first
+        # and captures the 50-garrison city with 49 left; P0's smaller move
+        # (59) then beats that leftover and recaptures.
+        env2 = make_bare_env()
+        add_city(env2, 5, 6, 50)
+        env2.city_initial_army[idx(5, 6)] = 50
+        add_troops(env2, 1, 5, 7, 100)  # moves 99 → first, captures, 49 left
+        add_troops(env2, 0, 5, 5, 60)   # moves 59 > 49 → same-tick recapture
+        _, rewards, done, info = env2.step(
+            {"source_idx": idx(5, 5), "direction": 1, "split": 0},
+            {"source_idx": idx(5, 7), "direction": 3, "split": 0})
+        bd = info["reward_breakdown"]
+        assert env2.map[5][6].occupied == 0
+        # P0 (breakdown) recaptured a just-taken city → steal, no c_cap.
+        assert bd["c_steal"] == 1
+        assert bd["c_cap"] == 0
 
 
 # ======================================================================
