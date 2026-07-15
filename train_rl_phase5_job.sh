@@ -1,42 +1,47 @@
 #!/bin/bash
-#SBATCH --job-name=gm-rl-p4
+#SBATCH --job-name=gm-rl-p5
 #SBATCH --partition=batch
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:nvidia_h200_nvl:4
+#SBATCH --gres=gpu:nvidia_h200_nvl:8
 #SBATCH --time=5-00:00:00
 #SBATCH --no-requeue
 #SBATCH --output=slurm-rl-%j.out
 
-# Phase 4 RL — continue PPO self-play from the phase-3 policy with city
-# economy taught through three channels instead of one big capture bonus
-# (the flat +0.25..0.33 of commit ed0c866 aggregated to 2-3× the terminal
-# reward on city-dense maps and caused reward-hacking boom-bust cycles):
-#   1. Damage-proportional neutral-city payout, budget-capped per map
-#      (--city_budget): every whittle hit pays partially, a full capture
-#      sums to exactly the per-city unit. Dense signal, unfarmable.
-#   2. Auxiliary capture-feasibility head (--capture_aux_weight): exact
-#      "would this move capture" labels from the env force the encoder to
-#      represent army-count comparisons the log-compressed input hides.
-#   3. Truncated games score ±0.35 by city-adjusted material instead of 0,
-#      so long-game economy pays through the terminal channel.
-# Winrate vs the frozen IL anchor is evaluated every --eval_interval iters
-# as a shaping-independent progress signal.
+# Phase 5 RL — the AverageJoe-informed regime change. Keeps phase 4.1's
+# reward design (damage-proportional city payout, capture-aux head,
+# material-scored truncation) and adds, in one coherent phase:
+#   - Hard legal masking of sources AND directions in rollout + PPO replay
+#     (--rl_legal_mask): no reward/entropy budget spent on legality, KL
+#     anchor compares masked (trained) distributions.
+#   - Undiscounted horizon fit: gamma 1.0, lambda 0.9, 2048-step episodes
+#     — long economic games reach the real ±1 terminal.
+#   - Learner seat randomized per episode (--randomize_seat): the P0
+#     move-priority advantage no longer trains or inflates statistics.
+#   - Mirror self-play (--mirror_prob 0.5): both seats of model-vs-model
+#     games train (~+50% samples); fresh pool opponent drawn per episode.
+#   - Chunked optimizer steps + target-KL epoch guard (--accum_episodes,
+#     --target_kl).
+#   - EMA weights (--ema_decay) for eval, pool snapshots and deployment
+#     (rl_ema_iterN.pt artifacts; use them for the ladder bot and as
+#     refs for scripts/elo_ladder.py).
+#   - Input features (--derive_army_channels, --turn_globals): linear
+#     ownership-split army channels + production-cycle globals, enabled
+#     via exactly function-preserving zero-pad migration (optimizer state
+#     is intentionally dropped at this boundary; flags become sticky in
+#     the checkpoint config).
+#   - Eval: paired, seat-swapped, greedy vs the frozen IL anchor.
+# 8 GPUs x 4 episodes keeps 32 games/iteration (mirror games add ~50%
+# more trajectories on top) at ~2x phase-4 wall-clock speed.
 #
-# Weights, optimizer, opponent pool and iteration counter resume from the
-# newest phase-4 checkpoint if one exists, else the newest phase-3
-# checkpoint (rl_v2) — so a plain resubmission continues phase 4 instead
-# of silently rolling back to phase 3 and overwriting phase-4 outputs.
-# Outputs land in a fresh directory so the two reward regimes stay
-# separable. The KL anchor is pinned back to the IL policy (--kl_ref): a
-# plain resume would re-anchor onto the resumed rush-style policy and pull
-# AGAINST the city behavior this phase is meant to induce.
-# --reset_reward_decay restarts the shaping decay clocks at this phase
-# boundary: without it the raised capture bonus would enter pre-annealed
-# to 0.9995^300 and be half gone ~1100 iterations in.
+# Weights, pool and iteration counter resume from the newest phase-5
+# checkpoint if one exists, else newest phase-4, else phase-3 — a plain
+# resubmission continues phase 5 instead of rolling back. Outputs land in
+# a fresh directory so regimes stay separable. The KL anchor stays pinned
+# to the IL policy (--kl_ref).
 #
-#   sbatch train_rl_phase4_job.sh              # first launch AND crash recovery
-#   RESUME=/path/to/specific.pt sbatch train_rl_phase4_job.sh   # explicit pick
+#   sbatch train_rl_phase5_job.sh              # first launch AND crash recovery
+#   RESUME=/path/to/specific.pt sbatch train_rl_phase5_job.sh   # explicit pick
 
 export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
@@ -45,19 +50,24 @@ export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TMPDIR=/tmp
 
-GPUS_PER_NODE=${GPUS_PER_NODE:-4}
-# 8 episodes x 4 GPUs = 32 games/iteration — matches phase 3's effective
-# batch so PPO gradient noise and pool-gate winrate stats stay comparable.
-EPISODES=${EPISODES:-8}
+GPUS_PER_NODE=${GPUS_PER_NODE:-8}
+# 4 episodes x 8 GPUs = 32 pool games/iteration — matches phase 3/4 batch
+# statistics for the pool-gate winrate; mirror episodes add extra
+# trajectories without touching the gate.
+EPISODES=${EPISODES:-4}
 IL_ANCHOR=/scratch/$USER/gaming-master/checkpoints/il_phase2/checkpoint_epoch5.pt
+P5_DIR=/scratch/$USER/gaming-master/checkpoints/rl_phase5
 P4_DIR=/scratch/$USER/gaming-master/checkpoints/rl_phase4
 P3_DIR=/scratch/$USER/gaming-master/checkpoints/rl_v2
 
-# Highest-iteration phase-4 checkpoint if any (sort -V: by iteration number,
-# not mtime), else newest phase-3 one for the first launch.
+# Highest-iteration checkpoint (sort -V: by iteration number, not mtime);
+# the [0-9].pt suffix keeps the standalone rl_ema_iterN.pt artifacts and
+# anything unexpected out of the resume path.
 if [ -z "${RESUME:-}" ]; then
-    RESUME=$(ls "$P4_DIR"/rl_checkpoint_iter*.pt 2>/dev/null | sort -V | tail -1)
-    [ -n "$RESUME" ] || RESUME=$(ls "$P3_DIR"/rl_checkpoint_iter*.pt 2>/dev/null | sort -V | tail -1)
+    for DIR in "$P5_DIR" "$P4_DIR" "$P3_DIR"; do
+        RESUME=$(ls "$DIR"/rl_checkpoint_iter*[0-9].pt 2>/dev/null | sort -V | tail -1)
+        [ -n "$RESUME" ] && break
+    done
 fi
 if [ ! -f "$RESUME" ]; then
     echo "ERROR: no resume checkpoint found (RESUME='$RESUME')" >&2
@@ -102,7 +112,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --kl_ref "$IL_ANCHOR" \
         --reset_reward_decay \
         "${MAP_FLAGS[@]}" \
-        --output_dir "$P4_DIR" \
+        --output_dir "$P5_DIR" \
         --il_data_dir "${IL_DIRS[@]}" \
         --episodes_per_gpu $EPISODES \
         --rollout_steps 2048 \
@@ -120,6 +130,11 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --il_weight 0.5 \
         --il_decay 0.995 \
         --rl_legal_mask 1 \
+        --randomize_seat 1 \
+        --mirror_prob 0.5 \
+        --derive_army_channels 1 \
+        --turn_globals 1 \
+        --ema_decay 0.998 \
         --capture_aux_weight 0.05 \
         --city_budget 0.8 \
         --eval_interval 50 \
