@@ -72,6 +72,15 @@ def parse_args():
     p.add_argument("--rollout_steps", type=int, default=1000,
                    help="Max steps per self-play episode")
     p.add_argument("--ppo_epochs", type=int, default=4)
+    p.add_argument("--accum_episodes", type=int, default=0,
+                   help="Optimizer step every N local episode buffers "
+                        "within an epoch instead of one step per epoch "
+                        "(0 = legacy single step). More Adam steps per "
+                        "iteration at smaller effective batch.")
+    p.add_argument("--target_kl", type=float, default=0.0,
+                   help="Skip remaining PPO epochs once the all-reduced "
+                        "approx_kl exceeds this (0 = off). Guards the "
+                        "second epoch from destructively large updates.")
     p.add_argument("--clip_range", type=float, default=0.2)
     p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--gae_lambda", type=float, default=0.95)
@@ -518,8 +527,20 @@ def ppo_update(
     capture_optimizer: Optional[torch.optim.Optimizer] = None,
     capture_weight: float = 0.0,
     legal_masked: bool = True,
+    accum_episodes: int = 0,
+    n_chunks: int = 1,
 ) -> Dict[str, float]:
-    """Run one PPO update epoch with gradient accumulation over multiple trajectories."""
+    """Run one PPO update epoch with gradient accumulation over multiple
+    trajectories.
+
+    ``accum_episodes > 0`` splits the epoch into ``n_chunks`` optimizer
+    steps of that many local buffers each (2 Adam steps/iteration is a far
+    outlier vs PPO practice — AverageJoe takes 128). ``n_chunks`` MUST be
+    the all-reduced MAX across ranks: every rank has to post the same
+    number of sync_gradients collectives even when its own chunk is empty
+    (buffer counts vary per rank under mirror self-play), or NCCL pairs
+    collectives across different steps and silently corrupts them.
+    """
     # eval mode: rollout log-probs were collected in eval mode, so the update
     # must disable dropout and use BatchNorm running stats — otherwise
     # old/new log-probs come from different policies and the ratio is invalid.
@@ -534,7 +555,41 @@ def ppo_update(
     n_buffers = len(buffers)
     metrics_accum: Dict[str, float] = {}
 
-    for buf in buffers:
+    def _flush_step(chunk_empty: bool) -> None:
+        """Sync, clip and apply one optimizer step (both optimizers)."""
+        if chunk_empty:
+            # Uniform gradient presence across ranks: a rank whose chunk is
+            # empty contributes explicit zeros instead of triggering the
+            # missing-gradient anomaly path inside sync_gradients.
+            for p in model.parameters():
+                if p.requires_grad and p.grad is None:
+                    p.grad = torch.zeros_like(p)
+            if use_capture:
+                for p in capture_head.parameters():
+                    if p.grad is None:
+                        p.grad = torch.zeros_like(p)
+        if world_size > 1:
+            sync_gradients(model, world_size)
+            if use_capture:
+                sync_gradients(capture_head, world_size)
+        if grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            if use_capture:
+                torch.nn.utils.clip_grad_norm_(
+                    capture_head.parameters(), grad_clip)
+        optimizer.step()
+        optimizer.zero_grad()
+        if use_capture:
+            capture_optimizer.step()
+            capture_optimizer.zero_grad()
+
+    if accum_episodes and accum_episodes > 0:
+        chunks = [buffers[i * accum_episodes:(i + 1) * accum_episodes]
+                  for i in range(n_chunks)]
+    else:
+        chunks = [buffers]
+
+    def _process_buffer(buf: RolloutBuffer, denom: int) -> None:
         batch = buf.to_tensor_batch(device)
 
         grid_seq = batch["grid_seq"]        # [1, T, C, H, W]
@@ -662,8 +717,8 @@ def ppo_update(
                 cap_acc = ((((cap_logits > 0).float() == cap_labels).float()
                             * cap_mask).sum() / n_lab).item()
 
-        # Scale loss for gradient accumulation
-        (total / n_buffers).backward()
+        # Scale loss for gradient accumulation within this chunk
+        (total / max(denom, 1)).backward()
 
         # Accumulate metrics
         step_metrics = {
@@ -686,19 +741,12 @@ def ppo_update(
         for k, v in step_metrics.items():
             metrics_accum[k] = metrics_accum.get(k, 0.0) + v
 
-    if world_size > 1:
-        sync_gradients(model, world_size)
-        if use_capture:
-            sync_gradients(capture_head, world_size)
-    if grad_clip > 0:
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        if use_capture:
-            torch.nn.utils.clip_grad_norm_(capture_head.parameters(), grad_clip)
-    optimizer.step()
-    if use_capture:
-        capture_optimizer.step()
+    for chunk in chunks:
+        for buf in chunk:
+            _process_buffer(buf, denom=len(chunk))
+        _flush_step(chunk_empty=len(chunk) == 0)
 
-    return {k: v / n_buffers for k, v in metrics_accum.items()}
+    return {k: v / max(n_buffers, 1) for k, v in metrics_accum.items()}
 
 
 def il_auxiliary_update(
@@ -1182,8 +1230,24 @@ def main():
             torch.cuda.empty_cache()
 
         valid_buffers = [buf for buf in ep_buffers if len(buf) > 0]
+        # Chunked stepping: the chunk COUNT must be rank-invariant (buffer
+        # counts differ per rank under mirror self-play) — every rank has
+        # to post the same number of grad-sync collectives.
+        if args.accum_episodes > 0:
+            local_chunks = max(
+                1, -(-len(valid_buffers) // args.accum_episodes))
+            if dist.is_initialized():
+                nc = torch.tensor([local_chunks], device=device)
+                dist.all_reduce(nc, op=dist.ReduceOp.MAX)
+                n_chunks = int(nc.item())
+            else:
+                n_chunks = local_chunks
+        else:
+            n_chunks = 1
+
         ppo_metrics_agg = {}
-        if valid_buffers:
+        epochs_run = 0
+        if valid_buffers or (dist.is_initialized() and args.ppo_epochs > 0):
             for _epoch in range(args.ppo_epochs):
                 metrics = ppo_update(
                     model, ref_model, valid_buffers, rl_criterion,
@@ -1197,11 +1261,29 @@ def main():
                     capture_optimizer=capture_optimizer,
                     capture_weight=args.capture_aux_weight,
                     legal_masked=bool(args.rl_legal_mask),
+                    accum_episodes=args.accum_episodes,
+                    n_chunks=n_chunks,
                 )
+                epochs_run += 1
                 for k, v in metrics.items():
                     ppo_metrics_agg[k] = ppo_metrics_agg.get(k, 0.0) + v
 
-        n_updates = args.ppo_epochs if valid_buffers else 1
+                # Live target-KL guard: the decision must be identical on
+                # every rank, so it uses the all-reduced mean approx_kl.
+                if args.target_kl > 0 and _epoch < args.ppo_epochs - 1:
+                    kl_t = torch.tensor(
+                        [metrics.get("approx_kl", 0.0)], device=device)
+                    if dist.is_initialized():
+                        dist.all_reduce(kl_t)
+                        kl_t /= world_size
+                    if kl_t.item() > args.target_kl:
+                        if rank0:
+                            print(f"  PPO early stop after epoch "
+                                  f"{_epoch + 1}: approx_kl={kl_t.item():.4f}"
+                                  f" > {args.target_kl}")
+                        break
+
+        n_updates = max(epochs_run, 1)
         ppo_avg = {k: v / n_updates for k, v in ppo_metrics_agg.items()}
 
         # ---- 4. IL auxiliary update ----

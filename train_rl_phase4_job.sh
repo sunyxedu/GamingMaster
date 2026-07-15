@@ -108,6 +108,8 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --rollout_steps 2048 \
         --act_steps 1 \
         --ppo_epochs 2 \
+        --accum_episodes 4 \
+        --target_kl 0.015 \
         --clip_range 0.15 \
         --gamma 1.0 \
         --gae_lambda 0.9 \
