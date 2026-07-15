@@ -96,6 +96,9 @@ class RolloutBuffer:
         self.rewards: List[float] = []
         self.dones: List[bool] = []
         self.valid_directions: List[List[bool]] = []  # [4] per step
+        # Capture-feasibility supervision (optional obs keys): [4, H, W]
+        self.capture_labels: List[Optional[torch.Tensor]] = []
+        self.capture_masks: List[Optional[torch.Tensor]] = []
 
         self.advantages: Optional[torch.Tensor] = None
         self.returns: Optional[torch.Tensor] = None
@@ -124,6 +127,8 @@ class RolloutBuffer:
         self.rewards.append(reward)
         self.dones.append(done)
         self.valid_directions.append(valid_directions or [True, True, True, True])
+        self.capture_labels.append(obs.get("capture_label"))
+        self.capture_masks.append(obs.get("capture_mask"))
 
     # ---- advantage computation -----------------------------------------
 
@@ -148,7 +153,7 @@ class RolloutBuffer:
         """Stack trajectory into a single-sample batch ``[1, T, …]``."""
         assert self.advantages is not None, "call compute_returns_and_advantages first"
         T = len(self.grids)
-        return {
+        batch = {
             "grid_seq": torch.stack(self.grids).unsqueeze(0).to(device),
             "globals_seq": torch.stack(self.globals_).unsqueeze(0).to(device),
             "legal_mask": torch.stack(self.legal_masks).unsqueeze(0).to(device),
@@ -176,6 +181,14 @@ class RolloutBuffer:
             ).unsqueeze(0),  # [1, T, 4]
             "length": T,
         }
+        # Capture-feasibility supervision — only when every step carried it
+        # (older callers / tests build obs without these keys).
+        if all(t is not None for t in self.capture_labels):
+            batch["capture_label"] = (
+                torch.stack(self.capture_labels).unsqueeze(0).to(device))
+            batch["capture_mask"] = (
+                torch.stack(self.capture_masks).unsqueeze(0).to(device))
+        return batch
 
     # ---- housekeeping --------------------------------------------------
 

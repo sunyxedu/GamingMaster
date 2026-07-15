@@ -12,10 +12,15 @@ Observation format matches the model's ``step()`` input:
 
 Reward design (per step; discounted returns are NOT bounded to [-1, 1] —
 the value head is deliberately unbounded):
-    Terminal:  win +1.0, loss -1.0 (turn-limit truncation gives neither)
+    Terminal:  win +1.0, loss -1.0; turn-limit truncation scores
+               ±0.35 × material heuristic (soft terminal)
     Dense:     0.6 × delta_heuristic × dense_reward_scale (potential-based)
     Events:    enemy city capture +0.16 / loss -0.16 (symmetric),
-               neutral city capture +0.25..0.33,
+               neutral city damage pays unit × damage/G0 per hit
+               (unit = min(0.25, city_budget_total / n_cities), so the
+               whole map's neutral-city reward stays below the terminal
+               reward and a full capture sums to exactly `unit`),
+               capture precision bonus ≤ 0.3 × unit,
                invalid move -0.05
 """
 
@@ -106,6 +111,16 @@ class GeneralsEnv:
         self.city_reward_scale: float = 1.0
         self.dense_reward_scale: float = 1.0
 
+        # Neutral-city reward budget for the WHOLE map: the per-city unit is
+        # budget / n_cities (capped at 0.25). A flat per-city bonus let
+        # city-dense replay maps pay out 2-3× the terminal reward per game,
+        # which dominated win/loss and destabilised training.
+        self.city_budget_total: float = 0.8
+        self.city_reward_unit: float = 0.25
+        # Initial garrison per city (set at reset) — denominator for the
+        # damage-proportional payout.
+        self.city_initial_army: Dict[int, int] = {}
+
         # Map pool for replay-based maps
         self.map_pool: Optional[List[Dict]] = None
 
@@ -131,6 +146,13 @@ class GeneralsEnv:
         adj_op = o["army"] + max(-city_diff, 0) * 50
         ratio = adj_my / max(adj_op, 1)
         return float(math.tanh(ratio - 1.0))
+
+    def truncation_score(self, pid: int) -> float:
+        """Soft terminal reward for truncated games: ±0.35 scaled by the
+        city-adjusted material heuristic, so who is actually ahead when the
+        clock runs out matters — including city economy — without ever
+        outweighing a real win/loss."""
+        return 0.35 * self._heuristic(pid)
 
     # ==================================================================
     # Reset
@@ -164,6 +186,16 @@ class GeneralsEnv:
         self.turn = 0
         self.done = False
         self.winner = None
+
+        # Neutral-city payout bookkeeping: every city starts neutral, so the
+        # per-city unit and initial garrisons are fixed for the whole game.
+        self.city_initial_army = {
+            idx: max(1, self.map[idx // self.grid_w][idx % self.grid_w].army)
+            for idx in self.cities
+        }
+        self.city_reward_unit = min(
+            0.25, self.city_budget_total / max(len(self.cities), 1),
+        )
 
         # Initialize heuristic tracking
         self.prev_heuristic = {
@@ -268,28 +300,59 @@ class GeneralsEnv:
                         reward_breakdown["r_city"] -= city_r
                         reward_breakdown["c_loss"] += 1
                 else:
-                    # Captured neutral city — one-time bonus per city (a
-                    # captured city never returns to neutral, so this cannot
-                    # be farmed) plus a small efficiency bonus. Sized at ~5%
-                    # of the terminal reward: city economy is core domain
-                    # knowledge worth paying for, without drowning win/loss.
+                    # Captured neutral city — the damage payout below already
+                    # pays the final hit (the whole remaining garrison), so
+                    # here only count the event and pay a small precision
+                    # bonus for capturing with minimal overkill: it rewards
+                    # judging the garrison number correctly, which is the
+                    # skill the payout is meant to teach.
                     r, c = divmod(city_idx, self.grid_w)
                     remaining = self.map[r][c].army
-                    bonus = 0.08 * math.exp(-0.1 * remaining)
-                    city_r = (0.25 + bonus) * self.city_reward_scale
-                    rewards[pid] += city_r
+                    bonus = (0.3 * self.city_reward_unit
+                             * math.exp(-0.1 * remaining)
+                             * self.city_reward_scale)
+                    rewards[pid] += bonus
                     if pid == 0:
-                        reward_breakdown["r_city"] += city_r
+                        reward_breakdown["r_city"] += bonus
                         reward_breakdown["c_cap"] += 1
 
-        # Player-0 failed neutral-city hit (whittle without capture)
-        if move_0 is not None:
-            end = move_0["end"]
-            if end in neutral_before:
-                er, ec = divmod(end, self.grid_w)
-                end_tile = self.map[er][ec]
-                if end_tile.occupied == -1 and end_tile.army < neutral_before[end]:
-                    reward_breakdown["c_bash"] += 1
+        # Neutral-city damage payout: each garrison point whittled off pays
+        # unit × damage/G0, so a full capture sums to exactly `unit` across
+        # however many hits it took. Partial hits pay partially — an agent
+        # that cannot yet judge garrison numbers still gets a gradient from
+        # every attempt instead of all-or-nothing on completion. Neutral
+        # garrisons never regrow, so the payout per city is bounded by
+        # `unit` and cannot be farmed.
+        hits: Dict[int, List[int]] = {}
+        for pid, move in ((0, move_0), (1, move_1)):
+            if move is not None and move["end"] in neutral_before:
+                hits.setdefault(move["end"], []).append(pid)
+        for city_idx, pids in hits.items():
+            er, ec = divmod(city_idx, self.grid_w)
+            tile = self.map[er][ec]
+            if tile.occupied == -1:
+                damage = neutral_before[city_idx] - tile.army
+            else:
+                # Captured this step: the final hit destroyed the whole
+                # remaining garrison.
+                damage = neutral_before[city_idx]
+            if damage <= 0:
+                continue
+            g0 = max(self.city_initial_army.get(
+                city_idx, neutral_before[city_idx]), 1)
+            # Both players hitting the same city in one step is rare; exact
+            # per-move attribution would need mid-step snapshots, so split
+            # the damage evenly.
+            share = damage / len(pids)
+            for pid in pids:
+                whittle_r = (self.city_reward_unit * (share / g0)
+                             * self.city_reward_scale)
+                rewards[pid] += whittle_r
+                if pid == 0:
+                    reward_breakdown["r_city"] += whittle_r
+                    if tile.occupied == -1:
+                        # Whittled without capturing (failed hit).
+                        reward_breakdown["c_bash"] += 1
 
         # Check win
         winner = self._check_winner()
@@ -305,11 +368,18 @@ class GeneralsEnv:
             else:
                 reward_breakdown["r_winlose"] -= 1.0
         elif self.turn >= self.max_turns:
-            # Turn-limit truncation, not a terminal state: callers should
-            # bootstrap the value instead of assuming zero future return.
+            # Turn-limit truncation: scored by material as a SOFT terminal
+            # (callers should not bootstrap). A silent 0 made long games
+            # where city economy compounds worthless in the terminal
+            # channel, structurally undervaluing economic play vs rushing.
             self.done = True
             self.winner = None
             info["truncated"] = True
+            for pid in [0, 1]:
+                r_trunc = self.truncation_score(pid)
+                rewards[pid] += r_trunc
+                if pid == 0:
+                    reward_breakdown["r_winlose"] += r_trunc
 
         # Dense reward: heuristic delta
         if not self.done:
@@ -377,7 +447,38 @@ class GeneralsEnv:
             if self.map[r][c].army > 1:
                 legal[0, r, c] = True
 
-        return {"grid": grid, "globals": globals_vec, "legal_mask": legal}
+        # --- capture-feasibility labels (auxiliary supervision) ---
+        # For each movable owned tile and direction onto a DEFENDED
+        # neighbour (neutral city or enemy tile): would a full move capture
+        # it, i.e. (src.army - 1) > dst.army? The single log-compressed army
+        # channel makes this threshold nearly invisible in input space;
+        # supervising it directly forces the encoder to represent the
+        # comparison. Neighbours of owned tiles are always visible, so the
+        # labels never leak fogged information.
+        cap_label = torch.zeros(4, H, W, dtype=torch.float32)
+        cap_mask = torch.zeros(4, H, W, dtype=torch.bool)
+        for idx in self.player_land[player_id]:
+            r, c = divmod(idx, W)
+            a = self.map[r][c].army
+            if a <= 1:
+                continue
+            for d in range(4):
+                nr, nc = r + _DIR_DR[d], c + _DIR_DC[d]
+                if not (0 <= nr < rH and 0 <= nc < rW):
+                    continue
+                t = self.map[nr][nc]
+                if t.terrain == _MOUNTAIN:
+                    continue
+                defended = (t.occupied == 1 - player_id
+                            or (t.occupied == -1 and t.terrain == _CITY))
+                if not defended:
+                    continue
+                cap_mask[d, r, c] = True
+                if a - 1 > t.army:
+                    cap_label[d, r, c] = 1.0
+
+        return {"grid": grid, "globals": globals_vec, "legal_mask": legal,
+                "capture_label": cap_label, "capture_mask": cap_mask}
 
     # ==================================================================
     # Internal: state encoding (same as simulator)

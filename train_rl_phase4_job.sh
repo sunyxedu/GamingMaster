@@ -8,11 +8,20 @@
 #SBATCH --no-requeue
 #SBATCH --output=slurm-rl-%j.out
 
-# Phase 4 RL — continue PPO self-play from the phase-3 policy under the
-# RAISED neutral-city capture reward (+0.25..0.33, commit ed0c866). Phase-3
-# replay analysis showed self-play drifting into a short-game rush meta with
-# neutral captures -> ~0/game; nothing in the pool punishes ignoring city
-# economy, so the domain knowledge goes into the reward instead.
+# Phase 4 RL — continue PPO self-play from the phase-3 policy with city
+# economy taught through three channels instead of one big capture bonus
+# (the flat +0.25..0.33 of commit ed0c866 aggregated to 2-3× the terminal
+# reward on city-dense maps and caused reward-hacking boom-bust cycles):
+#   1. Damage-proportional neutral-city payout, budget-capped per map
+#      (--city_budget): every whittle hit pays partially, a full capture
+#      sums to exactly the per-city unit. Dense signal, unfarmable.
+#   2. Auxiliary capture-feasibility head (--capture_aux_weight): exact
+#      "would this move capture" labels from the env force the encoder to
+#      represent army-count comparisons the log-compressed input hides.
+#   3. Truncated games score ±0.35 by city-adjusted material instead of 0,
+#      so long-game economy pays through the terminal channel.
+# Winrate vs the frozen IL anchor is evaluated every --eval_interval iters
+# as a shaping-independent progress signal.
 #
 # Weights, optimizer, opponent pool and iteration counter resume from the
 # newest phase-4 checkpoint if one exists, else the newest phase-3
@@ -109,6 +118,10 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --il_weight 0.5 \
         --il_decay 0.995 \
         --invalidity_weight 0.5 \
+        --capture_aux_weight 0.05 \
+        --city_budget 0.8 \
+        --eval_interval 50 \
+        --eval_games 4 \
         --city_reward_decay 0.9995 \
         --dense_reward_decay 0.9997 \
         --lr 6e-5 \

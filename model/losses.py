@@ -433,7 +433,12 @@ class RLLoss(nn.Module):
         policy_loss = (policy_loss * mask_f).sum() / n_valid
 
         # --- value loss ---
-        value_loss = F.mse_loss(values, returns, reduction="none")
+        # Huber, scaled to match MSE for |err| < 1 and linear beyond: shaped
+        # or truncation-scored episodes occasionally produce outlier returns
+        # that would otherwise shock the critic (observed as value-loss
+        # spikes of 10-20× preceding policy collapses).
+        value_loss = 2.0 * F.smooth_l1_loss(
+            values, returns, reduction="none", beta=1.0)
         value_loss = (value_loss * mask_f).sum() / n_valid
 
         # --- entropy bonus (negative → we *maximise* entropy) ---

@@ -228,6 +228,9 @@ class GameNetwork(nn.Module):
         # Self-supervised next-observation prediction from belief tokens
         if cfg.predict_next_obs:
             out.update(self.obs_encoder.next_obs_outputs(tokens[:, :, :S_game]))
+        # Stage-1 belief tokens for external auxiliary heads (e.g. the RL
+        # capture-feasibility head) — a view, so returning it is free.
+        out["belief_tokens"] = tokens[:, :, :S_game]
         return out
 
     # ------------------------------------------------------------------

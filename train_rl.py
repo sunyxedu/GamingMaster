@@ -98,6 +98,16 @@ def parse_args():
                         "anchor across restarts.")
     p.add_argument("--invalidity_weight", type=float, default=0.1,
                    help="Weight for source/direction invalidity auxiliary loss")
+    p.add_argument("--capture_aux_weight", type=float, default=0.05,
+                   help="Weight of the auxiliary capture-feasibility BCE "
+                        "head (0 = disabled). Supervises 'would a full move "
+                        "from tile X in direction d capture the target' so "
+                        "the encoder learns exact army comparisons.")
+    p.add_argument("--city_budget", type=float, default=0.8,
+                   help="Total neutral-city reward budget per map; the "
+                        "per-city payout unit is budget/n_cities (capped "
+                        "at 0.25), keeping aggregate city shaping below "
+                        "the terminal win/loss reward")
     p.add_argument("--city_reward_decay", type=float, default=0.9999,
                    help="Per-iteration decay for city capture reward scale")
     p.add_argument("--dense_reward_decay", type=float, default=0.9999,
@@ -150,6 +160,15 @@ def parse_args():
                    help="Temporal mixer for from-scratch models (checkpoints "
                         "carry their own setting in the saved config)")
 
+    # Fixed-opponent evaluation (progress signal independent of shaping
+    # rewards and of the moving opponent pool)
+    p.add_argument("--eval_interval", type=int, default=50,
+                   help="Every N iterations play eval games vs the frozen "
+                        "KL reference policy (0 = never; requires --kl_weight"
+                        " > 0 so the reference model exists)")
+    p.add_argument("--eval_games", type=int, default=4,
+                   help="Eval games per GPU per evaluation round")
+
     # Logging
     p.add_argument("--log_interval", type=int, default=10)
     p.add_argument("--save_interval", type=int, default=100)
@@ -201,6 +220,39 @@ class OpponentPool:
 
     def __len__(self) -> int:
         return len(self.pool)
+
+
+# ======================================================================
+# Auxiliary capture-feasibility head
+# ======================================================================
+
+class CaptureHead(torch.nn.Module):
+    """Per-tile, per-direction capture-feasibility predictor.
+
+    Reads the Stage-1 belief tokens and predicts, for each owned tile and
+    direction onto a defended target (neutral city or enemy tile), whether
+    a full-strength move would capture it — labels come exactly from the
+    env (``capture_label``/``capture_mask`` observation keys).
+
+    The policy's army input is a single log-compressed channel, so the
+    "src.army - 1 > dst.army" threshold is nearly invisible in input space;
+    this head's BCE backpropagates into the encoder and forces it to
+    represent the comparison. Kept OUTSIDE ``GeneralsNetwork`` so model
+    checkpoints, the opponent pool and the KL reference stay byte-
+    compatible; it is trained by its own small optimizer.
+    """
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(d_model, d_model // 2),
+            torch.nn.ReLU(),
+            torch.nn.Linear(d_model // 2, 4),
+        )
+
+    def forward(self, belief_tokens: torch.Tensor) -> torch.Tensor:
+        """[B, T, N, d] → capture logits [B, T, N, 4]."""
+        return self.net(belief_tokens)
 
 
 # ======================================================================
@@ -316,16 +368,15 @@ def collect_selfplay_episode(
         }
         # Compute valid directions for chosen source
         valid_dirs = env.get_valid_directions(action_dict["source_idx"])
-        truncated = bool(info.get("truncated", False))
         buffer.add(
             obs=obs[0],
             action=action_dict,
             log_prob=step_out[0]["action_log_prob"].item(),
             value=step_out[0]["value"].item(),
             reward=rewards[0],
-            # A turn-limit truncation is not a terminal state — marking it
-            # done would zero the bootstrap inside GAE.
-            done=done and not truncated,
+            # Truncation (env turn limit) is a SOFT terminal: the env already
+            # scored it by material, so GAE must not bootstrap on top.
+            done=done,
             valid_directions=valid_dirs,
         )
 
@@ -333,20 +384,16 @@ def collect_selfplay_episode(
         if done:
             break
 
-    # Compute GAE. Bootstrap the value on truncation (env turn limit or
-    # rollout_steps running out) — only true terminals get 0.
-    if not done or truncated:
-        grid = obs[0]["grid"].unsqueeze(0).to(device)
-        glb = obs[0]["globals"].unsqueeze(0).to(device)
-        with torch.no_grad():
-            last_out = model.step_rl(grid, glb,
-                                     st_cache=caches[0],
-                                     step_idx=len(buffer), act_steps=act_steps)
-        last_value = last_out["value"].item()
-    else:
-        last_value = 0.0
+    # Rollout budget exhausted mid-game: the env never saw a terminal, so
+    # apply the same material-based truncation score here and close the
+    # episode — mirrors the env's own turn-limit handling.
+    if not done and len(buffer) > 0:
+        buffer.rewards[-1] += env.truncation_score(0)
+        buffer.dones[-1] = True
+        reward_totals["r_winlose"] += env.truncation_score(0)
+
     buffer.compute_returns_and_advantages(
-        gamma=gamma, lam=gae_lambda, last_value=last_value,
+        gamma=gamma, lam=gae_lambda, last_value=0.0,
     )
 
     return buffer, replay_log, reward_totals
@@ -369,6 +416,9 @@ def ppo_update(
     invalidity_weight: float = 0.1,
     grad_clip: float = 1.0,
     act_steps: int = 1,
+    capture_head: Optional[CaptureHead] = None,
+    capture_optimizer: Optional[torch.optim.Optimizer] = None,
+    capture_weight: float = 0.0,
 ) -> Dict[str, float]:
     """Run one PPO update epoch with gradient accumulation over multiple trajectories."""
     # eval mode: rollout log-probs were collected in eval mode, so the update
@@ -377,6 +427,10 @@ def ppo_update(
     # Gradients still flow in eval mode.
     model.eval()
     optimizer.zero_grad()
+    use_capture = (capture_head is not None and capture_optimizer is not None
+                   and capture_weight > 0)
+    if use_capture:
+        capture_optimizer.zero_grad()
 
     n_buffers = len(buffers)
     metrics_accum: Dict[str, float] = {}
@@ -464,6 +518,28 @@ def ppo_update(
             inv_loss = src_val_loss + dir_val_loss
             total = total + invalidity_weight * inv_loss
 
+        # Auxiliary capture-feasibility BCE: exact env labels, masked to
+        # (owned movable tile, defended neighbour) pairs. Backpropagates
+        # through the belief tokens into the encoder.
+        cap_loss = torch.tensor(0.0, device=device)
+        cap_acc = 0.0
+        if use_capture and "capture_label" in batch:
+            T = grid_seq.size(1)
+            cap_logits = capture_head(pred["belief_tokens"])  # [1, T, N, 4]
+            # [1, T, 4, H, W] → [1, T, N, 4] matching the token layout
+            cap_labels = (batch["capture_label"]
+                          .reshape(1, T, 4, -1).permute(0, 1, 3, 2))
+            cap_mask = (batch["capture_mask"]
+                        .reshape(1, T, 4, -1).permute(0, 1, 3, 2)).float()
+            n_lab = cap_mask.sum().clamp(min=1)
+            bce = F.binary_cross_entropy_with_logits(
+                cap_logits, cap_labels, reduction="none")
+            cap_loss = (bce * cap_mask).sum() / n_lab
+            total = total + capture_weight * cap_loss
+            with torch.no_grad():
+                cap_acc = ((((cap_logits > 0).float() == cap_labels).float()
+                            * cap_mask).sum() / n_lab).item()
+
         # Scale loss for gradient accumulation
         (total / n_buffers).backward()
 
@@ -481,15 +557,23 @@ def ppo_update(
             "ent_src": head_entropy["ent_src"].item(),
             "ent_dir": head_entropy["ent_dir"].item(),
             "ent_spl": head_entropy["ent_spl"].item(),
+            "cap_loss": cap_loss.item() if isinstance(cap_loss, torch.Tensor) else cap_loss,
+            "cap_acc": cap_acc,
         }
         for k, v in step_metrics.items():
             metrics_accum[k] = metrics_accum.get(k, 0.0) + v
 
     if world_size > 1:
         sync_gradients(model, world_size)
+        if use_capture:
+            sync_gradients(capture_head, world_size)
     if grad_clip > 0:
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        if use_capture:
+            torch.nn.utils.clip_grad_norm_(capture_head.parameters(), grad_clip)
     optimizer.step()
+    if use_capture:
+        capture_optimizer.step()
 
     return {k: v / n_buffers for k, v in metrics_accum.items()}
 
@@ -629,6 +713,26 @@ def main():
         if rank0:
             print(f"Resumed weights from {args.resume} (starting iteration {start_iter})")
 
+    # ---- Auxiliary capture head (own optimizer, outside the model) ------
+    # Separate module + optimizer so model checkpoints, the opponent pool
+    # and the KL reference stay byte-compatible with head-less runs.
+    capture_head: Optional[CaptureHead] = None
+    capture_optimizer: Optional[torch.optim.Optimizer] = None
+    if args.capture_aux_weight > 0:
+        capture_head = CaptureHead(cfg.d_model).to(device)
+        capture_optimizer = torch.optim.AdamW(
+            capture_head.parameters(), lr=args.lr,
+            weight_decay=args.weight_decay,
+        )
+        if rl_ckpt is not None and "capture_head_state" in rl_ckpt:
+            capture_head.load_state_dict(rl_ckpt["capture_head_state"])
+            if "capture_optim_state" in rl_ckpt:
+                capture_optimizer.load_state_dict(rl_ckpt["capture_optim_state"])
+            if rank0:
+                print("  Capture head resumed from checkpoint")
+        elif rank0:
+            print(f"Capture head enabled (weight={args.capture_aux_weight})")
+
     # ---- Sync initial state across ranks --------------------------------
     # Gradients are manually all-reduced, but nothing else aligns the ranks:
     # a from-scratch multi-GPU run would average gradients over different
@@ -638,6 +742,10 @@ def main():
         for t in model.state_dict().values():
             if isinstance(t, torch.Tensor):
                 dist.broadcast(t, src=0)
+        if capture_head is not None:
+            for t in capture_head.state_dict().values():
+                if isinstance(t, torch.Tensor):
+                    dist.broadcast(t, src=0)
 
     # ---- Reference model (frozen copy for KL regularisation) -----------
     ref_model: Optional[GeneralsNetwork] = None
@@ -729,6 +837,7 @@ def main():
 
     # ---- Environment (each rank gets its own) --------------------------
     env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w)
+    env.city_budget_total = args.city_budget
     if args.replay_dir and args.filtered_file:
         n_maps = env.load_map_pool(args.replay_dir, args.filtered_file)
         if rank0:
@@ -764,6 +873,9 @@ def main():
             resume_lr *= 0.5
         for pg in optimizer.param_groups:
             pg["lr"] = resume_lr
+        if capture_optimizer is not None:
+            for pg in capture_optimizer.param_groups:
+                pg["lr"] = resume_lr
         if rank0:
             print(f"  LR restored to {resume_lr:.3e} (decay^{done_iters})")
 
@@ -928,6 +1040,9 @@ def main():
                     invalidity_weight=args.invalidity_weight,
                     grad_clip=args.grad_clip,
                     act_steps=args.act_steps,
+                    capture_head=capture_head,
+                    capture_optimizer=capture_optimizer,
+                    capture_weight=args.capture_aux_weight,
                 )
                 for k, v in metrics.items():
                     ppo_metrics_agg[k] = ppo_metrics_agg.get(k, 0.0) + v
@@ -962,6 +1077,9 @@ def main():
         # Decay learning rate
         for pg in optimizer.param_groups:
             pg["lr"] *= args.lr_decay
+        if capture_optimizer is not None:
+            for pg in capture_optimizer.param_groups:
+                pg["lr"] *= args.lr_decay
 
         # Decay entropy weight
         rl_criterion.entropy_weight = max(
@@ -1012,6 +1130,31 @@ def main():
             elif rank0:
                 print(f"  Pool update skipped: winrate={recent_wr:.2f} < {args.pool_update_winrate}")
 
+        # ---- 6b. Fixed-opponent evaluation vs the KL anchor ----
+        # Progress signal independent of shaping rewards and of the moving
+        # opponent pool: winrate here separates "actually stronger" from
+        # "better at farming shaped reward".
+        if (args.eval_interval > 0 and ref_model is not None
+                and iteration % args.eval_interval == 0):
+            ev = {0: 0, 1: 0, None: 0}
+            for _ in range(args.eval_games):
+                collect_selfplay_episode(
+                    model, ref_model, env, device,
+                    max_steps=args.rollout_steps,
+                    gamma=args.gamma, gae_lambda=args.gae_lambda,
+                    act_steps=args.act_steps,
+                )
+                ev[env.winner if env.winner in (0, 1) else None] += 1
+            if dist.is_initialized():
+                ev_t = torch.tensor(
+                    [ev[0], ev[1], ev[None]], dtype=torch.float32, device=device)
+                dist.all_reduce(ev_t)
+                ev = {0: int(ev_t[0]), 1: int(ev_t[1]), None: int(ev_t[2])}
+            if rank0:
+                n_ev = max(ev[0] + ev[1] + ev[None], 1)
+                print(f"  Eval vs anchor: {ev[0]}/{ev[1]}/{ev[None]} "
+                      f"(W/L/D of {n_ev})  wr={ev[0] / n_ev:.2f}")
+
         # ---- 7. Logging ----
         if rank0 and iteration % args.log_interval == 0:
             print(
@@ -1030,6 +1173,8 @@ def main():
                 f"e_s={ppo_avg.get('ent_src', 0):.3f}  "
                 f"e_d={ppo_avg.get('ent_dir', 0):.3f}  "
                 f"e_sp={ppo_avg.get('ent_spl', 0):.3f} | "
+                f"cap={ppo_avg.get('cap_loss', 0):.3f}/"
+                f"{ppo_avg.get('cap_acc', 0):.2f} | "
                 f"il={il_metrics.get('il_loss', 0):.4f}  "
                 f"il_w={il_weight:.4f} | "
                 f"pool={len(opponent_pool)}  "
@@ -1037,9 +1182,12 @@ def main():
                 f"    rw: inv={reward_totals['r_invalid']:.3f}  "
                 f"city={reward_totals['r_city']:.3f}  "
                 f"dense={reward_totals['r_dense']:.3f}  "
-                f"wl={reward_totals['r_winlose']:.1f} | "
+                f"wl={reward_totals['r_winlose']:.2f} | "
                 f"city/game: cap={reward_totals['c_cap']:.2f}  "
                 f"bash={reward_totals['c_bash']:.2f}  "
+                # Extra hits per capture — direct measure of garrison-number
+                # judgement (0 = every city taken in one blow).
+                f"fail={reward_totals['c_bash'] / max(reward_totals['c_bash'] + reward_totals['c_cap'], 1e-6):.2f}  "
                 f"steal={reward_totals['c_steal']:.2f}  "
                 f"loss={reward_totals['c_loss']:.2f}"
             )
@@ -1075,7 +1223,7 @@ def main():
             ckpt_path = os.path.join(
                 args.output_dir, f"rl_checkpoint_iter{iteration}.pt",
             )
-            torch.save({
+            ckpt_data = {
                 "iteration": iteration,
                 "model_state": raw.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
@@ -1087,7 +1235,11 @@ def main():
                 # exactly instead of recomputing from the iteration counter.
                 "city_reward_scale": env.city_reward_scale,
                 "dense_reward_scale": env.dense_reward_scale,
-            }, ckpt_path + ".tmp")
+            }
+            if capture_head is not None:
+                ckpt_data["capture_head_state"] = capture_head.state_dict()
+                ckpt_data["capture_optim_state"] = capture_optimizer.state_dict()
+            torch.save(ckpt_data, ckpt_path + ".tmp")
             # Atomic publish: a reader (or a resume glob) must never see a
             # half-written checkpoint.
             os.replace(ckpt_path + ".tmp", ckpt_path)
