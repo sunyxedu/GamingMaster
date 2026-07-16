@@ -48,7 +48,10 @@ def safe_masked_logits(
         safe = safe.masked_fill(~mask, float("-inf"))
         all_masked = (safe.isinf() & (safe < 0)).all(dim=-1)
         if all_masked.any():
-            safe[all_masked, ..., 0] = 0.0
+            # Column-slice write, NOT `safe[all_masked, ..., 0]`: mixing a
+            # boolean mask with a trailing index is only valid for 1-D
+            # masks, and callers pass [B, T, N] logits too.
+            safe[..., 0] = safe[..., 0].masked_fill(all_masked, 0.0)
     nan_rows = safe.isnan().any(dim=-1)
     if nan_rows.any():
         safe[nan_rows] = 0.0
@@ -80,8 +83,9 @@ def masked_log_prob(
         safe = logits.masked_fill(~mask, float("-inf"))
         all_masked = (safe.isinf() & (safe < 0)).all(dim=-1)
         if all_masked.any():
+            # Column-slice write — see safe_masked_logits.
             safe = safe.clone()
-            safe[all_masked, ..., 0] = 0.0
+            safe[..., 0] = safe[..., 0].masked_fill(all_masked, 0.0)
     else:
         safe = logits
     return F.log_softmax(safe, dim=-1).gather(

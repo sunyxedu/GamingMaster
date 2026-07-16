@@ -380,8 +380,12 @@ class GeneralsDecoder(ActionDecoder):
             sl_masked = source_logits.masked_fill(~lm, -1e9)
             bad_rows = ~lm.any(dim=-1)                           # [B, T]
             if bad_rows.any():
+                # Column-slice write: `sl_masked[bad_rows, 0]` is valid
+                # advanced indexing only for a 1-D mask; on [B, T, N] the
+                # 2-D mask mis-aligns and raises IndexError.
                 sl_masked = sl_masked.clone()
-                sl_masked[bad_rows, 0] = 0.0
+                sl_masked[..., 0] = sl_masked[..., 0].masked_fill(
+                    bad_rows, 0.0)
         else:
             sl_masked = source_logits
         # NaN-row fallback mirroring safe_masked_logits: the rollout sampled

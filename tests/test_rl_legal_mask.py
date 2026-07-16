@@ -14,6 +14,7 @@ import torch
 
 from env.generals_env import GeneralsEnv
 from model.config import ModelConfig
+from model.games.base import masked_log_prob, safe_masked_logits
 from model.network import GeneralsNetwork
 
 
@@ -31,8 +32,14 @@ def model(cfg):
     return m
 
 
-def _rollout(model, env, T=6, act_steps=1):
-    """Masked rollout via step(); returns stacked tensors for replay."""
+def _rollout(model, env, T=6, act_steps=1, zero_legal_at=None):
+    """Masked rollout via step(); returns stacked tensors for replay.
+
+    ``zero_legal_at`` presents the model with an all-False source mask at
+    that step — the trainer's no-legal-source case (turn 0, all armies
+    == 1): the buffer records the sampled fallback action verbatim while
+    the env receives a pass.
+    """
     obs = env.reset(seed=7)
     cache = None
     rec = {k: [] for k in ("grid", "glb", "legal", "dirm", "src", "dir",
@@ -41,6 +48,8 @@ def _rollout(model, env, T=6, act_steps=1):
         grid = obs[0]["grid"].unsqueeze(0)
         glb = obs[0]["globals"].unsqueeze(0)
         legal = obs[0]["legal_mask"].unsqueeze(0)
+        if t == zero_legal_at:
+            legal = torch.zeros_like(legal)
         dirm = obs[0]["dir_mask"].unsqueeze(0)
         with torch.no_grad():
             out = model.step(grid, glb, legal_mask=legal, st_cache=cache,
@@ -58,7 +67,7 @@ def _rollout(model, env, T=6, act_steps=1):
         rec["lp"].append(out["action_log_prob"].item())
 
         action = None
-        if not rec["passed"][-1]:
+        if not rec["passed"][-1] and bool(legal.any()):
             action = {"source_idx": rec["src"][-1],
                       "direction": rec["dir"][-1],
                       "split": rec["spl"][-1]}
@@ -68,38 +77,60 @@ def _rollout(model, env, T=6, act_steps=1):
     return rec
 
 
+def _replay(model, cfg, rec):
+    """Sequence forward + compute_log_prob over a recorded rollout."""
+    grid_seq = torch.stack(rec["grid"]).unsqueeze(0)
+    glb_seq = torch.stack(rec["glb"]).unsqueeze(0)
+    legal_seq = torch.stack(rec["legal"]).unsqueeze(0)   # [1,T,1,H,W]
+    dirm_seq = torch.stack(rec["dirm"]).unsqueeze(0)     # [1,T,4,H,W]
+    actions = {
+        "source_idx": torch.tensor(rec["src"]).unsqueeze(0),
+        "direction": torch.tensor(rec["dir"]).unsqueeze(0),
+        "split": torch.tensor(rec["spl"]).unsqueeze(0),
+        "passed": torch.tensor(rec["passed"]).unsqueeze(0),
+    }
+    with torch.no_grad():
+        pred = model(
+            grid_seq, glb_seq,
+            legal_mask=legal_seq,
+            source_y=actions["source_idx"] // cfg.grid_w,
+            source_x=actions["source_idx"] % cfg.grid_w,
+            act_steps=1,
+            direction_mask=dirm_seq,
+        )
+        lp, ent, _ = model.compute_log_prob(
+            pred, actions, legal={"source": legal_seq})
+    return lp, ent
+
+
 class TestMaskedPPOExactness:
     def test_masked_rollout_replay_ratio_is_one(self, model, cfg):
         env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w)
         rec = _rollout(model, env, T=6)
-        T = len(rec["lp"])
-
-        grid_seq = torch.stack(rec["grid"]).unsqueeze(0)
-        glb_seq = torch.stack(rec["glb"]).unsqueeze(0)
-        legal_seq = torch.stack(rec["legal"]).unsqueeze(0)   # [1,T,1,H,W]
-        dirm_seq = torch.stack(rec["dirm"]).unsqueeze(0)     # [1,T,4,H,W]
-        actions = {
-            "source_idx": torch.tensor(rec["src"]).unsqueeze(0),
-            "direction": torch.tensor(rec["dir"]).unsqueeze(0),
-            "split": torch.tensor(rec["spl"]).unsqueeze(0),
-            "passed": torch.tensor(rec["passed"]).unsqueeze(0),
-        }
-        with torch.no_grad():
-            pred = model(
-                grid_seq, glb_seq,
-                legal_mask=legal_seq,
-                source_y=actions["source_idx"] // cfg.grid_w,
-                source_x=actions["source_idx"] % cfg.grid_w,
-                act_steps=1,
-                direction_mask=dirm_seq,
-            )
-            lp, ent, _ = model.compute_log_prob(
-                pred, actions, legal={"source": legal_seq})
+        lp, ent = _replay(model, cfg, rec)
 
         old = torch.tensor(rec["lp"]).unsqueeze(0)
         ratio = (lp - old).exp()
         assert torch.allclose(ratio, torch.ones_like(ratio), atol=1e-4), \
             f"masked rollout/replay mismatch: max|ratio-1|={(ratio - 1).abs().max()}"
+        assert torch.isfinite(ent).all()
+
+    def test_all_masked_step_replay_ratio_is_one(self, model, cfg):
+        """A step with NO legal source books through the one-hot-index-0
+        fallback; the replay must hit the same fallback on the [B, T, N]
+        path and land ratio == 1.  Regression: the replay fallback wrote
+        via mask+integer advanced indexing, which is invalid for the 2-D
+        row mask and raised IndexError on the first real no-source step."""
+        env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w)
+        rec = _rollout(model, env, T=6, zero_legal_at=2)
+        assert len(rec["lp"]) > 2 and not rec["legal"][2].any()
+        assert rec["src"][2] == 0  # all-masked fallback source
+
+        lp, ent = _replay(model, cfg, rec)
+        old = torch.tensor(rec["lp"]).unsqueeze(0)
+        ratio = (lp - old).exp()
+        assert torch.allclose(ratio, torch.ones_like(ratio), atol=1e-4), \
+            f"all-masked step replay mismatch: max|ratio-1|={(ratio - 1).abs().max()}"
         assert torch.isfinite(ent).all()
 
     def test_masked_sampling_never_illegal(self, model, cfg):
@@ -173,6 +204,30 @@ class TestGreedyEval:
         finally:
             model.action_decoder.greedy = False
         assert streams[0] == streams[1]
+
+
+class TestAllMaskedFallback:
+    """Shared-helper guards for degenerate rows on [B, T, N] inputs —
+    the replay-path shape (rollout passes [BT, N] with a 1-D row mask)."""
+
+    def test_safe_masked_logits_3d_all_masked_row(self):
+        logits = torch.randn(2, 3, 5)
+        mask = torch.ones(2, 3, 5, dtype=torch.bool)
+        mask[0, 1] = False
+        safe = safe_masked_logits(logits, mask)
+        assert safe[0, 1, 0] == 0.0
+        assert torch.isinf(safe[0, 1, 1:]).all()
+        assert torch.allclose(safe[1], logits[1].float())
+
+    def test_masked_log_prob_3d_all_masked_row(self):
+        logits = torch.randn(2, 3, 5, requires_grad=True)
+        mask = torch.ones(2, 3, 5, dtype=torch.bool)
+        mask[0, 1] = False
+        idx = torch.zeros(2, 3, dtype=torch.long)
+        lp = masked_log_prob(logits, idx, mask)
+        assert lp[0, 1] == 0.0  # one-hot fallback: log p(0) == 0
+        lp.sum().backward()
+        assert torch.isfinite(logits.grad).all()
 
 
 class TestDirMask:
