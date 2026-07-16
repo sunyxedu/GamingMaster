@@ -66,8 +66,9 @@ def _mask_logits(logits: torch.Tensor, mask: Optional[torch.Tensor]) -> torch.Te
     safe = logits.masked_fill(~mask, float("-inf"))
     all_masked = (safe.isinf() & (safe < 0)).all(dim=-1)
     if all_masked.any():
+        # Column-slice write — see base.safe_masked_logits.
         safe = safe.clone()
-        safe[all_masked, ..., 0] = 0.0
+        safe[..., 0] = safe[..., 0].masked_fill(all_masked, 0.0)
     return safe
 
 

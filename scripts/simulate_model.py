@@ -193,7 +193,8 @@ def run_inference(model, replay, device, grid_w, act_steps=None):
     src_logits_masked[~lm] = float("-inf")
     bad = src_logits_masked.isinf().all(dim=-1)
     if bad.any():
-        src_logits_masked[bad, 0] = 0.0
+        src_logits_masked[..., 0] = src_logits_masked[..., 0].masked_fill(
+            bad, 0.0)
 
     pass_logits = pred["pass_logits"][0]
 

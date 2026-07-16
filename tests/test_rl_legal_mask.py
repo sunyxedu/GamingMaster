@@ -15,7 +15,13 @@ import torch
 from env.generals_env import GeneralsEnv
 from model.config import ModelConfig
 from model.games.base import masked_log_prob, safe_masked_logits
+from model.games.board import _masked_policy_logits
+from model.games.clash_royale import _mask_logits as _cr_mask_logits
+from model.games.hearthstone import _mask_logits as _hs_mask_logits
+from model.games.mahjong import _mask_logits as _mj_mask_logits
+from model.games.pokemon import PokemonDecoder
 from model.network import GeneralsNetwork
+from model.rl_utils import compute_policy_kl_heads
 
 
 @pytest.fixture(scope="module")
@@ -77,8 +83,8 @@ def _rollout(model, env, T=6, act_steps=1, zero_legal_at=None):
     return rec
 
 
-def _replay(model, cfg, rec):
-    """Sequence forward + compute_log_prob over a recorded rollout."""
+def _forward(model, cfg, rec):
+    """Sequence forward over a recorded rollout (the ppo_update forward)."""
     grid_seq = torch.stack(rec["grid"]).unsqueeze(0)
     glb_seq = torch.stack(rec["glb"]).unsqueeze(0)
     legal_seq = torch.stack(rec["legal"]).unsqueeze(0)   # [1,T,1,H,W]
@@ -98,6 +104,13 @@ def _replay(model, cfg, rec):
             act_steps=1,
             direction_mask=dirm_seq,
         )
+    return pred, actions, legal_seq
+
+
+def _replay(model, cfg, rec):
+    """Sequence forward + compute_log_prob over a recorded rollout."""
+    pred, actions, legal_seq = _forward(model, cfg, rec)
+    with torch.no_grad():
         lp, ent, _ = model.compute_log_prob(
             pred, actions, legal={"source": legal_seq})
     return lp, ent
@@ -132,6 +145,21 @@ class TestMaskedPPOExactness:
         assert torch.allclose(ratio, torch.ones_like(ratio), atol=1e-4), \
             f"all-masked step replay mismatch: max|ratio-1|={(ratio - 1).abs().max()}"
         assert torch.isfinite(ent).all()
+
+    def test_all_masked_step_kl_anchor(self, model, cfg):
+        """The KL anchor must survive an all-masked step (regression:
+        compute_policy_kl's fallback used the same invalid indexing) and
+        be exactly 0 against an identical reference distribution."""
+        env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w)
+        rec = _rollout(model, env, T=6, zero_legal_at=2)
+        assert not rec["legal"][2].any()
+
+        pred, actions, legal_seq = _forward(model, cfg, rec)
+        kls = compute_policy_kl_heads(
+            pred, pred, legal_mask=legal_seq, passed=actions["passed"])
+        for k, v in kls.items():
+            assert torch.isfinite(v), f"{k} not finite"
+            assert v.abs() < 1e-6, f"{k} != 0 against identical ref: {v}"
 
     def test_masked_sampling_never_illegal(self, model, cfg):
         env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w)
@@ -210,11 +238,20 @@ class TestAllMaskedFallback:
     """Shared-helper guards for degenerate rows on [B, T, N] inputs —
     the replay-path shape (rollout passes [BT, N] with a 1-D row mask)."""
 
-    def test_safe_masked_logits_3d_all_masked_row(self):
+    @pytest.mark.parametrize("fn", [
+        safe_masked_logits,
+        _masked_policy_logits,
+        _cr_mask_logits,
+        _hs_mask_logits,
+        _mj_mask_logits,
+        PokemonDecoder._mask_logits,
+    ], ids=["base", "board", "clash_royale", "hearthstone", "mahjong",
+            "pokemon"])
+    def test_mask_helper_3d_all_masked_row(self, fn):
         logits = torch.randn(2, 3, 5)
         mask = torch.ones(2, 3, 5, dtype=torch.bool)
         mask[0, 1] = False
-        safe = safe_masked_logits(logits, mask)
+        safe = fn(logits, mask)
         assert safe[0, 1, 0] == 0.0
         assert torch.isinf(safe[0, 1, 1:]).all()
         assert torch.allclose(safe[1], logits[1].float())

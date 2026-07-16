@@ -242,10 +242,12 @@ def compute_policy_kl(
         ref_masked = reference_source_logits.masked_fill(~lm, -1e9)
         bad = ~lm.any(dim=-1)
         if bad.any():
+            # Column-slice write: mask+trailing-index advanced indexing is
+            # invalid for the 2-D row mask on torch <= 2.8 (cluster).
             cur_masked = cur_masked.clone()
             ref_masked = ref_masked.clone()
-            cur_masked[bad, 0] = 0.0
-            ref_masked[bad, 0] = 0.0
+            cur_masked[..., 0] = cur_masked[..., 0].masked_fill(bad, 0.0)
+            ref_masked[..., 0] = ref_masked[..., 0].masked_fill(bad, 0.0)
     else:
         cur_masked = current_source_logits
         ref_masked = reference_source_logits
