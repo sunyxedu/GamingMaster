@@ -3,7 +3,7 @@
 #SBATCH --partition=batch
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:nvidia_h200_nvl:8
+#SBATCH --gres=gpu:nvidia_h200_nvl:4
 #SBATCH --time=5-00:00:00
 #SBATCH --no-requeue
 #SBATCH --output=slurm-rl-%j.out
@@ -35,8 +35,10 @@
 #     is intentionally dropped at this boundary; flags become sticky in
 #     the checkpoint config).
 #   - Eval: paired, seat-swapped, greedy vs the frozen IL anchor.
-# 8 GPUs x 4 episodes keeps 32 games/iteration (mirror games add ~50%
-# more trajectories on top) at ~2x phase-4 wall-clock speed.
+# GPU width comes from the Slurm allocation: 4 GPUs (the #SBATCH default)
+# is the standard run; submit with --gres=...:2 for a light test job.
+# EPISODES defaults to 32/GPUs so an iteration is ~32 pool games at any
+# width (mirror games add ~50% more trajectories on top).
 #
 # Weights, pool and iteration counter resume from the newest phase-5
 # checkpoint if one exists, else newest phase-4, else phase-3 — a plain
@@ -44,8 +46,10 @@
 # a fresh directory so regimes stay separable. The KL anchor stays pinned
 # to the IL policy (--kl_ref).
 #
-#   sbatch train_rl_phase5_job.sh              # first launch AND crash recovery
+#   sbatch train_rl_phase5_job.sh              # real run (4 GPUs), first launch AND crash recovery
 #   RESUME=/path/to/specific.pt sbatch train_rl_phase5_job.sh   # explicit pick
+#   EPISODES=4 sbatch --gres=gpu:nvidia_h200_nvl:2 --time=4:00:00 \
+#       train_rl_phase5_job.sh                 # 2-GPU test (8 games/iter, backfills easily)
 
 export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
@@ -54,11 +58,13 @@ export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TMPDIR=/tmp
 
-GPUS_PER_NODE=${GPUS_PER_NODE:-8}
-# 4 episodes x 8 GPUs = 32 pool games/iteration — matches phase 3/4 batch
-# statistics for the pool-gate winrate; mirror episodes add extra
-# trajectories without touching the gate.
-EPISODES=${EPISODES:-4}
+# GPU width is read from the actual allocation, so a CLI --gres override
+# (the test line above) needs no matching env var.
+GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}
+# EPISODES x GPUs = 32 pool games/iteration by default — matches phase 3/4
+# batch statistics for the pool-gate winrate at any width; mirror episodes
+# add extra trajectories without touching the gate.
+EPISODES=${EPISODES:-$(( 32 / GPUS_PER_NODE ))}
 IL_ANCHOR=/scratch/$USER/gaming-master/checkpoints/il_phase2/checkpoint_epoch5.pt
 P5_DIR=/scratch/$USER/gaming-master/checkpoints/rl_phase5
 P4_DIR=/scratch/$USER/gaming-master/checkpoints/rl_phase4
@@ -106,11 +112,14 @@ IL_DIRS=(
 )
 
 HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
+# Job-unique rendezvous port: a 2-GPU test and the real job can now share
+# a node, so they must not both bind 29500.
+RDZV_PORT=$((29500 + ${SLURM_JOB_ID:-0} % 1000))
 
 srun apptainer exec --nv /scratch/$USER/pytorch.sif \
     torchrun --nproc_per_node=$GPUS_PER_NODE --nnodes=$SLURM_NNODES \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
-        --rdzv_endpoint=$HEAD_NODE:29500 \
+        --rdzv_endpoint=$HEAD_NODE:$RDZV_PORT \
         ~/GamingMaster/train_rl.py \
         --resume "$RESUME" \
         --kl_ref "$IL_ANCHOR" \
