@@ -2,7 +2,6 @@
 Loss functions for Imitation Learning (IL) and Reinforcement Learning (RL).
 """
 
-import math
 from typing import Dict, Optional
 
 import torch
@@ -370,36 +369,6 @@ def next_obs_loss(
     return {"state_loss": state_loss, "army_loss": army_loss}
 
 
-def hl_gauss_target_probs(
-    targets: torch.Tensor,
-    n_bins: int,
-    vmax: float,
-    sigma: float,
-) -> torch.Tensor:
-    """Gaussian histogram (HL-Gauss) target distribution.
-
-    Each scalar target y (clamped to [-vmax, vmax]) becomes the probability
-    a N(y, sigma²) sample lands in each of ``n_bins`` equal-width bins
-    spanning the support, renormalised for the mass falling outside — the
-    standard histogram-loss construction (Imani & White 2018), the one
-    AverageJoe uses (128 bins, σ ≈ 2.5 bin widths).
-
-    Args:
-        targets: [...] scalar returns
-    Returns:
-        [..., n_bins] rows summing to 1
-    """
-    y = targets.float().clamp(-vmax, vmax).unsqueeze(-1)   # [..., 1]
-    edges = torch.linspace(-vmax, vmax, n_bins + 1,
-                           device=targets.device)           # [n_bins+1]
-    # Φ((edge − y)/σ) via erf; adjacent differences = per-bin mass
-    z = (edges - y) / (sigma * math.sqrt(2.0))
-    cdf = 0.5 * (1.0 + torch.erf(z))                        # [..., n_bins+1]
-    probs = cdf[..., 1:] - cdf[..., :-1]
-    total = probs.sum(-1, keepdim=True).clamp(min=1e-8)
-    return probs / total
-
-
 class RLLoss(nn.Module):
     """PPO loss for RL training.
 
@@ -423,17 +392,11 @@ class RLLoss(nn.Module):
         value_weight: float = 0.5,
         entropy_weight: float = 0.01,
         clip_range: float = 0.2,
-        hl_gauss: bool = False,
-        hl_gauss_vmax: float = 1.5,
-        hl_gauss_sigma: float = 0.06,
     ):
         super().__init__()
         self.value_weight = value_weight
         self.entropy_weight = entropy_weight
         self.clip_range = clip_range
-        self.hl_gauss = hl_gauss
-        self.hl_gauss_vmax = hl_gauss_vmax
-        self.hl_gauss_sigma = hl_gauss_sigma
 
     def forward(
         self,
@@ -444,8 +407,6 @@ class RLLoss(nn.Module):
         advantages: torch.Tensor,
         old_log_probs: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        value_logits: Optional[torch.Tensor] = None,
-        policy_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
@@ -456,24 +417,11 @@ class RLLoss(nn.Module):
             advantages     [B, T]  GAE advantages (should be normalized)
             old_log_probs  [B, T]  log π_old(a|s) from rollout
             mask           [B, T]  bool — True for valid timesteps
-            value_logits   [B, T, n_bins]  HL-Gauss critic logits (required
-                           when constructed with hl_gauss=True)
-            policy_mask    [B, T]  bool — advantage-filter mask: policy loss
-                           and entropy bonus train only where True; the
-                           critic, approx_kl and clip_fraction stay on the
-                           full mask (the critic needs every return, and the
-                           KL diagnostics must measure the whole policy
-                           shift, not just the trained subset)
         """
         if mask is None:
             mask = torch.ones_like(log_probs, dtype=torch.bool)
         mask_f = mask.float()
         n_valid = mask_f.sum().clamp(min=1)
-        if policy_mask is not None:
-            pol_f = mask_f * policy_mask.float()
-        else:
-            pol_f = mask_f
-        n_pol = pol_f.sum().clamp(min=1)
 
         # --- PPO clipped policy loss ---
         ratio = torch.exp(log_probs - old_log_probs)
@@ -482,35 +430,19 @@ class RLLoss(nn.Module):
             ratio * advantages,
             clip_ratio * advantages,
         )
-        policy_loss = (policy_loss * pol_f).sum() / n_pol
+        policy_loss = (policy_loss * mask_f).sum() / n_valid
 
         # --- value loss ---
-        if self.hl_gauss:
-            if value_logits is None:
-                raise ValueError(
-                    "RLLoss(hl_gauss=True) needs value_logits — the model "
-                    "config and the loss disagree about the critic head")
-            n_bins = value_logits.size(-1)
-            with torch.no_grad():
-                target_p = hl_gauss_target_probs(
-                    returns, n_bins, self.hl_gauss_vmax, self.hl_gauss_sigma)
-            ce = -(target_p * F.log_softmax(value_logits.float(), dim=-1)
-                   ).sum(-1)
-            value_loss = (ce * mask_f).sum() / n_valid
-        else:
-            # Huber, scaled to match MSE for |err| < 1 and linear beyond:
-            # shaped or truncation-scored episodes occasionally produce
-            # outlier returns that would otherwise shock the critic
-            # (observed as value-loss spikes of 10-20× preceding policy
-            # collapses).
-            value_loss = 2.0 * F.smooth_l1_loss(
-                values, returns, reduction="none", beta=1.0)
-            value_loss = (value_loss * mask_f).sum() / n_valid
+        # Huber, scaled to match MSE for |err| < 1 and linear beyond: shaped
+        # or truncation-scored episodes occasionally produce outlier returns
+        # that would otherwise shock the critic (observed as value-loss
+        # spikes of 10-20× preceding policy collapses).
+        value_loss = 2.0 * F.smooth_l1_loss(
+            values, returns, reduction="none", beta=1.0)
+        value_loss = (value_loss * mask_f).sum() / n_valid
 
         # --- entropy bonus (negative → we *maximise* entropy) ---
-        # Filtered with the policy loss: a bonus on untrained samples would
-        # still inject gradient into the policy heads there.
-        entropy_bonus = (entropy * pol_f).sum() / n_pol
+        entropy_bonus = (entropy * mask_f).sum() / n_valid
 
         total = (
             policy_loss
