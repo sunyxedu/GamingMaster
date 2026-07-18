@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-from model.components.heads import ValueHead
+from model.components.heads import HLGaussValueHead, ValueHead
 from model.components.transformer import SpatiotemporalBlock, _sinusoidal_pe
 from model.components.trm import TRM
 from model.config import ModelConfig
@@ -84,7 +84,11 @@ class GameNetwork(nn.Module):
         self.post_norm = nn.LayerNorm(cfg.d_model)
 
         # --- Value head (reads the HL decision token; shared by all games) ---
-        self.value_head = ValueHead(cfg.d_model)
+        if getattr(cfg, "hl_gauss_value", False):
+            self.value_head = HLGaussValueHead(
+                cfg.d_model, cfg.hl_gauss_bins, cfg.hl_gauss_vmax)
+        else:
+            self.value_head = ValueHead(cfg.d_model)
 
         if cfg.predict_next_obs and not obs_encoder.supports_next_obs:
             raise ValueError(
@@ -222,7 +226,15 @@ class GameNetwork(nn.Module):
         out = self.action_decoder.decode(
             game_out, hl_out, ll_out, B=B, T=T, t0=0, legal=legal, labels=labels,
         )
-        out["value"] = self.value_head(hl_out).reshape(B, T)
+        if isinstance(self.value_head, HLGaussValueHead):
+            # One MLP pass: expose the logits for the HL-Gauss CE loss and
+            # derive the scalar from them for every other consumer.
+            v_logits = self.value_head.logits(hl_out)
+            out["value_logits"] = v_logits.reshape(B, T, -1)
+            out["value"] = (self.value_head
+                            .expectation_from_logits(v_logits).reshape(B, T))
+        else:
+            out["value"] = self.value_head(hl_out).reshape(B, T)
         out["q_halt"] = q_halt.reshape(B, T)
 
         # Self-supervised next-observation prediction from belief tokens

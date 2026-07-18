@@ -101,6 +101,49 @@ def parse_args():
                    help="Per-iteration decay for il_weight")
     p.add_argument("--kl_weight", type=float, default=0.01,
                    help="KL regularisation against reference policy")
+    p.add_argument("--kl_weight_pow", type=float, default=0.0,
+                   help="Anchor-weight decay exponent (AverageJoe's magnet "
+                        "schedule): effective weight = kl_weight / "
+                        "(1 + t)^pow with t counted from THIS run's start "
+                        "iteration. 0 = constant (legacy). The anchor is "
+                        "strong while the sparse-reward critic finds its "
+                        "feet and fades as self-play takes over.")
+    p.add_argument("--kl_weight_min", type=float, default=0.0,
+                   help="Floor for the decayed anchor weight (0 = none)")
+    p.add_argument("--il_weight_min", type=float, default=0.0,
+                   help="Floor for the decayed IL auxiliary weight — keeps "
+                        "a permanent human-data pull (opening quality "
+                        "erodes to a measurably worse equilibrium when the "
+                        "IL term decays to zero; land@100 37 vs anchor "
+                        "45.6 measured at phase-5 end). 0 = legacy decay "
+                        "to nothing.")
+    p.add_argument("--entropy_ceiling", type=float, default=0.0,
+                   help="If the previous update's mean policy entropy "
+                        "exceeds this, the entropy bonus is switched off "
+                        "for the current iteration (0 = no ceiling). "
+                        "Breaks the despair-exploration feedback loop "
+                        "observed in the phase-5 collapse (losing streak → "
+                        "entropy 3.0 → noise-dominated updates).")
+    p.add_argument("--adv_filter_frac", type=float, default=0.0,
+                   help="Train the policy only on the top-FRAC samples of "
+                        "each episode by |advantage| (AverageJoe's top-25%% "
+                        "filter at 0.25). The critic still trains on every "
+                        "sample. 0 = no filtering.")
+    p.add_argument("--sparse_reward", type=int, default=0,
+                   help="1 = pure outcome reward: city and dense shaping "
+                        "scales are pinned to 0 (the ±1 terminal and the "
+                        "±0.35 material-scored soft terminal for "
+                        "truncations remain). Overrides the decay "
+                        "schedules and any scales restored from a resume "
+                        "checkpoint.")
+    p.add_argument("--hl_gauss_value", type=int, default=0,
+                   help="1 = HL-Gauss distributional critic (128 bins on "
+                        "[-1.5, 1.5], CE against Gaussian-smeared "
+                        "targets); scalar consumers read the expectation. "
+                        "Enabling on a scalar-critic checkpoint "
+                        "reinitialises the value head fresh (the rest of "
+                        "the net is untouched). Sticky via checkpoint "
+                        "config. 0 = legacy Huber scalar critic.")
     p.add_argument("--kl_ref", type=str, default=None,
                    help="Checkpoint whose weights define the frozen KL "
                         "reference policy. Default: this run's starting "
@@ -527,6 +570,17 @@ def collect_selfplay_episode(
 # PPO update
 # ======================================================================
 
+def anchor_weight(base: float, t: int, pow_: float, floor: float) -> float:
+    """Decayed KL-anchor weight: base / (1 + t)^pow_, floored.
+
+    ``t`` counts iterations since THIS run started (a phase restart resets
+    the clock — the schedule is a property of the regime, not the lifetime
+    counter). ``pow_ = 0`` reproduces the legacy constant weight.
+    """
+    w = base if pow_ <= 0 else base / ((1.0 + max(t, 0)) ** pow_)
+    return max(w, floor)
+
+
 def ppo_update(
     model: GeneralsNetwork,
     ref_model: Optional[GeneralsNetwork],
@@ -546,6 +600,7 @@ def ppo_update(
     legal_masked: bool = True,
     accum_episodes: int = 0,
     n_chunks: int = 1,
+    adv_filter_frac: float = 0.0,
 ) -> Dict[str, float]:
     """Run one PPO update epoch with gradient accumulation over multiple
     trajectories.
@@ -637,6 +692,24 @@ def ppo_update(
             log_probs, entropy, head_entropy = \
                 model.compute_action_log_prob_rl(pred, actions)
 
+        # Advantage filter (AverageJoe's top-25%): the policy trains only
+        # on this episode's highest-|advantage| samples — the decisive
+        # moves — which also mutes the noise-dominated gradient of long
+        # losing streaks. Per-episode (not per-batch) so every episode
+        # contributes its own most-informative steps regardless of how
+        # extreme its neighbours in the batch are. Advantages are already
+        # normalized across the iteration at this point. kthvalue keeps
+        # ties, so the kept count is >= the target fraction.
+        policy_mask = None
+        adv_kept = 1.0
+        n_samples = advantages.numel()
+        if 0.0 < adv_filter_frac < 1.0 and n_samples >= 8:
+            k = max(1, int(round(n_samples * adv_filter_frac)))
+            thresh = advantages.abs().flatten().kthvalue(
+                n_samples - k + 1).values
+            policy_mask = advantages.abs() >= thresh
+            adv_kept = policy_mask.float().mean().item()
+
         # RL loss
         rl_losses = rl_criterion(
             log_probs=log_probs,
@@ -645,6 +718,8 @@ def ppo_update(
             returns=returns,
             advantages=advantages,
             old_log_probs=old_lp,
+            value_logits=pred.get("value_logits"),
+            policy_mask=policy_mask,
         )
 
         total = rl_losses["loss"]
@@ -750,6 +825,7 @@ def ppo_update(
             "ent_spl": head_entropy["ent_spl"].item(),
             "cap_loss": cap_loss.item() if isinstance(cap_loss, torch.Tensor) else cap_loss,
             "cap_acc": cap_acc,
+            "adv_kept": adv_kept,
         }
         step_metrics.update(kl_heads)
         for k, v in step_metrics.items():
@@ -890,9 +966,23 @@ def main():
     if cfg.turn_globals:
         cfg.global_features = max(cfg.global_features, 7)
 
+    # HL-Gauss critic is sticky like the input features, but NOT
+    # function-preserving: freshly enabling it swaps the value head for a
+    # different architecture, so the head is reinitialised at every load
+    # of a scalar-critic state dict (policy weights are untouched; GAE
+    # runs off an untrained critic for the first iterations, which under
+    # sparse ±1 rewards degrades to REINFORCE — acceptable at a phase
+    # boundary, which is the only place this flag should be flipped).
+    hl_gauss_migrated = False
+    if args.hl_gauss_value and not cfg.hl_gauss_value:
+        cfg.hl_gauss_value = True
+        hl_gauss_migrated = True
+    value_reinit = ("value_head",) if hl_gauss_migrated else ()
+
     model = GeneralsNetwork(cfg).to(device)
     if il_ckpt is not None:
-        load_model_state(model, il_ckpt["model_state"], ctx="IL checkpoint")
+        load_model_state(model, il_ckpt["model_state"], ctx="IL checkpoint",
+                         reinit_prefixes=value_reinit)
         del il_ckpt
     if rank0:
         print(src_msg)
@@ -903,6 +993,12 @@ def main():
             print(f"  Input features: derive_army_channels="
                   f"{cfg.derive_army_channels} turn_globals={cfg.turn_globals}"
                   f" (global_features={cfg.global_features})")
+        if cfg.hl_gauss_value:
+            migrated = " (fresh head: migrated from scalar critic)" \
+                if hl_gauss_migrated else ""
+            print(f"  HL-Gauss critic: {cfg.hl_gauss_bins} bins on "
+                  f"[-{cfg.hl_gauss_vmax}, {cfg.hl_gauss_vmax}], "
+                  f"sigma={cfg.hl_gauss_sigma}{migrated}")
 
     n_params = sum(p.numel() for p in model.parameters())
     if rank0:
@@ -919,7 +1015,8 @@ def main():
         # (checkpoint already loaded above, where it defined the architecture)
         # Support both RL checkpoints (model_state) and IL checkpoints
         state_key = "model_state" if "model_state" in rl_ckpt else "model_state_dict"
-        load_model_state(model, rl_ckpt[state_key], ctx="resume checkpoint")
+        load_model_state(model, rl_ckpt[state_key], ctx="resume checkpoint",
+                         reinit_prefixes=value_reinit)
         start_iter = rl_ckpt.get("iteration", 0) + 1
         il_weight = rl_ckpt.get("il_weight", args.il_weight)
         wins = rl_ckpt.get("wins", wins)
@@ -989,8 +1086,16 @@ def main():
         ref_model = copy.deepcopy(model)
         if args.kl_ref:
             ref_ckpt = torch.load(args.kl_ref, map_location="cpu", weights_only=False)
+            # The reference anchors the POLICY heads only; its value head is
+            # never read, so when the anchor checkpoint predates the
+            # HL-Gauss critic the fresh-init head is simply dead weight.
+            ref_reinit = ("value_head",) if (
+                cfg.hl_gauss_value
+                and not ref_ckpt.get("config", {}).get("hl_gauss_value")
+            ) else ()
             load_model_state(ref_model, ref_ckpt["model_state"],
-                             ctx="KL reference checkpoint")
+                             ctx="KL reference checkpoint",
+                             reinit_prefixes=ref_reinit)
             del ref_ckpt
         ref_model.eval()
         for p in ref_model.parameters():
@@ -1005,9 +1110,19 @@ def main():
         max_size=args.pool_size,
     )
     if rl_ckpt is not None and "opponent_pool" in rl_ckpt:
-        opponent_pool.pool = [
-            OpponentPool._to_cpu(sd) for sd in rl_ckpt["opponent_pool"]
-        ]
+        if hl_gauss_migrated:
+            # Pool snapshots carry the scalar critic and can no longer be
+            # loaded into opponent_model. Dropping them is safe: pool
+            # opponents' value heads are never queried, but load_state_dict
+            # is strict about shapes — and a phase that flips this flag is
+            # a regime change that wants a fresh pool anyway.
+            if rank0:
+                print("  [note] resume opponent pool dropped "
+                      "(HL-Gauss migration changed the critic shapes)")
+        else:
+            opponent_pool.pool = [
+                OpponentPool._to_cpu(sd) for sd in rl_ckpt["opponent_pool"]
+            ]
     # Opponent model (loaded with pool checkpoint each iteration)
     opponent_model = copy.deepcopy(model)
     opponent_model.eval()
@@ -1035,6 +1150,9 @@ def main():
         value_weight=args.value_weight,
         entropy_weight=args.entropy_weight,
         clip_range=args.clip_range,
+        hl_gauss=bool(cfg.hl_gauss_value),
+        hl_gauss_vmax=cfg.hl_gauss_vmax,
+        hl_gauss_sigma=cfg.hl_gauss_sigma,
     )
     # AlphaStar-style auxiliary regularization targets the POLICY heads only:
     # the replay-outcome value labels live on a different scale and state
@@ -1079,6 +1197,15 @@ def main():
                       max_turns=args.rollout_steps)
     env.city_budget_total = args.city_budget
     env.turn_globals = cfg.turn_globals
+    if args.sparse_reward:
+        # Pure outcome reward: shaping scales pinned to zero here and after
+        # every place that could re-set them (resume restore below, the
+        # per-iteration decay in the training loop).
+        env.city_reward_scale = 0.0
+        env.dense_reward_scale = 0.0
+        if rank0:
+            print("Sparse reward: city/dense shaping OFF "
+                  "(±1 terminal and ±0.35 soft terminal only)")
     if args.replay_dir and args.filtered_file:
         n_maps = env.load_map_pool(args.replay_dir, args.filtered_file)
         if rank0:
@@ -1143,6 +1270,9 @@ def main():
         else:
             env.city_reward_scale = args.city_reward_decay ** done_iters
             env.dense_reward_scale = args.dense_reward_decay ** done_iters
+        if args.sparse_reward:
+            env.city_reward_scale = 0.0
+            env.dense_reward_scale = 0.0
         rl_criterion.entropy_weight = max(
             args.entropy_weight * (args.entropy_weight_decay ** done_iters),
             args.entropy_weight_min,
@@ -1163,6 +1293,9 @@ def main():
     # opponent on the first iteration after every restart.
     last_pool_update_iter = start_iter if args.resume \
         else start_iter - args.pool_update_interval
+
+    # Previous update's mean policy entropy, for the --entropy_ceiling gate
+    last_policy_entropy: Optional[float] = None
 
     # ---- Training loop -------------------------------------------------
     for iteration in range(start_iter, args.iterations + 1):
@@ -1308,6 +1441,26 @@ def main():
         else:
             n_chunks = 1
 
+        # Anchor weight schedule: strong at the phase start, fading as
+        # self-play takes over (clock = iterations since THIS run began).
+        kl_weight_t = anchor_weight(
+            args.kl_weight, iteration - start_iter,
+            args.kl_weight_pow, args.kl_weight_min)
+
+        # Entropy ceiling: the phase-5 collapse rode a feedback loop of
+        # losing → exploding entropy (3.0) → noise updates → losing. When
+        # the PREVIOUS update's mean policy entropy is already above the
+        # ceiling, spend no bonus pushing it higher this iteration.
+        base_entropy_weight = rl_criterion.entropy_weight
+        entropy_gated = (args.entropy_ceiling > 0
+                         and last_policy_entropy is not None
+                         and last_policy_entropy > args.entropy_ceiling)
+        if entropy_gated:
+            rl_criterion.entropy_weight = 0.0
+            if rank0:
+                print(f"  Entropy bonus gated: last ent "
+                      f"{last_policy_entropy:.2f} > {args.entropy_ceiling}")
+
         ppo_metrics_agg = {}
         epochs_run = 0
         if valid_buffers or (dist.is_initialized() and args.ppo_epochs > 0):
@@ -1316,7 +1469,7 @@ def main():
                     model, ref_model, valid_buffers, rl_criterion,
                     optimizer, device, cfg,
                     world_size=world_size,
-                    kl_weight=args.kl_weight,
+                    kl_weight=kl_weight_t,
                     invalidity_weight=args.invalidity_weight,
                     grad_clip=args.grad_clip,
                     act_steps=args.act_steps,
@@ -1326,6 +1479,7 @@ def main():
                     legal_masked=bool(args.rl_legal_mask),
                     accum_episodes=args.accum_episodes,
                     n_chunks=n_chunks,
+                    adv_filter_frac=args.adv_filter_frac,
                 )
                 epochs_run += 1
                 for k, v in metrics.items():
@@ -1346,8 +1500,12 @@ def main():
                                   f" > {args.target_kl}")
                         break
 
+        rl_criterion.entropy_weight = base_entropy_weight
+
         n_updates = max(epochs_run, 1)
         ppo_avg = {k: v / n_updates for k, v in ppo_metrics_agg.items()}
+        if "entropy" in ppo_avg:
+            last_policy_entropy = ppo_avg["entropy"]
 
         # ---- 4. IL auxiliary update ----
         il_metrics = {}
@@ -1367,7 +1525,7 @@ def main():
                 grad_clip=args.grad_clip,
                 act_steps=args.act_steps,
             )
-            il_weight *= args.il_decay
+            il_weight = max(il_weight * args.il_decay, args.il_weight_min)
 
             # The IL forward runs in train mode: BatchNorm running stats
             # chase each rank's own IL batch, and buffers are NOT covered
@@ -1385,6 +1543,9 @@ def main():
         # Decay shaping rewards
         env.city_reward_scale *= args.city_reward_decay
         env.dense_reward_scale *= args.dense_reward_decay
+        if args.sparse_reward:
+            env.city_reward_scale = 0.0
+            env.dense_reward_scale = 0.0
 
         # Decay learning rate
         for pg in optimizer.param_groups:
@@ -1432,23 +1593,28 @@ def main():
             global_avg_len = local_ep_len
 
         # ---- 6. Update opponent pool (conditional on winrate + min interval) ----
-        winrate_history.append(global_p0 / max(global_p0 + global_p1 + global_draw, 1))
-        iters_since_update = iteration - last_pool_update_iter
-        if iters_since_update >= args.pool_update_interval:
-            recent_wr = sum(winrate_history) / len(winrate_history) if winrate_history else 0
-            if recent_wr >= args.pool_update_winrate:
-                # Pool snapshots use the EMA when available — smoother
-                # opponents damp self-play cycling vs high-variance
-                # single-iteration snapshots.
-                opponent_pool.add(
-                    ema_state if ema_state is not None else model.state_dict())
-                last_pool_update_iter = iteration
-                if rank0:
-                    print(f"  Pool updated: {len(opponent_pool)} opponents "
-                          f"(winrate={recent_wr:.2f}"
-                          f"{', ema' if ema_state is not None else ''})")
-            elif rank0:
-                print(f"  Pool update skipped: winrate={recent_wr:.2f} < {args.pool_update_winrate}")
+        # Pure mirror self-play (mirror_prob >= 1) never plays the pool:
+        # there are no pool games, so the gate winrate is undefined and the
+        # whole mechanism — including the very losing-streak-vs-frozen-
+        # snapshots feedback that drove the phase-5 collapse — is off.
+        if args.mirror_prob < 1.0:
+            winrate_history.append(global_p0 / max(global_p0 + global_p1 + global_draw, 1))
+            iters_since_update = iteration - last_pool_update_iter
+            if iters_since_update >= args.pool_update_interval:
+                recent_wr = sum(winrate_history) / len(winrate_history) if winrate_history else 0
+                if recent_wr >= args.pool_update_winrate:
+                    # Pool snapshots use the EMA when available — smoother
+                    # opponents damp self-play cycling vs high-variance
+                    # single-iteration snapshots.
+                    opponent_pool.add(
+                        ema_state if ema_state is not None else model.state_dict())
+                    last_pool_update_iter = iteration
+                    if rank0:
+                        print(f"  Pool updated: {len(opponent_pool)} opponents "
+                              f"(winrate={recent_wr:.2f}"
+                              f"{', ema' if ema_state is not None else ''})")
+                elif rank0:
+                    print(f"  Pool update skipped: winrate={recent_wr:.2f} < {args.pool_update_winrate}")
 
         # ---- 6b. Fixed-opponent evaluation vs the KL anchor ----
         # Paired, seat-swapped, GREEDY: each seed is played twice with seats
@@ -1523,7 +1689,9 @@ def main():
                 f"ent={ppo_avg.get('entropy', 0):.4f}  "
                 f"kl={ppo_avg.get('approx_kl', 0):.4f}  "
                 f"clip={ppo_avg.get('clip_frac', 0):.3f}  "
+                f"keep={ppo_avg.get('adv_kept', 1):.2f}  "
                 f"kl_reg={ppo_avg.get('kl_reg', 0):.4f}  "
+                f"klw={kl_weight_t:.3f}  "
                 f"klh={ppo_avg.get('kl_src', 0):.3f}/{ppo_avg.get('kl_dir', 0):.3f}/"
                 f"{ppo_avg.get('kl_spl', 0):.3f}/{ppo_avg.get('kl_pass', 0):.3f}  "
                 f"inv={ppo_avg.get('inv_loss', 0):.4f}  "
