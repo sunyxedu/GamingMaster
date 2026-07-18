@@ -72,3 +72,17 @@ class ModelConfig:
     # vision). Spatiotemporal path only.
     predict_next_obs: bool = False
 
+    # HL-Gauss distributional value head (phase-6, AverageJoe-style):
+    # the critic outputs a categorical distribution over hl_gauss_bins
+    # support points in [-vmax, vmax] and is trained with cross-entropy
+    # against a Gaussian-smeared target (histogram loss). The scalar value
+    # exposed to GAE/eval is the distribution's expectation, so every
+    # consumer of out["value"] is unchanged. vmax=1.5 covers the sparse
+    # ±1 terminal plus the ±0.35-scaled truncation score with margin;
+    # sigma≈2.5 bin widths mirrors AverageJoe's 128-bin/σ0.04 on [-1,1].
+    # Sticky via checkpoint config like the input-feature flags.
+    hl_gauss_value: bool = False
+    hl_gauss_bins: int = 128
+    hl_gauss_vmax: float = 1.5
+    hl_gauss_sigma: float = 0.06
+
