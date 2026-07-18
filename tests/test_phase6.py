@@ -18,7 +18,7 @@ from model.config import ModelConfig
 from model.losses import RLLoss, hl_gauss_target_probs
 from model.network import GeneralsNetwork
 from model.rl_utils import RolloutBuffer, load_model_state
-from train_rl import anchor_weight, ppo_update
+from train_rl import anchor_weight, ppo_update, resolve_phase_start
 
 TINY = dict(d_model=64, n_heads=4, trm_H_cycles=1, trm_L_cycles=2,
             trm_block_layers=1)
@@ -206,6 +206,25 @@ class TestAnchorWeight:
 
     def test_negative_t_clamped(self):
         assert anchor_weight(0.08, -5, 0.2, 0.0) == pytest.approx(0.08)
+
+
+class TestResolvePhaseStart:
+    def test_fresh_run(self):
+        assert resolve_phase_start(None, 1, cross_phase=False) == 1
+
+    def test_within_phase_recovery_continues_clock(self):
+        ckpt = {"iteration": 1200, "phase_start_iter": 951}
+        assert resolve_phase_start(ckpt, 1201, cross_phase=False) == 951
+
+    def test_cross_phase_resets(self):
+        # Resuming a phase-6 checkpoint into a NEW phase directory must
+        # restart the anchor schedule even though the key is present.
+        ckpt = {"iteration": 1200, "phase_start_iter": 951}
+        assert resolve_phase_start(ckpt, 1201, cross_phase=True) == 1201
+
+    def test_legacy_checkpoint_without_key(self):
+        assert resolve_phase_start({"iteration": 1000}, 1001,
+                                   cross_phase=False) == 1001
 
 
 # ======================================================================

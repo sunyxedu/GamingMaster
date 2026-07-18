@@ -573,12 +573,29 @@ def collect_selfplay_episode(
 def anchor_weight(base: float, t: int, pow_: float, floor: float) -> float:
     """Decayed KL-anchor weight: base / (1 + t)^pow_, floored.
 
-    ``t`` counts iterations since THIS run started (a phase restart resets
-    the clock — the schedule is a property of the regime, not the lifetime
-    counter). ``pow_ = 0`` reproduces the legacy constant weight.
+    ``t`` counts iterations since the current REGIME started (see
+    ``resolve_phase_start``) — a phase boundary resets the clock, a
+    within-phase crash recovery continues it. ``pow_ = 0`` reproduces the
+    legacy constant weight.
     """
     w = base if pow_ <= 0 else base / ((1.0 + max(t, 0)) ** pow_)
     return max(w, floor)
+
+
+def resolve_phase_start(rl_ckpt: Optional[Dict], start_iter: int,
+                        cross_phase: bool) -> int:
+    """First iteration of the current regime, for the anchor-weight clock.
+
+    Within-phase crash recovery (same output dir) continues the clock
+    persisted in the checkpoint, so a restart cannot snap a decayed anchor
+    back to full strength — late in a phase that jump grows arbitrarily
+    large and shocks the policy. Any cross-phase resume, or a checkpoint
+    predating this key, restarts the clock at this run's first iteration
+    (the phase-boundary reset the schedule was designed around).
+    """
+    if rl_ckpt is not None and not cross_phase:
+        return int(rl_ckpt.get("phase_start_iter", start_iter))
+    return start_iter
 
 
 def ppo_update(
@@ -1023,6 +1040,16 @@ def main():
         if rank0:
             print(f"Resumed weights from {args.resume} (starting iteration {start_iter})")
 
+    # Regime clock for the anchor-weight schedule (must be resolved before
+    # the training loop; persisted into every checkpoint below).
+    cross_phase = bool(args.resume) and (
+        os.path.dirname(os.path.abspath(args.resume))
+        != os.path.abspath(args.output_dir))
+    phase_start_iter = resolve_phase_start(rl_ckpt, start_iter, cross_phase)
+    if rank0 and args.kl_weight_pow > 0:
+        print(f"  Anchor clock: phase start iter {phase_start_iter} "
+              f"(t={start_iter - phase_start_iter} at resume)")
+
     # ---- Auxiliary capture head (own optimizer, outside the model) ------
     # Separate module + optimizer so model checkpoints, the opponent pool
     # and the KL reference stay byte-compatible with head-less runs.
@@ -1254,8 +1281,6 @@ def main():
         # reset flag wins there, otherwise it is a silent no-op and the new
         # phase's shaping enters pre-annealed by however long the previous
         # phase ran.
-        cross_phase = (os.path.dirname(os.path.abspath(args.resume))
-                       != os.path.abspath(args.output_dir))
         if args.reset_reward_decay and cross_phase:
             env.city_reward_scale = 1.0
             env.dense_reward_scale = 1.0
@@ -1444,7 +1469,7 @@ def main():
         # Anchor weight schedule: strong at the phase start, fading as
         # self-play takes over (clock = iterations since THIS run began).
         kl_weight_t = anchor_weight(
-            args.kl_weight, iteration - start_iter,
+            args.kl_weight, iteration - phase_start_iter,
             args.kl_weight_pow, args.kl_weight_min)
 
         # Entropy ceiling: the phase-5 collapse rode a feedback loop of
@@ -1757,6 +1782,7 @@ def main():
                 "model_state": raw.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
                 "config": cfg.__dict__,
+                "phase_start_iter": phase_start_iter,
                 "il_weight": il_weight,
                 "wins": wins,
                 "opponent_pool": opponent_pool.pool,
