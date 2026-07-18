@@ -18,7 +18,9 @@ from model.config import ModelConfig
 from model.losses import RLLoss, hl_gauss_target_probs
 from model.network import GeneralsNetwork
 from model.rl_utils import RolloutBuffer, load_model_state
-from train_rl import anchor_weight, ppo_update, resolve_phase_start
+from env.generals_env import GeneralsEnv
+from train_rl import (anchor_weight, collect_selfplay_episode,
+                      load_sparring_net, ppo_update, resolve_phase_start)
 
 TINY = dict(d_model=64, n_heads=4, trm_H_cycles=1, trm_L_cycles=2,
             trm_block_layers=1)
@@ -225,6 +227,54 @@ class TestResolvePhaseStart:
     def test_legacy_checkpoint_without_key(self):
         assert resolve_phase_start({"iteration": 1000}, 1001,
                                    cross_phase=False) == 1001
+
+
+# ======================================================================
+# Sparring partner: cross-architecture frozen opponent
+# ======================================================================
+
+def _save_scalar_ckpt(tmp_path):
+    torch.manual_seed(1)
+    cfg = ModelConfig(**TINY)
+    net = GeneralsNetwork(cfg)
+    path = str(tmp_path / "sparring.pt")
+    torch.save({"iteration": 950, "model_state": net.state_dict(),
+                "config": cfg.__dict__}, path)
+    return path, cfg
+
+
+class TestSparringPartner:
+    def test_load_frozen_from_own_config(self, tmp_path):
+        path, _ = _save_scalar_ckpt(tmp_path)
+        net = load_sparring_net(path, torch.device("cpu"),
+                                expected_globals=4)
+        assert not any(p.requires_grad for p in net.parameters())
+        assert not net.training
+        # Built from ITS config: scalar critic, no HL-Gauss logits.
+        assert not hasattr(net.value_head, "centers")
+
+    def test_globals_mismatch_raises(self, tmp_path):
+        path, _ = _save_scalar_ckpt(tmp_path)
+        with pytest.raises(ValueError):
+            load_sparring_net(path, torch.device("cpu"), expected_globals=7)
+
+    def test_cross_arch_episode(self, tmp_path):
+        # A HL-Gauss learner must be able to play a full masked episode
+        # against a scalar-critic sparring net — the exact phase-6 vs
+        # ema950 pairing the job runs.
+        path, _ = _save_scalar_ckpt(tmp_path)
+        sparring = load_sparring_net(path, torch.device("cpu"),
+                                     expected_globals=4)
+        torch.manual_seed(2)
+        learner = GeneralsNetwork(
+            ModelConfig(hl_gauss_value=True, hl_gauss_bins=32, **TINY))
+        env = GeneralsEnv(max_turns=8)
+        bufs, replay, _ = collect_selfplay_episode(
+            learner, sparring, env, torch.device("cpu"),
+            max_steps=6, record=False, act_steps=1, legal_mask=True,
+            learner_pid=1, collect_both=False, reset_seed=5)
+        assert len(bufs) == 1
+        assert len(bufs[0]) == 6
 
 
 # ======================================================================

@@ -175,6 +175,21 @@ def parse_args():
                         "gate winrate (they are ~0.5 by construction). "
                         "Non-mirror games draw a fresh pool opponent per "
                         "episode.")
+    p.add_argument("--sparring_prob", type=float, default=0.0,
+                   help="Probability an episode is played against the "
+                        "frozen --sparring_ckpt opponent instead of the "
+                        "mirror/pool draw. Pure mirror self-play cannot "
+                        "punish style drift (rush vs rush is symmetric): a "
+                        "frozen sparring partner re-introduces the counter-"
+                        "style into the training distribution WITHOUT the "
+                        "pool/gate machinery. Sparring games use a random "
+                        "learner seat, collect one trajectory, and show up "
+                        "in the w/l/d counters (mirror games don't).")
+    p.add_argument("--sparring_ckpt", type=str, default=None,
+                   help="Checkpoint for the frozen sparring partner. Built "
+                        "from its OWN saved config, so a scalar-critic "
+                        "phase-5 EMA can spar a HL-Gauss phase-6 learner "
+                        "(its value head is never read).")
     p.add_argument("--randomize_seat", type=int, default=1,
                    help="1 = sample the learner's seat per episode (the env "
                         "move-priority tiebreak favors P0; a learner pinned "
@@ -580,6 +595,33 @@ def anchor_weight(base: float, t: int, pow_: float, floor: float) -> float:
     """
     w = base if pow_ <= 0 else base / ((1.0 + max(t, 0)) ** pow_)
     return max(w, floor)
+
+
+def load_sparring_net(path: str, device: torch.device,
+                      expected_globals: int) -> GeneralsNetwork:
+    """Load the frozen sparring partner from ITS OWN saved config.
+
+    The learner's architecture may have moved on (e.g. HL-Gauss critic);
+    the sparring net only needs a compatible OBSERVATION interface — its
+    policy heads drive its moves, its value head is never read. Globals
+    width must match what the env emits for the learner (the env has one
+    setting per run), hence the explicit check instead of a silent slice.
+    """
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    sp_cfg = ModelConfig(**{k: v for k, v in ckpt["config"].items()
+                            if k in ModelConfig.__dataclass_fields__})
+    if sp_cfg.global_features != expected_globals:
+        raise ValueError(
+            f"sparring checkpoint expects {sp_cfg.global_features} globals "
+            f"but the run's env emits {expected_globals}; pick a sparring "
+            "checkpoint from the same input-feature era")
+    net = GeneralsNetwork(sp_cfg).to(device)
+    state_key = "model_state" if "model_state" in ckpt else "model_state_dict"
+    load_model_state(net, ckpt[state_key], ctx="sparring checkpoint")
+    net.eval()
+    for p in net.parameters():
+        p.requires_grad = False
+    return net
 
 
 def resolve_phase_start(rl_ckpt: Optional[Dict], start_iter: int,
@@ -1158,6 +1200,15 @@ def main():
     if rank0:
         print(f"Opponent pool initialised (max_size={args.pool_size})")
 
+    # ---- Frozen sparring partner (style counterweight) -----------------
+    sparring_net: Optional[GeneralsNetwork] = None
+    if args.sparring_ckpt and args.sparring_prob > 0:
+        sparring_net = load_sparring_net(
+            args.sparring_ckpt, device, cfg.global_features)
+        if rank0:
+            print(f"Sparring partner: {args.sparring_ckpt} "
+                  f"(prob={args.sparring_prob}, frozen)")
+
     # ---- Encoder freeze ------------------------------------------------
     # Phase decided by start_iter so a resume past the boundary builds the
     # optimizer over the full parameter set from the start.
@@ -1366,8 +1417,18 @@ def main():
         replay_env_snapshot = None  # env state for the recorded episode
         for ep_i in range(args.episodes_per_gpu):
             record_this = should_record and ep_i == 0
-            mirror = args.mirror_prob > 0 and random.random() < args.mirror_prob
-            if mirror:
+            # Sparring draw first: a frozen counter-style opponent breaks
+            # pure mirror's blind spot (a drifting style is never punished
+            # when both seats share it). Remaining probability mass splits
+            # mirror-vs-pool exactly as before.
+            sparring = (sparring_net is not None
+                        and random.random() < args.sparring_prob)
+            mirror = (not sparring and args.mirror_prob > 0
+                      and random.random() < args.mirror_prob)
+            if sparring:
+                opp_net = sparring_net
+                learner_pid = random.randint(0, 1) if args.randomize_seat else 0
+            elif mirror:
                 opp_net = model
                 learner_pid = 0  # both seats collected; seat is symmetric
             else:

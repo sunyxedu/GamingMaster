@@ -38,6 +38,16 @@
 #   - ENTROPY CEILING (--entropy_ceiling 2.3): no entropy bonus while
 #     mean policy entropy is already above 2.3 — breaks the despair-
 #     exploration spiral (phase-5 rode it to ent 3.0).
+#   - SPARRING PARTNER (--sparring_prob 0.15 vs the frozen ema950 seed):
+#     pure mirror cannot punish style drift — rush vs rush is symmetric,
+#     so the over-aggressive short-game meta observed by iter ~1020
+#     (ep_len ~300, city capture ~0.1/game, owner's verdict "too
+#     aggressive") would never be corrected from within. 15% of episodes
+#     against the frozen economic seed re-introduce the counter-style;
+#     h2h at iter 1000 was 17-15, so these games carry real gradient in
+#     both directions. No pool/gate machinery involved. il_weight_min
+#     raised 0.02 -> 0.05 for the same reason (persistent human-style
+#     pull).
 #
 # Deferred (next engineering pass, orthogonal to this regime): cross-
 # episode batched rollout for 4-8x throughput.
@@ -85,6 +95,10 @@ if [ ! -f "$RESUME" ]; then
 fi
 if [ ! -f "$IL_ANCHOR" ]; then
     echo "ERROR: KL anchor checkpoint missing: $IL_ANCHOR" >&2
+    exit 1
+fi
+if [ ! -f "$P5_EMA_SEED" ]; then
+    echo "ERROR: sparring seed checkpoint missing: $P5_EMA_SEED" >&2
     exit 1
 fi
 echo "Resuming from: $RESUME"
@@ -136,6 +150,8 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --gae_lambda 0.9 \
         --sparse_reward 1 \
         --mirror_prob 1.0 \
+        --sparring_prob 0.15 \
+        --sparring_ckpt "$P5_EMA_SEED" \
         --randomize_seat 1 \
         --rl_legal_mask 1 \
         --adv_filter_frac 0.25 \
@@ -149,7 +165,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --kl_weight_min 0.005 \
         --il_weight 0.3 \
         --il_decay 0.997 \
-        --il_weight_min 0.02 \
+        --il_weight_min 0.05 \
         --derive_army_channels 1 \
         --turn_globals 1 \
         --ema_decay 0.998 \
