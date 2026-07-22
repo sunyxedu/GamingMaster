@@ -114,6 +114,14 @@ class GeneralsEnv:
         self.city_reward_scale: float = 1.0
         self.dense_reward_scale: float = 1.0
 
+        # Truncation soft-terminal knobs (settable by the trainer).  A
+        # positive trunc_penalty makes hitting the turn limit strictly worse
+        # than converting a win — without it, symmetric self-play can drift
+        # into an equilibrium where both sides stall to the clock and farm
+        # the material score instead of ever finishing the game.
+        self.trunc_material_scale: float = 0.35
+        self.trunc_penalty: float = 0.0
+
         # Append production-cycle features to the globals vector (must match
         # the model's cfg.turn_globals / global_features=7): the temporal
         # attention carries no positional encoding, so without these the
@@ -165,11 +173,14 @@ class GeneralsEnv:
         return float(math.tanh(ratio - 1.0))
 
     def truncation_score(self, pid: int) -> float:
-        """Soft terminal reward for truncated games: ±0.35 scaled by the
-        city-adjusted material heuristic, so who is actually ahead when the
-        clock runs out matters — including city economy — without ever
-        outweighing a real win/loss."""
-        return 0.35 * self._heuristic(pid)
+        """Soft terminal reward for truncated games: the city-adjusted
+        material heuristic scaled by ``trunc_material_scale``, minus a flat
+        ``trunc_penalty`` charged to BOTH players.  Defaults (0.35, 0.0)
+        keep who-is-ahead mattering when the clock runs out without ever
+        outweighing a real win/loss.  With a penalty, the leading side's
+        best truncation outcome (scale − penalty) is far below the +1 for
+        winning, so leads must be converted rather than sat on."""
+        return self.trunc_material_scale * self._heuristic(pid) - self.trunc_penalty
 
     # ==================================================================
     # Reset

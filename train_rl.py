@@ -124,6 +124,22 @@ def parse_args():
                         "Breaks the despair-exploration feedback loop "
                         "observed in the phase-5 collapse (losing streak → "
                         "entropy 3.0 → noise-dominated updates).")
+    p.add_argument("--entropy_penalty", type=float, default=0.0,
+                   help="When the --entropy_ceiling gate fires, use this as "
+                        "a NEGATIVE entropy weight instead of 0, actively "
+                        "pushing entropy back down. The phase-6 collapse "
+                        "showed a zeroing gate only stops adding fuel: "
+                        "entropy kept self-amplifying 2.3 -> 3.5 through "
+                        "long-game/large-territory feedback with the gate "
+                        "firing every iteration.")
+    p.add_argument("--trunc_material", type=float, default=0.35,
+                   help="Material scale of the truncation soft terminal.")
+    p.add_argument("--trunc_penalty", type=float, default=0.0,
+                   help="Flat penalty charged to BOTH players when a game "
+                        "hits the turn limit. Anti-stalling: the phase-6 "
+                        "collapse drifted into mutual clock-farming "
+                        "(ep_len 400 -> 1400 vs cap 1536) because a "
+                        "truncated lead scored nearly as well as winning.")
     p.add_argument("--adv_filter_frac", type=float, default=0.0,
                    help="Train the policy only on the top-FRAC samples of "
                         "each episode by |advantage| (AverageJoe's top-25%% "
@@ -1275,6 +1291,13 @@ def main():
                       max_turns=args.rollout_steps)
     env.city_budget_total = args.city_budget
     env.turn_globals = cfg.turn_globals
+    # Truncation knobs are plain env attrs — never stored in checkpoints,
+    # so setting them once here covers resumes too.
+    env.trunc_material_scale = args.trunc_material
+    env.trunc_penalty = args.trunc_penalty
+    if rank0 and (args.trunc_penalty > 0 or args.trunc_material != 0.35):
+        print(f"Truncation terminal: ±{args.trunc_material} material "
+              f"− {args.trunc_penalty} stalling penalty (both players)")
     if args.sparse_reward:
         # Pure outcome reward: shaping scales pinned to zero here and after
         # every place that could re-set them (resume restore below, the
@@ -1536,15 +1559,21 @@ def main():
         # Entropy ceiling: the phase-5 collapse rode a feedback loop of
         # losing → exploding entropy (3.0) → noise updates → losing. When
         # the PREVIOUS update's mean policy entropy is already above the
-        # ceiling, spend no bonus pushing it higher this iteration.
+        # ceiling, spend no bonus pushing it higher this iteration — and
+        # with --entropy_penalty, actively push it back down. Phase-6
+        # showed the zeroing gate alone can't stop a runaway: long-game /
+        # large-territory feedback kept raising entropy 2.3 → 3.5 with the
+        # gate firing every single iteration.
         base_entropy_weight = rl_criterion.entropy_weight
         entropy_gated = (args.entropy_ceiling > 0
                          and last_policy_entropy is not None
                          and last_policy_entropy > args.entropy_ceiling)
         if entropy_gated:
-            rl_criterion.entropy_weight = 0.0
+            rl_criterion.entropy_weight = -args.entropy_penalty
             if rank0:
-                print(f"  Entropy bonus gated: last ent "
+                mode = (f"pushing down at {args.entropy_penalty}"
+                        if args.entropy_penalty > 0 else "bonus off")
+                print(f"  Entropy gate ({mode}): last ent "
                       f"{last_policy_entropy:.2f} > {args.entropy_ceiling}")
 
         ppo_metrics_agg = {}
