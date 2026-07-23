@@ -33,16 +33,25 @@
 #      --entropy_penalty 0.005): above the ceiling the entropy weight
 #      goes NEGATIVE (was: zero) so runaway entropy is pushed back down.
 #      Bonus also halved 0.01 -> 0.005.
-#   3. ANCHOR RE-TIGHTENED (--il_weight 0.3 --il_weight_min 0.1): the
-#      collapse began right after the anchor let go; the floor doubles
-#      0.05 -> 0.1. KL-anchor clock resets automatically (new output dir
-#      => new phase => klw restarts at 0.08 and decays afresh).
-#   4. SPARRING DOSE DOUBLED (--sparring_prob 0.30, opponent = the
-#      ema1300 seed itself): 30% of episodes against a frozen strong
-#      economic player that actually converts wins — direct pressure
-#      against clock-farming, and the w/l scoreboard measures drift from
-#      the seed from a clean 50% baseline. Override SPAR_CKPT to spar a
+#   3. ANCHOR (--il_weight 0.3 --il_weight_min 0.05): phase-6's proven
+#      schedule. RUN-1 LESSON: the floor was doubled to 0.1 here and the
+#      strong pull Goodharted eval-vs-anchor to 0.83 while real strength
+#      fell (h2h vs seed 34% at iter 1475) — closer-to-anchor beats the
+#      anchor more, proving nothing. KL-anchor clock resets automatically
+#      (new output dir => klw restarts at 0.08 and decays afresh).
+#   4. SPARRING (--sparring_prob 0.15, opponent = the ema1300 seed):
+#      RUN-1 LESSON: 0.30 was poison — 30% of episodes vs a superior
+#      frozen opponent at ~74% loss rate, funneled through the top-25%
+#      |adv| filter, made punishment-dominated gradients chronic (pol
+#      loss persistently positive, sparring stuck at 26% for 170 iters).
+#      Back to phase-6's proven 15% dose. Override SPAR_CKPT to spar a
 #      different frozen opponent (e.g. phase-5 ema950).
+#
+# RUN-2 (2026-07-23): run-1 (iters 1326-1500, archived in
+# rl_phase7_run1/) validated the anti-stalling fixes — ep_len 470-580,
+# entropy gated correctly, zero clock-farming — but net strength fell
+# vs the seed. This run keeps fixes 1+2 verbatim and reverts the two
+# over-corrections (anchor floor, sparring dose) to phase-6 values.
 #
 # Unchanged from phase 6: sparse ±1, pure mirror otherwise, top-25% |adv|
 # filter, HL-Gauss critic, gamma 1.0, lambda 0.9, clip 0.15,
@@ -150,7 +159,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --trunc_penalty 0.3 \
         --trunc_material 0.15 \
         --mirror_prob 1.0 \
-        --sparring_prob 0.30 \
+        --sparring_prob 0.15 \
         --sparring_ckpt "$SPAR_CKPT" \
         --randomize_seat 1 \
         --rl_legal_mask 1 \
@@ -166,7 +175,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --kl_weight_min 0.005 \
         --il_weight 0.3 \
         --il_decay 0.997 \
-        --il_weight_min 0.1 \
+        --il_weight_min 0.05 \
         --derive_army_channels 1 \
         --turn_globals 1 \
         --ema_decay 0.998 \
