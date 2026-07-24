@@ -86,7 +86,17 @@ EPISODES=${EPISODES:-$(( 32 / GPUS_PER_NODE ))}
 IL_ANCHOR=/scratch/$USER/gaming-master/checkpoints/il_phase2/checkpoint_epoch5.pt
 P7_DIR=/scratch/$USER/gaming-master/checkpoints/rl_phase7
 P6_EMA_SEED=/scratch/$USER/gaming-master/checkpoints/rl_phase6/rl_ema_iter1300.pt
-SPAR_CKPT=${SPAR_CKPT:-$P6_EMA_SEED}
+# SPARRING LADDER (run-2b, after the 1450-1500 sparring-loss spiral): the
+# opponent-blind critic gives systematically negative advantages against a
+# frozen opponent the learner can't beat under TRAINING conditions
+# (raw+sampling ~ 20pts below the EMA+greedy h2h), and the top-|adv|
+# filter concentrates that into suppression-only gradients (scoreboard
+# slid 41->11% while eval round-tripped 0.78->0.88->0.78). So the
+# sparring partner is level-matched and promoted as the learner grows:
+#   vs ema950  scoreboard >60% sustained ~50 iters -> switch to ema1150
+#   vs ema1150 scoreboard >60% sustained ~50 iters -> switch to ema1300
+# The EXAM never changes: h2h vs ema1300 (EMA+greedy) at every review.
+SPAR_CKPT=${SPAR_CKPT:-/scratch/$USER/gaming-master/checkpoints/rl_phase5/rl_ema_iter950.pt}
 
 # Crash recovery: newest phase-7 checkpoint if one exists, else the
 # phase-6 pre-collapse EMA seed. Never the raw phase-6 checkpoints — the
