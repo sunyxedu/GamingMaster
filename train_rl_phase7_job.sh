@@ -84,7 +84,11 @@ GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}
 # EPISODES=12 on 6 GPUs (72/iter).
 EPISODES=${EPISODES:-$(( 32 / GPUS_PER_NODE ))}
 IL_ANCHOR=/scratch/$USER/gaming-master/checkpoints/il_phase2/checkpoint_epoch5.pt
-P7_DIR=/scratch/$USER/gaming-master/checkpoints/rl_phase7
+# NOTE: rl_phase7b, not rl_phase7 — the original directory's BeeGFS
+# metadata entry corrupted on 2026-07-25 (Remote I/O error on any create;
+# even the NAME cannot be recreated). Old data readable in
+# rl_phase7_broken/; report to cluster admins for cleanup.
+P7_DIR=/scratch/$USER/gaming-master/checkpoints/rl_phase7b
 P6_EMA_SEED=/scratch/$USER/gaming-master/checkpoints/rl_phase6/rl_ema_iter1300.pt
 # SPARRING LADDER (run-2b, after the 1450-1500 sparring-loss spiral): the
 # opponent-blind critic gives systematically negative advantages against a
