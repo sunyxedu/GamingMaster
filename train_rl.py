@@ -166,6 +166,12 @@ def parse_args():
                         "weights — on --resume that is the RESUMED policy, "
                         "so pass the IL checkpoint here to keep the human "
                         "anchor across restarts.")
+    p.add_argument("--eval_ckpt", type=str, default=None,
+                   help="Optional frozen checkpoint used for the periodic "
+                        "paired-greedy strength exam. Default: reuse the KL "
+                        "reference. Keeping this separate lets training use "
+                        "a human KL anchor while measuring against a fixed "
+                        "RL milestone.")
     p.add_argument("--invalidity_weight", type=float, default=0.1,
                    help="Weight for source/direction invalidity auxiliary "
                         "loss (ignored when --rl_legal_mask is on: masked "
@@ -1225,6 +1231,18 @@ def main():
             print(f"Sparring partner: {args.sparring_ckpt} "
                   f"(prob={args.sparring_prob}, frozen)")
 
+    # ---- Frozen strength-exam opponent ---------------------------------
+    # Separate from both the KL anchor and the training distribution.  A
+    # frozen opponent in PPO poisoned phase-7 through opponent-blind negative
+    # advantages; the same model remains valuable as a read-only exam.
+    eval_ref_net: Optional[GeneralsNetwork] = None
+    if args.eval_ckpt:
+        eval_ref_net = load_sparring_net(
+            args.eval_ckpt, device, cfg.global_features)
+        if rank0:
+            print(f"Fixed eval opponent: {args.eval_ckpt} "
+                  "(paired greedy, no training gradients)")
+
     # ---- Encoder freeze ------------------------------------------------
     # Phase decided by start_iter so a resume past the boundary builds the
     # optimizer over the full parameter set from the start.
@@ -1737,7 +1755,8 @@ def main():
         # so the pair is reproducible, and won_both/lost_both separates
         # dominance from map luck. Progress signal independent of shaping
         # rewards and of the moving opponent pool.
-        if (args.eval_interval > 0 and ref_model is not None
+        fixed_eval_net = eval_ref_net if eval_ref_net is not None else ref_model
+        if (args.eval_interval > 0 and fixed_eval_net is not None
                 and iteration % args.eval_interval == 0):
             rng_state = random.getstate()  # reset(seed) reseeds global RNG
             # Evaluate the EMA policy when available — it is what gets
@@ -1748,7 +1767,7 @@ def main():
                 opponent_model.load_state_dict(ema_state)
                 eval_net = opponent_model
             eval_net.action_decoder.greedy = True
-            ref_model.action_decoder.greedy = True
+            fixed_eval_net.action_decoder.greedy = True
             rank = dist.get_rank() if dist.is_initialized() else 0
             w = l = d = won_both = lost_both = 0
             try:
@@ -1757,7 +1776,7 @@ def main():
                     outcome = []
                     for lp in (0, 1):
                         collect_selfplay_episode(
-                            eval_net, ref_model, env, device,
+                            eval_net, fixed_eval_net, env, device,
                             max_steps=args.rollout_steps,
                             gamma=args.gamma, gae_lambda=args.gae_lambda,
                             act_steps=args.act_steps,
@@ -1775,7 +1794,7 @@ def main():
                     lost_both += int(outcome[0] == -1 and outcome[1] == -1)
             finally:
                 eval_net.action_decoder.greedy = False
-                ref_model.action_decoder.greedy = False
+                fixed_eval_net.action_decoder.greedy = False
                 random.setstate(rng_state)
             if dist.is_initialized():
                 ev_t = torch.tensor([w, l, d, won_both, lost_both],
@@ -1786,7 +1805,8 @@ def main():
                 n_ev = max(w + l + d, 1)
                 n_pairs = n_ev // 2
                 tag = "ema" if ema_state is not None else "raw"
-                print(f"  Eval vs anchor (paired greedy, {tag}): {w}/{l}/{d} "
+                target = "fixed" if eval_ref_net is not None else "anchor"
+                print(f"  Eval vs {target} (paired greedy, {tag}): {w}/{l}/{d} "
                       f"(W/L/D of {n_ev})  wr={w / n_ev:.2f}  "
                       f"pairs: won_both={won_both}/{n_pairs} "
                       f"lost_both={lost_both}/{n_pairs}")

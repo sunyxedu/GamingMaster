@@ -1,16 +1,28 @@
 #!/bin/bash
-#SBATCH --job-name=gm-rl-p7
+#SBATCH --job-name=gm-rl-p7c
 #SBATCH --partition=batch
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:nvidia_h200_nvl:4
 #SBATCH --time=5-00:00:00
 #SBATCH --no-requeue
-#SBATCH --output=slurm-rl-p7-%j.out
+#SBATCH --output=slurm-rl-p7c-%j.out
 
-# Phase 7 RL — phase 6 regime + anti-stalling fixes, seeded from the
-# phase-6 pre-collapse EMA (iter1300: eval-vs-anchor 0.77, h2h-vs-seed950
-# lineage 62.5% at 1150, owner-approved style).
+# Phase 7c / run-3 — recovery after the run-2b frozen-opponent spiral.
+#
+# Run-2b exposed three coupled mistakes:
+#   1. "rollback 1450" resumed rl_checkpoint_iter1450.pt (RAW learner), but
+#      the measured 53% h2h health point was rl_ema_iter1450.pt.  Run-3 seeds
+#      the learner itself from that exact EMA artifact, with a fresh optimizer
+#      and fresh EMA shadow.
+#   2. Even ema950 sparring fell 48 -> 41 -> 31 -> 27%, while entropy and
+#      episode length rose together.  Frozen opponents are therefore removed
+#      from the PPO distribution; anti-drift opponents are read-only exams.
+#   3. The negative entropy weight was filtered to the top-25% |adv| samples,
+#      leaving 75% of the trajectory outside the safety controller.  Negative
+#      entropy pressure now covers all valid timesteps and is doubled to 0.01.
+#
+# The fixed exam remains ema1300, paired/greedy on every eval interval.
 #
 # WHY A NEW PHASE — the phase-6 collapse (iters ~1355-1462, job 34175):
 # pure-mirror economic play drifted into a degenerate equilibrium where
@@ -24,53 +36,51 @@
 # had decayed away (il_w 0.065, klw 0.024), and 15% sparring was too weak
 # to counter the 85% mirror echo chamber.
 #
-# THE FOUR FIXES (vs the phase-6 flag set):
+# THE RUN-3 REGIME:
 #   1. TRUNCATION PENALTY (--trunc_penalty 0.3 --trunc_material 0.15):
 #      hitting the clock now costs both players 0.3, and the material
 #      term shrinks to ±0.15. Best truncation outcome for the leader is
 #      ~-0.15 vs +1.0 for winning -> leads must be converted.
-#   2. ACTIVE ENTROPY SUPPRESSION (--entropy_ceiling 1.9
-#      --entropy_penalty 0.005): above the ceiling the entropy weight
-#      goes NEGATIVE (was: zero) so runaway entropy is pushed back down.
-#      Bonus also halved 0.01 -> 0.005.
+#   2. GLOBAL ACTIVE ENTROPY SUPPRESSION (--entropy_ceiling 1.9
+#      --entropy_penalty 0.01): above the ceiling the negative entropy
+#      weight covers every valid timestep, not only the advantage-filtered
+#      quarter. The positive exploration bonus remains filtered.
 #   3. ANCHOR (--il_weight 0.3 --il_weight_min 0.05): phase-6's proven
 #      schedule. RUN-1 LESSON: the floor was doubled to 0.1 here and the
 #      strong pull Goodharted eval-vs-anchor to 0.83 while real strength
 #      fell (h2h vs seed 34% at iter 1475) — closer-to-anchor beats the
 #      anchor more, proving nothing. KL-anchor clock resets automatically
 #      (new output dir => klw restarts at 0.08 and decays afresh).
-#   4. SPARRING (--sparring_prob 0.15, opponent = the ema1300 seed):
-#      RUN-1 LESSON: 0.30 was poison — 30% of episodes vs a superior
-#      frozen opponent at ~74% loss rate, funneled through the top-25%
-#      |adv| filter, made punishment-dominated gradients chronic (pol
-#      loss persistently positive, sparring stuck at 26% for 170 iters).
-#      Back to phase-6's proven 15% dose. Override SPAR_CKPT to spar a
-#      different frozen opponent (e.g. phase-5 ema950).
+#   4. PURE MIRROR TRAINING (--sparring_prob 0): the truncation and entropy
+#      fixes now guard the two known mirror failure modes. Frozen opponents
+#      are excluded from gradients and ema1300 is retained as the paired,
+#      greedy fixed exam (--eval_ckpt).
 #
 # RUN-2 (2026-07-23): run-1 (iters 1326-1500, archived in
 # rl_phase7_run1/) validated the anti-stalling fixes — ep_len 470-580,
 # entropy gated correctly, zero clock-farming — but net strength fell
-# vs the seed. This run keeps fixes 1+2 verbatim and reverts the two
-# over-corrections (anchor floor, sparring dose) to phase-6 values.
+# vs the seed. Run-2b then proved that a weaker frozen opponent still
+# re-created the same punishment-dominated spiral. Run-3 keeps the validated
+# anti-stalling pieces and removes the common frozen-training cause.
 #
 # Unchanged from phase 6: sparse ±1, pure mirror otherwise, top-25% |adv|
 # filter, HL-Gauss critic, gamma 1.0, lambda 0.9, clip 0.15,
 # target_kl 0.015, EMA 0.998.
 #
-# Weights: first launch seeds from the phase-6 iter1300 EMA artifact
-# (explicit below); crash recovery resumes the newest phase-7 checkpoint
-# automatically. KL anchor stays pinned to the IL policy.
+# Weights: first launch seeds from the phase-7 EMA1450 deployment artifact
+# (the measured 53% h2h point); crash recovery resumes the newest run-3
+# checkpoint automatically. KL anchor stays pinned to the IL policy.
 #
 #   sbatch train_rl_phase7_job.sh                # first launch AND crash recovery
 #   RESUME=/path/to/specific.pt sbatch train_rl_phase7_job.sh   # explicit pick
-#   EPISODES=4 sbatch --gres=gpu:nvidia_h200_nvl:2 --time=4:00:00 \
-#       train_rl_phase7_job.sh                   # 2-GPU smoke test
-#   EPISODES=12 sbatch --gres=gpu:nvidia_h200_nvl:6 \
-#       train_rl_phase7_job.sh                   # phase-6 production shape (72/iter)
+#   P7_DIR=/scratch/.../smoke ITERATIONS=1452 EPISODES=2 \
+#       EVAL_INTERVAL=1 EVAL_GAMES=1 \
+#       sbatch --gres=gpu:nvidia_h200_nvl:2 --time=2:00:00 \
+#       train_rl_phase7_job.sh                   # two-iteration smoke test
+#   EPISODES=12 sbatch train_rl_phase7_job.sh    # production: 48 games/iter
 #
-# LR note: train_rl restores lr = --lr * lr_decay^1300 at this resume
-# (iteration counter continues from 1300), so --lr 6e-5 lands at an
-# effective ~5.3e-5 for the first phase-7 iteration.
+# LR note: iteration numbering continues from 1450, so --lr 6e-5 lands at
+# an effective ~5.2e-5 for the first run-3 iteration.
 
 export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
@@ -84,30 +94,23 @@ GPUS_PER_NODE=${GPUS_PER_NODE:-${SLURM_GPUS_ON_NODE:-4}}
 # EPISODES=12 on 6 GPUs (72/iter).
 EPISODES=${EPISODES:-$(( 32 / GPUS_PER_NODE ))}
 IL_ANCHOR=/scratch/$USER/gaming-master/checkpoints/il_phase2/checkpoint_epoch5.pt
-# NOTE: rl_phase7b, not rl_phase7 — the original directory's BeeGFS
-# metadata entry corrupted on 2026-07-25 (Remote I/O error on any create;
-# even the NAME cannot be recreated). Old data readable in
-# rl_phase7_broken/; report to cluster admins for cleanup.
-P7_DIR=/scratch/$USER/gaming-master/checkpoints/rl_phase7b
+# New output directory isolates run-3 from both the damaged run-2b weights
+# and the original rl_phase7 BeeGFS metadata failure.
+P7_DIR=${P7_DIR:-/scratch/$USER/gaming-master/checkpoints/rl_phase7c}
+P7_EMA_SEED=/scratch/$USER/gaming-master/checkpoints/rl_phase7b/rl_ema_iter1450.pt
 P6_EMA_SEED=/scratch/$USER/gaming-master/checkpoints/rl_phase6/rl_ema_iter1300.pt
-# SPARRING LADDER (run-2b, after the 1450-1500 sparring-loss spiral): the
-# opponent-blind critic gives systematically negative advantages against a
-# frozen opponent the learner can't beat under TRAINING conditions
-# (raw+sampling ~ 20pts below the EMA+greedy h2h), and the top-|adv|
-# filter concentrates that into suppression-only gradients (scoreboard
-# slid 41->11% while eval round-tripped 0.78->0.88->0.78). So the
-# sparring partner is level-matched and promoted as the learner grows:
-#   vs ema950  scoreboard >60% sustained ~50 iters -> switch to ema1150
-#   vs ema1150 scoreboard >60% sustained ~50 iters -> switch to ema1300
-# The EXAM never changes: h2h vs ema1300 (EMA+greedy) at every review.
-SPAR_CKPT=${SPAR_CKPT:-/scratch/$USER/gaming-master/checkpoints/rl_phase5/rl_ema_iter950.pt}
+EVAL_CKPT=${EVAL_CKPT:-$P6_EMA_SEED}
+ITERATIONS=${ITERATIONS:-10000}
+SAVE_INTERVAL=${SAVE_INTERVAL:-25}
+SAVE_REPLAY_INTERVAL=${SAVE_REPLAY_INTERVAL:-10}
+EVAL_INTERVAL=${EVAL_INTERVAL:-50}
+EVAL_GAMES=${EVAL_GAMES:-4}
 
-# Crash recovery: newest phase-7 checkpoint if one exists, else the
-# phase-6 pre-collapse EMA seed. Never the raw phase-6 checkpoints — the
-# raw weights carry the drift; the EMA artifact is the clean distillation.
+# Crash recovery: newest run-3 checkpoint if one exists, else the exact
+# deployment artifact whose 53% h2h result defined the healthy rollback.
 if [ -z "${RESUME:-}" ]; then
     RESUME=$(ls "$P7_DIR"/rl_checkpoint_iter*[0-9].pt 2>/dev/null | sort -V | tail -1)
-    [ -n "$RESUME" ] || RESUME=$P6_EMA_SEED
+    [ -n "$RESUME" ] || RESUME=$P7_EMA_SEED
 fi
 if [ ! -f "$RESUME" ]; then
     echo "ERROR: no resume checkpoint found (RESUME='$RESUME')" >&2
@@ -117,12 +120,13 @@ if [ ! -f "$IL_ANCHOR" ]; then
     echo "ERROR: KL anchor checkpoint missing: $IL_ANCHOR" >&2
     exit 1
 fi
-if [ ! -f "$SPAR_CKPT" ]; then
-    echo "ERROR: sparring checkpoint missing: $SPAR_CKPT" >&2
+if [ ! -f "$EVAL_CKPT" ]; then
+    echo "ERROR: fixed eval checkpoint missing: $EVAL_CKPT" >&2
     exit 1
 fi
 echo "Resuming from: $RESUME"
-echo "Sparring vs:   $SPAR_CKPT"
+echo "Training opponents: 100% live mirror"
+echo "Fixed exam vs:      $EVAL_CKPT"
 
 REPLAY_DIR=${REPLAY_DIR:-/scratch/$USER/gaming-master/data-v2/replays}
 FILTERED_FILE=${FILTERED_FILE:-/scratch/$USER/gaming-master/data-v2/filtered/Human.exe.json}
@@ -173,8 +177,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --trunc_penalty 0.3 \
         --trunc_material 0.15 \
         --mirror_prob 1.0 \
-        --sparring_prob 0.15 \
-        --sparring_ckpt "$SPAR_CKPT" \
+        --sparring_prob 0.0 \
         --randomize_seat 1 \
         --rl_legal_mask 1 \
         --adv_filter_frac 0.25 \
@@ -183,7 +186,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --entropy_weight_decay 0.9998 \
         --entropy_weight_min 0.003 \
         --entropy_ceiling 1.9 \
-        --entropy_penalty 0.005 \
+        --entropy_penalty 0.01 \
         --kl_weight 0.08 \
         --kl_weight_pow 0.2 \
         --kl_weight_min 0.005 \
@@ -194,13 +197,14 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --turn_globals 1 \
         --ema_decay 0.998 \
         --capture_aux_weight 0.05 \
-        --eval_interval 50 \
-        --eval_games 4 \
+        --eval_ckpt "$EVAL_CKPT" \
+        --eval_interval "$EVAL_INTERVAL" \
+        --eval_games "$EVAL_GAMES" \
         --lr 6e-5 \
         --lr_decay 0.9999 \
         --grad_clip 1.0 \
         --freeze_encoder_iters 0 \
-        --iterations 10000 \
-        --save_interval 25 \
-        --save_replay_interval 10 \
+        --iterations "$ITERATIONS" \
+        --save_interval "$SAVE_INTERVAL" \
+        --save_replay_interval "$SAVE_REPLAY_INTERVAL" \
         --log_interval 1

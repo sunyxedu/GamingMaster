@@ -8,6 +8,7 @@ iter ~1355-1462 collapse (mutual clock-farming + entropy runaway):
 """
 
 import sys
+from pathlib import Path
 from unittest import mock
 
 import torch
@@ -106,6 +107,29 @@ class TestNegativeEntropyWeight:
         out_b = RLLoss(entropy_weight=0.0)(**inp2)
         assert torch.allclose(out_a["loss"], out_b["loss"])
 
+    def test_negative_weight_uses_full_trajectory_despite_policy_mask(self):
+        inp = _loss_inputs()
+        ent = inp["entropy"].clone().requires_grad_(True)
+        inp["entropy"] = ent
+        policy_mask = torch.zeros_like(ent, dtype=torch.bool)
+        policy_mask[:, :3] = True
+        RLLoss(entropy_weight=-0.01)(
+            **inp, policy_mask=policy_mask)["loss"].backward()
+        # The safety controller must push down every valid timestep, not just
+        # the top-|adv| quarter selected for PPO.
+        assert (ent.grad > 0).all()
+
+    def test_positive_bonus_still_respects_policy_mask(self):
+        inp = _loss_inputs()
+        ent = inp["entropy"].clone().requires_grad_(True)
+        inp["entropy"] = ent
+        policy_mask = torch.zeros_like(ent, dtype=torch.bool)
+        policy_mask[:, :3] = True
+        RLLoss(entropy_weight=0.005)(
+            **inp, policy_mask=policy_mask)["loss"].backward()
+        assert (ent.grad[:, :3] < 0).all()
+        assert (ent.grad[:, 3:] == 0).all()
+
 
 # ======================================================================
 # Argparse defaults (backwards compatibility)
@@ -118,14 +142,32 @@ class TestPhase7ArgDefaults:
         assert args.trunc_material == 0.35
         assert args.trunc_penalty == 0.0
         assert args.entropy_penalty == 0.0
+        assert args.eval_ckpt is None
 
     def test_phase7_values_parse(self):
         argv = ["train_rl.py", "--trunc_penalty", "0.3",
                 "--trunc_material", "0.15", "--entropy_penalty", "0.005",
-                "--entropy_ceiling", "1.9"]
+                "--entropy_ceiling", "1.9",
+                "--eval_ckpt", "/tmp/fixed.pt"]
         with mock.patch.object(sys, "argv", argv):
             args = parse_args()
         assert args.trunc_penalty == 0.3
         assert args.trunc_material == 0.15
         assert args.entropy_penalty == 0.005
         assert args.entropy_ceiling == 1.9
+        assert args.eval_ckpt == "/tmp/fixed.pt"
+
+
+class TestRun3ProductionContract:
+    def test_job_seeds_exact_healthy_ema_and_excludes_sparring_gradients(self):
+        script = (Path(__file__).parents[1] /
+                  "train_rl_phase7_job.sh").read_text()
+        assert "rl_phase7b/rl_ema_iter1450.pt" in script
+        assert "--sparring_prob 0.0" in script
+        assert '--eval_ckpt "$EVAL_CKPT"' in script
+
+    def test_job_uses_global_entropy_controller_settings(self):
+        script = (Path(__file__).parents[1] /
+                  "train_rl_phase7_job.sh").read_text()
+        assert "--entropy_ceiling 1.9" in script
+        assert "--entropy_penalty 0.01" in script

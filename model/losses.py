@@ -507,10 +507,21 @@ class RLLoss(nn.Module):
                 values, returns, reduction="none", beta=1.0)
             value_loss = (value_loss * mask_f).sum() / n_valid
 
-        # --- entropy bonus (negative → we *maximise* entropy) ---
-        # Filtered with the policy loss: a bonus on untrained samples would
-        # still inject gradient into the policy heads there.
-        entropy_bonus = (entropy * pol_f).sum() / n_pol
+        # --- entropy bonus / safety penalty ---
+        # A positive exploration bonus follows the policy mask: injecting
+        # exploration gradient into samples excluded by the advantage filter
+        # would defeat the filter.  A NEGATIVE weight is different: it is the
+        # entropy-ceiling safety controller, so it must see the whole valid
+        # trajectory.  Phase-7 run-2b showed that applying the down-pressure
+        # only to the top-25% |adv| samples lets source entropy keep spreading
+        # everywhere else even while the gate fires every iteration.
+        if self.entropy_weight < 0:
+            ent_f = mask_f
+            n_ent = n_valid
+        else:
+            ent_f = pol_f
+            n_ent = n_pol
+        entropy_bonus = (entropy * ent_f).sum() / n_ent
 
         total = (
             policy_loss
