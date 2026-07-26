@@ -96,7 +96,7 @@ EPISODES=${EPISODES:-$(( 32 / GPUS_PER_NODE ))}
 IL_ANCHOR=/scratch/$USER/gaming-master/checkpoints/il_phase2/checkpoint_epoch5.pt
 # New output directory isolates run-3 from both the damaged run-2b weights
 # and the original rl_phase7 BeeGFS metadata failure.
-P7_DIR=${P7_DIR:-/scratch/$USER/gaming-master/checkpoints/rl_phase7c}
+P7_DIR=${P7_DIR:-/scratch/$USER/gaming-master/checkpoints/rl_phase7b/run3_prod}
 P7_EMA_SEED=/scratch/$USER/gaming-master/checkpoints/rl_phase7b/rl_ema_iter1450.pt
 P6_EMA_SEED=/scratch/$USER/gaming-master/checkpoints/rl_phase6/rl_ema_iter1300.pt
 EVAL_CKPT=${EVAL_CKPT:-$P6_EMA_SEED}

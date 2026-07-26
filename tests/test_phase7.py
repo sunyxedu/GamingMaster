@@ -163,6 +163,7 @@ class TestRun3ProductionContract:
         script = (Path(__file__).parents[1] /
                   "train_rl_phase7_job.sh").read_text()
         assert "rl_phase7b/rl_ema_iter1450.pt" in script
+        assert "rl_phase7b/run3_prod" in script
         assert "--sparring_prob 0.0" in script
         assert '--eval_ckpt "$EVAL_CKPT"' in script
 
