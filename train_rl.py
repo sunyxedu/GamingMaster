@@ -38,6 +38,7 @@ from data_processing.dataset_seq import SeqReplayDataset, collate_variable_lengt
 from env.generals_env import GeneralsEnv
 from model.config import ModelConfig
 from model.losses import ImitationLoss, RLLoss
+from model.magnet import expander_magnet_heads
 from model.network import GeneralsNetwork
 from model.rl_utils import (
     RolloutBuffer,
@@ -166,6 +167,13 @@ def parse_args():
                         "weights — on --resume that is the RESUMED policy, "
                         "so pass the IL checkpoint here to keep the human "
                         "anchor across restarts.")
+    p.add_argument("--magnet", type=int, default=0,
+                   help="1 = anchor the KL regulariser to the expander "
+                        "magnet heuristic (AverageJoe train/magnet.py) "
+                        "instead of a frozen reference network. Replaces "
+                        "the human-IL anchor: behavioural prior, no "
+                        "strength ceiling, weight never decays away. "
+                        "Overrides --kl_ref.")
     p.add_argument("--eval_ckpt", type=str, default=None,
                    help="Optional frozen checkpoint used for the periodic "
                         "paired-greedy strength exam. Default: reuse the KL "
@@ -682,6 +690,7 @@ def ppo_update(
     accum_episodes: int = 0,
     n_chunks: int = 1,
     adv_filter_frac: float = 0.0,
+    magnet: bool = False,
 ) -> Dict[str, float]:
     """Run one PPO update epoch with gradient accumulation over multiple
     trajectories.
@@ -814,16 +823,25 @@ def ppo_update(
         # and are noise; the unmasked KL was anchoring to that noise.
         kl_loss = torch.tensor(0.0, device=device)
         kl_heads: Dict[str, float] = {}
-        if ref_model is not None and kl_weight > 0:
+        if (ref_model is not None or magnet) and kl_weight > 0:
             with torch.no_grad():
-                ref_pred = ref_model(
-                    grid_seq, globals_seq,
-                    legal_mask=src_mask,
-                    source_y=source_y,
-                    source_x=source_x,
-                    act_steps=act_steps,
-                    direction_mask=dir_mask,
-                )
+                if magnet:
+                    # Heuristic anchor: magnet distributions play the role
+                    # of the frozen-reference forward (same head shapes,
+                    # same teacher-forced sources, same masks downstream).
+                    ref_pred = expander_magnet_heads(
+                        grid_seq, actions["source_idx"],
+                        dir_mask=dir_mask,
+                    )
+                else:
+                    ref_pred = ref_model(
+                        grid_seq, globals_seq,
+                        legal_mask=src_mask,
+                        source_y=source_y,
+                        source_x=source_x,
+                        act_steps=act_steps,
+                        direction_mask=dir_mask,
+                    )
             kls = compute_policy_kl_heads(
                 pred, ref_pred,
                 legal_mask=src_mask,
@@ -1173,7 +1191,12 @@ def main():
 
     # ---- Reference model (frozen copy for KL regularisation) -----------
     ref_model: Optional[GeneralsNetwork] = None
-    if args.kl_weight > 0:
+    if args.magnet:
+        if rank0:
+            print("Magnet anchor: KL regularised toward the expander "
+                  f"heuristic (weight {args.kl_weight}, pow "
+                  f"{args.kl_weight_pow}) — no frozen reference network")
+    elif args.kl_weight > 0:
         ref_model = copy.deepcopy(model)
         if args.kl_ref:
             ref_ckpt = torch.load(args.kl_ref, map_location="cpu", weights_only=False)
@@ -1613,6 +1636,7 @@ def main():
                     accum_episodes=args.accum_episodes,
                     n_chunks=n_chunks,
                     adv_filter_frac=args.adv_filter_frac,
+                    magnet=bool(args.magnet),
                 )
                 epochs_run += 1
                 for k, v in metrics.items():

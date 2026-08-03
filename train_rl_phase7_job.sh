@@ -105,6 +105,8 @@ SAVE_INTERVAL=${SAVE_INTERVAL:-25}
 SAVE_REPLAY_INTERVAL=${SAVE_REPLAY_INTERVAL:-10}
 EVAL_INTERVAL=${EVAL_INTERVAL:-50}
 EVAL_GAMES=${EVAL_GAMES:-4}
+ENTROPY_CEILING=${ENTROPY_CEILING:-1.9}
+ENTROPY_PENALTY=${ENTROPY_PENALTY:-0.01}
 
 # Crash recovery: newest run-3 checkpoint if one exists, else the exact
 # deployment artifact whose 53% h2h result defined the healthy rollback.
@@ -185,8 +187,8 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --entropy_weight 0.005 \
         --entropy_weight_decay 0.9998 \
         --entropy_weight_min 0.003 \
-        --entropy_ceiling 1.9 \
-        --entropy_penalty 0.01 \
+        --entropy_ceiling "$ENTROPY_CEILING" \
+        --entropy_penalty "$ENTROPY_PENALTY" \
         --kl_weight 0.08 \
         --kl_weight_pow 0.2 \
         --kl_weight_min 0.005 \
