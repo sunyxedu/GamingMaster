@@ -87,6 +87,19 @@ EVAL_INTERVAL=${EVAL_INTERVAL:-50}
 EVAL_GAMES=${EVAL_GAMES:-4}
 MAGNET_WEIGHT=${MAGNET_WEIGHT:-0.01}
 ENTROPY_WEIGHT=${ENTROPY_WEIGHT:-0.003}
+# Opening anchor (off by default): set OPENING_ANCHOR to the IL
+# checkpoint to teach the first OPENING_TURNS turns the human opening —
+# mirror self-play cannot punish shared opening habits and the magnet
+# is turn-agnostic, so the opening needs its own teacher.
+OPENING_ANCHOR=${OPENING_ANCHOR:-}
+OPENING_TURNS=${OPENING_TURNS:-100}
+OPENING_WEIGHT=${OPENING_WEIGHT:-0.05}
+OPEN_FLAGS=()
+if [ -n "$OPENING_ANCHOR" ]; then
+    OPEN_FLAGS=(--opening_anchor "$OPENING_ANCHOR"
+                --opening_anchor_turns "$OPENING_TURNS"
+                --opening_anchor_weight "$OPENING_WEIGHT")
+fi
 
 # Crash recovery: newest run-4 checkpoint if one exists, else the seed.
 if [ -z "${RESUME:-}" ]; then
@@ -145,6 +158,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --adv_filter_frac 0.25 \
         --hl_gauss_value 1 \
         --magnet 1 \
+        "${OPEN_FLAGS[@]}" \
         --kl_weight "$MAGNET_WEIGHT" \
         --kl_weight_pow 0 \
         --kl_weight_min "$MAGNET_WEIGHT" \

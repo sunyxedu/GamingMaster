@@ -174,6 +174,22 @@ def parse_args():
                         "the human-IL anchor: behavioural prior, no "
                         "strength ceiling, weight never decays away. "
                         "Overrides --kl_ref.")
+    p.add_argument("--opening_anchor", type=str, default=None,
+                   help="Checkpoint anchoring the OPENING only: per-head "
+                        "KL toward this frozen policy, charged on the "
+                        "first --opening_anchor_turns timesteps of every "
+                        "episode. Mirror self-play cannot punish shared "
+                        "opening habits (symmetric slowness is a 50/50 "
+                        "draw of gradients) and the magnet is turn-"
+                        "agnostic, so the opening needs its own teacher. "
+                        "Anchoring ~100 turns to the near-optimal human "
+                        "opening cannot cap late-game strength.")
+    p.add_argument("--opening_anchor_turns", type=int, default=100,
+                   help="Timestep horizon of the opening anchor (frame i "
+                        "is turn i — buffers truncate tail-only).")
+    p.add_argument("--opening_anchor_weight", type=float, default=0.05,
+                   help="Constant weight of the opening KL. No decay: "
+                        "the opening textbook never stops applying.")
     p.add_argument("--eval_ckpt", type=str, default=None,
                    help="Optional frozen checkpoint used for the periodic "
                         "paired-greedy strength exam. Default: reuse the KL "
@@ -691,6 +707,9 @@ def ppo_update(
     n_chunks: int = 1,
     adv_filter_frac: float = 0.0,
     magnet: bool = False,
+    opening_ref: Optional[GeneralsNetwork] = None,
+    opening_weight: float = 0.0,
+    opening_turns: int = 100,
 ) -> Dict[str, float]:
     """Run one PPO update epoch with gradient accumulation over multiple
     trajectories.
@@ -851,6 +870,40 @@ def ppo_update(
             kl_heads = {k: v.item() for k, v in kls.items()}
             total = total + kl_weight * kl_loss
 
+        # Opening anchor: per-head KL toward the frozen opening teacher,
+        # charged on the first opening_turns timesteps only (frame i IS
+        # turn i — buffers truncate tail-only). The reference forward
+        # runs on the sliced prefix, so it costs ~N/T of a full pass and
+        # the causal architecture makes the prefix forward identical to
+        # the full forward's prefix.
+        okl_loss = torch.tensor(0.0, device=device)
+        if opening_ref is not None and opening_weight > 0:
+            n_open = min(opening_turns, grid_seq.size(1))
+            if n_open > 0:
+                with torch.no_grad():
+                    o_pred = opening_ref(
+                        grid_seq[:, :n_open], globals_seq[:, :n_open],
+                        legal_mask=(src_mask[:, :n_open]
+                                    if src_mask is not None else None),
+                        source_y=source_y[:, :n_open],
+                        source_x=source_x[:, :n_open],
+                        act_steps=act_steps,
+                        direction_mask=(dir_mask[:, :n_open]
+                                        if dir_mask is not None else None),
+                    )
+                cur_prefix = {k: pred[k][:, :n_open] for k in
+                              ("source_logits", "direction_logits",
+                               "split_logits", "pass_logits")}
+                okls = compute_policy_kl_heads(
+                    cur_prefix, o_pred,
+                    legal_mask=(src_mask[:, :n_open]
+                                if src_mask is not None else None),
+                    passed=actions["passed"][:, :n_open],
+                )
+                okl_loss = sum(KL_HEAD_WEIGHTS[k] * v
+                               for k, v in okls.items())
+                total = total + opening_weight * okl_loss
+
         # Invalidity loss: push probability toward legal sources & valid
         # directions. Redundant under hard masking (the masked policy places
         # zero mass on invalid actions by construction) — skip it there.
@@ -917,6 +970,7 @@ def ppo_update(
             "approx_kl": rl_losses["approx_kl"].item(),
             "clip_frac": rl_losses["clip_fraction"].item(),
             "kl_reg": kl_loss.item() if isinstance(kl_loss, torch.Tensor) else kl_loss,
+            "okl": okl_loss.item() if isinstance(okl_loss, torch.Tensor) else okl_loss,
             "inv_loss": inv_loss.item() if isinstance(inv_loss, torch.Tensor) else inv_loss,
             "ent_pass": head_entropy["ent_pass"].item(),
             "ent_src": head_entropy["ent_src"].item(),
@@ -1217,6 +1271,28 @@ def main():
         if rank0:
             src = args.kl_ref if args.kl_ref else "this run's starting weights"
             print(f"Created frozen reference model for KL regularisation ({src})")
+
+    # ---- Opening anchor (frozen teacher for the first N turns) ---------
+    opening_ref: Optional[GeneralsNetwork] = None
+    if args.opening_anchor and args.opening_anchor_weight > 0:
+        o_ckpt = torch.load(args.opening_anchor, map_location="cpu",
+                            weights_only=False)
+        opening_ref = copy.deepcopy(model)
+        o_reinit = ("value_head",) if (
+            cfg.hl_gauss_value
+            and not o_ckpt.get("config", {}).get("hl_gauss_value")
+        ) else ()
+        load_model_state(opening_ref, o_ckpt["model_state"],
+                         ctx="opening anchor checkpoint",
+                         reinit_prefixes=o_reinit)
+        del o_ckpt
+        opening_ref.eval()
+        for o_p in opening_ref.parameters():
+            o_p.requires_grad = False
+        if rank0:
+            print(f"Opening anchor: KL toward {args.opening_anchor} on "
+                  f"the first {args.opening_anchor_turns} turns "
+                  f"(constant weight {args.opening_anchor_weight})")
 
     # ---- Opponent pool -------------------------------------------------
     opponent_pool = OpponentPool(
@@ -1637,6 +1713,9 @@ def main():
                     n_chunks=n_chunks,
                     adv_filter_frac=args.adv_filter_frac,
                     magnet=bool(args.magnet),
+                    opening_ref=opening_ref,
+                    opening_weight=args.opening_anchor_weight,
+                    opening_turns=args.opening_anchor_turns,
                 )
                 epochs_run += 1
                 for k, v in metrics.items():
@@ -1861,7 +1940,8 @@ def main():
                 f"cap={ppo_avg.get('cap_loss', 0):.3f}/"
                 f"{ppo_avg.get('cap_acc', 0):.2f} | "
                 f"il={il_metrics.get('il_loss', 0):.4f}  "
-                f"il_w={il_weight:.4f} | "
+                f"il_w={il_weight:.4f}  "
+                f"okl={ppo_avg.get('okl', 0):.3f} | "
                 f"pool={len(opponent_pool)}  "
                 f"t={elapsed:.1f}s\n"
                 f"    rw: inv={reward_totals['r_invalid']:.3f}  "
