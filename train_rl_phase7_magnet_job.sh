@@ -91,6 +91,9 @@ ENTROPY_WEIGHT=${ENTROPY_WEIGHT:-0.003}
 # batched forward (mirror-only). This is the throughput lever — EPISODES
 # can go to 64+/GPU without a proportional wall-clock cost.
 VEC_ROLLOUT=${VEC_ROLLOUT:-0}
+# With VEC_ROLLOUT: parallel env stepping over this many persistent
+# worker processes per rank (0 = in-process serial stepping).
+ENV_WORKERS=${ENV_WORKERS:-0}
 # Opening anchor (off by default): set OPENING_ANCHOR to the IL
 # checkpoint to teach the first OPENING_TURNS turns the human opening —
 # mirror self-play cannot punish shared opening habits and the magnet
@@ -145,6 +148,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --output_dir "$P7M_DIR" \
         --episodes_per_gpu $EPISODES \
         --vec_rollout "$VEC_ROLLOUT" \
+        --env_workers "$ENV_WORKERS" \
         --rollout_steps 1536 \
         --act_steps 1 \
         --ppo_epochs 1 \

@@ -281,6 +281,11 @@ def parse_args():
                         "mirror_prob>=1 and sparring_prob<=0, else falls back "
                         "to the sequential path). Same per-transition "
                         "semantics; only RNG consumption order differs.")
+    p.add_argument("--env_workers", type=int, default=0,
+                   help="With --vec_rollout: spread env slots 1..N-1 over "
+                        "this many persistent worker processes so env.step "
+                        "runs in parallel instead of serially in the rank "
+                        "process. 0 = step all envs in-process.")
 
     # Opponent pool
     p.add_argument("--pool_size", type=int, default=10,
@@ -661,6 +666,7 @@ def collect_selfplay_episodes_vec(
     record: bool = False,
     act_steps: int = 1,
     legal_mask: bool = True,
+    worker_pool=None,
 ) -> Tuple[List[RolloutBuffer], Optional[List[Dict]], Dict[str, float]]:
     """Vectorized mirror self-play: N envs in lockstep, both seats through
     ONE batched forward per step (rows [0..A) = seat 0, [A..2A) = seat 1 of
@@ -677,12 +683,22 @@ def collect_selfplay_episodes_vec(
     Returns (buffers ordered [env0-seat0, env0-seat1, env1-seat0, ...],
     replay log of envs[0] if ``record``, reward-breakdown totals SUMMED
     over envs — the caller normalizes by episode count).
+
+    With ``worker_pool`` (an env.vec_workers.EnvWorkerPool), env slots
+    1..n-1 live in worker processes and step in parallel; slot 0 stays in
+    ``envs[0]`` (replay recording reads its internals directly). Worker
+    envs get their attrs (breakdown_pid included) at pool construction.
     """
     model.eval()
-    n = len(envs)
+    n = worker_pool.n_envs if worker_pool is not None else len(envs)
     for e in envs:
         e.breakdown_pid = 0
-    obs = [e.reset() for e in envs]
+    if worker_pool is not None:
+        obs_map = worker_pool.reset_all()
+        obs_map[0] = envs[0].reset()
+        obs = [obs_map[i] for i in range(n)]
+    else:
+        obs = [e.reset() for e in envs]
     buffers = [{0: RolloutBuffer(), 1: RolloutBuffer()} for _ in range(n)]
     env_done = [False] * n
     active = list(range(n))
@@ -737,7 +753,13 @@ def collect_selfplay_episodes_vec(
         logp = out["action_log_prob"].detach().float().cpu().reshape(b_total)
         val = out["value"].detach().float().cpu().reshape(b_total, -1)[:, 0]
 
+        # Build every env's actions first, dispatch remote slots in one
+        # batched pool call (workers step in parallel), step slot 0
+        # locally, then process all results uniformly.
         any_finished = False
+        acts_all: Dict[int, Dict[int, Dict]] = {}
+        remote_actions: Dict[int, tuple] = {}
+        results: Dict[int, tuple] = {}
         for k, i in enumerate(active):
             acts = {}
             for pid, r in ((0, k), (1, k + a)):
@@ -758,9 +780,25 @@ def collect_selfplay_episodes_vec(
                         "split": int(spl[r]),
                     },
                 }
+            acts_all[i] = acts
+            payload = (acts[0]["env_action"], acts[1]["env_action"],
+                       acts[0]["action"]["source_idx"],
+                       acts[1]["action"]["source_idx"])
+            if worker_pool is not None and i != 0:
+                remote_actions[i] = payload
+            else:
+                new_obs, rewards, done, info = envs[i].step(
+                    payload[0], payload[1])
+                vd = (envs[i].get_valid_directions(payload[2]),
+                      envs[i].get_valid_directions(payload[3]))
+                results[i] = (new_obs, (rewards[0], rewards[1]), done,
+                              info, vd)
+        if remote_actions:
+            results.update(worker_pool.step(remote_actions))
 
-            new_obs, rewards, done, info = envs[i].step(
-                acts[0]["env_action"], acts[1]["env_action"])
+        for k, i in enumerate(active):
+            acts = acts_all[i]
+            new_obs, rewards, done, info, vd = results[i]
 
             if replay_log is not None and i == 0:
                 snapshot = envs[0].get_state_snapshot()
@@ -785,8 +823,6 @@ def collect_selfplay_episodes_vec(
 
             for pid in (0, 1):
                 r = acts[pid]["row"]
-                valid_dirs = envs[i].get_valid_directions(
-                    acts[pid]["action"]["source_idx"])
                 buffers[i][pid].add(
                     obs=obs[i][pid],
                     action=acts[pid]["action"],
@@ -794,7 +830,7 @@ def collect_selfplay_episodes_vec(
                     value=float(val[r]),
                     reward=rewards[pid],
                     done=done,
-                    valid_directions=valid_dirs,
+                    valid_directions=vd[pid],
                 )
 
             obs[i] = new_obs
@@ -816,13 +852,20 @@ def collect_selfplay_episodes_vec(
     # Budget exhausted with games still running: same material-scored soft
     # terminal the sequential path applies.
     for i in range(n):
+        trunc_pair = None
+        if not env_done[i]:
+            if worker_pool is not None and i != 0:
+                trunc_pair = worker_pool.truncation_scores(i)
+            else:
+                trunc_pair = (envs[i].truncation_score(0),
+                              envs[i].truncation_score(1))
         for pid in (0, 1):
             buf = buffers[i][pid]
-            if not env_done[i] and len(buf) > 0:
-                buf.rewards[-1] += envs[i].truncation_score(pid)
+            if trunc_pair is not None and len(buf) > 0:
+                buf.rewards[-1] += trunc_pair[pid]
                 buf.dones[-1] = True
                 if pid == 0:
-                    reward_totals["r_winlose"] += envs[i].truncation_score(pid)
+                    reward_totals["r_winlose"] += trunc_pair[pid]
             buf.compute_returns_and_advantages(
                 gamma=gamma, lam=gae_lambda, last_value=0.0)
 
@@ -1639,12 +1682,37 @@ def main():
     # Built here, AFTER every env attribute above is final, by cloning the
     # fully-configured env. The map pool is shared by reference (read-only).
     vec_envs: Optional[List[GeneralsEnv]] = None
+    env_worker_pool = None
     if args.vec_rollout:
         if args.mirror_prob < 1.0 or args.sparring_prob > 0:
             if rank0:
                 print("[warn] --vec_rollout requires pure mirror "
                       "(mirror_prob>=1, sparring_prob<=0) — using the "
                       "sequential rollout path")
+        elif args.env_workers > 0 and args.episodes_per_gpu > 1:
+            from env.vec_workers import EnvWorkerPool
+            vec_envs = [env]  # slot 0 local (replay recording)
+            env_worker_pool = EnvWorkerPool(
+                n_envs=args.episodes_per_gpu,
+                n_workers=args.env_workers,
+                env_kwargs=dict(grid_h=cfg.grid_h, grid_w=cfg.grid_w,
+                                max_turns=args.rollout_steps),
+                env_attrs=dict(
+                    city_budget_total=env.city_budget_total,
+                    turn_globals=env.turn_globals,
+                    trunc_material_scale=env.trunc_material_scale,
+                    trunc_penalty=env.trunc_penalty,
+                    city_reward_scale=env.city_reward_scale,
+                    dense_reward_scale=env.dense_reward_scale,
+                    breakdown_pid=0,
+                ),
+                map_pool_src=(args.replay_dir, args.filtered_file)
+                if (args.replay_dir and args.filtered_file) else None,
+            )
+            if rank0:
+                print(f"Vectorized rollout: {args.episodes_per_gpu} envs in "
+                      f"lockstep, batch {2 * args.episodes_per_gpu} per "
+                      f"forward, {args.env_workers} env worker processes")
         else:
             vec_envs = [env]
             for _ in range(args.episodes_per_gpu - 1):
@@ -1797,6 +1865,7 @@ def main():
                 record=should_record,
                 act_steps=args.act_steps,
                 legal_mask=bool(args.rl_legal_mask),
+                worker_pool=env_worker_pool,
             )
             ep_buffers.extend(bufs_v)
             if replay_log_v is not None:
