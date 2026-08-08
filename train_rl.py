@@ -274,6 +274,13 @@ def parse_args():
     # Multi-episode collection
     p.add_argument("--episodes_per_gpu", type=int, default=1,
                    help="Episodes to collect per GPU before PPO update (gradient accumulation)")
+    p.add_argument("--vec_rollout", type=int, default=0,
+                   help="Vectorize rollout collection: run all episodes_per_gpu "
+                        "envs in lockstep, both seats through one batched "
+                        "forward per step (mirror games only — requires "
+                        "mirror_prob>=1 and sparring_prob<=0, else falls back "
+                        "to the sequential path). Same per-transition "
+                        "semantics; only RNG consumption order differs.")
 
     # Opponent pool
     p.add_argument("--pool_size", type=int, default=10,
@@ -625,6 +632,205 @@ def collect_selfplay_episode(
         )
 
     return [buffers[pid] for pid in seats], replay_log, reward_totals
+
+
+def _select_cache_rows(
+    st_cache: List[torch.Tensor], keep_rows: torch.Tensor, batch: int,
+) -> List[torch.Tensor]:
+    """Drop finished episodes from a batched step cache.
+
+    Per-layer caches are flattened over batch and token dims ([B*S, ...] —
+    recurrent state or attention KV alike); view back to [B, S, ...], keep
+    the surviving batch rows, re-flatten.
+    """
+    out = []
+    for c in st_cache:
+        rest = tuple(c.shape[1:])
+        s = c.shape[0] // batch
+        out.append(c.view((batch, s) + rest)[keep_rows].reshape((-1,) + rest))
+    return out
+
+
+def collect_selfplay_episodes_vec(
+    model: GeneralsNetwork,
+    envs: List[GeneralsEnv],
+    device: torch.device,
+    max_steps: int = 1000,
+    gamma: float = 0.99,
+    gae_lambda: float = 0.95,
+    record: bool = False,
+    act_steps: int = 1,
+    legal_mask: bool = True,
+) -> Tuple[List[RolloutBuffer], Optional[List[Dict]], Dict[str, float]]:
+    """Vectorized mirror self-play: N envs in lockstep, both seats through
+    ONE batched forward per step (rows [0..A) = seat 0, [A..2A) = seat 1 of
+    the A still-active envs).
+
+    Mirror-only by design — both seats share ``model`` and both
+    trajectories are collected (non-mirror/sparring episodes stay on
+    collect_selfplay_episode). Finished envs are compacted out of the batch
+    and their cache rows dropped, so late steps don't pay for early
+    finishers. Per-transition semantics match collect_selfplay_episode;
+    only the RNG consumption order differs (one batched sample per step
+    instead of 2N sequential ones).
+
+    Returns (buffers ordered [env0-seat0, env0-seat1, env1-seat0, ...],
+    replay log of envs[0] if ``record``, reward-breakdown totals SUMMED
+    over envs — the caller normalizes by episode count).
+    """
+    model.eval()
+    n = len(envs)
+    for e in envs:
+        e.breakdown_pid = 0
+    obs = [e.reset() for e in envs]
+    buffers = [{0: RolloutBuffer(), 1: RolloutBuffer()} for _ in range(n)]
+    env_done = [False] * n
+    active = list(range(n))
+    cache: Optional[List[torch.Tensor]] = None
+    replay_log: Optional[List[Dict]] = [] if record else None
+    reward_totals: Dict[str, float] = {
+        "r_invalid": 0.0, "r_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
+        "c_cap": 0.0, "c_bash": 0.0, "c_steal": 0.0, "c_loss": 0.0,
+    }
+
+    if replay_log is not None:
+        snapshot = envs[0].get_state_snapshot()
+        replay_log.append({
+            "turn": -1,
+            "p0_action": None, "p1_action": None,
+            "p0_reward": 0.0, "p1_reward": 0.0,
+            "illegal": [False, False],
+            "p0_stats": envs[0]._player_stats(0),
+            "p1_stats": envs[0]._player_stats(1),
+            "state": snapshot["state"],
+            "army": snapshot["army"],
+            "done": False, "winner": None,
+        })
+
+    for _step in range(max_steps):
+        a = len(active)
+        rows = [(i, 0) for i in active] + [(i, 1) for i in active]
+        grid = torch.stack([obs[i][pid]["grid"] for i, pid in rows]).to(device)
+        glb = torch.stack(
+            [obs[i][pid]["globals"] for i, pid in rows]).to(device)
+
+        with torch.no_grad():
+            if legal_mask:
+                lm = torch.stack(
+                    [obs[i][pid]["legal_mask"] for i, pid in rows]).to(device)
+                dm = torch.stack(
+                    [obs[i][pid]["dir_mask"] for i, pid in rows]).to(device)
+                out = model.step(
+                    grid, glb, legal_mask=lm, direction_mask=dm,
+                    st_cache=cache, step_idx=_step, act_steps=act_steps)
+            else:
+                out = model.step_rl(grid, glb, st_cache=cache,
+                                    step_idx=_step, act_steps=act_steps)
+        cache = out["st_cache"]
+
+        # One CPU sync per head instead of 4 .item() calls per seat per env
+        b_total = 2 * a
+        src = out["action_source"].detach().cpu().reshape(b_total)
+        dirn = out["action_direction"].detach().cpu().reshape(b_total)
+        spl = out["action_split"].detach().cpu().reshape(b_total)
+        pas = out["action_pass"].detach().cpu().reshape(b_total)
+        logp = out["action_log_prob"].detach().float().cpu().reshape(b_total)
+        val = out["value"].detach().float().cpu().reshape(b_total, -1)[:, 0]
+
+        any_finished = False
+        for k, i in enumerate(active):
+            acts = {}
+            for pid, r in ((0, k), (1, k + a)):
+                did_pass = bool(pas[r])
+                no_moves = (legal_mask
+                            and not bool(obs[i][pid]["legal_mask"].any()))
+                acts[pid] = {
+                    "row": r,
+                    "action": {
+                        "source_idx": int(src[r]),
+                        "direction": int(dirn[r]),
+                        "split": int(spl[r]),
+                        "passed": did_pass,
+                    },
+                    "env_action": None if (did_pass or no_moves) else {
+                        "source_idx": int(src[r]),
+                        "direction": int(dirn[r]),
+                        "split": int(spl[r]),
+                    },
+                }
+
+            new_obs, rewards, done, info = envs[i].step(
+                acts[0]["env_action"], acts[1]["env_action"])
+
+            if replay_log is not None and i == 0:
+                snapshot = envs[0].get_state_snapshot()
+                replay_log.append({
+                    "turn": info["turn"],
+                    "p0_action": acts[0]["env_action"],
+                    "p1_action": acts[1]["env_action"],
+                    "p0_reward": rewards[0],
+                    "p1_reward": rewards[1],
+                    "illegal": [info["illegal"][0], info["illegal"][1]],
+                    "p0_stats": envs[0]._player_stats(0),
+                    "p1_stats": envs[0]._player_stats(1),
+                    "state": snapshot["state"],
+                    "army": snapshot["army"],
+                    "done": done,
+                    "winner": info.get("winner"),
+                })
+
+            if "reward_breakdown" in info:
+                for kk, v in info["reward_breakdown"].items():
+                    reward_totals[kk] += v
+
+            for pid in (0, 1):
+                r = acts[pid]["row"]
+                valid_dirs = envs[i].get_valid_directions(
+                    acts[pid]["action"]["source_idx"])
+                buffers[i][pid].add(
+                    obs=obs[i][pid],
+                    action=acts[pid]["action"],
+                    log_prob=float(logp[r]),
+                    value=float(val[r]),
+                    reward=rewards[pid],
+                    done=done,
+                    valid_directions=valid_dirs,
+                )
+
+            obs[i] = new_obs
+            if done:
+                env_done[i] = True
+                any_finished = True
+
+        if any_finished:
+            keep = [k for k, i in enumerate(active) if not env_done[i]]
+            active = [i for i in active if not env_done[i]]
+            if active and cache is not None:
+                keep_rows = torch.tensor(
+                    keep + [k + a for k in keep],
+                    dtype=torch.long, device=cache[0].device)
+                cache = _select_cache_rows(cache, keep_rows, b_total)
+        if not active:
+            break
+
+    # Budget exhausted with games still running: same material-scored soft
+    # terminal the sequential path applies.
+    for i in range(n):
+        for pid in (0, 1):
+            buf = buffers[i][pid]
+            if not env_done[i] and len(buf) > 0:
+                buf.rewards[-1] += envs[i].truncation_score(pid)
+                buf.dones[-1] = True
+                if pid == 0:
+                    reward_totals["r_winlose"] += envs[i].truncation_score(pid)
+            buf.compute_returns_and_advantages(
+                gamma=gamma, lam=gae_lambda, last_value=0.0)
+
+    flat: List[RolloutBuffer] = []
+    for i in range(n):
+        flat.append(buffers[i][0])
+        flat.append(buffers[i][1])
+    return flat, replay_log, reward_totals
 
 
 # ======================================================================
@@ -1429,6 +1635,33 @@ def main():
         if rank0:
             print(f"Loaded {n_maps} replay maps for environment")
 
+    # ---- Vectorized rollout fleet (mirror-only) ------------------------
+    # Built here, AFTER every env attribute above is final, by cloning the
+    # fully-configured env. The map pool is shared by reference (read-only).
+    vec_envs: Optional[List[GeneralsEnv]] = None
+    if args.vec_rollout:
+        if args.mirror_prob < 1.0 or args.sparring_prob > 0:
+            if rank0:
+                print("[warn] --vec_rollout requires pure mirror "
+                      "(mirror_prob>=1, sparring_prob<=0) — using the "
+                      "sequential rollout path")
+        else:
+            vec_envs = [env]
+            for _ in range(args.episodes_per_gpu - 1):
+                e2 = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w,
+                                 max_turns=args.rollout_steps)
+                e2.city_budget_total = env.city_budget_total
+                e2.turn_globals = env.turn_globals
+                e2.trunc_material_scale = env.trunc_material_scale
+                e2.trunc_penalty = env.trunc_penalty
+                e2.city_reward_scale = env.city_reward_scale
+                e2.dense_reward_scale = env.dense_reward_scale
+                e2.map_pool = env.map_pool
+                vec_envs.append(e2)
+            if rank0:
+                print(f"Vectorized rollout: {len(vec_envs)} envs in "
+                      f"lockstep, batch {2 * len(vec_envs)} per forward")
+
     # ---- Resume: optimizer state & schedules (weights loaded earlier) ---
     if args.resume:
         if "iteration" in rl_ckpt and "optimizer_state" in rl_ckpt:
@@ -1555,7 +1788,38 @@ def main():
         local_mirror = 0
 
         replay_env_snapshot = None  # env state for the recorded episode
-        for ep_i in range(args.episodes_per_gpu):
+        if vec_envs is not None:
+            bufs_v, replay_log_v, rw_tot = collect_selfplay_episodes_vec(
+                model, vec_envs, device,
+                max_steps=args.rollout_steps,
+                gamma=args.gamma,
+                gae_lambda=args.gae_lambda,
+                record=should_record,
+                act_steps=args.act_steps,
+                legal_mask=bool(args.rl_legal_mask),
+            )
+            ep_buffers.extend(bufs_v)
+            if replay_log_v is not None:
+                replay_log = replay_log_v
+                e0 = vec_envs[0]
+                replay_env_snapshot = {
+                    "winner": e0.winner,
+                    "map_pool_idx": e0.current_map_idx,
+                    "replay_id": e0.map_pool[e0.current_map_idx]["replay_id"] if e0.map_pool and e0.current_map_idx is not None else None,
+                    "real_h": e0.real_h, "real_w": e0.real_w,
+                    "generals": e0.generals, "cities": e0.cities,
+                    "mountains": e0.mountains,
+                }
+            # Seat-0 buffers carry the per-episode stats (mirror: seat is
+            # symmetric); accumulate sums here, the shared normalization
+            # below divides by episodes_per_gpu.
+            for buf in bufs_v[0::2]:
+                local_ep_len += len(buf)
+                local_ep_reward += sum(buf.rewards)
+            for k in reward_totals:
+                reward_totals[k] += rw_tot[k]
+            local_mirror = args.episodes_per_gpu
+        for ep_i in range(args.episodes_per_gpu if vec_envs is None else 0):
             record_this = should_record and ep_i == 0
             # Sparring draw first: a frozen counter-style opponent breaks
             # pure mirror's blind spot (a drifting style is never punished

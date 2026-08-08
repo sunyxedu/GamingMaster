@@ -87,6 +87,10 @@ EVAL_INTERVAL=${EVAL_INTERVAL:-50}
 EVAL_GAMES=${EVAL_GAMES:-4}
 MAGNET_WEIGHT=${MAGNET_WEIGHT:-0.01}
 ENTROPY_WEIGHT=${ENTROPY_WEIGHT:-0.003}
+# Vectorized rollout: all EPISODES envs step in lockstep through one
+# batched forward (mirror-only). This is the throughput lever — EPISODES
+# can go to 64+/GPU without a proportional wall-clock cost.
+VEC_ROLLOUT=${VEC_ROLLOUT:-0}
 # Opening anchor (off by default): set OPENING_ANCHOR to the IL
 # checkpoint to teach the first OPENING_TURNS turns the human opening —
 # mirror self-play cannot punish shared opening habits and the magnet
@@ -140,6 +144,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         "${MAP_FLAGS[@]}" \
         --output_dir "$P7M_DIR" \
         --episodes_per_gpu $EPISODES \
+        --vec_rollout "$VEC_ROLLOUT" \
         --rollout_steps 1536 \
         --act_steps 1 \
         --ppo_epochs 1 \
