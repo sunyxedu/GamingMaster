@@ -33,6 +33,24 @@ import torch
 _INFO_KEYS = ("turn", "illegal", "winner", "reward_breakdown")
 
 
+def _obs_to_numpy(obs_pair):
+    """Torch tensors must not cross the pipe: torch's ForkingPickler ships
+    storages by file-descriptor sharing, and at 64 envs x ~12 tensors per
+    step that exhausts the process fd budget within seconds
+    ("received 0 items of ancdata"). Numpy arrays pickle by value."""
+    return {pid: {k: (v.numpy() if isinstance(v, torch.Tensor) else v)
+                  for k, v in obs_pair[pid].items()}
+            for pid in (0, 1)}
+
+
+def _obs_to_torch(obs_pair):
+    import numpy as np
+    return {pid: {k: (torch.from_numpy(v) if isinstance(v, np.ndarray)
+                      else v)
+                  for k, v in obs_pair[pid].items()}
+            for pid in (0, 1)}
+
+
 def _build_env(env_kwargs: Dict[str, Any], env_attrs: Dict[str, Any],
                map_pool_src: Optional[Tuple[str, str]]):
     from env.generals_env import GeneralsEnv
@@ -67,7 +85,7 @@ def _worker_main(conn, slots: Sequence[int], env_kwargs: Dict[str, Any],
         if cmd == "reset":
             out = {}
             for s in slots:
-                out[s] = envs[s].reset()
+                out[s] = _obs_to_numpy(envs[s].reset())
             conn.send(out)
         elif cmd == "step":
             # msg[1]: {slot: (a0, a1, src0, src1)} — src is the sampled
@@ -79,7 +97,8 @@ def _worker_main(conn, slots: Sequence[int], env_kwargs: Dict[str, Any],
                 vd = (envs[s].get_valid_directions(src0),
                       envs[s].get_valid_directions(src1))
                 # rewards is a {pid: float} dict — keep pid indexing
-                out.append((s, new_obs, (rewards[0], rewards[1]), done,
+                out.append((s, _obs_to_numpy(new_obs),
+                            (rewards[0], rewards[1]), done,
                             _slim_info(info), vd))
             conn.send(out)
         elif cmd == "trunc":
@@ -134,7 +153,8 @@ class EnvWorkerPool:
             c.send(("reset",))
         out: Dict[int, Dict[int, Dict[str, torch.Tensor]]] = {}
         for c in self._conns:
-            out.update(c.recv())
+            out.update({s: _obs_to_torch(pair)
+                        for s, pair in c.recv().items()})
         return out
 
     def step(
@@ -153,7 +173,7 @@ class EnvWorkerPool:
         out: Dict[int, tuple] = {}
         for w in per_worker:
             for s, obs, rewards, done, info, vd in self._conns[w].recv():
-                out[s] = (obs, rewards, done, info, vd)
+                out[s] = (_obs_to_torch(obs), rewards, done, info, vd)
         return out
 
     def truncation_scores(self, slot: int) -> Tuple[float, float]:

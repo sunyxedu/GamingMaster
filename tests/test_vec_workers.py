@@ -53,6 +53,27 @@ def test_pool_truncation_scores(pool):
     assert all(math.isfinite(t) for t in ts)
 
 
+def test_pipe_payload_never_carries_torch_tensors():
+    # Torch tensors cross the pipe via fd-sharing and exhaust the fd
+    # budget at production scale ("received 0 items of ancdata") — the
+    # worker must convert to numpy before send, the parent back to torch.
+    import numpy as np
+    from env.vec_workers import _obs_to_numpy, _obs_to_torch
+
+    env = GeneralsEnv(**ENV_KWARGS)
+    pair = env.reset()
+    wire = _obs_to_numpy(pair)
+    for pid in (0, 1):
+        for k, v in wire[pid].items():
+            assert not isinstance(v, torch.Tensor), (pid, k)
+            assert isinstance(v, np.ndarray), (pid, k)
+    back = _obs_to_torch(wire)
+    for pid in (0, 1):
+        for k, v in back[pid].items():
+            assert isinstance(v, torch.Tensor), (pid, k)
+            assert torch.equal(v, pair[pid][k]), (pid, k)
+
+
 def test_vec_collect_with_pool():
     torch.manual_seed(0)
     cfg = ModelConfig(hl_gauss_value=True, hl_gauss_bins=32,
