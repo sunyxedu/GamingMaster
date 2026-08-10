@@ -42,7 +42,10 @@ def main() -> None:
     net, _cfg = load_net(args.ckpt, device)
     if args.greedy:
         net.action_decoder.greedy = True
-    env = GeneralsEnv(grid_h=25, grid_w=25, max_turns=args.rollout_steps)
+    env = GeneralsEnv(grid_h=_cfg.grid_h, grid_w=_cfg.grid_w,
+                      max_turns=args.rollout_steps)
+    # turn_globals nets expect 7 global features; bare env emits 4
+    env.turn_globals = bool(getattr(_cfg, "turn_globals", False))
     if args.replay_dir and args.filtered_file:
         n = env.load_map_pool(args.replay_dir, args.filtered_file)
         print(f"Loaded {n} maps")
