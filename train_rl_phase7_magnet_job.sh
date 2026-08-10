@@ -106,6 +106,15 @@ ACCUM_EPISODES=${ACCUM_EPISODES:-4}
 # the ratio). >1 spends proportionally more forward compute — switch
 # only after a depth probe (scripts/depth_probe.py) shows it pays.
 ACT_STEPS=${ACT_STEPS:-1}
+# Depth-randomized rollout (TRM deep-supervision analog): per-episode
+# pondering depth sampled from 'depth:prob,...'; each episode replays at
+# its own depth, teacher anchors stay at depth 1, eval at ACT_STEPS.
+# Cost multiplier ~= E[depth]. Empty = fixed ACT_STEPS everywhere.
+ACT_DIST=${ACT_DIST:-}
+ACT_DIST_FLAGS=()
+if [ -n "$ACT_DIST" ]; then
+    ACT_DIST_FLAGS=(--act_steps_dist "$ACT_DIST")
+fi
 # Opening anchor (off by default): set OPENING_ANCHOR to the IL
 # checkpoint to teach the first OPENING_TURNS turns the human opening —
 # mirror self-play cannot punish shared opening habits and the magnet
@@ -163,6 +172,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --env_workers "$ENV_WORKERS" \
         --rollout_steps 1536 \
         --act_steps "$ACT_STEPS" \
+        "${ACT_DIST_FLAGS[@]}" \
         --ppo_epochs 1 \
         --accum_episodes "$ACCUM_EPISODES" \
         --target_kl 0.02 \

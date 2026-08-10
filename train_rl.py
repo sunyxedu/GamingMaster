@@ -88,6 +88,14 @@ def parse_args():
     p.add_argument("--act_steps", type=int, default=1,
                    help="Fixed TRM ACT depth used for BOTH rollout and PPO update "
                         "(the two must match for the PPO ratio to be valid)")
+    p.add_argument("--act_steps_dist", type=str, default="",
+                   help="Depth-randomized rollout (TRM deep-supervision "
+                        "analog): 'depth:prob,...' e.g. "
+                        "'1:0.6,2:0.2,4:0.1,8:0.06,16:0.04'. Each episode "
+                        "samples a pondering depth, plays AND replays at it "
+                        "(PPO exactness holds per-buffer; teacher anchors "
+                        "stay at depth 1). Vectorized rollout only. Empty = "
+                        "fixed --act_steps. Eval always uses --act_steps.")
 
     # Loss weights
     p.add_argument("--value_weight", type=float, default=0.5)
@@ -705,9 +713,22 @@ def collect_selfplay_episodes_vec(
     else:
         obs = [e.reset() for e in envs]
     buffers = [{0: RolloutBuffer(), 1: RolloutBuffer()} for _ in range(n)]
+    # Per-env TRM pondering depth (TRM-style deep training across depths:
+    # each episode plays and replays at ITS depth — PPO exactness holds
+    # per-buffer). A plain int = same depth everywhere.
+    depths = (list(act_steps) if isinstance(act_steps, (list, tuple))
+              else [act_steps] * n)
+    if len(depths) != n:
+        raise ValueError(f"act_steps list has {len(depths)} entries "
+                         f"for {n} envs")
+    for i in range(n):
+        for pid in (0, 1):
+            buffers[i][pid].act_steps = depths[i]
     env_done = [False] * n
     active = list(range(n))
-    cache: Optional[List[torch.Tensor]] = None
+    # Envs of different depths cannot share one batched forward, so each
+    # depth group keeps its own step cache.
+    caches: Dict[int, Optional[List[torch.Tensor]]] = {}
     replay_log: Optional[List[Dict]] = [] if record else None
     reward_totals: Dict[str, float] = {
         "r_invalid": 0.0, "r_city": 0.0, "r_dense": 0.0, "r_winlose": 0.0,
@@ -729,34 +750,57 @@ def collect_selfplay_episodes_vec(
         })
 
     for _step in range(max_steps):
-        a = len(active)
-        rows = [(i, 0) for i in active] + [(i, 1) for i in active]
-        grid = torch.stack([obs[i][pid]["grid"] for i, pid in rows]).to(device)
-        glb = torch.stack(
-            [obs[i][pid]["globals"] for i, pid in rows]).to(device)
+        # ---- one batched forward per depth group ----
+        groups: Dict[int, List[int]] = {}
+        for i in active:
+            groups.setdefault(depths[i], []).append(i)
+        sampled: Dict[int, Dict[int, Dict[str, float]]] = {}
+        for d, grp in groups.items():
+            a = len(grp)
+            rows = [(i, 0) for i in grp] + [(i, 1) for i in grp]
+            grid = torch.stack(
+                [obs[i][pid]["grid"] for i, pid in rows]).to(device)
+            glb = torch.stack(
+                [obs[i][pid]["globals"] for i, pid in rows]).to(device)
+            with torch.no_grad():
+                if legal_mask:
+                    lm = torch.stack(
+                        [obs[i][pid]["legal_mask"]
+                         for i, pid in rows]).to(device)
+                    dm = torch.stack(
+                        [obs[i][pid]["dir_mask"]
+                         for i, pid in rows]).to(device)
+                    out = model.step(
+                        grid, glb, legal_mask=lm, direction_mask=dm,
+                        st_cache=caches.get(d), step_idx=_step,
+                        act_steps=d)
+                else:
+                    out = model.step_rl(grid, glb, st_cache=caches.get(d),
+                                        step_idx=_step, act_steps=d)
+            caches[d] = out["st_cache"]
 
-        with torch.no_grad():
-            if legal_mask:
-                lm = torch.stack(
-                    [obs[i][pid]["legal_mask"] for i, pid in rows]).to(device)
-                dm = torch.stack(
-                    [obs[i][pid]["dir_mask"] for i, pid in rows]).to(device)
-                out = model.step(
-                    grid, glb, legal_mask=lm, direction_mask=dm,
-                    st_cache=cache, step_idx=_step, act_steps=act_steps)
-            else:
-                out = model.step_rl(grid, glb, st_cache=cache,
-                                    step_idx=_step, act_steps=act_steps)
-        cache = out["st_cache"]
-
-        # One CPU sync per head instead of 4 .item() calls per seat per env
-        b_total = 2 * a
-        src = out["action_source"].detach().cpu().reshape(b_total)
-        dirn = out["action_direction"].detach().cpu().reshape(b_total)
-        spl = out["action_split"].detach().cpu().reshape(b_total)
-        pas = out["action_pass"].detach().cpu().reshape(b_total)
-        logp = out["action_log_prob"].detach().float().cpu().reshape(b_total)
-        val = out["value"].detach().float().cpu().reshape(b_total, -1)[:, 0]
+            # One CPU sync per head instead of .item() calls per seat
+            b_total = 2 * a
+            src = out["action_source"].detach().cpu().reshape(b_total)
+            dirn = out["action_direction"].detach().cpu().reshape(b_total)
+            spl = out["action_split"].detach().cpu().reshape(b_total)
+            pas = out["action_pass"].detach().cpu().reshape(b_total)
+            logp = out["action_log_prob"].detach().float().cpu().reshape(
+                b_total)
+            val = out["value"].detach().float().cpu().reshape(
+                b_total, -1)[:, 0]
+            for r_idx, i in enumerate(grp):
+                sampled[i] = {
+                    pid: {
+                        "source_idx": int(src[r]),
+                        "direction": int(dirn[r]),
+                        "split": int(spl[r]),
+                        "passed": bool(pas[r]),
+                        "log_prob": float(logp[r]),
+                        "value": float(val[r]),
+                    }
+                    for pid, r in ((0, r_idx), (1, r_idx + a))
+                }
 
         # Build every env's actions first, dispatch remote slots in one
         # batched pool call (workers step in parallel), step slot 0
@@ -765,24 +809,25 @@ def collect_selfplay_episodes_vec(
         acts_all: Dict[int, Dict[int, Dict]] = {}
         remote_actions: Dict[int, tuple] = {}
         results: Dict[int, tuple] = {}
-        for k, i in enumerate(active):
+        for i in active:
             acts = {}
-            for pid, r in ((0, k), (1, k + a)):
-                did_pass = bool(pas[r])
+            for pid in (0, 1):
+                s = sampled[i][pid]
+                did_pass = s["passed"]
                 no_moves = (legal_mask
                             and not bool(obs[i][pid]["legal_mask"].any()))
                 acts[pid] = {
-                    "row": r,
+                    "sample": s,
                     "action": {
-                        "source_idx": int(src[r]),
-                        "direction": int(dirn[r]),
-                        "split": int(spl[r]),
+                        "source_idx": s["source_idx"],
+                        "direction": s["direction"],
+                        "split": s["split"],
                         "passed": did_pass,
                     },
                     "env_action": None if (did_pass or no_moves) else {
-                        "source_idx": int(src[r]),
-                        "direction": int(dirn[r]),
-                        "split": int(spl[r]),
+                        "source_idx": s["source_idx"],
+                        "direction": s["direction"],
+                        "split": s["split"],
                     },
                 }
             acts_all[i] = acts
@@ -801,7 +846,7 @@ def collect_selfplay_episodes_vec(
         if remote_actions:
             results.update(worker_pool.step(remote_actions))
 
-        for k, i in enumerate(active):
+        for i in active:
             acts = acts_all[i]
             new_obs, rewards, done, info, vd = results[i]
 
@@ -827,12 +872,12 @@ def collect_selfplay_episodes_vec(
                     reward_totals[kk] += v
 
             for pid in (0, 1):
-                r = acts[pid]["row"]
+                s = acts[pid]["sample"]
                 buffers[i][pid].add(
                     obs=obs[i][pid],
                     action=acts[pid]["action"],
-                    log_prob=float(logp[r]),
-                    value=float(val[r]),
+                    log_prob=s["log_prob"],
+                    value=s["value"],
                     reward=rewards[pid],
                     done=done,
                     valid_directions=vd[pid],
@@ -844,13 +889,22 @@ def collect_selfplay_episodes_vec(
                 any_finished = True
 
         if any_finished:
-            keep = [k for k, i in enumerate(active) if not env_done[i]]
+            # Compact each depth group's cache with ITS OWN row order
+            for d, grp in groups.items():
+                if caches.get(d) is None:
+                    continue
+                keep = [k for k, i in enumerate(grp) if not env_done[i]]
+                if len(keep) == len(grp):
+                    continue
+                if keep:
+                    keep_rows = torch.tensor(
+                        keep + [k + len(grp) for k in keep],
+                        dtype=torch.long, device=caches[d][0].device)
+                    caches[d] = _select_cache_rows(
+                        caches[d], keep_rows, 2 * len(grp))
+                else:
+                    caches[d] = None
             active = [i for i in active if not env_done[i]]
-            if active and cache is not None:
-                keep_rows = torch.tensor(
-                    keep + [k + a for k in keep],
-                    dtype=torch.long, device=cache[0].device)
-                cache = _select_cache_rows(cache, keep_rows, b_total)
         if not active:
             break
 
@@ -1033,6 +1087,9 @@ def ppo_update(
 
         # Forward with stored source positions. Masks must match the rollout
         # exactly (masked there => masked here) or the PPO ratio is invalid.
+        # The TRM pondering depth must match too: depth-randomized rollouts
+        # tag each buffer with the depth it played at.
+        buf_act = getattr(buf, "act_steps", act_steps)
         source_y = actions["source_idx"] // cfg.grid_w
         source_x = actions["source_idx"] % cfg.grid_w
         use_mask = legal_masked and "dir_mask" in batch
@@ -1044,7 +1101,7 @@ def ppo_update(
             legal_mask=src_mask,
             source_y=source_y,
             source_x=source_x,
-            act_steps=act_steps,
+            act_steps=buf_act,
             direction_mask=dir_mask,
         )
 
@@ -1107,12 +1164,15 @@ def ppo_update(
                         dir_mask=dir_mask,
                     )
                 else:
+                    # Teacher forwards stay at the canonical depth 1: the
+                    # anchor target must not move with the student's
+                    # sampled pondering depth.
                     ref_pred = ref_model(
                         grid_seq, globals_seq,
                         legal_mask=src_mask,
                         source_y=source_y,
                         source_x=source_x,
-                        act_steps=act_steps,
+                        act_steps=1,
                         direction_mask=dir_mask,
                     )
             kls = compute_policy_kl_heads(
@@ -1141,7 +1201,7 @@ def ppo_update(
                                     if src_mask is not None else None),
                         source_y=source_y[:, :n_open],
                         source_x=source_x[:, :n_open],
-                        act_steps=act_steps,
+                        act_steps=1,
                         direction_mask=(dir_mask[:, :n_open]
                                         if dir_mask is not None else None),
                     )
@@ -1686,6 +1746,19 @@ def main():
     # ---- Vectorized rollout fleet (mirror-only) ------------------------
     # Built here, AFTER every env attribute above is final, by cloning the
     # fully-configured env. The map pool is shared by reference (read-only).
+    act_dist: Optional[Dict[int, float]] = None
+    if args.act_steps_dist:
+        _pairs = [kv.split(":") for kv in args.act_steps_dist.split(",")]
+        act_dist = {int(k): float(v) for k, v in _pairs}
+        _z = sum(act_dist.values())
+        act_dist = {k: v / _z for k, v in act_dist.items()}
+        if rank0:
+            print("Depth-randomized rollout: "
+                  + ", ".join(f"d{k}={v:.2f}" for k, v in
+                              sorted(act_dist.items()))
+                  + f"  (E[d]={sum(k * v for k, v in act_dist.items()):.2f};"
+                  f" eval fixed at d{args.act_steps})")
+
     vec_envs: Optional[List[GeneralsEnv]] = None
     env_worker_pool = None
     if args.vec_rollout:
@@ -1859,19 +1932,29 @@ def main():
         local_p1 = 0
         local_draw = 0
         local_mirror = 0
+        mean_depth = float(args.act_steps)
 
         replay_env_snapshot = None  # env state for the recorded episode
         if vec_envs is not None:
+            if act_dist is not None:
+                iter_depths = random.choices(
+                    list(act_dist.keys()), weights=list(act_dist.values()),
+                    k=args.episodes_per_gpu)
+            else:
+                iter_depths = args.act_steps
             bufs_v, replay_log_v, rw_tot = collect_selfplay_episodes_vec(
                 model, vec_envs, device,
                 max_steps=args.rollout_steps,
                 gamma=args.gamma,
                 gae_lambda=args.gae_lambda,
                 record=should_record,
-                act_steps=args.act_steps,
+                act_steps=iter_depths,
                 legal_mask=bool(args.rl_legal_mask),
                 worker_pool=env_worker_pool,
             )
+            mean_depth = (sum(iter_depths) / len(iter_depths)
+                          if isinstance(iter_depths, list)
+                          else float(iter_depths))
             ep_buffers.extend(bufs_v)
             if replay_log_v is not None:
                 replay_log = replay_log_v
@@ -2281,6 +2364,7 @@ def main():
                 f"il_w={il_weight:.4f}  "
                 f"okl={ppo_avg.get('okl', 0):.3f} | "
                 f"pool={len(opponent_pool)}  "
+                f"d={mean_depth:.2f}  "
                 f"t={elapsed:.1f}s\n"
                 f"    rw: inv={reward_totals['r_invalid']:.3f}  "
                 f"city={reward_totals['r_city']:.3f}  "
