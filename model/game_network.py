@@ -154,19 +154,53 @@ class GameNetwork(nn.Module):
         self,
         x: torch.Tensor,
         act_steps: Optional[int],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Inference-time ACT: fixed depth when ``act_steps`` is given
-        (needed for exact policy replay in RL), q_halt-gated otherwise."""
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Inference-time ACT.
+
+        Fixed depth when ``act_steps`` is given (needed for exact policy
+        replay in RL). ``act_steps=None`` → ADAPTIVE per-row halting: each
+        batch row ponders until its own q_halt turns positive (or
+        cfg.halt_max_steps), halted rows leave the batch so late steps
+        only pay for the rows still thinking.
+
+        Returns (z_H, q_halt, act_depth[B]) — realized pondering depths.
+        """
         z_H, q_halt, carry = self.trm(x)
         if act_steps is not None:
-            for _ in range(max(1, act_steps) - 1):
+            steps = max(1, act_steps)
+            for _ in range(steps - 1):
                 z_H, q_halt, carry = self.trm(x, carry)
-        else:
-            for _ in range(self.cfg.halt_max_steps - 1):
-                if (q_halt > 0).all():
+            depth = torch.full((x.shape[0],), steps, dtype=torch.long,
+                               device=x.device)
+            return z_H, q_halt, depth
+
+        max_steps = max(1, self.cfg.halt_max_steps)
+        B = x.shape[0]
+        final_z = z_H.clone()
+        final_q = q_halt.clone()
+        depth = torch.full((B,), max_steps, dtype=torch.long,
+                           device=x.device)
+        alive = torch.arange(B, device=x.device)
+        cur_x, cur_z, cur_q, cur_carry = x, z_H, q_halt, carry
+        for step_i in range(1, max_steps):
+            halted = cur_q > 0
+            if halted.any():
+                rows = alive[halted]
+                final_z[rows] = cur_z[halted]
+                final_q[rows] = cur_q[halted]
+                depth[rows] = step_i
+                keep = ~halted
+                if not keep.any():
+                    alive = alive[:0]
                     break
-                z_H, q_halt, carry = self.trm(x, carry)
-        return z_H, q_halt
+                alive = alive[keep]
+                cur_x = cur_x[keep]
+                cur_carry = (cur_carry[0][keep], cur_carry[1][keep])
+            cur_z, cur_q, cur_carry = self.trm(cur_x, cur_carry)
+        if alive.numel():
+            final_z[alive] = cur_z
+            final_q[alive] = cur_q
+        return final_z, final_q, depth
 
     # ------------------------------------------------------------------
     # Full-sequence forward (training)
@@ -307,7 +341,7 @@ class GameNetwork(nn.Module):
         tokens = self.mid_norm(tokens.squeeze(1))
 
         # Stage 2: TRM with ACT
-        z_H, q_halt = self._trm_act_loop(tokens, act_steps)
+        z_H, q_halt, act_depth = self._trm_act_loop(tokens, act_steps)
         z_H = self.post_norm(z_H)
 
         game_out = z_H[:, :S_game]
@@ -331,6 +365,7 @@ class GameNetwork(nn.Module):
             **pred,
             "value": self.value_head(hl_out),
             "q_halt": q_halt,
+            "act_depth": act_depth,
             "st_cache": new_caches,
             **rl_out,
         }

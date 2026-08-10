@@ -115,6 +115,12 @@ ACT_DIST_FLAGS=()
 if [ -n "$ACT_DIST" ]; then
     ACT_DIST_FLAGS=(--act_steps_dist "$ACT_DIST")
 fi
+# Halt-head self-consistency calibration (adaptive-ACT prerequisite):
+# q_halt learns "deeper pondering would not change the move". Ref depth
+# and per-update sampling fraction bound the extra forward cost.
+HALT_WEIGHT=${HALT_WEIGHT:-0}
+HALT_REF=${HALT_REF:-8}
+HALT_FRAC=${HALT_FRAC:-0.25}
 # Opening anchor (off by default): set OPENING_ANCHOR to the IL
 # checkpoint to teach the first OPENING_TURNS turns the human opening —
 # mirror self-play cannot punish shared opening habits and the magnet
@@ -173,6 +179,9 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --rollout_steps 1536 \
         --act_steps "$ACT_STEPS" \
         "${ACT_DIST_FLAGS[@]}" \
+        --halt_consistency_weight "$HALT_WEIGHT" \
+        --halt_ref_depth "$HALT_REF" \
+        --halt_frac "$HALT_FRAC" \
         --ppo_epochs 1 \
         --accum_episodes "$ACCUM_EPISODES" \
         --target_kl 0.02 \

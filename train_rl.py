@@ -198,6 +198,18 @@ def parse_args():
     p.add_argument("--opening_anchor_weight", type=float, default=0.05,
                    help="Constant weight of the opening KL. No decay: "
                         "the opening textbook never stops applying.")
+    p.add_argument("--halt_consistency_weight", type=float, default=0.0,
+                   help="Weight of the halt-head self-consistency BCE "
+                        "(TRM halting, RL-adapted): q_halt learns to "
+                        "predict 'pondering deeper would not change the "
+                        "move'. 0 = off.")
+    p.add_argument("--halt_ref_depth", type=int, default=8,
+                   help="Reference pondering depth for halt labels; "
+                        "supervision applies to buffers shallower than "
+                        "this.")
+    p.add_argument("--halt_frac", type=float, default=0.25,
+                   help="Fraction of eligible buffers per update that pay "
+                        "the deep reference forward for halt labels.")
     p.add_argument("--eval_ckpt", type=str, default=None,
                    help="Optional frozen checkpoint used for the periodic "
                         "paired-greedy strength exam. Default: reuse the KL "
@@ -536,9 +548,20 @@ def collect_selfplay_episode(
         })
 
     # act_steps may be a single depth for both seats, or {pid: depth} to
-    # pit different TRM pondering depths against each other (depth probes)
+    # pit different TRM pondering depths against each other (depth
+    # probes). A depth of None = ADAPTIVE per-position halting (q_halt
+    # gated) — inference only: realized depths are data-dependent, so
+    # PPO cannot replay them yet.
     act_by_pid = (act_steps if isinstance(act_steps, dict)
                   else {0: act_steps, 1: act_steps})
+    adaptive = any(v is None for v in act_by_pid.values())
+    if adaptive and collect_buffers:
+        raise ValueError(
+            "adaptive act_steps (None) cannot be replayed by the PPO "
+            "update — use collect_buffers=False (probes/eval only)")
+    if adaptive:
+        reward_totals.update({"d0_sum": 0.0, "d0_n": 0.0,
+                              "d1_sum": 0.0, "d1_n": 0.0})
 
     for _step in range(max_steps):
         step_out = {}
@@ -563,6 +586,11 @@ def collect_selfplay_episode(
 
             caches[pid] = out.get("st_cache")
             step_out[pid] = out
+            if adaptive and "act_depth" in out:
+                reward_totals[f"d{pid}_sum"] += float(
+                    out["act_depth"].float().sum())
+                reward_totals[f"d{pid}_n"] += float(
+                    out["act_depth"].numel())
 
         # Build env actions. With masking, a player with NO legal source
         # (e.g. turn 0, all armies == 1) sampled through the all-masked
@@ -721,6 +749,10 @@ def collect_selfplay_episodes_vec(
     if len(depths) != n:
         raise ValueError(f"act_steps list has {len(depths)} entries "
                          f"for {n} envs")
+    if any(d is None for d in depths):
+        raise ValueError("adaptive depth (None) is not supported in the "
+                         "vectorized training collector — sampled fixed "
+                         "depths only")
     for i in range(n):
         for pid in (0, 1):
             buffers[i][pid].act_steps = depths[i]
@@ -1018,6 +1050,9 @@ def ppo_update(
     opening_ref: Optional[GeneralsNetwork] = None,
     opening_weight: float = 0.0,
     opening_turns: int = 100,
+    halt_weight: float = 0.0,
+    halt_ref_depth: int = 8,
+    halt_frac: float = 0.25,
 ) -> Dict[str, float]:
     """Run one PPO update epoch with gradient accumulation over multiple
     trajectories.
@@ -1272,6 +1307,45 @@ def ppo_update(
                 cap_acc = ((((cap_logits > 0).float() == cap_labels).float()
                             * cap_mask).sum() / n_lab).item()
 
+        # Halt-head self-consistency calibration (TRM's "halt when the
+        # answer is correct", RL-adapted: halt when pondering DEEPER would
+        # not change the move). A no-grad reference forward at
+        # halt_ref_depth labels each frame "settled" iff every head's
+        # greedy choice already matches the deep forward's; q_halt learns
+        # to predict it. Sampled per buffer (halt_frac) — the deep forward
+        # costs halt_ref_depth/buf_act extra — and only where the buffer's
+        # depth is shallower than the reference.
+        halt_loss = torch.tensor(0.0, device=device)
+        halt_acc = 0.0
+        if (halt_weight > 0 and "q_halt" in pred
+                and buf_act < halt_ref_depth
+                and random.random() < halt_frac):
+            with torch.no_grad():
+                deep = model(
+                    grid_seq, globals_seq,
+                    legal_mask=src_mask,
+                    source_y=source_y,
+                    source_x=source_x,
+                    act_steps=halt_ref_depth,
+                    direction_mask=dir_mask,
+                )
+                settled = (
+                    (pred["source_logits"].argmax(-1)
+                     == deep["source_logits"].argmax(-1))
+                    & (pred["direction_logits"].argmax(-1)
+                       == deep["direction_logits"].argmax(-1))
+                    & (pred["split_logits"].argmax(-1)
+                       == deep["split_logits"].argmax(-1))
+                    & ((pred["pass_logits"] > 0)
+                       == (deep["pass_logits"] > 0))
+                ).float()
+            halt_loss = F.binary_cross_entropy_with_logits(
+                pred["q_halt"], settled)
+            total = total + halt_weight * halt_loss
+            with torch.no_grad():
+                halt_acc = (((pred["q_halt"] > 0) == settled.bool())
+                            .float().mean().item())
+
         # Scale loss for gradient accumulation within this chunk
         (total / max(denom, 1)).backward()
 
@@ -1293,6 +1367,8 @@ def ppo_update(
             "cap_loss": cap_loss.item() if isinstance(cap_loss, torch.Tensor) else cap_loss,
             "cap_acc": cap_acc,
             "adv_kept": adv_kept,
+            "halt_loss": halt_loss.item() if isinstance(halt_loss, torch.Tensor) else halt_loss,
+            "halt_acc": halt_acc,
         }
         step_metrics.update(kl_heads)
         for k, v in step_metrics.items():
@@ -2137,6 +2213,9 @@ def main():
                     opening_ref=opening_ref,
                     opening_weight=args.opening_anchor_weight,
                     opening_turns=args.opening_anchor_turns,
+                    halt_weight=args.halt_consistency_weight,
+                    halt_ref_depth=args.halt_ref_depth,
+                    halt_frac=args.halt_frac,
                 )
                 epochs_run += 1
                 for k, v in metrics.items():
@@ -2362,7 +2441,9 @@ def main():
                 f"{ppo_avg.get('cap_acc', 0):.2f} | "
                 f"il={il_metrics.get('il_loss', 0):.4f}  "
                 f"il_w={il_weight:.4f}  "
-                f"okl={ppo_avg.get('okl', 0):.3f} | "
+                f"okl={ppo_avg.get('okl', 0):.3f}  "
+                f"halt={ppo_avg.get('halt_loss', 0):.3f}/"
+                f"{ppo_avg.get('halt_acc', 0):.2f} | "
                 f"pool={len(opponent_pool)}  "
                 f"d={mean_depth:.2f}  "
                 f"t={elapsed:.1f}s\n"
