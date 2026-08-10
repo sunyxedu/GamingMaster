@@ -527,6 +527,11 @@ def collect_selfplay_episode(
             "done": False, "winner": None,
         })
 
+    # act_steps may be a single depth for both seats, or {pid: depth} to
+    # pit different TRM pondering depths against each other (depth probes)
+    act_by_pid = (act_steps if isinstance(act_steps, dict)
+                  else {0: act_steps, 1: act_steps})
+
     for _step in range(max_steps):
         step_out = {}
 
@@ -542,11 +547,11 @@ def collect_selfplay_episode(
                         legal_mask=obs[pid]["legal_mask"].unsqueeze(0).to(device),
                         direction_mask=obs[pid]["dir_mask"].unsqueeze(0).to(device),
                         st_cache=caches[pid], step_idx=_step,
-                        act_steps=act_steps)
+                        act_steps=act_by_pid[pid])
                 else:
                     out = net.step_rl(grid, glb,
                                       st_cache=caches[pid], step_idx=_step,
-                                      act_steps=act_steps)
+                                      act_steps=act_by_pid[pid])
 
             caches[pid] = out.get("st_cache")
             step_out[pid] = out

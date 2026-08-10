@@ -101,6 +101,11 @@ ENV_WORKERS=${ENV_WORKERS:-0}
 # truncation-penalty batches. AverageJoe accumulates 128 episodes per
 # step; 32 restores the healthy-era step count at vectorized scale.
 ACCUM_EPISODES=${ACCUM_EPISODES:-4}
+# TRM pondering depth, FIXED for rollout/update/eval alike (PPO must
+# replay the exact rollout policy; adaptive q_halt gating would break
+# the ratio). >1 spends proportionally more forward compute — switch
+# only after a depth probe (scripts/depth_probe.py) shows it pays.
+ACT_STEPS=${ACT_STEPS:-1}
 # Opening anchor (off by default): set OPENING_ANCHOR to the IL
 # checkpoint to teach the first OPENING_TURNS turns the human opening —
 # mirror self-play cannot punish shared opening habits and the magnet
@@ -157,7 +162,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --vec_rollout "$VEC_ROLLOUT" \
         --env_workers "$ENV_WORKERS" \
         --rollout_steps 1536 \
-        --act_steps 1 \
+        --act_steps "$ACT_STEPS" \
         --ppo_epochs 1 \
         --accum_episodes "$ACCUM_EPISODES" \
         --target_kl 0.02 \
