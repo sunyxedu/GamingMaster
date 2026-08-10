@@ -94,6 +94,13 @@ VEC_ROLLOUT=${VEC_ROLLOUT:-0}
 # With VEC_ROLLOUT: parallel env stepping over this many persistent
 # worker processes per rank (0 = in-process serial stepping).
 ENV_WORKERS=${ENV_WORKERS:-0}
+# Episodes accumulated per optimizer step. The default 4 was tuned for
+# 12 episodes/GPU; at 64 episodes/GPU it yields ~32 optimizer steps per
+# iteration whose cumulative drift blows past target_kl (measured
+# approx_kl 0.28-0.66 in run5) and whose small chunks chase
+# truncation-penalty batches. AverageJoe accumulates 128 episodes per
+# step; 32 restores the healthy-era step count at vectorized scale.
+ACCUM_EPISODES=${ACCUM_EPISODES:-4}
 # Opening anchor (off by default): set OPENING_ANCHOR to the IL
 # checkpoint to teach the first OPENING_TURNS turns the human opening —
 # mirror self-play cannot punish shared opening habits and the magnet
@@ -152,7 +159,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --rollout_steps 1536 \
         --act_steps 1 \
         --ppo_epochs 1 \
-        --accum_episodes 4 \
+        --accum_episodes "$ACCUM_EPISODES" \
         --target_kl 0.02 \
         --clip_range 0.2 \
         --gamma 1.0 \
