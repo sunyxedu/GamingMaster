@@ -139,10 +139,15 @@ if [ -n "$OPENING_ANCHOR" ]; then
                 --opening_anchor_weight "$OPENING_WEIGHT")
 fi
 
-# Crash recovery: newest run-4 checkpoint if one exists, else the seed.
-if [ -z "${RESUME:-}" ]; then
-    RESUME=$(ls "$P7M_DIR"/rl_checkpoint_iter*[0-9].pt 2>/dev/null | sort -V | tail -1)
-    [ -n "$RESUME" ] || RESUME=$SEED_CKPT
+# Crash recovery FIRST: if the output dir already holds checkpoints,
+# continue from the newest one — even when RESUME is set. An explicit
+# RESUME is the SEED for a fresh directory only; letting it win on a
+# requeue silently rewinds a crashed run to its seed (bit 45418's era).
+LATEST=$(ls "$P7M_DIR"/rl_checkpoint_iter*[0-9].pt 2>/dev/null | sort -V | tail -1)
+if [ -n "$LATEST" ]; then
+    RESUME=$LATEST
+elif [ -z "${RESUME:-}" ]; then
+    RESUME=$SEED_CKPT
 fi
 if [ ! -f "$RESUME" ]; then
     echo "ERROR: no resume checkpoint found (RESUME='$RESUME')" >&2
