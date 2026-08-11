@@ -1078,6 +1078,9 @@ def ppo_update(
 
     n_buffers = len(buffers)
     metrics_accum: Dict[str, float] = {}
+    # Counts eligible buffers across the whole update for the halt-loss
+    # stride sampler (see _process_buffer).
+    halt_counter = [0]
 
     def _flush_step() -> None:
         """Sync, clip and apply one optimizer step (both optimizers).
@@ -1315,11 +1318,20 @@ def ppo_update(
         # to predict it. Sampled per buffer (halt_frac) — the deep forward
         # costs halt_ref_depth/buf_act extra — and only where the buffer's
         # depth is shallower than the reference.
+        # DETERMINISTIC stride sampling, not random: per-rank random gating
+        # let one rank draw several depth-8 reference forwards in a chunk
+        # and blow past the NCCL allreduce timeout while its peers waited
+        # (45418: watchdog SIGABRT after 600s). A fixed stride keeps every
+        # rank's extra-forward count balanced.
         halt_loss = torch.tensor(0.0, device=device)
         halt_acc = 0.0
+        take_halt = False
         if (halt_weight > 0 and "q_halt" in pred
-                and buf_act < halt_ref_depth
-                and random.random() < halt_frac):
+                and buf_act < halt_ref_depth):
+            halt_counter[0] += 1
+            stride = max(1, int(round(1.0 / max(halt_frac, 1e-6))))
+            take_halt = (halt_counter[0] % stride == 1) or stride == 1
+        if take_halt:
             with torch.no_grad():
                 deep = model(
                     grid_seq, globals_seq,
@@ -1452,7 +1464,12 @@ def main():
     # Distributed setup
     distributed = "LOCAL_RANK" in os.environ
     if distributed:
-        dist.init_process_group(backend="nccl")
+        # 30 min collective timeout: chunk durations vary with sampled TRM
+        # depths and halt reference forwards; the 10-min default killed
+        # 45418 on benign rank skew.
+        from datetime import timedelta
+        dist.init_process_group(backend="nccl",
+                                timeout=timedelta(minutes=30))
         local_rank = int(os.environ["LOCAL_RANK"])
         torch.cuda.set_device(local_rank)
         device = torch.device(f"cuda:{local_rank}")
