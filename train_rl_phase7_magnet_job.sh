@@ -121,6 +121,10 @@ fi
 HALT_WEIGHT=${HALT_WEIGHT:-0}
 HALT_REF=${HALT_REF:-8}
 HALT_FRAC=${HALT_FRAC:-0.25}
+# 0 = train with directions UNMASKED (walking into walls costs -0.05 and
+# a wasted turn; dir-validity aux loss supervises) so the network must
+# internalize terrain. Source mask and eval masking stay on.
+DIR_MASK=${DIR_MASK:-1}
 # Opening anchor (off by default): set OPENING_ANCHOR to the IL
 # checkpoint to teach the first OPENING_TURNS turns the human opening —
 # mirror self-play cannot punish shared opening habits and the magnet
@@ -182,6 +186,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --halt_consistency_weight "$HALT_WEIGHT" \
         --halt_ref_depth "$HALT_REF" \
         --halt_frac "$HALT_FRAC" \
+        --dir_mask "$DIR_MASK" \
         --ppo_epochs 1 \
         --accum_episodes "$ACCUM_EPISODES" \
         --target_kl 0.02 \

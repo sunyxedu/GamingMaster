@@ -106,6 +106,10 @@ class GeneralsEnv:
         self.turn: int = 0
         self.done: bool = True
         self.winner: Optional[int] = None
+        # Per-player sighted-mountain memory (see reset / _get_observation);
+        # memory_vision=False restores pure instantaneous fog encoding.
+        self.seen_mountains: List[set] = [set(), set()]
+        self.memory_vision: bool = True
 
         # Heuristic tracking for dense reward
         self.prev_heuristic: Dict[int, float] = {0: 0.0, 1: 0.0}
@@ -194,6 +198,14 @@ class GeneralsEnv:
         """
         if seed is not None:
             random.seed(seed)
+
+        # Per-player structure memory (fog-of-war honest: each player only
+        # remembers what THEY have personally seen). Mountains a player has
+        # sighted stay encoded as mountains after vision is lost — without
+        # this the policy provably cannot remember walls (a sighted ridge
+        # decays back to the generic "obstacle in fog" state) and beelines
+        # into terrain it has already scouted.
+        self.seen_mountains = [set(), set()]
 
         self.current_map_idx: Optional[int] = None
         if self.map_pool:
@@ -470,11 +482,22 @@ class GeneralsEnv:
         # Only encode tiles within real map bounds (padding stays all-zero,
         # matching how the IL converter pads data)
         grid = torch.zeros(12, H, W, dtype=torch.float32)
+        memory = (self.seen_mountains[player_id]
+                  if getattr(self, "memory_vision", True) else None)
         for r in range(rH):
             for c in range(rW):
                 tile = self.map[r][c]
                 v = vision[r][c]
                 state = self._tile_to_state(tile, v, player_id)
+                if memory is not None:
+                    idx = r * W + c
+                    if v >= 1 and tile.terrain == _MOUNTAIN:
+                        memory.add(idx)
+                    elif v == 0 and idx in memory:
+                        # Sighted-before mountain: stays a mountain in this
+                        # player's observation instead of decaying to the
+                        # generic fog-obstacle state.
+                        state = 4
                 if 0 <= state <= 10:
                     grid[state, r, c] = 1.0
                 # Army channel (only for visible tiles)

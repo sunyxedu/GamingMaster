@@ -216,6 +216,15 @@ def parse_args():
                         "reference. Keeping this separate lets training use "
                         "a human KL anchor while measuring against a fixed "
                         "RL milestone.")
+    p.add_argument("--dir_mask", type=int, default=1,
+                   help="1 = hard-mask illegal DIRECTIONS (into mountains / "
+                        "off-map) during training rollouts and PPO replay. "
+                        "0 = directions unmasked: walking into a wall is the "
+                        "policy's own problem (env -0.05 + wasted turn + "
+                        "direction-validity aux loss teach it), forcing the "
+                        "network to internalize terrain instead of leaning "
+                        "on the mask. Source masking and eval/deployment "
+                        "masking are unaffected.")
     p.add_argument("--invalidity_weight", type=float, default=0.1,
                    help="Weight for source/direction invalidity auxiliary "
                         "loss (ignored when --rl_legal_mask is on: masked "
@@ -493,6 +502,7 @@ def collect_selfplay_episode(
     record: bool = False,
     act_steps: int = 1,
     legal_mask: bool = True,
+    mask_directions: bool = True,
     learner_pid: int = 0,
     reset_seed: Optional[int] = None,
     collect_both: bool = False,
@@ -576,7 +586,8 @@ def collect_selfplay_episode(
                     out = net.step(
                         grid, glb,
                         legal_mask=obs[pid]["legal_mask"].unsqueeze(0).to(device),
-                        direction_mask=obs[pid]["dir_mask"].unsqueeze(0).to(device),
+                        direction_mask=(obs[pid]["dir_mask"].unsqueeze(0).to(device)
+                                        if mask_directions else None),
                         st_cache=caches[pid], step_idx=_step,
                         act_steps=act_by_pid[pid])
                 else:
@@ -707,6 +718,7 @@ def collect_selfplay_episodes_vec(
     record: bool = False,
     act_steps: int = 1,
     legal_mask: bool = True,
+    mask_directions: bool = True,
     worker_pool=None,
 ) -> Tuple[List[RolloutBuffer], Optional[List[Dict]], Dict[str, float]]:
     """Vectorized mirror self-play: N envs in lockstep, both seats through
@@ -799,9 +811,13 @@ def collect_selfplay_episodes_vec(
                     lm = torch.stack(
                         [obs[i][pid]["legal_mask"]
                          for i, pid in rows]).to(device)
-                    dm = torch.stack(
+                    # mask_directions=False: the policy may pick a walled
+                    # direction — the env scores it invalid (-0.05, no-op)
+                    # and the network has to learn terrain the hard way.
+                    dm = (torch.stack(
                         [obs[i][pid]["dir_mask"]
                          for i, pid in rows]).to(device)
+                        if mask_directions else None)
                     out = model.step(
                         grid, glb, legal_mask=lm, direction_mask=dm,
                         st_cache=caches.get(d), step_idx=_step,
@@ -1043,6 +1059,7 @@ def ppo_update(
     capture_optimizer: Optional[torch.optim.Optimizer] = None,
     capture_weight: float = 0.0,
     legal_masked: bool = True,
+    mask_directions: bool = True,
     accum_episodes: int = 0,
     n_chunks: int = 1,
     adv_filter_frac: float = 0.0,
@@ -1132,7 +1149,10 @@ def ppo_update(
         source_x = actions["source_idx"] % cfg.grid_w
         use_mask = legal_masked and "dir_mask" in batch
         src_mask = batch["legal_mask"] if use_mask else None
-        dir_mask = batch["dir_mask"] if use_mask else None
+        # Directions may be unmasked independently (--dir_mask 0): replay
+        # must mirror the rollout's masking exactly or the ratio is invalid.
+        dir_mask = (batch["dir_mask"]
+                    if use_mask and mask_directions else None)
 
         pred = model(
             grid_seq, globals_seq,
@@ -1258,34 +1278,39 @@ def ppo_update(
 
         # Invalidity loss: push probability toward legal sources & valid
         # directions. Redundant under hard masking (the masked policy places
-        # zero mass on invalid actions by construction) — skip it there.
+        # zero mass on invalid actions by construction) — each part applies
+        # only where its head is actually unmasked.
         inv_loss = torch.tensor(0.0, device=device)
-        if invalidity_weight > 0 and not use_mask:
+        need_src_inv = invalidity_weight > 0 and not use_mask
+        need_dir_inv = invalidity_weight > 0 and not (use_mask
+                                                     and mask_directions)
+        if need_src_inv or need_dir_inv:
             T = grid_seq.size(1)
             not_passed = ~actions["passed"]  # [1, T]
-
-            # Source validity: encourage prob mass on legal source positions
             legal_mask_flat = batch["legal_mask"].reshape(1, T, -1).float()
-            source_probs = F.softmax(pred["source_logits"], dim=-1)
-            prob_on_valid_src = (source_probs * legal_mask_flat).sum(-1)
-            src_val_loss = -torch.log(prob_on_valid_src.clamp(min=1e-8))
-            src_mask = not_passed.float()
-            n_src = src_mask.sum().clamp(min=1)
-            src_val_loss = (src_val_loss * src_mask).sum() / n_src
 
-            # Direction validity: encourage prob mass on valid directions
-            valid_dirs = batch["valid_directions"].float()
-            dir_probs = F.softmax(pred["direction_logits"], dim=-1)
-            prob_on_valid_dir = (dir_probs * valid_dirs).sum(-1)
-            dir_val_loss = -torch.log(prob_on_valid_dir.clamp(min=1e-8))
-            source_was_valid = legal_mask_flat.gather(
-                -1, actions["source_idx"].unsqueeze(-1),
-            ).squeeze(-1)
-            dir_mask = source_was_valid * not_passed.float()
-            n_dir = dir_mask.sum().clamp(min=1)
-            dir_val_loss = (dir_val_loss * dir_mask).sum() / n_dir
+            if need_src_inv:
+                # Source validity: prob mass on legal source positions
+                source_probs = F.softmax(pred["source_logits"], dim=-1)
+                prob_on_valid_src = (source_probs * legal_mask_flat).sum(-1)
+                src_val_loss = -torch.log(prob_on_valid_src.clamp(min=1e-8))
+                srcm = not_passed.float()
+                n_src = srcm.sum().clamp(min=1)
+                inv_loss = inv_loss + (src_val_loss * srcm).sum() / n_src
 
-            inv_loss = src_val_loss + dir_val_loss
+            if need_dir_inv:
+                # Direction validity: prob mass on non-wall directions
+                valid_dirs = batch["valid_directions"].float()
+                dir_probs = F.softmax(pred["direction_logits"], dim=-1)
+                prob_on_valid_dir = (dir_probs * valid_dirs).sum(-1)
+                dir_val_loss = -torch.log(prob_on_valid_dir.clamp(min=1e-8))
+                source_was_valid = legal_mask_flat.gather(
+                    -1, actions["source_idx"].unsqueeze(-1),
+                ).squeeze(-1)
+                dirm = source_was_valid * not_passed.float()
+                n_dir = dirm.sum().clamp(min=1)
+                inv_loss = inv_loss + (dir_val_loss * dirm).sum() / n_dir
+
             total = total + invalidity_weight * inv_loss
 
         # Auxiliary capture-feasibility BCE: exact env labels, masked to
@@ -2043,6 +2068,7 @@ def main():
                 record=should_record,
                 act_steps=iter_depths,
                 legal_mask=bool(args.rl_legal_mask),
+                mask_directions=bool(args.dir_mask),
                 worker_pool=env_worker_pool,
             )
             mean_depth = (sum(iter_depths) / len(iter_depths)
@@ -2097,6 +2123,7 @@ def main():
                 record=record_this,
                 act_steps=args.act_steps,
                 legal_mask=bool(args.rl_legal_mask),
+                mask_directions=bool(args.dir_mask),
                 learner_pid=learner_pid,
                 collect_both=mirror,
             )
@@ -2223,6 +2250,7 @@ def main():
                     capture_optimizer=capture_optimizer,
                     capture_weight=args.capture_aux_weight,
                     legal_masked=bool(args.rl_legal_mask),
+                    mask_directions=bool(args.dir_mask),
                     accum_episodes=args.accum_episodes,
                     n_chunks=n_chunks,
                     adv_filter_frac=args.adv_filter_frac,
