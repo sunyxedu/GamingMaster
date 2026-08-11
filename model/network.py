@@ -52,7 +52,12 @@ class GeneralsNetwork(GameNetwork):
     }
 
     def __init__(self, cfg: ModelConfig):
-        super().__init__(cfg, GeneralsEncoder(cfg), GeneralsDecoder(cfg))
+        if getattr(cfg, "joint_decoder", False):
+            from model.games.generals import JointGeneralsDecoder
+            decoder = JointGeneralsDecoder(cfg)
+        else:
+            decoder = GeneralsDecoder(cfg)
+        super().__init__(cfg, GeneralsEncoder(cfg), decoder)
 
     # ------------------------------------------------------------------
     # Legacy attribute access (freeze helpers, tests, tools)

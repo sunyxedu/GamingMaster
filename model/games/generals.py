@@ -456,3 +456,248 @@ class GeneralsDecoder(ActionDecoder):
             }
 
         return total_lp, total_ent, head_entropy
+
+
+class JointGeneralsDecoder(ActionDecoder):
+    """AverageJoe-style flat joint-action decoder.
+
+    ONE categorical over ``2*4*N + 1`` outcomes: for every cell, four
+    full-army move directions and four half-army (split) directions,
+    plus a single global pass read from the HL token. Every concrete
+    move competes with every other move in the same softmax, so credit
+    lands on the exact arrow played. The factorized Source→Direction
+    hierarchy instead scores sources by a direction-agnostic marginal —
+    a wall-locked frontier cell can look attractive until the direction
+    head is left with nothing but bad options (the observed
+    beeline-into-mountains pathology).
+
+    Joint index layout: ``idx = (split * 4 + direction) * N + cell``;
+    ``idx == 8N`` is pass.
+
+    Contract compatibility: ``pred`` additionally carries the factorized
+    VIEWS (``source/direction/split/pass_logits``) derived as exact
+    marginals of the joint distribution, so the magnet KL, the opening
+    anchor, halt self-consistency labels and invalidity telemetry
+    consume them unchanged.
+    """
+
+    def __init__(self, cfg: ModelConfig):
+        super().__init__()
+        self.cfg = cfg
+        d = cfg.d_model
+        n_arrow = 2 * cfg.n_directions  # 4 full + 4 half per cell
+        self.arrow_head = nn.Sequential(
+            nn.Linear(d, d), nn.ReLU(), nn.Linear(d, n_arrow))
+        self.pass_proj = nn.Sequential(
+            nn.Linear(d, d // 2), nn.ReLU(), nn.Linear(d // 2, 1))
+
+    # ------------------------------------------------------------------
+
+    def _joint_and_views(self, tokens, hl, BT, legal):
+        cfg = self.cfg
+        D = cfg.n_directions
+        N = cfg.grid_h * cfg.grid_w
+        device = tokens.device
+
+        arrows = self.arrow_head(tokens)              # [BT, N, 2D]
+        arr = arrows.transpose(1, 2).contiguous()     # [BT, 2D, N]
+        pass_logit = self.pass_proj(hl).squeeze(-1)   # [BT]
+        joint_raw = torch.cat(
+            [arr.reshape(BT, 2 * D * N), pass_logit.unsqueeze(-1)], dim=-1)
+
+        legal_mask = legal.get("source") if legal else None
+        dir_legal = legal.get("direction") if legal else None
+        if legal_mask is not None:
+            src_ok = legal_mask.reshape(BT, 1, N)
+            if dir_legal is not None:
+                dir_ok = dir_legal.reshape(BT, D, N)
+            else:
+                dir_ok = torch.ones(BT, D, N, dtype=torch.bool,
+                                    device=device)
+            arrow_ok = (src_ok & dir_ok).repeat(1, 2, 1)   # [BT, 2D, N]
+            ok = torch.cat(
+                [arrow_ok.reshape(BT, 2 * D * N),
+                 torch.ones(BT, 1, dtype=torch.bool, device=device)],
+                dim=-1)
+            joint = joint_raw.masked_fill(~ok, -1e9)
+        else:
+            joint = joint_raw
+
+        # Pass is always legal, so no all-masked fallback is ever needed;
+        # NaN rows (bf16 overflow etc.) fall back to uniform, mirroring
+        # safe_masked_logits semantics.
+        nan_rows = joint.isnan().any(dim=-1)
+        if nan_rows.any():
+            joint = torch.where(nan_rows.unsqueeze(-1),
+                                torch.zeros_like(joint), joint)
+        return joint, arr, pass_logit
+
+    def _views(self, arr, pass_logit, src_idx, BT, legal):
+        """Factorized marginals of the joint distribution (view layer)."""
+        cfg = self.cfg
+        D = cfg.n_directions
+        N = arr.shape[-1]
+        device = arr.device
+
+        source_logits = torch.logsumexp(arr, dim=1)            # [BT, N]
+        sel = arr.gather(
+            2, src_idx.view(BT, 1, 1).expand(BT, 2 * D, 1),
+        ).squeeze(-1).reshape(BT, 2, D)                        # [BT, 2, D]
+
+        dir_legal = legal.get("direction") if legal else None
+        if dir_legal is not None:
+            dm = dir_legal.reshape(BT, D, N).gather(
+                2, src_idx.view(BT, 1, 1).expand(BT, D, 1)).squeeze(-1)
+            sel_m = sel.masked_fill(~dm.unsqueeze(1), -1e9)
+            dead = ~dm.any(-1)
+            if dead.any():
+                sel_m = torch.where(dead.view(BT, 1, 1), sel, sel_m)
+            sel = sel_m
+
+        direction_logits = torch.logsumexp(sel, dim=1)         # [BT, D]
+        split_logits = torch.logsumexp(sel, dim=2)             # [BT, 2]
+        # Bernoulli pass-vs-move logit of the joint policy
+        pass_view = pass_logit - torch.logsumexp(
+            arr.reshape(BT, -1), dim=-1)
+        return source_logits, direction_logits, split_logits, pass_view
+
+    # ------------------------------------------------------------------
+
+    def decode(
+        self,
+        tokens: torch.Tensor,
+        hl: torch.Tensor,
+        ll: torch.Tensor,
+        B: int,
+        T: int,
+        t0: int = 0,
+        legal: Optional[Dict[str, torch.Tensor]] = None,
+        labels: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> Dict[str, torch.Tensor]:
+        cfg = self.cfg
+        BT = B * T
+        D = cfg.n_directions
+        N = cfg.grid_h * cfg.grid_w
+        W = cfg.grid_w
+        device = tokens.device
+
+        joint, arr, pass_logit = self._joint_and_views(tokens, hl, BT, legal)
+
+        source_y = labels.get("source_y") if labels else None
+        source_x = labels.get("source_x") if labels else None
+        j_idx = None
+        if source_y is not None and source_x is not None:
+            # Replay path: the action tuple is re-encoded by
+            # log_prob_entropy; here only the source index is needed to
+            # anchor the factorized views.
+            sy = source_y.reshape(BT)
+            sx = source_x.reshape(BT)
+            src_idx = (sy * W + sx).long().clamp(0, N - 1)
+        else:
+            # Rollout: draw the arrow from the joint categorical.
+            with torch.no_grad():
+                if self.greedy:
+                    j_idx = joint.argmax(-1)
+                else:
+                    probs = F.softmax(joint.float(), dim=-1)
+                    j_idx = torch.multinomial(probs, 1).squeeze(-1)
+            src_idx = torch.where(
+                j_idx >= 2 * D * N,
+                torch.zeros_like(j_idx), j_idx % N)
+
+        src_logits, dir_logits, spl_logits, pass_view = self._views(
+            arr, pass_logit, src_idx, BT, legal)
+
+        pred = {
+            "joint_logits": joint.reshape(B, T, 2 * D * N + 1),
+            "source_logits": src_logits.reshape(B, T, N),
+            "direction_logits": dir_logits.reshape(B, T, D),
+            "split_logits": spl_logits.reshape(B, T, 2),
+            "pass_logits": pass_view.reshape(B, T),
+            "src_idx": src_idx.reshape(B, T),
+        }
+        if j_idx is not None:
+            pred["joint_idx"] = j_idx.reshape(B, T)
+        return pred
+
+    # ------------------------------------------------------------------
+
+    def sample(
+        self,
+        pred: Dict[str, torch.Tensor],
+        legal: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> Dict[str, torch.Tensor]:
+        cfg = self.cfg
+        D = cfg.n_directions
+        joint = pred["joint_logits"]           # [B, 8N+1] (T squeezed)
+        j_idx = pred["joint_idx"]              # [B]
+        B = joint.shape[0]
+        N = cfg.grid_h * cfg.grid_w
+
+        with torch.no_grad():
+            lp = F.log_softmax(joint, dim=-1)
+            total_lp = lp.gather(-1, j_idx.unsqueeze(-1)).squeeze(-1)
+
+            did_pass = j_idx >= 2 * D * N
+            ch = torch.where(did_pass, torch.zeros_like(j_idx),
+                             j_idx // N)
+            cell = torch.where(did_pass, torch.zeros_like(j_idx),
+                               j_idx % N)
+            dir_idx = ch % D
+            spl_idx = ch // D
+
+        return {
+            "action_source": cell,
+            "action_direction": dir_idx,
+            "action_split": spl_idx,
+            "action_pass": did_pass,
+            "action_log_prob": total_lp,
+        }
+
+    # ------------------------------------------------------------------
+
+    def log_prob_entropy(
+        self,
+        pred: Dict[str, torch.Tensor],
+        actions: Dict[str, torch.Tensor],
+        legal: Optional[Dict[str, torch.Tensor]] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+        cfg = self.cfg
+        D = cfg.n_directions
+        joint = pred["joint_logits"]           # [B, T, 8N+1], masked
+        B, T, A = joint.shape
+        N = cfg.grid_h * cfg.grid_w
+
+        passed = actions["passed"]             # [B, T] bool
+        move_idx = ((actions["split"] * D + actions["direction"]) * N
+                    + actions["source_idx"]).long()
+        j_idx = torch.where(passed,
+                            torch.full_like(move_idx, 2 * D * N),
+                            move_idx)
+
+        log_p = F.log_softmax(joint, dim=-1)
+        total_lp = log_p.gather(-1, j_idx.unsqueeze(-1)).squeeze(-1)
+        probs = torch.exp(log_p)
+        total_ent = -(probs * log_p).nan_to_num(0.0).sum(-1)
+
+        with torch.no_grad():
+            # Per-head telemetry from the factorized views
+            sl = F.log_softmax(pred["source_logits"], dim=-1)
+            src_ent = -(torch.exp(sl) * sl).nan_to_num(0.0).sum(-1)
+            dl = F.log_softmax(pred["direction_logits"], dim=-1)
+            dir_ent = -(torch.exp(dl) * dl).sum(-1)
+            spl = F.log_softmax(pred["split_logits"], dim=-1)
+            spl_ent = -(torch.exp(spl) * spl).sum(-1)
+            p_pass = torch.sigmoid(pred["pass_logits"])
+            pass_ent = -(
+                p_pass * F.logsigmoid(pred["pass_logits"])
+                + (1 - p_pass) * F.logsigmoid(-pred["pass_logits"]))
+            mask_f = (~passed).float()
+            n_moves = mask_f.sum().clamp(min=1)
+            head_entropy = {
+                "ent_pass": pass_ent.detach().mean(),
+                "ent_src": (src_ent.detach() * mask_f).sum() / n_moves,
+                "ent_dir": (dir_ent.detach() * mask_f).sum() / n_moves,
+                "ent_spl": (spl_ent.detach() * mask_f).sum() / n_moves,
+            }
+        return total_lp, total_ent, head_entropy

@@ -65,6 +65,11 @@ class ModelConfig:
     # Action space
     n_directions: int = 4
     n_split: int = 2  # 0=all-but-1, 1=50%
+    # AverageJoe-style flat joint-action decoder: ONE categorical over
+    # (2 * n_directions * N + 1) arrows instead of the factorized
+    # Source→Direction hierarchy. Sticky in checkpoints like
+    # hl_gauss_value — a resume keeps whichever decoder trained.
+    joint_decoder: bool = False
 
     # Self-supervised next-observation prediction from the Stage-1 belief
     # tokens (game-agnostic memory pressure: the belief must retain whatever
