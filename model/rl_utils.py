@@ -325,14 +325,22 @@ def compute_policy_kl_heads(
     out["kl_spl"] = _cat_kl(cur_pred["split_logits"],
                             ref_pred["split_logits"])
 
-    # Bernoulli KL over the pass head (all steps — passing is always live)
+    # Bernoulli KL over the pass head. Frames with NO legal move are
+    # excluded: the env forces a pass there regardless of the head, the
+    # joint decoder's pass view saturates (+30) on them by construction,
+    # and against a factorized ref's raw logit each such frame would
+    # contribute ~30 nats of unfixable KL.
     pc = cur_pred["pass_logits"].float()
     pr = ref_pred["pass_logits"].float().detach()
     lp_c1, lp_c0 = F.logsigmoid(pc), F.logsigmoid(-pc)
     lp_r1, lp_r0 = F.logsigmoid(pr), F.logsigmoid(-pr)
-    out["kl_pass"] = (
-        lp_r1.exp() * (lp_r1 - lp_c1) + lp_r0.exp() * (lp_r0 - lp_c0)
-    ).mean()
+    kl_pass = (
+        lp_r1.exp() * (lp_r1 - lp_c1) + lp_r0.exp() * (lp_r0 - lp_c0))
+    if legal_mask is not None:
+        free = legal_mask.reshape(*kl_pass.shape, -1).any(-1).float()
+        out["kl_pass"] = (kl_pass * free).sum() / free.sum().clamp(min=1)
+    else:
+        out["kl_pass"] = kl_pass.mean()
     return out
 
 

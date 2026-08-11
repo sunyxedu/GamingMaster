@@ -532,7 +532,7 @@ class JointGeneralsDecoder(ActionDecoder):
                                 torch.zeros_like(joint), joint)
         return joint, arr, pass_logit
 
-    def _views(self, arr, pass_logit, src_idx, BT, legal):
+    def _views(self, arr, pass_logit, src_idx, BT, legal, move_lse):
         """Factorized marginals of the joint distribution (view layer)."""
         cfg = self.cfg
         D = cfg.n_directions
@@ -556,9 +556,13 @@ class JointGeneralsDecoder(ActionDecoder):
 
         direction_logits = torch.logsumexp(sel, dim=1)         # [BT, D]
         split_logits = torch.logsumexp(sel, dim=2)             # [BT, 2]
-        # Bernoulli pass-vs-move logit of the joint policy
-        pass_view = pass_logit - torch.logsumexp(
-            arr.reshape(BT, -1), dim=-1)
+        # Bernoulli pass-vs-move logit of the joint policy over LEGAL
+        # moves (the masked joint's move mass — the raw arrow mass counts
+        # thousands of illegal arrows, inflating the distilled pass logit
+        # by ~log(8N/legal) ≈ 5 nats in the opening). Clamped: rows with
+        # no legal move have move_lse ≈ -1e9 and the pass decision is
+        # forced anyway.
+        pass_view = (pass_logit - move_lse).clamp(-30.0, 30.0)
         return source_logits, direction_logits, split_logits, pass_view
 
     # ------------------------------------------------------------------
@@ -582,6 +586,9 @@ class JointGeneralsDecoder(ActionDecoder):
         device = tokens.device
 
         joint, arr, pass_logit = self._joint_and_views(tokens, hl, BT, legal)
+        # masked move mass — the pass view's denominator and the greedy
+        # pass-vs-move decision are both statements about LEGAL moves
+        move_lse = torch.logsumexp(joint[..., :-1], dim=-1)    # [BT]
 
         source_y = labels.get("source_y") if labels else None
         source_x = labels.get("source_x") if labels else None
@@ -597,7 +604,18 @@ class JointGeneralsDecoder(ActionDecoder):
             # Rollout: draw the arrow from the joint categorical.
             with torch.no_grad():
                 if self.greedy:
-                    j_idx = joint.argmax(-1)
+                    # Hierarchical greedy. Pass is a single ATOM of the
+                    # joint but carries the whole "don't move" intent:
+                    # raw argmax would play pass whenever the move mass
+                    # is spread over many arrows (p_pass > p_best_arrow
+                    # even at p_pass ≈ 1%) — a systematic hesitation
+                    # bias under greedy eval. Decide pass-vs-move by
+                    # MASS, then take the best arrow.
+                    best_arrow = joint[..., :-1].argmax(-1)
+                    j_idx = torch.where(
+                        joint[..., -1] > move_lse,
+                        torch.full_like(best_arrow, 2 * D * N),
+                        best_arrow)
                 else:
                     probs = F.softmax(joint.float(), dim=-1)
                     j_idx = torch.multinomial(probs, 1).squeeze(-1)
@@ -606,7 +624,7 @@ class JointGeneralsDecoder(ActionDecoder):
                 torch.zeros_like(j_idx), j_idx % N)
 
         src_logits, dir_logits, spl_logits, pass_view = self._views(
-            arr, pass_logit, src_idx, BT, legal)
+            arr, pass_logit, src_idx, BT, legal, move_lse)
 
         pred = {
             "joint_logits": joint.reshape(B, T, 2 * D * N + 1),

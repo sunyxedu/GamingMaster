@@ -100,6 +100,54 @@ def test_joint_views_are_marginals():
     assert diff[finite].max() < 1e-3
 
 
+def test_joint_greedy_is_hierarchical():
+    """Greedy must decide pass-vs-move by MASS, not by comparing the pass
+    ATOM against individual arrows: with move mass spread over thousands
+    of arrows, the pass logit sits above every single arrow even at tiny
+    pass probability (the 0-23-9 acceptance-probe failure mode)."""
+    net, cfg = _make()
+    # pass logit = +3 exactly: beats every raw-init arrow (~O(1)) but is
+    # far below the total move mass (log-sum-exp over ~thousands)
+    with torch.no_grad():
+        last = [m for m in net.action_decoder.pass_proj.modules()
+                if isinstance(m, torch.nn.Linear)][-1]
+        last.weight.zero_()
+        last.bias.fill_(3.0)
+    net.action_decoder.greedy = True
+    grid, glb, _, _ = _obs(cfg)
+    lm = torch.ones(3, 1, 25, 25, dtype=torch.bool)
+    dm = torch.ones(3, 4, 25, 25, dtype=torch.bool)
+    with torch.no_grad():
+        out = net.step(grid, glb, legal_mask=lm, direction_mask=dm,
+                       act_steps=1)
+    joint = out["joint_logits"]
+    # precondition: raw argmax WOULD pass (pass atom beats each arrow)
+    assert (joint[:, -1] > joint[:, :-1].max(-1).values).all()
+    # p(pass) is tiny → hierarchical greedy must move
+    assert not out["action_pass"].any()
+    # no legal move at all → forced pass
+    lm0 = torch.zeros(3, 1, 25, 25, dtype=torch.bool)
+    with torch.no_grad():
+        out0 = net.step(grid, glb, legal_mask=lm0, direction_mask=dm,
+                        act_steps=1)
+    assert out0["action_pass"].all()
+
+
+def test_joint_pass_view_uses_masked_move_mass():
+    """The Bernoulli pass view must be pass_logit minus the LEGAL move
+    mass — subtracting the raw mass counts thousands of illegal arrows
+    and inflates the distilled pass logit by ~5 nats in the opening."""
+    net, cfg = _make()
+    grid, glb, lm, dm = _obs(cfg)
+    with torch.no_grad():
+        out = net.step(grid, glb, legal_mask=lm, direction_mask=dm,
+                       act_steps=1)
+    joint = out["joint_logits"]  # masked
+    expect = (joint[:, -1] - torch.logsumexp(joint[:, :-1], dim=-1))
+    expect = expect.clamp(-30.0, 30.0)
+    assert torch.allclose(out["pass_logits"], expect, atol=1e-4)
+
+
 def test_joint_end_to_end_collect_and_update():
     net, cfg = _make()
     envs = [GeneralsEnv(grid_h=25, grid_w=25, max_turns=8)
