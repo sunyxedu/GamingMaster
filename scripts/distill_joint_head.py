@@ -134,6 +134,13 @@ def main() -> None:
                     s_pred, t_pred, legal_mask=src_mask,
                     passed=actions["passed"])
                 loss = sum(KL_WEIGHTS[k] * v for k, v in kls.items())
+                # backward per loss term: the neighbor-aware arrow head
+                # holds ~20 GB of activations per student forward on a
+                # long buffer — accumulating main + K extra-source
+                # graphs before one backward OOMs a 140 GB card.
+                opt.zero_grad()
+                tot += float(loss.detach())
+                loss.backward()
 
                 # Multi-source conditional distillation: the arrows of
                 # cells the teacher did NOT move from are only pinned by
@@ -169,13 +176,11 @@ def main() -> None:
                         kls2 = compute_policy_kl_heads(
                             s2, t2, legal_mask=src_mask,
                             passed=actions["passed"])
-                        loss = loss + (kls2["kl_dir"]
-                                       + 0.5 * kls2["kl_spl"])
+                        loss_k = kls2["kl_dir"] + 0.5 * kls2["kl_spl"]
+                        tot += float(loss_k.detach())
+                        loss_k.backward()
 
-                opt.zero_grad()
-                loss.backward()
                 opt.step()
-                tot += float(loss.detach())
                 n_b += 1
                 for k, v in kls.items():
                     head_tot[k] = head_tot.get(k, 0.0) + float(v.detach())
