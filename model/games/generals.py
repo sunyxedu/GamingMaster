@@ -481,26 +481,67 @@ class JointGeneralsDecoder(ActionDecoder):
     consume them unchanged.
     """
 
+    #: (drow, dcol) per direction — MUST match dir_id label semantics
+    #: (0=down 1=right 2=up 3=left), same as DirectionHead._OFFSETS
+    _OFFSETS = ((1, 0), (0, 1), (-1, 0), (0, -1))
+
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.cfg = cfg
         d = cfg.d_model
-        n_arrow = 2 * cfg.n_directions  # 4 full + 4 half per cell
-        self.arrow_head = nn.Sequential(
-            nn.Linear(d, d), nn.ReLU(), nn.Linear(d, n_arrow))
+        # Neighbor-aware arrow scorer, mirroring the factorized
+        # DirectionHead's inputs (source embed + the tile the move would
+        # ENTER + decision token). A per-cell head sees only the source
+        # token, where "good source" lives but "which way" does not —
+        # distilling through it left kl_dir on a ~0.8 plateau, the same
+        # uniform-direction failure the old cross-attention head had.
+        # One scorer shared across the four directions; the concat-MLP is
+        # split into three added projections so the cell/context terms
+        # are computed once for all directions.
+        self.edge = nn.Parameter(torch.zeros(d))
+        self.arrow_cell = nn.Linear(d, d)
+        self.arrow_nbr = nn.Linear(d, d, bias=False)
+        self.arrow_ctx = nn.Linear(d, d, bias=False)
+        self.arrow_out = nn.Linear(d, 2)  # full-move / half-move logits
         self.pass_proj = nn.Sequential(
             nn.Linear(d, d // 2), nn.ReLU(), nn.Linear(d // 2, 1))
 
     # ------------------------------------------------------------------
 
-    def _joint_and_views(self, tokens, hl, BT, legal):
+    def _arrow_logits(self, tokens, ll, BT):
+        """[BT, 2D, N] arrow logits; channel = split * D + dir."""
+        cfg = self.cfg
+        H, W, d = cfg.grid_h, cfg.grid_w, cfg.d_model
+        D = cfg.n_directions
+        N = H * W
+        tok2d = tokens.reshape(BT, H, W, d)
+        base = self.arrow_cell(tok2d) + self.arrow_ctx(ll).reshape(
+            BT, 1, 1, d)                                    # [BT, H, W, d]
+        edge = self.edge.to(tok2d.dtype)
+        chans = [None] * (2 * D)
+        for di, (drow, dcol) in enumerate(self._OFFSETS):
+            nbr = torch.roll(tok2d, shifts=(-drow, -dcol), dims=(1, 2))
+            # rolled-in wrap rows/cols are off-board → edge embedding
+            if drow == 1:
+                nbr = torch.cat([nbr[:, :-1], edge.expand(BT, 1, W, d)], 1)
+            elif drow == -1:
+                nbr = torch.cat([edge.expand(BT, 1, W, d), nbr[:, 1:]], 1)
+            elif dcol == 1:
+                nbr = torch.cat([nbr[:, :, :-1], edge.expand(BT, H, 1, d)], 2)
+            else:
+                nbr = torch.cat([edge.expand(BT, H, 1, d), nbr[:, :, 1:]], 2)
+            two = self.arrow_out(F.relu(base + self.arrow_nbr(nbr)))
+            chans[0 * D + di] = two[..., 0].reshape(BT, N)  # full move
+            chans[1 * D + di] = two[..., 1].reshape(BT, N)  # half move
+        return torch.stack(chans, dim=1)                    # [BT, 2D, N]
+
+    def _joint_and_views(self, tokens, hl, ll, BT, legal):
         cfg = self.cfg
         D = cfg.n_directions
         N = cfg.grid_h * cfg.grid_w
         device = tokens.device
 
-        arrows = self.arrow_head(tokens)              # [BT, N, 2D]
-        arr = arrows.transpose(1, 2).contiguous()     # [BT, 2D, N]
+        arr = self._arrow_logits(tokens, ll, BT)      # [BT, 2D, N]
         pass_logit = self.pass_proj(hl).squeeze(-1)   # [BT]
         joint_raw = torch.cat(
             [arr.reshape(BT, 2 * D * N), pass_logit.unsqueeze(-1)], dim=-1)
@@ -585,7 +626,8 @@ class JointGeneralsDecoder(ActionDecoder):
         W = cfg.grid_w
         device = tokens.device
 
-        joint, arr, pass_logit = self._joint_and_views(tokens, hl, BT, legal)
+        joint, arr, pass_logit = self._joint_and_views(
+            tokens, hl, ll, BT, legal)
         # masked move mass — the pass view's denominator and the greedy
         # pass-vs-move decision are both statements about LEGAL moves
         move_lse = torch.logsumexp(joint[..., :-1], dim=-1)    # [BT]
