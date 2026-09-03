@@ -144,6 +144,8 @@ We did not carry `z_H` and `z_L` from one timestep to the next. In HRM the carry
 | Job | 2369891 |
 | Everything else | As in round 1 |
 
+Speed: `attn15` 1.47 it/s, `attn8` 1.87 it/s (stock 2.2). At 1.47 it/s a Breakout run needs about 25 hours, so the two `attn15` Breakout runs have a dependent resume job (`slurm/isca_trm_resume.slurm`, `--load_last`) that continues from the last checkpoint after the 24 hour limit.
+
 Results will be added when the runs finish. They compare against the round 1 stock scores for the same game and seed.
 
 ## How the loop is trained (both rounds)
@@ -178,7 +180,7 @@ Relative to stock TWISTER, commit `e6d8cde`.
 | `nnet/envs/__init__.py` | `dm_control` import is optional. |
 | `nnet/envs/atari/atari_env.py` | `gym 0.19` and `atari-py` replaced by `gymnasium` and `ale-py`. Same wrapper settings. All arms use it. |
 | `nnet/modules/twister/test_recursive_dynamics.py`, `test_trm_fidelity.py` | Tests listed above. |
-| `experiments/isca_trm_pilot.slurm`, `isca_trm_seeds.slurm`, `isca_trm_loop.slurm` | SLURM arrays for round 1 (first two) and round 2. |
+| `experiments/isca_trm_pilot.slurm`, `isca_trm_seeds.slurm`, `isca_trm_loop.slurm`, `isca_trm_resume.slurm` | SLURM arrays for round 1 (first two) and round 2, and the resume job. |
 
 ## How to run
 
