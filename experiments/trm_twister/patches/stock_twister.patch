@@ -262,10 +262,18 @@ index 05c7013..86397d0 100644
 \ No newline at end of file
 +        return AttrDict(state=self.history, reward=reward, done=done, is_first=is_first, is_last=is_last)
 diff --git a/nnet/models/twister.py b/nnet/models/twister.py
-index 593f983..4d1d9ff 100644
+index 593f983..dda2b84 100644
 --- a/nnet/models/twister.py
 +++ b/nnet/models/twister.py
-@@ -163,6 +163,16 @@ class TWISTER(models.Model):
+@@ -15,6 +15,7 @@
+ # PyTorch
+ import torch
+ from torch import nn
++import torch.nn.functional as F
+ import torchvision
+ 
+ # NeuralNets
+@@ -163,6 +164,23 @@ class TWISTER(models.Model):
          self.config.ff_ratio_trans = model_params.ff_ratio_trans
          self.config.num_heads_trans = model_params.num_heads_trans
          self.config.drop_rate_trans = model_params.drop_rate_trans
@@ -279,10 +287,17 @@ index 593f983..4d1d9ff 100644
 +        self.config.trm_L_cycles = 4
 +        self.config.trm_reason_layers = 2
 +        self.config.trm_reason_ff_ratio = 2
++        # TRM training recipe (deep supervision + ACT + EMA), see recursive_dynamics.py
++        self.config.trm_halt_max_steps = 1            # passes per batch; 1 = off
++        self.config.trm_halt_exploration_prob = 0.1
++        self.config.trm_halt_acc = 0.5                # a timestep is correct at this prior/posterior code accuracy
++        self.config.trm_q_halt_scale = 0.5
++        self.config.ema = False
++        self.config.ema_rate = 0.999
          self.config.encoder_cnn_norm = {"class": "LayerNorm", "params": {"eps": 1e-3, "convert_float32": True}}
          self.config.module_pre_norm = False
          self.config.detach_decoder = False
-@@ -231,9 +241,9 @@ class TWISTER(models.Model):
+@@ -231,9 +249,9 @@ class TWISTER(models.Model):
              cnn_norm=self.config.norm,
          )
          self.rssm = twister_networks.TSSM(
@@ -295,7 +310,7 @@ index 593f983..4d1d9ff 100644
              learn_initial=self.config.learn_initial,
              norm=self.config.norm,
              hidden_size=self.config.model_hidden_size,
-@@ -242,7 +252,15 @@ class TWISTER(models.Model):
+@@ -242,7 +260,15 @@ class TWISTER(models.Model):
              num_heads=self.config.num_heads_trans,
              drop_rate=self.config.drop_rate_trans,
              att_context_left=self.config.att_context_left,
@@ -312,8 +327,198 @@ index 593f983..4d1d9ff 100644
          )
          self.policy_network = twister_networks.PolicyNetwork(
              num_actions=self.env.num_actions, 
+@@ -282,6 +308,11 @@ class TWISTER(models.Model):
+         # Slow Moving Networks
+         self.add_frozen("v_target", copy.deepcopy(self.value_network))
+ 
++        # Deep supervision state (carry, steps, halted) and EMA weights
++        self.sup = None
++        self.sup_pass = 0
++        self.ema_state = None
++
+         # Percentiles
+         self.register_buffer("perc_low", torch.tensor(0.0))
+         self.register_buffer("perc_high", torch.tensor(0.0))
+@@ -342,7 +373,8 @@ class TWISTER(models.Model):
+             "optimizer_state_dict": None if not save_optimizer else {key: value.state_dict() for key, value in self.optimizer.items()} if isinstance(self.optimizer, dict) else self.optimizer.state_dict(),
+             "model_step": self.model_step,
+             "grad_scaler_state_dict": self.grad_scaler.state_dict() if hasattr(self, "grad_scaler") else None,
+-            "replay_buffer_state_dict": self.replay_buffer.state_dict()
++            "replay_buffer_state_dict": self.replay_buffer.state_dict(),
++            "ema_state_dict": self.ema_state
+         }, path)
+         
+         # Save Buffer
+@@ -394,6 +426,9 @@ class TWISTER(models.Model):
+ 
+             # Model Step, already loaded from optm
+             self.model_step.fill_(checkpoint["model_step"])
++        if checkpoint.get("ema_state_dict") is not None:
++            device = next(self.parameters()).device
++            self.ema_state = {n: t.to(device) for n, t in checkpoint["ema_state_dict"].items()}
+ 
+         # Load replay Buffer State Dict
+         if self.config.load_replay_buffer_state_dict:
+@@ -681,6 +716,35 @@ class TWISTER(models.Model):
+         self.rssm.train(mode=training)
+         self.policy_network.train(mode=training)
+ 
++    def sup_passes(self):
++        return self.config.trm_halt_max_steps if self.config.dynamics_core == "trm" else 1
++
++    def ema_update(self):
++        """Exponential moving average of all parameters (TRM: ema_rate 0.999), used for evaluation."""
++        if not self.config.ema:
++            return
++        with torch.no_grad():
++            if self.ema_state is None:
++                self.ema_state = {n: p.detach().clone() for n, p in self.named_parameters()}
++                return
++            for n, p in self.named_parameters():
++                self.ema_state[n].mul_(self.config.ema_rate).add_(p.detach(), alpha=1.0 - self.config.ema_rate)
++
++    def eval_step(self, inputs, targets, verbose=False):
++        """Evaluate with the EMA weights when enabled, then restore the live weights."""
++        if not (self.config.ema and self.ema_state is not None):
++            return self._eval_step(inputs, targets, verbose)
++        with torch.no_grad():
++            backup = {n: p.detach().clone() for n, p in self.named_parameters()}
++            for n, p in self.named_parameters():
++                p.copy_(self.ema_state[n])
++        try:
++            return self._eval_step(inputs, targets, verbose)
++        finally:
++            with torch.no_grad():
++                for n, p in self.named_parameters():
++                    p.copy_(backup[n])
++
+     def update_target_networks(self):
+ 
+         # Update Target Networks
+@@ -712,10 +776,16 @@ class TWISTER(models.Model):
+         # World Model Step
+         self.set_require_grad([self.policy_network, self.value_network], False)
+         self.set_require_grad([self.encoder_network, self.decoder_network, self.rssm, self.reward_network, self.continue_network], True)
+-        world_model_batch_losses, world_model_batch_metrics, _ = self.world_model.train_step(inputs, targets, precision, grad_scaler, accumulated_steps, acc_step, eval_training)
+-        batch_losses.update({"world_model_" + key: value for key, value in world_model_batch_losses.items()})
+-        batch_metrics.update({"world_model_" + key: value for key, value in world_model_batch_metrics.items()})
+-        self.infos.update({"world_model_" + key: value for key, value in self.world_model.infos.items()})
++        # Deep supervision (TRM): K passes over the same batch, one optimizer step each.
++        # The recursion carry (z_H, z_L) continues across passes; halted timesteps stop.
++        self.sup = None
++        for self.sup_pass in range(self.sup_passes()):
++            world_model_batch_losses, world_model_batch_metrics, _ = self.world_model.train_step(inputs, targets, precision, grad_scaler, accumulated_steps, acc_step, eval_training)
++            tag = "world_model_" if self.sup_pass == 0 else "world_model_pass{}_".format(self.sup_pass)
++            batch_losses.update({tag + key: value for key, value in world_model_batch_losses.items()})
++            batch_metrics.update({tag + key: value for key, value in world_model_batch_metrics.items()})
++            self.infos.update({"world_model_" + key: value for key, value in self.world_model.infos.items()})
++        self.sup_pass = 0
+ 
+         ###############################################################################
+         # Actor Model Step
+@@ -751,6 +821,7 @@ class TWISTER(models.Model):
+ 
+         # Update value target
+         self.update_target_networks()
++        self.ema_update()
+ 
+         ###############################################################################
+         # Env Step
+@@ -787,6 +858,13 @@ class TWISTER(models.Model):
+     
+     class WorldModel(models.Model):
+ 
++        def add_loss(self, *args, **kwargs):
++            # Later deep-supervision passes train the recursion only
++            name = args[0] if args else kwargs.get("name")
++            if self.outer.sup_pass > 0 and name not in ("kl_prior", "kl_post", "q_halt"):
++                return
++            return super().add_loss(*args, **kwargs)
++
+         def __init__(self, outer):
+             super().__init__(name="World Model")
+             object.__setattr__(self, "outer", outer)
+@@ -818,12 +896,17 @@ class TWISTER(models.Model):
+             latent = self.encoder_network(states)
+ 
+             # Model Observe (B, L, D)
++            passes = self.outer.sup_passes()
++            k = self.outer.sup_pass
++            sup = self.outer.sup
+             posts, priors = self.rssm.observe(
+                 states=latent, 
+                 prev_actions=actions, 
+                 is_firsts=is_firsts, 
+                 prev_state=None, 
+-                is_firsts_hidden=None
++                is_firsts_hidden=None,
++                carry=sup["carry"] if (passes > 1 and k > 0) else None,
++                return_carry=passes > 1
+             )
+ 
+             # Update Hidden States
+@@ -897,12 +980,37 @@ class TWISTER(models.Model):
+             ###############################################################################
+ 
+             # KL
+-            kl_prior = torch.distributions.kl.kl_divergence(self.rssm.get_dist({k: v if k == "hidden" else v.detach() for k, v in posts.items()}), self.rssm.get_dist(priors))
+-            kl_post = torch.distributions.kl.kl_divergence(self.rssm.get_dist(posts), self.rssm.get_dist({k: v if k == "hidden" else v.detach() for k, v in priors.items()}))
++            kl_prior = torch.distributions.kl.kl_divergence(self.rssm.get_dist({k: v.detach() if torch.is_tensor(v) else v for k, v in posts.items()}), self.rssm.get_dist(priors))
++            kl_post = torch.distributions.kl.kl_divergence(self.rssm.get_dist(posts), self.rssm.get_dist({k: v.detach() if torch.is_tensor(v) else v for k, v in priors.items()}))
+ 
+             # Add losses, Mean after Free Nats
+-            self.add_loss("kl_prior", torch.mean(torch.clip(kl_prior, min=self.config.free_nats)), weight=self.config.loss_kl_prior_scale)
+-            self.add_loss("kl_post", torch.mean(torch.clip(kl_post, min=self.config.free_nats)), weight=self.config.loss_kl_post_scale)
++            if passes > 1:
++                # Deep supervision + ACT (TRM forward and ACTLossHead): halted timesteps carry no loss
++                q_halt = priors["q_halt"]
++                halted_prev = sup["halted"] if k > 0 else torch.zeros_like(q_halt, dtype=torch.bool)
++                active = (~halted_prev).to(q_halt.dtype)
++                denom = active.sum().clamp(min=1.0)
++                def masked_mean(x):
++                    a = active.reshape(active.shape + (1,) * (x.dim() - active.dim()))
++                    return (x * a).sum() / (denom * x[0, 0].numel())
++                self.add_loss("kl_prior", masked_mean(torch.clip(kl_prior, min=self.config.free_nats)), weight=self.config.loss_kl_prior_scale)
++                self.add_loss("kl_post", masked_mean(torch.clip(kl_post, min=self.config.free_nats)), weight=self.config.loss_kl_post_scale)
++                with torch.no_grad():
++                    acc = (priors["logits"].argmax(-1) == posts["logits"].argmax(-1)).to(q_halt.dtype).mean(-1)
++                    correct = (acc >= self.config.trm_halt_acc).to(q_halt.dtype)
++                self.add_loss("q_halt", masked_mean(F.binary_cross_entropy_with_logits(q_halt, correct, reduction="none")), weight=self.config.trm_q_halt_scale)
++                with torch.no_grad():
++                    steps = (sup["steps"] if k > 0 else torch.zeros_like(q_halt, dtype=torch.long)) + 1
++                    halted = (steps >= passes) | (q_halt > 0)
++                    min_halt = (torch.rand_like(q_halt) < self.config.trm_halt_exploration_prob) * torch.randint_like(steps, low=2, high=passes + 1)
++                    halted = (halted & (steps >= min_halt)) | halted_prev
++                    self.outer.sup = {"carry": priors["carry"], "steps": steps, "halted": halted}
++                    self.add_info("halt_frac_pass{}".format(k), round(halted.float().mean().item(), 3))
++                    self.add_info("q_halt_acc_pass{}".format(k), round((((q_halt >= 0) == (correct > 0.5)).float() * active).sum().item() / denom.item(), 3))
++                    self.add_info("code_acc_pass{}".format(k), round((acc * active).sum().item() / denom.item(), 3))
++            else:
++                self.add_loss("kl_prior", torch.mean(torch.clip(kl_prior, min=self.config.free_nats)), weight=self.config.loss_kl_prior_scale)
++                self.add_loss("kl_post", torch.mean(torch.clip(kl_post, min=self.config.free_nats)), weight=self.config.loss_kl_post_scale)
+ 
+             ###############################################################################
+             # Model Reward Loss
+@@ -954,6 +1062,8 @@ class TWISTER(models.Model):
+             for hidden_blk in posts["hidden"]]
+ 
+             # is_firsts flatten (B, L) -> (B*L, 1), will result in masking hidden if true
++            if self.outer.sup_pass > 0:
++                return outputs
+             self.outer.detached_is_firsts = is_firsts.flatten(start_dim=0, end_dim=1).unsqueeze(dim=1).detach()
+ 
+             # is_firsts hidden flatten (B, C+L) -> (B*L, C)
+@@ -1260,7 +1370,7 @@ class TWISTER(models.Model):
+ 
+         return outputs
+ 
+-    def eval_step(self, inputs, targets, verbose=False):
++    def _eval_step(self, inputs, targets, verbose=False):
+ 
+         # play
+         outputs_ = self.play(verbose=verbose)
 diff --git a/nnet/modules/twister/tssm.py b/nnet/modules/twister/tssm.py
-index 85b80f4..dd721c9 100644
+index 85b80f4..8757fe3 100644
 --- a/nnet/modules/twister/tssm.py
 +++ b/nnet/modules/twister/tssm.py
 @@ -21,6 +21,8 @@ from nnet import modules
@@ -415,3 +620,68 @@ index 85b80f4..dd721c9 100644
  
          # Dynamics Predictor dt -> zt
          self.dynamics_predictor = modules.Linear(
+@@ -152,7 +182,7 @@ class TSSM(nn.Module):
+ 
+         return initial_state
+ 
+-    def observe(self, states, prev_actions, is_firsts, prev_state=None, is_firsts_hidden=None, return_blocks_deter=False):
++    def observe(self, states, prev_actions, is_firsts, prev_state=None, is_firsts_hidden=None, return_blocks_deter=False, carry=None, return_carry=False):
+ 
+ 
+         # Create prev_states (B, L-1, ...)
+@@ -169,7 +199,7 @@ class TSSM(nn.Module):
+         prev_states["hidden"] = prev_state["hidden"]
+ 
+         # Forward Model (B, L, D)
+-        posts, priors = self(states, prev_states, prev_actions, is_firsts, is_firsts_hidden, return_blocks_deter=return_blocks_deter)
++        posts, priors = self(states, prev_states, prev_actions, is_firsts, is_firsts_hidden, return_blocks_deter=return_blocks_deter, carry=carry, return_carry=return_carry)
+ 
+         return posts, priors
+ 
+@@ -260,7 +290,7 @@ class TSSM(nn.Module):
+         else:
+             return 0
+ 
+-    def forward_img(self, prev_states, prev_actions, mask, return_att_w=False, return_blocks_deter=False):
++    def forward_img(self, prev_states, prev_actions, mask, return_att_w=False, return_blocks_deter=False, carry=None, return_carry=False):
+ 
+         # Clip Action -c:+c
+         if self.action_clip > 0.0:
+@@ -277,7 +307,8 @@ class TSSM(nn.Module):
+ 
+         # Recurrent
+         assert self.get_hidden_len(prev_states["hidden"]) <= self.att_context_left, "warning: att context left is {} and hidden has length {}".format(self.att_context_left, self.get_hidden_len(prev_states["hidden"]))
+-        outputs = self.transformer(x, hidden=prev_states["hidden"], mask=mask, return_hidden=True, return_att_w=return_att_w, return_blocks_x=return_blocks_deter)
++        carry_kwargs = {"carry": carry} if (carry is not None or return_carry) else {}
++        outputs = self.transformer(x, hidden=prev_states["hidden"], mask=mask, return_hidden=True, return_att_w=return_att_w, return_blocks_x=return_blocks_deter, **carry_kwargs)
+         deter, hidden = outputs.x, outputs.hidden
+ 
+         # Additional Outputs
+@@ -286,6 +317,9 @@ class TSSM(nn.Module):
+             add_out_dict["att_w"] = outputs.att_w
+         if return_blocks_deter:
+             add_out_dict["blocks_deter"] = outputs.blocks_x
++        if return_carry:
++            add_out_dict["carry"] = outputs.carry
++            add_out_dict["q_halt"] = outputs.q_halt
+ 
+         # Linear Logits
+         logits = self.dynamics_predictor(deter).reshape(deter.shape[:-1] + (self.stoch_size, self.discrete))
+@@ -302,7 +336,7 @@ class TSSM(nn.Module):
+         # Return Post
+         return {"deter": deter, "hidden": hidden, **states}
+ 
+-    def forward(self, states, prev_states, prev_actions, is_firsts, is_firsts_hidden=None, return_att_w=False, return_blocks_deter=False):
++    def forward(self, states, prev_states, prev_actions, is_firsts, is_firsts_hidden=None, return_att_w=False, return_blocks_deter=False, carry=None, return_carry=False):
+ 
+         # (B, 1 or L, A)
+         assert prev_actions.dim() == 3 
+@@ -344,7 +378,7 @@ class TSSM(nn.Module):
+             mask = mask.minimum(is_firts_mask)
+ 
+         # Forward Img
+-        prior = self.forward_img(prev_states, prev_actions, mask, return_att_w=return_att_w, return_blocks_deter=return_blocks_deter)
++        prior = self.forward_img(prev_states, prev_actions, mask, return_att_w=return_att_w, return_blocks_deter=return_blocks_deter, carry=carry, return_carry=return_carry)
+ 
+         # Forward Obs
+         post = self.forward_obs(prior["deter"], prior["hidden"], states)

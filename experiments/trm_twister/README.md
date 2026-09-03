@@ -2,7 +2,7 @@
 
 Experiment: replace the next-state predictor of stock TWISTER (a 4-block causal
 transformer) with a Tiny Recursive Model (TRM) loop, and compare on Atari-100k.
-Two rounds so far. Round 1 has finished. Round 2 is running.
+Three rounds so far. Round 1 has finished. Rounds 2 and 3 are running.
 
 ## Layout of this directory
 
@@ -41,6 +41,8 @@ Everything else (encoder, decoder, contrastive loss, actor, critic, hyperparamet
 | Can later steps see the loop's output? | not applicable | no, only through the sampled code | yes, through the per-call caches |
 | Dynamics parameters | 9,465,856 | 4,469,760 (47%) | 2,367,488 (25%) |
 | Status | baseline | done | running |
+
+Round 3 keeps the round 2 attention loop (H=2, L=3) and adds the TRM training recipe: deep supervision, ACT halting, and EMA. See the round 3 section.
 
 The TRM loop is the same in both rounds:
 
@@ -148,14 +150,55 @@ Speed: `attn15` 1.47 it/s, `attn8` 1.87 it/s (stock 2.2). At 1.47 it/s a Breakou
 
 Results will be added when the runs finish. They compare against the round 1 stock scores for the same game and seed.
 
-## How the loop is trained (both rounds)
+## Round 3: TRM training recipe (running)
+
+Same architecture as the round 2 `attn8` arm. What changes is training. The
+recipe follows the official TRM code (SamsungSAILMontreal/TinyRecursiveModels,
+`trm.py` forward, `losses.py` ACTLossHead, `pretrain.py` EMA). That code assumes a
+fixed input grid, so the inner model is replaced by the streaming core in
+`recursive_dynamics.py`; the carry, halting, loss and EMA logic are ported.
+
+### Deep supervision
+
+Each batch is trained in K = 3 passes, each with its own optimizer step.
+Pass k starts the recursion from the carry `(z_H, z_L)` that pass k-1
+produced, detached. In TRM terms: `halt_max_steps = 3`.
+
+- Pass 0 has all the stock losses.
+- Passes 1 and 2 have only the dynamics losses (prior and posterior KL) and the halt loss. The other heads already saw this batch.
+- The actor, the critic and the environment steps run once per batch, as in stock. So the 100k step budget is unchanged. The world model gets 3 optimizer steps per batch instead of 1.
+
+### ACT halting
+
+`q_head` reads a halt logit from `z_H` at every timestep (init: weight 0, bias -5, as in HRM).
+
+- Halt loss: binary cross entropy between the halt logit and "correct". A timestep is correct when the prior's argmax code matches the posterior's argmax code on at least 50% of the 32 categorical variables (`trm_halt_acc = 0.5`). This is the world model analogue of TRM's exact-answer target. Weight 0.5, as in TRM.
+- Halting: a timestep halts when its logit is above 0 or it reached pass 3. With probability 0.1 a random minimum number of passes is enforced (TRM exploration). Halted timesteps carry no loss on later passes.
+- Inference (imagination and evaluation) runs one pass. The caches that imagination reuses come from the pass 0 forward. Multi-pass inference is a follow-up.
+
+### EMA
+
+An exponential moving average of all parameters (rate 0.999) is kept and used for the evaluation episodes. The live weights are restored after each evaluation. The EMA is saved in the checkpoint.
+
+### What is running
+
+| Item | Value |
+|---|---|
+| Arm | `act8`: attention loop, H=2, L=3, `trm_halt_max_steps = 3`, `ema = true` |
+| Games, seeds | Ms. Pac-Man and Breakout, seeds 0 and 1 |
+| Runs | 4, job 2370598, each with two chained resume jobs for the 24 hour limit |
+| Compared against | stock and `attn8` for the same game and seed |
+
+Verified before launch: bit-exact carry continuation, halt head init and shape, gradients through the carry, and a CPU training smoke test of the full recipe (3 passes, halting state, EMA eval swap, checkpoint round trip). Code accuracy rose across the 3 passes within a batch in the smoke test.
+
+## How the loop is trained (rounds 1 and 2)
 
 1. Only the last outer cycle keeps gradients. The first H-1 outer cycles run under `torch.no_grad()`. Their outputs enter the last cycle as constants. This is the TRM one-step gradient rule.
 2. No weights are frozen during training. All weights train for the full run.
 3. Gradients reach the parts before the loop (round 1: the attention block; both rounds: the action mixer and the encoder) through the injected input in the last cycle.
 4. The start values `z_H` and `z_L` are fixed random buffers. They are not trained.
 5. Losses are the stock TWISTER losses. The actor and critic train inside imagination, through the loop.
-6. Not used yet: halting (ACT), training at random depths, carrying `z_H` and `z_L` across timesteps.
+6. Rounds 1 and 2 did not use halting (ACT), deep supervision or EMA. Round 3 adds them, see above.
 
 ## Tests
 
@@ -173,14 +216,14 @@ Relative to stock TWISTER, commit `e6d8cde`.
 
 | File | Change |
 |---|---|
-| `nnet/modules/twister/recursive_dynamics.py` | New. `RecursiveDynamics` with two loop types: `mlp` (round 1) and `attention` (round 2). Same interface as `TransformerNetwork`. |
-| `nnet/modules/twister/tssm.py` | Builds `RecursiveDynamics` when `dynamics_core == "trm"`. Stock path unchanged. |
-| `nnet/models/twister.py` | Config keys `dynamics_core`, `trm_loop`, `trm_loop_blocks`, `trm_context_blocks`, `trm_H_cycles`, `trm_L_cycles`, `trm_reason_layers`, `trm_reason_ff_ratio`. Passed to the TSSM. |
+| `nnet/modules/twister/recursive_dynamics.py` | New. `RecursiveDynamics` with two loop types: `mlp` (round 1) and `attention` (round 2). Carry in and out, halt head. Same interface as `TransformerNetwork`. |
+| `nnet/modules/twister/tssm.py` | Builds `RecursiveDynamics` when `dynamics_core == "trm"`. Passes the carry through `observe`. Stock path unchanged. |
+| `nnet/models/twister.py` | Config keys `dynamics_core`, `trm_loop`, `trm_loop_blocks`, `trm_context_blocks`, `trm_H_cycles`, `trm_L_cycles`, `trm_reason_layers`, `trm_reason_ff_ratio`, `trm_halt_max_steps`, `trm_halt_exploration_prob`, `trm_halt_acc`, `trm_q_halt_scale`, `ema`, `ema_rate`. Deep supervision loop in `train_step`, masked KL and halt loss in the world model forward, EMA update and EMA evaluation, EMA in checkpoints. |
 | `main.py` | `--seed` argument. |
 | `nnet/envs/__init__.py` | `dm_control` import is optional. |
 | `nnet/envs/atari/atari_env.py` | `gym 0.19` and `atari-py` replaced by `gymnasium` and `ale-py`. Same wrapper settings. All arms use it. |
 | `nnet/modules/twister/test_recursive_dynamics.py`, `test_trm_fidelity.py` | Tests listed above. |
-| `experiments/isca_trm_pilot.slurm`, `isca_trm_seeds.slurm`, `isca_trm_loop.slurm`, `isca_trm_resume.slurm` | SLURM arrays for round 1 (first two) and round 2, and the resume job. |
+| `experiments/isca_trm_pilot.slurm`, `isca_trm_seeds.slurm`, `isca_trm_loop.slurm`, `isca_trm_act.slurm`, `isca_trm_resume.slurm` | SLURM arrays for rounds 1, 2 and 3, and the resume job. |
 
 ## How to run
 
@@ -192,6 +235,9 @@ env_name=atari100k-ms_pacman run_name=twister_trm \
 # round 2 arm (attention loop, 15 calls)
 env_name=atari100k-ms_pacman run_name=twister_attn15 \
   override_config='{"dynamics_core":"trm","trm_loop":"attention"}' python main.py --wandb --seed 0
+
+# round 3 arm (full recipe)
+env_name=atari100k-ms_pacman run_name=twister_act8   override_config='{"dynamics_core":"trm","trm_loop":"attention","trm_H_cycles":2,"trm_L_cycles":3,"trm_halt_max_steps":3,"ema":true}' python main.py --wandb --seed 0
 
 # stock arm: omit override_config
 

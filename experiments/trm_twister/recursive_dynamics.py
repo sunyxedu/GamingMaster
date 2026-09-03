@@ -12,29 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""TRM-style recursive dynamics core (arXiv 2510.04871, code lineage sapientinc/HRM).
+"""TRM-style recursive dynamics core.
+
+Recursion, carry and halting head follow the official TRM code
+(SamsungSAILMontreal/TinyRecursiveModels, models/recursive_reasoning/trm.py,
+MIT license) and its HRM ancestor (sapientinc/HRM). That code assumes a fixed
+input token grid; this module replaces its inner model with a streaming version
+that attends over past timesteps through KV caches.
 
 A single shared network `net` refines two states, z_H (prediction) and z_L
-(scratchpad), with the input injected by addition (HRM ReasoningModule):
+(scratchpad), with the input injected by addition:
 
     for h in H_cycles:
         for l in L_cycles:
             z_L = net(z_L, z_H + x)
         z_H = net(z_H, z_L)
 
-All calls share the same weights. Only the last outer cycle keeps gradients.
+All calls share the same weights. Only the last outer cycle keeps gradients
+(TRM: the earlier cycles run under no_grad). A carry (z_H, z_L) from a previous
+pass can replace the fixed start values; this is how deep supervision and ACT
+continue the recursion across passes. `q_head` reads a halt logit from z_H at
+every timestep.
 
 Two loop types:
 - "mlp": one causal-attention context block runs once and produces x; `net` is
-  a per-timestep 2-layer MLP. No temporal mixing inside the loop.
-- "attention": no context block; `net` is a causal-attention transformer block
-  (the HRM block, TWISTER flavour). Every call attends over the past steps at
-  the same loop position, through its own KV cache.
+  a per-timestep 2-layer MLP.
+- "attention": no context block; `net` is a causal-attention transformer block.
+  Every call attends over the past steps at the same loop position, through its
+  own KV cache.
 
 Drop-in for modules.TransformerNetwork: forward(x, hidden, mask, return_hidden)
-returns AttrDict(x, hidden). The hidden state is a flat list of per-block
-caches: one entry for the context block ("mlp"), or one per net call
-("attention", H*L + H calls, in call order).
+returns AttrDict(x, hidden, carry, q_halt).
 """
 
 import torch
@@ -127,12 +135,24 @@ class RecursiveDynamics(nn.Module):
         self.register_buffer("H_init", torch.randn(dim_model))
         self.register_buffer("L_init", torch.randn(dim_model))
 
+        # Halt head (TRM q_head, halt logit only): starts far from halting
+        self.q_head = nn.Linear(dim_model, 1)
+        with torch.no_grad():
+            self.q_head.weight.zero_()
+            self.q_head.bias.fill_(-5.0)
+
         self.out_norm = nn.LayerNorm(dim_model)
 
-    def _recurse(self, x, net):
+    def initial_carry(self, x):
+        """Start states broadcast to the shape of x (B, L, D)."""
+        return self.H_init.to(x.dtype).expand_as(x), self.L_init.to(x.dtype).expand_as(x)
+
+    def _recurse(self, x, net, carry=None):
         """Run the H x L schedule with `net(z, injection)`. Only the last outer cycle keeps gradients."""
-        z_H = self.H_init.to(x.dtype).expand_as(x)
-        z_L = self.L_init.to(x.dtype).expand_as(x)
+        if carry is None:
+            z_H, z_L = self.initial_carry(x)
+        else:
+            z_H, z_L = carry
 
         if self.H_cycles > 1:
             with torch.no_grad():
@@ -144,9 +164,9 @@ class RecursiveDynamics(nn.Module):
         for _ in range(self.L_cycles):
             z_L = net(z_L, z_H + x)
         z_H = net(z_H, z_L)
-        return z_H
+        return z_H, z_L
 
-    def forward(self, x, lengths=None, hidden=None, return_hidden=False, return_att_w=False, mask=None, start_position=0, return_blocks_x=False):
+    def forward(self, x, lengths=None, hidden=None, return_hidden=False, return_att_w=False, mask=None, start_position=0, return_blocks_x=False, carry=None):
 
         if self.loop == "attention":
             # One cache per block per call. `hidden` is the flat list from the previous step.
@@ -162,16 +182,18 @@ class RecursiveDynamics(nn.Module):
                 state["call"] += 1
                 return out.x
 
-            z_H = self._recurse(x, net)
+            z_H, z_L = self._recurse(x, net, carry)
             new_hidden = caches
             att_w = []
         else:
             ctx = self.context(x, lengths=lengths, hidden=hidden, return_hidden=return_hidden, return_att_w=return_att_w, mask=mask, start_position=start_position)
-            z_H = self._recurse(ctx.x, self.reasoning)
+            z_H, z_L = self._recurse(ctx.x, self.reasoning, carry)
             new_hidden = ctx.hidden if return_hidden else None
             att_w = ctx.att_w if return_att_w else None
 
         outputs = structs.AttrDict(x=self.out_norm(z_H))
+        outputs.carry = (z_H.detach(), z_L.detach())
+        outputs.q_halt = self.q_head(z_H).squeeze(-1)
         if return_hidden:
             outputs.hidden = new_hidden
         if return_att_w:

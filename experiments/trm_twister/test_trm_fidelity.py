@@ -118,8 +118,8 @@ def test_gradient_boundary():
     core = _core().train()
     x = torch.randn(1, 4, DIM, requires_grad=True)
     out = core(x, mask=_mask(4))
-    # A random projection: the plain sum of a LayerNorm output is constant.
-    (out.x * torch.randn_like(out.x)).sum().backward()
+    # A random projection: the plain sum of a LayerNorm output is constant. q_halt joins so q_head is covered.
+    ((out.x * torch.randn_like(out.x)).sum() + out.q_halt.sum()).backward()
 
     assert x.grad is not None and x.grad.abs().sum() > 0, "no grad to input/encoder path"
     for n, p in core.named_parameters():
@@ -228,8 +228,8 @@ def test_attention_loop_streaming_consistency():
 def test_attention_loop_gradients():
     core = _attn_core().train()
     x = torch.randn(1, 4, DIM, requires_grad=True)
-    out = core(x, mask=_mask(4)).x
-    (out * torch.randn_like(out)).sum().backward()
+    out = core(x, mask=_mask(4))
+    ((out.x * torch.randn_like(out.x)).sum() + out.q_halt.sum()).backward()
     assert x.grad is not None and x.grad.abs().sum() > 0
     for n, p in core.named_parameters():
         assert p.grad is not None and p.grad.abs().sum() > 0, "no grad: {}".format(n)
@@ -267,6 +267,53 @@ def test_attention_loop_tssm_observe_imagine():
     print("test_attention_loop_tssm_observe_imagine OK (dynamics params {} vs {} = {:.0%})".format(n_trm, n_base, n_trm / n_base))
 
 
+def test_carry_continues_recursion():
+    """A pass started from a carry equals continuing the recursion from those states."""
+    core = _attn_core().eval()
+    x = torch.randn(2, 4, DIM)
+    with torch.no_grad():
+        first = core(x, mask=_mask(4))
+        second = core(x, mask=_mask(4), carry=first.carry)
+        # Naive: run 2 x H cycles in one go, same net
+        net = lambda z, inj: core.net(z + inj, mask=_mask(4)).x
+        z_H = core.H_init.expand_as(x)
+        z_L = core.L_init.expand_as(x)
+        for _ in range(2 * H_CYCLES):
+            for _l in range(L_CYCLES):
+                z_L = net(z_L, z_H + x)
+            z_H = net(z_H, z_L)
+        want = core.out_norm(z_H)
+    diff = (second.x - want).abs().max().item()
+    assert diff < 1e-5, "carry does not continue the recursion: {}".format(diff)
+    assert not second.carry[0].requires_grad and not second.carry[1].requires_grad
+    print("test_carry_continues_recursion OK (diff {:.1e})".format(diff))
+
+
+def test_q_head_init_and_shape():
+    """q_head starts at logit -5 (never halt) and gives one logit per timestep."""
+    core = _attn_core().eval()
+    x = torch.randn(3, 5, DIM)
+    with torch.no_grad():
+        out = core(x, mask=_mask(5))
+    assert out.q_halt.shape == (3, 5)
+    assert torch.allclose(out.q_halt, torch.full_like(out.q_halt, -5.0))
+    print("test_q_head_init_and_shape OK")
+
+
+def test_carry_gradient_boundary():
+    """With a carry, gradients still reach the net and the input, and the carry itself is a constant."""
+    core = _attn_core().train()
+    x = torch.randn(1, 4, DIM, requires_grad=True)
+    with torch.no_grad():
+        first = core(x, mask=_mask(4))
+    out = core(x, mask=_mask(4), carry=first.carry).x
+    (out * torch.randn_like(out)).sum().backward()
+    assert x.grad is not None and x.grad.abs().sum() > 0
+    for n, p in core.net.named_parameters():
+        assert p.grad is not None and p.grad.abs().sum() > 0, "no grad: {}".format(n)
+    print("test_carry_gradient_boundary OK")
+
+
 if __name__ == "__main__":
     test_matches_paper_pseudocode()
     test_cycle_counts()
@@ -278,4 +325,7 @@ if __name__ == "__main__":
     test_attention_loop_streaming_consistency()
     test_attention_loop_gradients()
     test_attention_loop_tssm_observe_imagine()
+    test_carry_continues_recursion()
+    test_q_head_init_and_shape()
+    test_carry_gradient_boundary()
     print("all fidelity tests passed")

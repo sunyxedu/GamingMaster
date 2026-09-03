@@ -32,6 +32,7 @@ cd "$HOME/twister-trm"
 case "$ARM" in
     attn15)      export override_config='{"dynamics_core":"trm","trm_loop":"attention"}' ;;
     attn8)       export override_config='{"dynamics_core":"trm","trm_loop":"attention","trm_H_cycles":2,"trm_L_cycles":3}' ;;
+    act8)        export override_config='{"dynamics_core":"trm","trm_loop":"attention","trm_H_cycles":2,"trm_L_cycles":3,"trm_halt_max_steps":3,"ema":true}' ;;
     trm)         export override_config='{"dynamics_core":"trm"}' ;;
     transformer) export override_config='{}' ;;
 esac

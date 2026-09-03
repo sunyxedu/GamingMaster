@@ -97,9 +97,9 @@ def test_streaming_consistency():
 def test_gradient_flow():
     core = _core().train()
     x = torch.randn(1, 4, DIM, requires_grad=True)
-    out = core(x, mask=_mask(4, 0)).x
-    # A random projection: the plain sum of a LayerNorm output is constant.
-    (out * torch.randn_like(out)).sum().backward()
+    out = core(x, mask=_mask(4, 0))
+    # A random projection: the plain sum of a LayerNorm output is constant. q_halt joins so q_head is covered.
+    ((out.x * torch.randn_like(out.x)).sum() + out.q_halt.sum()).backward()
     missing = [n for n, p in core.named_parameters() if p.grad is None or p.grad.abs().sum() == 0]
     assert not missing, "no gradient reaches: {}".format(missing)
     assert x.grad is not None and x.grad.abs().sum() > 0
