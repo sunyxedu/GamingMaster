@@ -1,0 +1,409 @@
+diff --git a/main.py b/main.py
+index d71a1a7..8925065 100644
+--- a/main.py
++++ b/main.py
+@@ -31,12 +31,26 @@ import warnings
+ # Disable Warnings
+ warnings.filterwarnings("ignore")
+ 
++def seed_everything(seed):
++    """Seed all RNG sources for reproducibility."""
++    import random
++    import numpy as np
++    random.seed(seed)
++    np.random.seed(seed)
++    torch.manual_seed(seed)
++    torch.cuda.manual_seed_all(seed)
++
+ def main(args):
+ 
+     ###############################################################################
+     # Init
+     ###############################################################################
+ 
++    # Seed
++    if args.seed is not None:
++        seed_everything(args.seed)
++        print("Seed: {}".format(args.seed))
++
+     # Print Mode
+     print("Mode: {}".format(args.mode))
+ 
+@@ -112,6 +126,7 @@ if __name__ == "__main__":
+     parser.add_argument("--keep_last_k",                type=int,   default=3,                                                          help="Keep last k checkpoints")
+ 
+     # Eval
++    parser.add_argument("--seed",                       type=int,   default=None,                                                       help="Seed all RNG sources")
+     parser.add_argument("--eval_period_epoch",          type=int,   default=5,                                                          help="Model evaluation every 'n' epochs")
+     parser.add_argument("--eval_period_step",           type=int,   default=None,                                                       help="Model evaluation every 'n' steps")
+ 
+diff --git a/nnet/envs/__init__.py b/nnet/envs/__init__.py
+index 7ea7fca..ba3ae57 100644
+--- a/nnet/envs/__init__.py
++++ b/nnet/envs/__init__.py
+@@ -14,5 +14,8 @@
+ 
+ # Sub Packages
+ from . import wrappers
+-from . import dm_control
++try:
++    from . import dm_control
++except ImportError:
++    pass
+ from . import atari
+\ No newline at end of file
+diff --git a/nnet/envs/atari/atari_env.py b/nnet/envs/atari/atari_env.py
+index 05c7013..86397d0 100644
+--- a/nnet/envs/atari/atari_env.py
++++ b/nnet/envs/atari/atari_env.py
+@@ -1,4 +1,5 @@
+ # Copyright 2025, Maxime Burchi.
++# Modifications Copyright 2025-2026, Hasaan Ahmad, adapted for ECHELON.
+ #
+ # Licensed under the Apache License, Version 2.0 (the "License");
+ # you may not use this file except in compliance with the License.
+@@ -19,16 +20,49 @@ import torchvision
+ # NeuralNets
+ from nnet.structs import AttrDict
+ 
+-# Gym
+-import gym.envs.atari
+-import gym.wrappers
++# Gymnasium + ALE
++import ale_py
++import gymnasium as gym
++import gymnasium.wrappers
+ 
+ # Other
+ import os
+ import datetime
+ 
++gym.register_envs(ale_py)
++
++GAME_TO_ALE_ID = {
++    "alien": "ALE/Alien-v5",
++    "amidar": "ALE/Amidar-v5",
++    "assault": "ALE/Assault-v5",
++    "asterix": "ALE/Asterix-v5",
++    "bank_heist": "ALE/BankHeist-v5",
++    "battle_zone": "ALE/BattleZone-v5",
++    "boxing": "ALE/Boxing-v5",
++    "breakout": "ALE/Breakout-v5",
++    "chopper_command": "ALE/ChopperCommand-v5",
++    "crazy_climber": "ALE/CrazyClimber-v5",
++    "demon_attack": "ALE/DemonAttack-v5",
++    "freeway": "ALE/Freeway-v5",
++    "frostbite": "ALE/Frostbite-v5",
++    "gopher": "ALE/Gopher-v5",
++    "hero": "ALE/Hero-v5",
++    "jamesbond": "ALE/Jamesbond-v5",
++    "kangaroo": "ALE/Kangaroo-v5",
++    "krull": "ALE/Krull-v5",
++    "kung_fu_master": "ALE/KungFuMaster-v5",
++    "ms_pacman": "ALE/MsPacman-v5",
++    "pong": "ALE/Pong-v5",
++    "private_eye": "ALE/PrivateEye-v5",
++    "qbert": "ALE/Qbert-v5",
++    "road_runner": "ALE/RoadRunner-v5",
++    "seaquest": "ALE/Seaquest-v5",
++    "up_n_down": "ALE/UpNDown-v5",
++}
++
++
+ class AtariEnv:
+-    
++
+     """
+ 
+     Atari 100k 26:
+@@ -58,7 +92,7 @@ class AtariEnv:
+         24: road_runner
+         25: seaquest
+         26: up_n_down
+-    
++
+     """
+ 
+     def obs_space(self):
+@@ -69,17 +103,17 @@ class AtariEnv:
+             return (["image", (3 * self.history_frames, self.img_size[0], self.img_size[1]), torch.uint8],)
+ 
+     def __init__(
+-            self, 
+-            game, 
+-            img_size=(64, 64), 
+-            action_repeat=4, 
+-            history_frames=1, 
+-            seed=None, 
+-            repeat_action_probability=0.0, 
+-            episode_saving_path=None, 
+-            noop_max=30, 
+-            terminal_on_life_loss=False, 
+-            grayscale_obs=False, 
++            self,
++            game,
++            img_size=(64, 64),
++            action_repeat=4,
++            history_frames=1,
++            seed=None,
++            repeat_action_probability=0.0,
++            episode_saving_path=None,
++            noop_max=30,
++            terminal_on_life_loss=False,
++            grayscale_obs=False,
+             full_action_space=False
+         ):
+ 
+@@ -89,16 +123,31 @@ class AtariEnv:
+         self.terminal_on_life_loss = terminal_on_life_loss
+ 
+         # Env
+-        self.env = gym.envs.atari.AtariEnv(game=game, obs_type='image', frameskip=1, repeat_action_probability=repeat_action_probability, full_action_space=full_action_space)
++        if game not in GAME_TO_ALE_ID:
++            import difflib
++            suggestion = difflib.get_close_matches(game, GAME_TO_ALE_ID.keys(), n=1)
++            hint = " Did you mean '{}'?".format(suggestion[0]) if suggestion else ""
++            raise KeyError(
++                "Unknown Atari game token '{}'.{} Game tokens must be lowercase "
++                "with underscores (e.g. 'ms_pacman', not 'mspacman'/'MsPacman'). "
++                "Valid tokens: {}".format(game, hint, ", ".join(sorted(GAME_TO_ALE_ID)))
++            )
++        env_id = GAME_TO_ALE_ID[game]
++        self.env = gym.make(
++            env_id,
++            obs_type='rgb',
++            frameskip=1,
++            repeat_action_probability=repeat_action_probability,
++            full_action_space=full_action_space,
++            render_mode=None,
++            disable_env_checker=True,
++        )
+ 
+         # Avoid unnecessary rendering in inner env.
+-        self.env._get_obs = lambda: None
+-
+-        # Tell wrapper that the inner env has no action repeat.
+-        self.env.spec = gym.envs.registration.EnvSpec('NoFrameskip-v0')
++        self.env.unwrapped._get_obs = lambda: None
+ 
+         # Standard Preprocessing
+-        self.env = gym.wrappers.AtariPreprocessing(env=self.env, noop_max=noop_max, frame_skip=action_repeat, screen_size=img_size[0], terminal_on_life_loss=terminal_on_life_loss, grayscale_obs=grayscale_obs)
++        self.env = gymnasium.wrappers.AtariPreprocessing(env=self.env, noop_max=noop_max, frame_skip=action_repeat, screen_size=img_size[0], terminal_on_life_loss=terminal_on_life_loss, grayscale_obs=grayscale_obs)
+ 
+         # Params
+         self.episode_saving_path = episode_saving_path
+@@ -119,8 +168,7 @@ class AtariEnv:
+         self.fps = 60.0 / self.action_repeat
+ 
+     def seed(self, seed):
+-        if seed:
+-            self.env.seed(seed)
++        self._seed = seed
+ 
+     def sample(self):
+ 
+@@ -129,7 +177,7 @@ class AtariEnv:
+     def preprocess(self, state, reward, done):
+ 
+         # To tensor
+-        state = torch.tensor(state) 
++        state = torch.tensor(state)
+ 
+         # (C, H, W)
+         if self.grayscale_obs:
+@@ -145,7 +193,7 @@ class AtariEnv:
+ 
+         # Is_last
+         if self.terminal_on_life_loss:
+-            is_last = torch.tensor(self.env.env.ale.game_over(), dtype=torch.float32)
++            is_last = torch.tensor(self.env.unwrapped.ale.game_over(), dtype=torch.float32)
+         else:
+             is_last = done
+ 
+@@ -154,8 +202,13 @@ class AtariEnv:
+     def reset(self):
+ 
+         # Reset
+-        state, _, _, _ = self.preprocess(self.env.reset(), 0, 0)
+-        
++        reset_kwargs = {}
++        if self._seed is not None:
++            reset_kwargs['seed'] = self._seed
++            self._seed = None  # Only use seed on first reset
++        obs, _info = self.env.reset(**reset_kwargs)
++        state, _, _, _ = self.preprocess(obs, 0, 0)
++
+         # Episode videos
+         if self.episode_saving_path is not None:
+             self.episode_video = []
+@@ -189,14 +242,15 @@ class AtariEnv:
+     def step(self, action):
+ 
+         # Env Step
+-        state, reward, done, infos = self.env.step(action.item())
++        state, reward, terminated, truncated, infos = self.env.step(action.item())
++        done = terminated or truncated
+ 
+         # Update Episode Score
+         self.episode_score += reward
+ 
+         # Add to video
+         if self.episode_saving_path is not None:
+-            self.episode_video.append(torch.tensor(self.env.env._get_image()))
++            self.episode_video.append(torch.tensor(self.env.unwrapped.ale.getScreenRGB()))
+             self.episode_video_pre.append(torch.tensor(state))
+ 
+         # Save Episode
+@@ -230,4 +284,4 @@ class AtariEnv:
+         else:
+             self.history = state
+ 
+-        return AttrDict(state=self.history, reward=reward, done=done, is_first=is_first, is_last=is_last)
+\ No newline at end of file
++        return AttrDict(state=self.history, reward=reward, done=done, is_first=is_first, is_last=is_last)
+diff --git a/nnet/models/twister.py b/nnet/models/twister.py
+index 593f983..118ad4b 100644
+--- a/nnet/models/twister.py
++++ b/nnet/models/twister.py
+@@ -163,6 +163,14 @@ class TWISTER(models.Model):
+         self.config.ff_ratio_trans = model_params.ff_ratio_trans
+         self.config.num_heads_trans = model_params.num_heads_trans
+         self.config.drop_rate_trans = model_params.drop_rate_trans
++
++        # Dynamics core: "transformer" (block stack) or "trm" (recursive weight-shared)
++        self.config.dynamics_core = "transformer"
++        self.config.trm_context_blocks = 1
++        self.config.trm_H_cycles = 3
++        self.config.trm_L_cycles = 4
++        self.config.trm_reason_layers = 2
++        self.config.trm_reason_ff_ratio = 2
+         self.config.encoder_cnn_norm = {"class": "LayerNorm", "params": {"eps": 1e-3, "convert_float32": True}}
+         self.config.module_pre_norm = False
+         self.config.detach_decoder = False
+@@ -231,9 +239,9 @@ class TWISTER(models.Model):
+             cnn_norm=self.config.norm,
+         )
+         self.rssm = twister_networks.TSSM(
+-            num_actions=self.env.num_actions, 
+-            stoch_size=self.config.model_stoch_size, 
+-            discrete=self.config.model_discrete, 
++            num_actions=self.env.num_actions,
++            stoch_size=self.config.model_stoch_size,
++            discrete=self.config.model_discrete,
+             learn_initial=self.config.learn_initial,
+             norm=self.config.norm,
+             hidden_size=self.config.model_hidden_size,
+@@ -242,7 +250,13 @@ class TWISTER(models.Model):
+             num_heads=self.config.num_heads_trans,
+             drop_rate=self.config.drop_rate_trans,
+             att_context_left=self.config.att_context_left,
+-            module_pre_norm=self.config.module_pre_norm
++            module_pre_norm=self.config.module_pre_norm,
++            dynamics_core=self.config.dynamics_core,
++            trm_context_blocks=self.config.trm_context_blocks,
++            trm_H_cycles=self.config.trm_H_cycles,
++            trm_L_cycles=self.config.trm_L_cycles,
++            trm_reason_layers=self.config.trm_reason_layers,
++            trm_reason_ff_ratio=self.config.trm_reason_ff_ratio
+         )
+         self.policy_network = twister_networks.PolicyNetwork(
+             num_actions=self.env.num_actions, 
+diff --git a/nnet/modules/twister/tssm.py b/nnet/modules/twister/tssm.py
+index 85b80f4..59c64de 100644
+--- a/nnet/modules/twister/tssm.py
++++ b/nnet/modules/twister/tssm.py
+@@ -21,6 +21,8 @@ from nnet import modules
+ from nnet import distributions
+ from nnet import structs
+ 
++from nnet.modules.twister.recursive_dynamics import RecursiveDynamics
++
+ class TSSM(nn.Module):
+ 
+     def __init__(
+@@ -46,6 +48,14 @@ class TSSM(nn.Module):
+             drop_rate=0.1,
+             att_context_left=64,
+             module_pre_norm=False,
++
++            # Dynamics core: "transformer" (block stack) or "trm" (recursive weight-shared)
++            dynamics_core="transformer",
++            trm_context_blocks=1,
++            trm_H_cycles=3,
++            trm_L_cycles=4,
++            trm_reason_layers=2,
++            trm_reason_ff_ratio=2,
+         ):
+         super(TSSM, self).__init__()
+ 
+@@ -84,30 +94,46 @@ class TSSM(nn.Module):
+         )
+ 
+         # Transformer et -> dt, ht
+-        self.transformer = modules.TransformerNetwork(
+-            dim_model=self.hidden_size,
+-            num_blocks=self.num_blocks,
+-            att_params={
+-                "class": "RelPosMultiHeadSelfAttention",
+-                "params": {
+-                    "num_heads": self.num_heads, 
+-                    "weight_init": "default", 
+-                    "bias_init": "default", 
+-                    "attn_drop_rate": self.drop_rate, 
+-                    "max_pos_encoding": self.max_pos_encoding, 
+-                    "causal": True
+-                }
+-            },
+-            emb_drop_rate=0.0,
+-            drop_rate=self.drop_rate,
+-            pos_embedding=None,
+-            mask=None,
+-            ff_ratio=self.ff_ratio,
+-            weight_init="default", 
+-            bias_init="default",
+-            act_fun="ReLU",
+-            module_pre_norm=module_pre_norm
+-        )
++        if dynamics_core == "trm":
++            self.transformer = RecursiveDynamics(
++                dim_model=self.hidden_size,
++                num_heads=self.num_heads,
++                drop_rate=self.drop_rate,
++                max_pos_encoding=self.max_pos_encoding,
++                ff_ratio=self.ff_ratio,
++                module_pre_norm=module_pre_norm,
++                context_blocks=trm_context_blocks,
++                H_cycles=trm_H_cycles,
++                L_cycles=trm_L_cycles,
++                reason_layers=trm_reason_layers,
++                reason_ff_ratio=trm_reason_ff_ratio,
++            )
++        else:
++            assert dynamics_core == "transformer", "unknown dynamics_core: {}".format(dynamics_core)
++            self.transformer = modules.TransformerNetwork(
++                dim_model=self.hidden_size,
++                num_blocks=self.num_blocks,
++                att_params={
++                    "class": "RelPosMultiHeadSelfAttention",
++                    "params": {
++                        "num_heads": self.num_heads,
++                        "weight_init": "default",
++                        "bias_init": "default",
++                        "attn_drop_rate": self.drop_rate,
++                        "max_pos_encoding": self.max_pos_encoding,
++                        "causal": True
++                    }
++                },
++                emb_drop_rate=0.0,
++                drop_rate=self.drop_rate,
++                pos_embedding=None,
++                mask=None,
++                ff_ratio=self.ff_ratio,
++                weight_init="default",
++                bias_init="default",
++                act_fun="ReLU",
++                module_pre_norm=module_pre_norm
++            )
+ 
+         # Dynamics Predictor dt -> zt
+         self.dynamics_predictor = modules.Linear(
