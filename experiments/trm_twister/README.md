@@ -11,7 +11,7 @@ transformer) with a Tiny Recursive Model (TRM) core, and compare on Atari-100k.
 | `recursive_dynamics.py` | The `RecursiveDynamics` module. Copy to `nnet/modules/twister/` in a TWISTER checkout. |
 | `test_recursive_dynamics.py`, `test_trm_fidelity.py` | Tests. Copy next to the module. |
 | `patches/stock_twister.patch` | Changes to stock TWISTER files. Apply with `git apply` at commit `e6d8cde` of `burchim/TWISTER`. |
-| `slurm/` | The two SLURM arrays used for the runs. |
+| `slurm/` | The SLURM arrays used for the runs. |
 
 ## What we ran
 
@@ -25,7 +25,12 @@ transformer) with a Tiny Recursive Model (TRM) core, and compare on Atari-100k.
 | Evaluation | Every 5 epochs. Mean score over 100 episodes. |
 | Precision, hardware | float32. One A100 80GB per run. 24 hour limit. |
 
-Parameters of the dynamics part: stock 9,465,856. TRM 4,469,760 (47%).
+Second round (running, job 2369891): attention inside the loop. Arms `attn15`
+(H=3, L=4, 15 calls) and `attn8` (H=2, L=3, 8 calls). Ms. Pac-Man and Breakout,
+seeds 0 and 1, plus the stock Breakout seed 1 that was missing. 9 runs.
+
+Parameters of the dynamics part: stock 9,465,856. TRM with MLP loop 4,469,760
+(47%). TRM with attention loop 2,367,488 (25%).
 Speed: stock 2.19 to 2.24 it/s. TRM 2.11 to 2.13 it/s.
 
 ## Results
@@ -60,6 +65,8 @@ Findings:
 
 Next step: put the attention block inside the loop, so that each loop cycle can look at the previous cycle's history. Control: two attention blocks with the same MLP loop.
 
+Second round results will be added when the runs finish.
+
 ## How the TRM core works
 
 At each timestep:
@@ -86,6 +93,17 @@ At each timestep:
 
 Only the 2 MLP layers are in the loop. This is the MLP-only variant of the TRM paper. The variant with attention inside the loop was not run yet.
 
+### Attention inside the loop (second round)
+
+Same schedule, different `net`:
+
+- No context block. The mixed input `x_t` is injected directly, as in the paper.
+- `net` is one TWISTER attention block (causal self-attention over the last 8 steps, plus feed-forward). This is the HRM block.
+- Every one of the 15 calls keeps its own KV cache of the past steps at that loop position. So each call can look at what the same call computed for earlier steps. This is the processed history that the MLP loop could not see.
+- Parameters: 2.37M (25% of stock). Config: `trm_loop = "attention"`. The `attn8` arm uses `trm_H_cycles = 2`, `trm_L_cycles = 3`.
+
+We did not carry `z_H` and `z_L` from one timestep to the next. In HRM the carry goes across steps on the same input. Across timesteps it would make training sequential over the 64-step sequence, about 60 times slower. The caches above already pass processed history forward.
+
 ## How it is trained
 
 1. Only the last outer cycle keeps gradients. The first 2 outer cycles run under `torch.no_grad()`. Their outputs enter the last cycle as constants. This is the TRM one-step gradient rule.
@@ -101,15 +119,15 @@ Relative to stock TWISTER.
 
 | File | Change |
 |---|---|
-| `nnet/modules/twister/recursive_dynamics.py` | New. `RecursiveDynamics` (context block + `ReasoningCore`). Same interface as `TransformerNetwork`. |
+| `nnet/modules/twister/recursive_dynamics.py` | New. `RecursiveDynamics` with two loop types: `mlp` (context block + `ReasoningCore`) and `attention` (one attention block in the loop, one cache per call). Same interface as `TransformerNetwork`. |
 | `nnet/modules/twister/tssm.py` | Builds `RecursiveDynamics` when `dynamics_core == "trm"`. Stock path unchanged. |
-| `nnet/models/twister.py` | Config keys `dynamics_core`, `trm_context_blocks`, `trm_H_cycles`, `trm_L_cycles`, `trm_reason_layers`, `trm_reason_ff_ratio`. Passed to the TSSM. |
+| `nnet/models/twister.py` | Config keys `dynamics_core`, `trm_loop`, `trm_loop_blocks`, `trm_context_blocks`, `trm_H_cycles`, `trm_L_cycles`, `trm_reason_layers`, `trm_reason_ff_ratio`. Passed to the TSSM. |
 | `main.py` | `--seed` argument. |
 | `nnet/envs/__init__.py` | `dm_control` import is optional. |
 | `nnet/envs/atari/atari_env.py` | `gym 0.19` and `atari-py` replaced by `gymnasium` and `ale-py`. Same wrapper settings. Both arms use it. |
 | `nnet/modules/twister/test_recursive_dynamics.py` | Interface tests: shapes, streaming equality, gradients, parameter count, observe and imagine. |
 | `nnet/modules/twister/test_trm_fidelity.py` | Semantics tests: bit-exact match to the paper loop, 15 calls per step, gradient boundary, stock state dict unchanged. |
-| `experiments/isca_trm_pilot.slurm`, `experiments/isca_trm_seeds.slurm` | SLURM arrays for the runs above. |
+| `experiments/isca_trm_pilot.slurm`, `experiments/isca_trm_seeds.slurm`, `experiments/isca_trm_loop.slurm` | SLURM arrays for the runs above. |
 
 Defaults used in all runs: `trm_context_blocks = 1`, `trm_H_cycles = 3`,
 `trm_L_cycles = 4`, `trm_reason_layers = 2`, `trm_reason_ff_ratio = 2`.

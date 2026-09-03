@@ -156,10 +156,126 @@ def test_baseline_state_dict_unchanged():
     print("test_baseline_state_dict_unchanged OK")
 
 
+def _attn_core(H=H_CYCLES, L=L_CYCLES):
+    torch.manual_seed(11)
+    return RecursiveDynamics(
+        dim_model=DIM, num_heads=4, drop_rate=0.0, max_pos_encoding=2048,
+        ff_ratio=2, module_pre_norm=False, loop="attention",
+        H_cycles=H, L_cycles=L,
+    )
+
+
+def _mask_h(seq_len, hidden_len):
+    return modules.return_mask(seq_len=seq_len, hidden_len=hidden_len, left_context=8,
+                               right_context=0, dtype=torch.float32, device="cpu")
+
+
+def test_attention_loop_matches_paper_pseudocode():
+    """Attention loop == naive transcription with the module's own net, exactly."""
+    core = _attn_core().eval()
+    x = torch.randn(2, 5, DIM)
+    with torch.no_grad():
+        got = core(x, mask=_mask(5)).x
+        net = lambda z, inj: core.net(z + inj, mask=_mask(5)).x
+        z_H = core.H_init.expand_as(x)
+        z_L = core.L_init.expand_as(x)
+        for _h in range(H_CYCLES):
+            for _l in range(L_CYCLES):
+                z_L = net(z_L, z_H + x)
+            z_H = net(z_H, z_L)
+        want = core.out_norm(z_H)
+    diff = (got - want).abs().max().item()
+    assert diff == 0.0, "attention loop deviates from pseudocode: {}".format(diff)
+    print("test_attention_loop_matches_paper_pseudocode OK (exact)")
+
+
+def test_attention_loop_cycle_counts():
+    for H, L in ((3, 4), (2, 3)):
+        core = _attn_core(H, L).eval()
+        calls = []
+        orig = core.net.forward
+        core.net.forward = lambda *a, **k: calls.append(1) or orig(*a, **k)
+        with torch.no_grad():
+            out = core(torch.randn(1, 3, DIM), mask=_mask(3), return_hidden=True)
+        assert len(calls) == H * L + H, "net called {}x, expected {}".format(len(calls), H * L + H)
+        assert len(out.hidden) == (H * L + H) * len(core.net.blocks), "one cache per block per call"
+    print("test_attention_loop_cycle_counts OK (15 and 8 calls, one cache each)")
+
+
+def test_attention_loop_streaming_consistency():
+    """Full sequence == chunked forward with the flat per-call cache list."""
+    core = _attn_core().eval()
+    x = torch.randn(1, 6, DIM)
+    with torch.no_grad():
+        full = core(x, mask=_mask_h(6, 0), return_hidden=True).x
+        p1 = core(x[:, :3], mask=_mask_h(3, 0), return_hidden=True)
+        p2 = core(x[:, 3:], hidden=p1.hidden, mask=_mask_h(3, 3), return_hidden=True)
+        chunked = torch.cat([p1.x, p2.x], dim=1)
+        # Step by step, as imagination does
+        h = None
+        steps = []
+        for t in range(6):
+            o = core(x[:, t:t + 1], hidden=h, mask=_mask_h(1, 0 if h is None else h[0][0].shape[1]), return_hidden=True)
+            h = o.hidden
+            steps.append(o.x)
+        stepped = torch.cat(steps, dim=1)
+    d1 = (full - chunked).abs().max().item()
+    d2 = (full - stepped).abs().max().item()
+    assert d1 < 1e-4 and d2 < 1e-4, "streaming mismatch: {} {}".format(d1, d2)
+    print("test_attention_loop_streaming_consistency OK (max diff {:.1e}, {:.1e})".format(d1, d2))
+
+
+def test_attention_loop_gradients():
+    core = _attn_core().train()
+    x = torch.randn(1, 4, DIM, requires_grad=True)
+    out = core(x, mask=_mask(4)).x
+    (out * torch.randn_like(out)).sum().backward()
+    assert x.grad is not None and x.grad.abs().sum() > 0
+    for n, p in core.named_parameters():
+        assert p.grad is not None and p.grad.abs().sum() > 0, "no grad: {}".format(n)
+    print("test_attention_loop_gradients OK")
+
+
+def test_attention_loop_tssm_observe_imagine():
+    from nnet.modules.twister.tssm import TSSM
+    import torch.nn as nn
+    torch.manual_seed(0)
+    tssm = TSSM(num_actions=5, stoch_size=4, discrete=8, learn_initial=True,
+                hidden_size=DIM, num_blocks=4, ff_ratio=2, num_heads=4,
+                drop_rate=0.0, att_context_left=8,
+                dynamics_core="trm", trm_loop="attention").eval()
+    base = TSSM(num_actions=5, stoch_size=4, discrete=8, hidden_size=DIM, num_blocks=4,
+                ff_ratio=2, num_heads=4, drop_rate=0.0, att_context_left=8)
+    n_trm = sum(p.numel() for p in tssm.transformer.parameters())
+    n_base = sum(p.numel() for p in base.transformer.parameters())
+    B, L = 2, 6
+    states = {"logits": torch.zeros(B, L, 4, 8), "stoch": torch.randn(B, L, 4, 8)}
+    is_firsts = torch.zeros(B, L); is_firsts[:, 0] = 1.0
+    posts, priors = tssm.observe(states, torch.zeros(B, L, 5), is_firsts)
+    assert priors["deter"].shape == (B, L, DIM)
+
+    class _P(nn.Module):
+        def forward(self, feat):
+            d = torch.distributions.OneHotCategorical(logits=torch.zeros(feat.shape[:-1] + (5,)))
+            d.rsample = d.sample
+            return d
+
+    prev = {k: v[:, -1:] for k, v in priors.items() if k != "hidden"}
+    prev["hidden"] = tssm.slice_hidden(priors["hidden"])
+    img = tssm.imagine(_P(), prev, img_steps=3)
+    assert img["deter"].shape == (B, 4, DIM)
+    print("test_attention_loop_tssm_observe_imagine OK (dynamics params {} vs {} = {:.0%})".format(n_trm, n_base, n_trm / n_base))
+
+
 if __name__ == "__main__":
     test_matches_paper_pseudocode()
     test_cycle_counts()
     test_gradient_boundary()
     test_no_grad_cycles_matter()
     test_baseline_state_dict_unchanged()
+    test_attention_loop_matches_paper_pseudocode()
+    test_attention_loop_cycle_counts()
+    test_attention_loop_streaming_consistency()
+    test_attention_loop_gradients()
+    test_attention_loop_tssm_observe_imagine()
     print("all fidelity tests passed")

@@ -262,16 +262,18 @@ index 05c7013..86397d0 100644
 \ No newline at end of file
 +        return AttrDict(state=self.history, reward=reward, done=done, is_first=is_first, is_last=is_last)
 diff --git a/nnet/models/twister.py b/nnet/models/twister.py
-index 593f983..118ad4b 100644
+index 593f983..4d1d9ff 100644
 --- a/nnet/models/twister.py
 +++ b/nnet/models/twister.py
-@@ -163,6 +163,14 @@ class TWISTER(models.Model):
+@@ -163,6 +163,16 @@ class TWISTER(models.Model):
          self.config.ff_ratio_trans = model_params.ff_ratio_trans
          self.config.num_heads_trans = model_params.num_heads_trans
          self.config.drop_rate_trans = model_params.drop_rate_trans
 +
 +        # Dynamics core: "transformer" (block stack) or "trm" (recursive weight-shared)
 +        self.config.dynamics_core = "transformer"
++        self.config.trm_loop = "mlp"
++        self.config.trm_loop_blocks = 1
 +        self.config.trm_context_blocks = 1
 +        self.config.trm_H_cycles = 3
 +        self.config.trm_L_cycles = 4
@@ -280,7 +282,7 @@ index 593f983..118ad4b 100644
          self.config.encoder_cnn_norm = {"class": "LayerNorm", "params": {"eps": 1e-3, "convert_float32": True}}
          self.config.module_pre_norm = False
          self.config.detach_decoder = False
-@@ -231,9 +239,9 @@ class TWISTER(models.Model):
+@@ -231,9 +241,9 @@ class TWISTER(models.Model):
              cnn_norm=self.config.norm,
          )
          self.rssm = twister_networks.TSSM(
@@ -293,13 +295,15 @@ index 593f983..118ad4b 100644
              learn_initial=self.config.learn_initial,
              norm=self.config.norm,
              hidden_size=self.config.model_hidden_size,
-@@ -242,7 +250,13 @@ class TWISTER(models.Model):
+@@ -242,7 +252,15 @@ class TWISTER(models.Model):
              num_heads=self.config.num_heads_trans,
              drop_rate=self.config.drop_rate_trans,
              att_context_left=self.config.att_context_left,
 -            module_pre_norm=self.config.module_pre_norm
 +            module_pre_norm=self.config.module_pre_norm,
 +            dynamics_core=self.config.dynamics_core,
++            trm_loop=self.config.trm_loop,
++            trm_loop_blocks=self.config.trm_loop_blocks,
 +            trm_context_blocks=self.config.trm_context_blocks,
 +            trm_H_cycles=self.config.trm_H_cycles,
 +            trm_L_cycles=self.config.trm_L_cycles,
@@ -309,7 +313,7 @@ index 593f983..118ad4b 100644
          self.policy_network = twister_networks.PolicyNetwork(
              num_actions=self.env.num_actions, 
 diff --git a/nnet/modules/twister/tssm.py b/nnet/modules/twister/tssm.py
-index 85b80f4..59c64de 100644
+index 85b80f4..dd721c9 100644
 --- a/nnet/modules/twister/tssm.py
 +++ b/nnet/modules/twister/tssm.py
 @@ -21,6 +21,8 @@ from nnet import modules
@@ -321,13 +325,15 @@ index 85b80f4..59c64de 100644
  class TSSM(nn.Module):
  
      def __init__(
-@@ -46,6 +48,14 @@ class TSSM(nn.Module):
+@@ -46,6 +48,16 @@ class TSSM(nn.Module):
              drop_rate=0.1,
              att_context_left=64,
              module_pre_norm=False,
 +
 +            # Dynamics core: "transformer" (block stack) or "trm" (recursive weight-shared)
 +            dynamics_core="transformer",
++            trm_loop="mlp",
++            trm_loop_blocks=1,
 +            trm_context_blocks=1,
 +            trm_H_cycles=3,
 +            trm_L_cycles=4,
@@ -336,7 +342,7 @@ index 85b80f4..59c64de 100644
          ):
          super(TSSM, self).__init__()
  
-@@ -84,30 +94,46 @@ class TSSM(nn.Module):
+@@ -84,30 +96,48 @@ class TSSM(nn.Module):
          )
  
          # Transformer et -> dt, ht
@@ -372,6 +378,8 @@ index 85b80f4..59c64de 100644
 +                max_pos_encoding=self.max_pos_encoding,
 +                ff_ratio=self.ff_ratio,
 +                module_pre_norm=module_pre_norm,
++                loop=trm_loop,
++                loop_blocks=trm_loop_blocks,
 +                context_blocks=trm_context_blocks,
 +                H_cycles=trm_H_cycles,
 +                L_cycles=trm_L_cycles,
