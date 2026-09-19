@@ -5,7 +5,7 @@ Games use different control paths according to latency pressure:
 | Tier | Control path | Implemented experiment environments |
 |---|---|---|
 | 1: world waits | Astra with a harness designed by an outer code-search loop | Rule puzzles, offline ARC-AGI-3 |
-| 2: world keeps ticking | Astra plans, Jev classifies, a generated harness connects them to actions | Snake, Lane Runner (`meta-harness-tier2` branch) |
+| 2: world keeps ticking | Astra plans, Jev classifies, a generated harness connects them to actions | Snake, Lane Runner |
 | 3: very tight latency | Trained neural network | See the per-game neural adapters below |
 
 The [Meta-Harness guide](docs/meta-harness.md) explains tiers 1 and 2. The
@@ -24,7 +24,9 @@ net = build_game_network("chess", d_model=256)   # generals / chess / go / othel
 net = build_game_network("go", board_h=9)        # mahjong / pokemon / lux / clash_royale / hearthstone / starcraft
 ```
 
-Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-pipeline.md) · [multi-game architecture](docs/multi-game.md) · [game data sources](docs/game-data-sources.md) · [known limitations](docs/known-limitations.md)
+Start with the [documentation index](docs/README.md). Published Meta-Harness
+programs and measurements are catalogued in the
+[experiment archive](metaharness/artifacts/README.md).
 
 ## Project Structure
 
@@ -99,7 +101,7 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 
 ## Quick Start
 
-### 1. Install
+### Install
 
 ```bash
 uv sync
@@ -107,7 +109,29 @@ uv sync
 # (Node.js is NOT required — .gior decompression is pure Python)
 ```
 
-### 2. Visualise a Replay
+### Foundation-model agents (tiers 1 and 2)
+
+Check the pipeline locally with explicit offline backends:
+
+```bash
+uv run python -m metaharness loop --tier 2 --game snake \
+    --system1 heuristic --system2 scripted --proposer scripted --clock virtual --iters 1
+```
+
+For live experiments, use the existing Codex account login for Astra and set
+`TYPESAFE_API_KEY` in `.env` using [.env.example](.env.example) as a reference:
+
+```bash
+uv run python -m metaharness loop --tier 2 --game snake \
+    --system1 jev --system2 astra --proposer astra
+```
+
+See the [Meta-Harness guide](docs/meta-harness.md) for tier 1, ARC setup, budgets,
+held-out evaluation and the distinction between offline checks and live results.
+
+### Neural agent workflow (tier 3)
+
+#### Visualise a replay
 
 ```bash
 # From a generals.io replay URL — produces an interactive HTML file
@@ -118,13 +142,13 @@ uv run python scripts/replay_to_visual.py \
 open viz_output/replay.html
 ```
 
-### 3. Prepare Training Data
+#### Prepare training data
 
 ```bash
 uv run python -m scripts.prepare_data --players Human.exe --output data/output --target 1000 --min-turns 80
 ```
 
-### 4. Train (Imitation Learning)
+#### Train with imitation learning
 
 ```bash
 # Recommended: recurrent neural memory + world-model objective
@@ -139,7 +163,7 @@ Effective batch = `batch_size × GPUs × grad_accum`; see
 [docs/training.md](docs/training.md) for memory-based batch sizing and the
 full from-scratch recipe.
 
-### 5. Train (Reinforcement Learning)
+#### Train with reinforcement learning
 
 ```bash
 # Load from IL checkpoint, fine-tune with PPO self-play
@@ -165,7 +189,7 @@ The data pipeline turns raw generals.io replays into training-ready tensors.
 Replays are stored on AWS S3 as `.gior` files (LZ-string compressed). The pipeline:
 1. Fetches replay metadata from `generals.io/api/replaysForUsername`
 2. Downloads `.gior` files from `generalsio-replays-na.s3.amazonaws.com`
-3. Decompresses using Node.js `lz-string` (auto-installed if missing)
+3. Decompresses with the Python `lzstring` package
 4. Deserialises into a structured dict: map size, generals, cities, mountains, moves
 
 **Filter** — `data_processing/processing/filter.py`
