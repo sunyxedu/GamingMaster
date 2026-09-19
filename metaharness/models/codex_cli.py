@@ -47,6 +47,7 @@ class CodexCLI:
         self.extra_config = dict(extra_config or {})
         self.n_calls = 0
         self.total_usage: dict[str, int] = {}
+        self.player_tools = "disabled-and-audited"
 
     # -- argv -----------------------------------------------------------
     def _argv(self, prompt: str, *, cwd: Optional[Path], session_id: Optional[str],
@@ -67,6 +68,15 @@ class CodexCLI:
         # resume inherits a session's permissions unless explicitly overridden.
         cfg["sandbox_mode"] = '"workspace-write"' if agentic else '"read-only"'
         cfg["approval_policy"] = '"never"'
+        if not agentic:
+            # A game player is inference-only. Filesystem/search access would
+            # expose hidden simulator state or answers outside its observation.
+            cfg["features.shell_tool"] = "false"
+            cfg["features.apps"] = "false"
+            cfg["features.browser_use"] = "false"
+            cfg["features.computer_use"] = "false"
+            cfg["features.multi_agent"] = "false"
+            cfg["web_search"] = '"disabled"'
         if self.reasoning_effort:
             cfg["model_reasoning_effort"] = f'"{self.reasoning_effort}"'
         # Silence hooks/notifiers from the user's interactive config.
@@ -89,6 +99,11 @@ class CodexCLI:
         trace: Optional[TraceSink] = None,
     ) -> System2Result:
         full_prompt = f"{system}\n\n{prompt}" if system and not session_id else prompt
+        if not agentic:
+            full_prompt = ("Inference-only game player: use only the supplied observations and "
+                           "conversation. Do not use tools, read files, run commands, browse, or "
+                           "consult external memories. Return the requested answer directly.\n\n"
+                           + full_prompt)
         cwd = Path(cwd).resolve() if cwd else None      # -C and subprocess cwd must both be absolute
         t0 = time.time()
         with tempfile.TemporaryDirectory() as td:
@@ -105,6 +120,16 @@ class CodexCLI:
             text = last_msg.read_text() if last_msg.exists() else ""
         events = _parse_jsonl(proc.stdout)
         thread_id, usage, errors = _digest_events(events)
+        if not agentic:
+            external = [ev.get("item", {}).get("type") for ev in events
+                        if ev.get("type") in ("item.started", "item.completed")
+                        and ev.get("item", {}).get("type") in
+                        {"command_execution", "mcp_tool_call", "web_search", "file_change",
+                         "collab_tool_call"}]
+            if external:
+                error = "inference-only player used external tools: " + ", ".join(sorted(set(external)))
+                self._trace(trace, t0, full_prompt, None, error)
+                raise ModelUnavailable(error)
         stderr_tail = (proc.stderr or "")[-2000:]
         combined_err = "\n".join(errors + ([stderr_tail] if proc.returncode != 0 else []))
         if _USAGE_LIMIT_RE.search(combined_err) or _USAGE_LIMIT_RE.search(proc.stdout[-4000:]):

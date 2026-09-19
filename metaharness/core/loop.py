@@ -69,6 +69,7 @@ class MetaHarnessLoop:
             "harness_timeout_s": config.harness_timeout_s,
             "models": {k: None if m is None else {
                 "name": m.name, "model": getattr(m, "model", None),
+                "player_tools": getattr(m, "player_tools", None),
                 "reasoning_effort": getattr(m, "reasoning_effort", None)}
                 for k, m in (("system1", system1), ("system2", system2), ("proposer", proposer))},
         }
