@@ -1,0 +1,39 @@
+{
+  "protocol_version": 2,
+  "task": "Design a harness for a **real-time** game (tier 2).\n\nGame: `snake` \u2014 Snake on a 12x12 grid, one tick every 0.500s, max 120 ticks. +1 per food eaten; episode ends on wall/self collision. The snake advances one cell per tick in its heading regardless of whether you decided. Observation: dict with head, heading, body, food, food_delta, danger{up,down,left,right} (True = that cell kills), and an ASCII grid (head=arrow, body=o, food=*).\n\nActions:\n- up: face up (y-1)\n- down: face down (y+1)\n- left: face left (x-1)\n- right: face right (x+1)\n- keep: keep current heading\n(no decision in time => 'keep')\nReversing into yourself is ignored (heading unchanged). Walls kill. Grid coordinates: x to the right, y downward, origin top-left.\n\nModels available through `ctx`:\n* `ctx.think(prompt, session_id=...)` \u2014 Astra (System-2, slow: seconds). Deep reasoning, can plan,\n  can explain rules. Returns `.text` and `.session_id` (pass it back to keep its reasoning state).\n  Budget: 4 calls per episode. Astra never sees the game unless you show it.\n* `ctx.decide(state, questions)` \u2014 Jev (System-1, fast: ~0.1\u20130.7 s). Typed questions\n  (`metaharness.models.jev.Choice/Score/Noul`), calibrated probabilities. Budget: 240 calls per\n  episode. Jev is a zero-shot classifier: it does not reason, so what you put in `state` and how you\n  phrase `instructions`/`criteria` is the whole game.\n* `ctx.spawn(fn)` \u2014 background thread, so Astra can think while Jev keeps acting.\n\nThe game ticks every 0.5s **on its own clock**; `ctx.act(a)` posts the current action (instant).\nA tick with no fresh action re-applies the last one. Evaluation metric: mean score over seeds\n(primary), then fraction of stale ticks (lower is better), then System-2 calls (fewer is better).\nClock mode: wall.\n\nHow to ask Jev well (from TypeSafe's System-One guidance, docs.typesafe.ai):\n* Keep deterministic work in code (legality, geometry, bookkeeping); ask Jev only the judgment code\n  cannot make. One narrow, coherent judgment per question; several *independent* questions over the\n  same state go in ONE `ctx.decide` call (parallel, same latency) \u2014 speculative questions are fine,\n  code consumes only the relevant answers.\n* `state` should be a named JSON object with only the relevant context (no context rot); reference\n  nested fields in questions with backticked paths like `snake.danger.left`.\n* Question ids are invisible to the model: the full meaning must be in `instructions` + `criteria`.\n  Criteria must separate the options from each other with concrete situations (\"moves toward food\n  and keeps \u2265 20 free cells\" vs \"safe but away from food\"); include a no-match option when nothing\n  may fit. Score levels must describe concrete situations. Use structured (dict) criteria when\n  options are easily confused.\n* `probabilities` + `confidence` are the interface: gate on them (low confidence \u2192 code fallback or\n  escalate to Astra), and check freshness before applying an answer to a changed state.\n\nWhat the harness must design (this is the whole point): how Astra's slow output (a plan, a rule\nsummary, a policy sketch, a subgoal) is turned into *state + questions* for Jev at every tick, how\nJev's typed answer is turned into a game action, when to go back to Astra, and what to do when a\ndecision is late.\n\n**Generality requirement.** The best harness is re-evaluated on a *held-out game* with the same\ninterface (`game.describe()`, `game.action_spec`, dict observations, `ctx`) but different rules and\ndifferent observation keys. Do not hard-code this game's rules or observation fields; discover them\nfrom `game.describe()` / the observation, or ask the System-2 model. Game-specific solvers score 0\non the held-out game.",
+  "seeds_train": [
+    0,
+    1,
+    2
+  ],
+  "clock_mode": "wall",
+  "latency_override": null,
+  "game_kwargs": {
+    "tick_s": 0.5,
+    "max_ticks": 120
+  },
+  "memory_mode": "episode",
+  "budget": {
+    "max_system1_calls": 240,
+    "max_system2_calls": 4,
+    "max_wall_s": 240
+  },
+  "harness_timeout_s": 240,
+  "models": {
+    "system1": {
+      "name": "jev",
+      "model": "jev-latest",
+      "reasoning_effort": null
+    },
+    "system2": {
+      "name": "codex:gpt-6-astra",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high"
+    },
+    "proposer": {
+      "name": "codex:gpt-6-astra",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high"
+    }
+  }
+}

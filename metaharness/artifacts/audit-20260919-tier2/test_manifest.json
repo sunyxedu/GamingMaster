@@ -1,0 +1,53 @@
+{
+  "selected": "0004",
+  "candidates": [
+    "0002-previous_astra_winner",
+    "0004",
+    "0000-tier2_jev_only"
+  ],
+  "cases": [
+    [
+      "heldout-cold",
+      "snake",
+      {
+        "tick_s": 0.5,
+        "max_ticks": 120
+      },
+      [
+        700,
+        701,
+        702
+      ],
+      "episode"
+    ],
+    [
+      "heldout-shared",
+      "snake",
+      {
+        "tick_s": 0.5,
+        "max_ticks": 120
+      },
+      [
+        700,
+        701,
+        702
+      ],
+      "shared"
+    ],
+    [
+      "heldout-lanerunner",
+      "lanerunner",
+      {
+        "tick_s": 0.5,
+        "max_ticks": 120
+      },
+      [
+        700,
+        701,
+        702
+      ],
+      "episode"
+    ]
+  ],
+  "selection": "training scores only"
+}

@@ -1,0 +1,7 @@
+[15:31:16] eval 0000-tier2_jev_only: mean=0.0 stale=0.16666666666666666 fatal=None errors=0
+[15:31:34] eval 0001-tier2_astra_only: mean=0.0 stale=1.0 fatal=None errors=0
+[15:34:36] eval 0002-previous_astra_winner: mean=8.666666666666666 stale=0.0 fatal=None errors=0
+[15:34:36] iteration 1/2: proposing with codex:gpt-6-astra
+[15:46:45] eval 0003: mean=1.3333333333333333 stale=0.0 fatal=None errors=0
+[15:46:45] iteration 2/2: proposing with codex:gpt-6-astra
+[15:57:46] eval 0004: mean=13.0 stale=0.0 fatal=None errors=0
