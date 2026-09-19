@@ -16,6 +16,7 @@ dependencies = [
     "python-chess>=1.999",
     "python-shogi>=1.1.1",
     "zstandard>=0.25.0",
+    "tomli>=2.0; python_version < '3.11'",  # model profiles on Python 3.10
 ]
 
 [project.optional-dependencies]
