@@ -139,3 +139,21 @@ def build(ctx): return H(ctx)
                          system1=None, clock_mode="wall", harness_timeout_s=5)
     ep = r.episodes[0]
     assert ep.steps >= 5 and ep.stale_ticks == ep.steps
+
+
+def test_wall_ticker_is_phase_aligned_with_wait_for_tick(tmp_path):
+    code = '''
+class H:
+    def __init__(self, ctx): self.ctx = ctx
+    def run_episode(self, game):
+        while not self.ctx.done:
+            self.ctx.act("keep")
+            self.ctx.wait_for_tick()
+def build(ctx): return H(ctx)
+'''
+    p = _write(tmp_path, "phase.py", code)
+    r = evaluate_harness(p, lambda **k: SnakeGame(tick_s=0.05, max_ticks=30, width=120, height=120, **k), [0],
+                         system2=None, system1=None, clock_mode="wall", harness_timeout_s=10)
+    ep = r.episodes[0]
+    # one fresh decision per tick: (almost) no stale ticks and no doubled decisions
+    assert ep.steps >= 20 and ep.stale_ticks <= 2

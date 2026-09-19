@@ -26,6 +26,8 @@ class LoopConfig:
     proposer_timeout_s: float = 1800.0
     harness_timeout_s: float = 600.0
     stop_on_model_unavailable: bool = True
+    heldout_game: Optional[str] = None                       # cross-game generality test
+    heldout_game_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 class MetaHarnessLoop:
@@ -62,13 +64,16 @@ class MetaHarnessLoop:
         with open(self.log_path, "a") as fh:
             fh.write(line + "\n")
 
-    def evaluate(self, cand: Candidate, seeds: list[int], tag: str = "") -> EvalResult:
+    def evaluate(self, cand: Candidate, seeds: list[int], tag: str = "",
+                 game_factory: Optional[Callable[..., Any]] = None,
+                 game_kwargs: Optional[dict[str, Any]] = None) -> EvalResult:
         out = cand.dir if not tag else cand.dir / tag
         res = evaluate_harness(
-            cand.harness_path, self.game_factory, seeds, system2=self.system2, system1=self.system1,
-            out_dir=out, clock_mode=self.cfg.clock_mode, budget_per_episode=self.cfg.budget,
-            latency_override=self.cfg.latency_override, harness_timeout_s=self.cfg.harness_timeout_s,
-            game_kwargs=self.game_kwargs,
+            cand.harness_path, game_factory or self.game_factory, seeds, system2=self.system2,
+            system1=self.system1, out_dir=out, clock_mode=self.cfg.clock_mode,
+            budget_per_episode=self.cfg.budget, latency_override=self.cfg.latency_override,
+            harness_timeout_s=self.cfg.harness_timeout_s,
+            game_kwargs=self.game_kwargs if game_kwargs is None else game_kwargs,
         )
         self.archive.write_leaderboard()
         self._log(f"eval {cand.dir.name}{'/' + tag if tag else ''}: mean={res.mean_score} "
@@ -109,7 +114,13 @@ class MetaHarnessLoop:
                 break
         best = self.archive.best()
         if best and self.cfg.seeds_heldout:
-            self._log(f"held-out evaluation of {best.dir.name}")
+            self._log(f"held-out seeds evaluation of {best.dir.name}")
             self.evaluate(best, self.cfg.seeds_heldout, tag="heldout")
-            self.archive.write_leaderboard()
+        if best and self.cfg.heldout_game:
+            from ..games.registry import make_game
+            self._log(f"held-out GAME evaluation of {best.dir.name} on {self.cfg.heldout_game}")
+            self.evaluate(best, self.cfg.seeds_heldout or self.cfg.seeds_train, tag=f"heldout-{self.cfg.heldout_game}",
+                          game_factory=lambda **k: make_game(self.cfg.heldout_game, **k),
+                          game_kwargs=self.cfg.heldout_game_kwargs)
+        self.archive.write_leaderboard()
         return best

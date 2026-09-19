@@ -90,10 +90,16 @@ class Clock(Protocol):
 
 
 class WallClock:
+    """Real time, measured from ``origin`` (episode start) so that tick
+    boundaries are at integer multiples of ``tick_s`` — the runner's ticker
+    is scheduled on the same origin, which keeps ``wait_for_tick`` in phase."""
     mode = "wall"
 
+    def __init__(self, origin: Optional[float] = None) -> None:
+        self.origin = time.time() if origin is None else origin
+
     def now(self) -> float:
-        return time.time()
+        return time.time() - self.origin
 
     def charge(self, seconds: float) -> None:  # real latency already elapsed
         pass
@@ -184,8 +190,10 @@ class HarnessContext:
         latency_override: Optional[Mapping[str, float]] = None,
         tick_s: Optional[float] = None,
         act_overhead_s: float = 0.001,
+        ticks_fn: Optional[Callable[[], int]] = None,
     ) -> None:
         self.tick_s = tick_s
+        self._ticks = ticks_fn
         self.act_overhead_s = act_overhead_s
         self.system2 = system2
         self.system1 = system1
@@ -211,12 +219,21 @@ class HarnessContext:
         return out
 
     def wait_for_tick(self) -> None:
-        """Block until the next game tick boundary (realtime games only)."""
+        """Block until the game has applied its next tick (realtime games only).
+
+        Waits to the next tick boundary, then — in wall mode — until the tick
+        counter has actually advanced, so the harness never posts an action
+        that a still-pending tick would consume out of phase."""
         if self.game_kind != "realtime" or not self.tick_s:
             return
+        target = (self._ticks() + 1) if self._ticks else None
         now = self.clock.now()
-        nxt = (int(now / self.tick_s) + 1) * self.tick_s
+        nxt = (int(now / self.tick_s + 1e-9) + 1) * self.tick_s
         self.clock.sleep(max(1e-6, nxt - now))
+        if self.clock.mode == "wall" and target is not None:
+            deadline = time.time() + self.tick_s
+            while self._ticks() < target and not self._done() and time.time() < deadline:
+                time.sleep(0.001)
 
     def observe(self) -> Any:
         return self._observe()

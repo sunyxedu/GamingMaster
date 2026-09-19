@@ -28,7 +28,13 @@ Evaluation metric: mean levels completed over seeds (primary), then System-2 cal
 What the harness must design: what to store (action→effect hypotheses, visited states, level maps),
 what to retrieve and show Astra each turn (full history? a diff? an ASCII map with a legend?), how to
 parse Astra's reply into actions robustly, how many actions to commit per call, when to run cheap
-scripted exploration instead of asking Astra, and how to detect that a hypothesis was refuted."""
+scripted exploration instead of asking Astra, and how to detect that a hypothesis was refuted.
+
+**Generality requirement.** The best harness is re-evaluated on a *held-out game* with the same
+interface (`game.describe()`, `game.action_spec`, dict observations, `ctx`) but different rules and
+different observation keys. Do not hard-code this game's rules or observation fields; discover them
+from `game.describe()` / the observation, or ask the System-2 model. Game-specific solvers score 0
+on the held-out game."""
 
 
 def task_md(game_name: str, budget: contract.Budget, clock_mode: str, game_kwargs: dict) -> str:

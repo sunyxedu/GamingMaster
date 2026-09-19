@@ -36,7 +36,13 @@ Clock mode: {clock}.
 What the harness must design (this is the whole point): how Astra's slow output (a plan, a rule
 summary, a policy sketch, a subgoal) is turned into *state + questions* for Jev at every tick, how
 Jev's typed answer is turned into a game action, when to go back to Astra, and what to do when a
-decision is late."""
+decision is late.
+
+**Generality requirement.** The best harness is re-evaluated on a *held-out game* with the same
+interface (`game.describe()`, `game.action_spec`, dict observations, `ctx`) but different rules and
+different observation keys. Do not hard-code this game's rules or observation fields; discover them
+from `game.describe()` / the observation, or ask the System-2 model. Game-specific solvers score 0
+on the held-out game."""
 
 
 def task_md(game_name: str, budget: contract.Budget, clock_mode: str, game_kwargs: dict) -> str:
