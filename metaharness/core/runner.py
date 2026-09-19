@@ -114,7 +114,8 @@ class _GameView:
         return getattr(self._g, "ticks", 0)
 
     def info(self) -> dict[str, Any]:
-        return self._g.info()
+        # Game.info() is evaluator diagnostics and can contain hidden rules.
+        return {"score": self.score, "ticks": self.ticks, "game_done": self._g.done}
 
 
 class _Mailbox:
@@ -285,7 +286,7 @@ def run_episode(
     res.latency_s1, res.latency_s2 = s1_lat, s2_lat
     res.wall_s = time.time() - t_wall0
     res.error = err
-    res.info = {**game.info(), "pending_tasks": pending}
+    res.info = {**view.info(), "pending_tasks": pending}
     trace.write({"type": "episode_end", **res.summary()})
     return res
 
@@ -344,7 +345,7 @@ def evaluate_harness(
         if i:
             module = load_harness_module(harness_path)
         memory = copy.deepcopy(memory) if memory_mode == "shared" else {}
-        trace = TraceSink(out_dir / f"trace_seed{seed}.jsonl" if out_dir else None)
+        trace = TraceSink(out_dir / f"trace_seed{seed}.jsonl" if out_dir else None, append=False)
         budget = Budget(max_system2_calls=b.max_system2_calls, max_system1_calls=b.max_system1_calls,
                         max_wall_s=b.max_wall_s)
         try:

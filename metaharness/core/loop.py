@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 from ..models.base import ModelUnavailable, System1Model, System2Model, TraceSink

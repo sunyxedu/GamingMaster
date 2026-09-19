@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import threading
 import time
-from types import SimpleNamespace
 
 import pytest
 
@@ -147,3 +146,24 @@ def test_manifest_prevents_reusing_incomparable_scores(tmp_path):
     (held / "eval.json").write_text('{}')
     with pytest.raises(ValueError, match="held-out results"):
         main(args + ["--iters", "1"])
+
+
+def test_hidden_rule_diagnostics_do_not_reach_harness_or_archive(tmp_path):
+    from metaharness.core.runner import _GameView
+    from metaharness.games.rulepuzzle import RulePuzzleGame
+    game = RulePuzzleGame()
+    assert 'move_map' in game.info()
+    view = _GameView(game, threading.Event())
+    assert 'move_map' not in view.info() and 'family' not in view.info()
+    code = '''
+from types import SimpleNamespace
+def build(ctx):
+    return SimpleNamespace(run_episode=lambda game: ctx.act(1))
+'''
+    r = evaluate(tmp_path, code, system2=None)
+    assert 'actions_used' not in r.episodes[0].info
+    p = tmp_path / 'result' / 'trace_seed0.jsonl'
+    assert sum(json.loads(line)['type'] == 'episode_start' for line in p.read_text().splitlines()) == 1
+    # Re-evaluation replaces each episode trace instead of appending a second trajectory.
+    evaluate(tmp_path, code, system2=None)
+    assert sum(json.loads(line)['type'] == 'episode_start' for line in p.read_text().splitlines()) == 1
