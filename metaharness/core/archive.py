@@ -79,7 +79,9 @@ class Archive:
             return None
         def key(c: Candidate):
             e = c.eval() or {}
-            return (e.get("mean_score", 0.0), -(e.get("stale_fraction") or 0.0), -e.get("system2_calls", 0))
+            # score, then fewer stale ticks, then fewer System-2 calls, then fewer actions (efficiency)
+            return (e.get("mean_score", 0.0), -(e.get("stale_fraction") or 0.0), -e.get("system2_calls", 0),
+                    -(e.get("mean_steps") or 0.0))
         return max(scored, key=key)
 
     # -- docs -----------------------------------------------------------

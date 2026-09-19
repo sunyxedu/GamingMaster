@@ -73,6 +73,7 @@ class EvalResult:
             "n_episodes": len(self.episodes),
             "system1_calls": sum(e.system1_calls for e in self.episodes),
             "system2_calls": sum(e.system2_calls for e in self.episodes),
+            "mean_steps": (statistics.fmean(e.steps for e in self.episodes) if self.episodes else None),
             "errors": [e.error for e in self.episodes if e.error],
             "episodes": [e.summary() for e in self.episodes],
         }

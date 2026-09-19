@@ -1,7 +1,9 @@
 """Tier-2 seed #2: Astra alone, one call per decision. Demonstrates why a slow
 model cannot drive a real-time game: most ticks run on a stale action.
-"""
+Game-agnostic (JSON observation, action names from the spec)."""
 from __future__ import annotations
+
+from metaharness.baselines._generic import obs_text, parse_action
 
 
 class Harness:
@@ -11,18 +13,17 @@ class Harness:
     def run_episode(self, game):
         ctx = self.ctx
         session = None
+        names = list(game.action_spec.names)
         while not ctx.done:
-            obs = game.observe()
             prompt = (f"{game.describe()}\nActions:\n{game.action_spec.describe()}\n\n"
-                      f"Observation:\n{obs['grid']}\nhead={obs['head']} heading={obs['heading']} "
-                      f"food={obs['food']} danger={obs['danger']}\n"
+                      f"Observation:\n{obs_text(game.observe())}\n"
                       "Reply with exactly one action name and nothing else.")
-            res = ctx.think(prompt, session_id=session)
+            try:
+                res = ctx.think(prompt, session_id=session)
+            except RuntimeError:
+                break
             session = res.session_id
-            a = res.text.strip().split()[0].strip("`'\".").lower() if res.text.strip() else "keep"
-            if a not in game.action_spec.names:
-                a = "keep"
-            ctx.act(a)
+            ctx.act(parse_action(res.text, names, default=game.action_spec.noop or names[0]))
 
 
 def build(ctx):
