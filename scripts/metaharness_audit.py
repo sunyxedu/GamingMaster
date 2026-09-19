@@ -7,6 +7,7 @@ All requests use the configured Astra/Jev profiles; no mocked latency.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import shutil
 import subprocess
@@ -42,7 +43,11 @@ def main():
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--iterations", type=int, default=2)
     p.add_argument("--source", type=Path, help="validate: discovery archive to re-evaluate with final code")
+    p.add_argument("--jobs", type=int, default=1, choices=[1, 2],
+                   help="test only: independent tier-1 episodes may run concurrently")
     a = p.parse_args()
+    if a.tier == 2 and a.jobs != 1:
+        p.error("wall-clock tier-2 comparisons run serially")
     load_dotenv()
     task, game, kw, prior, budget = setup(a.tier)
     archive = Archive(a.root.resolve())
@@ -105,6 +110,12 @@ def main():
         # Freeze before exposing any test outcomes; never optimize from these results.
         selected = [c for c in archive.candidates()
                     if c.dir.name.endswith("previous_astra_winner") or c.idx == best.idx]
+        # Test the newest evaluated challenger even when training selection
+        # retained the incumbent. Its test scores never change selection.
+        evaluated = [c for c in archive.candidates() if c.eval() and not c.eval().get("fatal")]
+        challenger = max(evaluated, key=lambda c: c.idx)
+        if challenger not in selected:
+            selected.append(challenger)
         selected += [c for c in archive.candidates()
                      if c.dir.name.endswith("tier2_jev_only") or c.dir.name.endswith("tier1_astra_naive")]
         cases = [("heldout-cold", game, kw, [700, 701, 702] if a.tier == 2 else [700, 701], "episode")]
@@ -123,20 +134,32 @@ def main():
         if freeze_path.exists() and json.loads(freeze_path.read_text()) != json.loads(json.dumps(freeze)):
             raise SystemExit("Frozen test configuration changed")
         freeze_path.write_text(json.dumps(freeze, indent=2) + "\n")
-        for label, name, game_kw, seeds, memory_mode in cases:
-            for cand in selected:
-                out = cand.dir / label
-                if (out / "eval.json").exists():
-                    continue
-                result = evaluate_harness(cand.harness_path, lambda **k: make_game(name, **k), seeds,
-                                          system2=s2, system1=s1, out_dir=out, clock_mode="wall",
-                                          game_kwargs=game_kw, budget_per_episode=budget,
-                                          harness_timeout_s=budget.max_wall_s, memory_mode=memory_mode)
-                print(label, cand.dir.name, result.mean_score,
-                      result.fatal, [e.error for e in result.episodes if e.error], flush=True)
-                archive.write_leaderboard()
-                if result.fatal:
-                    raise SystemExit(result.fatal)
+        (archive.root / "test_execution.json").write_text(json.dumps({
+            "jobs": a.jobs, "git_commit": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip(),
+        }, indent=2) + "\n")
+
+        def run_case(cand, case):
+            label, name, game_kw, seeds, memory_mode = case
+            out = cand.dir / label
+            if (out / "eval.json").exists():
+                return None
+            result = evaluate_harness(cand.harness_path, lambda **k: make_game(name, **k), seeds,
+                                      system2=make_system2("astra", reasoning_effort="high"),
+                                      system1=make_system1("jev") if a.tier == 2 else None,
+                                      out_dir=out, clock_mode="wall", game_kwargs=game_kw,
+                                      budget_per_episode=budget, harness_timeout_s=budget.max_wall_s,
+                                      memory_mode=memory_mode)
+            print(label, cand.dir.name, result.mean_score,
+                  result.fatal, [e.error for e in result.episodes if e.error], flush=True)
+            return result.fatal
+
+        with ThreadPoolExecutor(max_workers=a.jobs) as pool:
+            pending = [pool.submit(run_case, cand, case) for case in cases for cand in selected]
+            failures = [failure for future in as_completed(pending) if (failure := future.result())]
+        archive.write_leaderboard()
+        if failures:
+            raise SystemExit("; ".join(failures))
         if a.tier == 2:
             for label, slow, fast in (("heldout-no-astra", None, s1),
                                       ("heldout-no-jev", s2, None)):
