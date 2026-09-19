@@ -1,0 +1,71 @@
+{
+  "harness_path": "runs/exp-tier1-rulepuzzle-claude/candidates/0002/harness.py",
+  "game": "rulepuzzle",
+  "fatal": null,
+  "mean_score": 2.0,
+  "stale_fraction": null,
+  "n_episodes": 2,
+  "system1_calls": 0,
+  "system2_calls": 0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 2.0,
+      "steps": 16,
+      "system1_calls": 0,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 0.0021009445190429688,
+      "error": null,
+      "info": {
+        "levels_done": 2,
+        "actions_used": 16,
+        "family": "teleport",
+        "move_map": {
+          "ACTION1": "left",
+          "ACTION2": "up",
+          "ACTION3": "down",
+          "ACTION4": "right"
+        },
+        "interact": "ACTION6"
+      }
+    },
+    {
+      "seed": 1,
+      "score": 2.0,
+      "steps": 15,
+      "system1_calls": 0,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 0.0015578269958496094,
+      "error": null,
+      "info": {
+        "levels_done": 2,
+        "actions_used": 15,
+        "family": "teleport",
+        "move_map": {
+          "ACTION1": "right",
+          "ACTION2": "up",
+          "ACTION3": "left",
+          "ACTION4": "down"
+        },
+        "interact": "ACTION6"
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "harness_path": "metaharness/baselines/tier1_astra_naive.py",
+  "game": "arc3",
+  "fatal": null,
+  "mean_score": 0.0,
+  "stale_fraction": null,
+  "n_episodes": 1,
+  "system1_calls": 0,
+  "system2_calls": 16,
+  "mean_steps": 15.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 100,
+      "score": 0.0,
+      "steps": 15,
+      "system1_calls": 0,
+      "system2_calls": 16,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 15,
+        "mean": 3.2221627871195477,
+        "p50": 2.849684000015259,
+        "p90": 4.497658729553223,
+        "max": 5.970297813415527
+      },
+      "wall_s": 48.362375020980835,
+      "error": null,
+      "info": {
+        "levels_done": 0,
+        "actions_used": 15,
+        "state": "NOT_FINISHED"
+      }
+    }
+  ]
+}

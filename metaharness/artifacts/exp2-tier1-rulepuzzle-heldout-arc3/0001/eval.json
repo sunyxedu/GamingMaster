@@ -1,0 +1,72 @@
+{
+  "harness_path": "runs/exp2-tier1-rulepuzzle-heldout-arc3/candidates/0001/harness.py",
+  "game": "rulepuzzle",
+  "fatal": null,
+  "mean_score": 2.0,
+  "stale_fraction": null,
+  "n_episodes": 2,
+  "system1_calls": 0,
+  "system2_calls": 0,
+  "mean_steps": 30.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 2.0,
+      "steps": 30,
+      "system1_calls": 0,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 0.002138853073120117,
+      "error": null,
+      "info": {
+        "levels_done": 2,
+        "actions_used": 30,
+        "family": "teleport",
+        "move_map": {
+          "ACTION1": "left",
+          "ACTION2": "up",
+          "ACTION3": "down",
+          "ACTION4": "right"
+        },
+        "interact": "ACTION6"
+      }
+    },
+    {
+      "seed": 1,
+      "score": 2.0,
+      "steps": 30,
+      "system1_calls": 0,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 0.0016829967498779297,
+      "error": null,
+      "info": {
+        "levels_done": 2,
+        "actions_used": 30,
+        "family": "teleport",
+        "move_map": {
+          "ACTION1": "right",
+          "ACTION2": "up",
+          "ACTION3": "left",
+          "ACTION4": "down"
+        },
+        "interact": "ACTION6"
+      }
+    }
+  ]
+}

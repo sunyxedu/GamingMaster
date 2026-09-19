@@ -1,0 +1,40 @@
+{
+  "harness_path": "runs/exp2-tier1-rulepuzzle-heldout-arc3/candidates/0003/harness.py",
+  "game": "arc3",
+  "fatal": null,
+  "mean_score": 1.0,
+  "stale_fraction": null,
+  "n_episodes": 1,
+  "system1_calls": 0,
+  "system2_calls": 11,
+  "mean_steps": 150.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 100,
+      "score": 1.0,
+      "steps": 150,
+      "system1_calls": 0,
+      "system2_calls": 11,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 11,
+        "mean": 39.431579654867,
+        "p50": 29.630606174468994,
+        "p90": 60.992993116378784,
+        "max": 146.92727828025818
+      },
+      "wall_s": 434.37083315849304,
+      "error": null,
+      "info": {
+        "levels_done": 1,
+        "actions_used": 150,
+        "state": "NOT_FINISHED"
+      }
+    }
+  ]
+}

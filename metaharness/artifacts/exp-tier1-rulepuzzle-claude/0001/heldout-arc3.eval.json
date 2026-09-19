@@ -1,0 +1,37 @@
+{
+  "harness_path": "runs/exp-tier1-rulepuzzle-claude/candidates/0001/harness.py",
+  "game": "arc3",
+  "fatal": null,
+  "mean_score": 0.0,
+  "stale_fraction": null,
+  "n_episodes": 1,
+  "system1_calls": 0,
+  "system2_calls": 0,
+  "errors": [
+    "Traceback (most recent call last):\n  File \"/Users/hemlix/Documents/GamingMaster/metaharness/core/runner.py\", line 237, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/runs/exp-tier1-rulepuzzle-claude/candidates/0001/harness.py\", line 500, in run_episode\n    w.ingest(ctx.observe(), EMPTY)\n    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/runs/exp-tier1-rulepuzzle-claude/candidates/0001/harness.py\", line 80, in ingest\n    new_level = obs[\"level\"] != self.level\n                ~~~^^^^^^^^^\nKeyError: 'level'\n"
+  ],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 0.0,
+      "steps": 0,
+      "system1_calls": 0,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 0.0012390613555908203,
+      "error": "Traceback (most recent call last):\n  File \"/Users/hemlix/Documents/GamingMaster/metaharness/core/runner.py\", line 237, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/runs/exp-tier1-rulepuzzle-claude/candidates/0001/harness.py\", line 500, in run_episode\n    w.ingest(ctx.observe(), EMPTY)\n    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/runs/exp-tier1-rulepuzzle-claude/candidates/0001/harness.py\", line 80, in ingest\n    new_level = obs[\"level\"] != self.level\n                ~~~^^^^^^^^^\nKeyError: 'level'\n",
+      "info": {
+        "levels_done": 0,
+        "actions_used": 0,
+        "state": "NOT_FINISHED"
+      }
+    }
+  ]
+}
