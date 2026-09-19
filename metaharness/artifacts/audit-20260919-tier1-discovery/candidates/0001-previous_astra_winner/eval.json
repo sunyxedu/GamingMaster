@@ -1,0 +1,112 @@
+{
+  "harness_path": "/private/tmp/gamingmaster-audit-tier1-20260919/candidates/0001-previous_astra_winner/harness.py",
+  "game": "rulepuzzle",
+  "fatal": null,
+  "mean_score": 2.0,
+  "stale_fraction": null,
+  "n_episodes": 2,
+  "system1_calls": 0,
+  "system2_calls": 7,
+  "mean_steps": 36.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 2.0,
+      "steps": 36,
+      "system1_calls": 0,
+      "system2_calls": 4,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 4,
+        "mean": 26.8755224943161,
+        "p50": 31.188961029052734,
+        "p90": 37.51585412025452,
+        "max": 37.51585412025452
+      },
+      "wall_s": 107.50890803337097,
+      "error": null,
+      "info": {
+        "levels_done": 2,
+        "actions_used": 36,
+        "family": "teleport",
+        "move_map": {
+          "ACTION1": "left",
+          "ACTION2": "up",
+          "ACTION3": "down",
+          "ACTION4": "right"
+        },
+        "interact": "ACTION6",
+        "pending_tasks": 0
+      }
+    },
+    {
+      "seed": 1,
+      "score": 2.0,
+      "steps": 36,
+      "system1_calls": 0,
+      "system2_calls": 3,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 3,
+        "mean": 27.037753264109295,
+        "p50": 30.269295692443848,
+        "p90": 35.766809940338135,
+        "max": 35.766809940338135
+      },
+      "wall_s": 81.11943793296814,
+      "error": null,
+      "info": {
+        "levels_done": 2,
+        "actions_used": 36,
+        "family": "teleport",
+        "move_map": {
+          "ACTION1": "right",
+          "ACTION2": "up",
+          "ACTION3": "left",
+          "ACTION4": "down"
+        },
+        "interact": "ACTION6",
+        "pending_tasks": 0
+      }
+    }
+  ],
+  "metadata": {
+    "protocol_version": 2,
+    "seeds": [
+      0,
+      1
+    ],
+    "game_kwargs": {
+      "n_levels": 2,
+      "budget_per_level": 50
+    },
+    "clock_mode": "wall",
+    "latency_override": null,
+    "memory_mode": "episode",
+    "harness_timeout_s": 900,
+    "budget": {
+      "max_system1_calls": 0,
+      "max_system2_calls": 12,
+      "max_wall_s": 900
+    },
+    "models": {
+      "system1": null,
+      "system2": {
+        "name": "codex:gpt-6-astra",
+        "model": "gpt-6-astra",
+        "reasoning_effort": "high"
+      }
+    },
+    "harness_sha256": "26285777aaeaeadbec3c8b3edf696492c0358693bade386a7e5f5371f6774934"
+  },
+  "score_std": 0.0
+}

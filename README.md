@@ -1,4 +1,17 @@
-# GamingMaster — Multi-Game Neural Network Bot
+# GamingMaster — Game Agents and Meta-Harness
+
+Games use different control paths according to latency pressure:
+
+| Tier | Control path | Implemented experiment environments |
+|---|---|---|
+| 1: world waits | Astra with a harness designed by an outer code-search loop | Rule puzzles, offline ARC-AGI-3 |
+| 2: world keeps ticking | Astra plans, Jev classifies, a generated harness connects them to actions | Snake, Lane Runner (`meta-harness-tier2` branch) |
+| 3: very tight latency | Trained neural network | See the per-game neural adapters below |
+
+The [Meta-Harness guide](docs/meta-harness.md) explains tiers 1 and 2. The
+[live-model audit](docs/meta-harness-audit-2026-09-19.md) records real Astra/Jev
+experiments, cold-start and shared-memory controls, and current transfer limits.
+Minecraft and Genshin are target use cases; their integrations are not implemented.
 
 An AlphaStar-inspired Transformer architecture with a TRM (Tiny Recursive Model) pondering core, trained by Imitation Learning (IL) followed by PPO self-play (RL).
 
@@ -55,6 +68,7 @@ Detailed docs: [training guide](docs/training.md) · [data pipeline](docs/data-p
 │       ├── recurrence.py     #     GatedRecurrence — fixed-size neural episode memory
 │       ├── trm.py            #     TRM (Tiny Recursive Model) two-state pondering
 │       ├── heads.py          #     Source / Direction / Split / Pass / Value heads
+├── metaharness/              # Astra/Jev backends, generated controllers, search and evaluation
 ├── env/                      # RL environments
 │   ├── generals_env.py       #   Two-player simultaneous-move Gym-like env
 │   └── board_selfplay_env.py #   Alternating-move self-play env (othello/gomoku)

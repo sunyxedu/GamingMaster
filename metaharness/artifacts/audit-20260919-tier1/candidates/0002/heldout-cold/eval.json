@@ -1,0 +1,99 @@
+{
+  "harness_path": "/private/tmp/gamingmaster-audit-tier1-final-20260919/candidates/0002/harness.py",
+  "game": "rulepuzzle",
+  "fatal": null,
+  "mean_score": 2.0,
+  "stale_fraction": null,
+  "n_episodes": 2,
+  "system1_calls": 0,
+  "system2_calls": 5,
+  "mean_steps": 36.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 700,
+      "score": 2.0,
+      "steps": 36,
+      "system1_calls": 0,
+      "system2_calls": 2,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 2,
+        "mean": 36.25819551944733,
+        "p50": 54.286365032196045,
+        "p90": 54.286365032196045,
+        "max": 54.286365032196045
+      },
+      "wall_s": 72.63949918746948,
+      "error": null,
+      "info": {
+        "score": 2.0,
+        "ticks": 0,
+        "game_done": true,
+        "pending_tasks": 0
+      }
+    },
+    {
+      "seed": 701,
+      "score": 2.0,
+      "steps": 36,
+      "system1_calls": 0,
+      "system2_calls": 3,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 3,
+        "mean": 40.40409278869629,
+        "p50": 50.452688217163086,
+        "p90": 53.32981610298157,
+        "max": 53.32981610298157
+      },
+      "wall_s": 121.34427499771118,
+      "error": null,
+      "info": {
+        "score": 2.0,
+        "ticks": 0,
+        "game_done": true,
+        "pending_tasks": 0
+      }
+    }
+  ],
+  "metadata": {
+    "protocol_version": 2,
+    "seeds": [
+      700,
+      701
+    ],
+    "game_kwargs": {
+      "n_levels": 2,
+      "budget_per_level": 50
+    },
+    "clock_mode": "wall",
+    "latency_override": null,
+    "memory_mode": "episode",
+    "harness_timeout_s": 900,
+    "budget": {
+      "max_system1_calls": 0,
+      "max_system2_calls": 12,
+      "max_wall_s": 900
+    },
+    "models": {
+      "system1": null,
+      "system2": {
+        "name": "codex:gpt-6-astra",
+        "model": "gpt-6-astra",
+        "player_tools": "disabled-and-audited",
+        "reasoning_effort": "high"
+      }
+    },
+    "harness_sha256": "e8df37499ddaec9d952134522b8b98920ea782e5aad5ee50492166026d82fe81"
+  },
+  "score_std": 0.0
+}

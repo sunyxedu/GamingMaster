@@ -1,5 +1,8 @@
 # Meta-Harness: designing the glue between foundation models and games
 
+See the [2026-09-19 implementation audit and live-model experiments](meta-harness-audit-2026-09-19.md)
+for the current protocol, fixes, cold-start controls and transfer limitations.
+
 `metaharness/` is the second half of GamingMaster. The trained network in
 `model/` covers games where every millisecond matters. Everything else is
 handled by *foundation models plus a harness*, and the harness is not written
@@ -47,7 +50,8 @@ gets everything through `ctx` (`metaharness/core/contract.py`):
 * `ctx.spawn(fn)` — background thread, so Astra can think while Jev acts.
 * `ctx.act(action)` — turn games: step; real-time games: post the current
   action to a mailbox that the game clock reads every tick.
-* `ctx.wait_for_tick()`, `ctx.clock`, `ctx.memory` (persists across seeds),
+* `ctx.wait_for_tick()`, `ctx.clock`, `ctx.memory` (episode-local by default;
+  `--memory-mode shared` explicitly enables ordered cross-seed adaptation),
   `ctx.log(...)` (goes into the JSONL trace).
 
 The harness therefore decides exactly the things the tier-2 discussion is
@@ -93,8 +97,12 @@ proposal, score and trace) writes `candidates/NNNN/harness.py` and a
 `proposal.md` with its hypothesis. The evaluator runs it on the training
 seeds, archives `eval.json` and the traces, regenerates the leaderboard, and
 the loop repeats. At the end the best candidate is re-evaluated on held-out
-seeds. Selection is lexicographic: mean score, then fewer stale ticks, then
-fewer System-2 calls.
+seeds. Fatal, partial and erroneous evaluations cannot win. Selection is
+lexicographic: mean score, fewer stale ticks, fewer System-2 calls, then fewer
+actions for turn games; real-time ties favor longer survival. Every evaluation
+records its seeds, budgets, models, clock, memory
+protocol and harness hash; incompatible archive resumes are rejected. Once an
+archive contains held-out evaluations, start a fresh archive for further search.
 
 Baselines are seeded deliberately weak so the loop has something to beat:
 Jev-only, Astra-only (tier 2) and naive Astra (tier 1). The
@@ -120,12 +128,12 @@ python -m metaharness eval --tier 2 --game snake --harness runs/<exp>/candidates
     --system1 jev --system2 astra --seeds 100,101,102
 ```
 
-Games: `snake` (tier 2), `rulepuzzle` (tier 1, hidden-rule grid puzzles with
+Games: `snake` and `lanerunner` (tier 2), `rulepuzzle` (tier 1, hidden-rule grid puzzles with
 key/door, toggle, teleport, mirrored-controls families), `arc3` (tier 1, real
 ARC-AGI-3 through `arc_agi.Arcade` offline).
 
-Tests: `uv run pytest tests/metaharness` (26 tests; the live Jev test is
-skipped without a key).
+Tests: `uv run pytest tests/metaharness` (50 on tier 2; 35 on the tier-1
+branch at this audit). Live Jev coverage requires a configured key.
 
 ## Cross-game held-out evaluation (why it exists)
 
@@ -142,9 +150,9 @@ on a different game with the same interface (`lanerunner` for tier 2, `arc3`
 for tier 1), reports it on the leaderboard without using it for selection,
 and the task spec now states the generality requirement. Seed baselines are
 game-agnostic by construction (`metaharness/baselines/_generic.py`, tested on
-every registered game), and the tie-break rewards fewer actions.
+every registered game), and the turn-game tie-break rewards fewer actions.
 
-## Experiments (2026-09-19)
+## Historical experiments (2026-09-19, shared-memory protocol)
 
 All four runs used real Jev (`jev-1.13.0`, p50 latency 0.57–0.62 s on a
 0.5 s tick) and Claude (`claude -p`) as an explicit stand-in for Astra as
@@ -200,9 +208,9 @@ plans of many actions per call and no re-probing after a level-up.
 
 ### Running with real Astra
 
-Same commands with `--system2 astra --proposer astra` once the codex account
-has usage again (`codex exec` reports the reset time). Nothing else changes;
-the adapter is exercised by the offline tests against recorded codex output.
+Use `--system2 astra --proposer astra` with the CLI account login. Astra is
+available and used for the audit above; the earlier quota-limited runs below
+remain as historical evidence. No backend is silently substituted.
 
 ### Round 3 — real Astra (gpt-6-astra, reasoning effort high) as player and proposer
 

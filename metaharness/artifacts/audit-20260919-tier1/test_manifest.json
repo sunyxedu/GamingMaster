@@ -1,0 +1,48 @@
+{
+  "selected": "0001-previous_astra_winner",
+  "candidates": [
+    "0001-previous_astra_winner",
+    "0002",
+    "0000-tier1_astra_naive"
+  ],
+  "cases": [
+    [
+      "heldout-cold",
+      "rulepuzzle",
+      {
+        "n_levels": 2,
+        "budget_per_level": 50
+      },
+      [
+        700,
+        701
+      ],
+      "episode"
+    ],
+    [
+      "heldout-arc3-ls20",
+      "arc3",
+      {
+        "game_id": "ls20",
+        "max_actions": 150
+      },
+      [
+        700
+      ],
+      "episode"
+    ],
+    [
+      "heldout-arc3-cd82",
+      "arc3",
+      {
+        "game_id": "cd82",
+        "max_actions": 150
+      },
+      [
+        700
+      ],
+      "episode"
+    ]
+  ],
+  "selection": "training scores only"
+}
