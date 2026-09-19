@@ -150,6 +150,8 @@ def _fake_run_cli(stdout, rc, last_text=None):
 
     def run_cli(argv, *, cwd, stdin_text, timeout_s, env_overrides=None, env_drop=()):
         assert "OPENAI_API_KEY" in env_drop
+        assert cwd is None or Path(cwd).is_absolute()
+        assert "-C" not in argv or Path(argv[argv.index("-C") + 1]).is_absolute()
         if last_text is not None:
             Path(argv[argv.index("-o") + 1]).write_text(last_text)
         return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr="")

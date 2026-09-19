@@ -47,6 +47,7 @@ class ClaudeCLI:
             argv += ["--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
         else:
             argv += ["--tools", ""]  # plain answer, no tool use
+        cwd = Path(cwd).resolve() if cwd else None
         t0 = time.time()
         # Nested Claude Code sessions refuse to start unless this is cleared.
         proc = run_cli(argv, cwd=cwd, stdin_text=prompt, timeout_s=timeout_s,

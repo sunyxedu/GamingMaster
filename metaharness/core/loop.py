@@ -101,6 +101,9 @@ class MetaHarnessLoop:
                 if self.cfg.stop_on_model_unavailable:
                     break
                 continue
+            except Exception as e:  # noqa: BLE001 — a failed proposal is data, not a crash
+                self._log(f"proposer failed: {type(e).__name__}: {str(e)[:300]}")
+                continue
             finally:
                 ptrace.close()
             if not cand.harness_path.exists():

@@ -89,6 +89,7 @@ class CodexCLI:
         trace: Optional[TraceSink] = None,
     ) -> System2Result:
         full_prompt = f"{system}\n\n{prompt}" if system and not session_id else prompt
+        cwd = Path(cwd).resolve() if cwd else None      # -C and subprocess cwd must both be absolute
         t0 = time.time()
         with tempfile.TemporaryDirectory() as td:
             last_msg = Path(td) / "last.txt"
