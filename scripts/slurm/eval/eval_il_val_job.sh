@@ -10,22 +10,33 @@
 # Evaluate the LAST few phase-2 IL epoch checkpoints on the held-out *-val
 # splits (mid-epoch _step saves are ignored). Checkpoints are sharded
 # round-robin across however many GPUs the job was granted (auto-detected),
-# one eval_il.py process per GPU; a merged, loss-sorted summary is printed
+# one training/eval_il.py process per GPU; a merged, loss-sorted summary is printed
 # at the end.
 #
-#   sbatch eval_il_val_job.sh                                # last 5, 4 GPUs
-#   LAST=10 sbatch --gres=gpu:nvidia_h200_nvl:2 eval_il_val_job.sh
-#   EPOCHS="10 15 20 23" sbatch eval_il_val_job.sh           # explicit epochs
+#   sbatch scripts/slurm/eval/eval_il_val_job.sh                                # last 5, 4 GPUs
+#   LAST=10 sbatch --gres=gpu:nvidia_h200_nvl:2 scripts/slurm/eval/eval_il_val_job.sh
+#   EPOCHS="10 15 20 23" sbatch scripts/slurm/eval/eval_il_val_job.sh           # explicit epochs
 #
 # Per-GPU CSVs are APPENDED across runs, so the merged table at the end
 # accumulates every epoch evaluated so far — rerunning with new EPOCHS
 # extends the same sorted summary.
 #
 # Override the checkpoint dir or output:
-#   CKPT_DIR=... OUT_DIR=... sbatch eval_il_val_job.sh
+#   CKPT_DIR=... OUT_DIR=... sbatch scripts/slurm/eval/eval_il_val_job.sh
 
 export PYTHONWARNINGS="ignore::UserWarning"
-export PYTHONPATH=~/GamingMaster
+# Slurm executes a spool copy: start from the explicit checkout or submit directory.
+_gm_start="${GAMINGMASTER_ROOT:-${SLURM_SUBMIT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}}"
+_gm_root=$(cd -- "$_gm_start" && pwd) || exit 1
+while [[ ! -f "$_gm_root/scripts/slurm/_env.sh" ]]; do
+    if [[ "$_gm_root" == / ]]; then
+        echo "Cannot find GamingMaster; set GAMINGMASTER_ROOT to the checkout root." >&2
+        exit 1
+    fi
+    _gm_root=$(dirname -- "$_gm_root")
+done
+source "$_gm_root/scripts/slurm/_env.sh" || exit 1
+unset _gm_start _gm_root
 export PYTHONUNBUFFERED=1
 export TMPDIR=/tmp
 
@@ -72,7 +83,7 @@ for i in $(seq 0 $((GPUS - 1))); do
     done
     [ ${#SHARD[@]} -eq 0 ] && continue
     CUDA_VISIBLE_DEVICES=$i apptainer exec --nv /scratch/$USER/pytorch.sif \
-        python3 ~/GamingMaster/eval_il.py \
+        python3 -m training.eval_il \
             --checkpoints "${SHARD[@]}" \
             --data_dir "${VAL_DIRS[@]}" \
             --world_model_weight 0.2 \

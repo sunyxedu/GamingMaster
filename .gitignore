@@ -25,3 +25,5 @@ data/
 .claude/
 # meta-harness run archives (large traces)
 runs/
+# local job logs
+slurm-*.out

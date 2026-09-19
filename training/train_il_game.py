@@ -4,15 +4,15 @@ Trains ``build_game_network(<game>)`` on shards produced by the
 per-game converters (see data_processing/games/), using the decoder's
 own ``il_loss`` plus the shared value-head MSE.
 
-    uv run python train_il_game.py --game othello \
+    uv run python -m training.train_il_game --game othello \
         --data_dir data/othello/train --epochs 10 --batch_size 8
 
-generals keeps its dedicated ``train_il.py`` (teacher-forcing schedule,
+generals keeps its dedicated ``training/train_il.py`` (teacher-forcing schedule,
 world-model objective and cluster plumbing live there); this trainer
 covers every other adapter with one code path.
 
 Single-process on purpose: the multi-node story (manual grad allreduce,
-NaN voting) stays in train_il.py until a non-generals game actually
+NaN voting) stays in training/train_il.py until a non-generals game actually
 trains at that scale.
 """
 

@@ -3,10 +3,10 @@ Imitation Learning training script for the generals.io bot.
 
 Usage:
     # Single GPU:
-    python3 train_il.py --data_dir <path_to_gio_data> [options]
+    python3 -m training.train_il --data_dir <path_to_gio_data> [options]
 
     # Multi-GPU (torchrun + manual grad sync):
-    torchrun --nproc_per_node=2 train_il.py --data_dir <path_to_gio_data> [options]
+    torchrun --nproc_per_node=2 --module training.train_il --data_dir <path_to_gio_data> [options]
 """
 
 import argparse

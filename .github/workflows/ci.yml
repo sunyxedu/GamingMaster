@@ -29,3 +29,12 @@ jobs:
           uv pip install pytest
       - name: Run tests
         run: uv run --no-sync python -m pytest tests/ -q -p no:cacheprovider
+      - name: Check installed entrypoints outside the checkout
+        run: |
+          uv build --wheel
+          uv pip install --no-deps --reinstall dist/*.whl
+          project_python="$PWD/.venv/bin/python"
+          cd "$(mktemp -d)"
+          for entrypoint in training.train_il training.train_rl training.train_il_game training.train_rl_game training.eval_il metaharness scripts.prepare_data; do
+            "$project_python" -I -m "$entrypoint" --help > /dev/null
+          done

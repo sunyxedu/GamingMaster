@@ -21,6 +21,7 @@ The ARC results cover selected offline games rather than an official benchmark r
 
 | Document | Purpose |
 |---|---|
+| [Neural agent walkthrough](neural-agent.md) | Data flow, network architecture and verification |
 | [Multi-game architecture](multi-game.md) | Shared network, observation encoders and action decoders |
 | [Training](training.md) | Imitation learning, reinforcement learning and memory sizing |
 | [Data pipeline](data-pipeline.md) | Replay download, filtering, simulation and conversion |
@@ -30,6 +31,9 @@ The ARC results cover selected offline games rather than an official benchmark r
 
 ## Working directories and checks
 
+- [Repository conventions](repository-layout.md) explains file placement and
+  training command migration; [Slurm jobs](../scripts/slurm/README.md) documents
+  cluster submissions and checkout discovery.
 - `metaharness/artifacts/` holds published research records. Keep their original
   programs and measurements intact; add a new archive for a new protocol.
 - `runs/`, `data/` and `checkpoints/` are ignored local outputs.

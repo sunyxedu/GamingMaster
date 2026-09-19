@@ -20,7 +20,7 @@ from data_processing.games.othello.rules import (
 )
 from env.board_selfplay_env import BoardSelfPlayEnv
 from model.games import build_game_network
-from train_rl_game import batch_trajectories, collect, ppo_update
+from training.train_rl_game import batch_trajectories, collect, ppo_update
 
 SMALL = dict(
     d_model=48, n_heads=4, d_ff=64, n_st_layers=1,

@@ -14,19 +14,30 @@
 # fewer GPUs only means slower wall-clock, never different training.
 #
 # Submit-time variants (no editing needed):
-#   sbatch train_il_scratch_job.sh                    # 1 node x 8 H200
-#   sbatch --nodes=2 train_il_scratch_job.sh          # 2 nodes x 8
-#   sbatch --nodes=3 train_il_scratch_job.sh          # gpu[1-3] when drained
+#   sbatch scripts/slurm/il/train_il_scratch_job.sh                    # 1 node x 8 H200
+#   sbatch --nodes=2 scripts/slurm/il/train_il_scratch_job.sh          # 2 nodes x 8
+#   sbatch --nodes=3 scripts/slurm/il/train_il_scratch_job.sh          # gpu[1-3] when drained
 #   # Harvest the 4-full-card halves of gpu5/gpu6 with a uniform 4/node job:
 #   GPUS_PER_NODE=4 sbatch --export=ALL --nodes=4 \
-#       --gres=gpu:nvidia_h200_nvl:4 train_il_scratch_job.sh
+#       --gres=gpu:nvidia_h200_nvl:4 scripts/slurm/il/train_il_scratch_job.sh
 #
 # NOTE: MIG slices (gres names like nvidia_h200_nvl_3g.71gb) cannot join
 # multi-GPU NCCL jobs — use them for single-GPU probes/smoke tests only.
 
 export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
-export PYTHONPATH=~/GamingMaster
+# Slurm executes a spool copy: start from the explicit checkout or submit directory.
+_gm_start="${GAMINGMASTER_ROOT:-${SLURM_SUBMIT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}}"
+_gm_root=$(cd -- "$_gm_start" && pwd) || exit 1
+while [[ ! -f "$_gm_root/scripts/slurm/_env.sh" ]]; do
+    if [[ "$_gm_root" == / ]]; then
+        echo "Cannot find GamingMaster; set GAMINGMASTER_ROOT to the checkout root." >&2
+        exit 1
+    fi
+    _gm_root=$(dirname -- "$_gm_root")
+done
+source "$_gm_root/scripts/slurm/_env.sh" || exit 1
+unset _gm_start _gm_root
 export PYTHONUNBUFFERED=1
 # Recurrent-mode memory (measured, T=1000): B=6 OOMs a 141GB card; B=3
 # peaks at 134.5/139.8 GiB — no headroom for DDP buffers + variable
@@ -69,7 +80,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
     torchrun --nproc_per_node=$GPUS_PER_NODE --nnodes=$SLURM_NNODES \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$HEAD_NODE:29500 \
-        ~/GamingMaster/train_il.py \
+        --module training.train_il \
         --data_dir "${DATA_DIRS[@]}" \
         $RESUME_FLAG \
         --output_dir /scratch/$USER/gaming-master/checkpoints/il_recurrent_v1 \

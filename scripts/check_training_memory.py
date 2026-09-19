@@ -106,7 +106,7 @@ def alloc_training_batch(cfg: ModelConfig, batch_size: int, seq_len: int, device
     ratio_id = torch.zeros(B, T, K, device=device, dtype=torch.long)
     value = torch.zeros(B, T, device=device, dtype=torch.float32)
 
-    # Mirror train_il.py: these targets are moved to GPU even though IL loss
+    # Mirror training/train_il.py: these targets are moved to GPU even though IL loss
     # currently does not use them.
     enemy_heatmap = torch.zeros(B, T, 1, H, W, device=device, dtype=torch.float32)
     next_visibility = torch.zeros(B, T, 1, H, W, device=device, dtype=torch.float32)

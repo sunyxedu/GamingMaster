@@ -19,7 +19,7 @@ from model.losses import RLLoss, hl_gauss_target_probs
 from model.network import GeneralsNetwork
 from model.rl_utils import RolloutBuffer, load_model_state
 from env.generals_env import GeneralsEnv
-from train_rl import (anchor_weight, collect_selfplay_episode,
+from training.train_rl import (anchor_weight, collect_selfplay_episode,
                       load_sparring_net, ppo_update, resolve_phase_start)
 
 TINY = dict(d_model=64, n_heads=4, trm_H_cycles=1, trm_L_cycles=2,

@@ -44,7 +44,7 @@ Conclusions from a deep-dive investigation (103 agents, multi-source adversarial
 
 **Recommendation**: Start C immediately (compatible with the value head of our CR adapter, as an auxiliary task); A is the
 main line (first step: pull the Replay-Dataset, check whether the `.npy` schema can map to our `arena_seq/hand_*` obs
-contract, and write a converter to feed the 105 matches into `train_il_game.py` for a smoke test); evaluate B only if A's
+contract, and write a converter to feed the 105 matches into `training/train_il_game.py` for a smoke test); evaluate B only if A's
 data bottleneck proves impossible to break through and there is willingness to invest long-term (the first step is to read
 retroroyale's battle-related source code and confirm whether the server actually does authoritative simulation).
 

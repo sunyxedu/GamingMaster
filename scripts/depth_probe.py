@@ -21,7 +21,7 @@ import torch
 
 from env.generals_env import GeneralsEnv
 from scripts.elo_ladder import load_net
-from train_rl import collect_selfplay_episode
+from training.train_rl import collect_selfplay_episode
 
 
 def main() -> None:
