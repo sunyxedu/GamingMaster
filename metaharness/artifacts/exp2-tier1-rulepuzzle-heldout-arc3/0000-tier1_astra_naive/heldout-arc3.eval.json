@@ -1,0 +1,66 @@
+{
+  "harness_path": "metaharness/baselines/tier1_astra_naive.py",
+  "game": "arc3",
+  "fatal": null,
+  "mean_score": 1.5,
+  "stale_fraction": null,
+  "n_episodes": 2,
+  "system1_calls": 0,
+  "system2_calls": 32,
+  "mean_steps": 15.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 100,
+      "score": 2.0,
+      "steps": 15,
+      "system1_calls": 0,
+      "system2_calls": 16,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 15,
+        "mean": 5.354573663075765,
+        "p50": 3.805906057357788,
+        "p90": 11.165271043777466,
+        "max": 15.21692705154419
+      },
+      "wall_s": 80.34532308578491,
+      "error": null,
+      "info": {
+        "levels_done": 2,
+        "actions_used": 15,
+        "state": "NOT_FINISHED"
+      }
+    },
+    {
+      "seed": 101,
+      "score": 1.0,
+      "steps": 15,
+      "system1_calls": 0,
+      "system2_calls": 16,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 15,
+        "mean": 6.361226542790731,
+        "p50": 3.278343915939331,
+        "p90": 23.982688188552856,
+        "max": 24.4960880279541
+      },
+      "wall_s": 95.44556403160095,
+      "error": null,
+      "info": {
+        "levels_done": 1,
+        "actions_used": 15,
+        "state": "NOT_FINISHED"
+      }
+    }
+  ]
+}

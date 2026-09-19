@@ -119,3 +119,80 @@ ARC-AGI-3 through `arc_agi.Arcade` offline).
 
 Tests: `uv run pytest tests/metaharness` (26 tests; the live Jev test is
 skipped without a key).
+
+## Cross-game held-out evaluation (why it exists)
+
+The very first live runs exposed the classic meta-harness failure: the
+proposer scored a perfect 2.0 on the rule puzzles by writing a scripted
+puzzle solver that never called Astra, and the tier-2 winner embedded an
+exact snake simulator. Both crashed with `KeyError` on a game they had not
+seen — and so did the naive baselines that seeded them, which had taught the
+proposer to hard-code observation fields.
+
+The defence, as in the paper, is held-out evaluation on something the
+search never optimised: `--heldout-game NAME` re-evaluates the best candidate
+on a different game with the same interface (`lanerunner` for tier 2, `arc3`
+for tier 1), reports it on the leaderboard without using it for selection,
+and the task spec now states the generality requirement. Seed baselines are
+game-agnostic by construction (`metaharness/baselines/_generic.py`, tested on
+every registered game), and the tie-break rewards fewer actions.
+
+## Experiments (2026-09-19)
+
+All four runs used real Jev (`jev-1.13.0`, p50 latency 0.57–0.62 s on a
+0.5 s tick) and Claude (`claude -p`) as an explicit stand-in for Astra as
+both player and proposer, because the codex account had exhausted its usage
+window. Archives with every proposal, harness and eval are under
+`metaharness/artifacts/` (traces stay in `runs/`, gitignored).
+
+### Tier 2 — snake (Jev acts, Astra thinks), held-out game lanerunner
+
+Round 2 (`exp2-tier2-snake-heldout-lanerunner`, generality clause on):
+
+| candidate | snake train (3 seeds) | stale ticks | S1 / S2 calls | what it did |
+|-----------|----------------------:|------------:|--------------:|-------------|
+| Jev-only baseline | 0.0 | 33 % | 15 / 0 | raw observation, one Choice per tick, dies in 6 ticks |
+| Astra-only baseline | 0.0 | 81 % | 0 / 9 | one think per decision; the snake runs into the wall while it thinks |
+| 0002 | 0.7 | 23 % | 26 / 6 | first generic bridge; still one decision late |
+| 0003 | 9.3 | 13 % | 481 / 3 | Astra writes the bridge **as code** (`bridge(obs) → options/utility`), harvested across episodes; Jev arbitrates |
+| **0004** | **23.7** | **0.2 %** | 187 / 5 | every tick runs the bridge; Jev only on near-ties; stall detector escalates to Astra with the stalled trajectory |
+
+Held-out for 0004: snake seeds 100–101 → 27.0; **lanerunner (never seen) →
+37.05** (the Jev-only baseline gets 0.85 there; the round-1 winner, which
+had hard-coded snake, crashes).
+
+Round 1 (`exp-tier2-snake-jev-claude`, before the generality clause) went
+0 → 24 → 32 → 32.3 (held-out seeds 35.0, 0 % stale) by diagnosing from the
+traces that Jev's answer lands one tick late and pipelining Jev on the
+*predicted* next state — but with an exact snake simulator inside the
+harness, hence 0 on lanerunner. The proposer also found a real runner bug
+(the wall ticker was not phase-aligned with `wait_for_tick`); fixed in
+`1e8239b`.
+
+### Tier 1 — hidden-rule puzzles, held-out game ARC-AGI-3
+
+Round 2 (`exp2-tier1-rulepuzzle-heldout-arc3`):
+
+| candidate | rulepuzzle train (levels of 2) | actions / episode | S2 calls | ARC-AGI-3 `vc33` (7 levels, 150 actions, ≤15 calls) |
+|-----------|------------------------------:|------------------:|---------:|------------------------------------------------------:|
+| naive baseline | 0.0 | 15 (budget death) | 16 | 2.0 / 1.0 |
+| 0001 | 2.0 | 30 | 0 | – |
+| 0002 | 2.0 | 28 | 0 | – |
+| **0003** | 2.0 | **15.5** | 0 | **4.0 / 4.0** (12–14 calls) |
+
+On a second ARC game the proposer never touched (`ls20`, 1 seed): 0003
+reaches 1 level, the baseline 0. Caveat: the proposer had shell access and
+dry-ran `vc33` itself while designing 0003, so `vc33` is held out from the
+*selection* but not from the proposer; `ls20` is the strict number.
+
+What the winning tier-1 harness does: scripted probing to learn the movement
+map, explicit colour beliefs (passable / blocked / consumable / toggle /
+teleport) that are refuted by evidence, Dijkstra over believed-passable cells
+with *curiosity* for rare untouched colours, and Astra only when stuck — with
+plans of many actions per call and no re-probing after a level-up.
+
+### Running with real Astra
+
+Same commands with `--system2 astra --proposer astra` once the codex account
+has usage again (`codex exec` reports the reset time). Nothing else changes;
+the adapter is exercised by the offline tests against recorded codex output.

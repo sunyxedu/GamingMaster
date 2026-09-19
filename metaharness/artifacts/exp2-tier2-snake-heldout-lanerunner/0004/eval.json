@@ -1,0 +1,103 @@
+{
+  "harness_path": "runs/exp2-tier2-snake-heldout-lanerunner/candidates/0004/harness.py",
+  "game": "snake",
+  "fatal": null,
+  "mean_score": 23.666666666666668,
+  "stale_fraction": 0.0022222222222222222,
+  "n_episodes": 3,
+  "system1_calls": 187,
+  "system2_calls": 5,
+  "mean_steps": 300.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 16.0,
+      "steps": 300,
+      "system1_calls": 77,
+      "system2_calls": 3,
+      "stale_ticks": 2,
+      "decided_ticks": 298,
+      "latency_s1": {
+        "n": 77,
+        "mean": 0.5742881514809348,
+        "p50": 0.5691561698913574,
+        "p90": 0.6128818988800049,
+        "max": 0.6894042491912842
+      },
+      "latency_s2": {
+        "n": 3,
+        "mean": 23.682796001434326,
+        "p50": 24.253137826919556,
+        "p90": 25.13621497154236,
+        "max": 25.13621497154236
+      },
+      "wall_s": 174.2639720439911,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 16.0,
+        "length": 19,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 1,
+      "score": 29.0,
+      "steps": 300,
+      "system1_calls": 53,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 53,
+        "mean": 0.5797402453872392,
+        "p50": 0.5698518753051758,
+        "p90": 0.6339082717895508,
+        "max": 0.6832849979400635
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 150.01042318344116,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 29.0,
+        "length": 32,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 2,
+      "score": 26.0,
+      "steps": 300,
+      "system1_calls": 57,
+      "system2_calls": 2,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 57,
+        "mean": 0.5858513263233921,
+        "p50": 0.5773289203643799,
+        "p90": 0.63185715675354,
+        "max": 0.7337310314178467
+      },
+      "latency_s2": {
+        "n": 2,
+        "mean": 36.293009996414185,
+        "p50": 42.92640495300293,
+        "p90": 42.92640495300293,
+        "max": 42.92640495300293
+      },
+      "wall_s": 212.5962359905243,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 26.0,
+        "length": 29,
+        "death": "timeout"
+      }
+    }
+  ]
+}

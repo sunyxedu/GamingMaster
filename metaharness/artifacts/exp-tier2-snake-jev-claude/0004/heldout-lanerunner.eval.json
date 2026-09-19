@@ -1,0 +1,61 @@
+{
+  "harness_path": "runs/exp-tier2-snake-jev-claude/candidates/0004/harness.py",
+  "game": "lanerunner",
+  "fatal": null,
+  "mean_score": 0.0,
+  "stale_fraction": null,
+  "n_episodes": 2,
+  "system1_calls": 0,
+  "system2_calls": 0,
+  "mean_steps": 0.0,
+  "errors": [
+    "Traceback (most recent call last):\n  File \"/Users/hemlix/Documents/GamingMaster/metaharness/core/runner.py\", line 238, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/runs/exp-tier2-snake-jev-claude/candidates/0004/harness.py\", line 398, in run_episode\n    w, h = obs[\"grid_size\"]\n           ~~~^^^^^^^^^^^^^\nKeyError: 'grid_size'\n",
+    "Traceback (most recent call last):\n  File \"/Users/hemlix/Documents/GamingMaster/metaharness/core/runner.py\", line 238, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/runs/exp-tier2-snake-jev-claude/candidates/0004/harness.py\", line 398, in run_episode\n    w, h = obs[\"grid_size\"]\n           ~~~^^^^^^^^^^^^^\nKeyError: 'grid_size'\n"
+  ],
+  "episodes": [
+    {
+      "seed": 100,
+      "score": 0.0,
+      "steps": 0,
+      "system1_calls": 0,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 0.0014679431915283203,
+      "error": "Traceback (most recent call last):\n  File \"/Users/hemlix/Documents/GamingMaster/metaharness/core/runner.py\", line 238, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/runs/exp-tier2-snake-jev-claude/candidates/0004/harness.py\", line 398, in run_episode\n    w, h = obs[\"grid_size\"]\n           ~~~^^^^^^^^^^^^^\nKeyError: 'grid_size'\n",
+      "info": {
+        "ticks": 0,
+        "score": 0.0,
+        "death": null
+      }
+    },
+    {
+      "seed": 101,
+      "score": 0.0,
+      "steps": 0,
+      "system1_calls": 0,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 0.0003249645233154297,
+      "error": "Traceback (most recent call last):\n  File \"/Users/hemlix/Documents/GamingMaster/metaharness/core/runner.py\", line 238, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/runs/exp-tier2-snake-jev-claude/candidates/0004/harness.py\", line 398, in run_episode\n    w, h = obs[\"grid_size\"]\n           ~~~^^^^^^^^^^^^^\nKeyError: 'grid_size'\n",
+      "info": {
+        "ticks": 0,
+        "score": 0.0,
+        "death": null
+      }
+    }
+  ]
+}

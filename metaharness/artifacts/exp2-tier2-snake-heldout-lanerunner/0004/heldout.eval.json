@@ -1,0 +1,72 @@
+{
+  "harness_path": "runs/exp2-tier2-snake-heldout-lanerunner/candidates/0004/harness.py",
+  "game": "snake",
+  "fatal": null,
+  "mean_score": 27.0,
+  "stale_fraction": 0.0033333333333333335,
+  "n_episodes": 2,
+  "system1_calls": 84,
+  "system2_calls": 2,
+  "mean_steps": 300.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 100,
+      "score": 22.0,
+      "steps": 300,
+      "system1_calls": 48,
+      "system2_calls": 2,
+      "stale_ticks": 2,
+      "decided_ticks": 298,
+      "latency_s1": {
+        "n": 48,
+        "mean": 0.5982600450515747,
+        "p50": 0.5948009490966797,
+        "p90": 0.6606688499450684,
+        "max": 0.7520599365234375
+      },
+      "latency_s2": {
+        "n": 2,
+        "mean": 68.6706964969635,
+        "p50": 103.81393003463745,
+        "p90": 103.81393003463745,
+        "max": 103.81393003463745
+      },
+      "wall_s": 253.8191590309143,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 22.0,
+        "length": 25,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 101,
+      "score": 32.0,
+      "steps": 300,
+      "system1_calls": 36,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 36,
+        "mean": 0.5962235993809171,
+        "p50": 0.5998520851135254,
+        "p90": 0.6502351760864258,
+        "max": 0.7642860412597656
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 150.0108642578125,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 32.0,
+        "length": 35,
+        "death": "timeout"
+      }
+    }
+  ]
+}
