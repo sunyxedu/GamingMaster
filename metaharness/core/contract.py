@@ -11,7 +11,7 @@ and ``HarnessProgram`` has one method::
 The harness owns the whole control loop for one episode. Everything it may
 use comes through ``ctx``:
 
-* ``ctx.system2``   — Astra (slow, reasoning). ``ctx.think(prompt, session=...)``
+* ``ctx.system2``   — Astra (slow, reasoning). ``ctx.think(prompt, session_id=...)``
                       wraps it with tracing + budget accounting.
 * ``ctx.system1``   — Jev (fast, typed decisions). ``ctx.decide(state, questions)``
                       wraps it with tracing + latency accounting. Tier 1 tasks
