@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -36,17 +37,35 @@ def setup(tier):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("phase", choices=["search", "test"])
+    p.add_argument("phase", choices=["search", "validate", "test"])
     p.add_argument("--tier", type=int, choices=[1, 2], required=True)
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--iterations", type=int, default=2)
+    p.add_argument("--source", type=Path, help="validate: discovery archive to re-evaluate with final code")
     a = p.parse_args()
     load_dotenv()
     task, game, kw, prior, budget = setup(a.tier)
     archive = Archive(a.root.resolve())
+    if a.phase == "validate":
+        if a.source is None or a.source.resolve() == archive.root:
+            p.error("validate requires a different --source archive")
+        if not archive.candidates():
+            for old in Archive(a.source.resolve()).candidates():
+                if not old.harness_path.exists():
+                    continue
+                dest = archive.cand_dir / old.dir.name
+                dest.mkdir()
+                for filename in ("harness.py", "proposal.md", "proposal_error.json"):
+                    if (old.dir / filename).exists():
+                        shutil.copy2(old.dir / filename, dest / filename)
+                (dest / "origin.json").write_text(json.dumps({
+                    "archive": str(a.source.resolve()), "candidate": old.dir.name,
+                    "discovery_evaluated": old.eval() is not None,
+                }, indent=2) + "\n")
+        a.iterations = 0
     s2 = make_system2("astra", reasoning_effort="high")
     s1 = make_system1("jev") if a.tier == 2 else None
-    if a.phase == "search":
+    if a.phase in ("search", "validate"):
         if not archive.candidates():
             for baseline in task.baseline_paths():
                 archive.add_seed(baseline, label=baseline.stem)
@@ -72,7 +91,7 @@ def main():
                               memory_mode="episode"), proposer_extra=extra)
         provenance = {"git_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip(),
-            "command": "search", "tier": a.tier}
+            "command": a.phase, "tier": a.tier}
         with (archive.root / "provenance.jsonl").open("a") as fh:
             fh.write(json.dumps(provenance) + "\n")
         best = loop.run()

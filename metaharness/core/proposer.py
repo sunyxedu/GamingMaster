@@ -10,8 +10,9 @@ Two modes, same prompt:
 """
 from __future__ import annotations
 
-import re
+import ast
 import json
+import re
 from typing import Optional
 
 from ..models.base import System2Model, TraceSink
@@ -85,8 +86,21 @@ def propose(
     cand = archive.new_candidate()
     prompt = build_prompt(archive, cand, contract_doc, task_md, extra)
     (cand.dir / "prompt.md").write_text(prompt)
-    res = model.run(prompt, cwd=archive.root, system=PROPOSER_SYSTEM, agentic=agentic,
-                    timeout_s=timeout_s, trace=trace)
+    try:
+        res = model.run(prompt, cwd=archive.root, system=PROPOSER_SYSTEM, agentic=agentic,
+                        timeout_s=timeout_s, trace=trace)
+    except TimeoutError as exc:
+        # A CLI can finish writing the deliverable and time out during its final
+        # checks. Preserve this as an explicitly incomplete proposal, and let
+        # the evaluator establish whether the written program actually works.
+        (cand.dir / "proposal_error.json").write_text(json.dumps({
+            "error": str(exc), "type": type(exc).__name__, "status": "timed_out",
+        }, indent=2) + "\n")
+        if cand.harness_path.exists() and (cand.dir / "proposal.md").exists():
+            tree = ast.parse(cand.harness_path.read_text())
+            if any(isinstance(node, ast.FunctionDef) and node.name == "build" for node in tree.body):
+                return cand
+        raise
     (cand.dir / "proposer_output.md").write_text(res.text or "")
     if isinstance(res.raw, list):
         (cand.dir / "proposer_events.jsonl").write_text(
