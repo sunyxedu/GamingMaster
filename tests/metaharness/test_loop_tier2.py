@@ -34,4 +34,3 @@ def test_tier2_offline_loop(tmp_runs):
     trace = (cands[2].dir / "trace_seed0.jsonl").read_text().splitlines()
     kinds = {json.loads(l).get("type") for l in trace}
     assert {"episode_start", "tick", "model_call", "episode_end"} <= kinds
-
