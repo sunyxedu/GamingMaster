@@ -29,3 +29,22 @@ def test_proposer_text_mode_extracts_fenced_block(tmp_runs):
     assert c.harness_path.read_text().startswith("def build")
     assert "Hypothesis: X" in (c.dir / "proposal.md").read_text()
     assert "candidates/0000" in (c.dir / "prompt.md").read_text()
+
+
+def test_completed_artifacts_survive_proposer_timeout(tmp_path):
+    from metaharness.core.proposer import propose
+    from metaharness.models.mock import ScriptedSystem2
+
+    class TimedOut(ScriptedSystem2):
+        def run(self, prompt, *, cwd, **kwargs):
+            d = sorted((cwd / 'candidates').iterdir())[-1]
+            (d / 'harness.py').write_text('def build(ctx):\n    return None\n')
+            (d / 'proposal.md').write_text('Completed written proposal before CLI timeout.')
+            raise TimeoutError('CLI deadline')
+
+    a = Archive(tmp_path / 'archive')
+    c = propose(TimedOut(), a, contract_doc='contract', task_md='task')
+    assert c.harness_path.exists()
+    assert json.loads((c.dir / 'proposal_error.json').read_text())['status'] == 'timed_out'
+    # This does not mark it as evaluated or eligible; only the evaluator can do that.
+    assert c.eval() is None and a.best() is None
