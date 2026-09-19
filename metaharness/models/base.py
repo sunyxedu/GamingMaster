@@ -43,11 +43,11 @@ class ModelCall:
 class TraceSink:
     """Append-only JSONL trace; thread-safe. ``None`` path = in-memory only."""
 
-    def __init__(self, path: Path | str | None = None) -> None:
+    def __init__(self, path: Path | str | None = None, *, append: bool = True) -> None:
         self.path = Path(path) if path else None
         self.records: list[dict[str, Any]] = []
         self._lock = threading.Lock()
-        self._fh = open(self.path, "a", encoding="utf-8") if self.path else None
+        self._fh = open(self.path, "a" if append else "w", encoding="utf-8") if self.path else None
 
     def write(self, record: Mapping[str, Any]) -> None:
         rec = dict(record)
