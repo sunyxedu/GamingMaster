@@ -16,8 +16,14 @@ the archive that lets the next iteration do better.
 
 Tier 1 and tier 2 are what this package implements. The models:
 
-* **Astra** — OpenAI GPT-6 Astra, reached through the `codex` CLI
-  (`metaharness/models/astra.py`). Non-interactive `codex exec --json`, thread
+* **Model profiles** live in `metaharness/models.toml`: a profile names a
+  *backend* (how to reach a model) plus a model id and options, e.g.
+  `[system2.astra] backend = "codex", model = "gpt-6-astra"`. Backends know
+  nothing about specific models. `--system2 astra`, `--system2 sol`,
+  `--system2 claude`, `--proposer …`, `--system1 jev` select profiles;
+  `--effort` overrides a profile's reasoning effort.
+* **Astra** — OpenAI GPT-6 Astra, reached through the `codex` CLI backend
+  (`metaharness/models/codex_cli.py`). Non-interactive `codex exec --json`, thread
   resume so hidden reasoning state carries across turns, the CLI's own login
   (no API key in the repo). The integration follows Auto-CTFer's codex
   backend. When codex reports a usage limit the adapter raises
@@ -26,8 +32,9 @@ Tier 1 and tier 2 are what this package implements. The models:
   `POST https://api.typesafe.ai/v1/systemone` with typed questions
   (`Choice` / `Score` / `Noul`) and calibrated probabilities back in
   70–700 ms. Key in `.env` as `TYPESAFE_API_KEY` (never in code).
-* **Claude** (`claude -p`) is wired as an explicit stand-in for Astra
-  (`--system2 claude`, `--proposer claude`). It is never substituted silently.
+* **Claude** — the `claude` CLI backend (`metaharness/models/claude_cli.py`);
+  profiles `claude` (CLI default model) and `claude-opus`. Used as an explicit
+  stand-in when codex has no usage; never substituted silently.
 
 ## What a harness is
 

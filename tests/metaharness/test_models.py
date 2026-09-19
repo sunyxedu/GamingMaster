@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from metaharness.models import astra as astra_mod
-from metaharness.models.astra import AstraCodex, _digest_events, _last_agent_message, _parse_jsonl
+from metaharness.models import codex_cli as codex_mod
+from metaharness.models import make_system2
+from metaharness.models.codex_cli import CodexCLI, _digest_events, _last_agent_message, _parse_jsonl
 from metaharness.models.base import ModelUnavailable, TraceSink
 from metaharness.models.jev import Choice, JevClient, Noul, Score, parse_answer
 
@@ -91,10 +92,25 @@ def test_jev_live_snake_decision():
     assert abs(sum(ans["move"].probabilities.values()) - 1.0) < 0.05
 
 
-# ---------------------------------------------------------------- Astra / codex
+# ---------------------------------------------------------------- profiles
+
+
+def test_profiles_resolve_backend_and_model():
+    m = make_system2("astra")
+    assert isinstance(m, CodexCLI) and m.model == "gpt-6-astra" and m.reasoning_effort == "high"
+    assert make_system2("astra", reasoning_effort="low").reasoning_effort == "low"
+    assert make_system2("sol").model == "gpt-5.6-sol"
+    from metaharness.models.claude_cli import ClaudeCLI
+    c = make_system2("claude")
+    assert isinstance(c, ClaudeCLI) and c.model is None
+    with pytest.raises(ValueError):
+        make_system2("no-such-profile")
+
+
+# ---------------------------------------------------------------- codex CLI backend
 
 def test_astra_argv_new_and_resume(tmp_path):
-    a = AstraCodex(reasoning_effort="high")
+    a = CodexCLI(model="gpt-6-astra", reasoning_effort="high")
     argv = a._argv("hi", cwd=tmp_path, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
     assert argv[:2] == ["codex", "exec"] and "-m" in argv and argv[argv.index("-m") + 1] == "gpt-6-astra"
     assert "-s" in argv and "read-only" in argv and "--json" in argv and argv[-1] == "hi"
@@ -141,14 +157,14 @@ def _fake_run_cli(stdout, rc, last_text=None):
 
 
 def test_astra_usage_limit_raises_model_unavailable(monkeypatch, tmp_path):
-    monkeypatch.setattr(astra_mod, "run_cli", _fake_run_cli(CODEX_LIMIT_STDOUT, 1))
+    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(CODEX_LIMIT_STDOUT, 1))
     tr = TraceSink()
     with pytest.raises(ModelUnavailable):
-        AstraCodex().run("hi", cwd=tmp_path, trace=tr)
+        CodexCLI(model="gpt-6-astra").run("hi", cwd=tmp_path, trace=tr)
     assert tr.records[-1]["ok"] is False
 
 
 def test_astra_ok_returns_text_and_session(monkeypatch, tmp_path):
-    monkeypatch.setattr(astra_mod, "run_cli", _fake_run_cli(CODEX_OK_STDOUT, 0, last_text="up\n"))
-    res = AstraCodex().run("hi", cwd=tmp_path)
+    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(CODEX_OK_STDOUT, 0, last_text="up\n"))
+    res = CodexCLI(model="gpt-6-astra").run("hi", cwd=tmp_path)
     assert res.text.strip() == "up" and res.session_id == "t-1" and res.usage["input_tokens"] == 12

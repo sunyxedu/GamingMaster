@@ -1,8 +1,8 @@
-"""Claude through the ``claude`` CLI (``claude -p --output-format json``).
+"""Any Claude model through the ``claude`` CLI (``claude -p --output-format json``).
 
-Stand-in for Astra when codex has no usage. Same interface, same session
-semantics (``--resume``). Used explicitly via ``--system2 claude``; never
-silently substituted.
+Which model is a config concern (``metaharness/models.toml``); this class only
+drives the CLI. Same interface and session semantics (``--resume``) as the
+codex backend. Never substituted silently for another profile.
 """
 from __future__ import annotations
 
@@ -16,10 +16,11 @@ from .base import ModelCall, ModelUnavailable, System2Result, TraceSink
 
 
 class ClaudeCLI:
-    name = "claude"
-
-    def __init__(self, model: Optional[str] = None, claude_bin: str = "claude") -> None:
+    def __init__(self, model: Optional[str] = None, reasoning_effort: Optional[str] = None,
+                 claude_bin: str = "claude") -> None:
         self.model = model
+        self.name = f"claude:{model or 'default'}"
+        self.reasoning_effort = reasoning_effort      # accepted for profile symmetry; claude -p has no flag
         self.claude_bin = claude_bin
         self.n_calls = 0
         self.total_cost_usd = 0.0
@@ -68,6 +69,6 @@ class ClaudeCLI:
         self.total_cost_usd += float(payload.get("total_cost_usd") or 0.0)
         res = System2Result(text=text, session_id=payload.get("session_id") or session_id, latency_s=latency, usage=usage, raw=payload)
         if trace:
-            trace.log_call(ModelCall("system2", f"claude:{self.model or 'default'}", t0, latency,
+            trace.log_call(ModelCall("system2", self.name, t0, latency,
                                      {"prompt": prompt}, {"text": text, "session_id": res.session_id}, usage=usage))
         return res
