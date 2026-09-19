@@ -98,7 +98,7 @@ def test_stale_tick_accounting_with_slow_system1(tmp_path):
     for ep in r.episodes:
         assert ep.system1_calls > 0
         assert ep.stale_ticks > ep.decided_ticks          # most ticks ran on a stale action
-        assert ep.latency_s1 and abs(ep.latency_s1[0] - 0.6) < 1e-9 or True
+        assert ep.latency_s1 and abs(ep.latency_s1[0] - 0.6) < 1e-9
     assert r.stale_fraction is not None and r.stale_fraction > 0.5
 
 
@@ -116,7 +116,7 @@ def build(ctx): return H(ctx)
     r = evaluate_harness(p, lambda **k: SnakeGame(max_ticks=1000, **k), [0], system2=ScriptedSystem2(latency_s=0.1),
                          system1=None, clock_mode="virtual", budget_per_episode=Budget(max_system2_calls=3))
     ep = r.episodes[0]
-    assert ep.error and "budget" in ep.error and ep.system2_calls == 4
+    assert ep.error and "budget" in ep.error and ep.system2_calls == 3
 
 
 def test_load_error_is_fatal(tmp_path):

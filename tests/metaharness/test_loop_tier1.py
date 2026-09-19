@@ -16,7 +16,7 @@ def test_tier1_offline_loop(tmp_runs):
     cands = a.candidates()
     assert len(cands) == 2
     e = cands[1].eval()
-    assert e["fatal"] is None and e["system2_calls"] == 6      # 5 allowed + the call that tripped the budget
+    assert e["fatal"] is None and e["system2_calls"] == 5      # rejected requests are not backend calls
     assert e["errors"] == []                                   # reference harness handles the budget cleanly
 
 

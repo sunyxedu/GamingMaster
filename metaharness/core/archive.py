@@ -12,6 +12,7 @@ read access to this directory rather than a compressed summary.
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,7 +75,14 @@ class Archive:
         return c
 
     def best(self) -> Optional[Candidate]:
-        scored = [c for c in self.candidates() if c.score is not None]
+        def eligible(c):
+            e = c.eval() or {}
+            score = e.get("mean_score")
+            expected = e.get("metadata", {}).get("seeds")
+            return (score is not None and math.isfinite(score) and not e.get("fatal")
+                    and not e.get("errors") and e.get("n_episodes", 0) > 0
+                    and (expected is None or len(expected) == e.get("n_episodes")))
+        scored = [c for c in self.candidates() if eligible(c)]
         if not scored:
             return None
         def key(c: Candidate):

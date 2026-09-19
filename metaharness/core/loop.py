@@ -28,6 +28,7 @@ class LoopConfig:
     stop_on_model_unavailable: bool = True
     heldout_game: Optional[str] = None                       # cross-game generality test
     heldout_game_kwargs: dict[str, Any] = field(default_factory=dict)
+    memory_mode: str = "episode"
 
 
 class MetaHarnessLoop:
@@ -55,6 +56,30 @@ class MetaHarnessLoop:
         self.system1 = system1
         self.cfg = config
         self.proposer_extra = proposer_extra
+        overlap = set(config.seeds_train) & set(config.seeds_heldout)
+        if overlap:
+            raise ValueError(f"train and held-out seeds overlap: {sorted(overlap)}")
+        if config.n_iterations and any(archive.cand_dir.glob("*/heldout*/eval.json")):
+            raise ValueError("This archive contains held-out results; start a new search archive.")
+        manifest = {
+            "protocol_version": 2, "task": task_md, "seeds_train": config.seeds_train,
+            "clock_mode": config.clock_mode, "latency_override": config.latency_override,
+            "game_kwargs": game_kwargs, "memory_mode": config.memory_mode,
+            "budget": {k: getattr(config.budget, k) for k in
+                       ("max_system1_calls", "max_system2_calls", "max_wall_s")},
+            "harness_timeout_s": config.harness_timeout_s,
+            "models": {k: None if m is None else {
+                "name": m.name, "model": getattr(m, "model", None),
+                "reasoning_effort": getattr(m, "reasoning_effort", None)}
+                for k, m in (("system1", system1), ("system2", system2), ("proposer", proposer))},
+        }
+        manifest_path = archive.root / "manifest.json"
+        if manifest_path.exists():
+            if json.loads(manifest_path.read_text()) != manifest:
+                raise ValueError("Search configuration changed; start a new archive to avoid mixing scores.")
+        elif any(c.eval() is not None for c in archive.candidates()):
+            raise ValueError("Legacy archive has no protocol manifest; start a new search archive.")
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
         self.archive.write_task(task_md)
         self.log_path = archive.root / "loop.log"
 
@@ -74,6 +99,7 @@ class MetaHarnessLoop:
             budget_per_episode=self.cfg.budget, latency_override=self.cfg.latency_override,
             harness_timeout_s=self.cfg.harness_timeout_s,
             game_kwargs=self.game_kwargs if game_kwargs is None else game_kwargs,
+            memory_mode=self.cfg.memory_mode,
         )
         self.archive.write_leaderboard()
         self._log(f"eval {cand.dir.name}{'/' + tag if tag else ''}: mean={res.mean_score} "

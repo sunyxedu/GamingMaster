@@ -84,6 +84,7 @@ def cmd_loop(a: argparse.Namespace) -> int:
                      proposer_timeout_s=a.proposer_timeout, harness_timeout_s=a.harness_timeout,
                      latency_override=json.loads(a.latency_override) if a.latency_override else None,
                      heldout_game=a.heldout_game or None,
+                     memory_mode=a.memory_mode,
                      heldout_game_kwargs=json.loads(a.heldout_game_kwargs) if a.heldout_game_kwargs else {})
     loop = MetaHarnessLoop(
         archive=archive, game_factory=GAMES[a.game][1] if a.game in GAMES else (lambda **k: make_game(a.game, **k)),
@@ -109,13 +110,13 @@ def cmd_eval(a: argparse.Namespace) -> int:
                            system2=_system2(a.system2, a.effort), system1=_system1(a.system1), out_dir=out,
                            clock_mode=a.clock, budget_per_episode=budget, harness_timeout_s=a.harness_timeout,
                            latency_override=json.loads(a.latency_override) if a.latency_override else None,
-                           game_kwargs=game_kwargs)
+                           game_kwargs=game_kwargs, memory_mode=a.memory_mode)
     print(json.dumps({k: v for k, v in res.to_json().items() if k != "episodes"}, indent=2, default=str))
     for e in res.episodes:
         print(f"seed {e.seed}: score={e.score} steps={e.steps} stale={e.stale_ticks}/{e.stale_ticks + e.decided_ticks} "
               f"s1={e.system1_calls} s2={e.system2_calls} err={'yes' if e.error else 'no'}")
     print(f"out: {out}")
-    return 0
+    return 1 if res.fatal or any(e.error for e in res.episodes) else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -132,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="System-1 profile from metaharness/models.toml (jev) | heuristic | none")
         sp.add_argument("--effort", default=None, help="override the profile's reasoning effort (low|medium|high|xhigh|max)")
         sp.add_argument("--clock", default="wall", choices=["wall", "virtual"])
+        sp.add_argument("--memory-mode", default="episode", choices=["episode", "shared"],
+                        help="episode: independent cold starts; shared: adaptation across ordered seeds")
         sp.add_argument("--latency-override", default="", help='JSON e.g. {"system2": 3.0, "system1": 0.3} (virtual clock)')
         sp.add_argument("--seeds", default="0,1,2")
         sp.add_argument("--s2-budget", type=int, default=40)
