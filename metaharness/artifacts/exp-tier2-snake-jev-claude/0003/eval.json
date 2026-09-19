@@ -1,0 +1,98 @@
+{
+  "harness_path": "runs/exp-tier2-snake-jev-claude/candidates/0003/harness.py",
+  "game": "snake",
+  "fatal": null,
+  "mean_score": 32.0,
+  "stale_fraction": 0.0,
+  "n_episodes": 3,
+  "system1_calls": 26,
+  "system2_calls": 1,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 31.0,
+      "steps": 300,
+      "system1_calls": 7,
+      "system2_calls": 1,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 7,
+        "mean": 0.5761750425611224,
+        "p50": 0.5772480964660645,
+        "p90": 0.6248459815979004,
+        "max": 0.6248459815979004
+      },
+      "latency_s2": {
+        "n": 1,
+        "mean": 4.32751989364624,
+        "p50": 4.32751989364624,
+        "p90": 4.32751989364624,
+        "max": 4.32751989364624
+      },
+      "wall_s": 150.01438117027283,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 31.0,
+        "length": 34,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 1,
+      "score": 31.0,
+      "steps": 300,
+      "system1_calls": 11,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 11,
+        "mean": 0.5804075544530695,
+        "p50": 0.568234920501709,
+        "p90": 0.6456241607666016,
+        "max": 0.6503410339355469
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 150.01146697998047,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 31.0,
+        "length": 34,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 2,
+      "score": 34.0,
+      "steps": 300,
+      "system1_calls": 8,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 8,
+        "mean": 0.6071887612342834,
+        "p50": 0.619251012802124,
+        "p90": 0.6390388011932373,
+        "max": 0.6390388011932373
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 150.0131378173828,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 34.0,
+        "length": 37,
+        "death": "timeout"
+      }
+    }
+  ]
+}

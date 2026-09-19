@@ -1,0 +1,99 @@
+{
+  "harness_path": "runs/astra-tier2-snake-heldout-lanerunner/candidates/0003/harness.py",
+  "game": "snake",
+  "fatal": null,
+  "mean_score": 18.666666666666668,
+  "stale_fraction": 0.0,
+  "n_episodes": 3,
+  "system1_calls": 301,
+  "system2_calls": 1,
+  "mean_steps": 201.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 19.0,
+      "steps": 263,
+      "system1_calls": 132,
+      "system2_calls": 1,
+      "stale_ticks": 0,
+      "decided_ticks": 263,
+      "latency_s1": {
+        "n": 132,
+        "mean": 0.5876346086010789,
+        "p50": 0.5819010734558105,
+        "p90": 0.6376078128814697,
+        "max": 0.6808638572692871
+      },
+      "latency_s2": {
+        "n": 1,
+        "mean": 29.63226294517517,
+        "p50": 29.63226294517517,
+        "p90": 29.63226294517517,
+        "max": 29.63226294517517
+      },
+      "wall_s": 131.54492115974426,
+      "error": null,
+      "info": {
+        "ticks": 263,
+        "score": 19.0,
+        "length": 22,
+        "death": "self"
+      }
+    },
+    {
+      "seed": 1,
+      "score": 16.0,
+      "steps": 144,
+      "system1_calls": 71,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 144,
+      "latency_s1": {
+        "n": 71,
+        "mean": 0.5997351357634638,
+        "p50": 0.5845019817352295,
+        "p90": 0.6321601867675781,
+        "max": 1.5649471282958984
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 72.01053094863892,
+      "error": null,
+      "info": {
+        "ticks": 144,
+        "score": 16.0,
+        "length": 19,
+        "death": "self"
+      }
+    },
+    {
+      "seed": 2,
+      "score": 21.0,
+      "steps": 196,
+      "system1_calls": 98,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 196,
+      "latency_s1": {
+        "n": 98,
+        "mean": 0.573245685927722,
+        "p50": 0.565183162689209,
+        "p90": 0.6233820915222168,
+        "max": 0.6887598037719727
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 98.008553981781,
+      "error": null,
+      "info": {
+        "ticks": 196,
+        "score": 21.0,
+        "length": 24,
+        "death": "self"
+      }
+    }
+  ]
+}

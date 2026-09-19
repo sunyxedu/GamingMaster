@@ -1,0 +1,106 @@
+{
+  "harness_path": "runs/exp-tier2-snake-jev-claude/candidates/0002/harness.py",
+  "game": "snake",
+  "fatal": null,
+  "mean_score": 24.0,
+  "stale_fraction": 0.0,
+  "n_episodes": 3,
+  "system1_calls": 452,
+  "system2_calls": 5,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 17.0,
+      "steps": 300,
+      "system1_calls": 145,
+      "system2_calls": 1,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 145,
+        "mean": 0.605204414499217,
+        "p50": 0.5714771747589111,
+        "p90": 0.615239143371582,
+        "max": 2.7463560104370117
+      },
+      "latency_s2": {
+        "n": 1,
+        "mean": 5.527811050415039,
+        "p50": 5.527811050415039,
+        "p90": 5.527811050415039,
+        "max": 5.527811050415039
+      },
+      "wall_s": 150.00820994377136,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 17.0,
+        "length": 20,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 1,
+      "score": 25.0,
+      "steps": 300,
+      "system1_calls": 161,
+      "system2_calls": 2,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 161,
+        "mean": 0.5821995868445924,
+        "p50": 0.5767650604248047,
+        "p90": 0.6249852180480957,
+        "max": 0.9347059726715088
+      },
+      "latency_s2": {
+        "n": 2,
+        "mean": 13.483142614364624,
+        "p50": 17.97263813018799,
+        "p90": 17.97263813018799,
+        "max": 17.97263813018799
+      },
+      "wall_s": 150.006432056427,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 25.0,
+        "length": 28,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 2,
+      "score": 30.0,
+      "steps": 300,
+      "system1_calls": 146,
+      "system2_calls": 2,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 146,
+        "mean": 0.5869895187142777,
+        "p50": 0.5771856307983398,
+        "p90": 0.6521389484405518,
+        "max": 0.8354122638702393
+      },
+      "latency_s2": {
+        "n": 2,
+        "mean": 10.228733539581299,
+        "p50": 13.280984163284302,
+        "p90": 13.280984163284302,
+        "max": 13.280984163284302
+      },
+      "wall_s": 150.00517416000366,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 30.0,
+        "length": 33,
+        "death": "timeout"
+      }
+    }
+  ]
+}

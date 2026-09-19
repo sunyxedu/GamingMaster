@@ -1,0 +1,98 @@
+{
+  "harness_path": "runs/exp-tier2-snake-jev-claude/candidates/0004/harness.py",
+  "game": "snake",
+  "fatal": null,
+  "mean_score": 32.333333333333336,
+  "stale_fraction": 0.0,
+  "n_episodes": 3,
+  "system1_calls": 63,
+  "system2_calls": 1,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 29.0,
+      "steps": 300,
+      "system1_calls": 20,
+      "system2_calls": 1,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 20,
+        "mean": 0.8416298747062683,
+        "p50": 0.5958971977233887,
+        "p90": 0.6736278533935547,
+        "max": 5.592183828353882
+      },
+      "latency_s2": {
+        "n": 1,
+        "mean": 3.40132212638855,
+        "p50": 3.40132212638855,
+        "p90": 3.40132212638855,
+        "max": 3.40132212638855
+      },
+      "wall_s": 150.01158499717712,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 29.0,
+        "length": 32,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 1,
+      "score": 33.0,
+      "steps": 300,
+      "system1_calls": 21,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 21,
+        "mean": 0.5760831605820429,
+        "p50": 0.5735528469085693,
+        "p90": 0.5979359149932861,
+        "max": 0.7559096813201904
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 150.00738286972046,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 33.0,
+        "length": 36,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 2,
+      "score": 35.0,
+      "steps": 300,
+      "system1_calls": 22,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 22,
+        "mean": 0.5937538363716819,
+        "p50": 0.5871131420135498,
+        "p90": 0.6272830963134766,
+        "max": 0.7040982246398926
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 150.01049494743347,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 35.0,
+        "length": 38,
+        "death": "timeout"
+      }
+    }
+  ]
+}
