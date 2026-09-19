@@ -73,7 +73,8 @@ def main():
         provenance = {"git_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip(),
             "command": "search", "tier": a.tier}
-        (archive.root / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
+        with (archive.root / "provenance.jsonl").open("a") as fh:
+            fh.write(json.dumps(provenance) + "\n")
         best = loop.run()
         if best is None:
             raise SystemExit("No eligible candidate")
@@ -117,6 +118,20 @@ def main():
                 archive.write_leaderboard()
                 if result.fatal:
                     raise SystemExit(result.fatal)
+        if a.tier == 2:
+            for label, slow, fast in (("heldout-no-astra", None, s1),
+                                      ("heldout-no-jev", s2, None)):
+                out = best.dir / label
+                if (out / "eval.json").exists():
+                    continue
+                result = evaluate_harness(best.harness_path, lambda **k: make_game(game, **k),
+                                          [700, 701, 702], system2=slow, system1=fast,
+                                          out_dir=out, clock_mode="wall", game_kwargs=kw,
+                                          budget_per_episode=budget, harness_timeout_s=budget.max_wall_s,
+                                          memory_mode="episode")
+                print(label, best.dir.name, result.mean_score, result.fatal,
+                      [e.error for e in result.episodes if e.error], flush=True)
+                archive.write_leaderboard()
     print(archive.write_leaderboard(), flush=True)
 
 
