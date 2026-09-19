@@ -1,0 +1,6 @@
+{
+  "error": "CLI invocation exceeded 600.000s",
+  "type": "TimeoutError",
+  "status": "timed_out",
+  "source": "discovery loop.log at 15:47:18; code and proposal were already written"
+}
