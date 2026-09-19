@@ -1,0 +1,95 @@
+{
+  "kind": "interface probe; not a gameplay benchmark",
+  "source_commit": "7201cf9064c74961f46e77c004ca4de26e9433fc",
+  "guide_sha256": "a15d3b8f3b88e61a003592c89f6b308516b67688e181d7b7a2c6b4ba12d82a47",
+  "system2": "codex:gpt-6-astra",
+  "effort": "high",
+  "system2_calls": 1,
+  "system1_calls": 1,
+  "request": {
+    "state": {
+      "plan": {
+        "goal": "The amber beacon is lit.",
+        "preconditions": [
+          "The socket is connected to a working power source."
+        ]
+      },
+      "observation": {
+        "summary": "The socket is unplugged. The beacon is dark."
+      }
+    },
+    "questions": {
+      "condition": {
+        "type": "choice",
+        "instructions": "Using only the evidence in state.observation, determine whether state.plan.preconditions are supported. Select supported if every precondition is established, contradicted if any precondition is contradicted, or unknown if neither conclusion is established.",
+        "criteria": {
+          "supported": "Every required precondition is supported by the observation.",
+          "contradicted": "The observation contradicts at least one required precondition.",
+          "unknown": "No precondition is explicitly contradicted, but the observation does not establish every required precondition."
+        }
+      },
+      "progress": {
+        "type": "score",
+        "instructions": "Using only state.observation, assess visible completion of state.plan.goal on the ordered levels below. Assess the goal itself independently of whether its preconditions hold. Do not infer unobserved progress.",
+        "criteria": [
+          "No visible progress toward the goal.",
+          "Visible partial progress toward the goal, but completion is not established.",
+          "The observation visibly establishes complete achievement of the goal."
+        ]
+      },
+      "finished": {
+        "type": "noul",
+        "instructions": "Does state.observation explicitly establish that state.plan.goal is complete? Judge only the observed goal status; do not infer completion from preconditions or other question answers.",
+        "criteria": {
+          "true": "The observation explicitly establishes completion of the goal.",
+          "false": "The observation does not explicitly establish completion of the goal."
+        }
+      }
+    },
+    "read_fields": {
+      "condition": [
+        "value",
+        "probabilities",
+        "confidence"
+      ],
+      "progress": [
+        "value"
+      ],
+      "finished": [
+        "value"
+      ]
+    }
+  },
+  "answers": {
+    "condition": {
+      "type": "choice",
+      "value": "contradicted",
+      "probabilities": {
+        "contradicted": 0.96,
+        "supported": 0.0,
+        "unknown": 0.04
+      },
+      "confidence": 0.93
+    },
+    "progress": {
+      "type": "score",
+      "value": 0.0,
+      "probabilities": {
+        "0": 1.0,
+        "1": 0.0,
+        "2": 0.0
+      },
+      "confidence": 0.99
+    },
+    "finished": {
+      "type": "noul",
+      "value": 0.02,
+      "probabilities": {
+        "true": 0.02,
+        "false": 0.98
+      },
+      "confidence": null
+    }
+  },
+  "validation": "passed"
+}
