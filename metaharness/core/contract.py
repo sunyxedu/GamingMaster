@@ -21,8 +21,9 @@ use comes through ``ctx``:
 * ``ctx.clock``     — the game clock. In *virtual* mode, model latency is
                       charged to the clock deterministically (tests); in
                       *wall* mode it is real time.
-* ``ctx.memory``    — a dict that persists across episodes of the same
-                      evaluation (the harness may learn between seeds).
+* ``ctx.memory``    — a dict reset per episode by default. Explicit shared
+                      memory evaluations allow learning between seeds; the
+                      evaluation manifest records which protocol was used.
 * ``ctx.log(...)``  — free-form events into the trace.
 * ``ctx.budget``    — remaining System-2 calls / tokens; exceeding it ends the
                       episode (score kept), so harnesses must be thrifty.
@@ -64,6 +65,16 @@ class Budget:
     system2_calls: int = 0
     system1_calls: int = 0
     t_start: float = field(default_factory=time.time)
+    _lock: Any = field(default_factory=threading.Lock, repr=False)
+
+    def reserve(self, kind: str) -> None:
+        """Count only requests admitted to the backend, atomically across workers."""
+        with self._lock:
+            self.check()
+            attr = kind + "_calls"
+            if getattr(self, attr) >= getattr(self, "max_" + attr):
+                raise BudgetExceeded(f"{kind} call budget exhausted")
+            setattr(self, attr, getattr(self, attr) + 1)
 
     def check(self) -> None:
         if self.system2_calls > self.max_system2_calls:
@@ -209,10 +220,16 @@ class HarnessContext:
         self._pool = cf.ThreadPoolExecutor(max_workers=4, thread_name_prefix="harness")
         self.last_system2: Optional[System2Result] = None
         self.errors: list[str] = []
+        self.unavailable: Optional[ModelUnavailable] = None
+        self._closed = threading.Event()
+        self._futures: list[cf.Future] = []
 
     # -- game -----------------------------------------------------------
     def act(self, action: Any) -> Any:
         """Realtime: post the current action (instant). Turn: step and return obs."""
+        self.budget.check()
+        if self.done:
+            return self._observe()
         out = self._act(action)
         if self.game_kind == "realtime" and self.clock.mode == "virtual":
             self.clock.charge(self.act_overhead_s)
@@ -224,7 +241,8 @@ class HarnessContext:
         Waits to the next tick boundary, then — in wall mode — until the tick
         counter has actually advanced, so the harness never posts an action
         that a still-pending tick would consume out of phase."""
-        if self.game_kind != "realtime" or not self.tick_s:
+        self.budget.check()
+        if self.done or self.game_kind != "realtime" or not self.tick_s:
             return
         target = (self._ticks() + 1) if self._ticks else None
         now = self.clock.now()
@@ -240,45 +258,68 @@ class HarnessContext:
 
     @property
     def done(self) -> bool:
-        return self._done()
+        return self._closed.is_set() or self._done()
 
     # -- models ---------------------------------------------------------
     def think(self, prompt: str, *, session_id: Optional[str] = None, system: Optional[str] = None,
               timeout_s: float = 300.0) -> System2Result:
         if self.system2 is None:
             raise RuntimeError("no System-2 model in this task")
-        self.budget.system2_calls += 1
-        self.budget.check()
-        res = self.system2.run(prompt, session_id=session_id, system=system, agentic=False,
-                               timeout_s=timeout_s, trace=self.trace)
+        self._check_open()
+        self.budget.reserve("system2")
+        started = self.clock.now()
+        try:
+            res = self.system2.run(prompt, session_id=session_id, system=system, agentic=False,
+                                   timeout_s=min(timeout_s, self.budget.remaining()["wall_s"]),
+                                   trace=self.trace)
+        except ModelUnavailable as exc:
+            self.unavailable = exc
+            raise
         charged = self._latency_override.get("system2", res.latency_s)
-        self.clock.charge(charged)
+        if self.clock.mode == "virtual":
+            self.clock.charge(max(0.0, started + charged - self.clock.now()))
         self.last_system2 = res
         return res
 
     def decide(self, state: Any, questions: Mapping[str, Any], *, timeout_s: float = 5.0) -> dict[str, System1Answer]:
         if self.system1 is None:
             raise RuntimeError("no System-1 model in this task")
-        self.budget.system1_calls += 1
-        self.budget.check()
+        self._check_open()
+        self.budget.reserve("system1")
+        started = self.clock.now()
         t0 = time.time()
-        ans = self.system1.decide(state, questions, timeout_s=timeout_s, trace=self.trace)
+        try:
+            ans = self.system1.decide(state, questions,
+                                     timeout_s=min(timeout_s, self.budget.remaining()["wall_s"]),
+                                     trace=self.trace)
+        except ModelUnavailable as exc:
+            self.unavailable = exc
+            raise
         lat = time.time() - t0
         charged = self._latency_override.get("system1", getattr(self.system1, "latency_s", lat))
         if self.clock.mode == "virtual":
-            self.clock.charge(charged)
+            self.clock.charge(max(0.0, started + charged - self.clock.now()))
         return ans
 
+    def _check_open(self) -> None:
+        if self._closed.is_set():
+            raise BudgetExceeded("episode is closed")
+
     def spawn(self, fn: Callable[[], Any]) -> cf.Future:
-        return self._pool.submit(fn)
+        self._check_open()
+        future = self._pool.submit(fn)
+        self._futures.append(future)
+        return future
 
     def log(self, **event: Any) -> None:
         event.setdefault("type", "harness")
         event["clock"] = self.clock.now()
         self.trace.write(event)
 
-    def close(self) -> None:
+    def close(self) -> int:
+        self._closed.set()
         self._pool.shutdown(wait=False, cancel_futures=True)
+        return sum(not f.done() for f in self._futures)
 
 
 class HarnessProgram(Protocol):

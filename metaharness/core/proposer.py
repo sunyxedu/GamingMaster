@@ -61,7 +61,14 @@ model call with request/response/latency and every game tick/step):
    candidate, what evidence would confirm/refute it.
 4. If you cannot use tools, reply with the full harness in ONE ```python fenced block and the
    proposal text after it.
-Do not modify any other candidate. Do not run long experiments yourself; the evaluator will."""
+Do not modify any other candidate. Do not run long experiments yourself; the evaluator will.
+Read only this archive and the interface documentation above. Do not inspect game implementation
+source, other experiment archives, credentials, or held-out games/results. Infer semantics from the
+public game description and observations supplied through ctx. Do not call model backends directly:
+all inference must go through ctx.think/ctx.decide so the evaluator can account for it.
+ModelUnavailable must propagate. Join all ctx.spawn futures before returning; no background work
+may escape the episode. The default evaluation resets both memory and module globals per episode;
+only an explicit shared-memory protocol allows cross-episode caching. The manifest is authoritative."""
 
 
 def propose(

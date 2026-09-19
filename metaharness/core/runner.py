@@ -6,6 +6,8 @@ latency distribution, and how many System-1/2 calls were spent.
 """
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import statistics
 import threading
@@ -55,6 +57,7 @@ class EvalResult:
     game: str
     episodes: list[EpisodeResult]
     fatal: Optional[str] = None       # harness failed to load / model unavailable
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def mean_score(self) -> Optional[float]:
@@ -76,14 +79,18 @@ class EvalResult:
             "mean_steps": (statistics.fmean(e.steps for e in self.episodes) if self.episodes else None),
             "errors": [e.error for e in self.episodes if e.error],
             "episodes": [e.summary() for e in self.episodes],
+            "metadata": self.metadata,
+            "score_std": (statistics.stdev(e.score for e in self.episodes)
+                          if len(self.episodes) > 1 else None),
         }
 
 
 class _GameView:
     """What the harness sees: observations + metadata, never the stepping API."""
 
-    def __init__(self, game: Any) -> None:
+    def __init__(self, game: Any, stopped: threading.Event) -> None:
         self._g = game
+        self._stopped = stopped
         self.name = game.name
         self.action_spec = game.action_spec
         self.tick_s = getattr(game, "tick_s", None)
@@ -96,7 +103,7 @@ class _GameView:
 
     @property
     def done(self) -> bool:
-        return self._g.done
+        return self._stopped.is_set() or self._g.done
 
     @property
     def score(self) -> float:
@@ -144,7 +151,10 @@ def run_episode(
 ) -> EpisodeResult:
     realtime = hasattr(game, "tick")
     game.reset(seed)
-    view = _GameView(game)
+    stop = threading.Event()
+    view = _GameView(game, stop)
+    accepting_trace = threading.Event()
+    accepting_trace.set()
     t_wall0 = time.time()
     res = EpisodeResult(seed=seed, score=0.0, steps=0, system1_calls=0, system2_calls=0)
     s1_lat: list[float] = []
@@ -160,6 +170,8 @@ def run_episode(
             self._fh = None
 
         def write(self, record):
+            if not accepting_trace.is_set():
+                return
             r = dict(record)
             r["seed"] = seed
             if r.get("type") == "model_call" and r.get("ok"):
@@ -167,7 +179,6 @@ def run_episode(
             self.inner.write(r)
 
     tee = _Tee(trace)
-    stop = threading.Event()
     stale = decided = 0
     ticker: Optional[threading.Thread] = None
     mailbox = _Mailbox(game.action_spec.noop if realtime else None)
@@ -186,9 +197,9 @@ def run_episode(
         if clock_mode == "virtual":
             clock = VirtualClock()
             def _advance(t0: float, t1: float) -> None:
-                n0, n1 = int(t0 // game.tick_s), int(t1 // game.tick_s)
-                for _ in range(n1 - n0):
-                    if game.done:
+                target = int(t1 / game.tick_s + 1e-9)
+                for _ in range(max(0, target - game.ticks)):
+                    if stop.is_set() or game.done:
                         break
                     _apply_tick()
             clock.on_advance = _advance
@@ -211,6 +222,8 @@ def run_episode(
     else:
         clock = VirtualClock() if clock_mode == "virtual" else WallClock()
         def act_fn(action: Any) -> Any:
+            if stop.is_set():
+                return game.observe()
             obs = game.step(action)
             tee.write({"type": "step", "action": action, "score": game.score})
             return obs
@@ -224,7 +237,6 @@ def run_episode(
     tee.write({"type": "episode_start", "game": game.name, "realtime": realtime, "clock": clock_mode})
     err: Optional[str] = None
     try:
-        program = module.build(ctx)
         if ticker:
             clock.origin = time.time()
             ticker.start()
@@ -235,6 +247,7 @@ def run_episode(
             if isinstance(clock, VirtualClock):
                 clock.set_driver()
             try:
+                program = module.build(ctx)
                 program.run_episode(view)
             except BaseException as e:  # noqa: BLE001
                 exc.append(e)
@@ -243,8 +256,9 @@ def run_episode(
 
         th = threading.Thread(target=_run, name="harness", daemon=True)
         th.start()
-        if not done_flag.wait(harness_timeout_s):
-            err = f"harness did not return within {harness_timeout_s}s"
+        deadline_s = max(0.0, min(harness_timeout_s, budget.remaining()["wall_s"]))
+        if not done_flag.wait(deadline_s):
+            err = f"harness did not return within {deadline_s:.3f}s (episode deadline)"
         elif exc:
             e = exc[0]
             if isinstance(e, ModelUnavailable):
@@ -257,7 +271,12 @@ def run_episode(
         stop.set()
         if ticker and ticker.is_alive():
             ticker.join(timeout=2.0)
-        ctx.close()
+        pending = ctx.close()
+        accepting_trace.clear()
+    if ctx.unavailable is not None:
+        raise ctx.unavailable
+    if pending and err is None:
+        err = f"harness returned with {pending} unfinished background task(s)"
     res.score = float(game.score)
     res.steps = game.ticks if realtime else int(game.info().get("actions_used", 0))
     res.system1_calls = budget.system1_calls
@@ -266,8 +285,8 @@ def run_episode(
     res.latency_s1, res.latency_s2 = s1_lat, s2_lat
     res.wall_s = time.time() - t_wall0
     res.error = err
-    res.info = game.info()
-    tee.write({"type": "episode_end", **res.summary()})
+    res.info = {**game.info(), "pending_tasks": pending}
+    trace.write({"type": "episode_end", **res.summary()})
     return res
 
 
@@ -284,13 +303,34 @@ def evaluate_harness(
     latency_override: Optional[dict[str, float]] = None,
     harness_timeout_s: float = 600.0,
     game_kwargs: Optional[dict[str, Any]] = None,
+    memory_mode: str = "episode",
 ) -> EvalResult:
+    if memory_mode not in {"episode", "shared"}:
+        raise ValueError("memory_mode must be episode or shared")
+    if not seeds or len(set(seeds)) != len(seeds):
+        raise ValueError("evaluation requires nonempty, unique seeds")
+    if clock_mode not in {"wall", "virtual"}:
+        raise ValueError("clock_mode must be wall or virtual")
+    if latency_override and clock_mode != "virtual":
+        raise ValueError("latency_override requires virtual clock")
     harness_path = Path(harness_path)
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
-    game = game_factory(**(game_kwargs or {}))
-    result = EvalResult(harness_path=str(harness_path), game=game.name, episodes=[])
+    result = EvalResult(harness_path=str(harness_path), game="unknown", episodes=[])
+    b = budget_per_episode or Budget()
+    result.metadata = {
+        "protocol_version": 2, "seeds": seeds, "game_kwargs": game_kwargs or {},
+        "clock_mode": clock_mode, "latency_override": latency_override,
+        "memory_mode": memory_mode, "harness_timeout_s": harness_timeout_s,
+        "budget": {"max_system1_calls": b.max_system1_calls,
+                   "max_system2_calls": b.max_system2_calls, "max_wall_s": b.max_wall_s},
+        "models": {kind: None if model is None else {
+            "name": model.name, "model": getattr(model, "model", None),
+            "reasoning_effort": getattr(model, "reasoning_effort", None)}
+            for kind, model in (("system1", system1), ("system2", system2))},
+    }
     try:
+        result.metadata["harness_sha256"] = hashlib.sha256(harness_path.read_bytes()).hexdigest()
         module = load_harness_module(harness_path)
     except Exception as e:  # noqa: BLE001
         result.fatal = "load error: " + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-3000:]
@@ -298,8 +338,13 @@ def evaluate_harness(
         return result
     memory: dict[str, Any] = {}
     for i, seed in enumerate(seeds):
+        # Fresh game/module prevent timed-out workers and globals contaminating another seed.
+        game = game_factory(**(game_kwargs or {}))
+        result.game = game.name
+        if i:
+            module = load_harness_module(harness_path)
+        memory = copy.deepcopy(memory) if memory_mode == "shared" else {}
         trace = TraceSink(out_dir / f"trace_seed{seed}.jsonl" if out_dir else None)
-        b = budget_per_episode or Budget()
         budget = Budget(max_system2_calls=b.max_system2_calls, max_system1_calls=b.max_system1_calls,
                         max_wall_s=b.max_wall_s)
         try:
@@ -309,6 +354,7 @@ def evaluate_harness(
             result.episodes.append(ep)
         except ModelUnavailable as e:
             result.fatal = f"model unavailable: {e}"
+            trace.write({"type": "episode_unavailable", "seed": seed, "error": str(e)})
             break
         finally:
             trace.close()

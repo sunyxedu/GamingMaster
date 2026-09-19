@@ -19,9 +19,9 @@ Actions:
 
 Model available through `ctx`: `ctx.think(prompt, session_id=...)` — Astra (System-2). Budget: {s2}
 calls per episode; every call may return *several* actions to save budget. `ctx.act(action)` steps the
-game and returns the next observation. `ctx.memory` persists across the seeds of one evaluation, so
-the harness may carry over what it learned about the action semantics (they are re-drawn per seed —
-so store *how to discover*, not the answer).
+game and returns the next observation. By default each episode has fresh `ctx.memory` and module
+globals. An explicitly configured shared-memory experiment may carry procedural knowledge between
+seeds; action semantics are re-drawn, so never carry over seed-specific answers.
 
 Evaluation metric: mean levels completed over seeds (primary), then System-2 calls (fewer is better).
 
