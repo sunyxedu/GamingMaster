@@ -16,8 +16,14 @@ the archive that lets the next iteration do better.
 
 Tier 1 and tier 2 are what this package implements. The models:
 
-* **Astra** — OpenAI GPT-6 Astra, reached through the `codex` CLI
-  (`metaharness/models/astra.py`). Non-interactive `codex exec --json`, thread
+* **Model profiles** live in `metaharness/models.toml`: a profile names a
+  *backend* (how to reach a model) plus a model id and options, e.g.
+  `[system2.astra] backend = "codex", model = "gpt-6-astra"`. Backends know
+  nothing about specific models. `--system2 astra`, `--system2 sol`,
+  `--system2 claude`, `--proposer …`, `--system1 jev` select profiles;
+  `--effort` overrides a profile's reasoning effort.
+* **Astra** — OpenAI GPT-6 Astra, reached through the `codex` CLI backend
+  (`metaharness/models/codex_cli.py`). Non-interactive `codex exec --json`, thread
   resume so hidden reasoning state carries across turns, the CLI's own login
   (no API key in the repo). The integration follows Auto-CTFer's codex
   backend. When codex reports a usage limit the adapter raises
@@ -26,8 +32,9 @@ Tier 1 and tier 2 are what this package implements. The models:
   `POST https://api.typesafe.ai/v1/systemone` with typed questions
   (`Choice` / `Score` / `Noul`) and calibrated probabilities back in
   70–700 ms. Key in `.env` as `TYPESAFE_API_KEY` (never in code).
-* **Claude** (`claude -p`) is wired as an explicit stand-in for Astra
-  (`--system2 claude`, `--proposer claude`). It is never substituted silently.
+* **Claude** — the `claude` CLI backend (`metaharness/models/claude_cli.py`);
+  profiles `claude` (CLI default model) and `claude-opus`. Used as an explicit
+  stand-in when codex has no usage; never substituted silently.
 
 ## What a harness is
 
@@ -196,3 +203,32 @@ plans of many actions per call and no re-probing after a level-up.
 Same commands with `--system2 astra --proposer astra` once the codex account
 has usage again (`codex exec` reports the reset time). Nothing else changes;
 the adapter is exercised by the offline tests against recorded codex output.
+
+### Round 3 — real Astra (gpt-6-astra, reasoning effort high) as player and proposer
+
+Same settings as round 2, run once the codex account had usage again
+(`astra-tier2-snake-heldout-lanerunner`, `astra-tier1-rulepuzzle-heldout-arc3`).
+
+**Tier 2, snake.** 0 → 2.0 → 18.7 → **29.7** food per episode over three
+proposals, 0 % stale ticks throughout, all three winning episodes survive
+the full 300 ticks; held-out seeds 23.0. The winner (`0004`) keeps a small
+Astra-compiled reactive policy plus a separately compiled, empirically
+checked transition model with bounded lookahead, and uses only 2 Astra calls
+per evaluation. Transfer to lanerunner is weak (3.9, dies at tick 7–13):
+better than Jev-only (0.85) but far below the Claude-round winner (37.05),
+whose "Astra writes the bridge as code and re-writes it on stalls" design
+adapted to the new game at runtime.
+
+**Tier 1, rule puzzles.** Perfect 2/2 levels from the first proposal on, but
+unlike the Claude round the harness keeps Astra in the loop (6–7 calls per
+episode: evidence-carrying action batches with guarded execution instead of
+a scripted solver). On ARC-AGI-3 `vc33` the winner (`0002`) reaches
+**4 / 7 levels on both seeds** (94 and 116 actions, 15 calls); on the
+strictly unseen `ls20` it reaches **3 levels** (Claude round: 1, naive
+baseline: 0). Astra-high calls take ~40 s, so the loop's default 600 s
+harness timeout truncated the first ARC pass at 3–4 levels; the numbers above
+use `--harness-timeout 1800`.
+
+Two adapter bugs were only visible with the live account and are fixed in
+this round: `codex exec resume` rejects `--color/-s/-C`, and `-C` must be an
+absolute path when the subprocess cwd is the run directory.

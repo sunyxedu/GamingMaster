@@ -2,11 +2,17 @@
 
 POST https://api.typesafe.ai/v1/systemone
   {"model": "jev-latest", "state": <str|obj|list>, "questions": {id: {...}}}
-Question types: ``choice`` (criteria: {option: description}), ``score``
-(criteria: [level0, level1, ...]), ``noul`` (yes/no; criteria optional).
-Answers carry calibrated probabilities + confidence. Latency 70–700 ms.
+Question types (contract per docs.typesafe.ai/api, checked 2026-09-19):
+  ``choice``  instructions: str|obj|list; criteria: {option: description|None}   (<=255 options)
+  ``score``   instructions: str|obj|list; criteria: [level0, level1, ...]         (>=2 levels)
+  ``noul``    instructions: str|obj|list; criteria: {"true": ..., "false": ...} optional
+Answers carry calibrated probabilities + confidence (noul: probability only).
+Question ids are for code only — the model never sees them, so the whole
+meaning must be in ``instructions``/``criteria``. Independent questions over
+the same state should be sent in ONE request (evaluated in parallel).
 
-Standard library only (urllib) so the fast loop has no extra deps.
+Standard library only (urllib) so the fast loop has no extra deps. When
+working on this integration use the ``typesafe-ai`` skill / live docs.
 """
 from __future__ import annotations
 
@@ -25,10 +31,19 @@ from .base import ModelCall, ModelUnavailable, System1Answer, TraceSink
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 
 
+Instr = Any   # str | dict | list — structured instructions are allowed by the API
+
+
 @dataclass
 class Choice:
-    instructions: str
-    criteria: dict[str, str]
+    instructions: Instr
+    criteria: dict[str, Any]          # option -> description (str | structured | None)
+
+    def __post_init__(self) -> None:
+        if not self.criteria:
+            raise ValueError("Choice needs at least one option")
+        if len(self.criteria) > 255:
+            raise ValueError("Choice allows at most 255 options")
 
     def to_json(self) -> dict[str, Any]:
         return {"type": "choice", "instructions": self.instructions, "criteria": dict(self.criteria)}
@@ -36,8 +51,12 @@ class Choice:
 
 @dataclass
 class Score:
-    instructions: str
-    criteria: list[str]
+    instructions: Instr
+    criteria: list[Any]               # ordered levels, each a concrete situation
+
+    def __post_init__(self) -> None:
+        if len(self.criteria) < 2:
+            raise ValueError("Score needs at least 2 levels")
 
     def to_json(self) -> dict[str, Any]:
         return {"type": "score", "instructions": self.instructions, "criteria": list(self.criteria)}
@@ -45,8 +64,8 @@ class Score:
 
 @dataclass
 class Noul:
-    instructions: str
-    criteria: dict[str, str] = field(default_factory=dict)
+    instructions: Instr
+    criteria: dict[str, Any] = field(default_factory=dict)   # optional {"true": ..., "false": ...}
 
     def to_json(self) -> dict[str, Any]:
         d: dict[str, Any] = {"type": "noul", "instructions": self.instructions}

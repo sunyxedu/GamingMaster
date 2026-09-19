@@ -26,7 +26,7 @@ from .core import Archive, LoopConfig, MetaHarnessLoop
 from .core.contract import Budget
 from .core.runner import evaluate_harness
 from .games.registry import GAMES, make_game
-from .models import make_system1, make_system2
+from .models import make_system1, make_system2  # noqa: F401
 
 
 def _parse_seeds(s: str) -> list[int]:
@@ -34,15 +34,13 @@ def _parse_seeds(s: str) -> list[int]:
 
 
 def _system2(name: str, effort: str | None):
+    """``none`` | a ``[system2.*]`` profile from models.toml (``--effort`` overrides the profile)."""
     if name == "none":
         return None
-    kw = {}
-    if name == "astra" and effort:
-        kw["reasoning_effort"] = effort
-    if name == "scripted":
+    if name == "scripted":                      # offline stand-in with game-aware canned replies
         from .baselines._scripted import scripted_system2
         return scripted_system2()
-    return make_system2(name, **kw)
+    return make_system2(name, reasoning_effort=effort)
 
 
 def _system1(name: str):
@@ -128,9 +126,11 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--tier", type=int, required=True, choices=[1, 2])
         sp.add_argument("--game", required=True)
         sp.add_argument("--game-kwargs", default="", help="JSON kwargs for the game constructor")
-        sp.add_argument("--system2", default="astra", choices=["astra", "claude", "scripted", "none"])
-        sp.add_argument("--system1", default="jev", choices=["jev", "heuristic", "none"])
-        sp.add_argument("--effort", default=None, help="Astra reasoning effort (low|medium|high|xhigh|max)")
+        sp.add_argument("--system2", default="astra",
+                        help="System-2 profile from metaharness/models.toml (astra, sol, claude, ...) | scripted | none")
+        sp.add_argument("--system1", default="jev",
+                        help="System-1 profile from metaharness/models.toml (jev) | heuristic | none")
+        sp.add_argument("--effort", default=None, help="override the profile's reasoning effort (low|medium|high|xhigh|max)")
         sp.add_argument("--clock", default="wall", choices=["wall", "virtual"])
         sp.add_argument("--latency-override", default="", help='JSON e.g. {"system2": 3.0, "system1": 0.3} (virtual clock)')
         sp.add_argument("--seeds", default="0,1,2")
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
 
     lp = sub.add_parser("loop", help="run the meta-harness search")
     common(lp)
-    lp.add_argument("--proposer", default="astra", choices=["astra", "claude", "scripted"])
+    lp.add_argument("--proposer", default="astra", help="System-2 profile for the proposer | scripted")
     lp.add_argument("--proposer-text", action="store_true", help="proposer answers in text (no tools)")
     lp.add_argument("--proposer-timeout", type=float, default=1800.0)
     lp.add_argument("--iters", type=int, default=3)

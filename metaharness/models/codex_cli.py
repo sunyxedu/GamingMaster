@@ -1,4 +1,8 @@
-"""Astra (OpenAI GPT-6 Astra) through the ``codex`` CLI, non-interactively.
+"""Any OpenAI model through the ``codex`` CLI, non-interactively.
+
+Which model (Astra, Sol, ...) is a *config* concern: see ``metaharness/models.toml``
+(``[system2.astra] backend = "codex", model = "gpt-6-astra"``). This class only
+knows how to drive the CLI.
 
 Mirrors Auto-CTFer's codex backend (engine/src/solvers/codex.ts): the CLI's own
 login (``~/.codex/auth.json``) is used, ``OPENAI_API_KEY``/``OPENAI_BASE_URL``
@@ -22,23 +26,21 @@ from typing import Optional
 from ._cli import run_cli
 from .base import ModelCall, ModelUnavailable, System2Result, TraceSink
 
-ASTRA_MODEL = "gpt-6-astra"
 _USAGE_LIMIT_RE = re.compile(r"usage limit|insufficient_quota|purchase more credits", re.I)
 _AUTH_RE = re.compile(r"not logged in|login required|401|unauthorized", re.I)
 
 
-class AstraCodex:
-    name = "astra"
-
+class CodexCLI:
     def __init__(
         self,
-        model: str = ASTRA_MODEL,
-        reasoning_effort: Optional[str] = "high",
+        model: str,
+        reasoning_effort: Optional[str] = None,
         codex_bin: str = "codex",
         ephemeral: bool = False,
         extra_config: Optional[dict[str, str]] = None,
     ) -> None:
         self.model = model
+        self.name = f"codex:{model}"
         self.reasoning_effort = reasoning_effort
         self.codex_bin = codex_bin
         self.ephemeral = ephemeral
@@ -52,12 +54,13 @@ class AstraCodex:
         argv = [self.codex_bin, "exec"]
         if session_id:
             argv += ["resume", session_id]
-        argv += ["--json", "--skip-git-repo-check", "--color", "never", "-o", str(last_msg_path)]
+        # `resume` accepts a subset of `exec` flags (no --color / -s / -C).
+        argv += ["--json", "--skip-git-repo-check", "-o", str(last_msg_path)]
+        if agentic:
+            argv += ["--dangerously-bypass-approvals-and-sandbox"]
         if not session_id:
-            argv += ["-m", self.model]
-            if agentic:
-                argv += ["--dangerously-bypass-approvals-and-sandbox"]
-            else:
+            argv += ["-m", self.model, "--color", "never"]
+            if not agentic:
                 argv += ["-s", "read-only"]
             if cwd:
                 argv += ["-C", str(cwd)]
@@ -86,6 +89,7 @@ class AstraCodex:
         trace: Optional[TraceSink] = None,
     ) -> System2Result:
         full_prompt = f"{system}\n\n{prompt}" if system and not session_id else prompt
+        cwd = Path(cwd).resolve() if cwd else None      # -C and subprocess cwd must both be absolute
         t0 = time.time()
         with tempfile.TemporaryDirectory() as td:
             last_msg = Path(td) / "last.txt"
@@ -104,7 +108,7 @@ class AstraCodex:
         combined_err = "\n".join(errors + ([stderr_tail] if proc.returncode != 0 else []))
         if _USAGE_LIMIT_RE.search(combined_err) or _USAGE_LIMIT_RE.search(proc.stdout[-4000:]):
             self._trace(trace, t0, full_prompt, None, combined_err)
-            raise ModelUnavailable(f"codex/astra usage limit: {combined_err.strip()[:300]}")
+            raise ModelUnavailable(f"codex usage limit: {combined_err.strip()[:300]}")
         if proc.returncode != 0 and not text:
             self._trace(trace, t0, full_prompt, None, combined_err)
             if _AUTH_RE.search(combined_err):
@@ -125,7 +129,7 @@ class AstraCodex:
         if not trace:
             return
         trace.log_call(ModelCall(
-            "system2", f"astra:{self.model}", t0, time.time() - t0,
+            "system2", self.name, t0, time.time() - t0,
             {"prompt": prompt}, {"text": res.text, "session_id": res.session_id} if res else None,
             ok=err is None, error=err, usage=res.usage if res else {},
         ))
