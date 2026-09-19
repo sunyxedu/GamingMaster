@@ -851,6 +851,7 @@ dependencies = [
     { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "python-chess" },
     { name = "python-shogi" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "torch" },
     { name = "zstandard" },
 ]
@@ -876,6 +877,7 @@ requires-dist = [
     { name = "numpy", marker = "python_full_version >= '3.13'", specifier = ">=2.1" },
     { name = "python-chess", specifier = ">=1.999" },
     { name = "python-shogi", specifier = ">=1.1.1" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "torch", specifier = ">=2.0.0" },
     { name = "zstandard", specifier = ">=0.25.0" },
 ]
