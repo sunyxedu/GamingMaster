@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..core import contract
 from ..games.registry import make_game
+from ..models.jev import usage_guide
 
 BASELINES = ["tier2_jev_only", "tier2_astra_only"]
 
@@ -22,10 +23,9 @@ Models available through `ctx`:
 * `ctx.think(prompt, session_id=...)` — Astra (System-2, slow: seconds). Deep reasoning, can plan,
   can explain rules. Returns `.text` and `.session_id` (pass it back to keep conversation context).
   Budget: {s2} calls per episode. Astra never sees the game unless you show it.
-* `ctx.decide(state, questions)` — Jev (System-1, fast: ~0.1–0.7 s). Typed questions
-  (`metaharness.models.jev.Choice/Score/Noul`), calibrated probabilities. Budget: {s1} calls per
-  episode. Jev is a zero-shot classifier: it does not reason, so what you put in `state` and how you
-  phrase `instructions`/`criteria` is the whole game.
+* `ctx.decide(state, questions)` — Jev (System-1, fast typed judgments). Budget: {s1} calls per
+  episode. Read the complete Jev model context and local usage contract below before designing
+  its state, questions and answer-to-action bridge. Actual latency must be measured.
 * `ctx.spawn(fn)` — background thread, so Astra can think while Jev keeps acting.
 
 The game ticks every {tick_s}s **on its own clock**; `ctx.act(a)` posts the current action (instant).
@@ -33,23 +33,8 @@ A tick with no fresh action re-applies the last one. Evaluation metric: mean sco
 (primary), then fraction of stale ticks (lower is better), then System-2 calls (fewer is better).
 Clock mode: {clock}.
 
-How to ask Jev well (from TypeSafe's System-One guidance, docs.typesafe.ai):
-* Keep deterministic work in code (legality, geometry, bookkeeping); ask Jev only the judgment code
-  cannot make. One narrow, coherent judgment per question; several *independent* questions over the
-  same state go in ONE `ctx.decide` call (parallel, same latency) — speculative questions are fine,
-  code consumes only the relevant answers.
-* `state` should be a named JSON object with only the relevant context (no context rot); reference
-  nested fields in questions with backticked paths like `snake.danger.left`.
-* Question ids are invisible to the model: the full meaning must be in `instructions` + `criteria`.
-  Criteria must separate the options from each other with concrete situations ("moves toward food
-  and keeps ≥ 20 free cells" vs "safe but away from food"); include a no-match option when nothing
-  may fit. Score levels must describe concrete situations. Use structured (dict) criteria when
-  options are easily confused.
-* `probabilities` + `confidence` are the interface: gate on them (low confidence → code fallback or
-  escalate to Astra), and check freshness before applying an answer to a changed state.
-
 What the harness must design (this is the whole point): how Astra's slow output (a plan, a rule
-summary, a policy sketch, a subgoal) is turned into *state + questions* for Jev at every tick, how
+summary, a policy sketch, a subgoal) is turned into *state + questions* for Jev when needed, how
 Jev's typed answer is turned into a game action, when to go back to Astra, and what to do when a
 decision is late.
 
@@ -62,9 +47,13 @@ on the held-out game."""
 
 def task_md(game_name: str, budget: contract.Budget, clock_mode: str, game_kwargs: dict) -> str:
     g = make_game(game_name, **game_kwargs)
-    return TASK_TEMPLATE.format(game=game_name, describe=g.describe(), actions=g.action_spec.describe(),
-                                s2=budget.max_system2_calls, s1=budget.max_system1_calls,
-                                tick_s=g.tick_s, clock=clock_mode)
+    task = TASK_TEMPLATE.format(game=game_name, describe=g.describe(), actions=g.action_spec.describe(),
+                               s2=budget.max_system2_calls, s1=budget.max_system1_calls,
+                               tick_s=g.tick_s, clock=clock_mode)
+    # Inline the snapshot: proposers are restricted to the archive and cannot
+    # rely on following web links or reading the installed model source.
+    # It becomes part of task.md, each candidate prompt and the resume manifest.
+    return task + "\n\n" + usage_guide()
 
 
 def contract_doc() -> str:

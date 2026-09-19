@@ -5,6 +5,7 @@ import json
 
 from metaharness.cli import main
 from metaharness.core.archive import Archive
+from metaharness.models.jev import usage_guide
 
 
 def test_tier2_offline_loop(tmp_runs):
@@ -23,10 +24,14 @@ def test_tier2_offline_loop(tmp_runs):
     assert cands[2].eval()["system2_calls"] > 0 and cands[2].eval()["system1_calls"] > 0
     assert (a.root / "leaderboard.md").exists() and (a.root / "task.md").exists()
     assert (a.root / "candidates" / "0002" / "proposal.md").exists()
+    # The actual proposer input carries the bundled guide, not only a docs link.
+    guide = usage_guide()
+    assert guide in (cands[2].dir / "prompt.md").read_text()
+    assert guide in (a.root / "task.md").read_text()
+    assert guide in json.loads((a.root / "manifest.json").read_text())["task"]
     best = a.best()
     assert best is not None and (best.dir / "heldout" / "eval.json").exists()
     trace = (cands[2].dir / "trace_seed0.jsonl").read_text().splitlines()
     kinds = {json.loads(l).get("type") for l in trace}
     assert {"episode_start", "tick", "model_call", "episode_end"} <= kinds
-
 
