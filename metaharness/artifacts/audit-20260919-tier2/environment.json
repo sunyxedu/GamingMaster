@@ -1,0 +1,21 @@
+{
+  "python": "3.14.5",
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "codex_cli": "0.155.1",
+  "packages": {
+    "arc-agi": "0.9.9",
+    "arcengine": "0.9.3"
+  },
+  "arc_assets": [
+    {
+      "game": "ls20",
+      "version": "9607627b",
+      "sha256": "298c810da2850d557c95d92a2cbd846df29a45d7134e20888617bedf5dafcd92"
+    },
+    {
+      "game": "cd82",
+      "version": "fb555c5d",
+      "sha256": "dafeabff60a3a99b5c93629f8da0d8f555b873ef16a522247d6197b1b3addbcb"
+    }
+  ]
+}

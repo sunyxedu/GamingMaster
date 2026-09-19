@@ -1,0 +1,10 @@
+[00:47:03] eval 0000-tier2_jev_only: mean=0.0 stale=0.16666666666666666 fatal=None errors=0
+[00:47:22] eval 0001-tier2_astra_only: mean=0.0 stale=0.8148148148148148 fatal=None errors=0
+[00:47:22] iteration 1/3: proposing with claude
+[01:00:21] eval 0002: mean=24.0 stale=0.0 fatal=None errors=0
+[01:00:21] iteration 2/3: proposing with claude
+[01:16:51] eval 0003: mean=32.0 stale=0.0 fatal=None errors=0
+[01:16:51] iteration 3/3: proposing with claude
+[01:40:11] eval 0004: mean=32.333333333333336 stale=0.0 fatal=None errors=0
+[01:40:11] held-out evaluation of 0004
+[01:45:11] eval 0004/heldout: mean=35.0 stale=0.0 fatal=None errors=0

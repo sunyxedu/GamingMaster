@@ -1,0 +1,13 @@
+[11:08:02] eval 0000-tier2_jev_only: mean=0.0 stale=0.2777777777777778 fatal=None errors=0
+[11:08:22] eval 0001-tier2_astra_only: mean=0.0 stale=1.0 fatal=None errors=0
+[11:08:22] iteration 1/3: proposing with astra
+[11:09:50] iteration 1/3: proposing with codex:gpt-6-astra
+[11:29:55] eval 0002: mean=2.0 stale=0.0 fatal=None errors=0
+[11:29:55] iteration 2/3: proposing with codex:gpt-6-astra
+[11:41:32] eval 0003: mean=18.666666666666668 stale=0.0 fatal=None errors=0
+[11:41:32] iteration 3/3: proposing with codex:gpt-6-astra
+[11:57:49] eval 0004: mean=29.666666666666668 stale=0.0 fatal=None errors=0
+[11:57:49] held-out seeds evaluation of 0004
+[12:01:51] eval 0004/heldout: mean=23.0 stale=0.0 fatal=None errors=0
+[12:01:51] held-out GAME evaluation of 0004 on lanerunner
+[12:03:07] eval 0004/heldout-lanerunner: mean=3.9000000000000004 stale=0.0 fatal=None errors=0

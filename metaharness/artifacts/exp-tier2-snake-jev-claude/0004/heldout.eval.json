@@ -1,0 +1,71 @@
+{
+  "harness_path": "runs/exp-tier2-snake-jev-claude/candidates/0004/harness.py",
+  "game": "snake",
+  "fatal": null,
+  "mean_score": 35.0,
+  "stale_fraction": 0.0,
+  "n_episodes": 2,
+  "system1_calls": 39,
+  "system2_calls": 1,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 100,
+      "score": 35.0,
+      "steps": 300,
+      "system1_calls": 19,
+      "system2_calls": 1,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 19,
+        "mean": 0.5830308261670565,
+        "p50": 0.5829691886901855,
+        "p90": 0.6375479698181152,
+        "max": 0.7014391422271729
+      },
+      "latency_s2": {
+        "n": 1,
+        "mean": 3.3012280464172363,
+        "p50": 3.3012280464172363,
+        "p90": 3.3012280464172363,
+        "max": 3.3012280464172363
+      },
+      "wall_s": 150.01271319389343,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 35.0,
+        "length": 38,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 101,
+      "score": 35.0,
+      "steps": 300,
+      "system1_calls": 20,
+      "system2_calls": 0,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 20,
+        "mean": 0.5804438829421997,
+        "p50": 0.566411018371582,
+        "p90": 0.6607339382171631,
+        "max": 0.6676740646362305
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 150.0095500946045,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 35.0,
+        "length": 38,
+        "death": "timeout"
+      }
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+[
+  {
+    "file": "README.md",
+    "sha256": "1e4834011b4c640a11b196bbf47a2741a35141975acaa7449ff341260b600226",
+    "uncompressed_bytes": 2043
+  },
+  {
+    "file": "astra_output.md",
+    "sha256": "159d117fdc731736d1ef4baf02ef1e2aaed84e2b91360d209de2d0c6b3775843",
+    "uncompressed_bytes": 2078
+  },
+  {
+    "file": "prompt.md",
+    "sha256": "cf119c0a64b2c942dd4679c8a2691f6887c2f7b05a8d0810cd0cddaade2643a2",
+    "uncompressed_bytes": 11861
+  },
+  {
+    "file": "summary.json",
+    "sha256": "edca287f6fa98fa64e0c48a8fbc566ea2bacb4dc487f55463848b1c252e2b3d9",
+    "uncompressed_bytes": 3168
+  },
+  {
+    "file": "trace.jsonl.gz",
+    "sha256": "7577024f4ba32fed12beb6795fc82a18004ac4f2624f33153264d435b2a2e666",
+    "uncompressed_bytes": 31706
+  }
+]

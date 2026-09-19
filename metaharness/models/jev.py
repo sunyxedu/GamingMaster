@@ -23,12 +23,21 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from ..config import load_dotenv
 from .base import ModelCall, ModelUnavailable, System1Answer, TraceSink
 
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
+
+
+def usage_guide() -> str:
+    """Versioned model context for the proposer and runtime Astra prompt builders.
+
+    Reads a bundled, credential-free snapshot; never fetches docs at inference time.
+    """
+    return Path(__file__).with_name("jev_usage.md").read_text(encoding="utf-8")
 
 
 Instr = Any   # str | dict | list — structured instructions are allowed by the API

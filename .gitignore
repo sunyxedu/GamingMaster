@@ -5,6 +5,8 @@ __pycache__/
 dist/
 build/
 .eggs/
+.venv/
+.pytest_cache/
 node_modules/
 .ruff_cache/
 checkpoints/
@@ -16,6 +18,10 @@ data/
 .idea/
 # secrets
 .env
+.env.*
+!.env.example
 .DS_Store
+# machine-local agent settings
+.claude/
 # meta-harness run archives (large traces)
 runs/

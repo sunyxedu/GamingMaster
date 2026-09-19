@@ -3,6 +3,19 @@
 See the [2026-09-19 implementation audit and live-model experiments](meta-harness-audit-2026-09-19.md)
 for the current protocol, fixes, cold-start controls and transfer limitations.
 
+Tier-2 proposal prompts now embed the versioned
+[Jev context and usage guide](../metaharness/models/jev_usage.md), including the
+local `ctx.decide` return contract, explicit request context, batched questions,
+confidence handling and latency constraints. The text is stored in `task.md`,
+every candidate's `prompt.md` and the search manifest, so changing it requires
+a fresh search archive. Generated harnesses can reuse the same text via
+`metaharness.models.jev.usage_guide()` when asking runtime Astra to design Jev
+questions. The guide leaves the game-specific bridge to the proposer.
+A [live interface probe](../metaharness/artifacts/jev-context-smoke-20260919/README.md)
+verified one real Astra-generated batch of Choice/Score/Noul questions against
+Jev, alongside 17 targeted tests. This verifies the new context and API path;
+the earlier gameplay measurements used the previous prompts.
+
 `metaharness/` is the second half of GamingMaster. The trained network in
 `model/` covers games where every millisecond matters. Everything else is
 handled by *foundation models plus a harness*, and the harness is not written
