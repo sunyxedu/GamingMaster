@@ -33,6 +33,21 @@ A tick with no fresh action re-applies the last one. Evaluation metric: mean sco
 (primary), then fraction of stale ticks (lower is better), then System-2 calls (fewer is better).
 Clock mode: {clock}.
 
+How to ask Jev well (from TypeSafe's System-One guidance, docs.typesafe.ai):
+* Keep deterministic work in code (legality, geometry, bookkeeping); ask Jev only the judgment code
+  cannot make. One narrow, coherent judgment per question; several *independent* questions over the
+  same state go in ONE `ctx.decide` call (parallel, same latency) — speculative questions are fine,
+  code consumes only the relevant answers.
+* `state` should be a named JSON object with only the relevant context (no context rot); reference
+  nested fields in questions with backticked paths like `snake.danger.left`.
+* Question ids are invisible to the model: the full meaning must be in `instructions` + `criteria`.
+  Criteria must separate the options from each other with concrete situations ("moves toward food
+  and keeps ≥ 20 free cells" vs "safe but away from food"); include a no-match option when nothing
+  may fit. Score levels must describe concrete situations. Use structured (dict) criteria when
+  options are easily confused.
+* `probabilities` + `confidence` are the interface: gate on them (low confidence → code fallback or
+  escalate to Astra), and check freshness before applying an answer to a changed state.
+
 What the harness must design (this is the whole point): how Astra's slow output (a plan, a rule
 summary, a policy sketch, a subgoal) is turned into *state + questions* for Jev at every tick, how
 Jev's typed answer is turned into a game action, when to go back to Astra, and what to do when a
