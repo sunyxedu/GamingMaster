@@ -24,21 +24,31 @@
 # To saturate ALL FOUR cpu nodes on a single player, submit as a job array —
 # each task owns a disjoint shard of the player's history (no coordination):
 #
-#   sbatch --array=0-3 prepare_data_job.sh
+#   sbatch --array=0-3 scripts/slurm/data/prepare_data_job.sh
 #   # after all tasks finish, merge the shard lists once:
 #   .venv/bin/python -m scripts.prepare_data -p Human.exe \
 #       -o /scratch/$USER/gaming-master/data-v2 --merge
 #
 # Multiple players? Pass the name as the script argument (space-safe):
-#   sbatch prepare_data_job.sh "Average Joe"
-# or submit the whole roster with collect_data.sh.
+#   sbatch scripts/slurm/data/prepare_data_job.sh "Average Joe"
+# or submit the whole roster with scripts/slurm/data/collect_data.sh.
 #
 # No srun (single-task job; step creation times out on the cpu partition)
 # and no apptainer (the container lacks the lzstring package — the repo
 # venv on shared home has everything and cpu nodes run its wheels fine).
-export PYTHONPATH=~/GamingMaster
+# Slurm executes a spool copy: start from the explicit checkout or submit directory.
+_gm_start="${GAMINGMASTER_ROOT:-${SLURM_SUBMIT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}}"
+_gm_root=$(cd -- "$_gm_start" && pwd) || exit 1
+while [[ ! -f "$_gm_root/scripts/slurm/_env.sh" ]]; do
+    if [[ "$_gm_root" == / ]]; then
+        echo "Cannot find GamingMaster; set GAMINGMASTER_ROOT to the checkout root." >&2
+        exit 1
+    fi
+    _gm_root=$(dirname -- "$_gm_root")
+done
+source "$_gm_root/scripts/slurm/_env.sh" || exit 1
+unset _gm_start _gm_root
 export PYTHONUNBUFFERED=1   # live logs (unbuffered stdout)
-cd ~/GamingMaster
 
 # Shard spec from the array task id (defaults to 0/1 = unsharded)
 if [ -n "$SLURM_ARRAY_TASK_ID" ]; then

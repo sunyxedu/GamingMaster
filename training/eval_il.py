@@ -1,12 +1,12 @@
 """
-Validation-set evaluation for IL checkpoints (generals.io, train_il.py lineage).
+Validation-set evaluation for IL checkpoints (generals.io, training/train_il.py lineage).
 
 Runs each checkpoint over held-out *-val replays with NO teacher forcing and
 full ACT depth, reporting the same loss parts and accuracies the training
 loop logs, so numbers are directly comparable across epochs.
 
 Usage:
-    python3 eval_il.py \
+    python3 -m training.eval_il \
         --checkpoints ckpts/checkpoint_epoch*.pt \
         --data_dir data/PlayerA-val data/PlayerB-val \
         [--csv results.csv]

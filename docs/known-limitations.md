@@ -40,7 +40,7 @@ RL env never generates them. The bot targets classic 1v1 maps.
 - The RL env's random maps place mountains/cities uniformly (with a
   connectivity check and 50% side swap); they don't reproduce the real
   generator's fairness constraints (mirrored distances, city fairness).
-- `train_rl.py` trains player 0 only per episode; opponents come from a
+- `training/train_rl.py` trains player 0 only per episode; opponents come from a
   frozen pool, so there is no gradient through the opponent's seat.
 - The world-model objective (`predict_next_obs`, `--world_model_weight`)
   trains only during IL; RL uses shaped environment rewards with no

@@ -42,7 +42,7 @@ from env.generals_env import GeneralsEnv                     # noqa: E402
 from model.config import ModelConfig                         # noqa: E402
 from model.network import GeneralsNetwork                    # noqa: E402
 from model.rl_utils import load_model_state                  # noqa: E402
-from train_rl import collect_selfplay_episode                # noqa: E402
+from training.train_rl import collect_selfplay_episode                # noqa: E402
 
 
 def parse_args():

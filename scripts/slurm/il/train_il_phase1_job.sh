@@ -9,16 +9,27 @@
 
 # Phase 1 IL — broad base on ALL data (Human.exe bot bulk + high-end players).
 # Purpose: learn game dynamics / legality / fog memory / state coverage. The
-# policy comes out bot-flavoured; phase 2 (train_il_phase2_job.sh) polishes it
+# policy comes out bot-flavoured; phase 2 (scripts/slurm/il/train_il_phase2_job.sh) polishes it
 # on the high-end players only.
 #
 # Big dataset → the large effective batch (384) and 8-32 GPUs are justified.
-#   sbatch train_il_phase1_job.sh                 # 1 node x 8
-#   sbatch --nodes=4 train_il_phase1_job.sh       # 4 nodes x 8 = 32 GPUs
+#   sbatch scripts/slurm/il/train_il_phase1_job.sh                 # 1 node x 8
+#   sbatch --nodes=4 scripts/slurm/il/train_il_phase1_job.sh       # 4 nodes x 8 = 32 GPUs
 
 export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
-export PYTHONPATH=~/GamingMaster
+# Slurm executes a spool copy: start from the explicit checkout or submit directory.
+_gm_start="${GAMINGMASTER_ROOT:-${SLURM_SUBMIT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}}"
+_gm_root=$(cd -- "$_gm_start" && pwd) || exit 1
+while [[ ! -f "$_gm_root/scripts/slurm/_env.sh" ]]; do
+    if [[ "$_gm_root" == / ]]; then
+        echo "Cannot find GamingMaster; set GAMINGMASTER_ROOT to the checkout root." >&2
+        exit 1
+    fi
+    _gm_root=$(dirname -- "$_gm_root")
+done
+source "$_gm_root/scripts/slurm/_env.sh" || exit 1
+unset _gm_start _gm_root
 export PYTHONUNBUFFERED=1
 # Recurrent-mode memory (measured, T=1000): B=6 OOMs a 141GB card; B=3
 # peaks at 134.5/139.8 GiB — no headroom for DDP buffers + variable
@@ -45,7 +56,7 @@ RESUME_FLAG=""
 # Hot-start across an architecture change: load weights from FINETUNE, fresh
 # run; REINIT names submodules to leave freshly initialized, e.g.
 #   FINETUNE=/scratch/.../checkpoint_epoch3.pt REINIT=direction_head. \
-#       ./submit_phase1.sh 1 4
+#       scripts/slurm/il/submit_phase1.sh 1 4
 [ -n "${FINETUNE:-}" ] && RESUME_FLAG="--finetune_from $FINETUNE ${REINIT:+--reinit $REINIT}"
 
 HEAD_NODE=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n1)
@@ -63,7 +74,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
     torchrun --nproc_per_node=$GPUS_PER_NODE --nnodes=$SLURM_NNODES \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$HEAD_NODE:29500 \
-        ~/GamingMaster/train_il.py \
+        --module training.train_il \
         --data_dir "${DATA_DIRS[@]}" \
         $RESUME_FLAG \
         --output_dir /scratch/$USER/gaming-master/checkpoints/il_phase1 \

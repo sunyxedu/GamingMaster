@@ -71,20 +71,31 @@
 # (the measured 53% h2h point); crash recovery resumes the newest run-3
 # checkpoint automatically. KL anchor stays pinned to the IL policy.
 #
-#   sbatch train_rl_phase7_job.sh                # first launch AND crash recovery
-#   RESUME=/path/to/specific.pt sbatch train_rl_phase7_job.sh   # explicit pick
+#   sbatch scripts/slurm/rl/train_rl_phase7_job.sh                # first launch AND crash recovery
+#   RESUME=/path/to/specific.pt sbatch scripts/slurm/rl/train_rl_phase7_job.sh   # explicit pick
 #   P7_DIR=/scratch/.../smoke ITERATIONS=1452 EPISODES=2 \
 #       EVAL_INTERVAL=1 EVAL_GAMES=1 \
 #       sbatch --gres=gpu:nvidia_h200_nvl:2 --time=2:00:00 \
-#       train_rl_phase7_job.sh                   # two-iteration smoke test
-#   EPISODES=12 sbatch train_rl_phase7_job.sh    # production: 48 games/iter
+#       scripts/slurm/rl/train_rl_phase7_job.sh                   # two-iteration smoke test
+#   EPISODES=12 sbatch scripts/slurm/rl/train_rl_phase7_job.sh    # production: 48 games/iter
 #
 # LR note: iteration numbering continues from 1450, so --lr 6e-5 lands at
 # an effective ~5.2e-5 for the first run-3 iteration.
 
 export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
-export PYTHONPATH=~/GamingMaster
+# Slurm executes a spool copy: start from the explicit checkout or submit directory.
+_gm_start="${GAMINGMASTER_ROOT:-${SLURM_SUBMIT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}}"
+_gm_root=$(cd -- "$_gm_start" && pwd) || exit 1
+while [[ ! -f "$_gm_root/scripts/slurm/_env.sh" ]]; do
+    if [[ "$_gm_root" == / ]]; then
+        echo "Cannot find GamingMaster; set GAMINGMASTER_ROOT to the checkout root." >&2
+        exit 1
+    fi
+    _gm_root=$(dirname -- "$_gm_root")
+done
+source "$_gm_root/scripts/slurm/_env.sh" || exit 1
+unset _gm_start _gm_root
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TMPDIR=/tmp
@@ -159,7 +170,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
     torchrun --nproc_per_node=$GPUS_PER_NODE --nnodes=$SLURM_NNODES \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$HEAD_NODE:$RDZV_PORT \
-        ~/GamingMaster/train_rl.py \
+        --module training.train_rl \
         --resume "$RESUME" \
         --kl_ref "$IL_ANCHOR" \
         --reset_reward_decay \

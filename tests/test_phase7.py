@@ -15,7 +15,7 @@ import torch
 
 from env.generals_env import GeneralsEnv
 from model.losses import RLLoss
-from train_rl import parse_args
+from training.train_rl import parse_args
 
 
 # ======================================================================
@@ -137,7 +137,7 @@ class TestNegativeEntropyWeight:
 
 class TestPhase7ArgDefaults:
     def test_new_flags_default_off(self):
-        with mock.patch.object(sys, "argv", ["train_rl.py"]):
+        with mock.patch.object(sys, "argv", ["training/train_rl.py"]):
             args = parse_args()
         assert args.trunc_material == 0.35
         assert args.trunc_penalty == 0.0
@@ -145,7 +145,7 @@ class TestPhase7ArgDefaults:
         assert args.eval_ckpt is None
 
     def test_phase7_values_parse(self):
-        argv = ["train_rl.py", "--trunc_penalty", "0.3",
+        argv = ["training/train_rl.py", "--trunc_penalty", "0.3",
                 "--trunc_material", "0.15", "--entropy_penalty", "0.005",
                 "--entropy_ceiling", "1.9",
                 "--eval_ckpt", "/tmp/fixed.pt"]
@@ -161,7 +161,7 @@ class TestPhase7ArgDefaults:
 class TestRun3ProductionContract:
     def test_job_seeds_exact_healthy_ema_and_excludes_sparring_gradients(self):
         script = (Path(__file__).parents[1] /
-                  "train_rl_phase7_job.sh").read_text()
+                  "scripts/slurm/rl/train_rl_phase7_job.sh").read_text()
         assert "rl_phase7b/rl_ema_iter1450.pt" in script
         assert "rl_phase7b/run3_prod" in script
         assert "--sparring_prob 0.0" in script
@@ -169,6 +169,6 @@ class TestRun3ProductionContract:
 
     def test_job_uses_global_entropy_controller_settings(self):
         script = (Path(__file__).parents[1] /
-                  "train_rl_phase7_job.sh").read_text()
+                  "scripts/slurm/rl/train_rl_phase7_job.sh").read_text()
         assert "--entropy_ceiling 1.9" in script
         assert "--entropy_penalty 0.01" in script

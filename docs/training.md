@@ -13,12 +13,12 @@ computation:
 
 1. **TRM pondering depth** (`act_steps`). The TRM can refine its answer over
    multiple ACT steps with a carry. Depth changes the policy, so:
-   - `train_rl.py` uses a **fixed** depth `--act_steps` (default 1) for both
+   - `training/train_rl.py` uses a **fixed** depth `--act_steps` (default 1) for both
      the rollout (`step_rl(act_steps=K)`) and the PPO update
      (`forward(act_steps=K)`) and the IL auxiliary update. Never let these
      diverge — the PPO ratio becomes meaningless (this was the single worst
      bug in the original implementation).
-   - `train_il.py` samples a random depth in `[1, --max_act_steps]` per batch
+   - `training/train_il.py` samples a random depth in `[1, --max_act_steps]` per batch
      (deep-supervision style), so that inference-time carry states are
      in-distribution and `q_halt` is trained at every depth.
    - Evaluation scripts (`play_model.py`, `simulate_model.py`) take
@@ -43,7 +43,7 @@ computation:
 ## Imitation learning
 
 ```bash
-uv run python train_il.py --data_dir data/output/training/<player> \
+uv run python -m training.train_il --data_dir data/output/training/<player> \
     --batch_size 4 --tf_start 0.4 --tf_end 0.0
 ```
 
@@ -66,7 +66,7 @@ meaningful when the conditioning source equals the ground truth, so those
 loss terms are weighted by the indicator `pred["src_idx"] == gt_src`. With
 `--tf_start 0` an untrained model rarely samples the right source, so
 direction/split receive little signal at first — start with `--tf_start 0.4`
-(decayed to 0) as in `train_job.sh`.
+(decayed to 0) as in `scripts/slurm/il/train_job.sh`.
 
 **Padded frames and BatchNorm.** Variable-length sequences are zero-padded;
 `frame_mask` keeps padded frames out of the spatial encoder so they cannot
@@ -80,7 +80,7 @@ across ranks — a rank-local skip would desynchronize gradient allreduce and
 silently corrupt every later step of the epoch.
 
 The gradient sync itself (`model/rl_utils.py::sync_gradients`, shared with
-`train_rl.py`) keeps the collective schedule rank-invariant: a fixed-size
+`training/train_rl.py`) keeps the collective schedule rank-invariant: a fixed-size
 presence mask is MAX-reduced first so every rank agrees which parameters
 participate; a rank whose autograd left a participating parameter without a
 gradient contributes zeros and prints a `[grad-sync]` warning naming the
@@ -94,7 +94,7 @@ by all ranks alike, so heads untouched by an objective are never stepped.
 ## RL self-play
 
 ```bash
-uv run python train_rl.py \
+uv run python -m training.train_rl \
     --il_checkpoint checkpoints/checkpoint_epochN.pt \
     --il_data_dir data/output/training/<player> \
     --act_steps 1
@@ -134,7 +134,7 @@ boundary (optimizer state is skipped with a warning when the trainable set
 changed). Checkpoint loading is strict: missing keys raise instead of leaving
 modules randomly initialized.
 
-**Distributed.** `train_rl.py` does not use DDP (manual gradient all-reduce
+**Distributed.** `training/train_rl.py` does not use DDP (manual gradient all-reduce
 instead); rank 0's parameters and buffers are broadcast at startup so all
 ranks start identical.
 
@@ -205,7 +205,7 @@ effective batch = batch_size × world_size × grad_accum
 Recommended from-scratch recipe (recurrent memory + world model):
 
 ```bash
-torchrun --nproc_per_node=8 train_il.py \
+torchrun --nproc_per_node=8 --module training.train_il \
     --data_dir <regenerated data> \
     --temporal_mixer recurrent --world_model_weight 0.2 \
     --tf_start 0.4 --tf_end 0.0 \

@@ -12,7 +12,7 @@ Implements distributed PPO self-play with:
   - Encoder freeze / unfreeze schedule
 
 Usage:
-    torchrun --nproc_per_node=8 --nnodes=4 ... train_rl.py \\
+    torchrun --nproc_per_node=8 --nnodes=4 ... --module training.train_rl \\
         --il_checkpoint checkpoints/finetune/checkpoint_epoch67.pt \\
         --il_data_dir data-1k/training/Human.exe \\
         --iterations 10000

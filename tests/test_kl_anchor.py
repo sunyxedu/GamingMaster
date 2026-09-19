@@ -86,7 +86,7 @@ class TestKLHeads:
 class TestEMA:
     def test_update_ema_math_and_buffers(self):
         import torch.nn as nn
-        from train_rl import init_ema, update_ema
+        from training.train_rl import init_ema, update_ema
 
         m = nn.Sequential(nn.Linear(4, 4), nn.BatchNorm1d(4))
         ema = init_ema(m)
@@ -109,7 +109,7 @@ class TestEMA:
     def test_ema_state_loads_strict(self):
         from model.config import ModelConfig
         from model.network import GeneralsNetwork
-        from train_rl import init_ema
+        from training.train_rl import init_ema
 
         cfg = ModelConfig(d_model=64, n_heads=4, trm_H_cycles=1,
                           trm_L_cycles=2, trm_block_layers=1)

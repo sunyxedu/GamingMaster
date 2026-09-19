@@ -5,7 +5,7 @@ Answers, per iteration and over training: is the learner (p0) opening fewer
 neutral towers? Is it bashing them with insufficient army? Is the net city
 reward decline captures drying up, or losses to stronger pool opponents?
 
-Replays are the full-information snapshots saved by train_rl.py
+Replays are the full-information snapshots saved by training/train_rl.py
 (save_replay_interval): state codes 3=neutral city, 6=p0 city, 9=p1 city;
 army grids; per-step actions. Neutral city armies never regenerate, so any
 army drop on a neutral city tile is a hit.

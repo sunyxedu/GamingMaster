@@ -15,20 +15,31 @@
 # (epoch 1, new optimizer/schedule). Point CKPT at the best phase-1 checkpoint:
 #
 #   CKPT=/scratch/$USER/gaming-master/checkpoints/il_phase1/checkpoint_epoch40.pt \
-#       sbatch train_il_phase2_job.sh
+#       sbatch scripts/slurm/il/train_il_phase2_job.sh
 #
 # Resuming an INTERRUPTED phase-2 run (any GPU count — ACCUM keeps the
 # effective batch at TARGET_EFF; the checkpoint carries optimizer + LR
 # schedule; CKPT is not needed):
 #
 #   RESUME=/scratch/$USER/gaming-master/checkpoints/il_phase2/checkpoint_epochN.pt \
-#       sbatch train_il_phase2_job.sh
+#       sbatch scripts/slurm/il/train_il_phase2_job.sh
 #
 # Small high-end set → smaller effective batch (more optimizer steps).
 
 export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
-export PYTHONPATH=~/GamingMaster
+# Slurm executes a spool copy: start from the explicit checkout or submit directory.
+_gm_start="${GAMINGMASTER_ROOT:-${SLURM_SUBMIT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}}"
+_gm_root=$(cd -- "$_gm_start" && pwd) || exit 1
+while [[ ! -f "$_gm_root/scripts/slurm/_env.sh" ]]; do
+    if [[ "$_gm_root" == / ]]; then
+        echo "Cannot find GamingMaster; set GAMINGMASTER_ROOT to the checkout root." >&2
+        exit 1
+    fi
+    _gm_root=$(dirname -- "$_gm_root")
+done
+source "$_gm_root/scripts/slurm/_env.sh" || exit 1
+unset _gm_start _gm_root
 export PYTHONUNBUFFERED=1
 # Recurrent-mode memory (measured, T=1000): B=6 OOMs a 141GB card; B=3
 # peaks at 134.5/139.8 GiB — no headroom for DDP buffers + variable
@@ -39,7 +50,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TMPDIR=/tmp
 
 # Fresh start (--finetune_from phase-1 CKPT) and resume (--resume phase-2
-# checkpoint) are mutually exclusive in train_il.py: a resumed run must keep
+# checkpoint) are mutually exclusive in training/train_il.py: a resumed run must keep
 # its own optimizer/schedule, not re-seed from phase 1. CKPT is only needed
 # for a fresh start.
 if [ -n "${RESUME:-}" ]; then
@@ -75,7 +86,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
     torchrun --nproc_per_node=$GPUS_PER_NODE --nnodes=$SLURM_NNODES \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$HEAD_NODE:29500 \
-        ~/GamingMaster/train_il.py \
+        --module training.train_il \
         --data_dir "${DATA_DIRS[@]}" \
         "${INIT_FLAGS[@]}" \
         --output_dir /scratch/$USER/gaming-master/checkpoints/il_phase2 \

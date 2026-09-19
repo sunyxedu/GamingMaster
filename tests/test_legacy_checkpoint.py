@@ -4,7 +4,7 @@ The game-adapter refactor moved the generals modules into
 ``obs_encoder.*`` / ``action_decoder.*``. Checkpoints saved before it
 (e.g. IL phase 1 trained on main) use the old flat key names and are
 remapped on load via ``GeneralsNetwork.LEGACY_KEY_MAP``. These tests pin
-that migration — the exact operation ``train_il.py --finetune_from
+that migration — the exact operation ``training/train_il.py --finetune_from
 <phase-1 ckpt>`` performs — plus the reinit-prefix handling and the
 optimizer-state resume guards around it.
 
@@ -338,7 +338,7 @@ def test_parameter_registration_order_is_pinned():
 def test_phase1_checkpoint_file_round_trip(tmp_path):
     """Save a synthetic phase-1-style checkpoint file (legacy keys, config
     dict, stepped optimizer state) and drive it through the same steps
-    train_il.py performs: torch.load, config reconstruction, legacy
+    training/train_il.py performs: torch.load, config reconstruction, legacy
     detection, weight load — and the optimizer-state rejection the
     --resume guard applies to pre-refactor checkpoints."""
     net_a = small_net(seed=0)
@@ -356,7 +356,7 @@ def test_phase1_checkpoint_file_round_trip(tmp_path):
 
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
 
-    # Config reconstruction as train_il.py does — the recurrent mixer and
+    # Config reconstruction as training/train_il.py does — the recurrent mixer and
     # the world-model head must survive the file round trip.
     cfg = ModelConfig(**{k: v for k, v in ckpt["config"].items()
                          if k in ModelConfig.__dataclass_fields__})

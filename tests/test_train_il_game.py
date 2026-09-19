@@ -11,7 +11,7 @@ from data_processing.games.dataset import (
     collate_game_sequences,
     save_shard,
 )
-from train_il_game import LABEL_KEYS, build_labels, parse_overrides, run_batch
+from training.train_il_game import LABEL_KEYS, build_labels, parse_overrides, run_batch
 
 SMALL = dict(
     d_model=48, n_heads=4, d_ff=64, n_st_layers=1,
@@ -126,7 +126,7 @@ def test_shard_locality_sampler_coverage_and_locality(tmp_path):
 
 
 def test_resume_arch_prefers_checkpoint_config(capsys):
-    from train_il_game import resume_arch_overrides
+    from training.train_il_game import resume_arch_overrides
 
     ckpt = {"config": {"d_model": 48, "board_h": 6}, "config_overrides": {}}
     assert resume_arch_overrides(ckpt, {}) == {"d_model": 48, "board_h": 6}
@@ -143,7 +143,7 @@ def test_resume_rebuilds_exact_arch_from_config():
     must resume with the saved shapes (the pre-fix code rebuilt from
     overrides + registry defaults and crashed or silently drifted)."""
     from model.games import build_game_network
-    from train_il_game import build_net_tolerant, resume_arch_overrides
+    from training.train_il_game import build_net_tolerant, resume_arch_overrides
 
     net = build_game_network("othello", **SMALL)
     ckpt = {
@@ -157,7 +157,7 @@ def test_resume_rebuilds_exact_arch_from_config():
 
 
 def test_build_net_tolerant_drops_unknown_keys():
-    from train_il_game import build_net_tolerant
+    from training.train_il_game import build_net_tolerant
 
     net, dropped = build_net_tolerant(
         "othello", {**SMALL, "some_removed_field": 1},
@@ -179,7 +179,7 @@ def test_build_labels_state_keys_never_dropped():
 
 
 def test_legal_from_obs_wiring():
-    from train_il_game import LEGAL_FROM_OBS
+    from training.train_il_game import LEGAL_FROM_OBS
 
     hs = LEGAL_FROM_OBS["hearthstone"](
         {"entity_mask": torch.tensor([[[1, 0, 1]]], dtype=torch.uint8)},
@@ -240,7 +240,7 @@ def test_dataset_exposes_converter_version_and_meta(tmp_path):
 def test_check_meta_arch():
     from types import SimpleNamespace
 
-    from train_il_game import check_meta_arch
+    from training.train_il_game import check_meta_arch
 
     cfg = SimpleNamespace(board_h=15, board_w=15)
     check_meta_arch("gomoku", cfg, {"board_size": 15})
@@ -252,10 +252,10 @@ def test_check_meta_arch():
 def test_clash_royale_max_len_guard(monkeypatch, tmp_path):
     import sys
 
-    import train_il_game
+    from training import train_il_game
 
     monkeypatch.setattr(sys, "argv", [
-        "train_il_game.py", "--game", "clash_royale",
+        "training/train_il_game.py", "--game", "clash_royale",
         "--data_dir", str(tmp_path), "--max_len", "64",
     ])
     with pytest.raises(SystemExit, match="max_len"):

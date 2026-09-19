@@ -17,7 +17,7 @@ Machine flexibility: fetch/filter/simulate need no numpy (old login nodes
 work — finished games park in a `simulated` state) and only fetching needs
 internet; rerunning the same command on a numpy machine converts parked
 games. `filtered/<player>.json` ends up listing exactly the trainable
-games — the same file `train_rl.py --filtered_file` consumes for the RL
+games — the same file `training/train_rl.py --filtered_file` consumes for the RL
 map pool.
 
 ## What gets rejected, and why

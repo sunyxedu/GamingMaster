@@ -1,11 +1,11 @@
 """PPO self-play fine-tuning for the placement board games.
 
-Loads a ``train_il_game.py`` checkpoint (othello / gomoku), self-plays
+Loads a ``training/train_il_game.py`` checkpoint (othello / gomoku), self-plays
 with a single policy on both seats through
 :class:`env.board_selfplay_env.BoardSelfPlayEnv`, and PPO-fine-tunes the
 policy + value heads.
 
-    uv run python train_rl_game.py --game othello \
+    uv run python -m training.train_rl_game --game othello \
         --il_checkpoint checkpoints/il_game/othello_epoch9.pt --iters 200
 
 The effective RL action is the placement point: othello passes are
@@ -14,9 +14,9 @@ observation and value target but carry no policy loss, and the IL pass
 head is left untouched.  Rollout log-probs and the PPO replay both go
 through the fp32 ``masked_log_prob`` path at the same fixed ACT depth,
 and both run in eval mode, so the ratio is exactly 1 before the first
-update — same invariants as generals' train_rl.py.
+update — same invariants as generals' training/train_rl.py.
 
-generals keeps its dedicated ``train_rl.py`` (simultaneous moves,
+generals keeps its dedicated ``training/train_rl.py`` (simultaneous moves,
 opponent pool, IL regularisation); chess needs from→to legality
 threading in FromToDecoder.sample before it can join.
 """
@@ -35,7 +35,7 @@ import torch.nn.functional as F
 from env.board_selfplay_env import BoardSelfPlayEnv
 from model.games.base import categorical_entropy, masked_log_prob
 from model.rl_utils import compute_gae, freeze_encoder, optim_param_groups
-from train_il_game import build_net_tolerant, pick_device, resume_arch_overrides
+from training.train_il_game import build_net_tolerant, pick_device, resume_arch_overrides
 
 
 def parse_args() -> argparse.Namespace:

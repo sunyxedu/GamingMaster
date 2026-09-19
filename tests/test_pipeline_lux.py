@@ -254,7 +254,7 @@ def test_value_fallback_on_truncated_replay():
 
 def test_legal_hook_and_absent_slots_contribute_zero():
     from model.games import build_game_network
-    from train_il_game import LEGAL_FROM_OBS, run_batch
+    from training.train_il_game import LEGAL_FROM_OBS, run_batch
 
     samples, _, _ = episode_to_samples(_mini_episode(), "mini")
     batch = collate_game_sequences(samples[:2])

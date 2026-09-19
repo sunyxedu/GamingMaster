@@ -23,7 +23,7 @@ from model.config import ModelConfig
 from model.network import GeneralsNetwork
 from model.rl_utils import compute_policy_kl_heads
 from scripts.elo_ladder import load_net
-from train_rl import collect_selfplay_episodes_vec
+from training.train_rl import collect_selfplay_episodes_vec
 
 KL_WEIGHTS = {"kl_src": 1.0, "kl_dir": 1.0, "kl_spl": 0.5, "kl_pass": 1.0}
 

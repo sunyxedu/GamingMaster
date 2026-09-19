@@ -11,7 +11,7 @@ from env.generals_env import GeneralsEnv
 from env.vec_workers import EnvWorkerPool
 from model.config import ModelConfig
 from model.network import GeneralsNetwork
-from train_rl import collect_selfplay_episodes_vec
+from training.train_rl import collect_selfplay_episodes_vec
 
 TINY = dict(d_model=64, n_heads=4, trm_H_cycles=1, trm_L_cycles=2,
             trm_block_layers=1)

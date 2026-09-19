@@ -16,13 +16,24 @@
 # their overconfident logits make poor PPO/KL anchors). The same checkpoint
 # seeds the frozen KL reference and the opponent-pool baseline.
 #
-#   sbatch train_rl_phase3_job.sh
+#   sbatch scripts/slurm/rl/train_rl_phase3_job.sh
 #   RESUME=/scratch/$USER/gaming-master/checkpoints/rl_v2/rl_checkpoint_iterN.pt \
-#       sbatch train_rl_phase3_job.sh
+#       sbatch scripts/slurm/rl/train_rl_phase3_job.sh
 
 export PYTHONWARNINGS="ignore::UserWarning"
 export TORCH_CPP_LOG_LEVEL=ERROR
-export PYTHONPATH=~/GamingMaster
+# Slurm executes a spool copy: start from the explicit checkout or submit directory.
+_gm_start="${GAMINGMASTER_ROOT:-${SLURM_SUBMIT_DIR:-$(dirname -- "${BASH_SOURCE[0]}")}}"
+_gm_root=$(cd -- "$_gm_start" && pwd) || exit 1
+while [[ ! -f "$_gm_root/scripts/slurm/_env.sh" ]]; do
+    if [[ "$_gm_root" == / ]]; then
+        echo "Cannot find GamingMaster; set GAMINGMASTER_ROOT to the checkout root." >&2
+        exit 1
+    fi
+    _gm_root=$(dirname -- "$_gm_root")
+done
+source "$_gm_root/scripts/slurm/_env.sh" || exit 1
+unset _gm_start _gm_root
 export PYTHONUNBUFFERED=1
 # Recurrent-mode PPO re-runs full-episode BPTT (T up to 1000) like IL
 # training; same allocator + node-local tmp settings apply.
@@ -70,7 +81,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
     torchrun --nproc_per_node=$GPUS_PER_NODE --nnodes=$SLURM_NNODES \
         --rdzv_id=$SLURM_JOB_ID --rdzv_backend=c10d \
         --rdzv_endpoint=$HEAD_NODE:29500 \
-        ~/GamingMaster/train_rl.py \
+        --module training.train_rl \
         "${INIT_FLAGS[@]}" \
         "${MAP_FLAGS[@]}" \
         --output_dir /scratch/$USER/gaming-master/checkpoints/rl_v2 \
