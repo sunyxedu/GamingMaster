@@ -79,7 +79,9 @@ class Archive:
             return None
         def key(c: Candidate):
             e = c.eval() or {}
-            return (e.get("mean_score", 0.0), -(e.get("stale_fraction") or 0.0), -e.get("system2_calls", 0))
+            # score, then fewer stale ticks, then fewer System-2 calls, then fewer actions (efficiency)
+            return (e.get("mean_score", 0.0), -(e.get("stale_fraction") or 0.0), -e.get("system2_calls", 0),
+                    -(e.get("mean_steps") or 0.0))
         return max(scored, key=key)
 
     # -- docs -----------------------------------------------------------
@@ -104,5 +106,18 @@ class Archive:
         best = self.best()
         text = "# Leaderboard\n\n" + "\n".join(rows) + "\n\n" + (
             f"Best so far: `{best.dir.name}` (mean score {best.score:.3f})\n" if best else "No scored candidate yet.\n")
+        held = []
+        for c in self.candidates():
+            for d in sorted(c.dir.glob("heldout*")):
+                ej = d / "eval.json"
+                if ej.exists():
+                    e = json.loads(ej.read_text())
+                    ms = e.get("mean_score")
+                    held.append(f"- `{c.dir.name}` / {d.name} ({e.get('game')}): mean score "
+                                f"{'–' if ms is None else f'{ms:.3f}'} over {e.get('n_episodes', 0)} episodes"
+                                + (f", fatal: {e['fatal'][:80]}" if e.get("fatal") else "")
+                                + (f", {len(e['errors'])} episode errors" if e.get("errors") else ""))
+        if held:
+            text += "\nHeld-out evaluations (not used for selection):\n" + "\n".join(held) + "\n"
         (self.root / "leaderboard.md").write_text(text)
         return text

@@ -73,6 +73,7 @@ class EvalResult:
             "n_episodes": len(self.episodes),
             "system1_calls": sum(e.system1_calls for e in self.episodes),
             "system2_calls": sum(e.system2_calls for e in self.episodes),
+            "mean_steps": (statistics.fmean(e.steps for e in self.episodes) if self.episodes else None),
             "errors": [e.error for e in self.episodes if e.error],
             "episodes": [e.summary() for e in self.episodes],
         }
@@ -194,15 +195,16 @@ def run_episode(
         else:
             clock = WallClock()
             def _ticker() -> None:
-                nxt = time.time() + game.tick_s
+                # phase-aligned: tick n fires at origin + n * tick_s
+                n = 1
                 while not stop.is_set() and not game.done:
-                    delay = nxt - time.time()
+                    delay = clock.origin + n * game.tick_s - time.time()
                     if delay > 0:
                         stop.wait(delay)
                     if stop.is_set() or game.done:
                         break
                     _apply_tick()
-                    nxt += game.tick_s
+                    n += 1
             ticker = threading.Thread(target=_ticker, name="game-ticker", daemon=True)
 
         act_fn = mailbox.post
@@ -217,12 +219,14 @@ def run_episode(
                          memory=memory, game_kind="realtime" if realtime else "turn",
                          act_fn=act_fn, observe_fn=game.observe, done_fn=lambda: game.done,
                          latency_override=latency_override,
-                         tick_s=getattr(game, "tick_s", None) if realtime else None)
+                         tick_s=getattr(game, "tick_s", None) if realtime else None,
+                         ticks_fn=(lambda: game.ticks) if realtime else None)
     tee.write({"type": "episode_start", "game": game.name, "realtime": realtime, "clock": clock_mode})
     err: Optional[str] = None
     try:
         program = module.build(ctx)
         if ticker:
+            clock.origin = time.time()
             ticker.start()
         done_flag = threading.Event()
         exc: list[BaseException] = []

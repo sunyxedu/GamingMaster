@@ -14,7 +14,7 @@ def register(name: str, tier: str):
 
 def _populate() -> None:
     import importlib
-    for mod in ("rulepuzzle", "snake", "arc3"):     # registration side effect
+    for mod in ("rulepuzzle", "snake", "lanerunner", "arc3"):     # registration side effect
         try:
             importlib.import_module(f"{__package__}.{mod}")
         except ImportError:

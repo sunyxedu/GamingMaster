@@ -1,8 +1,10 @@
-"""Tier-1 seed: Astra sees the current grid and picks one action per call.
-No memory, no hypothesis tracking — the floor the meta-harness must beat."""
+"""Tier-1 seed: Astra sees the current observation and picks one action per call.
+No memory, no hypothesis tracking — the floor the meta-harness must beat.
+Game-agnostic on purpose: only game.describe(), game.action_spec and a JSON
+rendering of the observation are used."""
 from __future__ import annotations
 
-import re
+from metaharness.baselines._generic import obs_text, parse_action
 
 
 class Harness:
@@ -13,19 +15,17 @@ class Harness:
         ctx = self.ctx
         session = None
         obs = game.observe()
+        names = list(game.action_spec.names)
         while not ctx.done:
-            grid = "\n".join(" ".join(str(c) for c in row) for row in obs["grid"])
-            prompt = (f"{game.describe()}\nLegend (digit=colour): {obs['legend']}\n"
-                      f"Level {obs['level']}/{obs['levels_total']}, actions left this level: "
-                      f"{obs['actions_left_this_level']}\nGrid:\n{grid}\n\n"
-                      "Reply with exactly one action name (ACTION1..ACTION6).")
+            prompt = (f"{game.describe()}\nActions:\n{game.action_spec.describe()}\n\n"
+                      f"Observation:\n{obs_text(obs)}\n\n"
+                      "Reply with exactly one action (name, plus arguments if it needs them) and nothing else.")
             try:
                 res = ctx.think(prompt, session_id=session)
             except RuntimeError:
                 break
             session = res.session_id
-            m = re.search(r"ACTION[1-6]", res.text or "")
-            obs = ctx.act(m.group(0) if m else "ACTION1")
+            obs = ctx.act(parse_action(res.text, names, default=names[0]))
 
 
 def build(ctx):

@@ -84,7 +84,9 @@ def cmd_loop(a: argparse.Namespace) -> int:
     cfg = LoopConfig(n_iterations=a.iters, seeds_train=_parse_seeds(a.seeds), seeds_heldout=_parse_seeds(a.heldout),
                      clock_mode=a.clock, budget=budget, proposer_agentic=not a.proposer_text,
                      proposer_timeout_s=a.proposer_timeout, harness_timeout_s=a.harness_timeout,
-                     latency_override=json.loads(a.latency_override) if a.latency_override else None)
+                     latency_override=json.loads(a.latency_override) if a.latency_override else None,
+                     heldout_game=a.heldout_game or None,
+                     heldout_game_kwargs=json.loads(a.heldout_game_kwargs) if a.heldout_game_kwargs else {})
     loop = MetaHarnessLoop(
         archive=archive, game_factory=GAMES[a.game][1] if a.game in GAMES else (lambda **k: make_game(a.game, **k)),
         game_kwargs=game_kwargs, task_md=tier.task_md(a.game, budget, a.clock, game_kwargs),
@@ -144,7 +146,9 @@ def main(argv: list[str] | None = None) -> int:
     lp.add_argument("--proposer-text", action="store_true", help="proposer answers in text (no tools)")
     lp.add_argument("--proposer-timeout", type=float, default=1800.0)
     lp.add_argument("--iters", type=int, default=3)
-    lp.add_argument("--heldout", default="100,101,102")
+    lp.add_argument("--heldout", default="100,101,102", help="held-out seeds (same game)")
+    lp.add_argument("--heldout-game", default="", help="held-out GAME for the generality test (e.g. lanerunner / arc3)")
+    lp.add_argument("--heldout-game-kwargs", default="", help="JSON kwargs for the held-out game")
     lp.add_argument("--name", default="")
     lp.set_defaults(fn=cmd_loop)
 

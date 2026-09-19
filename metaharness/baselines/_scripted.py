@@ -55,12 +55,11 @@ def heuristic_snake_policy(state: Any, questions: Mapping[str, Any]) -> dict[str
 
 def scripted_system2() -> ScriptedSystem2:
     def fn(prompt: str) -> str:
-        if "head=" in prompt and "danger=" in prompt:
-            m = re.search(r"head=\[(-?\d+), (-?\d+)\].*?food=\[(-?\d+), (-?\d+)\].*?danger=(\{.*?\})", prompt, re.S)
+        if '"food_delta"' in prompt and '"danger"' in prompt:
+            m = re.search(r'"food_delta": \[(-?\d+), (-?\d+)\].*?"danger": (\{.*?\})', prompt, re.S)
             if m:
-                hx, hy, fx, fy = map(int, m.groups()[:4])
-                danger = json.loads(m.group(5).replace("'", '"').replace("True", "true").replace("False", "false"))
-                return _greedy({"food_delta": [fx - hx, fy - hy], "danger": danger, "heading": "right"})
+                danger = json.loads(m.group(3).replace("True", "true").replace("False", "false"))
+                return _greedy({"food_delta": [int(m.group(1)), int(m.group(2))], "danger": danger, "heading": "right"})
         if "ACTION1..ACTION6" in prompt or "ACTION" in prompt:
             return "ACTION1"
         return "PLAN: move toward the food along the longer axis first; avoid cells marked dangerous; " \
