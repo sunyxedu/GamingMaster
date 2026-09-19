@@ -87,9 +87,13 @@ class Archive:
             return None
         def key(c: Candidate):
             e = c.eval() or {}
-            # score, then fewer stale ticks, then fewer System-2 calls, then fewer actions (efficiency)
+            # Turn games reward action efficiency; real-time games reward
+            # survival. Fewer elapsed ticks must not reward an early death.
+            realtime = (e.get("metadata", {}).get("game_kind") == "realtime"
+                        or e.get("stale_fraction") is not None)
+            steps = e.get("mean_steps") or 0.0
             return (e.get("mean_score", 0.0), -(e.get("stale_fraction") or 0.0), -e.get("system2_calls", 0),
-                    -(e.get("mean_steps") or 0.0))
+                    steps if realtime else -steps)
         return max(scored, key=key)
 
     # -- docs -----------------------------------------------------------

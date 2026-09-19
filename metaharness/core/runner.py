@@ -343,6 +343,7 @@ def evaluate_harness(
         # Fresh game/module prevent timed-out workers and globals contaminating another seed.
         game = game_factory(**(game_kwargs or {}))
         result.game = game.name
+        result.metadata["game_kind"] = "realtime" if hasattr(game, "tick") else "turn"
         if i:
             module = load_harness_module(harness_path)
         memory = copy.deepcopy(memory) if memory_mode == "shared" else {}
