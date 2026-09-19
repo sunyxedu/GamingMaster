@@ -100,6 +100,25 @@ def build(ctx):
     assert all(e.score == 0 for e in r.episodes)
 
 
+def test_request_is_archived_even_when_response_misses_episode_deadline(tmp_path):
+    class Slow(ScriptedSystem2):
+        def run(self, *args, **kwargs):
+            time.sleep(.08)
+            return super().run(*args, **kwargs)
+
+    r = evaluate(tmp_path, '''
+from types import SimpleNamespace
+def build(ctx):
+    return SimpleNamespace(run_episode=lambda game: ctx.think('slow request'))
+''', system2=Slow(), budget_per_episode=Budget(max_wall_s=.025))
+    assert all(e.error and 'deadline' in e.error for e in r.episodes)
+    rows = [json.loads(line) for line in
+            (tmp_path / 'result' / 'trace_seed0.jsonl').read_text().splitlines()]
+    request = next(row for row in rows if row['type'] == 'model_request')
+    assert request['prompt'] == 'slow request' and request['kind'] == 'system2'
+    assert rows[-1]['type'] == 'episode_end'
+
+
 def test_call_reservation_is_atomic_and_does_not_count_rejected_calls():
     b = Budget(max_system2_calls=3)
     accepted = []
