@@ -1,0 +1,95 @@
+{
+  "harness_path": "runs/astra-tier2-snake-heldout-lanerunner/candidates/0002/harness.py",
+  "game": "snake",
+  "fatal": null,
+  "mean_score": 2.0,
+  "stale_fraction": 0.0,
+  "n_episodes": 3,
+  "system1_calls": 450,
+  "system2_calls": 9,
+  "mean_steps": 300.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 1.0,
+      "steps": 300,
+      "system1_calls": 150,
+      "system2_calls": 3,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 150,
+        "mean": 0.5768229468663534,
+        "p50": 0.569511890411377,
+        "p90": 0.6111259460449219,
+        "max": 0.7088468074798584
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 150.01194596290588,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 1.0,
+        "length": 4,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 1,
+      "score": 2.0,
+      "steps": 300,
+      "system1_calls": 150,
+      "system2_calls": 3,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 150,
+        "mean": 0.5845504570007324,
+        "p50": 0.5729169845581055,
+        "p90": 0.6472289562225342,
+        "max": 0.8145427703857422
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 150.01081204414368,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 2.0,
+        "length": 5,
+        "death": "timeout"
+      }
+    },
+    {
+      "seed": 2,
+      "score": 3.0,
+      "steps": 300,
+      "system1_calls": 150,
+      "system2_calls": 3,
+      "stale_ticks": 0,
+      "decided_ticks": 300,
+      "latency_s1": {
+        "n": 150,
+        "mean": 0.576855099995931,
+        "p50": 0.5701401233673096,
+        "p90": 0.620872974395752,
+        "max": 0.6747560501098633
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 150.0120770931244,
+      "error": null,
+      "info": {
+        "ticks": 300,
+        "score": 3.0,
+        "length": 6,
+        "death": "timeout"
+      }
+    }
+  ]
+}

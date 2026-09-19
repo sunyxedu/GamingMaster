@@ -203,3 +203,32 @@ plans of many actions per call and no re-probing after a level-up.
 Same commands with `--system2 astra --proposer astra` once the codex account
 has usage again (`codex exec` reports the reset time). Nothing else changes;
 the adapter is exercised by the offline tests against recorded codex output.
+
+### Round 3 — real Astra (gpt-6-astra, reasoning effort high) as player and proposer
+
+Same settings as round 2, run once the codex account had usage again
+(`astra-tier2-snake-heldout-lanerunner`, `astra-tier1-rulepuzzle-heldout-arc3`).
+
+**Tier 2, snake.** 0 → 2.0 → 18.7 → **29.7** food per episode over three
+proposals, 0 % stale ticks throughout, all three winning episodes survive
+the full 300 ticks; held-out seeds 23.0. The winner (`0004`) keeps a small
+Astra-compiled reactive policy plus a separately compiled, empirically
+checked transition model with bounded lookahead, and uses only 2 Astra calls
+per evaluation. Transfer to lanerunner is weak (3.9, dies at tick 7–13):
+better than Jev-only (0.85) but far below the Claude-round winner (37.05),
+whose "Astra writes the bridge as code and re-writes it on stalls" design
+adapted to the new game at runtime.
+
+**Tier 1, rule puzzles.** Perfect 2/2 levels from the first proposal on, but
+unlike the Claude round the harness keeps Astra in the loop (6–7 calls per
+episode: evidence-carrying action batches with guarded execution instead of
+a scripted solver). On ARC-AGI-3 `vc33` the winner (`0002`) reaches
+**4 / 7 levels on both seeds** (94 and 116 actions, 15 calls); on the
+strictly unseen `ls20` it reaches **3 levels** (Claude round: 1, naive
+baseline: 0). Astra-high calls take ~40 s, so the loop's default 600 s
+harness timeout truncated the first ARC pass at 3–4 levels; the numbers above
+use `--harness-timeout 1800`.
+
+Two adapter bugs were only visible with the live account and are fixed in
+this round: `codex exec resume` rejects `--color/-s/-C`, and `-C` must be an
+absolute path when the subprocess cwd is the run directory.

@@ -1,0 +1,80 @@
+{
+  "harness_path": "runs/astra-tier1-rulepuzzle-heldout-arc3/candidates/0003/harness.py",
+  "game": "rulepuzzle",
+  "fatal": null,
+  "mean_score": 2.0,
+  "stale_fraction": null,
+  "n_episodes": 2,
+  "system1_calls": 0,
+  "system2_calls": 6,
+  "mean_steps": 25.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 2.0,
+      "steps": 28,
+      "system1_calls": 0,
+      "system2_calls": 2,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 2,
+        "mean": 32.8996399641037,
+        "p50": 51.081622838974,
+        "p90": 51.081622838974,
+        "max": 51.081622838974
+      },
+      "wall_s": 65.87271189689636,
+      "error": null,
+      "info": {
+        "levels_done": 2,
+        "actions_used": 28,
+        "family": "teleport",
+        "move_map": {
+          "ACTION1": "left",
+          "ACTION2": "up",
+          "ACTION3": "down",
+          "ACTION4": "right"
+        },
+        "interact": "ACTION6"
+      }
+    },
+    {
+      "seed": 1,
+      "score": 2.0,
+      "steps": 22,
+      "system1_calls": 0,
+      "system2_calls": 4,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 4,
+        "mean": 31.252925038337708,
+        "p50": 40.93760895729065,
+        "p90": 41.45445799827576,
+        "max": 41.45445799827576
+      },
+      "wall_s": 125.08078789710999,
+      "error": null,
+      "info": {
+        "levels_done": 2,
+        "actions_used": 22,
+        "family": "teleport",
+        "move_map": {
+          "ACTION1": "right",
+          "ACTION2": "up",
+          "ACTION3": "left",
+          "ACTION4": "down"
+        },
+        "interact": "ACTION6"
+      }
+    }
+  ]
+}
