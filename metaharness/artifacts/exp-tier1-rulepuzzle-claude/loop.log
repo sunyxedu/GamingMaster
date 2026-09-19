@@ -1,0 +1,9 @@
+[00:51:03] eval 0000-tier1_astra_naive: mean=0.0 stale=None fatal=None errors=0
+[00:51:03] iteration 1/3: proposing with claude
+[00:57:59] eval 0001: mean=2.0 stale=None fatal=None errors=0
+[00:57:59] iteration 2/3: proposing with claude
+[01:08:19] eval 0002: mean=2.0 stale=None fatal=None errors=0
+[01:08:19] iteration 3/3: proposing with claude
+[01:15:59] eval 0003: mean=2.0 stale=None fatal=None errors=0
+[01:15:59] held-out evaluation of 0001
+[01:15:59] eval 0001/heldout: mean=2.0 stale=None fatal=None errors=0

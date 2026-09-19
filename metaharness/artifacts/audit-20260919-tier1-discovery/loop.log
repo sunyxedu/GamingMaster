@@ -1,0 +1,4 @@
+[15:34:09] eval 0000-tier1_astra_naive: mean=1.0 stale=None fatal=None errors=0
+[15:37:18] eval 0001-previous_astra_winner: mean=2.0 stale=None fatal=None errors=0
+[15:37:18] iteration 1/1: proposing with codex:gpt-6-astra
+[15:47:18] proposer failed: TimeoutError: CLI invocation exceeded 600.000s

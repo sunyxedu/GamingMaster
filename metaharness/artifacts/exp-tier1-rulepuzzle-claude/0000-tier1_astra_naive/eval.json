@@ -1,0 +1,79 @@
+{
+  "harness_path": "runs/exp-tier1-rulepuzzle-claude/candidates/0000-tier1_astra_naive/harness.py",
+  "game": "rulepuzzle",
+  "fatal": null,
+  "mean_score": 0.0,
+  "stale_fraction": null,
+  "n_episodes": 2,
+  "system1_calls": 0,
+  "system2_calls": 32,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 0.0,
+      "steps": 15,
+      "system1_calls": 0,
+      "system2_calls": 16,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 15,
+        "mean": 6.443343782424927,
+        "p50": 4.055906057357788,
+        "p90": 12.14016318321228,
+        "max": 20.22889804840088
+      },
+      "wall_s": 96.65491819381714,
+      "error": null,
+      "info": {
+        "levels_done": 0,
+        "actions_used": 15,
+        "family": "teleport",
+        "move_map": {
+          "ACTION1": "left",
+          "ACTION2": "up",
+          "ACTION3": "down",
+          "ACTION4": "right"
+        },
+        "interact": "ACTION6"
+      }
+    },
+    {
+      "seed": 1,
+      "score": 0.0,
+      "steps": 15,
+      "system1_calls": 0,
+      "system2_calls": 16,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 15,
+        "mean": 11.079209836324056,
+        "p50": 6.238344192504883,
+        "p90": 24.688931941986084,
+        "max": 24.695145845413208
+      },
+      "wall_s": 166.1924979686737,
+      "error": null,
+      "info": {
+        "levels_done": 0,
+        "actions_used": 15,
+        "family": "teleport",
+        "move_map": {
+          "ACTION1": "right",
+          "ACTION2": "up",
+          "ACTION3": "left",
+          "ACTION4": "down"
+        },
+        "interact": "ACTION6"
+      }
+    }
+  ]
+}

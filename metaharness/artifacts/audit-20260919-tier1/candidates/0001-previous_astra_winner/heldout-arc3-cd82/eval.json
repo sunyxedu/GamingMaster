@@ -1,0 +1,71 @@
+{
+  "harness_path": "/private/tmp/gamingmaster-audit-tier1-final-20260919/candidates/0001-previous_astra_winner/harness.py",
+  "game": "arc3",
+  "fatal": null,
+  "mean_score": 4.0,
+  "stale_fraction": null,
+  "n_episodes": 1,
+  "system1_calls": 0,
+  "system2_calls": 12,
+  "mean_steps": 78.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 700,
+      "score": 4.0,
+      "steps": 78,
+      "system1_calls": 0,
+      "system2_calls": 12,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 12,
+        "mean": 61.80088585615158,
+        "p50": 72.18846297264099,
+        "p90": 95.27209615707397,
+        "max": 98.68166208267212
+      },
+      "wall_s": 741.7597079277039,
+      "error": null,
+      "info": {
+        "score": 4.0,
+        "ticks": 0,
+        "game_done": false,
+        "pending_tasks": 0
+      }
+    }
+  ],
+  "metadata": {
+    "protocol_version": 2,
+    "seeds": [
+      700
+    ],
+    "game_kwargs": {
+      "game_id": "cd82",
+      "max_actions": 150
+    },
+    "clock_mode": "wall",
+    "latency_override": null,
+    "memory_mode": "episode",
+    "harness_timeout_s": 900,
+    "budget": {
+      "max_system1_calls": 0,
+      "max_system2_calls": 12,
+      "max_wall_s": 900
+    },
+    "models": {
+      "system1": null,
+      "system2": {
+        "name": "codex:gpt-6-astra",
+        "model": "gpt-6-astra",
+        "player_tools": "disabled-and-audited",
+        "reasoning_effort": "high"
+      }
+    },
+    "harness_sha256": "26285777aaeaeadbec3c8b3edf696492c0358693bade386a7e5f5371f6774934"
+  },
+  "score_std": null
+}

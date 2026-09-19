@@ -1,0 +1,34 @@
+{
+  "protocol_version": 2,
+  "task": "Design a harness for a **turn-based, hidden-rule** game (tier 1, ARC-AGI-3 style).\n\nGame: `rulepuzzle` \u2014 A 10x10 colour-grid puzzle with 2 levels and a budget of 50 actions per level. You control the white cell. Six actions ACTION1..ACTION6 exist; their effects are NOT given and must be discovered by experiment (they are fixed within an episode). Reaching the yellow cell completes a level. Some colours may be walls, keys, doors, toggles or teleports. Score = levels completed.\n\nActions:\n- ACTION1: unknown \u2014 discover by trying\n- ACTION2: unknown \u2014 discover by trying\n- ACTION3: unknown \u2014 discover by trying\n- ACTION4: unknown \u2014 discover by trying\n- ACTION5: unknown \u2014 discover by trying\n- ACTION6: unknown \u2014 discover by trying\nACTION5/ACTION6 may be context-dependent. Effects are fixed for the whole episode.\n\nModel available through `ctx`: `ctx.think(prompt, session_id=...)` \u2014 Astra (System-2). Budget: 12\ncalls per episode; every call may return *several* actions to save budget. `ctx.act(action)` steps the\ngame and returns the next observation. By default each episode has fresh `ctx.memory` and module\nglobals. An explicitly configured shared-memory experiment may carry procedural knowledge between\nseeds; action semantics are re-drawn, so never carry over seed-specific answers.\n\nEvaluation metric: mean levels completed over seeds (primary), then System-2 calls (fewer is better).\n\nWhat the harness must design: what to store (action\u2192effect hypotheses, visited states, level maps),\nwhat to retrieve and show Astra each turn (full history? a diff? an ASCII map with a legend?), how to\nparse Astra's reply into actions robustly, how many actions to commit per call, when to run cheap\nscripted exploration instead of asking Astra, and how to detect that a hypothesis was refuted.\n\n**Generality requirement.** The best harness is re-evaluated on a *held-out game* with the same\ninterface (`game.describe()`, `game.action_spec`, dict observations, `ctx`) but different rules and\ndifferent observation keys. Do not hard-code this game's rules or observation fields; discover them\nfrom `game.describe()` / the observation, or ask the System-2 model. Game-specific solvers score 0\non the held-out game.",
+  "seeds_train": [
+    0,
+    1
+  ],
+  "clock_mode": "wall",
+  "latency_override": null,
+  "game_kwargs": {
+    "n_levels": 2,
+    "budget_per_level": 50
+  },
+  "memory_mode": "episode",
+  "budget": {
+    "max_system1_calls": 0,
+    "max_system2_calls": 12,
+    "max_wall_s": 900
+  },
+  "harness_timeout_s": 900,
+  "models": {
+    "system1": null,
+    "system2": {
+      "name": "codex:gpt-6-astra",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high"
+    },
+    "proposer": {
+      "name": "codex:gpt-6-astra",
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high"
+    }
+  }
+}
