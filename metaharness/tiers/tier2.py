@@ -20,7 +20,7 @@ Actions:
 
 Models available through `ctx`:
 * `ctx.think(prompt, session_id=...)` — Astra (System-2, slow: seconds). Deep reasoning, can plan,
-  can explain rules. Returns `.text` and `.session_id` (pass it back to keep its reasoning state).
+  can explain rules. Returns `.text` and `.session_id` (pass it back to keep conversation context).
   Budget: {s2} calls per episode. Astra never sees the game unless you show it.
 * `ctx.decide(state, questions)` — Jev (System-1, fast: ~0.1–0.7 s). Typed questions
   (`metaharness.models.jev.Choice/Score/Noul`), calibrated probabilities. Budget: {s1} calls per
