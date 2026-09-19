@@ -116,10 +116,11 @@ def test_astra_argv_new_and_resume(tmp_path):
     assert "-s" in argv and "read-only" in argv and "--json" in argv and argv[-1] == "hi"
     assert any(x == 'model_reasoning_effort="high"' for x in argv)
     argv2 = a._argv("more", cwd=tmp_path, session_id="abc", agentic=True, last_msg_path=tmp_path / "l")
-    assert argv2[:4] == ["codex", "exec", "resume", "abc"] and "-m" not in argv2
+    assert argv2[:4] == ["codex", "exec", "resume", "abc"] and argv2[argv2.index("-m") + 1] == "gpt-6-astra"
     assert "--color" not in argv2 and "-s" not in argv2 and "-C" not in argv2   # resume rejects these (live 0.154)
     argv3 = a._argv("x", cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
-    assert "--dangerously-bypass-approvals-and-sandbox" in argv3
+    assert "workspace-write" in argv3
+    assert "--dangerously-bypass-approvals-and-sandbox" not in argv3
 
 
 CODEX_LIMIT_STDOUT = """{"type":"thread.started","thread_id":"01a0b6d5-ca9d-7c32-a13d-9189e0fc5393"}
@@ -170,3 +171,25 @@ def test_astra_ok_returns_text_and_session(monkeypatch, tmp_path):
     monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(CODEX_OK_STDOUT, 0, last_text="up\n"))
     res = CodexCLI(model="gpt-6-astra").run("hi", cwd=tmp_path)
     assert res.text.strip() == "up" and res.session_id == "t-1" and res.usage["input_tokens"] == 12
+
+
+@pytest.mark.parametrize('stdout,rc,last_text', [
+    (CODEX_OK_STDOUT, 1, 'partial'),
+    ('{"type":"turn.failed","error":{"message":"backend down"}}', 0, 'partial'),
+    ('{"type":"turn.completed","usage":{}}', 0, ''),
+])
+def test_codex_incomplete_response_is_not_success(monkeypatch, stdout, rc, last_text):
+    monkeypatch.setattr(codex_mod, 'run_cli', _fake_run_cli(stdout, rc, last_text))
+    with pytest.raises(RuntimeError):
+        CodexCLI(model='gpt-6-astra').run('test')
+
+
+def test_cli_stdin_and_timeout(tmp_path):
+    import sys
+    from metaharness.models._cli import run_cli
+    r = run_cli([sys.executable, '-c', 'import sys; print(sys.stdin.read().upper())'],
+                cwd=tmp_path, stdin_text='hello', timeout_s=2)
+    assert r.returncode == 0 and r.stdout.strip() == 'HELLO'
+    with pytest.raises(TimeoutError, match='CLI invocation exceeded'):
+        run_cli([sys.executable, '-c', 'import time; time.sleep(10)'],
+                cwd=tmp_path, stdin_text=None, timeout_s=.05)

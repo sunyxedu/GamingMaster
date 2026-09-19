@@ -56,17 +56,17 @@ class CodexCLI:
             argv += ["resume", session_id]
         # `resume` accepts a subset of `exec` flags (no --color / -s / -C).
         argv += ["--json", "--skip-git-repo-check", "-o", str(last_msg_path)]
-        if agentic:
-            argv += ["--dangerously-bypass-approvals-and-sandbox"]
+        argv += ["-m", self.model]
         if not session_id:
-            argv += ["-m", self.model, "--color", "never"]
-            if not agentic:
-                argv += ["-s", "read-only"]
+            argv += ["--color", "never", "-s", "workspace-write" if agentic else "read-only"]
             if cwd:
                 argv += ["-C", str(cwd)]
             if self.ephemeral:
                 argv += ["--ephemeral"]
         cfg = dict(self.extra_config)
+        # resume inherits a session's permissions unless explicitly overridden.
+        cfg["sandbox_mode"] = '"workspace-write"' if agentic else '"read-only"'
+        cfg["approval_policy"] = '"never"'
         if self.reasoning_effort:
             cfg["model_reasoning_effort"] = f'"{self.reasoning_effort}"'
         # Silence hooks/notifiers from the user's interactive config.
@@ -97,7 +97,8 @@ class CodexCLI:
                               agentic=agentic, last_msg_path=last_msg)
             try:
                 proc = run_cli(argv, cwd=cwd, stdin_text=None, timeout_s=timeout_s,
-                               env_drop=("OPENAI_API_KEY", "OPENAI_BASE_URL"))
+                               env_drop=("OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY",
+                                         "TYPESAFE_API_KEY"))
             except Exception as e:  # timeout etc.
                 self._trace(trace, t0, full_prompt, None, str(e))
                 raise
@@ -109,13 +110,16 @@ class CodexCLI:
         if _USAGE_LIMIT_RE.search(combined_err) or _USAGE_LIMIT_RE.search(proc.stdout[-4000:]):
             self._trace(trace, t0, full_prompt, None, combined_err)
             raise ModelUnavailable(f"codex usage limit: {combined_err.strip()[:300]}")
-        if proc.returncode != 0 and not text:
+        if proc.returncode != 0 or errors:
             self._trace(trace, t0, full_prompt, None, combined_err)
             if _AUTH_RE.search(combined_err):
                 raise ModelUnavailable(f"codex auth problem: {combined_err[:300]}")
             raise RuntimeError(f"codex exec failed (rc={proc.returncode}): {combined_err[:800]}")
         if not text:  # fall back to the last agent_message event
             text = _last_agent_message(events)
+        if not text.strip():
+            self._trace(trace, t0, full_prompt, None, "empty completed response")
+            raise RuntimeError("codex returned no final response")
         latency = time.time() - t0
         self.n_calls += 1
         for k, v in usage.items():

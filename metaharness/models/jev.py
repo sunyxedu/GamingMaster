@@ -127,30 +127,36 @@ class JevClient:
         body = {"model": self.model, "state": state, "questions": {k: _q_json(q) for k, q in questions.items()}}
         data = json.dumps(body).encode()
         t0 = time.time()
+        deadline = time.monotonic() + timeout_s
         last_err: str | None = None
         for attempt in range(self.max_retries + 1):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._log(trace, t0, body, None, "request deadline exceeded")
+                raise TimeoutError("Jev request deadline exceeded")
             req = urllib.request.Request(
                 self.url, data=data, method="POST",
                 headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
             )
             try:
-                with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                with urllib.request.urlopen(req, timeout=remaining) as resp:
                     payload = json.loads(resp.read().decode())
                 break
             except urllib.error.HTTPError as e:
                 detail = e.read().decode(errors="replace")[:500]
                 last_err = f"HTTP {e.code}: {detail}"
                 if e.code in (429, 529) and attempt < self.max_retries:
-                    time.sleep(min(2.0, 0.2 * 2**attempt) + random.random() * 0.1)
+                    time.sleep(min(max(0, deadline - time.monotonic()),
+                                   min(2.0, 0.2 * 2**attempt) + random.random() * 0.1))
                     continue
                 self._log(trace, t0, body, None, last_err)
-                if e.code in (401, 403):
+                if e.code in (401, 403, 429, 529):
                     raise ModelUnavailable(last_err) from e
                 raise RuntimeError(last_err) from e
             except (urllib.error.URLError, TimeoutError, OSError) as e:
                 last_err = f"{type(e).__name__}: {e}"
                 if attempt < self.max_retries:
-                    time.sleep(0.2 * 2**attempt)
+                    time.sleep(min(max(0, deadline - time.monotonic()), 0.2 * 2**attempt))
                     continue
                 self._log(trace, t0, body, None, last_err)
                 raise RuntimeError(last_err) from e
