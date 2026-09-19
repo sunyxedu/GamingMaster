@@ -101,6 +101,7 @@ def test_astra_argv_new_and_resume(tmp_path):
     assert any(x == 'model_reasoning_effort="high"' for x in argv)
     argv2 = a._argv("more", cwd=tmp_path, session_id="abc", agentic=True, last_msg_path=tmp_path / "l")
     assert argv2[:4] == ["codex", "exec", "resume", "abc"] and "-m" not in argv2
+    assert "--color" not in argv2 and "-s" not in argv2 and "-C" not in argv2   # resume rejects these (live 0.154)
     argv3 = a._argv("x", cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
     assert "--dangerously-bypass-approvals-and-sandbox" in argv3
 

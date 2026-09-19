@@ -52,12 +52,13 @@ class AstraCodex:
         argv = [self.codex_bin, "exec"]
         if session_id:
             argv += ["resume", session_id]
-        argv += ["--json", "--skip-git-repo-check", "--color", "never", "-o", str(last_msg_path)]
+        # `resume` accepts a subset of `exec` flags (no --color / -s / -C).
+        argv += ["--json", "--skip-git-repo-check", "-o", str(last_msg_path)]
+        if agentic:
+            argv += ["--dangerously-bypass-approvals-and-sandbox"]
         if not session_id:
-            argv += ["-m", self.model]
-            if agentic:
-                argv += ["--dangerously-bypass-approvals-and-sandbox"]
-            else:
+            argv += ["-m", self.model, "--color", "never"]
+            if not agentic:
                 argv += ["-s", "read-only"]
             if cwd:
                 argv += ["-C", str(cwd)]
