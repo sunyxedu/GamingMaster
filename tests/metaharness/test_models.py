@@ -193,3 +193,13 @@ def test_cli_stdin_and_timeout(tmp_path):
     with pytest.raises(TimeoutError, match='CLI invocation exceeded'):
         run_cli([sys.executable, '-c', 'import time; time.sleep(10)'],
                 cwd=tmp_path, stdin_text=None, timeout_s=.05)
+
+
+def test_player_external_tools_invalidate_inference(monkeypatch):
+    tool_event = '{"type":"item.completed","item":{"type":"command_execution","command":"cat simulator.py"}}\n'
+    monkeypatch.setattr(codex_mod, 'run_cli', _fake_run_cli(tool_event + CODEX_OK_STDOUT, 0, 'up'))
+    model = CodexCLI(model='gpt-6-astra')
+    with pytest.raises(ModelUnavailable, match='external tools'):
+        model.run('play the game')
+    # The proposer deliberately has tools; that is the meta-harness outer loop.
+    assert model.run('design a harness', agentic=True).text == 'up'

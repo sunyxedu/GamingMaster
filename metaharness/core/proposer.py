@@ -11,6 +11,7 @@ Two modes, same prompt:
 from __future__ import annotations
 
 import re
+import json
 from typing import Optional
 
 from ..models.base import System2Model, TraceSink
@@ -87,6 +88,9 @@ def propose(
     res = model.run(prompt, cwd=archive.root, system=PROPOSER_SYSTEM, agentic=agentic,
                     timeout_s=timeout_s, trace=trace)
     (cand.dir / "proposer_output.md").write_text(res.text or "")
+    if isinstance(res.raw, list):
+        (cand.dir / "proposer_events.jsonl").write_text(
+            "".join(json.dumps(event, default=str) + "\n" for event in res.raw))
     if not cand.harness_path.exists():
         code = _fenced_python(res.text or "")
         if code:

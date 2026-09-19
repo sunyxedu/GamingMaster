@@ -327,6 +327,7 @@ def evaluate_harness(
                    "max_system2_calls": b.max_system2_calls, "max_wall_s": b.max_wall_s},
         "models": {kind: None if model is None else {
             "name": model.name, "model": getattr(model, "model", None),
+            "player_tools": getattr(model, "player_tools", None),
             "reasoning_effort": getattr(model, "reasoning_effort", None)}
             for kind, model in (("system1", system1), ("system2", system2))},
     }
