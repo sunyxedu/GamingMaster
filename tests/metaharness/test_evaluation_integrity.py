@@ -129,6 +129,21 @@ def test_partial_or_failed_evaluations_cannot_win(tmp_path):
     assert a.best().idx == good.idx
 
 
+def test_action_efficiency_does_not_reward_early_realtime_death(tmp_path):
+    a = Archive(tmp_path / "archive")
+    short, long = a.new_candidate(), a.new_candidate()
+    for c, steps in ((short, 3), (long, 120)):
+        c.eval_path.write_text(json.dumps({"mean_score": 1, "n_episodes": 1,
+                                          "mean_steps": steps, "stale_fraction": 0.0}))
+    assert a.best().idx == long.idx
+    for c in (short, long):
+        value = c.eval()
+        value["stale_fraction"] = None
+        value["metadata"] = {"game_kind": "turn"}
+        c.eval_path.write_text(json.dumps(value))
+    assert a.best().idx == short.idx
+
+
 def test_manifest_prevents_reusing_incomparable_scores(tmp_path):
     from metaharness.cli import main
     args = ["loop", "--tier", "1", "--game", "rulepuzzle", "--system1", "none",
