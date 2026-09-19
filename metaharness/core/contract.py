@@ -268,6 +268,8 @@ class HarnessContext:
         self._check_open()
         self.budget.reserve("system2")
         started = self.clock.now()
+        self.trace.write({"type": "model_request", "kind": "system2", "clock": started,
+                          "prompt": prompt, "session_id": session_id})
         try:
             res = self.system2.run(prompt, session_id=session_id, system=system, agentic=False,
                                    timeout_s=min(timeout_s, self.budget.remaining()["wall_s"]),
@@ -287,6 +289,10 @@ class HarnessContext:
         self._check_open()
         self.budget.reserve("system1")
         started = self.clock.now()
+        self.trace.write({"type": "model_request", "kind": "system1", "clock": started,
+                          "state": state, "questions": {
+                              key: value.to_json() if hasattr(value, "to_json") else value
+                              for key, value in questions.items()}})
         t0 = time.time()
         try:
             ans = self.system1.decide(state, questions,
