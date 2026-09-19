@@ -1,0 +1,40 @@
+{
+  "harness_path": "runs/astra-tier1-rulepuzzle-heldout-arc3/candidates/0002/harness.py",
+  "game": "arc3",
+  "fatal": null,
+  "mean_score": 3.0,
+  "stale_fraction": null,
+  "n_episodes": 1,
+  "system1_calls": 0,
+  "system2_calls": 15,
+  "mean_steps": 150.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 100,
+      "score": 3.0,
+      "steps": 150,
+      "system1_calls": 0,
+      "system2_calls": 15,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 15,
+        "mean": 78.75578161875407,
+        "p50": 84.17542791366577,
+        "p90": 125.24220705032349,
+        "max": 143.76836800575256
+      },
+      "wall_s": 1181.6937799453735,
+      "error": null,
+      "info": {
+        "levels_done": 3,
+        "actions_used": 150,
+        "state": "NOT_FINISHED"
+      }
+    }
+  ]
+}

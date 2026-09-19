@@ -1,0 +1,66 @@
+{
+  "harness_path": "runs/astra-tier1-rulepuzzle-heldout-arc3/candidates/0002/harness.py",
+  "game": "arc3",
+  "fatal": null,
+  "mean_score": 4.0,
+  "stale_fraction": null,
+  "n_episodes": 2,
+  "system1_calls": 0,
+  "system2_calls": 30,
+  "mean_steps": 105.0,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 100,
+      "score": 4.0,
+      "steps": 94,
+      "system1_calls": 0,
+      "system2_calls": 15,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 15,
+        "mean": 64.30269541740418,
+        "p50": 48.79096293449402,
+        "p90": 139.65374112129211,
+        "max": 158.83350205421448
+      },
+      "wall_s": 964.8020868301392,
+      "error": null,
+      "info": {
+        "levels_done": 4,
+        "actions_used": 94,
+        "state": "NOT_FINISHED"
+      }
+    },
+    {
+      "seed": 101,
+      "score": 4.0,
+      "steps": 116,
+      "system1_calls": 0,
+      "system2_calls": 15,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 15,
+        "mean": 84.6997620900472,
+        "p50": 67.76818799972534,
+        "p90": 184.6295211315155,
+        "max": 193.66264820098877
+      },
+      "wall_s": 1270.850858926773,
+      "error": null,
+      "info": {
+        "levels_done": 4,
+        "actions_used": 116,
+        "state": "NOT_FINISHED"
+      }
+    }
+  ]
+}

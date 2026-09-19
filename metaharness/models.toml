@@ -1,0 +1,34 @@
+# Model profiles. A profile = a backend (how to reach a model) + a model id + options.
+# Backends: "codex" (codex CLI, ~/.codex login), "claude" (claude CLI login),
+#           "typesafe" (Jev HTTP API, TYPESAFE_API_KEY in .env),
+#           "scripted" / "heuristic" (offline stand-ins for tests).
+# Select with --system2 <profile> / --proposer <profile> / --system1 <profile>.
+# Override the file with METAHARNESS_MODELS=/path/to/models.toml.
+
+[system2.astra]
+backend = "codex"
+model = "gpt-6-astra"
+reasoning_effort = "high"
+
+[system2.sol]
+backend = "codex"
+model = "gpt-5.6-sol"
+reasoning_effort = "high"
+
+[system2.claude]
+backend = "claude"
+model = ""                 # empty = the claude CLI's configured default model
+
+[system2.claude-opus]
+backend = "claude"
+model = "claude-opus-5"
+
+[system2.scripted]
+backend = "scripted"
+
+[system1.jev]
+backend = "typesafe"
+model = "jev-latest"
+
+[system1.heuristic]
+backend = "heuristic"
