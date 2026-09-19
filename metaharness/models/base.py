@@ -4,7 +4,7 @@ Two kinds of model, mirroring the fast/slow split of the tier-2 design:
 
 * ``System2Model`` — a slow, reasoning, *agentic* model (Astra through the
   codex CLI). Text in, text out, optionally resuming a session so the model's
-  hidden reasoning state carries over between calls. It may also be run as a
+  conversation context carries over between calls. It may also be run as a
   coding agent inside a working directory (that is how the meta-harness
   proposer uses it).
 * ``System1Model`` — a fast, non-autoregressive decision model (Jev). Typed
@@ -97,7 +97,7 @@ class System2Model(Protocol):
         timeout_s: float = 600.0,
         trace: Optional[TraceSink] = None,
     ) -> System2Result:
-        """One turn. ``session_id`` resumes a prior turn (reasoning state kept).
+        """One turn. ``session_id`` resumes a prior turn (conversation context kept).
 
         ``agentic=True`` lets the model use tools (shell / file edits) inside
         ``cwd`` — used by the meta-harness proposer. ``agentic=False`` asks for

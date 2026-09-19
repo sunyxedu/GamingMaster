@@ -24,7 +24,7 @@ Tier 1 and tier 2 are what this package implements. The models:
   `--effort` overrides a profile's reasoning effort.
 * **Astra** — OpenAI GPT-6 Astra, reached through the `codex` CLI backend
   (`metaharness/models/codex_cli.py`). Non-interactive `codex exec --json`, thread
-  resume so hidden reasoning state carries across turns, the CLI's own login
+  resume so conversation context carries across turns, the CLI's own login
   (no API key in the repo). The integration follows Auto-CTFer's codex
   backend. When codex reports a usage limit the adapter raises
   `ModelUnavailable` and the loop stops cleanly instead of scoring garbage.

@@ -11,8 +11,8 @@ reasoning effort is passed as ``model_reasoning_effort``.
 
 ``codex exec --json`` prints JSONL events; the final agent message is also
 written with ``-o``. ``codex exec resume <thread-id> <prompt>`` continues a
-thread so Astra's hidden reasoning state persists across game turns — the
-setting behind OpenAI's ARC-AGI-3 result.
+thread so Astra's conversation context persists across game turns. This does not establish
+persistence of inaccessible model-internal reasoning state.
 """
 from __future__ import annotations
 
