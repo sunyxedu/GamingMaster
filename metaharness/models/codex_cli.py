@@ -68,7 +68,13 @@ class CodexCLI:
         # resume inherits a session's permissions unless explicitly overridden.
         cfg["sandbox_mode"] = '"workspace-write"' if agentic else '"read-only"'
         cfg["approval_policy"] = '"never"'
+        # Never inherit the user's interactive speed tier: experiments run on the
+        # standard tier so latency numbers are comparable and credits are not 2x.
+        cfg.setdefault("service_tier", '"default"')
+        cfg.setdefault("features.fast_mode", "false")
         if not agentic:
+            # The player must not pick up the user's global AGENTS.md / project docs.
+            cfg["project_doc_max_bytes"] = "0"
             # A game player is inference-only. Filesystem/search access would
             # expose hidden simulator state or answers outside its observation.
             cfg["features.shell_tool"] = "false"

@@ -203,3 +203,13 @@ def test_player_external_tools_invalidate_inference(monkeypatch):
         model.run('play the game')
     # The proposer deliberately has tools; that is the meta-harness outer loop.
     assert model.run('design a harness', agentic=True).text == 'up'
+
+
+def test_astra_argv_never_inherits_fast_tier(tmp_path):
+    from metaharness.models.codex_cli import CodexCLI
+    a = CodexCLI(model="m")
+    for agentic in (False, True):
+        argv = a._argv("hi", cwd=tmp_path, session_id=None, agentic=agentic, last_msg_path=tmp_path / "l")
+        assert 'service_tier="default"' in argv and "features.fast_mode=false" in argv
+    player = a._argv("hi", cwd=tmp_path, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
+    assert "project_doc_max_bytes=0" in player
