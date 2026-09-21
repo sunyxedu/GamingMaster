@@ -83,6 +83,8 @@ def combine_evals(per_game: dict[str, dict[str, Any]], seeds: list[int]) -> dict
         "n_episodes": sum(g.get("n_episodes", 0) for g in per_game.values()),
         "system1_calls": sum(g.get("system1_calls", 0) for g in per_game.values()),
         "system2_calls": sum(g.get("system2_calls", 0) for g in per_game.values()),
+        "failed_s1": sum(g.get("failed_s1", 0) for g in per_game.values()),
+        "failed_s2": sum(g.get("failed_s2", 0) for g in per_game.values()),
         "mean_steps": None,
         "s1_informed_fraction": (acts_s1 / acts) if acts else None,
         "s2_informed_fraction": (acts_s2 / acts) if acts else None,
@@ -227,7 +229,7 @@ class Archive:
         table = self._norm_table()
         head = ["#", "candidate"] + ([f"{g}" for g in games] if multi else ["mean score"]) + \
                (["selection (mean / worst norm.)"] if multi else []) + \
-               ["episodes", "stale ticks", "S1 calls", "S2 calls", "Jev→act", "Astra→act",
+               ["episodes", "stale ticks", "S1 calls", "S2 calls", "failed S1/S2", "Jev→act", "Astra→act",
                 "Jev p50/max s", "Astra p50/max s", "status"]
         rows = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
 
@@ -257,6 +259,7 @@ class Archive:
                 return "–" if lat[f"{kind}_p50"] is None else f"{lat[f'{kind}_p50']:.1f} / {lat[f'{kind}_max']:.0f}"
             cells += [str(e.get("n_episodes", 0)), fmt(e.get("stale_fraction"), pct=True),
                       str(e.get("system1_calls", 0)), str(e.get("system2_calls", 0)),
+                      f"{e.get('failed_s1', 0)} / {e.get('failed_s2', 0)}",
                       fmt(e.get("s1_informed_fraction"), pct=True), fmt(e.get("s2_informed_fraction"), pct=True),
                       lat_cell("s1"), lat_cell("s2"), status]
             rows.append("| " + " | ".join(cells) + " |")

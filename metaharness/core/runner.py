@@ -38,6 +38,8 @@ class EpisodeResult:
     acts: int = 0                 # actions posted by the harness
     acts_after_s1: int = 0        # ... preceded by a fresh System-1 answer
     acts_after_s2: int = 0        # ... preceded by a fresh System-2 answer
+    failed_s1: int = 0            # model calls that errored / timed out (not counted in latency)
+    failed_s2: int = 0
 
     def summary(self) -> dict[str, Any]:
         d = asdict(self)
@@ -84,6 +86,8 @@ class EvalResult:
             "system1_calls": sum(e.system1_calls for e in self.episodes),
             "system2_calls": sum(e.system2_calls for e in self.episodes),
             "mean_steps": (statistics.fmean(e.steps for e in self.episodes) if self.episodes else None),
+            "failed_s1": sum(e.failed_s1 for e in self.episodes),
+            "failed_s2": sum(e.failed_s2 for e in self.episodes),
             "s1_informed_fraction": _frac(sum(e.acts_after_s1 for e in self.episodes), sum(e.acts for e in self.episodes)),
             "s2_informed_fraction": _frac(sum(e.acts_after_s2 for e in self.episodes), sum(e.acts for e in self.episodes)),
             "errors": [e.error for e in self.episodes if e.error],
@@ -184,8 +188,13 @@ def run_episode(
                 return
             r = dict(record)
             r["seed"] = seed
-            if r.get("type") == "model_call" and r.get("ok"):
-                (s1_lat if r.get("kind") == "system1" else s2_lat).append(float(r.get("latency_s", 0.0)))
+            if r.get("type") == "model_call":
+                if r.get("ok"):
+                    (s1_lat if r.get("kind") == "system1" else s2_lat).append(float(r.get("latency_s", 0.0)))
+                elif r.get("kind") == "system1":
+                    res.failed_s1 += 1
+                else:
+                    res.failed_s2 += 1
             self.inner.write(r)
 
     tee = _Tee(trace)
