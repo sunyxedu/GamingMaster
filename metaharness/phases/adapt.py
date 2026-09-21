@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -56,9 +57,10 @@ Working directory: `{out_dir}`. Study documents from the previous phase are in `
 * If the game needs a running client/server/account, script the setup (`setup.sh` or Python) and run it.
   If something needs the user (account login, purchase, a GUI step), write `NEEDS.md` listing exactly
   what and stop.
-* Write `ADAPTOR.md`, `requirements.txt` (if any), `env.example`. Install requirements into the
-  current Python environment (`uv pip install ...` or `pip install ...`).
-* Test it yourself: `python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('{out_dir}').to_markdown())"`
+* Write `ADAPTOR.md`, `requirements.txt` (if any), `env.example`. The evaluator's interpreter is
+  `{sys.executable}` (Python {sys.version.split()[0]}; `metaharness` is importable there). Install
+  requirements into *that* environment: `{sys.executable} -m pip install ...`.
+* Test it yourself: `{sys.executable} -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('{out_dir}').to_markdown())"`
   must print PASS. Then play a few random actions and check the observation and score make sense.
 {('## Validation feedback from the orchestrator' + chr(10) + feedback) if feedback else ''}"""
 

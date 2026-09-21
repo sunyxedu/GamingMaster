@@ -17,6 +17,7 @@ orchestrator only validates ``study.json`` and asks for repairs.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -53,7 +54,8 @@ def study_prompt(game: str, notes: str, tier_hint: Optional[int], out_dir: Path)
                 if tier_hint else "Decide the tier yourself and justify it.")
     return f"""# Study the game: **{game}**
 
-Working directory: `{out_dir}` (write everything here).
+Working directory: `{out_dir}` (write everything here). The evaluator's Python is `{sys.executable}`
+(Python {sys.version.split()[0]}); judge software requirements against it, not the system python.
 User notes (platform, account, constraints — may be empty): {notes or '(none)'}
 
 We are building an agent for this game out of two foundation models plus a generated harness:
