@@ -173,7 +173,11 @@ def cmd_run(a: argparse.Namespace) -> int:
     log(f"search: tier {tier_n} on adaptor game {game!r}")
     if not a.system1 or a.system1 == "auto":
         a.system1 = "jev" if tier_n == 2 else "none"
-    best = _run_search(a, game, tier_n, study_text(run_dir / "study"), run_dir / "search")
+    prior = study_text(run_dir / "study")
+    adaptor_md = run_dir / "adaptor" / "ADAPTOR.md"
+    if adaptor_md.exists():                     # interface documentation, not hidden rules
+        prior += "\n\n### adaptor/ADAPTOR.md\n" + adaptor_md.read_text()[:8000]
+    best = _run_search(a, game, tier_n, prior, run_dir / "search")
     log("run: done" + (f" — best {best.dir.name}" if best else " — no eligible candidate"))
     return 0
 
