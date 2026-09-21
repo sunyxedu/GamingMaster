@@ -1,0 +1,1 @@
+{"name":"minecraft-metaharness-bridge","version":"1.0.0","private":true,"dependencies":{"mineflayer":"4.39.0","mineflayer-pathfinder":"2.4.5","vec3":"0.1.10"}}

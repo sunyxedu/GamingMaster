@@ -1,0 +1,144 @@
+{
+  "harness_path": "/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/search/candidates/0000-tier2_jev_only/harness.py",
+  "game": "Minecraft Java 1.21.1 \u2014 natural survival",
+  "fatal": null,
+  "mean_score": 15.266418141667316,
+  "stale_fraction": 0.3768584356819651,
+  "n_episodes": 3,
+  "system1_calls": 967,
+  "system2_calls": 0,
+  "mean_steps": 515.6666666666666,
+  "s1_informed_fraction": 1.0,
+  "s2_informed_fraction": 0.0,
+  "errors": [
+    "Traceback (most recent call last):\n  File \"/private/tmp/gm-run3/metaharness/core/runner.py\", line 261, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/search/candidates/0000-tier2_jev_only/harness.py\", line 22, in run_episode\n    ans = ctx.decide(game.observe(), q)\n  File \"/private/tmp/gm-run3/metaharness/core/contract.py\", line 327, in decide\n    ans = self.system1.decide(state, questions,\n                             timeout_s=min(timeout_s, self.budget.remaining()[\"wall_s\"]),\n                             trace=self.trace)\n  File \"/private/tmp/gm-run3/metaharness/models/jev.py\", line 145, in decide\n    raise TimeoutError(\"Jev request deadline exceeded\")\nTimeoutError: Jev request deadline exceeded\n"
+  ],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 20.0,
+      "steps": 600,
+      "system1_calls": 374,
+      "system2_calls": 0,
+      "stale_ticks": 227,
+      "decided_ticks": 373,
+      "latency_s1": {
+        "n": 374,
+        "mean": 0.8018759999045714,
+        "p50": 0.782167911529541,
+        "p90": 0.8535528182983398,
+        "max": 1.8063573837280273
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 300.1651701927185,
+      "error": null,
+      "info": {
+        "score": 20.0,
+        "ticks": 600,
+        "game_done": true,
+        "pending_tasks": 0
+      },
+      "acts": 373,
+      "acts_after_s1": 373,
+      "acts_after_s2": 0
+    },
+    {
+      "seed": 1,
+      "score": 20.0,
+      "steps": 600,
+      "system1_calls": 387,
+      "system2_calls": 0,
+      "stale_ticks": 214,
+      "decided_ticks": 386,
+      "latency_s1": {
+        "n": 387,
+        "mean": 0.7764171050808535,
+        "p50": 0.7584798336029053,
+        "p90": 0.8242180347442627,
+        "max": 1.9947960376739502
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 300.6835160255432,
+      "error": null,
+      "info": {
+        "score": 20.0,
+        "ticks": 600,
+        "game_done": true,
+        "pending_tasks": 0
+      },
+      "acts": 386,
+      "acts_after_s1": 386,
+      "acts_after_s2": 0
+    },
+    {
+      "seed": 2,
+      "score": 5.799254425001951,
+      "steps": 347,
+      "system1_calls": 206,
+      "system2_calls": 0,
+      "stale_ticks": 142,
+      "decided_ticks": 205,
+      "latency_s1": {
+        "n": 205,
+        "mean": 0.8228719199576029,
+        "p50": 0.7734160423278809,
+        "p90": 0.8698508739471436,
+        "max": 2.2352707386016846
+      },
+      "latency_s2": {
+        "n": 0
+      },
+      "wall_s": 173.9749879837036,
+      "error": "Traceback (most recent call last):\n  File \"/private/tmp/gm-run3/metaharness/core/runner.py\", line 261, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/search/candidates/0000-tier2_jev_only/harness.py\", line 22, in run_episode\n    ans = ctx.decide(game.observe(), q)\n  File \"/private/tmp/gm-run3/metaharness/core/contract.py\", line 327, in decide\n    ans = self.system1.decide(state, questions,\n                             timeout_s=min(timeout_s, self.budget.remaining()[\"wall_s\"]),\n                             trace=self.trace)\n  File \"/private/tmp/gm-run3/metaharness/models/jev.py\", line 145, in decide\n    raise TimeoutError(\"Jev request deadline exceeded\")\nTimeoutError: Jev request deadline exceeded\n",
+      "info": {
+        "score": 5.799254740301209,
+        "ticks": 347,
+        "game_done": false,
+        "pending_tasks": 0
+      },
+      "acts": 205,
+      "acts_after_s1": 205,
+      "acts_after_s2": 0
+    }
+  ],
+  "metadata": {
+    "protocol_version": 2,
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "expected_episodes": 3,
+    "game_kwargs": {},
+    "clock_mode": "wall",
+    "latency_override": null,
+    "memory_mode": "episode",
+    "harness_timeout_s": 900.0,
+    "budget": {
+      "max_system1_calls": 4000,
+      "max_system2_calls": 40,
+      "max_wall_s": 900.0
+    },
+    "models": {
+      "system1": {
+        "name": "jev",
+        "model": "jev-latest",
+        "player_tools": null,
+        "reasoning_effort": null
+      },
+      "system2": {
+        "name": "codex:gpt-6-astra",
+        "model": "gpt-6-astra",
+        "player_tools": "disabled-and-audited",
+        "reasoning_effort": "high"
+      }
+    },
+    "harness_sha256": "d0bd1b21c30316c7eeb2a4d5a56246ec951f059ef386226768a97cbb5850402b",
+    "game_kind": "realtime"
+  },
+  "score_std": 8.19880428041851
+}

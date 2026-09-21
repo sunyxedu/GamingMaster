@@ -52,7 +52,7 @@ tie-break).
 |---|---|---|---|---|
 | "Snake" | 7 min; local real-time env spec, Hamiltonian-cycle prior with sources | 8 min, 241-line original env, validated 1st try | 0 → 0.412 → **0.770** food/cell (2/3 seeds clear the board), 0 % stale | 0.649 (3 unseen seeds) |
 | "ARC-AGI-3" (offline, 8 cached games) | 12 min; official `arc-agi` SDK in-process | 8 min, validated 1st try, 60 levels mapped to seeds with a dev/held-out split | 0.33 → **4.33** levels (cd82 6/6, lf52 4/10, ls20 3/7); official-formula score on these three ≈ 50 % | sp80 1/6, tn36 4/7 → 2.5 levels, ≈ 23 % official-formula |
-| "Minecraft" (Java 1.21.1, offline server + Mineflayer bridge built by the adapt agent) | 23 min | 46 min, validated 1st try; real vanilla server, 300 s episodes | running | – |
+| "Minecraft" (Java 1.21.1, offline server + Mineflayer bridge built by the adapt agent) | 23 min | 46 min, validated 1st try; real vanilla server, 300 s episodes, score = resources + equipment + survival | Jev-only 15.3 (idle survival = 20), Astra-only 6.3 (93 % stale), 0002 20.0 (0 Jev calls, idle), **0003 26.7** (558 Jev calls, 31 % of actions Jev-informed; logs gathered, tools crafted) | unseen world seed 100: **40.0** (max resource credit + equipment); seed 101 rejected by the adaptor's terrain admission |
 
 Archives (proposals, harnesses, evals, study + adaptor sources, no traces):
 `metaharness/artifacts/r5-snake-general/`, `metaharness/artifacts/r6-arc3-general/`.
@@ -60,7 +60,17 @@ Archives (proposals, harnesses, evals, study + adaptor sources, no traces):
 Lessons that became general code: measured latency and failed-call columns on the
 leaderboard (Snake 0002 wasted all Astra calls on a self-chosen 45 s timeout);
 wall budget ≥ harness timeout (ARC 0001 lost two episodes to the 900 s manifest
-budget and the next iteration was spent on a reliability repair instead of play).
+budget and the next iteration was spent on a reliability repair instead of play);
+a game `reset(seed)` that the adaptor refuses is an episode error, not a crash of
+the whole run (Minecraft held-out seed 101).
+
+What the Minecraft proposals show about the Astra–Jev split: the first proposal
+asked Astra to *compile a guarded policy* and never received one in time (0 Jev
+calls, idle survival); the second replaced compilation with **short grounded
+command menus** built by code from the observation, Jev choosing among them
+every tick while Astra sets goals asynchronously — the first harness in this
+project where Jev informs a third of the actions and the score comes from
+progress rather than survival.
 
 The former built-in games (`snake`, `lanerunner`, `rulepuzzle`, `arc3`) moved to
 `metaharness/testbeds/`: offline fixtures for testing the pipeline, not adaptors

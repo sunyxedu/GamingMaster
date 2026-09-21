@@ -1,0 +1,9 @@
+[19:02:04] eval 0000-tier2_jev_only: mean=15.266418141667316 stale=0.3768584356819651 fatal=None errors=1
+[19:15:33] eval 0001-tier2_astra_only: mean=6.347634886109478 stale=0.9313413858868405 fatal=None errors=0
+[19:15:33] iteration 1/2: proposing with codex:gpt-6-astra
+[19:27:52] preflight 0002: ok
+[19:44:17] eval 0002: mean=20.0 stale=0.0 fatal=None errors=0
+[19:44:17] iteration 2/2: proposing with codex:gpt-6-astra
+[19:54:01] preflight 0003: ok
+[20:09:18] eval 0003: mean=26.666666666666668 stale=0.0 fatal=None errors=0
+[20:09:18] held-out seeds evaluation of 0003

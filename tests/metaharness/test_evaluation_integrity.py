@@ -201,3 +201,24 @@ def build(ctx):
     # Re-evaluation replaces each episode trace instead of appending a second trajectory.
     evaluate(tmp_path, code, system2=None)
     assert sum(json.loads(line)['type'] == 'episode_start' for line in p.read_text().splitlines()) == 1
+
+
+def test_game_reset_failure_is_an_episode_error(tmp_path):
+    from metaharness.core.runner import evaluate_harness
+    from metaharness.testbeds.snake import SnakeGame
+
+    class Picky(SnakeGame):
+        def reset(self, seed):
+            if seed == 1:
+                raise RuntimeError("scenario 1 is not admissible")
+            return super().reset(seed)
+
+    h = tmp_path / "h.py"
+    h.write_text("class H:\n    def __init__(self, ctx): self.ctx = ctx\n"
+                 "    def run_episode(self, game):\n        pass\n"
+                 "def build(ctx): return H(ctx)\n")
+    r = evaluate_harness(h, lambda **k: Picky(max_ticks=5, **k), [0, 1, 2], system2=None, system1=None,
+                         clock_mode="virtual")
+    assert r.fatal is None and len(r.episodes) == 3
+    assert r.episodes[1].error and "not admissible" in r.episodes[1].error
+    assert r.episodes[0].error is None and r.episodes[2].error is None

@@ -1,0 +1,99 @@
+{
+  "game": "Minecraft: Java Edition",
+  "tier": 2,
+  "tier_rationale": "The chosen vanilla 1.21.1 dedicated server runs continuously at a target 20 ticks per second while model calls are pending. Routine gathering can tolerate seconds, but nearby mobs, falls, drowning and fire can punish subsecond hesitation. Use independent local physics and deterministic emergency checks, Jev for bounded tactical choices around every 0.5–1 seconds, and Astra for asynchronous milestone planning. The 0.5-second decision budget is an engineering target, not a safe delay in every situation; immediate hazards must be handled without either model. Do not freeze or slow the world during the 300-second scored episode.",
+  "decision_latency_s": 0.5,
+  "interface": {
+    "chosen": "bot library",
+    "why": "Mineflayer with mineflayer-pathfinder, running in a persistent Node subprocess and connected to an adaptor-owned loopback vanilla server with offline authentication, exposes structured client state and ordinary survival actions without an account, GUI or renderer. A JSON Lines subprocess bridge lets the evaluator use Python 3.14.5 standard-library modules without relying on legacy MineRL/Malmo native dependencies. Server stdin handles reset and shutdown separately from policy actions. Tagged upstream source includes 1.21.1 support; installation and integration still require runtime verification.",
+    "software": [
+      "Evaluator Python /Users/hemlix/Documents/GamingMaster/.venv/bin/python, verified 3.14.5; standard library only for the wrapper",
+      "Existing Node.js v26.0.0 and npm; Mineflayer 4.39.0 requires Node >=22",
+      "mineflayer@4.39.0, source-verified candidate pin; confirm npm availability and lock transitive dependencies",
+      "mineflayer-pathfinder@2.4.5, source-verified candidate pin",
+      "vec3@0.1.10, explicit direct dependency; use Mineflayer bot.registry for versioned game data",
+      "Mojang vanilla Minecraft Java Edition 1.21.1 dedicated server.jar from its official release page",
+      "Architecture-matched Temurin JDK 21 archive installed under the run directory; existing Java 26.0.2 is untested with this server",
+      "Optional only after validation: mineflayer-tool, mineflayer-collectblock, prismarine-viewer"
+    ],
+    "env": [
+      {
+        "var": "MC_RUN_DIR",
+        "description": "Optional absolute runtime root under the study directory; default /Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/study/runtime. The adaptor creates all downloads, caches, worlds and logs here.",
+        "required": false
+      },
+      {
+        "var": "MC_HOST",
+        "description": "Optional loopback server address; default 127.0.0.1. This local-only adaptor must reject non-loopback binding or connection targets.",
+        "required": false
+      },
+      {
+        "var": "MC_PORT",
+        "description": "Optional fixed free local TCP port; otherwise the adaptor allocates one and handles bind collisions.",
+        "required": false
+      },
+      {
+        "var": "MC_USERNAME",
+        "description": "Optional non-secret offline player name, default StudyBot; validate 1–16 ASCII letters, digits or underscores. No Microsoft or Mojang credentials are used.",
+        "required": false
+      },
+      {
+        "var": "MC_VERSION",
+        "description": "Optional version override, default 1.21.1; any change requires a separate compatibility-tested benchmark configuration.",
+        "required": false
+      },
+      {
+        "var": "MC_SERVER_JAR",
+        "description": "Optional path to the verified local official 1.21.1 server JAR; otherwise the adaptor downloads the pinned version under runtime/downloads.",
+        "required": false
+      },
+      {
+        "var": "JAVA_BIN",
+        "description": "Optional exact Java executable path; default to the locally extracted JDK 21 runtime rather than assuming the global Java 26 works.",
+        "required": false
+      },
+      {
+        "var": "NODE_BIN",
+        "description": "Optional Node executable path; default existing node v26.0.0. A locally installed Node 22/24 is a fallback only after a demonstrated compatibility problem.",
+        "required": false
+      },
+      {
+        "var": "MC_EPISODE_SECONDS",
+        "description": "Optional episode duration, default 300 wall-clock seconds after readiness. A changed duration is a different benchmark configuration, not a per-policy advantage.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Use interfaces.md as the complete adaptor specification. Create runtime/bridge, runtime/npm-cache, runtime/downloads, runtime/jdk-21, runtime/baselines, runtime/episodes and runtime/logs under the study directory. Do not install globally.",
+      "Install the exact Node candidate pins with a local npm cache, preserve package-lock.json and use npm ci thereafter. Verify imports with Node 26 and subprocess communication using the specified evaluator Python 3.14.5. The study could not perform this because shell DNS failed for registry.npmjs.org.",
+      "Download and verify an OS/architecture-matched JDK 21 archive and Mojang's 1.21.1 server JAR. Obtain the server link from https://www.minecraft.net/en-us/article/minecraft-java-edition-1-21-1 or version-specific official manifest metadata; record artifact hashes. Respect the Minecraft EULA and write eula=true during authorized server setup; do not redistribute the JAR.",
+      "For each reset, terminate only previously owned processes and create a fresh episode directory from an unplayed stopped baseline or a new world. Derive a stable signed-64-bit decimal world seed and start-time stratum from the evaluator seed; transport the world seed as a string.",
+      "Write server.properties before startup: server-ip=127.0.0.1, allocated server-port, online-mode=false, enforce-secure-profile=false, gamemode=survival, force-gamemode=true, difficulty=normal, hardcore=false, max-players=1, pvp=false, spawn-protection=0, level-name=world, selected level-seed, level-type=minecraft:normal, view-distance=6, simulation-distance=5, enable-rcon=false, enable-query=false and player-idle-timeout=0.",
+      "Launch the local Java 21 executable with -Xms512M -Xmx2G -jar server.jar nogui in the episode directory. Drain logs continuously and wait for the Done startup marker with a separate startup timeout. Use owned stdin for setup and cleanup; expose no administrative command endpoint to either model.",
+      "Prepare an admitted dry surface start, normal natural regeneration and mob spawning, keepInventory=false, spawnRadius=0, clear initial weather and a fresh empty player. Reset any preparation playerdata, statistics and advancements while stopped; discard preparation map memory. Set initial time to 1000 or 9000 immediately before active play.",
+      "Start a persistent Node bridge; create the bot with explicit host, port, version 1.21.1, offline username, auth=offline, respawn=false and logErrors=false. Route errors to stderr. Load pathfinder and wait for spawn, required chunks, settled inventory and a safe standing position.",
+      "Apply conservative navigation, bounded jobs, actual cancellation and independent safety checks. Publish timestamped JSON snapshots and asynchronous job results. Confirm Survival, full health/food, empty inventory and no operator privilege, then start the 300-second monotonic wall clock. Never pause the world for model inference.",
+      "Track server-confirmed inventory high-water marks and one-time milestones in trusted code. End on first death or time limit; distinguish invalid infrastructure trials. Cancel controls/jobs, disconnect the bot, save-all flush, stop and await the owned server, escalating process termination only after bounded waits.",
+      "Before evaluation, run the smoke tests in interfaces.md: login/chunks, movement/cancellation, wood-to-stone crafting and drops, furnace/food, death/no-respawn, clean seeded resets, score anti-duplication checks and multiple natural dusk/terrain trials. Record actual dependency pins and measured latency."
+    ],
+    "observation": "Timestamped partial-observation JSON: self position/velocity/orientation/health/food/saturation/oxygen/equipment, named inventory counts, day/weather/dimension, nearby entities, loaded local collision geometry, exposed or visible resource candidates, legal stand/retreat/frontier positions, remembered workstations, feasible recipes and ingredient deficits, active job/errors, score components and remaining wall time. Code computes distances, eligibility, cooldowns and arithmetic. Unknown chunks/data are explicitly unknown; do not supply hidden ore locations from world files or full chunk scans. Send snapshots around 5 Hz plus urgent events; the physics/safety loop continues independently.",
+    "actions": "Validated asynchronous typed jobs with IDs, deadlines and postconditions: navigate to a code-generated candidate using pathfinder goals, look_at, gather a bounded set of eligible blocks with dig/drop-pickup verification, equip, craft by recipe-execution count, place against a valid reference face, load/retrieve a furnace, eat, cooldown-aware attack, shield, cancel and bounded wait. Serialize movement/hands/window ownership; revalidate stale model choices and genuinely stop timed-out jobs. Policy actions cannot run arbitrary code, raw packets, server commands, teleport, give or creative operations."
+  },
+  "scoring": "Custom absolute score, clamped to [0,100]. Resource points use per-episode maxima of simultaneously held server-confirmed personal inventory counts: min(unstripped Overworld logs,10) + 0.5*min(cobblestone,20) + min(combined coal+charcoal,5) + min(raw_iron,5), maximum 30. Latch first verified possession of crafting_table=5, wooden_pickaxe=5, stone_pickaxe=10, stone_axe=5, furnace=5, torch=5, one cooked-food item=5, iron_ingot=5 and shield=5, maximum 50. Cooked-food whitelist: cooked_beef, cooked_porkchop, cooked_mutton, cooked_chicken, cooked_rabbit, cooked_cod, cooked_salmon, baked_potato. Legitimate looting counts as equipment progress. Add 10*seconds_survived/300 and, only at an alive time-limit finish, 10*final_health/20; subtract 20 on terminal death. Exclude setup time, crafting previews/cursor/container slots and duplicate transfers; retain earned credit after consumption. Report components and milestone times as well as score; optional reward is score delta. Infrastructure failures are invalid trials. Full healthy idling earns 20, while resources and equipment provide the remaining 80.",
+  "scenarios": "Use unseen natural vanilla 1.21.1 world seeds with stable digest-derived world seed, safe-spawn selection and equal time-of-day strata 1000/9000. Prequalify starts by a fixed terrain/resource predicate independent of policy performance: dry safe surface, at least 12 reachable log blocks and 24 shallow ordinary stone blocks nearby within 48 blocks, without lava crossings or drops above two blocks; use a bounded deterministic candidate search near world spawn and record inadmissibility. Coal, iron, animals, wood species, hills and water vary naturally. Restore a pristine stopped per-seed baseline including a fresh player, not a played world or teleport-only reset. Hold out entire world seeds and repeat trials because terrain seeds do not make mob AI, drops and network timing bitwise deterministic. Keep Normal difficulty, initial clear weather, empty inventory, score and 300-second duration fixed for compared agents.",
+  "strategy_summary": "Strong early play converts a small wood opening into a crafting table and wooden pickaxe, then upgrades after three cobblestone instead of making a full wooden tool set. Use stone equipment and a furnace to obtain fuel, torches, cooked food and opportunistic iron/shield milestones. Favor short safe routes, preserve crafting and fuel reserves, collect actual drops and do nearby useful work during smelting. Avoid deep caves and combat when cheap progress or survival is more valuable, especially during the dusk stratum and the final seconds. Code handles recipes, quantities, pathfinding, cooldowns, bookkeeping, real cancellation and immediate hazards. Astra chooses bounded prerequisite plans and adapts to resources, deadlines and failures. Jev answers fresh typed threat, cover and target-choice questions among code-validated options while local physics continues.",
+  "risks": [
+    "Study shell DNS failed for npm registry and GitHub downloads. Network egress or verified local artifacts are required before installation; no server/bot smoke test was performed.",
+    "Node 26 satisfies the selected Mineflayer engine range, but transitive dependencies and the full pinned server/plugin combination still need runtime validation and a lockfile.",
+    "Existing Java 26 is not validated with historical Minecraft 1.21.1; use a locally installed architecture-matched JDK 21 as the conservative baseline.",
+    "Offline authentication does not verify identity. Keep all gameplay binding on loopback and RCON disabled; this is not a public-server deployment.",
+    "Mojang EULA and distribution terms still apply. A free server download and offline technical login do not establish a licensing exemption; no cracked graphical client or redistributed game JAR is proposed.",
+    "Legacy Malmo/MineRL/MineDojo/MineStudio dependency statements do not establish Python 3.14.5 compatibility; avoid installing them into the evaluator for the selected design.",
+    "Chunk generation, cold startup, Java memory use and cached worlds can exceed active episode time and consume significant disk; exclude setup from play and cap retained artifacts.",
+    "Pathfinding can fail on water, doors, obstacles or irregular terrain. Every job needs bounded search, valid interaction positions, postconditions and actual cancellation.",
+    "Client inventory predictions, unloaded chunks and stale model replies can produce false observations or score credit. Use server-confirmed updates, explicit unknown values, candidate validation and episode IDs.",
+    "Jev latency cannot cover every imminent hazard; deterministic safety checks must remain active while both models think, and no model response guarantees survival.",
+    "Natural seeds vary attainable progress; admission criteria must be fixed before evaluation and never depend on achieved policy score. Same-seed mob/drop/timing behavior is not fully deterministic.",
+    "The proposed custom progress score rewards capped inventory reserves and first possession, not lifetime mining or mandatory crafting provenance; retain this definition consistently across harness comparisons."
+  ]
+}

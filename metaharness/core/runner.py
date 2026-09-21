@@ -164,7 +164,15 @@ def run_episode(
     harness_timeout_s: float = 600.0,
 ) -> EpisodeResult:
     realtime = hasattr(game, "tick")
-    game.reset(seed)
+    try:
+        game.reset(seed)
+    except ModelUnavailable:
+        raise
+    except Exception as e:  # noqa: BLE001 — a scenario the adaptor cannot provide is an episode error, not a crash
+        res = EpisodeResult(seed=seed, score=0.0, steps=0, system1_calls=0, system2_calls=0,
+                            error="game reset failed: " + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-2000:])
+        trace.write({"type": "episode_end", **res.summary()})
+        return res
     stop = threading.Event()
     view = _GameView(game, stop)
     accepting_trace = threading.Event()
