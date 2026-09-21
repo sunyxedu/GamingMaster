@@ -7,7 +7,7 @@ from pathlib import Path
 
 from metaharness.core.contract import Budget, VirtualClock
 from metaharness.core.runner import evaluate_harness
-from metaharness.games.snake import SnakeGame
+from metaharness.testbeds.snake import SnakeGame
 from metaharness.models.mock import HeuristicSystem1, ScriptedSystem2
 
 HARNESS_DIR = Path(__file__).parent / "harnesses"

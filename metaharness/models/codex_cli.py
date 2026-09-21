@@ -51,23 +51,30 @@ class CodexCLI:
 
     # -- argv -----------------------------------------------------------
     def _argv(self, prompt: str, *, cwd: Optional[Path], session_id: Optional[str],
-              agentic: bool, last_msg_path: Path) -> list[str]:
+              agentic: bool, last_msg_path: Path, images: Optional[list[str]] = None,
+              full_access: bool = False, web_search: bool = False) -> list[str]:
         argv = [self.codex_bin, "exec"]
         if session_id:
             argv += ["resume", session_id]
+        for img in images or []:              # screenshots for visual games
+            argv += ["-i", str(img)]
         # `resume` accepts a subset of `exec` flags (no --color / -s / -C).
         argv += ["--json", "--skip-git-repo-check", "-o", str(last_msg_path)]
         argv += ["-m", self.model]
+        sandbox = "danger-full-access" if (agentic and full_access) else ("workspace-write" if agentic else "read-only")
         if not session_id:
-            argv += ["--color", "never", "-s", "workspace-write" if agentic else "read-only"]
+            argv += ["--color", "never", "-s", sandbox]
             if cwd:
                 argv += ["-C", str(cwd)]
             if self.ephemeral:
                 argv += ["--ephemeral"]
         cfg = dict(self.extra_config)
         # resume inherits a session's permissions unless explicitly overridden.
-        cfg["sandbox_mode"] = '"workspace-write"' if agentic else '"read-only"'
+        cfg["sandbox_mode"] = f'"{sandbox}"'
         cfg["approval_policy"] = '"never"'
+        if agentic:
+            # Study / adapt phases research the game on the web; the proposer must not.
+            cfg["web_search"] = '"live"' if web_search else '"disabled"'
         # Never inherit the user's interactive speed tier: experiments run on the
         # standard tier so latency numbers are comparable and credits are not 2x.
         cfg.setdefault("service_tier", '"default"')
@@ -103,7 +110,12 @@ class CodexCLI:
         agentic: bool = False,
         timeout_s: float = 600.0,
         trace: Optional[TraceSink] = None,
+        images: Optional[list[str]] = None,
+        full_access: bool = False,
+        web_search: bool = False,
     ) -> System2Result:
+        """``full_access`` (agentic only) lifts the workspace sandbox so the model can
+        install packages / start game servers; ``web_search`` enables live search."""
         full_prompt = f"{system}\n\n{prompt}" if system and not session_id else prompt
         if not agentic:
             full_prompt = ("Inference-only game player: use only the supplied observations and "
@@ -115,7 +127,8 @@ class CodexCLI:
         with tempfile.TemporaryDirectory() as td:
             last_msg = Path(td) / "last.txt"
             argv = self._argv(full_prompt, cwd=cwd, session_id=session_id,
-                              agentic=agentic, last_msg_path=last_msg)
+                              agentic=agentic, last_msg_path=last_msg, images=images,
+                              full_access=full_access, web_search=web_search)
             try:
                 proc = run_cli(argv, cwd=cwd, stdin_text=None, timeout_s=timeout_s,
                                env_drop=("OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY",

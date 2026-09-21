@@ -184,7 +184,7 @@ def test_manifest_prevents_reusing_incomparable_scores(tmp_path):
 
 def test_hidden_rule_diagnostics_do_not_reach_harness_or_archive(tmp_path):
     from metaharness.core.runner import _GameView
-    from metaharness.games.rulepuzzle import RulePuzzleGame
+    from metaharness.testbeds.rulepuzzle import RulePuzzleGame
     game = RulePuzzleGame()
     assert 'move_map' in game.info()
     view = _GameView(game, threading.Event())

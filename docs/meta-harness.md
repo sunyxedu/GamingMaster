@@ -16,6 +16,41 @@ verified one real Astra-generated batch of Choice/Score/Noul questions against
 Jev, alongside 17 targeted tests. This verifies the new context and API path;
 the earlier gameplay measurements used the previous prompts.
 
+## From a game name to a playing agent (2026-09-21)
+
+The only inputs are the game's **name**, optional notes (platform, server,
+account) and credentials in `.env`. Nothing game-specific lives in this
+repository; every game-specific artefact is produced by the model into
+`runs/<game>/`:
+
+```
+python -m metaharness run --game "Minecraft" --notes "Java 1.21 server at localhost:25565"
+```
+
+| phase | agent | output | validated by |
+|-------|-------|--------|--------------|
+| **study** (`phases/study.py`) | Astra, agentic, live web search | `study/brief.md` (rules, pace), `interfaces.md` (every way to drive the game, chosen one, software + env vars), `strategies.md` (what strong players do; what belongs in code / Astra prompts / Jev questions), `study.json` (tier, latency, scoring, scenarios) | schema check + repair rounds |
+| **adapt** (`phases/adapt.py`) | Astra, agentic, full access (may install packages, start servers) | `adaptor/game.py` implementing `TurnGame`/`RealtimeGame` for the real game, `ADAPTOR.md`, `requirements.txt`, `env.example`; `NEEDS.md` when the user must act (login, missing env var) | generic smoke test `games/adaptor.py::validate_adaptor` (load, reset two seeds, JSON observations, every action once, ticks/score/done types, determinism, scenario variety); failures are fed back, up to 4 attempts |
+| **search** (`core/`) | Astra proposer + Astra/Jev players | `search/candidates/NNNN/` harnesses (Astra–Jev protocol, Jev–game action bridge, or Astra–game protocol for tier 1) | latency-honest runner, held-out seeds, pre-flight |
+
+The search phase now **pre-flights** every proposal (one virtual-clock episode with
+stand-in models that return garbage) and gives the proposer one repair round
+before real model budget is spent; the first live run of the day lost a whole
+iteration to `ctx.log(event, **data)`, a contract misuse that pre-flight catches
+in under a second. The contract doc lists exact signatures, `ctx.log` accepts
+positional arguments, `ctx.think(images=[...])` passes screenshots to Astra
+(codex `-i`), and the proposer keeps a `notes.md` lab notebook across
+iterations. The leaderboard reports `Jev→act` / `Astra→act`: the fraction of
+posted actions preceded by a fresh model answer, so "uses Jev" is measurable
+rather than claimed. With several training games in one archive, selection is
+generality-aware (mean of per-game min-max-normalised scores, worst game as
+tie-break).
+
+The former built-in games (`snake`, `lanerunner`, `rulepuzzle`, `arc3`) moved to
+`metaharness/testbeds/`: offline fixtures for testing the pipeline, not adaptors
+the Meta-Harness depends on. The codex backend pins `service_tier="default"` and
+`features.fast_mode=false` so runs never inherit the interactive fast tier.
+
 `metaharness/` is the second half of GamingMaster. The trained network in
 `model/` covers games where every millisecond matters. Everything else is
 handled by *foundation models plus a harness*, and the harness is not written

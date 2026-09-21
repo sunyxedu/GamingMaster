@@ -17,7 +17,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from .base import ActionSpec
+from ..games.base import ActionSpec
 
 ACTIONS = ["ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5", "ACTION6"]
 COLOURS = ["black", "blue", "red", "green", "yellow", "grey", "magenta", "orange", "cyan", "white"]
@@ -215,6 +215,6 @@ class RulePuzzleGame:
         )
 
 
-from .registry import register  # noqa: E402
+from ..games.registry import register  # noqa: E402
 
 register("rulepuzzle", "tier1")(RulePuzzleGame)

@@ -14,16 +14,27 @@ class ScriptedSystem2:
     name = "scripted"
 
     def __init__(self, replies: Optional[list[str]] = None, fn: Optional[Callable[[str], str]] = None,
-                 latency_s: float = 1.5) -> None:
+                 latency_s: float = 1.5, files: Optional[list[dict[str, str]]] = None) -> None:
         self.replies = list(replies or ["OK"])
         self.fn = fn
+        # ``files``: per call, {relative_path: content} written into ``cwd`` when
+        # run agentically (a stand-in for a coding agent that edits the workspace).
+        self.files = list(files or [])
         self.latency_s = latency_s
         self.calls: list[str] = []
         self.n_calls = 0
 
     def run(self, prompt: str, *, cwd=None, session_id=None, system=None, agentic=False,
-            timeout_s: float = 600.0, trace: Optional[TraceSink] = None) -> System2Result:
+            timeout_s: float = 600.0, trace: Optional[TraceSink] = None, images=None,
+            full_access: bool = False, web_search: bool = False) -> System2Result:
         self.calls.append(prompt)
+        if agentic and cwd is not None and self.files:
+            from pathlib import Path
+            batch = self.files[min(len(self.calls) - 1, len(self.files) - 1)]
+            for rel, content in batch.items():
+                target = Path(cwd) / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content)
         text = self.fn(prompt) if self.fn else self.replies[min(len(self.calls) - 1, len(self.replies) - 1)]
         self.n_calls += 1
         res = System2Result(text=text, session_id=session_id or "scripted-session", latency_s=self.latency_s)

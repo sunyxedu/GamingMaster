@@ -16,8 +16,8 @@ import os
 from typing import Any, Optional
 
 from ..config import load_dotenv
-from .base import ActionSpec
-from .registry import register
+from ..games.base import ActionSpec
+from ..games.registry import register
 
 ARC_ACTIONS = ["ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5", "ACTION6", "ACTION7"]
 

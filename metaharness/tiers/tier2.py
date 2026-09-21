@@ -45,7 +45,21 @@ from `game.describe()` / the observation, or ask the System-2 model. Game-specif
 on the held-out game."""
 
 
-def task_md(game_name: str, budget: contract.Budget, clock_mode: str, game_kwargs: dict) -> str:
+STUDY_SECTION = """
+
+## Prior knowledge from the study phase
+The study phase researched this game (rules, interface, community strategies). Use it: implement exact
+rules/bookkeeping/search as code, put planning and adaptation into Astra prompts, and fast recognition
+into Jev questions — but verify every claim against observations, because sources can be wrong or
+outdated for this build of the game.
+
+{study}
+"""
+
+
+def task_md(game_name: str, budget: contract.Budget, clock_mode: str, game_kwargs: dict,
+            study: str = "") -> str:
+    """``study``: text of the study phase (rules, interface, strategies) appended as prior knowledge."""
     g = make_game(game_name, **game_kwargs)
     task = TASK_TEMPLATE.format(game=game_name, describe=g.describe(), actions=g.action_spec.describe(),
                                s2=budget.max_system2_calls, s1=budget.max_system1_calls,
@@ -53,7 +67,7 @@ def task_md(game_name: str, budget: contract.Budget, clock_mode: str, game_kwarg
     # Inline the snapshot: proposers are restricted to the archive and cannot
     # rely on following web links or reading the installed model source.
     # It becomes part of task.md, each candidate prompt and the resume manifest.
-    return task + "\n\n" + usage_guide()
+    return task + (STUDY_SECTION.format(study=study) if study else "") + "\n\n" + usage_guide()
 
 
 def contract_doc() -> str:

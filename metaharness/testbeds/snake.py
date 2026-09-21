@@ -10,7 +10,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from .base import ActionSpec
+from ..games.base import ActionSpec
 
 DIRS = {"up": (0, -1), "down": (0, 1), "left": (-1, 0), "right": (1, 0)}
 OPPOSITE = {"up": "down", "down": "up", "left": "right", "right": "left"}
@@ -151,6 +151,6 @@ class SnakeGame:
         )
 
 
-from .registry import register  # noqa: E402
+from ..games.registry import register  # noqa: E402
 
 register("snake", "tier2")(SnakeGame)

@@ -13,8 +13,8 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from .base import ActionSpec
-from .registry import register
+from ..games.base import ActionSpec
+from ..games.registry import register
 
 LANES = 3
 

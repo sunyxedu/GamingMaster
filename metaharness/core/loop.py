@@ -9,8 +9,8 @@ from typing import Any, Callable, Optional
 from ..models.base import ModelUnavailable, System1Model, System2Model, TraceSink
 from .archive import Archive, Candidate
 from .contract import Budget
-from .proposer import propose
-from .runner import EvalResult, evaluate_harness
+from .proposer import propose, repair
+from .runner import EvalResult, evaluate_harness, preflight_harness
 
 
 @dataclass
@@ -28,6 +28,8 @@ class LoopConfig:
     heldout_game: Optional[str] = None                       # cross-game generality test
     heldout_game_kwargs: dict[str, Any] = field(default_factory=dict)
     memory_mode: str = "episode"
+    preflight: bool = True                                   # cheap dry run + one repair before evaluating
+    preflight_timeout_s: float = 60.0
 
 
 class MetaHarnessLoop:
@@ -106,6 +108,26 @@ class MetaHarnessLoop:
                   f"stale={res.stale_fraction} fatal={res.fatal} errors={len([e for e in res.episodes if e.error])}")
         return res
 
+    def preflight_and_repair(self, cand: Candidate) -> bool:
+        """Dry-run the candidate with stand-in models; on failure ask the proposer to repair once."""
+        for attempt in (0, 1):
+            rep = preflight_harness(cand.harness_path, self.game_factory, game_kwargs=self.game_kwargs,
+                                    tier2=self.system1 is not None, timeout_s=self.cfg.preflight_timeout_s)
+            (cand.dir / f"preflight_{attempt}.json").write_text(json.dumps(rep, indent=2, default=str))
+            if rep["ok"]:
+                self._log(f"preflight {cand.dir.name}: ok" + (" after repair" if attempt else ""))
+                return True
+            self._log(f"preflight {cand.dir.name}: FAILED — {rep['error'][:200].replace(chr(10), ' ')}")
+            if attempt == 1:
+                return False
+            ptrace = TraceSink(self.archive.root / "proposer_trace.jsonl")
+            try:
+                repair(self.proposer, cand, rep["error"], agentic=self.cfg.proposer_agentic, trace=ptrace,
+                       timeout_s=min(900.0, self.cfg.proposer_timeout_s))
+            finally:
+                ptrace.close()
+        return False
+
     def run(self) -> Optional[Candidate]:
         # evaluate any unevaluated candidates (seeds / baselines) first
         for c in self.archive.candidates():
@@ -137,6 +159,8 @@ class MetaHarnessLoop:
                                                                "mean_score": None, "n_episodes": 0}))
                 self._log(f"{cand.dir.name}: proposer produced no harness")
                 continue
+            if self.cfg.preflight:
+                self.preflight_and_repair(cand)
             r = self.evaluate(cand, self.cfg.seeds_train)
             if r.fatal and "model unavailable" in r.fatal and self.cfg.stop_on_model_unavailable:
                 self._log("stopping: " + r.fatal)

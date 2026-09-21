@@ -35,12 +35,19 @@ class EpisodeResult:
     wall_s: float = 0.0
     error: Optional[str] = None
     info: dict[str, Any] = field(default_factory=dict)
+    acts: int = 0                 # actions posted by the harness
+    acts_after_s1: int = 0        # ... preceded by a fresh System-1 answer
+    acts_after_s2: int = 0        # ... preceded by a fresh System-2 answer
 
     def summary(self) -> dict[str, Any]:
         d = asdict(self)
         d["latency_s1"] = _stats(self.latency_s1)
         d["latency_s2"] = _stats(self.latency_s2)
         return d
+
+
+def _frac(num: int, den: int) -> Optional[float]:
+    return (num / den) if den else None
 
 
 def _stats(xs: list[float]) -> dict[str, float]:
@@ -77,6 +84,8 @@ class EvalResult:
             "system1_calls": sum(e.system1_calls for e in self.episodes),
             "system2_calls": sum(e.system2_calls for e in self.episodes),
             "mean_steps": (statistics.fmean(e.steps for e in self.episodes) if self.episodes else None),
+            "s1_informed_fraction": _frac(sum(e.acts_after_s1 for e in self.episodes), sum(e.acts for e in self.episodes)),
+            "s2_informed_fraction": _frac(sum(e.acts_after_s2 for e in self.episodes), sum(e.acts for e in self.episodes)),
             "errors": [e.error for e in self.episodes if e.error],
             "episodes": [e.summary() for e in self.episodes],
             "metadata": self.metadata,
@@ -287,6 +296,7 @@ def run_episode(
     res.wall_s = time.time() - t_wall0
     res.error = err
     res.info = {**view.info(), "pending_tasks": pending}
+    res.acts, res.acts_after_s1, res.acts_after_s2 = ctx.acts, ctx.acts_after_s1, ctx.acts_after_s2
     trace.write({"type": "episode_end", **res.summary()})
     return res
 
@@ -320,7 +330,7 @@ def evaluate_harness(
     result = EvalResult(harness_path=str(harness_path), game="unknown", episodes=[])
     b = budget_per_episode or Budget()
     result.metadata = {
-        "protocol_version": 2, "seeds": seeds, "game_kwargs": game_kwargs or {},
+        "protocol_version": 2, "seeds": seeds, "expected_episodes": len(seeds), "game_kwargs": game_kwargs or {},
         "clock_mode": clock_mode, "latency_override": latency_override,
         "memory_mode": memory_mode, "harness_timeout_s": harness_timeout_s,
         "budget": {"max_system1_calls": b.max_system1_calls,
@@ -368,3 +378,34 @@ def evaluate_harness(
 def _dump(result: EvalResult, out_dir: Optional[Path]) -> None:
     if out_dir:
         (out_dir / "eval.json").write_text(json.dumps(result.to_json(), indent=2, default=str))
+
+
+def preflight_harness(harness_path: Path | str, game_factory: Any, *, game_kwargs: Optional[dict[str, Any]] = None,
+                      tier2: bool = True, timeout_s: float = 60.0, seed: int = 0) -> dict[str, Any]:
+    """Cheap contract check before spending real model budget.
+
+    One episode on the *virtual* clock with stand-in models (System-2 returns
+    arbitrary text, System-1 the first option of every question). Only Python
+    exceptions raised by the harness count as failures: budget/deadline ends and
+    a low score are fine. Real-time test beds finish in well under a second."""
+    from ..models.mock import HeuristicSystem1, ScriptedSystem2
+    harness_path = Path(harness_path)
+    try:
+        module = load_harness_module(harness_path)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "stage": "load", "error": "".join(traceback.format_exception(type(e), e, e.__traceback__))[-4000:]}
+    s2 = ScriptedSystem2(fn=lambda prompt: "I am not sure. Let us try something: maybe ACTION or {\"plan\": []}",
+                         latency_s=1.0)
+    s1 = HeuristicSystem1(latency_s=0.1) if tier2 else None
+    game = game_factory(**(game_kwargs or {}))
+    budget = Budget(max_system2_calls=6, max_system1_calls=400, max_wall_s=timeout_s)
+    trace = TraceSink(None)
+    try:
+        ep = run_episode(module, game, seed=seed, system2=s2, system1=s1, trace=trace, memory={}, budget=budget,
+                         clock_mode="virtual", harness_timeout_s=timeout_s)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "stage": "episode", "error": "".join(traceback.format_exception(type(e), e, e.__traceback__))[-4000:]}
+    err = ep.error or ""
+    benign = err.startswith("budget exceeded") or err.startswith("harness did not return") or not err
+    return {"ok": benign, "stage": "episode", "error": err, "score": ep.score, "steps": ep.steps,
+            "system1_calls": ep.system1_calls, "system2_calls": ep.system2_calls}

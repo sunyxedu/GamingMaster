@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-arc3 = ["arc-agi; python_version >= '3.13'"]   # tier-1 ARC-AGI-3 adapter (metaharness/games/arc3.py)
+arc3 = ["arc-agi; python_version >= '3.13'"]   # tier-1 ARC-AGI-3 adapter (metaharness/testbeds/arc3.py)
 
 [project.scripts]
 prepare-data = "scripts.prepare_data:main"

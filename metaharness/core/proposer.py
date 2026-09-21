@@ -60,8 +60,14 @@ model call with request/response/latency and every game tick/step):
    It must import only the standard library and `metaharness.*`.
 3. Write `candidates/{candidate.dir.name}/proposal.md`: hypothesis, what changed vs. the parent
    candidate, what evidence would confirm/refute it.
-4. If you cannot use tools, reply with the full harness in ONE ```python fenced block and the
+4. Append 3-6 bullet lessons to `notes.md` at the archive root (a running lab notebook: what
+   generalised, what was a dead end, which contract details bit you). Read it first.
+5. If you cannot use tools, reply with the full harness in ONE ```python fenced block and the
    proposal text after it.
+Before the real evaluation the candidate is *pre-flighted*: one short episode with stand-in models
+that return arbitrary text / first options on a virtual clock. Any exception there (a contract
+misuse, an unhandled parse failure of model output) is sent back to you once for repair; a harness
+must survive garbage model output without crashing.
 Do not modify any other candidate. Do not run long experiments yourself; the evaluator will.
 Read only this archive and the interface documentation above. Do not inspect game implementation
 source, other experiment archives, credentials, or held-out games/results. Infer semantics from the
@@ -102,6 +108,8 @@ def propose(
                 return cand
         raise
     (cand.dir / "proposer_output.md").write_text(res.text or "")
+    if res.session_id:
+        (cand.dir / "session.json").write_text(json.dumps({"session_id": res.session_id}))
     if isinstance(res.raw, list):
         (cand.dir / "proposer_events.jsonl").write_text(
             "".join(json.dumps(event, default=str) + "\n" for event in res.raw))
@@ -115,3 +123,36 @@ def propose(
     if not (cand.dir / "proposal.md").exists():
         (cand.dir / "proposal.md").write_text("(proposer wrote no proposal.md)\n")
     return cand
+
+
+def repair(
+    model: System2Model,
+    cand: Candidate,
+    report: str,
+    *,
+    agentic: bool = True,
+    trace: Optional[TraceSink] = None,
+    timeout_s: float = 900.0,
+) -> bool:
+    """One repair round after a failed pre-flight: same session if we have one."""
+    session = None
+    sp = cand.dir / "session.json"
+    if sp.exists():
+        session = json.loads(sp.read_text()).get("session_id")
+    prompt = (f"Pre-flight of `candidates/{cand.dir.name}/harness.py` failed. Fix the harness IN PLACE "
+              f"(same file) so it survives this and similar model-output/contract problems; keep the design. "
+              f"Append one line about the cause to proposal.md.\n\nPre-flight report:\n```\n{report[-6000:]}\n```"
+              + ("" if agentic else "\nReply with the complete fixed harness in ONE ```python fenced block."))
+    (cand.dir / "repair_prompt.md").write_text(prompt)
+    try:
+        res = model.run(prompt, cwd=cand.dir.parent.parent, session_id=session, agentic=agentic,
+                        timeout_s=timeout_s, trace=trace)
+    except Exception as exc:  # noqa: BLE001 — a failed repair is data
+        (cand.dir / "repair_error.json").write_text(json.dumps({"error": str(exc), "type": type(exc).__name__}))
+        return False
+    (cand.dir / "repair_output.md").write_text(res.text or "")
+    if not agentic:
+        code = _fenced_python(res.text or "")
+        if code:
+            cand.harness_path.write_text(code)
+    return True

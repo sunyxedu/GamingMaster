@@ -38,6 +38,19 @@ model call still lets time pass). ``ctx.wait_for_tick()`` blocks until the
 next tick boundary — use it instead of spinning.
 Turn games (tier 1) are stepped with ``ctx.act(action)`` synchronously and
 return the next observation.
+
+Exact signatures (use these; anything else is a contract error caught in pre-flight)::
+
+    ctx.think(prompt: str, *, session_id: str | None = None, system: str | None = None,
+              images: list[str] | None = None, timeout_s: float = 300.0) -> System2Result   # .text .session_id
+    ctx.decide(state: Any, questions: dict[str, Choice | Score | Noul], *, timeout_s: float = 5.0)
+              -> dict[str, System1Answer]                                                   # .value .probabilities .confidence
+    ctx.act(action) -> observation | None      ctx.observe() -> observation      ctx.done -> bool
+    ctx.wait_for_tick() -> None                ctx.spawn(fn) -> concurrent.futures.Future
+    ctx.log(**fields) -> None                  ctx.memory: dict     ctx.clock.now() -> float (s)
+    ctx.budget.remaining() -> {"system2_calls": int, "system1_calls": int, "wall_s": float}
+    game.describe() -> str    game.action_spec.names / .descriptions / .noop / .notes    game.observe()
+    game.tick_s (realtime only)    game.ticks    game.score    game.done
 """
 from __future__ import annotations
 
@@ -223,6 +236,13 @@ class HarnessContext:
         self.unavailable: Optional[ModelUnavailable] = None
         self._closed = threading.Event()
         self._futures: list[cf.Future] = []
+        # Decision provenance (reported, never used for selection): how many posted
+        # actions were preceded by a fresh System-1 / System-2 answer since the last act.
+        self.acts = 0
+        self.acts_after_s1 = 0
+        self.acts_after_s2 = 0
+        self._s1_credit = False
+        self._s2_credit = False
 
     # -- game -----------------------------------------------------------
     def act(self, action: Any) -> Any:
@@ -231,6 +251,13 @@ class HarnessContext:
         if self.done:
             return self._observe()
         out = self._act(action)
+        self.acts += 1
+        if self._s1_credit:
+            self.acts_after_s1 += 1
+            self._s1_credit = False
+        if self._s2_credit:
+            self.acts_after_s2 += 1
+            self._s2_credit = False
         if self.game_kind == "realtime" and self.clock.mode == "virtual":
             self.clock.charge(self.act_overhead_s)
         return out
@@ -262,7 +289,7 @@ class HarnessContext:
 
     # -- models ---------------------------------------------------------
     def think(self, prompt: str, *, session_id: Optional[str] = None, system: Optional[str] = None,
-              timeout_s: float = 300.0) -> System2Result:
+              images: Optional[list[str]] = None, timeout_s: float = 300.0) -> System2Result:
         if self.system2 is None:
             raise RuntimeError("no System-2 model in this task")
         self._check_open()
@@ -271,9 +298,10 @@ class HarnessContext:
         self.trace.write({"type": "model_request", "kind": "system2", "clock": started,
                           "prompt": prompt, "session_id": session_id})
         try:
+            kw = {"images": images} if images else {}
             res = self.system2.run(prompt, session_id=session_id, system=system, agentic=False,
                                    timeout_s=min(timeout_s, self.budget.remaining()["wall_s"]),
-                                   trace=self.trace)
+                                   trace=self.trace, **kw)
         except ModelUnavailable as exc:
             self.unavailable = exc
             raise
@@ -281,6 +309,7 @@ class HarnessContext:
         if self.clock.mode == "virtual":
             self.clock.charge(max(0.0, started + charged - self.clock.now()))
         self.last_system2 = res
+        self._s2_credit = True
         return res
 
     def decide(self, state: Any, questions: Mapping[str, Any], *, timeout_s: float = 5.0) -> dict[str, System1Answer]:
@@ -305,6 +334,7 @@ class HarnessContext:
         charged = self._latency_override.get("system1", getattr(self.system1, "latency_s", lat))
         if self.clock.mode == "virtual":
             self.clock.charge(max(0.0, started + charged - self.clock.now()))
+        self._s1_credit = True
         return ans
 
     def _check_open(self) -> None:
@@ -317,7 +347,16 @@ class HarnessContext:
         self._futures.append(future)
         return future
 
-    def log(self, **event: Any) -> None:
+    def log(self, *args: Any, **event: Any) -> None:
+        """Free-form harness event into the trace. ``ctx.log(event="x", k=v)``;
+        a leading positional str becomes ``event``, a leading dict is merged."""
+        for a in args:
+            if isinstance(a, Mapping):
+                event = {**a, **event}
+            elif isinstance(a, str) and "event" not in event:
+                event["event"] = a
+            else:
+                event.setdefault("args", []).append(a)
         event.setdefault("type", "harness")
         event["clock"] = self.clock.now()
         self.trace.write(event)

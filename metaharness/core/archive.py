@@ -1,13 +1,21 @@
 """Filesystem archive of harness candidates — the proposer's whole memory.
 
     runs/<experiment>/
-      task.md                   what the game is, the contract, the budget
+      task.md                   what the games are, the contract, the budget
       leaderboard.md            auto-regenerated after every evaluation
+      notes.md                  cross-iteration lab notebook (proposer appends)
       candidates/0000-baseline/ harness.py  proposal.md  eval.json  trace_seed*.jsonl
-      candidates/0001/          ...
+      candidates/0001/          ...           (multi-game: game-<name>/eval.json + traces,
+                                               eval.json = combined summary)
 
 Following Meta-Harness (arXiv 2603.28052) the proposer gets *unrestricted*
 read access to this directory rather than a compressed summary.
+
+Selection is *generality-aware*: with several training games, each game's mean
+score is min-max normalised across the archive (0 = worst candidate on that
+game, 1 = best), and a candidate is ranked by the mean normalised score, then
+by its worst game, so a harness that wins one game and dies on another does
+not beat a harness that is decent everywhere.
 """
 from __future__ import annotations
 
@@ -37,10 +45,67 @@ class Candidate:
             return json.loads(self.eval_path.read_text())
         return None
 
+    def game_evals(self) -> dict[str, dict[str, Any]]:
+        """Per-game evaluation summaries: ``{game: eval}`` (one entry for single-game archives)."""
+        e = self.eval()
+        if not e:
+            return {}
+        if isinstance(e.get("per_game"), dict):
+            return dict(e["per_game"])
+        return {str(e.get("game", "game")): e}
+
     @property
     def score(self) -> Optional[float]:
         e = self.eval()
         return None if not e else e.get("mean_score")
+
+
+def combine_evals(per_game: dict[str, dict[str, Any]], seeds: list[int]) -> dict[str, Any]:
+    """Combined summary of several single-game eval dicts (what gets written to eval.json)."""
+    games = list(per_game)
+    means = [g.get("mean_score") for g in per_game.values()]
+    finite = [m for m in means if m is not None and math.isfinite(m)]
+    stale_tot = stale_num = 0
+    acts = acts_s1 = acts_s2 = 0
+    for g in per_game.values():
+        for ep in g.get("episodes", []):
+            stale_num += ep.get("stale_ticks", 0)
+            stale_tot += ep.get("stale_ticks", 0) + ep.get("decided_ticks", 0)
+            acts += ep.get("acts", 0)
+            acts_s1 += ep.get("acts_after_s1", 0)
+            acts_s2 += ep.get("acts_after_s2", 0)
+    fatal = [f"{name}: {g['fatal']}" for name, g in per_game.items() if g.get("fatal")]
+    return {
+        "game": "+".join(games), "games": games,
+        "fatal": "; ".join(fatal) if fatal else None,
+        "mean_score": (sum(finite) / len(finite)) if finite and len(finite) == len(means) else None,
+        "stale_fraction": (stale_num / stale_tot) if stale_tot else None,
+        "n_episodes": sum(g.get("n_episodes", 0) for g in per_game.values()),
+        "system1_calls": sum(g.get("system1_calls", 0) for g in per_game.values()),
+        "system2_calls": sum(g.get("system2_calls", 0) for g in per_game.values()),
+        "mean_steps": None,
+        "s1_informed_fraction": (acts_s1 / acts) if acts else None,
+        "s2_informed_fraction": (acts_s2 / acts) if acts else None,
+        "errors": [f"{name}: {err}" for name, g in per_game.items() for err in g.get("errors", [])],
+        "per_game": {name: {k: v for k, v in g.items() if k != "episodes"} | {
+            "episodes": [{k: ep.get(k) for k in ("seed", "score", "steps", "stale_ticks", "decided_ticks",
+                                                  "system1_calls", "system2_calls", "acts", "acts_after_s1",
+                                                  "acts_after_s2", "error")} for ep in g.get("episodes", [])]}
+            for name, g in per_game.items()},
+        "metadata": {"seeds": seeds, "games": games, "expected_episodes": len(seeds) * len(games),
+                     "game_kind": next((g.get("metadata", {}).get("game_kind") for g in per_game.values()), None)},
+    }
+
+
+def _eligible(e: dict[str, Any]) -> bool:
+    score = e.get("mean_score")
+    meta = e.get("metadata", {})
+    expected = meta.get("expected_episodes")
+    if expected is None and meta.get("seeds") is not None:
+        expected = len(meta["seeds"])
+    return (score is not None and math.isfinite(score) and not e.get("fatal")
+            and not e.get("errors") and e.get("n_episodes", 0) > 0
+            and (expected is None or expected == e.get("n_episodes")))
 
 
 class Archive:
@@ -74,17 +139,53 @@ class Archive:
         c.dir.joinpath("proposal.md").write_text(note or f"Seed candidate copied from {harness_file}.\n")
         return c
 
-    def best(self) -> Optional[Candidate]:
-        def eligible(c):
+    # -- selection ------------------------------------------------------
+    def games(self) -> list[str]:
+        seen: list[str] = []
+        for c in self.candidates():
+            for g in c.game_evals():
+                if g not in seen:
+                    seen.append(g)
+        return seen
+
+    def _norm_table(self) -> dict[str, tuple[float, float]]:
+        """Per game: (min, max) of mean score over eligible candidates."""
+        table: dict[str, list[float]] = {}
+        for c in self.candidates():
             e = c.eval() or {}
-            score = e.get("mean_score")
-            expected = e.get("metadata", {}).get("seeds")
-            return (score is not None and math.isfinite(score) and not e.get("fatal")
-                    and not e.get("errors") and e.get("n_episodes", 0) > 0
-                    and (expected is None or len(expected) == e.get("n_episodes")))
-        scored = [c for c in self.candidates() if eligible(c)]
+            if not _eligible(e):
+                continue
+            for g, ge in c.game_evals().items():
+                m = ge.get("mean_score")
+                if m is not None and math.isfinite(m):
+                    table.setdefault(g, []).append(m)
+        return {g: (min(v), max(v)) for g, v in table.items()}
+
+    def normalized(self, c: Candidate, table: Optional[dict[str, tuple[float, float]]] = None) -> dict[str, float]:
+        table = self._norm_table() if table is None else table
+        out: dict[str, float] = {}
+        for g, ge in c.game_evals().items():
+            m = ge.get("mean_score")
+            if m is None or g not in table:
+                continue
+            lo, hi = table[g]
+            out[g] = ((m - lo) / (hi - lo)) if hi > lo else 0.0
+        return out
+
+    def selection_score(self, c: Candidate, table: Optional[dict[str, tuple[float, float]]] = None
+                        ) -> tuple[float, float]:
+        """(mean normalised score over games, worst game) — higher is better."""
+        n = self.normalized(c, table)
+        if not n:
+            return (float("-inf"), float("-inf"))
+        return (sum(n.values()) / len(n), min(n.values()))
+
+    def best(self) -> Optional[Candidate]:
+        scored = [c for c in self.candidates() if _eligible(c.eval() or {})]
         if not scored:
             return None
+        table = self._norm_table()
+
         def key(c: Candidate):
             e = c.eval() or {}
             # Turn games reward action efficiency; real-time games reward
@@ -92,7 +193,9 @@ class Archive:
             realtime = (e.get("metadata", {}).get("game_kind") == "realtime"
                         or e.get("stale_fraction") is not None)
             steps = e.get("mean_steps") or 0.0
-            return (e.get("mean_score", 0.0), -(e.get("stale_fraction") or 0.0), -e.get("system2_calls", 0),
+            mean_n, worst_n = self.selection_score(c, table)
+            return (round(mean_n, 9), round(worst_n, 9), e.get("mean_score", 0.0),
+                    -(e.get("stale_fraction") or 0.0), -e.get("system2_calls", 0),
                     steps if realtime else -steps)
         return max(scored, key=key)
 
@@ -101,23 +204,47 @@ class Archive:
         (self.root / "task.md").write_text(text)
 
     def write_leaderboard(self) -> str:
-        rows = ["| # | candidate | mean score | episodes | stale ticks | S1 calls | S2 calls | status |",
-                "|---|-----------|-----------:|---------:|------------:|---------:|---------:|--------|"]
+        games = self.games()
+        multi = len(games) > 1
+        table = self._norm_table()
+        head = ["#", "candidate"] + ([f"{g}" for g in games] if multi else ["mean score"]) + \
+               (["selection (mean / worst norm.)"] if multi else []) + \
+               ["episodes", "stale ticks", "S1 calls", "S2 calls", "Jev→act", "Astra→act", "status"]
+        rows = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
+
+        def fmt(x, pct=False):
+            if x is None:
+                return "–"
+            return f"{100 * x:.0f}%" if pct else f"{x:.3f}"
+
         for c in self.candidates():
             e = c.eval()
             if e is None:
-                rows.append(f"| {c.idx:04d} | {c.dir.name} | – | – | – | – | – | not evaluated |")
+                rows.append("| " + " | ".join([f"{c.idx:04d}", c.dir.name] + ["–"] * (len(head) - 3) + ["not evaluated"]) + " |")
                 continue
             status = "fatal: " + e["fatal"][:60].replace("\n", " ") if e.get("fatal") else (
                 f"{len(e.get('errors', []))} episode errors" if e.get("errors") else "ok")
-            ms = e.get("mean_score")
-            sf = e.get("stale_fraction")
-            rows.append(
-                f"| {c.idx:04d} | {c.dir.name} | {ms if ms is None else f'{ms:.3f}'} | {e.get('n_episodes', 0)} | "
-                f"{'–' if sf is None else f'{100*sf:.0f}%'} | {e.get('system1_calls', 0)} | {e.get('system2_calls', 0)} | {status} |")
+            ge = c.game_evals()
+            cells = [f"{c.idx:04d}", c.dir.name]
+            if multi:
+                cells += [fmt(ge[g].get("mean_score")) if g in ge else "–" for g in games]
+                mean_n, worst_n = self.selection_score(c, table)
+                cells.append("–" if not _eligible(e) else f"{mean_n:.3f} / {worst_n:.3f}")
+            else:
+                cells.append(fmt(e.get("mean_score")))
+            cells += [str(e.get("n_episodes", 0)), fmt(e.get("stale_fraction"), pct=True),
+                      str(e.get("system1_calls", 0)), str(e.get("system2_calls", 0)),
+                      fmt(e.get("s1_informed_fraction"), pct=True), fmt(e.get("s2_informed_fraction"), pct=True), status]
+            rows.append("| " + " | ".join(cells) + " |")
         best = self.best()
-        text = "# Leaderboard\n\n" + "\n".join(rows) + "\n\n" + (
-            f"Best so far: `{best.dir.name}` (mean score {best.score:.3f})\n" if best else "No scored candidate yet.\n")
+        text = "# Leaderboard\n\n" + "\n".join(rows) + "\n\n"
+        if multi:
+            text += ("Selection: each game's mean score is min-max normalised across eligible candidates; "
+                     "candidates are ranked by the mean normalised score, then by their worst game. "
+                     "A harness must work on every game.\n")
+        text += ("`Jev→act` / `Astra→act`: fraction of posted actions preceded by a fresh System-1 / System-2 "
+                 "answer since the previous action (reported, not used for selection).\n\n")
+        text += (f"Best so far: `{best.dir.name}` (mean score {best.score:.3f})\n" if best else "No scored candidate yet.\n")
         held = []
         for c in self.candidates():
             for d in sorted(c.dir.glob("heldout*")):

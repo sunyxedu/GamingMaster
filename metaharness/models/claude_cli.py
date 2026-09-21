@@ -35,6 +35,9 @@ class ClaudeCLI:
         agentic: bool = False,
         timeout_s: float = 600.0,
         trace: Optional[TraceSink] = None,
+        images: Optional[list[str]] = None,
+        full_access: bool = False,
+        web_search: bool = False,
     ) -> System2Result:
         argv = [self.claude_bin, "-p", "--output-format", "json"]
         if self.model:

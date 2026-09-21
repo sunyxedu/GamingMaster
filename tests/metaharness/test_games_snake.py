@@ -1,4 +1,4 @@
-from metaharness.games.snake import SnakeGame
+from metaharness.testbeds.snake import SnakeGame
 
 
 def test_snake_rules():
@@ -28,7 +28,7 @@ def test_snake_observation_is_json_serialisable_and_danger_consistent():
 
 
 def test_lanerunner_rules_and_heldout_loop(tmp_path):
-    from metaharness.games.lanerunner import LaneRunnerGame
+    from metaharness.testbeds.lanerunner import LaneRunnerGame
     g = LaneRunnerGame(tick_s=0.1, max_ticks=50)
     o = g.reset(0)
     assert o["lane"] == 1 and len(o["upcoming"]) == 6 and "snake" not in g.describe()

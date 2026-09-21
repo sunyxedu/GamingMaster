@@ -1,6 +1,6 @@
 from collections import deque
 
-from metaharness.games.rulepuzzle import ACTIONS, RulePuzzleGame
+from metaharness.testbeds.rulepuzzle import ACTIONS, RulePuzzleGame
 
 
 def _solvable(game: RulePuzzleGame, seed: int) -> bool:
