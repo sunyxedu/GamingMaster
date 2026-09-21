@@ -1,0 +1,187 @@
+{
+  "clock": "wall-monotonic",
+  "wall_s": 1.8008148340741172,
+  "tick_cap": 32,
+  "receipts": [
+    {
+      "tick": 1,
+      "requested": "DOWN",
+      "received_elapsed_s": 2.5667017325758934e-05,
+      "applied_elapsed_s": 0.20200000004842877
+    },
+    {
+      "tick": 2,
+      "requested": "RIGHT",
+      "received_elapsed_s": 0.2020062090596184,
+      "applied_elapsed_s": 0.4004961249884218
+    },
+    {
+      "tick": 3,
+      "requested": "LEFT",
+      "received_elapsed_s": 0.4005018339958042,
+      "applied_elapsed_s": 0.6022357500623912
+    },
+    {
+      "tick": 4,
+      "requested": "UP",
+      "received_elapsed_s": 0.602265499997884,
+      "applied_elapsed_s": 0.804236292024143
+    },
+    {
+      "tick": 5,
+      "requested": "UP",
+      "received_elapsed_s": 0.8042417500400916,
+      "applied_elapsed_s": 1.0012267919955775
+    },
+    {
+      "tick": 6,
+      "requested": "NOOP",
+      "received_elapsed_s": 1.001232875045389,
+      "applied_elapsed_s": 1.2014425840461627
+    },
+    {
+      "tick": 7,
+      "requested": "UP",
+      "received_elapsed_s": 1.201474417001009,
+      "applied_elapsed_s": 1.404293500003405
+    },
+    {
+      "tick": 8,
+      "requested": "DOWN",
+      "received_elapsed_s": 1.4042999170487747,
+      "applied_elapsed_s": 1.6030906670494005
+    },
+    {
+      "tick": 9,
+      "requested": "NOOP",
+      "received_elapsed_s": 1.6030962920049205,
+      "applied_elapsed_s": 1.8008140000747517
+    }
+  ],
+  "replay": {
+    "ruleset_id": "classic-walled-v1",
+    "scenario_version": "snake-scenarios-v1",
+    "profile": "demo-v1",
+    "seed": 7,
+    "actions": [
+      {
+        "tick": 1,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 2,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 3,
+        "requested": "LEFT",
+        "applied": "RIGHT",
+        "reverse_ignored": true
+      },
+      {
+        "tick": 4,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 5,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 6,
+        "requested": "NOOP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 7,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 8,
+        "requested": "DOWN",
+        "applied": "UP",
+        "reverse_ignored": true
+      },
+      {
+        "tick": 9,
+        "requested": "NOOP",
+        "applied": "UP",
+        "reverse_ignored": false
+      }
+    ],
+    "final": {
+      "schema_version": 1,
+      "ruleset_id": "classic-walled-v1",
+      "scenario_version": "snake-scenarios-v1",
+      "profile": "demo-v1",
+      "tick": 9,
+      "status": "dead",
+      "width": 10,
+      "height": 10,
+      "initial_length": 3,
+      "body": [
+        [
+          5,
+          0
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          5,
+          2
+        ]
+      ],
+      "direction": "UP",
+      "food": [
+        0,
+        7
+      ],
+      "length": 3,
+      "food_eaten": 0,
+      "score": 0,
+      "completion": 0.0,
+      "tick_interval_s": 0.2,
+      "last_requested_action": "NOOP",
+      "last_applied_action": "UP",
+      "reverse_ignored": false,
+      "attempted_destination": [
+        5,
+        -1
+      ],
+      "terminated": true,
+      "truncated": false,
+      "won": false,
+      "end_reason": "wall_collision"
+    }
+  },
+  "metrics": {
+    "ruleset_id": "classic-walled-v1",
+    "scenario_version": "snake-scenarios-v1",
+    "profile": "demo-v1",
+    "clock_owner": "runner",
+    "width": 10,
+    "height": 10,
+    "food_eaten": 0,
+    "raw_score": 0,
+    "completion": 0.0,
+    "score": 0.0,
+    "won": false,
+    "ticks": 9,
+    "terminated": true,
+    "truncated": false,
+    "end_reason": "wall_collision",
+    "recommended_tick_cap": 20000
+  }
+}

@@ -97,6 +97,24 @@ def combine_evals(per_game: dict[str, dict[str, Any]], seeds: list[int]) -> dict
     }
 
 
+def latency_summary(e: dict[str, Any]) -> dict[str, Optional[float]]:
+    """Median over episodes of the per-episode p50 / max model latency (seconds)."""
+    import statistics
+    out: dict[str, Optional[float]] = {}
+    games = e["per_game"].values() if isinstance(e.get("per_game"), dict) else [e]
+    for kind in ("s1", "s2"):
+        p50s, maxs = [], []
+        for g in games:
+            for ep in g.get("episodes", []):
+                st = ep.get(f"latency_{kind}") or {}
+                if st.get("n"):
+                    p50s.append(float(st["p50"]))
+                    maxs.append(float(st["max"]))
+        out[f"{kind}_p50"] = statistics.median(p50s) if p50s else None
+        out[f"{kind}_max"] = max(maxs) if maxs else None
+    return out
+
+
 def _eligible(e: dict[str, Any]) -> bool:
     score = e.get("mean_score")
     meta = e.get("metadata", {})
@@ -209,7 +227,8 @@ class Archive:
         table = self._norm_table()
         head = ["#", "candidate"] + ([f"{g}" for g in games] if multi else ["mean score"]) + \
                (["selection (mean / worst norm.)"] if multi else []) + \
-               ["episodes", "stale ticks", "S1 calls", "S2 calls", "Jev→act", "Astra→act", "status"]
+               ["episodes", "stale ticks", "S1 calls", "S2 calls", "Jev→act", "Astra→act",
+                "Jev p50/max s", "Astra p50/max s", "status"]
         rows = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
 
         def fmt(x, pct=False):
@@ -232,9 +251,14 @@ class Archive:
                 cells.append("–" if not _eligible(e) else f"{mean_n:.3f} / {worst_n:.3f}")
             else:
                 cells.append(fmt(e.get("mean_score")))
+            lat = latency_summary(e)
+
+            def lat_cell(kind):
+                return "–" if lat[f"{kind}_p50"] is None else f"{lat[f'{kind}_p50']:.1f} / {lat[f'{kind}_max']:.0f}"
             cells += [str(e.get("n_episodes", 0)), fmt(e.get("stale_fraction"), pct=True),
                       str(e.get("system1_calls", 0)), str(e.get("system2_calls", 0)),
-                      fmt(e.get("s1_informed_fraction"), pct=True), fmt(e.get("s2_informed_fraction"), pct=True), status]
+                      fmt(e.get("s1_informed_fraction"), pct=True), fmt(e.get("s2_informed_fraction"), pct=True),
+                      lat_cell("s1"), lat_cell("s2"), status]
             rows.append("| " + " | ".join(cells) + " |")
         best = self.best()
         text = "# Leaderboard\n\n" + "\n".join(rows) + "\n\n"
@@ -243,7 +267,9 @@ class Archive:
                      "candidates are ranked by the mean normalised score, then by their worst game. "
                      "A harness must work on every game.\n")
         text += ("`Jev→act` / `Astra→act`: fraction of posted actions preceded by a fresh System-1 / System-2 "
-                 "answer since the previous action (reported, not used for selection).\n\n")
+                 "answer since the previous action (reported, not used for selection). Latency columns are the "
+                 "median per-episode p50 and the worst observed call: design timeouts and pipelining from these "
+                 "measurements, not from assumptions.\n\n")
         text += (f"Best so far: `{best.dir.name}` (mean score {best.score:.3f})\n" if best else "No scored candidate yet.\n")
         held = []
         for c in self.candidates():

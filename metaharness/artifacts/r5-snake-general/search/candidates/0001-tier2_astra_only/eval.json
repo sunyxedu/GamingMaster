@@ -1,0 +1,142 @@
+{
+  "harness_path": "/Users/hemlix/Documents/GamingMaster/runs/r5-snake/search/candidates/0001-tier2_astra_only/harness.py",
+  "game": "Snake",
+  "fatal": null,
+  "mean_score": 0.0,
+  "stale_fraction": 1.0,
+  "n_episodes": 3,
+  "system1_calls": 0,
+  "system2_calls": 3,
+  "mean_steps": 5.0,
+  "s1_informed_fraction": null,
+  "s2_informed_fraction": null,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 0.0,
+      "steps": 5,
+      "system1_calls": 0,
+      "system2_calls": 1,
+      "stale_ticks": 5,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 1,
+        "mean": 5.571252107620239,
+        "p50": 5.571252107620239,
+        "p90": 5.571252107620239,
+        "max": 5.571252107620239
+      },
+      "wall_s": 5.5721681118011475,
+      "error": null,
+      "info": {
+        "score": 0.0,
+        "ticks": 5,
+        "game_done": true,
+        "pending_tasks": 0
+      },
+      "acts": 0,
+      "acts_after_s1": 0,
+      "acts_after_s2": 0
+    },
+    {
+      "seed": 1,
+      "score": 0.0,
+      "steps": 5,
+      "system1_calls": 0,
+      "system2_calls": 1,
+      "stale_ticks": 5,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 1,
+        "mean": 5.124876976013184,
+        "p50": 5.124876976013184,
+        "p90": 5.124876976013184,
+        "max": 5.124876976013184
+      },
+      "wall_s": 5.125349998474121,
+      "error": null,
+      "info": {
+        "score": 0.0,
+        "ticks": 5,
+        "game_done": true,
+        "pending_tasks": 0
+      },
+      "acts": 0,
+      "acts_after_s1": 0,
+      "acts_after_s2": 0
+    },
+    {
+      "seed": 2,
+      "score": 0.0,
+      "steps": 5,
+      "system1_calls": 0,
+      "system2_calls": 1,
+      "stale_ticks": 5,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 1,
+        "mean": 5.627825975418091,
+        "p50": 5.627825975418091,
+        "p90": 5.627825975418091,
+        "max": 5.627825975418091
+      },
+      "wall_s": 5.628448963165283,
+      "error": null,
+      "info": {
+        "score": 0.0,
+        "ticks": 5,
+        "game_done": true,
+        "pending_tasks": 0
+      },
+      "acts": 0,
+      "acts_after_s1": 0,
+      "acts_after_s2": 0
+    }
+  ],
+  "metadata": {
+    "protocol_version": 2,
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "expected_episodes": 3,
+    "game_kwargs": {},
+    "clock_mode": "wall",
+    "latency_override": null,
+    "memory_mode": "episode",
+    "harness_timeout_s": 900.0,
+    "budget": {
+      "max_system1_calls": 4000,
+      "max_system2_calls": 40,
+      "max_wall_s": 900.0
+    },
+    "models": {
+      "system1": {
+        "name": "jev",
+        "model": "jev-latest",
+        "player_tools": null,
+        "reasoning_effort": null
+      },
+      "system2": {
+        "name": "codex:gpt-6-astra",
+        "model": "gpt-6-astra",
+        "player_tools": "disabled-and-audited",
+        "reasoning_effort": "high"
+      }
+    },
+    "harness_sha256": "0dad28a587e9d11714e37718f40db83a9147f4834411f417ae3dd870dc846b44",
+    "game_kind": "realtime"
+  },
+  "score_std": 0.0
+}

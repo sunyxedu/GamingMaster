@@ -1,0 +1,40 @@
+{
+  "game": "Snake",
+  "tier": 2,
+  "tier_rationale": "Classic Snake moves continuously. The chosen local classic-walled-v1 profile advances one cell every 0.200 seconds independently of observations or model calls; a missed direction deadline keeps the current heading and may cause an immediate collision. Astra is too slow for individual turns, and Jev's approximately 0.5-second latency also exceeds a tick, so generated local control code must execute and validate a policy every tick while the models supply asynchronous policy choices. A synchronous debug step mode is a separate tier-1 interface and must not be scored as real-time play.",
+  "decision_latency_s": 0.2,
+  "interface": {
+    "chosen": "api: local headless real-time Snake environment with JSON Lines transport",
+    "why": "The user permits local implementation. It provides exact state, explicit classic rules, deterministic seeded replay and independent real-time ticking without an account, GUI or network. Inspected community environments require correctness fixes or old API migration; browser mods and emulator routes add version-specific uncertainty. This is a specification for the adaptor phase, not an existing implementation.",
+    "software": [
+      "Python 3.11+ recommended; standard library suffices for the chosen core and transport",
+      "Optional Pygame for human rendering; not required for headless play"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Select a Python 3.11+ interpreter and create an isolated project virtual environment; the study workspace currently reports Python 3.9.6. No game credentials or environment variables are needed.",
+      "Implement classic-walled-v1 exactly as specified in interfaces.md: default 10x10 grid, initial length 3, one uniformly sampled food, growth one, solid walls, ignored reversal, departing-tail entry allowed, immediate full-board win, and fixed 0.200-second movement ticks.",
+      "Expose reset(seed, options), start, observe, act and close through local newline-delimited JSON with request IDs, episode IDs, tick IDs, deadlines and explicit acknowledgments; isolate the clock from model calls and blocked transport.",
+      "Reject late or old-episode actions, allow only one executed heading choice per tick, and continue the current heading when no input arrives. Keep the player controller separate from the environment.",
+      "Implement the documented seed/profile generation and record applied tick-indexed actions for deterministic replay, without exposing future food or RNG state to the player.",
+      "Verify movement, growth, tail collision, food placement, full-board termination, replay determinism and deadline behavior; confirm a stalled controller does not pause the world.",
+      "Report raw food score, normalized completion, win rate, ticks, latency and terminal/truncation reasons. Keep synchronous debug and alternate-speed results separate from the primary real-time suite."
+    ],
+    "observation": "Full JSON state: version, episode and tick IDs, status, width/height, initial length, ordered head-first body coordinates with x right and y down, executed direction, current food or null, score/length, clock/deadline fields, applied-action metadata, and termination/truncation reason. No future food, seed or RNG state in player observations. Optional rendering is for inspection only.",
+    "actions": "Submit UP, RIGHT, DOWN or LEFT for the next tick with episode_id, target_tick and sequence before its deadline. Highest received sequence for that tick wins; reversal is ignored and keeps the executed heading. Late actions are rejected, never shifted forward. Without a command the snake continues straight. Reset/start are evaluator lifecycle operations, not in-episode gameplay actions; no pause or speed change during scored play."
+  },
+  "scoring": "Raw game score is food_eaten, equal to length minus initial_length. Primary cross-board scalar is food_eaten/(width*height-initial_length), with full-board win rate also reported. Use fewer ticks only as an efficiency comparison at equal completion; do not reward idle survival. Cap runs externally at 2*(width*height)^2 ticks and mark truncation separately from wall/body death or victory, preserving earned score.",
+  "scenarios": "Default demonstration is 10x10. The held-out suite uses a versioned seed-driven mixture of 8x8, 10x10, 12x12 and 16x12 empty boards, rotations/reflections of a central straight length-3 start with matching heading and at least two clear forward moves, and uniform food draws from row-major empty cells. All primary scenarios tick at 0.200 seconds. Use disjoint development and held-out seed lists; replay requires both seed and applied actions because real-time arrival jitter changes execution. Odd boards, obstacles and 0.100/0.300-second speeds are separately labeled generalization/stress suites. There are no opponents.",
+  "strategy_summary": "Start with a verified Hamiltonian-cycle controller on the selected even-sided empty rectangles, ensuring the starting body and direction agree with the cycle. Add shortcuts only when exact simulation preserves cyclic body order and growth space, keeping the cycle successor as fallback. Faster food routes should be simulated through eating and checked for escape; tail reachability and flood fill are useful heuristics, not completion guarantees. Generated code owns movement, arithmetic, search, bookkeeping and every-tick control. Astra chooses policies and analyzes failures, while Jev optionally ranks code-generated, labeled candidates asynchronously. Revalidate every model preference on current state and keep the local policy running when calls are late or absent.",
+  "risks": [
+    "The chosen local game and API still need implementation and acceptance tests; no game-playing code was written during study.",
+    "The 0.200-second tick is a declared benchmark setting, not a measured timing for a particular Nokia or browser release; remaining decision slack can be less than a full tick.",
+    "Both models can miss individual movement deadlines; the generated local controller is essential and must not be hidden inside the environment.",
+    "Community source was inspected but not executed; the closest Gymnasium candidate has static correctness findings documented in interfaces.md.",
+    "Python 3.11+ may need installation, and shell network retrieval failed during study even though web research worked.",
+    "Real-time episodes can take minutes or longer; offline acceleration changes the timing evaluation and must be labeled separately.",
+    "Hamiltonian guarantees require a compatible ordered body and suitable board geometry; arbitrary starts, odd boards, obstacles or unsafe shortcuts can invalidate them.",
+    "Process stalls, stale actions and blocked output can corrupt timing unless the engine and transport are isolated and logged.",
+    "Third-party browser or emulator fallbacks introduce site-specific terms, update fragility, GUI permissions or game-image requirements; none are needed for the selected route."
+  ]
+}

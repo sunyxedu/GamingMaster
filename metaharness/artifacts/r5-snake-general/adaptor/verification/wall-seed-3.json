@@ -1,0 +1,307 @@
+{
+  "clock": "wall-monotonic",
+  "wall_s": 3.8045281670056283,
+  "tick_cap": 32,
+  "receipts": [
+    {
+      "tick": 1,
+      "requested": "RIGHT",
+      "received_elapsed_s": 2.4170149117708206e-06,
+      "applied_elapsed_s": 0.20265308301895857
+    },
+    {
+      "tick": 2,
+      "requested": "NOOP",
+      "received_elapsed_s": 0.2026587079744786,
+      "applied_elapsed_s": 0.4038355420343578
+    },
+    {
+      "tick": 3,
+      "requested": "NOOP",
+      "received_elapsed_s": 0.4038407920161262,
+      "applied_elapsed_s": 0.6031779170734808
+    },
+    {
+      "tick": 4,
+      "requested": "RIGHT",
+      "received_elapsed_s": 0.6031836250331253,
+      "applied_elapsed_s": 0.8050084999995306
+    },
+    {
+      "tick": 5,
+      "requested": "DOWN",
+      "received_elapsed_s": 0.8050137080717832,
+      "applied_elapsed_s": 1.0043414999963716
+    },
+    {
+      "tick": 6,
+      "requested": "NOOP",
+      "received_elapsed_s": 1.0043473329860717,
+      "applied_elapsed_s": 1.2044949170667678
+    },
+    {
+      "tick": 7,
+      "requested": "LEFT",
+      "received_elapsed_s": 1.204498082981445,
+      "applied_elapsed_s": 1.4050371670164168
+    },
+    {
+      "tick": 8,
+      "requested": "NOOP",
+      "received_elapsed_s": 1.4050402080174536,
+      "applied_elapsed_s": 1.6049799170577899
+    },
+    {
+      "tick": 9,
+      "requested": "UP",
+      "received_elapsed_s": 1.60498575004749,
+      "applied_elapsed_s": 1.8013229999924079
+    },
+    {
+      "tick": 10,
+      "requested": "NOOP",
+      "received_elapsed_s": 1.8013287920039147,
+      "applied_elapsed_s": 2.0006660419749096
+    },
+    {
+      "tick": 11,
+      "requested": "UP",
+      "received_elapsed_s": 2.0006693330360577,
+      "applied_elapsed_s": 2.205051083001308
+    },
+    {
+      "tick": 12,
+      "requested": "LEFT",
+      "received_elapsed_s": 2.205057083046995,
+      "applied_elapsed_s": 2.404539667069912
+    },
+    {
+      "tick": 13,
+      "requested": "DOWN",
+      "received_elapsed_s": 2.4045451669953763,
+      "applied_elapsed_s": 2.6035382919944823
+    },
+    {
+      "tick": 14,
+      "requested": "NOOP",
+      "received_elapsed_s": 2.603543958044611,
+      "applied_elapsed_s": 2.8021726249717176
+    },
+    {
+      "tick": 15,
+      "requested": "RIGHT",
+      "received_elapsed_s": 2.8021781670395285,
+      "applied_elapsed_s": 3.000871083000675
+    },
+    {
+      "tick": 16,
+      "requested": "RIGHT",
+      "received_elapsed_s": 3.000877666985616,
+      "applied_elapsed_s": 3.204004833009094
+    },
+    {
+      "tick": 17,
+      "requested": "LEFT",
+      "received_elapsed_s": 3.2040112080285326,
+      "applied_elapsed_s": 3.4019375829957426
+    },
+    {
+      "tick": 18,
+      "requested": "NOOP",
+      "received_elapsed_s": 3.4019432499771938,
+      "applied_elapsed_s": 3.602845499990508
+    },
+    {
+      "tick": 19,
+      "requested": "NOOP",
+      "received_elapsed_s": 3.6028522080741823,
+      "applied_elapsed_s": 3.804523375001736
+    }
+  ],
+  "replay": {
+    "ruleset_id": "classic-walled-v1",
+    "scenario_version": "snake-scenarios-v1",
+    "profile": "demo-v1",
+    "seed": 3,
+    "actions": [
+      {
+        "tick": 1,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 2,
+        "requested": "NOOP",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 3,
+        "requested": "NOOP",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 4,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 5,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 6,
+        "requested": "NOOP",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 7,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 8,
+        "requested": "NOOP",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 9,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 10,
+        "requested": "NOOP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 11,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 12,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 13,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 14,
+        "requested": "NOOP",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 15,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 16,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 17,
+        "requested": "LEFT",
+        "applied": "RIGHT",
+        "reverse_ignored": true
+      },
+      {
+        "tick": 18,
+        "requested": "NOOP",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 19,
+        "requested": "NOOP",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      }
+    ],
+    "final": {
+      "schema_version": 1,
+      "ruleset_id": "classic-walled-v1",
+      "scenario_version": "snake-scenarios-v1",
+      "profile": "demo-v1",
+      "tick": 19,
+      "status": "dead",
+      "width": 10,
+      "height": 10,
+      "initial_length": 3,
+      "body": [
+        [
+          9,
+          4
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          7,
+          4
+        ]
+      ],
+      "direction": "RIGHT",
+      "food": [
+        2,
+        0
+      ],
+      "length": 3,
+      "food_eaten": 0,
+      "score": 0,
+      "completion": 0.0,
+      "tick_interval_s": 0.2,
+      "last_requested_action": "NOOP",
+      "last_applied_action": "RIGHT",
+      "reverse_ignored": false,
+      "attempted_destination": [
+        10,
+        4
+      ],
+      "terminated": true,
+      "truncated": false,
+      "won": false,
+      "end_reason": "wall_collision"
+    }
+  },
+  "metrics": {
+    "ruleset_id": "classic-walled-v1",
+    "scenario_version": "snake-scenarios-v1",
+    "profile": "demo-v1",
+    "clock_owner": "runner",
+    "width": 10,
+    "height": 10,
+    "food_eaten": 0,
+    "raw_score": 0,
+    "completion": 0.0,
+    "score": 0.0,
+    "won": false,
+    "ticks": 19,
+    "terminated": true,
+    "truncated": false,
+    "end_reason": "wall_collision",
+    "recommended_tick_cap": 20000
+  }
+}

@@ -1,0 +1,6490 @@
+{
+  "clock": "offline-fast",
+  "replay": {
+    "ruleset_id": "classic-walled-v1",
+    "scenario_version": "snake-scenarios-v1",
+    "profile": "primary-v1",
+    "seed": 61,
+    "actions": [
+      {
+        "tick": 1,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 2,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 3,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 4,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 5,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 6,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 7,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 8,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 9,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 10,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 11,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 12,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 13,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 14,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 15,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 16,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 17,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 18,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 19,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 20,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 21,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 22,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 23,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 24,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 25,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 26,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 27,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 28,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 29,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 30,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 31,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 32,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 33,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 34,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 35,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 36,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 37,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 38,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 39,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 40,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 41,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 42,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 43,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 44,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 45,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 46,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 47,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 48,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 49,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 50,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 51,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 52,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 53,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 54,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 55,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 56,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 57,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 58,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 59,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 60,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 61,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 62,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 63,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 64,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 65,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 66,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 67,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 68,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 69,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 70,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 71,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 72,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 73,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 74,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 75,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 76,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 77,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 78,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 79,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 80,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 81,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 82,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 83,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 84,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 85,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 86,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 87,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 88,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 89,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 90,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 91,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 92,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 93,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 94,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 95,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 96,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 97,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 98,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 99,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 100,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 101,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 102,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 103,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 104,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 105,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 106,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 107,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 108,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 109,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 110,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 111,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 112,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 113,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 114,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 115,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 116,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 117,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 118,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 119,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 120,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 121,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 122,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 123,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 124,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 125,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 126,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 127,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 128,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 129,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 130,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 131,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 132,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 133,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 134,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 135,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 136,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 137,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 138,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 139,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 140,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 141,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 142,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 143,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 144,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 145,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 146,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 147,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 148,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 149,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 150,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 151,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 152,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 153,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 154,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 155,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 156,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 157,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 158,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 159,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 160,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 161,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 162,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 163,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 164,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 165,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 166,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 167,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 168,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 169,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 170,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 171,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 172,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 173,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 174,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 175,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 176,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 177,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 178,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 179,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 180,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 181,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 182,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 183,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 184,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 185,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 186,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 187,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 188,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 189,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 190,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 191,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 192,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 193,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 194,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 195,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 196,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 197,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 198,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 199,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 200,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 201,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 202,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 203,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 204,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 205,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 206,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 207,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 208,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 209,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 210,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 211,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 212,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 213,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 214,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 215,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 216,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 217,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 218,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 219,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 220,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 221,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 222,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 223,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 224,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 225,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 226,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 227,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 228,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 229,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 230,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 231,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 232,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 233,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 234,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 235,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 236,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 237,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 238,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 239,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 240,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 241,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 242,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 243,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 244,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 245,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 246,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 247,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 248,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 249,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 250,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 251,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 252,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 253,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 254,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 255,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 256,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 257,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 258,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 259,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 260,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 261,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 262,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 263,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 264,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 265,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 266,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 267,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 268,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 269,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 270,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 271,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 272,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 273,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 274,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 275,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 276,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 277,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 278,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 279,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 280,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 281,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 282,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 283,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 284,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 285,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 286,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 287,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 288,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 289,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 290,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 291,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 292,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 293,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 294,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 295,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 296,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 297,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 298,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 299,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 300,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 301,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 302,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 303,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 304,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 305,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 306,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 307,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 308,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 309,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 310,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 311,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 312,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 313,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 314,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 315,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 316,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 317,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 318,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 319,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 320,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 321,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 322,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 323,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 324,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 325,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 326,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 327,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 328,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 329,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 330,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 331,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 332,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 333,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 334,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 335,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 336,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 337,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 338,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 339,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 340,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 341,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 342,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 343,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 344,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 345,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 346,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 347,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 348,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 349,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 350,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 351,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 352,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 353,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 354,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 355,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 356,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 357,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 358,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 359,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 360,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 361,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 362,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 363,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 364,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 365,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 366,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 367,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 368,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 369,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 370,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 371,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 372,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 373,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 374,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 375,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 376,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 377,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 378,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 379,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 380,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 381,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 382,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 383,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 384,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 385,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 386,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 387,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 388,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 389,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 390,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 391,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 392,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 393,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 394,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 395,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 396,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 397,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 398,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 399,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 400,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 401,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 402,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 403,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 404,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 405,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 406,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 407,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 408,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 409,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 410,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 411,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 412,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 413,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 414,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 415,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 416,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 417,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 418,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 419,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 420,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 421,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 422,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 423,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 424,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 425,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 426,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 427,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 428,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 429,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 430,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 431,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 432,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 433,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 434,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 435,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 436,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 437,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 438,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 439,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 440,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 441,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 442,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 443,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 444,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 445,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 446,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 447,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 448,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 449,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 450,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 451,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 452,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 453,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 454,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 455,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 456,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 457,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 458,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 459,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 460,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 461,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 462,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 463,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 464,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 465,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 466,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 467,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 468,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 469,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 470,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 471,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 472,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 473,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 474,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 475,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 476,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 477,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 478,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 479,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 480,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 481,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 482,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 483,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 484,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 485,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 486,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 487,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 488,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 489,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 490,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 491,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 492,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 493,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 494,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 495,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 496,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 497,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 498,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 499,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 500,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 501,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 502,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 503,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 504,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 505,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 506,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 507,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 508,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 509,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 510,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 511,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 512,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 513,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 514,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 515,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 516,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 517,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 518,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 519,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 520,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 521,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 522,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 523,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 524,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 525,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 526,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 527,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 528,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 529,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 530,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 531,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 532,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 533,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 534,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 535,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 536,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 537,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 538,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 539,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 540,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 541,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 542,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 543,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 544,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 545,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 546,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 547,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 548,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 549,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 550,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 551,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 552,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 553,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 554,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 555,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 556,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 557,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 558,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 559,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 560,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 561,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 562,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 563,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 564,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 565,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 566,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 567,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 568,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 569,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 570,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 571,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 572,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 573,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 574,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 575,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 576,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 577,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 578,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 579,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 580,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 581,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 582,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 583,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 584,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 585,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 586,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 587,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 588,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 589,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 590,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 591,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 592,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 593,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 594,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 595,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 596,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 597,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 598,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 599,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 600,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 601,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 602,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 603,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 604,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 605,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 606,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 607,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 608,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 609,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 610,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 611,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 612,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 613,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 614,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 615,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 616,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 617,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 618,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 619,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 620,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 621,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 622,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 623,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 624,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 625,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 626,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 627,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 628,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 629,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 630,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 631,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 632,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 633,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 634,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 635,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 636,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 637,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 638,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 639,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 640,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 641,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 642,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 643,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 644,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 645,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 646,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 647,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 648,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 649,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 650,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 651,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 652,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 653,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 654,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 655,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 656,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 657,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 658,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 659,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 660,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 661,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 662,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 663,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 664,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 665,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 666,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 667,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 668,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 669,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 670,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 671,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 672,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 673,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 674,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 675,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 676,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 677,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 678,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 679,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 680,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 681,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 682,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 683,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 684,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 685,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 686,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 687,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 688,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 689,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 690,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 691,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 692,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 693,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 694,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 695,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 696,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 697,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 698,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 699,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 700,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 701,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 702,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 703,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 704,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 705,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 706,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 707,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 708,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 709,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 710,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 711,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 712,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 713,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 714,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 715,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 716,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 717,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 718,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 719,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 720,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 721,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 722,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 723,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 724,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 725,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 726,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 727,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 728,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 729,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 730,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 731,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 732,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 733,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 734,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 735,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 736,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 737,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 738,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 739,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 740,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 741,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 742,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 743,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 744,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 745,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 746,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 747,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 748,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 749,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 750,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 751,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 752,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 753,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 754,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 755,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 756,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 757,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 758,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 759,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 760,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 761,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 762,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 763,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 764,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 765,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 766,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 767,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 768,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 769,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 770,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 771,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 772,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 773,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 774,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 775,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 776,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 777,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 778,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 779,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 780,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 781,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 782,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 783,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 784,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 785,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 786,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 787,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 788,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 789,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 790,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 791,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 792,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 793,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 794,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 795,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 796,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 797,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 798,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 799,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 800,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 801,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 802,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 803,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 804,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 805,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 806,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 807,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 808,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 809,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 810,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 811,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 812,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 813,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 814,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 815,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 816,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 817,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 818,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 819,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 820,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 821,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 822,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 823,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 824,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 825,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 826,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 827,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 828,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 829,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 830,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 831,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 832,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 833,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 834,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 835,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 836,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 837,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 838,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 839,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 840,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 841,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 842,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 843,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 844,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 845,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 846,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 847,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 848,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 849,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 850,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 851,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 852,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 853,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 854,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 855,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 856,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 857,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 858,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 859,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 860,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 861,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 862,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 863,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 864,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 865,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 866,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 867,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 868,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 869,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 870,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 871,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 872,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 873,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 874,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 875,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 876,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 877,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 878,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 879,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 880,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 881,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 882,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 883,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 884,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 885,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 886,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 887,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 888,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 889,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 890,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 891,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 892,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 893,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 894,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 895,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 896,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 897,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 898,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 899,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 900,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 901,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 902,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 903,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 904,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 905,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 906,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 907,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 908,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 909,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 910,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 911,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 912,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 913,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 914,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 915,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 916,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 917,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 918,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 919,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 920,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 921,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 922,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 923,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 924,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 925,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 926,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 927,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 928,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 929,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 930,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 931,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 932,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 933,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 934,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 935,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 936,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 937,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 938,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 939,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 940,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 941,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 942,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 943,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 944,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 945,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 946,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 947,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 948,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 949,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 950,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 951,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 952,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 953,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 954,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 955,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 956,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 957,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 958,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 959,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 960,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 961,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 962,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 963,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 964,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 965,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 966,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 967,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 968,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 969,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 970,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 971,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 972,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 973,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 974,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 975,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 976,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 977,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 978,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 979,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 980,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 981,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 982,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 983,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 984,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 985,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 986,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 987,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 988,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 989,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 990,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 991,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 992,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 993,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 994,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 995,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 996,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 997,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 998,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 999,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1000,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1001,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1002,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1003,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1004,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1005,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1006,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1007,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1008,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1009,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1010,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1011,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1012,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1013,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1014,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1015,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1016,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1017,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1018,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1019,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1020,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1021,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1022,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1023,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1024,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1025,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1026,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1027,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1028,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 1029,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      }
+    ],
+    "final": {
+      "schema_version": 1,
+      "ruleset_id": "classic-walled-v1",
+      "scenario_version": "snake-scenarios-v1",
+      "profile": "primary-v1",
+      "tick": 1029,
+      "status": "won",
+      "width": 8,
+      "height": 8,
+      "initial_length": 3,
+      "body": [
+        [
+          4,
+          4
+        ],
+        [
+          3,
+          4
+        ],
+        [
+          2,
+          4
+        ],
+        [
+          1,
+          4
+        ],
+        [
+          1,
+          3
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          3,
+          3
+        ],
+        [
+          4,
+          3
+        ],
+        [
+          5,
+          3
+        ],
+        [
+          6,
+          3
+        ],
+        [
+          7,
+          3
+        ],
+        [
+          7,
+          2
+        ],
+        [
+          6,
+          2
+        ],
+        [
+          5,
+          2
+        ],
+        [
+          4,
+          2
+        ],
+        [
+          3,
+          2
+        ],
+        [
+          2,
+          2
+        ],
+        [
+          1,
+          2
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          1
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          1
+        ],
+        [
+          7,
+          1
+        ],
+        [
+          7,
+          0
+        ],
+        [
+          6,
+          0
+        ],
+        [
+          5,
+          0
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          3,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          2
+        ],
+        [
+          0,
+          3
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          0,
+          5
+        ],
+        [
+          0,
+          6
+        ],
+        [
+          0,
+          7
+        ],
+        [
+          1,
+          7
+        ],
+        [
+          2,
+          7
+        ],
+        [
+          3,
+          7
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          5,
+          7
+        ],
+        [
+          6,
+          7
+        ],
+        [
+          7,
+          7
+        ],
+        [
+          7,
+          6
+        ],
+        [
+          6,
+          6
+        ],
+        [
+          5,
+          6
+        ],
+        [
+          4,
+          6
+        ],
+        [
+          3,
+          6
+        ],
+        [
+          2,
+          6
+        ],
+        [
+          1,
+          6
+        ],
+        [
+          1,
+          5
+        ],
+        [
+          2,
+          5
+        ],
+        [
+          3,
+          5
+        ],
+        [
+          4,
+          5
+        ],
+        [
+          5,
+          5
+        ],
+        [
+          6,
+          5
+        ],
+        [
+          7,
+          5
+        ],
+        [
+          7,
+          4
+        ],
+        [
+          6,
+          4
+        ],
+        [
+          5,
+          4
+        ]
+      ],
+      "direction": "RIGHT",
+      "food": null,
+      "length": 64,
+      "food_eaten": 61,
+      "score": 61,
+      "completion": 1.0,
+      "tick_interval_s": 0.2,
+      "last_requested_action": "RIGHT",
+      "last_applied_action": "RIGHT",
+      "reverse_ignored": false,
+      "attempted_destination": [
+        4,
+        4
+      ],
+      "terminated": true,
+      "truncated": false,
+      "won": true,
+      "end_reason": "board_full"
+    }
+  },
+  "metrics": {
+    "ruleset_id": "classic-walled-v1",
+    "scenario_version": "snake-scenarios-v1",
+    "profile": "primary-v1",
+    "clock_owner": "runner",
+    "width": 8,
+    "height": 8,
+    "food_eaten": 61,
+    "raw_score": 61,
+    "completion": 1.0,
+    "score": 1.0,
+    "won": true,
+    "ticks": 1029,
+    "terminated": true,
+    "truncated": false,
+    "end_reason": "board_full",
+    "recommended_tick_cap": 8192
+  }
+}

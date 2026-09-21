@@ -1,0 +1,463 @@
+{
+  "clock": "wall-monotonic",
+  "wall_s": 6.405070291948505,
+  "tick_cap": 32,
+  "receipts": [
+    {
+      "tick": 1,
+      "requested": "LEFT",
+      "received_elapsed_s": 4.332978278398514e-06,
+      "applied_elapsed_s": 0.20446766691748053
+    },
+    {
+      "tick": 2,
+      "requested": "LEFT",
+      "received_elapsed_s": 0.20448816695716232,
+      "applied_elapsed_s": 0.40518562495708466
+    },
+    {
+      "tick": 3,
+      "requested": "UP",
+      "received_elapsed_s": 0.40519129193853587,
+      "applied_elapsed_s": 0.6004201249452308
+    },
+    {
+      "tick": 4,
+      "requested": "DOWN",
+      "received_elapsed_s": 0.600425791926682,
+      "applied_elapsed_s": 0.8004195829853415
+    },
+    {
+      "tick": 5,
+      "requested": "NOOP",
+      "received_elapsed_s": 0.8004261669702828,
+      "applied_elapsed_s": 1.0005232919938862
+    },
+    {
+      "tick": 6,
+      "requested": "LEFT",
+      "received_elapsed_s": 1.0005367919802666,
+      "applied_elapsed_s": 1.2009178329026327
+    },
+    {
+      "tick": 7,
+      "requested": "LEFT",
+      "received_elapsed_s": 1.2009234169963747,
+      "applied_elapsed_s": 1.4002758329734206
+    },
+    {
+      "tick": 8,
+      "requested": "DOWN",
+      "received_elapsed_s": 1.4002818329026923,
+      "applied_elapsed_s": 1.6049742919858545
+    },
+    {
+      "tick": 9,
+      "requested": "LEFT",
+      "received_elapsed_s": 1.6049777920125052,
+      "applied_elapsed_s": 1.8012661669636145
+    },
+    {
+      "tick": 10,
+      "requested": "DOWN",
+      "received_elapsed_s": 1.8012724579311907,
+      "applied_elapsed_s": 2.0006963330088183
+    },
+    {
+      "tick": 11,
+      "requested": "NOOP",
+      "received_elapsed_s": 2.000701916986145,
+      "applied_elapsed_s": 2.201891832984984
+    },
+    {
+      "tick": 12,
+      "requested": "RIGHT",
+      "received_elapsed_s": 2.2018989169737324,
+      "applied_elapsed_s": 2.402336666942574
+    },
+    {
+      "tick": 13,
+      "requested": "NOOP",
+      "received_elapsed_s": 2.402341999928467,
+      "applied_elapsed_s": 2.601958749932237
+    },
+    {
+      "tick": 14,
+      "requested": "RIGHT",
+      "received_elapsed_s": 2.6019653329858556,
+      "applied_elapsed_s": 2.8043762499000877
+    },
+    {
+      "tick": 15,
+      "requested": "DOWN",
+      "received_elapsed_s": 2.8043815419077873,
+      "applied_elapsed_s": 3.00212974997703
+    },
+    {
+      "tick": 16,
+      "requested": "RIGHT",
+      "received_elapsed_s": 3.002161999931559,
+      "applied_elapsed_s": 3.204555167001672
+    },
+    {
+      "tick": 17,
+      "requested": "UP",
+      "received_elapsed_s": 3.2045608749613166,
+      "applied_elapsed_s": 3.405038541997783
+    },
+    {
+      "tick": 18,
+      "requested": "NOOP",
+      "received_elapsed_s": 3.4050421249121428,
+      "applied_elapsed_s": 3.600979166920297
+    },
+    {
+      "tick": 19,
+      "requested": "DOWN",
+      "received_elapsed_s": 3.600985041935928,
+      "applied_elapsed_s": 3.8003578749485314
+    },
+    {
+      "tick": 20,
+      "requested": "NOOP",
+      "received_elapsed_s": 3.8003646249417216,
+      "applied_elapsed_s": 4.005050874897279
+    },
+    {
+      "tick": 21,
+      "requested": "NOOP",
+      "received_elapsed_s": 4.005057041998953,
+      "applied_elapsed_s": 4.205067583010532
+    },
+    {
+      "tick": 22,
+      "requested": "RIGHT",
+      "received_elapsed_s": 4.205076624988578,
+      "applied_elapsed_s": 4.403304624953307
+    },
+    {
+      "tick": 23,
+      "requested": "DOWN",
+      "received_elapsed_s": 4.403312582988292,
+      "applied_elapsed_s": 4.60228016693145
+    },
+    {
+      "tick": 24,
+      "requested": "UP",
+      "received_elapsed_s": 4.6022924579447135,
+      "applied_elapsed_s": 4.801382916979492
+    },
+    {
+      "tick": 25,
+      "requested": "UP",
+      "received_elapsed_s": 4.801387166953646,
+      "applied_elapsed_s": 5.001413291902281
+    },
+    {
+      "tick": 26,
+      "requested": "DOWN",
+      "received_elapsed_s": 5.001422707922757,
+      "applied_elapsed_s": 5.203373624943197
+    },
+    {
+      "tick": 27,
+      "requested": "LEFT",
+      "received_elapsed_s": 5.2033802919322625,
+      "applied_elapsed_s": 5.401276999968104
+    },
+    {
+      "tick": 28,
+      "requested": "NOOP",
+      "received_elapsed_s": 5.401282124919817,
+      "applied_elapsed_s": 5.60097979195416
+    },
+    {
+      "tick": 29,
+      "requested": "UP",
+      "received_elapsed_s": 5.600983166950755,
+      "applied_elapsed_s": 5.803247125004418
+    },
+    {
+      "tick": 30,
+      "requested": "DOWN",
+      "received_elapsed_s": 5.803253166959621,
+      "applied_elapsed_s": 6.002337791956961
+    },
+    {
+      "tick": 31,
+      "requested": "LEFT",
+      "received_elapsed_s": 6.002342916908674,
+      "applied_elapsed_s": 6.204169207951054
+    },
+    {
+      "tick": 32,
+      "requested": "DOWN",
+      "received_elapsed_s": 6.204172874917276,
+      "applied_elapsed_s": 6.405055042007007
+    }
+  ],
+  "replay": {
+    "ruleset_id": "classic-walled-v1",
+    "scenario_version": "snake-scenarios-v1",
+    "profile": "demo-v1",
+    "seed": 0,
+    "actions": [
+      {
+        "tick": 1,
+        "requested": "LEFT",
+        "applied": "RIGHT",
+        "reverse_ignored": true
+      },
+      {
+        "tick": 2,
+        "requested": "LEFT",
+        "applied": "RIGHT",
+        "reverse_ignored": true
+      },
+      {
+        "tick": 3,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 4,
+        "requested": "DOWN",
+        "applied": "UP",
+        "reverse_ignored": true
+      },
+      {
+        "tick": 5,
+        "requested": "NOOP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 6,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 7,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 8,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 9,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 10,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 11,
+        "requested": "NOOP",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 12,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 13,
+        "requested": "NOOP",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 14,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 15,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 16,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 17,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 18,
+        "requested": "NOOP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 19,
+        "requested": "DOWN",
+        "applied": "UP",
+        "reverse_ignored": true
+      },
+      {
+        "tick": 20,
+        "requested": "NOOP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 21,
+        "requested": "NOOP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 22,
+        "requested": "RIGHT",
+        "applied": "RIGHT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 23,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 24,
+        "requested": "UP",
+        "applied": "DOWN",
+        "reverse_ignored": true
+      },
+      {
+        "tick": 25,
+        "requested": "UP",
+        "applied": "DOWN",
+        "reverse_ignored": true
+      },
+      {
+        "tick": 26,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 27,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 28,
+        "requested": "NOOP",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 29,
+        "requested": "UP",
+        "applied": "UP",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 30,
+        "requested": "DOWN",
+        "applied": "UP",
+        "reverse_ignored": true
+      },
+      {
+        "tick": 31,
+        "requested": "LEFT",
+        "applied": "LEFT",
+        "reverse_ignored": false
+      },
+      {
+        "tick": 32,
+        "requested": "DOWN",
+        "applied": "DOWN",
+        "reverse_ignored": false
+      }
+    ],
+    "final": {
+      "schema_version": 1,
+      "ruleset_id": "classic-walled-v1",
+      "scenario_version": "snake-scenarios-v1",
+      "profile": "demo-v1",
+      "tick": 32,
+      "status": "truncated",
+      "width": 10,
+      "height": 10,
+      "initial_length": 3,
+      "body": [
+        [
+          6,
+          3
+        ],
+        [
+          6,
+          2
+        ],
+        [
+          7,
+          2
+        ]
+      ],
+      "direction": "DOWN",
+      "food": [
+        2,
+        6
+      ],
+      "length": 3,
+      "food_eaten": 0,
+      "score": 0,
+      "completion": 0.0,
+      "tick_interval_s": 0.2,
+      "last_requested_action": "DOWN",
+      "last_applied_action": "DOWN",
+      "reverse_ignored": false,
+      "attempted_destination": [
+        6,
+        3
+      ],
+      "terminated": false,
+      "truncated": true,
+      "won": false,
+      "end_reason": "external_tick_cap"
+    }
+  },
+  "metrics": {
+    "ruleset_id": "classic-walled-v1",
+    "scenario_version": "snake-scenarios-v1",
+    "profile": "demo-v1",
+    "clock_owner": "runner",
+    "width": 10,
+    "height": 10,
+    "food_eaten": 0,
+    "raw_score": 0,
+    "completion": 0.0,
+    "score": 0.0,
+    "won": false,
+    "ticks": 32,
+    "terminated": false,
+    "truncated": true,
+    "end_reason": "external_tick_cap",
+    "recommended_tick_cap": 20000
+  }
+}

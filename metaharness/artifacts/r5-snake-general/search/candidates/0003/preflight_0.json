@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "stage": "episode",
+  "error": "budget exceeded: wall time > 60.0s",
+  "score": 0.0,
+  "steps": 8072251,
+  "system1_calls": 2,
+  "system2_calls": 4
+}
