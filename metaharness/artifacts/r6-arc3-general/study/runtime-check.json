@@ -1,0 +1,346 @@
+{
+  "python": "3.14.5 (main, May 10 2026, 19:20:57) [Clang 22.1.3 ]",
+  "packages": {
+    "arc-agi": "0.9.9",
+    "arcengine": "0.9.3",
+    "numpy": "2.4.2",
+    "pydantic": "2.13.5"
+  },
+  "operation_mode": "offline",
+  "checks": "Fresh construction and initial RESET only; no gameplay actions; no game logic inspected.",
+  "games": [
+    {
+      "game_id": "tn36-ef4dde99",
+      "make_ms": 48.52,
+      "loaded": true,
+      "state": "NOT_FINISHED",
+      "levels_completed": 0,
+      "win_levels": 7,
+      "available_actions": [
+        6
+      ],
+      "frames": 1,
+      "shapes": [
+        [
+          64,
+          64
+        ]
+      ],
+      "dtypes": [
+        "int8"
+      ],
+      "palette": [
+        0,
+        1,
+        4,
+        5,
+        9,
+        11
+      ],
+      "full_reset": true,
+      "model_dump_includes_frame": false,
+      "repeat_seed_zero_initial_frame_equal": true,
+      "seed_zero_vs_one_initial_frame_equal": true
+    },
+    {
+      "game_id": "cd82-fb555c5d",
+      "make_ms": 6.779,
+      "loaded": true,
+      "state": "NOT_FINISHED",
+      "levels_completed": 0,
+      "win_levels": 6,
+      "available_actions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "frames": 1,
+      "shapes": [
+        [
+          64,
+          64
+        ]
+      ],
+      "dtypes": [
+        "int8"
+      ],
+      "palette": [
+        0,
+        2,
+        3,
+        4,
+        5,
+        15
+      ],
+      "full_reset": true,
+      "model_dump_includes_frame": false,
+      "repeat_seed_zero_initial_frame_equal": true,
+      "seed_zero_vs_one_initial_frame_equal": true
+    },
+    {
+      "game_id": "ls20-9607627b",
+      "make_ms": 21.589,
+      "loaded": true,
+      "state": "NOT_FINISHED",
+      "levels_completed": 0,
+      "win_levels": 7,
+      "available_actions": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "frames": 1,
+      "shapes": [
+        [
+          64,
+          64
+        ]
+      ],
+      "dtypes": [
+        "int8"
+      ],
+      "palette": [
+        0,
+        1,
+        3,
+        4,
+        5,
+        8,
+        9,
+        11,
+        12
+      ],
+      "full_reset": true,
+      "model_dump_includes_frame": false,
+      "repeat_seed_zero_initial_frame_equal": true,
+      "seed_zero_vs_one_initial_frame_equal": true
+    },
+    {
+      "game_id": "vc33-5430563c",
+      "make_ms": 14.697,
+      "loaded": true,
+      "state": "NOT_FINISHED",
+      "levels_completed": 0,
+      "win_levels": 7,
+      "available_actions": [
+        6
+      ],
+      "frames": 1,
+      "shapes": [
+        [
+          64,
+          64
+        ]
+      ],
+      "dtypes": [
+        "int8"
+      ],
+      "palette": [
+        0,
+        3,
+        4,
+        5,
+        7,
+        9,
+        11
+      ],
+      "full_reset": true,
+      "model_dump_includes_frame": false,
+      "repeat_seed_zero_initial_frame_equal": true,
+      "seed_zero_vs_one_initial_frame_equal": true
+    },
+    {
+      "game_id": "lf52-271a04aa",
+      "make_ms": 123.369,
+      "loaded": true,
+      "state": "NOT_FINISHED",
+      "levels_completed": 0,
+      "win_levels": 10,
+      "available_actions": [
+        1,
+        2,
+        3,
+        4,
+        6,
+        7
+      ],
+      "frames": 2,
+      "shapes": [
+        [
+          64,
+          64
+        ],
+        [
+          64,
+          64
+        ]
+      ],
+      "dtypes": [
+        "int8",
+        "int8"
+      ],
+      "palette": [
+        0,
+        1,
+        5,
+        9,
+        10,
+        14
+      ],
+      "full_reset": true,
+      "model_dump_includes_frame": false,
+      "repeat_seed_zero_initial_frame_equal": true,
+      "seed_zero_vs_one_initial_frame_equal": true
+    },
+    {
+      "game_id": "sb26-7fbdac44",
+      "make_ms": 17.423,
+      "loaded": true,
+      "state": "NOT_FINISHED",
+      "levels_completed": 0,
+      "win_levels": 8,
+      "available_actions": [
+        5,
+        6,
+        7
+      ],
+      "frames": 1,
+      "shapes": [
+        [
+          64,
+          64
+        ]
+      ],
+      "dtypes": [
+        "int8"
+      ],
+      "palette": [
+        0,
+        2,
+        4,
+        5,
+        8,
+        9,
+        11,
+        14,
+        15
+      ],
+      "full_reset": true,
+      "model_dump_includes_frame": false,
+      "repeat_seed_zero_initial_frame_equal": true,
+      "seed_zero_vs_one_initial_frame_equal": true
+    },
+    {
+      "game_id": "sp80-589a99af",
+      "make_ms": 6.102,
+      "loaded": true,
+      "state": "NOT_FINISHED",
+      "levels_completed": 0,
+      "win_levels": 6,
+      "available_actions": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "frames": 1,
+      "shapes": [
+        [
+          64,
+          64
+        ]
+      ],
+      "dtypes": [
+        "int8"
+      ],
+      "palette": [
+        1,
+        4,
+        6,
+        9,
+        11,
+        12,
+        14
+      ],
+      "full_reset": true,
+      "model_dump_includes_frame": false,
+      "repeat_seed_zero_initial_frame_equal": true,
+      "seed_zero_vs_one_initial_frame_equal": true
+    },
+    {
+      "game_id": "tu93-0768757b",
+      "make_ms": 14.11,
+      "loaded": true,
+      "state": "NOT_FINISHED",
+      "levels_completed": 0,
+      "win_levels": 9,
+      "available_actions": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "frames": 1,
+      "shapes": [
+        [
+          64,
+          64
+        ]
+      ],
+      "dtypes": [
+        "int8"
+      ],
+      "palette": [
+        0,
+        2,
+        4,
+        5,
+        6,
+        9,
+        14
+      ],
+      "full_reset": true,
+      "model_dump_includes_frame": false,
+      "repeat_seed_zero_initial_frame_equal": true,
+      "seed_zero_vs_one_initial_frame_equal": true
+    }
+  ],
+  "cache_setup": "MPLCONFIGDIR and XDG_CACHE_HOME set to writable study/.cache subdirectories; MPLBACKEND=Agg before importing arc_agi. Reset-only run completed.",
+  "requires_python": {
+    "arc-agi": ">=3.12",
+    "arcengine": ">=3.12"
+  },
+  "dependencies": {
+    "arc-agi": [
+      "arcengine>=0.9.3",
+      "flask>=3.1.0",
+      "matplotlib>=3.7.0",
+      "pydantic>=2.0.0",
+      "python-dotenv>=1.0.0",
+      "pillow>=12.1.1",
+      "requests>=2.31.0"
+    ],
+    "arcengine": [
+      "numpy>=1.24.0",
+      "pydantic>=2.10.6",
+      "mypy>=1.15.0 ; extra == 'dev'",
+      "pre-commit>=4.2.0 ; extra == 'dev'",
+      "ruff>=0.11.4 ; extra == 'dev'"
+    ]
+  },
+  "inspected_sdk_source_sha256": {
+    "arc_agi/base.py": "42973618f223096d6269422352980e85bdf6b2b51dcb42e7390f96164b0f994f",
+    "arc_agi/local_wrapper.py": "77e0a39f583e148bfc785f933d111ed4d8653d134def55b204dda3064e93bbd2",
+    "arc_agi/wrapper.py": "deaf07a628fb2e0f743366de4967110d4c06bafa21c5b61561d9ca02f31055ee",
+    "arc_agi/scorecard.py": "1cc830e48008bec60b8a98ae14d3e9312e8408f102a9878bad42744aa9e489b7",
+    "arc_agi/rendering.py": "ef62e519ecbca857dfeb9956c8a6468335e7078b0e83e86324e5272caedacdba",
+    "arcengine/enums.py": "94ebef48f6fe950a18679a1b991c366e8e28c32ab58c9335f385e19bea21950e",
+    "arcengine/base_game.py": "5b5f41f3bec4c0c97a727fda7326114991dc0d4a5642d489b40ee4aa87e6b15f"
+  }
+}

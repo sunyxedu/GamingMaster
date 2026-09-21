@@ -1,0 +1,107 @@
+{
+  "backend": "real pinned OFFLINE SDK",
+  "initializations": [
+    {
+      "seed": 0,
+      "game_id": "cd82-fb555c5d",
+      "win_levels": 6,
+      "observation_bytes": 13329
+    },
+    {
+      "seed": 1,
+      "game_id": "lf52-271a04aa",
+      "win_levels": 10,
+      "observation_bytes": 15968
+    },
+    {
+      "seed": 2,
+      "game_id": "ls20-9607627b",
+      "win_levels": 7,
+      "observation_bytes": 13248
+    },
+    {
+      "seed": 3,
+      "game_id": "sb26-7fbdac44",
+      "win_levels": 8,
+      "observation_bytes": 13262
+    },
+    {
+      "seed": 4,
+      "game_id": "sp80-589a99af",
+      "win_levels": 6,
+      "observation_bytes": 16918
+    },
+    {
+      "seed": 5,
+      "game_id": "tn36-ef4dde99",
+      "win_levels": 7,
+      "observation_bytes": 13159
+    },
+    {
+      "seed": 6,
+      "game_id": "tu93-0768757b",
+      "win_levels": 9,
+      "observation_bytes": 13163
+    },
+    {
+      "seed": 7,
+      "game_id": "vc33-5430563c",
+      "win_levels": 7,
+      "observation_bytes": 13149
+    }
+  ],
+  "random_play": [
+    {
+      "seed": 0,
+      "game_id": "cd82-fb555c5d",
+      "actions": 40,
+      "changed_frames": 35,
+      "max_animation_frames": 15,
+      "game_overs": 0,
+      "score": 0.0,
+      "state": "NOT_FINISHED"
+    },
+    {
+      "seed": 1,
+      "game_id": "lf52-271a04aa",
+      "actions": 40,
+      "changed_frames": 40,
+      "max_animation_frames": 16,
+      "game_overs": 0,
+      "score": 0.0,
+      "state": "NOT_FINISHED"
+    },
+    {
+      "seed": 2,
+      "game_id": "ls20-9607627b",
+      "actions": 160,
+      "changed_frames": 160,
+      "max_animation_frames": 6,
+      "game_overs": 1,
+      "score": 0.0,
+      "state": "NOT_FINISHED"
+    },
+    {
+      "seed": 3,
+      "game_id": "sb26-7fbdac44",
+      "actions": 40,
+      "changed_frames": 14,
+      "max_animation_frames": 42,
+      "game_overs": 0,
+      "score": 0.0,
+      "state": "NOT_FINISHED"
+    }
+  ],
+  "fixtures": [
+    "high-water progress 2 -> 0 -> 1 -> 2 -> 3 scores only 3",
+    "GAME_OVER blocks numbered calls but permits explicit retry",
+    "WIN ends episode and no subsequent call reaches SDK",
+    "None/empty SDK responses preserve last good frame and truncate"
+  ],
+  "live_retry": {
+    "first_full_reset": false,
+    "duplicate_full_reset": true
+  },
+  "budgets": "action, invalid request, and wall time limits passed",
+  "network": "all tests ran with requests.Session.request blocked"
+}

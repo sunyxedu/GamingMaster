@@ -1,0 +1,79 @@
+{
+  "game": "ARC-AGI-3",
+  "tier": 1,
+  "tier_rationale": "The official environments are turn-based and the installed engine advances synchronously only when an action is submitted, returning all internal animation frames before the next decision. Astra may reason for seconds or minutes without consuming moves or advancing the game. Rendering FPS is not a real-time simulation deadline. decision_latency_s=-1.0 is an explicit sentinel for no finite game-imposed deadline because standard JSON cannot represent infinity; evaluator wall-time and model budgets remain separate. Sources: https://docs.arcprize.org/game-schema and installed arcengine/base_game.py.",
+  "decision_latency_s": -1.0,
+  "interface": {
+    "chosen": "official env: arc-agi Python SDK, in-process OFFLINE mode",
+    "why": "Already installed and all eight cached versions initialize on the evaluator's Python 3.14.5. It supplies exact NumPy pixel grids and state/progress metadata without ARC server access, credentials, GUI input, or HTTP overhead. Use public wrapper observations rather than hidden engine state. See https://docs.arcprize.org/local-vs-online and interfaces.md.",
+    "software": [
+      "/Users/hemlix/Documents/GamingMaster/.venv/bin/python (Python 3.14.5; use this interpreter)",
+      "arc-agi==0.9.9 (already installed; no upgrade needed)",
+      "arcengine==0.9.3 (already installed)",
+      "numpy==2.4.2 and pydantic==2.13.5 (already installed)",
+      "Existing arc-agi dependencies: Flask, Matplotlib, python-dotenv, Pillow, requests",
+      "Existing cached environment files for cd82, lf52, ls20, sb26, sp80, tn36, tu93, vc33"
+    ],
+    "env": [
+      {
+        "var": "OPERATION_MODE",
+        "description": "Already supplied as offline. Also explicitly select OperationMode.OFFLINE and verify the resolved mode; never fall back to NORMAL, ONLINE, or COMPETITION.",
+        "required": true
+      },
+      {
+        "var": "ENVIRONMENTS_DIR",
+        "description": "Already supplied; preserve the existing directory containing cached metadata.json files and their Python game classes.",
+        "required": true
+      },
+      {
+        "var": "RECORDINGS_DIR",
+        "description": "Optional writable directory under the run workspace for SDK JSONL recordings.",
+        "required": false
+      },
+      {
+        "var": "MPLCONFIGDIR",
+        "description": "Recommended writable Matplotlib cache directory under the workspace, created before importing arc_agi to avoid sandbox cache warnings.",
+        "required": false
+      },
+      {
+        "var": "XDG_CACHE_HOME",
+        "description": "Recommended writable cache root under the workspace so Fontconfig can cache fonts.",
+        "required": false
+      },
+      {
+        "var": "MPLBACKEND",
+        "description": "Recommended Agg for headless operation; set before importing arc_agi.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Use the evaluator interpreter and retain the installed package versions; both ARC packages declare Python >=3.12 and were checked on 3.14.5.",
+      "Set writable optional cache directories before import, configure logging away from protocol stdout, and validate OPERATION_MODE and ENVIRONMENTS_DIR. No ARC_API_KEY, account, or server address is needed.",
+      "Construct Arcade(operation_mode=OperationMode.OFFLINE, environments_dir=the supplied path, recordings_dir=a writable run path); verify all fixed versioned IDs via get_environments(). Fail explicitly if cached data is missing.",
+      "Map nonnegative reset(seed) to seed modulo 8 in the fixed order cd82-fb555c5d, lf52-271a04aa, ls20-9607627b, sb26-7fbdac44, sp80-589a99af, tn36-ef4dde99, tu93-0768757b, vc33-5430563c; use engine seed 0.",
+      "For each evaluator reset, close the prior scorecard if used, discard the old wrapper, clear episode bookkeeping and game-specific agent memory, and call a fresh arc.make(full_game_id, seed=0, render_mode=None). Read env.observation_space; make already performs initial RESET.",
+      "Explicitly serialize raw frame arrays with tolist(), enums as IDs/strings, and metadata. FrameDataRaw.model_dump() omits frames. Use the last frame for current state and retain intermediate frames as transition evidence.",
+      "Validate and submit one enum action at a time through env.step. Handle None/errors explicitly, stop queued plans at level transitions or terminal states, and distinguish in-game RESET recovery from a fresh evaluator episode.",
+      "Report high-water levels_completed as score; track action count, retries, elapsed time, completion fraction, and truncation reason separately. Stop on WIN or external budget exhaustion; GAME_OVER may be retried through explicit RESET.",
+      "Verify simple actions, coordinate actions, serialization, retry semantics, terminal behavior, and duplicate-progress prevention on development games during adaptor implementation. This study tested initial construction/reset only."
+    ],
+    "observation": "Public FrameDataRaw: frame is a temporal list of NumPy 2D palette-index arrays (observed 64x64 int8, values 0-15), plus state, levels_completed, win_levels, available_actions, full_reset, action_input, game_id, and guid. Explicitly convert pixels to JSON because model_dump omits them. Expose the final grid, event frames, and code-derived objects/differences to Astra; retain raw pixels. No authoritative object names, goal, collision map, or valid-click mask is exposed.",
+    "actions": "env.step(GameAction.from_id(id), data=...) with numbered actions drawn from the current available_actions. Actions 1-4 conventionally up/down/left/right but effects vary; 5 is context-specific; 6 requires integer x,y in 0..63 in data; 7 is undo when available. RESET is ID 0 and may retry only the current level. Array indexing is grid[y][x]. The wrapper does not return a Gymnasium reward/done tuple. See https://docs.arcprize.org/actions and interfaces.md."
+  },
+  "scoring": "Primary episode score is max observed levels_completed since evaluator reset(seed), bounded by win_levels, so retries cannot farm duplicate completions. Incremental reward is the increase of this high-water mark. Track current progress, numbered actions, explicit retries/undo, elapsed time, WIN, completion fraction, and truncation separately. The cached games have 6,10,7,8,6,7,9,7 levels (60 total). Optional SDK RHAE is distinct from this user-requested level score; see https://docs.arcprize.org/methodology.",
+  "scenarios": "Use the immutable versioned eight-game manifest in interfaces.md; nonnegative seed modulo 8 selects the game, with engine seed fixed at 0. Suggested development residues 0-3 and held-out residues 4-7. Every seed sharing a game prefix belongs to the same split; seed 8 is another CD82 episode, not an unseen scenario. Two seed-0 initializations and one seed-1 initialization yielded identical initial frames for every cached game, so RNG seed changes alone are not demonstrated novelty. Hold out entire game families and clear game-specific memory between evaluator episodes while transferring learned mechanics between levels within an episode.",
+  "strategy_summary": "Astra should infer goals and causal rules through small discriminating probes, retaining facts, competing hypotheses, predictions, and counterexamples in structured memory. Code should handle exact frame differences, component geometry, click candidates, legality, counters, graph bookkeeping, and search in a learned state model. Prefer meaningful object clicks to blind pixel enumeration, and treat frame change as exploratory evidence rather than reward. Include selection, orientation, transformations, resources, and history when needed; identical visible boards need not imply identical states. Execute short verified plans with per-action checks and interrupt on unexpected effects, level changes, or terminal states. Record failure-causing actions before recovery, and explain why a level was won before transferring its rules forward. Jev is optional for independent semantic classification or candidate ranking with an unknown option; it should not plan or do arithmetic.",
+  "risks": [
+    "Offline cache must contain the exact pinned versions and matching game class files; no server download or anonymous-key fallback is available.",
+    "Public documentation, preview papers, and cached versions differ in fields, level totals, scoring, and action masks; installed runtime evidence takes precedence.",
+    "FrameDataRaw.model_dump omits pixel data; multiple frames are animation time, not color channels.",
+    "Player RESET can retry a level or fully restart, including after duplicate RESET or immediately after a level transition; evaluator reset(seed) must create a fresh wrapper.",
+    "Post-terminal extra actions can return empty frames and misleading progress in this installed engine branch; preserve prior progress and stop on WIN.",
+    "Game-specific source access, private engine snapshots, or held-out replay memorization would undermine the intended unseen-game evaluation.",
+    "No finite game decision deadline exists, but evaluator wall-time/action/model-cost budgets must be chosen separately; decision_latency_s=-1.0 denotes unbounded latency.",
+    "Matplotlib is imported even headless; writable cache variables avoid sandbox Fontconfig and Matplotlib warnings and repeated startup work.",
+    "SDK calls may return None after an exception, potentially after partial mutation; do not silently retry or turn interface failures into false game losses.",
+    "Initial-frame repeatability does not prove complete determinism or seed diversity. Fresh worker processes provide stronger isolation than cached classes in a long-lived process.",
+    "All eight initializations succeeded on Python 3.14.5, but gameplay actions, complete solutions, later levels, and death recovery remain for the adaptor phase to verify."
+  ]
+}

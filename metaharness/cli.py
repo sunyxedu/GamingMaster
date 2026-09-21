@@ -99,9 +99,17 @@ def _study_text(a: argparse.Namespace) -> str:
     return ""
 
 
+def _episode_budget(a: argparse.Namespace) -> Budget:
+    """The per-episode wall budget can never be shorter than the harness timeout: the ARC run
+    lost an iteration to a harness that respected --harness-timeout 1800 while the manifest's
+    default 900 s wall budget cut every long episode (`run: done — best 0002`, 2026-09-21)."""
+    wall = max(float(a.wall_budget), float(a.harness_timeout))
+    return Budget(max_system2_calls=a.s2_budget, max_system1_calls=a.s1_budget, max_wall_s=wall)
+
+
 def _run_search(a: argparse.Namespace, game: str, tier_n: int, study: str, exp_dir: Path):
     tier = _tier(tier_n)
-    budget = Budget(max_system2_calls=a.s2_budget, max_system1_calls=a.s1_budget, max_wall_s=a.wall_budget)
+    budget = _episode_budget(a)
     game_kwargs = json.loads(a.game_kwargs) if a.game_kwargs else {}
     archive = Archive(exp_dir)
     for p in tier.baseline_paths():
@@ -186,7 +194,7 @@ def cmd_eval(a: argparse.Namespace) -> int:
     load_dotenv()
     _tier(a.tier)
     game = _resolve_game(a)
-    budget = Budget(max_system2_calls=a.s2_budget, max_system1_calls=a.s1_budget, max_wall_s=a.wall_budget)
+    budget = _episode_budget(a)
     game_kwargs = json.loads(a.game_kwargs) if a.game_kwargs else {}
     out = Path(a.out) if a.out else Path(a.runs_dir) / f"eval-{Path(a.harness).stem}-{time.strftime('%Y%m%d-%H%M%S')}"
     res = evaluate_harness(a.harness, lambda **k: make_game(game, **k), _parse_seeds(a.seeds),

@@ -1,0 +1,66 @@
+{
+  "ok": true,
+  "checks": [
+    {
+      "check": "load game.py and make_game()",
+      "ok": true,
+      "detail": "name=ARC-AGI-3 tier=tier1 realtime=False"
+    },
+    {
+      "check": "action_spec is an ActionSpec with >=1 action",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "describe() returns a non-trivial string",
+      "ok": true,
+      "detail": "2651 chars"
+    },
+    {
+      "check": "seed 0: observe() JSON-serialisable",
+      "ok": true,
+      "detail": "13330 bytes"
+    },
+    {
+      "check": "seed 0: done is bool and score is a number after reset",
+      "ok": true,
+      "detail": "done=False score=0.0"
+    },
+    {
+      "check": "seed 0: applied 9 actions without exception",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "seed 0: info() is a dict",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "seed 1: observe() JSON-serialisable",
+      "ok": true,
+      "detail": "15969 bytes"
+    },
+    {
+      "check": "seed 1: done is bool and score is a number after reset",
+      "ok": true,
+      "detail": "done=False score=0.0"
+    },
+    {
+      "check": "seed 1: applied 9 actions without exception",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "seed 1: info() is a dict",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "different seeds give different starts (scenario variety)",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "error": null
+}

@@ -1,0 +1,5 @@
+arc-agi==0.9.9
+arcengine==0.9.3
+numpy==2.4.2
+pydantic==2.13.5
+Pillow>=12.1.1,<13

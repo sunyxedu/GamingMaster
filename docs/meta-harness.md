@@ -46,6 +46,22 @@ rather than claimed. With several training games in one archive, selection is
 generality-aware (mean of per-game min-max-normalised scores, worst game as
 tie-break).
 
+### First end-to-end runs from a game name (2026-09-21, Astra high, real Jev)
+
+| game (input) | study | adapt | search: baseline → best (train) | held-out |
+|---|---|---|---|---|
+| "Snake" | 7 min; local real-time env spec, Hamiltonian-cycle prior with sources | 8 min, 241-line original env, validated 1st try | 0 → 0.412 → **0.770** food/cell (2/3 seeds clear the board), 0 % stale | 0.649 (3 unseen seeds) |
+| "ARC-AGI-3" (offline, 8 cached games) | 12 min; official `arc-agi` SDK in-process | 8 min, validated 1st try, 60 levels mapped to seeds with a dev/held-out split | 0.33 → **4.33** levels (cd82 6/6, lf52 4/10, ls20 3/7); official-formula score on these three ≈ 50 % | sp80 1/6, tn36 4/7 → 2.5 levels, ≈ 23 % official-formula |
+| "Minecraft" (Java 1.21.1, offline server + Mineflayer bridge built by the adapt agent) | 23 min | 46 min, validated 1st try; real vanilla server, 300 s episodes | running | – |
+
+Archives (proposals, harnesses, evals, study + adaptor sources, no traces):
+`metaharness/artifacts/r5-snake-general/`, `metaharness/artifacts/r6-arc3-general/`.
+
+Lessons that became general code: measured latency and failed-call columns on the
+leaderboard (Snake 0002 wasted all Astra calls on a self-chosen 45 s timeout);
+wall budget ≥ harness timeout (ARC 0001 lost two episodes to the 900 s manifest
+budget and the next iteration was spent on a reliability repair instead of play).
+
 The former built-in games (`snake`, `lanerunner`, `rulepuzzle`, `arc3`) moved to
 `metaharness/testbeds/`: offline fixtures for testing the pipeline, not adaptors
 the Meta-Harness depends on. The codex backend pins `service_tier="default"` and

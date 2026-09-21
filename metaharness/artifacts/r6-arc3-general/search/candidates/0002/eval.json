@@ -1,0 +1,137 @@
+{
+  "harness_path": "/Users/hemlix/Documents/GamingMaster/runs/r6-arc3/search/candidates/0002/harness.py",
+  "game": "ARC-AGI-3",
+  "fatal": null,
+  "mean_score": 4.333333333333333,
+  "stale_fraction": null,
+  "n_episodes": 3,
+  "system1_calls": 0,
+  "system2_calls": 87,
+  "mean_steps": 0.0,
+  "s1_informed_fraction": 0.0,
+  "s2_informed_fraction": 0.15789473684210525,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 0,
+      "score": 6.0,
+      "steps": 0,
+      "system1_calls": 0,
+      "system2_calls": 22,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 22,
+        "mean": 25.76027721708471,
+        "p50": 23.040724992752075,
+        "p90": 38.258086919784546,
+        "max": 47.39166021347046
+      },
+      "wall_s": 567.0875587463379,
+      "error": null,
+      "info": {
+        "score": 6.0,
+        "ticks": 0,
+        "game_done": true,
+        "pending_tasks": 0
+      },
+      "acts": 89,
+      "acts_after_s1": 0,
+      "acts_after_s2": 22
+    },
+    {
+      "seed": 1,
+      "score": 4.0,
+      "steps": 0,
+      "system1_calls": 0,
+      "system2_calls": 33,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 33,
+        "mean": 25.421629118196893,
+        "p50": 24.345119953155518,
+        "p90": 35.58816194534302,
+        "max": 47.14980602264404
+      },
+      "wall_s": 839.8066627979279,
+      "error": null,
+      "info": {
+        "score": 4.0,
+        "ticks": 0,
+        "game_done": false,
+        "pending_tasks": 0
+      },
+      "acts": 191,
+      "acts_after_s1": 0,
+      "acts_after_s2": 33
+    },
+    {
+      "seed": 2,
+      "score": 3.0,
+      "steps": 0,
+      "system1_calls": 0,
+      "system2_calls": 32,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 32,
+        "mean": 25.951910950243473,
+        "p50": 25.38458800315857,
+        "p90": 32.716092109680176,
+        "max": 43.70301604270935
+      },
+      "wall_s": 831.1623260974884,
+      "error": null,
+      "info": {
+        "score": 3.0,
+        "ticks": 0,
+        "game_done": false,
+        "pending_tasks": 0
+      },
+      "acts": 271,
+      "acts_after_s1": 0,
+      "acts_after_s2": 32
+    }
+  ],
+  "metadata": {
+    "protocol_version": 2,
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "expected_episodes": 3,
+    "game_kwargs": {},
+    "clock_mode": "wall",
+    "latency_override": null,
+    "memory_mode": "episode",
+    "harness_timeout_s": 1800.0,
+    "budget": {
+      "max_system1_calls": 4000,
+      "max_system2_calls": 40,
+      "max_wall_s": 900.0
+    },
+    "models": {
+      "system1": null,
+      "system2": {
+        "name": "codex:gpt-6-astra",
+        "model": "gpt-6-astra",
+        "player_tools": "disabled-and-audited",
+        "reasoning_effort": "high"
+      }
+    },
+    "harness_sha256": "18c8ff2b4295633f553b3adcd3094638346c0c35c76c8833c37229575c9f2ff8",
+    "game_kind": "turn"
+  },
+  "score_std": 1.5275252316519468
+}

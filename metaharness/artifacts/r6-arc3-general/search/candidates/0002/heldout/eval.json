@@ -1,0 +1,106 @@
+{
+  "harness_path": "/Users/hemlix/Documents/GamingMaster/runs/r6-arc3/search/candidates/0002/harness.py",
+  "game": "ARC-AGI-3",
+  "fatal": null,
+  "mean_score": 2.5,
+  "stale_fraction": null,
+  "n_episodes": 2,
+  "system1_calls": 0,
+  "system2_calls": 59,
+  "mean_steps": 0.0,
+  "s1_informed_fraction": 0.0,
+  "s2_informed_fraction": 0.2041522491349481,
+  "errors": [],
+  "episodes": [
+    {
+      "seed": 100,
+      "score": 1.0,
+      "steps": 0,
+      "system1_calls": 0,
+      "system2_calls": 30,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 30,
+        "mean": 27.806478730837505,
+        "p50": 28.169678688049316,
+        "p90": 38.53772592544556,
+        "max": 45.67109489440918
+      },
+      "wall_s": 834.9307961463928,
+      "error": null,
+      "info": {
+        "score": 1.0,
+        "ticks": 0,
+        "game_done": false,
+        "pending_tasks": 0
+      },
+      "acts": 163,
+      "acts_after_s1": 0,
+      "acts_after_s2": 30
+    },
+    {
+      "seed": 101,
+      "score": 4.0,
+      "steps": 0,
+      "system1_calls": 0,
+      "system2_calls": 29,
+      "stale_ticks": 0,
+      "decided_ticks": 0,
+      "latency_s1": {
+        "n": 0
+      },
+      "latency_s2": {
+        "n": 29,
+        "mean": 28.835913222411584,
+        "p50": 30.62319588661194,
+        "p90": 43.19025993347168,
+        "max": 51.02820611000061
+      },
+      "wall_s": 836.764172077179,
+      "error": null,
+      "info": {
+        "score": 4.0,
+        "ticks": 0,
+        "game_done": false,
+        "pending_tasks": 0
+      },
+      "acts": 126,
+      "acts_after_s1": 0,
+      "acts_after_s2": 29
+    }
+  ],
+  "metadata": {
+    "protocol_version": 2,
+    "seeds": [
+      100,
+      101
+    ],
+    "expected_episodes": 2,
+    "game_kwargs": {},
+    "clock_mode": "wall",
+    "latency_override": null,
+    "memory_mode": "episode",
+    "harness_timeout_s": 1800.0,
+    "budget": {
+      "max_system1_calls": 4000,
+      "max_system2_calls": 40,
+      "max_wall_s": 900.0
+    },
+    "models": {
+      "system1": null,
+      "system2": {
+        "name": "codex:gpt-6-astra",
+        "model": "gpt-6-astra",
+        "player_tools": "disabled-and-audited",
+        "reasoning_effort": "high"
+      }
+    },
+    "harness_sha256": "18c8ff2b4295633f553b3adcd3094638346c0c35c76c8833c37229575c9f2ff8",
+    "game_kind": "turn"
+  },
+  "score_std": 2.1213203435596424
+}
