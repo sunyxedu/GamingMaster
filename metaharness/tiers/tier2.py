@@ -28,6 +28,12 @@ Models available through `ctx`:
   its state, questions and answer-to-action bridge. Actual latency must be measured.
 * `ctx.spawn(fn)` — background thread, so Astra can think while Jev keeps acting.
 
+Model economics (measured facts, not instructions): one Jev request answers *many independent typed
+questions about one state in parallel* for the price and latency (~0.5 s) of one, and the Jev budget
+is two orders of magnitude larger than Astra's; an Astra call takes tens of seconds to minutes and
+the budget is a few dozen per episode. Whatever the design, the evaluator reports how many posted
+actions were preceded by a fresh Jev / Astra answer, so the division of labour is visible.
+
 The game ticks every {tick_s}s **on its own clock**; `ctx.act(a)` posts the current action (instant).
 A tick with no fresh action re-applies the last one. Evaluation metric: mean score over seeds
 (primary), then fraction of stale ticks (lower is better), then System-2 calls (fewer is better).
