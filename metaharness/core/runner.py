@@ -313,6 +313,16 @@ def run_episode(
     res.wall_s = time.time() - t_wall0
     res.error = err
     res.info = {**view.info(), "pending_tasks": pending}
+    # Optional adaptor hook: a numeric breakdown of the score (e.g. progress vs survival) so
+    # the proposer can see *where* points came from instead of one scalar. Public, not hidden state.
+    if hasattr(game, "score_breakdown"):
+        try:
+            bd = game.score_breakdown()
+            if isinstance(bd, dict):
+                res.info["score_breakdown"] = {str(k): float(v) for k, v in bd.items()
+                                               if isinstance(v, (int, float))}
+        except Exception as e:  # noqa: BLE001
+            res.info["score_breakdown_error"] = str(e)[:200]
     res.acts, res.acts_after_s1, res.acts_after_s2 = ctx.acts, ctx.acts_after_s1, ctx.acts_after_s2
     trace.write({"type": "episode_end", **res.summary()})
     return res

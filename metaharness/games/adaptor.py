@@ -14,7 +14,10 @@ An adaptor is a directory (written by Astra, never by hand in this repo):
 object returned by ``make_game`` must implement ``TurnGame`` (``step``) or
 ``RealtimeGame`` (``tick`` + ``tick_s`` + ``ticks``) from ``games/base.py`` and
 additionally ``name`` (str) and ``TIER`` may be declared at module level as
-``TIER = 1 | 2``. Observations must be JSON-serialisable (dicts/lists/str/
+``TIER = 1 | 2``. Optionally implement ``score_breakdown() -> dict[str, float]``
+(numeric components of the current score, e.g. progress vs survival); the
+evaluator records it per episode so the harness designer sees where points came
+from. Observations must be JSON-serialisable (dicts/lists/str/
 numbers/bools); binary perception (screenshots) is exposed as file paths so a
 harness can hand them to ``ctx.think(images=[...])``.
 

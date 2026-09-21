@@ -274,6 +274,20 @@ class Archive:
                  "median per-episode p50 and the worst observed call: design timeouts and pipelining from these "
                  "measurements, not from assumptions.\n\n")
         text += (f"Best so far: `{best.dir.name}` (mean score {best.score:.3f})\n" if best else "No scored candidate yet.\n")
+        # score composition, when the adaptor exposes it (mean over episodes)
+        comp_rows = []
+        for c in self.candidates():
+            e = c.eval() or {}
+            eps = [ep for g in (e["per_game"].values() if isinstance(e.get("per_game"), dict) else [e])
+                   for ep in g.get("episodes", [])]
+            bds = [ep.get("info", {}).get("score_breakdown") for ep in eps]
+            bds = [b for b in bds if isinstance(b, dict)]
+            if bds:
+                keys = sorted({k for b in bds for k in b})
+                comp_rows.append(f"- `{c.dir.name}`: " + ", ".join(
+                    f"{k} {sum(b.get(k, 0.0) for b in bds) / len(bds):.2f}" for k in keys))
+        if comp_rows:
+            text += "\nScore composition (mean per episode, from the adaptor's score_breakdown):\n" + "\n".join(comp_rows) + "\n"
         held = []
         for c in self.candidates():
             for d in sorted(c.dir.glob("heldout*")):
