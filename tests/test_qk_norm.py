@@ -396,6 +396,50 @@ def test_frozen_core_keeps_qk_norm_scales_trainable_with_norms():
     assert not any(p.requires_grad for n, p in net.named_parameters() if "qk_norm" in n)
 
 
+@pytest.mark.parametrize("mixer", MIXERS)
+def test_qk_norm_scales_are_not_weight_decayed(mixer):
+    """Weight decay on the QK scales would pull the attention temperature
+    toward uniform; both optimiser groupings (optim_param_groups: single-game
+    IL / RL trainers; multi_game_param_groups: train_multi_game) keep them at
+    wd 0 and leave qk_norm=False models' groups exactly as before."""
+    from model.optim import AdamATan2
+    from model.rl_utils import optim_param_groups, qk_norm_param_ids
+    from training.train_multi_game import multi_game_param_groups
+
+    def is_memory(n):
+        return n.endswith("retention_bias") or n.endswith("temporal_rnn.h_init")
+
+    off = _net("recurrent_depth", mixer, qk_norm=False)
+    assert qk_norm_param_ids(off) == set()
+    g_off = optim_param_groups(off, 0.1)
+    assert [id(p) for p in g_off[0]["params"]] == \
+        [id(p) for n, p in off.named_parameters() if not is_memory(n)]
+    mg_off = multi_game_param_groups(off, 0.1)
+    assert len(mg_off) == 1 and [id(p) for p in mg_off[0]["params"]] == \
+        [id(p) for p in off.parameters()]
+
+    on = _net("recurrent_depth", mixer, qk_norm=True)
+    qk = {id(p) for n, p in on.named_parameters() if "qk_norm" in n}
+    assert qk_norm_param_ids(on) == qk
+    g_on = optim_param_groups(on, 0.1)
+    assert {id(p) for p in g_on[-1]["params"]} == qk | {
+        id(p) for n, p in on.named_parameters() if is_memory(n)}
+    assert g_on[-1]["weight_decay"] == 0.0
+    mg_on = multi_game_param_groups(on, 0.1)
+    assert {id(p) for p in mg_on[1]["params"]} == qk and mg_on[1]["weight_decay"] == 0.0
+    assert sum(len(g["params"]) for g in mg_on) == len(list(on.parameters()))
+
+    # pure decay (zero gradients): QK scales stay at 1, other norm scales shrink
+    opt = AdamATan2(mg_on, lr=1e-2, weight_decay=0.1)
+    for p in on.parameters():
+        p.grad = torch.zeros_like(p)
+    for _ in range(50):
+        opt.step()
+    assert torch.equal(on.core.prelude[0].qk_norm.q_norm.weight, torch.ones(D_HEAD))
+    assert torch.equal(on.st_layers[0].spatial_qk_norm.k_norm.weight, torch.ones(D_HEAD))
+    assert (on.core.prelude[0].norms[0].weight < 1).all()
+
+
 def test_core_block_bf16_autocast():
     torch.manual_seed(0)
     blk = CoreBlock(ModelConfig(d_model=32, n_heads=4, qk_norm=True),

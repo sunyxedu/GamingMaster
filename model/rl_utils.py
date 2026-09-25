@@ -9,14 +9,12 @@ Reinforcement-learning utilities.
 
 from __future__ import annotations
 
-import math
 from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-
 
 # ======================================================================
 # GAE
@@ -424,8 +422,27 @@ def sync_gradients(model: nn.Module, world_size: int) -> None:
 # Optimizer parameter groups
 # ======================================================================
 
+def qk_norm_param_ids(model: nn.Module) -> set:
+    """ids of the QK-norm scales (``cfg.qk_norm``) in ``model``.
+
+    They are the attention temperature: every logit is bounded by
+    √head_dim·max|g_q|·max|g_k|, and nothing downstream can compensate a
+    shrunken scale (a pre-norm scale is absorbed by the following linear
+    layer; these sit right before the dot product).  Decoupled weight decay
+    therefore pulls attention toward uniform whenever the gradient signal
+    is weak — at a high LR the attention collapsed that way instead of
+    training.  They stay out of weight decay; qk_norm=False models have none,
+    so their parameter groups are unchanged.
+    """
+    from model.components.core import QKNorm
+
+    return {id(p) for m in model.modules() if isinstance(m, QKNorm)
+            for p in m.parameters()}
+
+
 def optim_param_groups(model: nn.Module, weight_decay: float) -> List[Dict]:
-    """Parameter groups excluding recurrence memory parameters from decay.
+    """Parameter groups excluding recurrence memory parameters (and the
+    QK-norm scales, see :func:`qk_norm_param_ids`) from decay.
 
     AdamW's decoupled decay shrinks ``retention_bias`` toward 0 every step
     (a → 0.5), and the shrinkage hits the longest-memory channels hardest
@@ -434,11 +451,13 @@ def optim_param_groups(model: nn.Module, weight_decay: float) -> List[Dict]:
     slowest channel from 1024 to ~370 ticks over ~1.5M steps. ``h_init``
     is likewise decayed against a weak one-sample-per-sequence gradient.
     """
+    qk = qk_norm_param_ids(model)
     no_decay, decay = [], []
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        if name.endswith("retention_bias") or name.endswith("temporal_rnn.h_init"):
+        if (name.endswith("retention_bias") or name.endswith("temporal_rnn.h_init")
+                or id(p) in qk):
             no_decay.append(p)
         else:
             decay.append(p)

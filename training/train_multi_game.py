@@ -64,6 +64,7 @@ from model.optim import (
     ModelEMA,
     trm_lr_lambda,
 )
+from model.rl_utils import qk_norm_param_ids
 from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry
 from training.train_il_game import (
     LABEL_KEYS,
@@ -144,6 +145,22 @@ def mixture_weights(frames: Dict[str, int], alpha: float) -> Dict[str, float]:
     raw = {g: float(max(n, 1)) ** alpha for g, n in frames.items()}
     z = sum(raw.values())
     return {g: v / z for g, v in raw.items()}
+
+
+def multi_game_param_groups(model: torch.nn.Module, weight_decay: float) -> List[Dict]:
+    """Every trainable parameter once (shared core tensors de-duplicated),
+    decayed — except the QK-norm scales (wd 0, see
+    ``model.rl_utils.qk_norm_param_ids``).  Not ``optim_param_groups``: this
+    trainer decays the recurrence memory parameters, and a qk_norm=False
+    model keeps exactly its historical single group."""
+    qk = qk_norm_param_ids(model)
+    params = [p for p in model.parameters() if p.requires_grad]
+    groups = [{"params": [p for p in params if id(p) not in qk],
+               "weight_decay": weight_decay}]
+    no_decay = [p for p in params if id(p) in qk]
+    if no_decay:
+        groups.append({"params": no_decay, "weight_decay": 0.0})
+    return groups
 
 
 def _cycle(loader):
@@ -249,8 +266,8 @@ def main(argv=None) -> None:
                    for g, d in val_dirs.items() if g in games}
 
     params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = AdamATan2(params, lr=args.lr, betas=(args.beta1, args.beta2),
-                          weight_decay=args.weight_decay)
+    optimizer = AdamATan2(multi_game_param_groups(model, args.weight_decay), lr=args.lr,
+                          betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, trm_lr_lambda(args.warmup_steps, args.steps, args.lr_min_ratio))
     ema = ModelEMA(model, mu=args.ema_rate) if args.ema_rate > 0 else None

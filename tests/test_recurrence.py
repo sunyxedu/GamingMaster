@@ -68,7 +68,7 @@ def test_parallel_scan_equals_sequential():
         par = _scan_parallel(a, (1.0 - a) * v, h0)
         diff = (seq - par).abs().max().item()
         assert diff < 1e-12, f"T={T}: diff={diff}"
-    print(f"  T ∈ {{1, 2, 7, C±1, 3C+5}}: all < 1e-12 OK")
+    print("  T ∈ {1, 2, 7, C±1, 3C+5}: all < 1e-12 OK")
 
 
 def test_module_step_equals_forward():
@@ -176,6 +176,7 @@ def test_scan_gradients_correct_under_checkpoint():
     the custom scan's backward must produce identical grads inside it."""
     print("\n=== scan under re-entrant checkpoint: grads identical ===")
     from torch.utils.checkpoint import checkpoint
+
     from model.components.transformer import SpatiotemporalBlock
     from model.config import ModelConfig
 
@@ -394,7 +395,8 @@ def test_memory_params_excluded_from_weight_decay():
     for name, p in model.named_parameters():
         in_no_decay = id(p) in no_decay_ids
         is_memory = name.endswith("retention_bias") or name.endswith("temporal_rnn.h_init")
-        assert in_no_decay == is_memory, f"{name}: wrong decay group"
+        is_qk_scale = "qk_norm." in name        # cfg.qk_norm (tests/test_qk_norm.py)
+        assert in_no_decay == (is_memory or is_qk_scale), f"{name}: wrong decay group"
 
     # Empirical: pure decay (zero grad) must leave retention_bias untouched
     opt = torch.optim.AdamW(groups, lr=1e-2)
