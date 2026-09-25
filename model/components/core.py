@@ -76,6 +76,16 @@ def ckpt(fn, *args):
     return checkpoint(fn, *args, use_reentrant=False, context_fn=_ckpt_contexts)
 
 
+class RMSNorm(nn.RMSNorm):
+    """nn.RMSNorm that stays on the fused kernel under bf16 autocast: the
+    statistics are computed in fp32 and the (fp32) weight is cast to the
+    input dtype, instead of the unfused mixed-dtype fallback."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = F.rms_norm(x.float(), self.normalized_shape, None, self.eps).to(x.dtype)
+        return y * self.weight.to(x.dtype)
+
+
 class CoreLinear(nn.Module):
     """Bias-free linear with truncated-normal init of a chosen std.  Not an
     ``nn.Linear`` so GameNetwork's blanket std-0.02 init leaves it alone."""
@@ -189,7 +199,7 @@ class CoreBlock(nn.Module):
         self.n_heads = cfg.n_heads
         self.qkv = CoreLinear(d, 3 * d, std)
         self.o = CoreLinear(d, d, out_std)
-        self.norms = nn.ModuleList([nn.RMSNorm(d, eps=1e-6) for _ in range(4)])
+        self.norms = nn.ModuleList([RMSNorm(d, eps=1e-6) for _ in range(4)])
         self.ffn = (MoEFFN(d, cfg.moe_experts, cfg.moe_top_k, cfg.moe_shared_experts,
                            cfg.moe_expansion, std, out_std)
                     if moe else SwiGLUFFN(d, cfg.core_expansion, std, out_std))
@@ -231,7 +241,7 @@ class DeepCore(nn.Module):
         out_std = _out_std(cfg, cfg.core_layers)
         self.blocks = nn.ModuleList(
             [CoreBlock(cfg, out_std, _moe_on(cfg)) for _ in range(cfg.core_layers)])
-        self.final_norm = nn.RMSNorm(cfg.d_model, eps=1e-6)
+        self.final_norm = RMSNorm(cfg.d_model, eps=1e-6)
 
     def default_iters(self) -> int:
         return 1
@@ -273,7 +283,7 @@ class RecurrentDepthCore(nn.Module):
             [CoreBlock(cfg, out_std, moe) for _ in range(cfg.rd_recurrent_layers)])
         self.coda = nn.ModuleList(
             [CoreBlock(cfg, out_std, moe) for _ in range(cfg.rd_coda_layers)])
-        self.final_norm = nn.RMSNorm(d, eps=1e-6)
+        self.final_norm = RMSNorm(d, eps=1e-6)
         self.state_std = math.sqrt(2.0 / 5.0)
         self._fixed_state: Dict[Tuple[int, int, str], torch.Tensor] = {}
 
