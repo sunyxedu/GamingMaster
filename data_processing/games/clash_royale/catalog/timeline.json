@@ -1,0 +1,37 @@
+{
+ "version": "cr-timeline.v1",
+ "tick_ms": 50,
+ "grid": {
+  "width": 18,
+  "height": 32
+ },
+ "starting_elixir": 6.0,
+ "max_elixir": 10,
+ "sections": [
+  {
+   "length_seconds": 180,
+   "section_type": "Normal",
+   "flags": []
+  },
+  {
+   "length_seconds": 120,
+   "section_type": "Overtime",
+   "flags": []
+  }
+ ],
+ "elixir_rates": [
+  {
+   "length_seconds": 120,
+   "seconds_per_elixir": 2.8
+  },
+  {
+   "length_seconds": 120,
+   "seconds_per_elixir": 1.4
+  },
+  {
+   "length_seconds": 60,
+   "seconds_per_elixir": 0.93
+  }
+ ],
+ "note": "sections: normal then overtime; rates apply consecutively from t=0"
+}

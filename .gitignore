@@ -27,3 +27,6 @@ data/
 runs/
 # local job logs
 slurm-*.out
+
+# documentation stays local
+docs/
