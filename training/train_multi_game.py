@@ -89,7 +89,10 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="micro-batches per optimizer step (0 = number of games)")
     p.add_argument("--sample_alpha", type=float, default=0.5,
                    help="mixture temperature: w_g ∝ frames_g^alpha")
-    p.add_argument("--max_len", type=int, default=None, help="random-crop sequences")
+    p.add_argument("--max_len", type=int, default=None, help="random-crop training sequences")
+    p.add_argument("--val_max_len", type=int, default=None,
+                   help="validation crop (default: full sequences, so every evaluation "
+                        "sees exactly the same frames)")
     p.add_argument("--override", nargs="*", default=[], metavar="KEY=VALUE",
                    help="core/config overrides shared by all games")
     p.add_argument("--tf_prob", type=float, default=1.0)
@@ -233,7 +236,7 @@ def main(argv=None) -> None:
                                     num_workers=args.num_workers,
                                     collate_fn=collate_game_sequences))
                for g, ds in datasets.items()}
-    val_loaders = {g: DataLoader(GameShardDataset(d, game=g, max_len=args.max_len),
+    val_loaders = {g: DataLoader(GameShardDataset(d, game=g, max_len=args.val_max_len),
                                  batch_size=args.batch_size, collate_fn=collate_game_sequences)
                    for g, d in val_dirs.items() if g in games}
 
