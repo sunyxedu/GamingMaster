@@ -41,7 +41,7 @@ behaviour, which is what the golden parity tests pin.
 
 | game | source (fetch) | high-quality recipe | notes |
 |---|---|---|---|
-| generals.io | `$G generals ladder --out D --min-stars 70` (global duel ladder) | winner ≥ 70★ (or `--both`), human accounts only (`isBot` check), ≥ 100 turns | per-account `generals pipeline` (= `scripts/prepare_data.py`) still exists; its default account Human.exe is a bot |
+| generals.io | `$G generals ladder --out D --min-stars 70` (global duel ladder) | winner ≥ 70★ (or `--both`), human accounts only (`isBot` check), ≥ 50 turns | per-account `generals pipeline` (= `scripts/prepare_data.py`) still exists; its default account Human.exe is a bot |
 | chess | `$G chess fetch --month 2021-06 --elite` (Lichess Elite DB) or `--month` (full dump) | `convert --hq`: both Elo ≥ 2200, rated, normal termination, no bullet, ≥ 20 plies | elite months are pre-filtered 2400+/2200+ (2500+/2300+ since 2021-12) |
 | go | `$G go fetch --url https://dl.u-go.net/gamerecords/KGS-…tar.bz2` | `convert --hq`: both ≥ 6d, no time-loss/forfeit, no handicap, ≥ 50 moves | KGS archives already need one 7d or both 6d |
 | shogi | `$G shogi fetch --day 2025/06/01 --ratings 20250601` or `--year 2023` | `convert --hq --ratings D/ratings-….json`: both engines ≥ 3500 on the floodgate table, floodgate-300-10F, no time-up | engine play |

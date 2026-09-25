@@ -78,7 +78,7 @@ pub enum Cmd {
         both: bool,
         #[arg(long)]
         allow_bots: bool,
-        #[arg(long, default_value_t = 100)]
+        #[arg(long, default_value_t = 50)]
         min_turns: i64,
         #[arg(long, default_value_t = 1000)]
         max_games: usize,
