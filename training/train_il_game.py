@@ -102,6 +102,11 @@ LEGAL_FROM_OBS = {
 # default the config from the data; every run hard-fails on a mismatch.
 META_ARCH_KEYS = {
     "gomoku": {"board_size": ("board_h", "board_w")},
+    # crdata writes the arena geometry and the card vocabulary of the
+    # catalog it converted with (n_cards grows when cards are added)
+    "clash_royale": {k: (k,) for k in (
+        "arena_h", "arena_w", "arena_channels", "hand_size", "n_cards",
+        "card_feature_dim", "cr_global_features")},
     "pokemon": {"move_buckets": ("pokemon_move_buckets",),
                 "species_buckets": ("pokemon_species_buckets",)},
 }

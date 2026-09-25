@@ -48,8 +48,9 @@ class ClashRoyaleConfig(ModelConfig):
     #: input planes: unit presence / side / hp / tower planes etc.
     arena_channels: int = 16
     hand_size: int = 4
-    #: card-id vocabulary; index 0 = empty slot
-    n_cards: int = 110
+    #: card-id vocabulary; index 0 = empty slot (catalog cr-card-catalog.v1:
+    #: 124 ids; converted shards record it in their meta)
+    n_cards: int = 124
     #: per-card scalar features (elixir cost, level, ...)
     card_feature_dim: int = 8
     #: own/enemy elixir, match time, tower counts, ...
