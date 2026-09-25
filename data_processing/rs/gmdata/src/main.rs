@@ -11,6 +11,7 @@
 
 mod common;
 mod generals;
+mod go;
 mod gomoku;
 mod othello;
 
@@ -36,6 +37,11 @@ enum Game {
         #[command(subcommand)]
         cmd: othello::Cmd,
     },
+    /// Go (SGF records)
+    Go {
+        #[command(subcommand)]
+        cmd: go::Cmd,
+    },
     /// Gomoku (Gomocup .psq records)
     Gomoku {
         #[command(subcommand)]
@@ -48,5 +54,6 @@ fn main() -> Result<()> {
         Game::Generals { cmd } => generals::run(cmd),
         Game::Othello { cmd } => othello::run(cmd),
         Game::Gomoku { cmd } => gomoku::run(cmd),
+        Game::Go { cmd } => go::run(cmd),
     }
 }

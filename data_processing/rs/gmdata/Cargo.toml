@@ -20,3 +20,5 @@ rayon.workspace = true
 reqwest.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
+bzip2 = "0.4"
+tar = "0.4"

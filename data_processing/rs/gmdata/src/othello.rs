@@ -21,7 +21,6 @@ use gmshard::{Sample, ShardWriter};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-pub const N: usize = 8;
 const EMPTY: u8 = 0;
 pub const BLACK: u8 = 1;
 pub const WHITE: u8 = 2;

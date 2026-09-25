@@ -68,3 +68,15 @@ def test_gomoku(gmdata, tmp_path, rule, keep):
     subprocess.run(cmd, check=True, capture_output=True)
     assert_same(tmp_path / "py", tmp_path / "rs", ("source", "plies", "winner"))
     assert GameShardDataset(str(tmp_path / "rs")).shard_meta == {"board_size": 20}
+
+
+@pytest.mark.parametrize("flags", [(), ("handicap", "no_result")])
+def test_go(gmdata, tmp_path, flags):
+    from data_processing.games.go import convert as goconvert
+    args = ["--input", os.path.join(FIX, "go"), "--output_dir", str(tmp_path / "py")]
+    args += [f"--allow_{f}" for f in flags]
+    goconvert.main(args)
+    cmd = [gmdata, "go", "convert", "--input", os.path.join(FIX, "go"), "--out", tmp_path / "rs"]
+    cmd += [f"--allow-{f.replace('_', '-')}" for f in flags]
+    subprocess.run(cmd, check=True, capture_output=True)
+    assert_same(tmp_path / "py", tmp_path / "rs", ("result", "komi", "handicap", "n_moves", "players"))
