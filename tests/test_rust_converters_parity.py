@@ -11,8 +11,10 @@ import subprocess
 import sys
 
 import pytest
+import torch
 
-from data_processing.games.dataset import GameShardDataset, load_gm_samples
+from data_processing.games.dataset import VALUE_TARGET_BOUND, GameShardDataset, load_gm_samples
+from model.config import ModelConfig
 
 sys.path.insert(0, os.path.dirname(__file__))
 from golden_digests import sample_digests  # noqa: E402
@@ -43,6 +45,34 @@ CASES = {
     "pokemon": (["pokemon", "convert", "--input", f"{FIX}/pokemon"], ("replay_id", "side", "player", "rating", "won")),
 }
 
+# tgt.value contract (data_processing/games/dataset.py): the outcome levels each
+# converter may emit, and whose perspective a sample holds — "mover": both
+# players' frames, so only |value| is constant (the sign follows the mover);
+# "player": one player's view, so the value is constant over the sample.
+VALUE_CONTRACT = {
+    "othello": ((-1.0, 0.0, 1.0), "mover"),
+    "gomoku": ((-1.0, 1.0), "mover"),
+    "go": ((-1.0, 0.0, 1.0), "mover"),
+    "chess": ((-1.0, 0.0, 1.0), "mover"),
+    "shogi": ((-1.0, 0.0, 1.0), "mover"),
+    "lux": ((-1.0, 0.0, 1.0), "player"),
+    "mahjong": ((-1.0, -1.0 / 3.0, 1.0 / 3.0, 1.0), "player"),
+    "pokemon": ((-1.0, 1.0), "player"),
+}
+
+
+def check_value_contract(case, samples):
+    levels, view = VALUE_CONTRACT[case.split("_")[0]]
+    assert VALUE_TARGET_BOUND < ModelConfig().hl_gauss_vmax     # inside the HL-Gauss support
+    lv = torch.tensor(levels)
+    for i, s in enumerate(samples):
+        v = s["tgt"]["value"].float()
+        assert v.ndim == 1 and v.numel() > 0, (case, i)
+        assert torch.isfinite(v).all() and v.abs().max() <= VALUE_TARGET_BOUND, (case, i)
+        assert ((v[:, None] - lv).abs().min(-1).values < 1e-6).all(), (case, i, v.unique())
+        ref = v.abs() if view == "mover" else v
+        assert torch.all(ref == ref[0]), (case, i, v)
+
 
 @pytest.fixture(scope="module")
 def gmdata():
@@ -60,7 +90,9 @@ def test_matches_reference(gmdata, tmp_path, case):
     out = tmp_path / "rs"
     subprocess.run([gmdata, *args, "--out", str(out)], check=True, capture_output=True)
     golden = json.load(open(os.path.join(FIX, "golden", f"{case}.json")))
-    got = sample_digests(load_gm_samples(str(out)), meta_keys)
+    samples = load_gm_samples(str(out))
+    check_value_contract(case, samples)
+    got = sample_digests(samples, meta_keys)
     assert len(got) == len(golden["samples"]) > 0
     for i, (g, w) in enumerate(zip(got, golden["samples"])):
         assert g == w, f"{case}: sample {i} differs from the reference"

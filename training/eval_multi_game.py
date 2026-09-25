@@ -16,6 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from data_processing.games.dataset import GameShardDataset, collate_game_sequences
+from model.config import upgrade_config_dict
 from model.multi_game import MultiGameNetwork
 from training.deep_supervision import Q_HALT_WEIGHT
 from training.train_il_game import batch_loss, build_net_tolerant, pick_device, prepare_batch
@@ -27,7 +28,9 @@ def load_multi(path: str, device: torch.device, raw: bool = False) -> MultiGameN
     ck = torch.load(path, map_location="cpu", weights_only=False)
     nets = {}
     for g in ck["games"]:
-        net, _ = build_net_tolerant(g, dict(ck["configs"][g]))
+        # fields newer than the checkpoint take their LEGACY value, as in
+        # every other checkpoint loader
+        net, _ = build_net_tolerant(g, upgrade_config_dict(dict(ck["configs"][g])))
         nets[g] = net
     model = MultiGameNetwork(nets)
     model.load_state_dict(ck["train_model_state" if raw else "model_state"])
@@ -85,7 +88,10 @@ def main(argv: Optional[List[str]] = None) -> None:
             key = str(depth if depth is not None else model[g].default_depth)
             results.setdefault(g, {})[key] = m
             acc = m.get("exact_acc", float("nan"))
-            print(f"{g} r={key}: loss={m['loss']:.4f} exact_acc={acc:.4f}", flush=True)
+            # value_loss = the head's own training loss (MSE or HL-Gauss CE);
+            # value_mse compares scalar and HL-Gauss heads directly
+            val = "".join(f" {k}={m[k]:.4f}" for k in ("value_loss", "value_mse") if k in m)
+            print(f"{g} r={key}: loss={m['loss']:.4f} exact_acc={acc:.4f}{val}", flush=True)
     if a.json:
         with open(a.json, "w") as f:
             json.dump(results, f, indent=1)

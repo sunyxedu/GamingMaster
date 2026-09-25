@@ -17,9 +17,15 @@ each from a game drawn i.i.d. from the mixture
     w_g ∝ N_g^α          (N_g = frames of game g, α = --sample_alpha)
 
 so the expected step gradient is ∇ Σ_g w_g L_g, where L_g is game g's mean
-per-frame loss (decoder IL loss + value MSE).  α = 1 weighs every frame
+per-frame loss (decoder IL loss + value loss).  α = 1 weighs every frame
 equally (concatenated data), α = 0 weighs games equally, α ≈ 0.5 is the
 usual temperature compromise (HPT uses √N, π0 N^0.43).
+
+Value heads are per game.  The value loss is MSE for the scalar head, or the
+HL-Gauss cross-entropy with ``--override hl_gauss_value=True`` (every game
+gets a categorical head over [-hl_gauss_vmax, hl_gauss_vmax]; IL targets are
+final outcomes in [-1, 1]).  Logs report ``value_loss`` (the trained loss)
+and ``value_mse`` (MSE of the scalar prediction, comparable across heads).
 
 Everything else is the IL recipe of training/train_il_game.py: AdamATan2,
 warmup then constant LR, EMA weights for evaluation/checkpoints, deep
@@ -71,6 +77,7 @@ from training.train_il_game import (
     UNCROPPABLE,
     batch_loss,
     build_net_tolerant,
+    describe_value_head,
     mb_from_merged,
     parse_overrides,
     pick_device,
@@ -235,7 +242,8 @@ def main(argv=None) -> None:
     n_total = sum(p.numel() for p in model.parameters())
     n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"[init] games={games} core={first.cfg.core_type} moe={first.cfg.moe_experts} "
-          f"params={n_total:,} trainable={n_train:,} device={device.type}")
+          f"params={n_total:,} trainable={n_train:,} device={device.type} "
+          f"value_head={describe_value_head(first.cfg)}")
     print("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,} w={weights[g]:.3f}" for g in games))
 
     loaders = {g: _cycle(DataLoader(ds, batch_size=game_batch.get(g, args.batch_size),
@@ -325,7 +333,7 @@ def main(argv=None) -> None:
             res = evaluate(ev_model, val_loaders, device, args.value_weight, args.bf16,
                            args.eval_batches)
             for g, m in res.items():
-                keys = [k for k in sorted(m) if k.endswith("loss") or k.endswith("acc")]
+                keys = [k for k in sorted(m) if k.endswith(("loss", "acc", "mse"))]
                 print(f"[val {step}] {g}: " + " ".join(f"{k}={m[k]:.4f}" for k in keys),
                       flush=True)
             del ev_model

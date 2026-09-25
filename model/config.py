@@ -124,6 +124,20 @@ class ModelConfig:
     # ±1 terminal plus the ±0.35-scaled truncation score with margin;
     # sigma≈2.5 bin widths mirrors AverageJoe's 128-bin/σ0.04 on [-1,1].
     # Sticky via checkpoint config like the input-feature flags.
+    #
+    # The same defaults suit IL (training/train_il_game.py value_losses,
+    # targets = final outcomes in [-1, 1]: W/D/L, or mahjong placements
+    # ±1, ±1/3):
+    #   - vmax 1.5 > 1 is deliberate: a ±1 target's Gaussian (±4σ = ±0.24)
+    #     stays inside the support, so its smeared mean is exactly ±1.  With
+    #     vmax = 1 half of it would be cut at the edge and renormalised,
+    #     pulling the CE-optimal expectation in to ≈ ±(1 − 0.8σ) ≈ ±0.95.
+    #   - 128 bins → resolution 3/128 ≈ 0.023, far below the closest target
+    #     levels (mahjong, 2/3 apart); σ ≈ 2.6 bins smooths neighbouring
+    #     bins (Farebrother et al. 2024 recommend σ ≈ 0.75 bin widths;
+    #     either works — the IL target noise is the outcome itself, not σ).
+    # Changing any of the three would change what existing HL-Gauss
+    # checkpoints compute; a new default needs a LEGACY_CONFIG_DEFAULTS entry.
     hl_gauss_value: bool = False
     hl_gauss_bins: int = 128
     hl_gauss_vmax: float = 1.5

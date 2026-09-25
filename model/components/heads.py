@@ -175,8 +175,17 @@ class HLGaussValueHead(nn.Module):
 
     The expectation of a categorical over a bounded support is inherently
     bounded — the unbounded-critic rationale of ``ValueHead`` does not
-    apply because this head is only used in the sparse-reward regime
-    where true returns live inside the support.
+    apply because this head is only used where the targets live inside
+    the support: sparse-reward RL returns, and IL outcome targets in
+    [-1, 1] (``training.train_il_game.value_losses`` trains it with the
+    same cross-entropy and rejects out-of-support targets).
+
+    Note: ``centers`` (linspace over n_bins points) are not the midpoints
+    of the target histogram's bins (linspace over n_bins + 1 edges); they
+    are the midpoints stretched by n_bins / (n_bins − 1), so the
+    CE-optimal expectation is ≈ y · n_bins / (n_bins − 1) (0.8% at 128
+    bins; monotone, so rankings of values are unaffected).  Kept as is:
+    changing it would change what existing checkpoints compute.
     """
 
     def __init__(self, d_model: int, n_bins: int = 128, vmax: float = 1.5):

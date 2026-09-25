@@ -2,7 +2,8 @@
 
 Trains ``build_game_network(<game>)`` on shards produced by the
 per-game converters (see data_processing/games/), using the decoder's
-own ``il_loss`` plus the shared value-head MSE.
+own ``il_loss`` plus the value loss (MSE for the scalar head, HL-Gauss
+cross-entropy with ``--override hl_gauss_value=True``; see value_losses).
 
     uv run python -m training.train_il_game --game othello \
         --data_dir data/othello/train --epochs 10 --batch_size 8
@@ -38,6 +39,7 @@ from data_processing.games.dataset import (
 from model.components.core import update_moe_balance
 from model.config import upgrade_config_dict
 from model.games import build_game_network
+from model.losses import hl_gauss_cross_entropy
 from model.optim import (
     TRM_BETAS,
     TRM_EMA_RATE,
@@ -309,15 +311,79 @@ def mb_from_merged(game: str, merged: Dict) -> Dict:
                 legal=legal_fn(obs) if legal_fn is not None else None)
 
 
+def describe_value_head(cfg) -> str:
+    """Short summary of the value head a config builds (for logs)."""
+    if getattr(cfg, "hl_gauss_value", False):
+        return (f"hl_gauss(bins={cfg.hl_gauss_bins},vmax={cfg.hl_gauss_vmax},"
+                f"sigma={cfg.hl_gauss_sigma})")
+    return "scalar_mse"
+
+
+def check_value_support(target: torch.Tensor, mask: torch.Tensor,
+                        vmax: float) -> None:
+    """Raise unless every supervised (``mask``) value target is finite and
+    inside the HL-Gauss support [-vmax, vmax].
+
+    The Gaussian-histogram target construction clamps to the support, so an
+    out-of-range target would otherwise train silently toward the edge.
+    Every converter emits final outcomes in [-1, 1] (see the ``tgt.value``
+    contract in data_processing/games/dataset.py), which the default support
+    (vmax 1.5) covers with margin; padded frames (target 0) are masked out."""
+    bad = mask.bool() & ~(target.abs() <= vmax)          # NaN compares False
+    if bool(bad.any()):
+        vals = target[bad]
+        raise ValueError(
+            f"{int(bad.sum())} value target(s) outside the HL-Gauss support "
+            f"[-{vmax}, {vmax}] (e.g. {vals[:4].tolist()}, range "
+            f"[{float(vals.min())}, {float(vals.max())}]): IL value targets are "
+            f"final outcomes in [-1, 1] from the frame's player's perspective. "
+            f"Fix the converter, or raise hl_gauss_vmax if the game's value "
+            f"scale is genuinely wider")
+
+
+def value_losses(net, pred: Dict[str, torch.Tensor], target: torch.Tensor,
+                 mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """(value_loss, value_mse), per-frame means over the ``mask`` frames.
+
+    ``value_loss`` trains the head: the HL-Gauss cross-entropy against the
+    Gaussian-smeared target (Farebrother et al. 2024, "Stop Regressing")
+    when the network has an HLGaussValueHead (``pred["value_logits"]``),
+    plain MSE for the scalar head (unchanged).  ``value_mse`` is the MSE of
+    the scalar prediction (the HL-Gauss head's expectation) and so is
+    comparable across head types; for the scalar head it IS value_loss.
+    """
+    mask_f = mask.float()
+    n = mask_f.sum().clamp(min=1)
+    target = target.float()
+    logits = pred.get("value_logits")
+    if logits is None:
+        mse = (F.mse_loss(pred["value"].float(), target,
+                          reduction="none") * mask_f).sum() / n
+        return mse, mse
+    # support = the head's own (vmax fixed its bin centres); sigma = config,
+    # the same source train_rl's RLLoss reads
+    vmax = float(net.value_head.vmax)
+    check_value_support(target, mask, vmax)
+    ce = hl_gauss_cross_entropy(logits, target, vmax, float(net.cfg.hl_gauss_sigma))
+    v_loss = (ce * mask_f).sum() / n
+    with torch.no_grad():
+        mse = (F.mse_loss(pred["value"].float(), target,
+                          reduction="none") * mask_f).sum() / n
+    return v_loss, mse
+
+
 def batch_loss(
     net, mb: Dict, device: torch.device, value_weight: float,
     q_halt_weight: float, bf16: bool,
     carry=None, active: Optional[torch.Tensor] = None,
     act_steps: Optional[int] = None, reset: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, torch.Tensor]]:
-    """One TRM supervision step: decoder IL loss + value MSE + q_halt BCE
-    (target = whole action exactly right, reference ACTLossHead), all on
-    the ``active`` frames.  Returns (loss, stats, pred)."""
+    """One TRM supervision step: decoder IL loss + value loss (value_losses:
+    MSE, or HL-Gauss CE for an HL-Gauss head) + q_halt BCE (target = whole
+    action exactly right, reference ACTLossHead), all on the ``active``
+    frames.  Stats report both ``value_loss`` (the value term's training
+    loss) and ``value_mse`` (comparable across head types).  Returns
+    (loss, stats, pred)."""
     mask = mb["frame_mask"] if active is None else active
     autocast = torch.autocast(device.type, dtype=torch.bfloat16, enabled=bf16)
     with autocast:
@@ -328,11 +394,10 @@ def batch_loss(
         loss = losses["loss"]
         tgt = mb["tgt"]
         if "value" in tgt:
-            mask_f = mask.float()
-            v_loss = (F.mse_loss(pred["value"].float(), tgt["value"].float(),
-                                 reduction="none") * mask_f).sum() / mask_f.sum().clamp(min=1)
+            v_loss, v_mse = value_losses(net, pred, tgt["value"], mask)
             loss = loss + value_weight * v_loss
             losses["value_loss"] = v_loss.detach()
+            losses["value_mse"] = v_mse.detach()
         correct = losses.pop("answer_correct", None)
         answer_mask = losses.pop("answer_mask", None)
         if correct is not None:
@@ -464,7 +529,8 @@ def main() -> None:
     if args.halt_max_steps > 0:
         cfg.halt_max_steps = args.halt_max_steps
     print(f"[init] core={cfg.core_type} moe_experts={cfg.moe_experts} "
-          f"supervision_steps={net.supervision_steps} inference_depth={net.default_depth}")
+          f"supervision_steps={net.supervision_steps} inference_depth={net.default_depth} "
+          f"value_head={describe_value_head(cfg)}")
 
     groups = optim_param_groups(net, args.weight_decay)
     if args.optimizer == "adam_atan2":

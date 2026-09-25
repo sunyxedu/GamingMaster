@@ -6,8 +6,10 @@ Reads each run's log.txt ("[val STEP] game: k=v ...") and prints, per run,
 the final value of each metric for every game plus the macro average over
 the games the runs share (so runs over different game sets are not averaged
 over different games).  ``il_loss`` (default) removes the value term from the
-logged loss.  Note: clash_royale's exact_acc is dominated by "wait" frames —
-compare its card/place losses instead.
+logged loss.  ``value_loss`` is each head's own training loss (MSE for the
+scalar head, HL-Gauss cross-entropy with hl_gauss_value=True); compare value
+heads across runs with ``--metric value_mse``.  Note: clash_royale's exact_acc
+is dominated by "wait" frames — compare its card/place losses instead.
 """
 
 from __future__ import annotations
