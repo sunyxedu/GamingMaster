@@ -72,6 +72,19 @@ enum Cmd {
         /// drop a player's sequence when its elixir reconstruction violates the rules more than this many times
         #[arg(long, default_value_t = 3)]
         max_elixir_violations: u32,
+        /// imitate only the winning side of each match
+        #[arg(long)]
+        winner_only: bool,
+        /// drop matches shorter than this (early surrenders / disconnects)
+        #[arg(long, default_value_t = 0.0)]
+        min_duration_s: f64,
+        /// drop player sequences with fewer card plays (AFK / passive sides)
+        #[arg(long, default_value_t = 0)]
+        min_own_plays: usize,
+        /// high-quality preset: Ranked (Path of Legends) and Grand Challenge only, >= 60 s,
+        /// >= 5 own plays; add --winner-only to imitate winners only
+        #[arg(long)]
+        hq: bool,
     },
     /// Summarise a Parquet part: modes, results, cards, event kinds, coordinate convention
     Stats {
@@ -118,9 +131,17 @@ fn parquet_parts(input: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+#[derive(Clone, Copy, Default)]
+struct Quality {
+    winner_only: bool,
+    min_duration_s: f64,
+    min_own_plays: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn cmd_convert(
     input: PathBuf, out: PathBuf, step_ticks: u32, recent: usize, samples_per_shard: usize, catalog: Option<PathBuf>,
-    limit: Option<usize>, game_modes: Option<String>, max_viol: u32,
+    limit: Option<usize>, game_modes: Option<String>, max_viol: u32, q: Quality,
 ) -> Result<()> {
     let (cat, tl) = load_catalog(catalog)?;
     let cfg = FrameConfig { step_ticks, recent };
@@ -137,6 +158,7 @@ fn cmd_convert(
     let mut n_mode_skip = 0usize;
     let mut n_hand_fail = 0usize;
     let mut n_viol_drop = 0usize;
+    let mut n_low_quality = 0usize;
     let mut remaining = limit.unwrap_or(usize::MAX);
     let t0 = std::time::Instant::now();
     for (pi, part) in parts.iter().enumerate() {
@@ -177,6 +199,10 @@ fn cmd_convert(
                             n_viol_drop += 1;
                             continue;
                         }
+                        if (q.winner_only && s.meta.result != 1) || s.meta.duration_s < q.min_duration_s || s.meta.n_plays < q.min_own_plays {
+                            n_low_quality += 1;
+                            continue;
+                        }
                         writer.push(frames::to_gm(s, &cat))?;
                     }
                 }
@@ -193,7 +219,7 @@ fn cmd_convert(
     let summary = serde_json::json!({
         "format": "gm-shard.v1", "input": input, "parts": parts.len(), "rows": n_rows,
         "parse_errors": n_parse_err, "mode_skipped": n_mode_skip, "hand_inference_failed": n_hand_fail,
-        "elixir_violation_dropped": n_viol_drop, "shards": writer.written_shards,
+        "elixir_violation_dropped": n_viol_drop, "low_quality_dropped": n_low_quality, "shards": writer.written_shards,
         "samples": writer.written_samples, "frames": writer.written_frames,
         "step_ticks": step_ticks, "recent": recent, "catalog_version": cat.version,
         "seconds": t0.elapsed().as_secs_f64(),
@@ -259,8 +285,16 @@ fn cmd_stats(input: PathBuf, catalog: Option<PathBuf>, limit: Option<usize>) -> 
 fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Fetch { out, repo, actions, limit } => fetch::fetch(&repo, &out, actions, limit),
-        Cmd::Convert { input, out, step_ticks, recent, samples_per_shard, catalog, limit, game_modes, max_elixir_violations } => {
-            cmd_convert(input, out, step_ticks, recent, samples_per_shard, catalog, limit, game_modes, max_elixir_violations)
+        Cmd::Convert { input, out, step_ticks, recent, samples_per_shard, catalog, limit, game_modes, max_elixir_violations,
+                       winner_only, min_duration_s, min_own_plays, hq } => {
+            let mut q = Quality { winner_only, min_duration_s, min_own_plays };
+            let mut game_modes = game_modes;
+            if hq {
+                q.min_duration_s = q.min_duration_s.max(60.0);
+                q.min_own_plays = q.min_own_plays.max(5);
+                game_modes.get_or_insert_with(|| "Ranked,Grand Challenge".to_string());
+            }
+            cmd_convert(input, out, step_ticks, recent, samples_per_shard, catalog, limit, game_modes, max_elixir_violations, q)
         }
         Cmd::Stats { input, catalog, limit } => cmd_stats(input, catalog, limit),
     }
