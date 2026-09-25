@@ -1,0 +1,918 @@
+{
+"converter_version": 1,
+"shard_meta": {},
+"samples": [
+{
+"obs": {
+"players_seq": "111e9e813741ca4dc8c549738d284b1f2fd6190c046e8638bf36b4538551400c",
+"table_seq": "7eb669c6aca77297782b058048c39fd4d90bc193075e8274a7b854905d139e28",
+"tiles_seq": "7a2ab80ce59d89e7aefee610568de41cc83450cdede919ae8af926934ce70a98"
+},
+"tgt": {
+"action_type": "d22813acdcf4198b9681b8cc43d926ddf916d18d2610de5fa4f5ff2ed53b12e0",
+"tile_idx": "69d3a75fa5b8eaa249cbd39e9258e6c7bd14a4ba050257b1704b3e01935254d6",
+"value": "ce8e4dde4f2f60350a8b5bc5090af9adff60a9b6c19a8b918cb6852dc3e452d8"
+},
+"meta": {
+"name": "000fad71bb735a027861961e.mjson",
+"seat": 0,
+"kyokus": 13,
+"placement": 1,
+"final_score": 36600
+}
+},
+{
+"obs": {
+"players_seq": "373d37fc8e9fb77884f1e75af41b816e273c8b61d50b1b642879edccf7bae74b",
+"table_seq": "f00f78477d7c88a48b36f481eb82f460ab676d0bbaaf0e632f7c80da55fdad4c",
+"tiles_seq": "ce5d718f3ad2bda4c8f62884858010b404cc8fd0553ac3c63e2d9cec8dbfb2c8"
+},
+"tgt": {
+"action_type": "60999e1019e5bde78d76b784d10ff6cc93970b1cf4c568ff45e5d5b8e97f3111",
+"tile_idx": "8b2da2390499a5b17df657ad22fc70af24137b147bd0879deed21974f5c79dec",
+"value": "b9a143b2cd325dcb4e879dcdf488b0bdb2d31bc92a2e8da59986e099256cd1c0"
+},
+"meta": {
+"name": "000fad71bb735a027861961e.mjson",
+"seat": 1,
+"kyokus": 13,
+"placement": 2,
+"final_score": 22500
+}
+},
+{
+"obs": {
+"players_seq": "6a36cd45d416ea0640a6e5814af9c82f227ee3b48f91cbd45996a2c7e839627b",
+"table_seq": "5675ce9a224d3b17812d9f992d4b3cb74b44e61c543effc17f3f0b691d3a7cbc",
+"tiles_seq": "fab1234471cbd74ae7f4551e6b1bee0925539afcc525b1b584cdc9c0971862a3"
+},
+"tgt": {
+"action_type": "eee9eea71820abf718555378a49c66e304efedeac13a55e69e400d828f3eb730",
+"tile_idx": "0e9eabf49f630778c3accb77b9de15dc27ae568c54b160165a78f7a63a84b3e3",
+"value": "fd18c3bbb57c8c51adddd7287ee199b579275f4cc0713f7f4252336e374ada36"
+},
+"meta": {
+"name": "000fad71bb735a027861961e.mjson",
+"seat": 2,
+"kyokus": 13,
+"placement": 4,
+"final_score": 20300
+}
+},
+{
+"obs": {
+"players_seq": "f41d51db5ba34cf2408416bfddc080add9c1c6b68274a536fd1c55bf19f96856",
+"table_seq": "e016350210b6dec53aedf0fcf5f112dbe971da1ebc3ffc5ffaf0f3f96a921903",
+"tiles_seq": "f565eb1f61223b730367efad8b6cb83e7ba1f32eb93f06865b66c43e0cc90906"
+},
+"tgt": {
+"action_type": "15df9c674f5d7c4577db6ed1fb0c13fa9ceda446e57d21c758485bf0987c39d5",
+"tile_idx": "281f3e76f70327bed2a5d3b73b54d2b26ff8adaa6fdde0b084b4483706b0c401",
+"value": "5b3cc1eeae609b9c14a1f8b152b9da03062a91d2fa475c9b97150e8d952618d9"
+},
+"meta": {
+"name": "000fad71bb735a027861961e.mjson",
+"seat": 3,
+"kyokus": 13,
+"placement": 3,
+"final_score": 20600
+}
+},
+{
+"obs": {
+"players_seq": "b66001b253cf3a826210d24ca5fface90fbeee51e926dddb46889233f2b5944c",
+"table_seq": "580b75f95f7531b9d513b3e4f96ded06f659c70b749756d04ee6ffbdc2755845",
+"tiles_seq": "be9c0c0297105ea9ae2be8e0c44b67b8926feed1a103d9b872ce767f06b6ba15"
+},
+"tgt": {
+"action_type": "a16d86f193c58e7f04bd64ba933b7a1730aadaeb325e7f8c392491a9542b3d45",
+"tile_idx": "7a983e9598fa00b1c5b06616a1e50333248cf883af00dba186c9a5548dd9b11a",
+"value": "aa740446bc4d3ba3d02050e07dcfd557c0afac83d3c986353be56f269ea497e3"
+},
+"meta": {
+"name": "001d80e5bc7d661a7b972e9d.mjson",
+"seat": 0,
+"kyokus": 11,
+"placement": 4,
+"final_score": 14500
+}
+},
+{
+"obs": {
+"players_seq": "ca553b3e11612ab96a115662f4489f6ce3443958d7dd251a08851a3830363c45",
+"table_seq": "af8901e6042e97d003552ccf714f27e5a87f08aa296ad2a2aeada793efc32c1f",
+"tiles_seq": "59fca4e03a5049e0327db45e2e366278bc866b33594207d93069a4ac5d5c8fad"
+},
+"tgt": {
+"action_type": "e73f8e324c1bff1485dac499b44ab9929e6f772ffdc6148f61c053fe8cc8f468",
+"tile_idx": "1c51bb8b9a6d7bb863f758005e013a8e1bc845f240c2138c5b5f9be70957cfe5",
+"value": "6a84eec650655df03c99230cef33cf81ecff6d998bb67398009f0075ce1c128d"
+},
+"meta": {
+"name": "001d80e5bc7d661a7b972e9d.mjson",
+"seat": 1,
+"kyokus": 11,
+"placement": 3,
+"final_score": 26100
+}
+},
+{
+"obs": {
+"players_seq": "ed72fcbffc5f77f6068d3401cb68916abc94017f58c806c0e8965bb082d7a5e2",
+"table_seq": "ed95e3a3e04e1fec673a050a95b25baa2e6d5bc6b00efc67961433716a461861",
+"tiles_seq": "b1649162cd0e35f6703d5adcf2e04b10f9355fd3d1a6e43e0d9c6ee14448b631"
+},
+"tgt": {
+"action_type": "033a717a6bb08d2779ab10fda9792e5c5086f4aee26ae6d1e8a3e6c4f36d4186",
+"tile_idx": "984f236f7484f0698bd20a12e3e4c4934688152dc512eb7a884890af3db51e6f",
+"value": "a88c80564a98b8288084f5e4acae59ab697f4bb92080756cab72c54ed3ece5e5"
+},
+"meta": {
+"name": "001d80e5bc7d661a7b972e9d.mjson",
+"seat": 2,
+"kyokus": 11,
+"placement": 2,
+"final_score": 27500
+}
+},
+{
+"obs": {
+"players_seq": "56ba5fe526d332a01e801b1e3552ffb0912faae48c43210c81eb7498aa6cfd10",
+"table_seq": "459a850718ec9213366f1fa7904776a1cb381d74a0260a6ba6b89a8fdbf196cf",
+"tiles_seq": "d777343376c93beb397dd1a1ae45949fa20fe7f05673a103e1bbd3e473d0bb9b"
+},
+"tgt": {
+"action_type": "bb9c631686cd85432661f0253bd1b2f8cba3e8e72f5f6aa5eebd84f4bdbe0027",
+"tile_idx": "998b147587ee895aa264d467b860966718a0b89f61b2dc27a414c12ecfd70322",
+"value": "5ce935ca5a4be775b39d8b9e9201db0d088b15ee8eeb187a003fda39f608b87a"
+},
+"meta": {
+"name": "001d80e5bc7d661a7b972e9d.mjson",
+"seat": 3,
+"kyokus": 11,
+"placement": 1,
+"final_score": 30900
+}
+},
+{
+"obs": {
+"players_seq": "45631f235cd04607d4ac202c81c9922c76b0b224b2967840514dfc8f0e0fbed0",
+"table_seq": "7c7dd1e5b49320ab766c41a2702d7aba3ca8a85756bf38eddd54e56ce2ec5d1a",
+"tiles_seq": "7942ec27377bbf74c46392dff0d7a61eb6f379af7bab3d586d9d4e8f23654d6a"
+},
+"tgt": {
+"action_type": "192bbfd743fbaea2a9ca673c988dc20c6ad1d36dc55b7910c4d7bcbdd8f73119",
+"tile_idx": "0dd8f00cae59032833faa25625d63732ebc84a9b42e4c120d2367f6fe717156d",
+"value": "dba378b0b939122beeccc9192bfcd4394e27e60eb0a9b1064574426cad5764f7"
+},
+"meta": {
+"name": "002e46d0adae6bf78636f92f.mjson",
+"seat": 0,
+"kyokus": 11,
+"placement": 1,
+"final_score": 47000
+}
+},
+{
+"obs": {
+"players_seq": "244dcfd8610a37295ebe8aded7ad5eb2cd1ff15bf2973dcef24ffdbbfc3a9280",
+"table_seq": "23a4e65d9adbf31b0a247bf1e7691b096f2d48d6f58a8b72b88eeaad5d80261a",
+"tiles_seq": "633017358bc5f544efaa6d3e7a832a75f9df1d2fde8a4ed9ca091d35ae0060e8"
+},
+"tgt": {
+"action_type": "7664bf53e41af287a7e060d9c74d12b15913ced1cae15f2d931f5f75d78ca1d2",
+"tile_idx": "17feff5792115d121e912c40d7eea67242b112a1ce561e2f349bb36e764c2283",
+"value": "472cc2371aa80d08f6dc1702fa928df4caa1e2c187732382a063513cae36fdcc"
+},
+"meta": {
+"name": "002e46d0adae6bf78636f92f.mjson",
+"seat": 1,
+"kyokus": 11,
+"placement": 2,
+"final_score": 34700
+}
+},
+{
+"obs": {
+"players_seq": "b11dce66826ac47f29ade3f43c468f84b8a498fc16e360cd8dc2487d4ab5153e",
+"table_seq": "4999aa5ce94afbd89a6ebaf009cd97e618d17fd17d0b32da65ac7da910851de4",
+"tiles_seq": "488315ec79d982b537fffe6837b988f06cc09b5adacec9a96a6183f8a4fb6953"
+},
+"tgt": {
+"action_type": "491ba6dba9d60dfb3d3434bfb10b5397bf593c994a0981b1ccf182e9220a6c50",
+"tile_idx": "b735d4571d82b7586b56936ea11c29ee9e69b9f736fddb6972449b87da0e45ee",
+"value": "b96657f6351a754a048c54cb061c53544dbdd2c6499bb2d82c010a79151a5205"
+},
+"meta": {
+"name": "002e46d0adae6bf78636f92f.mjson",
+"seat": 2,
+"kyokus": 11,
+"placement": 4,
+"final_score": -1500
+}
+},
+{
+"obs": {
+"players_seq": "e2ee4f46e2ef577ba998bfe148b1b9ac2be35a2ea5e282f9e0b731a6d3347c38",
+"table_seq": "121a36792de313fc92c9a24c9cc6d418b8c2edbae8ec9e0a7ceea7d7eef791af",
+"tiles_seq": "6dca4a9004d664f5b90899c698b13fa5213b6c54c06a359e5027db05082d6bf5"
+},
+"tgt": {
+"action_type": "749383560e3d1e1372a6718a81733afea708db68c56c29ae8bd9bb5195e0a69d",
+"tile_idx": "c2367ac33e7ca14f78566bd7005ce632d4dec13c39b710c4021cf0cdab482ac8",
+"value": "d8d64c3ced2e86f8aeecfd74c47c428043334fdd65ca497f1807b4481d2a17dd"
+},
+"meta": {
+"name": "002e46d0adae6bf78636f92f.mjson",
+"seat": 3,
+"kyokus": 11,
+"placement": 3,
+"final_score": 19800
+}
+},
+{
+"obs": {
+"players_seq": "2616c9665f770a16df9e89227342837ee7298e89a6af2304e104a03f96774288",
+"table_seq": "3952fe59279b0461eb4c10f8796c235272db83149fdca7cfd8b4473292016de9",
+"tiles_seq": "0dd495f3ac5b90fd72123570e0f51752c399a3f7e35da31bc9abcb27a1eee9d5"
+},
+"tgt": {
+"action_type": "f82ed400a9cb862cc2b810ec228268f9cebd2aa1bb2832f9ceb4f3e2c7092887",
+"tile_idx": "cce9550bb6dbb14399f536cc69b6d6be0dfc917678941feb2f26062b2c90b81a",
+"value": "be70fbfa431112290d5b8e1b4c1b4759fd030113ca6fbdb51b5dc21bfd57e0a2"
+},
+"meta": {
+"name": "0038bbd8b6ce400b8f5d4f33.mjson",
+"seat": 0,
+"kyokus": 5,
+"placement": 3,
+"final_score": 14700
+}
+},
+{
+"obs": {
+"players_seq": "a0f2a47a4d2da8616dfc75f6a9eb9ae6bce3e550c8a386bac9f342a1b76cfa15",
+"table_seq": "6a691fce8e23c10fdf47d0af6276ecee03965c9edfabb8e2deafd6c248d0d227",
+"tiles_seq": "4d827780c74f68c4c3b03385eff59a62a2f721cd9a9b69105493029f4edb7616"
+},
+"tgt": {
+"action_type": "4ce218d97b6fb304d6b2c7fb18b9d3594253d75e357c7308719c57af37ee8d98",
+"tile_idx": "ca5844df78cf7ba1651a8551803247b5c2541268e74a6873e0988b52a4fa4fc8",
+"value": "922deb6d5b7c60a018be0e16622c40e5bc1d017e652899943a60085142cd8b1c"
+},
+"meta": {
+"name": "0038bbd8b6ce400b8f5d4f33.mjson",
+"seat": 1,
+"kyokus": 5,
+"placement": 4,
+"final_score": -3000
+}
+},
+{
+"obs": {
+"players_seq": "55aaedc40a7fd4df054a7953b4261bd3d2bb554ee9bc6bd5149141db92df1ab7",
+"table_seq": "ea8cacc98c24c495be0d0a5f801b877af96b1a998fd33cabb85105678a6f3b20",
+"tiles_seq": "cd991556bb620849c3aca6c814f4c7697fb28e1c2097cb90930dc319bc25e487"
+},
+"tgt": {
+"action_type": "f0634608fdf11515389c43260d4f94404dc4fe000f68e5fade9b76035214db74",
+"tile_idx": "1ee4f5612527abfa7780c8eb0b8a2472c50bca7c404a5d03ec89de84fe866bff",
+"value": "c2d9d00c45095238b6512f2d4272ee86be3eb006ab986d762e1f07426cd28d84"
+},
+"meta": {
+"name": "0038bbd8b6ce400b8f5d4f33.mjson",
+"seat": 2,
+"kyokus": 5,
+"placement": 1,
+"final_score": 56000
+}
+},
+{
+"obs": {
+"players_seq": "c441fe27f86e641a2fa0edede21e4a3934859c32a105f23dc219ce263d38b938",
+"table_seq": "d55116c18dd09230fa8da0a75761f615c36f1de6f36c71e3cddf6d171a7195b8",
+"tiles_seq": "ee7397c59e2376e454376c809eb6bec8fd9d8fc48df8f56929ad48d9facce165"
+},
+"tgt": {
+"action_type": "51b3eb1724edac1d03a56f95f3dd4acc6538095ca92d1eefea9804cf306181e7",
+"tile_idx": "8e852004b99406523d73e40d25b19389881d2b2b45e513815343ae74d2b57839",
+"value": "078145cf813071aab3386b39d638ce3455dc112a1977d0bc91552c5a309255c9"
+},
+"meta": {
+"name": "0038bbd8b6ce400b8f5d4f33.mjson",
+"seat": 3,
+"kyokus": 5,
+"placement": 2,
+"final_score": 32300
+}
+},
+{
+"obs": {
+"players_seq": "9ca7f76e5e0bfa1fde241fdeb9aed38f9b19abd17d23faa5f15bab42b01cc6ce",
+"table_seq": "a519e96e979bc5732afda33a534f2a1535e683e8a268354a6dbf08e3b235a3f5",
+"tiles_seq": "72907749ffe05419ac70d6c5b9900baeeadbd1796bb48bea6652b3460fc5774e"
+},
+"tgt": {
+"action_type": "9e92b62366219ba1bbdf5e8913c2cb8b8715275a120ffa798c1cac40c2e90881",
+"tile_idx": "fa8dc36fe11c6e4fd90e78dc278360617aafddbcb043bc8494e719c9c175cad8",
+"value": "dd376c92808b2843ebac34719f1a4605161de04ae1944136224810457d2e399b"
+},
+"meta": {
+"name": "004c8e50a7cbb970c0c6fa03.mjson",
+"seat": 0,
+"kyokus": 9,
+"placement": 2,
+"final_score": 26400
+}
+},
+{
+"obs": {
+"players_seq": "fbfe0704b6e40c302bc56d8a192810855d10cfa271a1baab0c27a4431d072cf8",
+"table_seq": "c129e7a5fd605f4a740dae83906b89d41687ce52a7726d3adee01d5e8b619b09",
+"tiles_seq": "f99d9fb0c4b7a6e205eed173aa7faaaa50c367a669cfa37ab4f70653db4300b2"
+},
+"tgt": {
+"action_type": "fe10e0c219186211dff6cecad91d03ae3097139f263105b2f44e7e663edd71a4",
+"tile_idx": "8c8097f1ee4e1f835333f058be0e1d888f3e88b28cfbe7c1c24ab801e0fa1517",
+"value": "ef0f2d65faac598b9c1f26b77b902747fed1d81ca055dd0b5e8c73c579e131d7"
+},
+"meta": {
+"name": "004c8e50a7cbb970c0c6fa03.mjson",
+"seat": 1,
+"kyokus": 9,
+"placement": 4,
+"final_score": 20000
+}
+},
+{
+"obs": {
+"players_seq": "cf8457326f25e88ab1a1b3ac289bc44005e946e0b3ccba72ca9887b1a405323d",
+"table_seq": "bddc9d1c2626651cf572b41eb35cded0ac4940154a3d712dd80c23e12ac93848",
+"tiles_seq": "a626d2fd9be92ac8b65aa8f527e51268363e83a7e48df0f61e48b0f2e3007970"
+},
+"tgt": {
+"action_type": "f57998ec0ab525a9152981267e4aa33460ad3f05dc8b4b2fed9a8e0092792be3",
+"tile_idx": "7906828488e31caf8e9184948eb8a1bf9847933b9027760380bc8ca7244382ca",
+"value": "6d3d5e25fc274c4cfb05c2d17a9f04dde077377c450362289800f29ce90d419b"
+},
+"meta": {
+"name": "004c8e50a7cbb970c0c6fa03.mjson",
+"seat": 2,
+"kyokus": 9,
+"placement": 1,
+"final_score": 31300
+}
+},
+{
+"obs": {
+"players_seq": "97da36d9940308e40acdc7455f429d072ee05e9ecbdd2357ac39282ec38684ac",
+"table_seq": "ac1ae8b64cbfa310a06a3c02e5ea0d9d1f8d832b074a71b48e51ff00a5d53fba",
+"tiles_seq": "978a7b08ae8086ce8f0a71f51f0be64b90059815aa85cdb766f10824f1833ed4"
+},
+"tgt": {
+"action_type": "fcbf76793c00fe3a6cebf6f09910e80e8e564a3d59659c3a7607c8b503ad48e6",
+"tile_idx": "1472b8064c992c4b0cdc9758e546d4dc49200d73b04cbd7ab504ae2897072533",
+"value": "30788b4a61013e4c18374bba173f34303c314df07d987190d1bd339bec0ad43f"
+},
+"meta": {
+"name": "004c8e50a7cbb970c0c6fa03.mjson",
+"seat": 3,
+"kyokus": 9,
+"placement": 3,
+"final_score": 22300
+}
+},
+{
+"obs": {
+"players_seq": "ab7dd3793fd8e2971f55c3b1d471092a40066e993eec79b406b01e412c493f48",
+"table_seq": "df93a623233d59722ecdfdfadd32ac1149d3397b235b95bf4df087f792e5c674",
+"tiles_seq": "3f79fc849575bd49b751682297f90811369b56568c53cd9059c9810242d698be"
+},
+"tgt": {
+"action_type": "2020b98abf9ad046d68535e585be96d6c8d2890cd92af44fe9172bc8a0fa5caa",
+"tile_idx": "ab4dcf49b53f8221dc2eac484b1c7665669e178b9840454a61d7d58cfd41821a",
+"value": "cb702f9ddfebdacfdedc91c1cc408dd3c4a76a6c39fd4cb9ade2a101e79dd948"
+},
+"meta": {
+"name": "008d8d40e0deb4a5675aaedb.mjson",
+"seat": 0,
+"kyokus": 13,
+"placement": 3,
+"final_score": 22300
+}
+},
+{
+"obs": {
+"players_seq": "9a0b5f18d26e3b788c0e1f38c7efd110e21f39836364bd988ac5c36f10bf2ce8",
+"table_seq": "64759d0a203dc19c88470794ee35c479a6db7ba6744ed997a51528f1f3712c28",
+"tiles_seq": "d32b2b99840dceca6feaf174635b8089d64c2afb14a9c98c30c3cc46af3e8806"
+},
+"tgt": {
+"action_type": "0804a73c4499092b43544611e781df39ad59ca6047cdc04d9d414b6026ec59dc",
+"tile_idx": "d3fda1ea402c62691ea67cb53e7ef7e5941de97a04c2d5e9b6853354965c55f0",
+"value": "dea7283930ef2e15205d4909adade566210fede025796027d70a5c88c8a00cc0"
+},
+"meta": {
+"name": "008d8d40e0deb4a5675aaedb.mjson",
+"seat": 1,
+"kyokus": 13,
+"placement": 2,
+"final_score": 24500
+}
+},
+{
+"obs": {
+"players_seq": "9d10f49842dce51ec0840081e9b96f836fc5f98334ce4502f86acac15732e546",
+"table_seq": "c4f40418975dddedcc469f605f3b53fa7b06ad3f7d1d18143a3903a2df39e090",
+"tiles_seq": "5f5672eb9bed9a08314ce7391b595b5d2f41cef3fd2a419b17cac714007d74b2"
+},
+"tgt": {
+"action_type": "0052f9220d5cfe1f554b19bcfcc2a5dbd1801cb83c1a31b0291f60f05a4268ff",
+"tile_idx": "bc96bb2513ac9c2e5c8e790c807adaaab5a652f2560dc389ea712a6278789ec1",
+"value": "fade439b1d256685a7c6001507451d6876685332e50ccec7f96e01f7524b7a79"
+},
+"meta": {
+"name": "008d8d40e0deb4a5675aaedb.mjson",
+"seat": 2,
+"kyokus": 13,
+"placement": 1,
+"final_score": 38300
+}
+},
+{
+"obs": {
+"players_seq": "3297b3ec104357ac4624791cd493c724a748fcb5ffe3daf4f65b0efbeae62e95",
+"table_seq": "0593d6e9065d6c10b3fd599fa0897dc6e349f51086ec7e285617e2269e45310d",
+"tiles_seq": "3688f7d4b16c5771026241e866415b1b9a45b7cfe9dd03097ccf5e5c6294a900"
+},
+"tgt": {
+"action_type": "d3bc5a27df65ac27c7fa0cd76b473764c473a9fc9dd8f40d1b4502a3f20f898e",
+"tile_idx": "d79bd3892d12801b7a950bd0dc0159b46ea2ed85d6d2968bfde4a506ea9d6006",
+"value": "0bc1d28f199ca2dff24bac11bdea0dc84171906133a8633599983f5ff75baf02"
+},
+"meta": {
+"name": "008d8d40e0deb4a5675aaedb.mjson",
+"seat": 3,
+"kyokus": 13,
+"placement": 4,
+"final_score": 14900
+}
+},
+{
+"obs": {
+"players_seq": "2dd6cee99f86642742cb159c00581d9a51390a5782ffda9f40f0ed73bd8f39a6",
+"table_seq": "813e9ba1d42e4c21f3acaa880f3e7bc21e36b3f53390c5dd8e3db0c94eaa03d3",
+"tiles_seq": "adf435c1b0f290c0586a7d63a97c52642eb11f8d809b17eeeb8476a0b4ceb5ac"
+},
+"tgt": {
+"action_type": "6f00a973b5a3a0488abd4402f7b02b9c0a1056d3400baf68422c4ed2062c67ec",
+"tile_idx": "ee392d70337f03384d6768cfb27d29a8888d377feb5d87b1171d9a73486ee188",
+"value": "91de008a9e25beae0bdc1a85a10cdbbf320b01c74f8bad46c4ef34f688eb9f7a"
+},
+"meta": {
+"name": "0090f5d58bfbfb37c3eca2ba.mjson",
+"seat": 0,
+"kyokus": 12,
+"placement": 3,
+"final_score": 24100
+}
+},
+{
+"obs": {
+"players_seq": "aa16c37cfe660808e7519132d9fda6cdc12b20f44fa37dff36172146d461d361",
+"table_seq": "5590bcad90410b2502f73f4f233a80db0b4b377dd927b365866e966c71f7e643",
+"tiles_seq": "ad28c0966c5d2ec7d3a7fc658193dabd1f64f22b32e83f833884dde82ec03aa4"
+},
+"tgt": {
+"action_type": "b419dd84cab01d2e2d0c8c337582709e9ecf2f82c622924475588a60e090144e",
+"tile_idx": "0b78dc28159de6b228b7fcf31f27fe12f3c7b7813d2eb33e144a6ae4f5bb3f30",
+"value": "362d7d519a17ee1d14e3a0d03dc2184516f06f8e21be673a0e410870798ad654"
+},
+"meta": {
+"name": "0090f5d58bfbfb37c3eca2ba.mjson",
+"seat": 1,
+"kyokus": 12,
+"placement": 1,
+"final_score": 34400
+}
+},
+{
+"obs": {
+"players_seq": "7e92eabd7ebce26d402f173c953b1118028f7e041ef8c336335516145f8fea78",
+"table_seq": "7ba0fb2340242c21c8b8a4a5fdb56eaedb69bfaf8cca772130bbfee9157c6ccf",
+"tiles_seq": "47e33a96e4b94a4316d347a6a3d708b4dbf3d59a3e69808a0c9a2f9e53576835"
+},
+"tgt": {
+"action_type": "688b5fcaccf80eea547de1477aa8b9597f99aa966dd385510c81025ff3b87b7c",
+"tile_idx": "f5c77db0d82b21d7183d8cc6f4a570830f3a7bd22d1cece1543f403fd6ce635c",
+"value": "5ec60274df95bf278a44bdd82d71145d136080ffe17fa565caffe38c2a11faf6"
+},
+"meta": {
+"name": "0090f5d58bfbfb37c3eca2ba.mjson",
+"seat": 2,
+"kyokus": 12,
+"placement": 2,
+"final_score": 32000
+}
+},
+{
+"obs": {
+"players_seq": "c40847185ca9c993016bb7fc037ec4a90c81ef24a1da2729360f61723ea4f8dc",
+"table_seq": "42f19d784e9fd2aeaee6ac0580c0df864cb53b1bb732d13e9c797a0e21126be3",
+"tiles_seq": "5049a55a894902ede92f33d4e2dd02aad814727216db6b7cabe6fcdd45a558e3"
+},
+"tgt": {
+"action_type": "f9c938e273b18b499c8183ebb01a0a57fe062b81b399f31f719ee50aa4a91aaa",
+"tile_idx": "e62b3205ed3cb6436a71169514f721fc9679ff4887656c2d0ae762c43586aaef",
+"value": "d8c1c1569444347e95b877f1a81713216d919da7fab3a456ccf585d8edc48c26"
+},
+"meta": {
+"name": "0090f5d58bfbfb37c3eca2ba.mjson",
+"seat": 3,
+"kyokus": 12,
+"placement": 4,
+"final_score": 6500
+}
+},
+{
+"obs": {
+"players_seq": "97be0d4936f085948c589294c28b0a9a59ff5540fe9d31d774383cc7aa64391f",
+"table_seq": "5b57e28f2898c89a89d0b344af5a2ed7c64829c4c0abf6f1bb0a53b527feb9b6",
+"tiles_seq": "6dd6e5dde2f065f03928aefbcec628c3c31d335e3e06bf1697b4cd0d55237e4f"
+},
+"tgt": {
+"action_type": "527e92ed9737bc94f371d64c3738a8c8d54d13cb6f196f30fdab9aa368055683",
+"tile_idx": "480bc089b5f7e8e5edc5365ec9109cdff38eb55e905210ee762fe7bad686b55d",
+"value": "6deadd1495cc0643611d4f1cf7d4f1e776019d62cdd7da12b007eee81bf70bae"
+},
+"meta": {
+"name": "00967c08a1c0de57aaa09e93.mjson",
+"seat": 0,
+"kyokus": 13,
+"placement": 1,
+"final_score": 37600
+}
+},
+{
+"obs": {
+"players_seq": "cb7b72c785c008e231977e2ed5ac20220cd071fe91978f7965bb7d0bc31dc81f",
+"table_seq": "0155b87d78f55c7650515b302424e2471ad49d5298d8f0eb90ebaf826a966511",
+"tiles_seq": "cb868517584ef2a72864e232d37b0af805c2e169f4be532ea21a1ed0ab0b73a7"
+},
+"tgt": {
+"action_type": "3fae817acb593e2df0a765c033a6c0ecfe85a480939cb4fcbf9308f90f7d1dae",
+"tile_idx": "7958cbb538f4f7ba1cc5712dbbf995dfbaf7dfc09192c12c8812f3c0d5d96bdf",
+"value": "32e64ba5000366b9f625be412561a0f1967e6961e0034d92b06639a13854c4bd"
+},
+"meta": {
+"name": "00967c08a1c0de57aaa09e93.mjson",
+"seat": 1,
+"kyokus": 13,
+"placement": 3,
+"final_score": 27000
+}
+},
+{
+"obs": {
+"players_seq": "1961a0268c726f1680987e23ffdbb2d5df148ee734440800b5b64e28e8c5a982",
+"table_seq": "1b611df9b234a7e58a02f529b88b01663f39e2004fa3cda8766fe110bef98792",
+"tiles_seq": "0a08d15a0e92450fcb363254a7dcf415e8ab56f4414cbd8246292573074ad37c"
+},
+"tgt": {
+"action_type": "81221d03662b3912b2bdf9996414cf180da1c26e138229219d0ff74ea408bffa",
+"tile_idx": "60aa7aeb1d1505e4c7614429417cf9a982ed80ada00d058884365dbac0dd834e",
+"value": "e5ba0a4fe94a9dae474ed8b451a37560caf6d5eafc5799a5925adefa6348f733"
+},
+"meta": {
+"name": "00967c08a1c0de57aaa09e93.mjson",
+"seat": 2,
+"kyokus": 13,
+"placement": 2,
+"final_score": 30200
+}
+},
+{
+"obs": {
+"players_seq": "8b5d4002e4d9c13141d63d918422dc7d93a1541f60aa3d7bb5aa62a6390f9e71",
+"table_seq": "9ec048875c61377611a3d7d45d29305b6b7935cbc8524dfa957df797162932db",
+"tiles_seq": "6f755690043ce51b101caefe00bd9656f386c5d05d686e3ae8d6260477c803c4"
+},
+"tgt": {
+"action_type": "67eaf2eac5d225efdb379f529877fcaef9dc8bcca3e793bc643cf07e42f12594",
+"tile_idx": "0c314a442db6720b2c6881cd0e3c43a64f5678c49d77144fdaa1b399281022cb",
+"value": "b0d324faccd826f33b753912c3a2bb735c6f64cda032c9d0f77f524737a5d227"
+},
+"meta": {
+"name": "00967c08a1c0de57aaa09e93.mjson",
+"seat": 3,
+"kyokus": 13,
+"placement": 4,
+"final_score": 5200
+}
+},
+{
+"obs": {
+"players_seq": "bdf09eb7d945534072df4717121d4600635adeba837c4c347fb33c01af0145b2",
+"table_seq": "e9e961f0bf1266d9f5e40bfeca2fdd108377a075f6edf2e8efb1b49603cdd583",
+"tiles_seq": "11b54ee17cdf550f0d730874ccd3c0a4d74eadb0398b6a841351fb33acf5289f"
+},
+"tgt": {
+"action_type": "32553a93b23d5f04cf993fa74042b17dc0fd0f56735d37da1bd8fb713434ab8a",
+"tile_idx": "bba831f7543a71c1fe7594b62b6215df2dfc67d24f5f0a2c6ef127d4b46aceef",
+"value": "f7640806e6c375b6467654a0f10e2534e3936164019b04cf7ee177c65b93685d"
+},
+"meta": {
+"name": "009c7f563913e19cb0bb5a0f.mjson",
+"seat": 0,
+"kyokus": 9,
+"placement": 2,
+"final_score": 28300
+}
+},
+{
+"obs": {
+"players_seq": "b9cb4e5f29fb8743a281b6ee0ee30dab740ad5548d9b84aaa5395d85b5bd3fe3",
+"table_seq": "606db151b2b0b88165d5054c52a671eb9e11b6d18c69593b5548fdde956a4dca",
+"tiles_seq": "cefd2b706b5237630ff370444377b7e0c42385524d73db32cf133a24f63ded66"
+},
+"tgt": {
+"action_type": "6079ef1160c7aab8ba48d56f140a6ed12f1af4d028ff0dfa4fae7d74990d27e4",
+"tile_idx": "d5f5865dc744a76c796f75b71981c5a0072beb085628fc178950b8a775e9de01",
+"value": "a51d5d9d5f9357fe362585aaf0ec8b7821c96280089fbd628126ccd317c0566b"
+},
+"meta": {
+"name": "009c7f563913e19cb0bb5a0f.mjson",
+"seat": 1,
+"kyokus": 9,
+"placement": 4,
+"final_score": 13200
+}
+},
+{
+"obs": {
+"players_seq": "1763711e5ee6927dd9242cc5af098e4a552a4418c264015c91a70e0f2552ea7d",
+"table_seq": "86da464d4bbec1432c1b415f79749267f94a060d0cad1229e90df10d309dac76",
+"tiles_seq": "cb67ac46aaeb5c1a49161c8a0b0dd45f8cc8291c9c5b96835e67bfff21251b56"
+},
+"tgt": {
+"action_type": "0e60b2ba2c619f82887ccbc8981020dff9ede299d0944ca2486249be122f2269",
+"tile_idx": "601fabaa919033ff94bb8f4eb25350e3383a25121725084b4dc53a8b7bc05f03",
+"value": "55ffbb6405d4e5e2e8516fe14e74ada8da88e2e76d3f5299d4f26afb56961a11"
+},
+"meta": {
+"name": "009c7f563913e19cb0bb5a0f.mjson",
+"seat": 2,
+"kyokus": 9,
+"placement": 1,
+"final_score": 36200
+}
+},
+{
+"obs": {
+"players_seq": "98d3e89a0cea1812965a0088fe5b4b251efa58bf5449e7e97d1e0450ff66dd09",
+"table_seq": "41f74f9e5d965d1955f07a1b03103aaf83e6f8a966f25113bd5c4800c45b84b3",
+"tiles_seq": "81fd595ff30e4fcbabc2fcc4b3fbfb2226a36e5ae57981de200a6b63776579c3"
+},
+"tgt": {
+"action_type": "823f2c1b61e9418c155ee54d841bfe42f3c2beb6bf42570a434275277707e843",
+"tile_idx": "8e7d867253af7b2a6c240cfa47e904cc401bcdb75fabaa523895ef483b0f229b",
+"value": "538b64b9a48cbf00c43ae2c76319ffd6633d1f08b200dff7e294d70e3a9276fe"
+},
+"meta": {
+"name": "009c7f563913e19cb0bb5a0f.mjson",
+"seat": 3,
+"kyokus": 9,
+"placement": 3,
+"final_score": 22300
+}
+},
+{
+"obs": {
+"players_seq": "dfe2a3240209507422582a381297c919128ea9184ab3412dde09305bbbb6a56f",
+"table_seq": "02c73b5fe10f7125f6447bf9e3eea7fb6ecb45f32efa9cd30c6786988b788ac5",
+"tiles_seq": "2e47f05d6404e140950f1cbc58efefa29040c2fa6a8ba75e66f7aee7461e9c7e"
+},
+"tgt": {
+"action_type": "934ee59a49ef554df1f828d3080d9a064214271031291543bdc5d7d45ada1d4d",
+"tile_idx": "22272bf3c800e10192fd42dcf7e50c92139d7adfacfea77092e5ff352c1427b8",
+"value": "fd18c3bbb57c8c51adddd7287ee199b579275f4cc0713f7f4252336e374ada36"
+},
+"meta": {
+"name": "00a4c9eb948d8deab1bad84b.mjson",
+"seat": 0,
+"kyokus": 12,
+"placement": 4,
+"final_score": 8000
+}
+},
+{
+"obs": {
+"players_seq": "66ae56d3c1de4718d7fa7acb943a00a5bb9ef9b7470b13e8e65f62d0e27fe18b",
+"table_seq": "cb4925eb8cc7e0a94700a82016311414ea0d8ed6a9f197b8498d5be7277cca21",
+"tiles_seq": "66eaa1c995f17e9b1f57ffdc4bb4f025ee4c034b75d0b5c81ce71781be1851fd"
+},
+"tgt": {
+"action_type": "4d866359357cb9c47d7123cfc1630890a728ecc7032a7dfa3a47e2fd78837048",
+"tile_idx": "d9bfaf832a50896e9ea1f007fcac81ab5d970b1bfffbd1dcfc1242072ec0e2b3",
+"value": "92f70e08b9e81147cc6fd313dc515e84760e11ab4a949f459f4d1cbcc4736694"
+},
+"meta": {
+"name": "00a4c9eb948d8deab1bad84b.mjson",
+"seat": 1,
+"kyokus": 12,
+"placement": 2,
+"final_score": 37400
+}
+},
+{
+"obs": {
+"players_seq": "dc4c9c7a330179311819bddc3c9cbef5bf59fdb7addbb11fe8dcbb875455fc2c",
+"table_seq": "c6885b619fdc1802c1312ea21f8aaf9e838bf20143f6caecccca3f98c66b098f",
+"tiles_seq": "a13dc3d1aa4c7ca092b5ce2ba986169ae29b2d1c250c09b70587a3b2e6c0b356"
+},
+"tgt": {
+"action_type": "46b5477711f181e1c57e66e6774b10179b6a20d4f989033a6762ccb938f04541",
+"tile_idx": "5c3b3ba6f11523c0fbb38503cc994c488e5736d717df468c1cbde612c54108cb",
+"value": "cdbd6a9b4d7eeec4f633f248016bbccf845dae995cd6540c3a0796ff8342e5b5"
+},
+"meta": {
+"name": "00a4c9eb948d8deab1bad84b.mjson",
+"seat": 2,
+"kyokus": 12,
+"placement": 1,
+"final_score": 39200
+}
+},
+{
+"obs": {
+"players_seq": "8f6623b76432bdcfbc9a67b03545be10a5d832f2112b3dada068553c0b3bbf8e",
+"table_seq": "0195e3170c366c9f6ed04bdd881ab612987771f55dd5873fe90cebf6ad977c6f",
+"tiles_seq": "7ba608685d69dab320f22db3aeb02e19d0f100244b4a2613903f1e32d0045722"
+},
+"tgt": {
+"action_type": "eb0b4d0b57383e3d75a07d6fa5f181239b719661715ca7ea32cbc6e7613a2684",
+"tile_idx": "cf496f7d06fa92443a83ac132752fcdb9fbef487679e2c6d8a1a6c75e8e37208",
+"value": "36adde2888e5a3c1d2d08e8498fd85ce158d2194642d5f2fc11f18ab468c7c51"
+},
+"meta": {
+"name": "00a4c9eb948d8deab1bad84b.mjson",
+"seat": 3,
+"kyokus": 12,
+"placement": 3,
+"final_score": 15400
+}
+},
+{
+"obs": {
+"players_seq": "20db2676282c86e5b502083786a3fcfab12df7382081cc80eb085404f1e1f5ee",
+"table_seq": "b40c7f81d02d2738ffb17b79a5e9a5e667eb4897f131caa833ce576493d36ea3",
+"tiles_seq": "fab664703b2c21244382de4ddfb023b59e8e06422beacd1678b44416394af1dd"
+},
+"tgt": {
+"action_type": "71e0465f7ee4962adda098de3895771b81130ecc532faad1151ec1834285553a",
+"tile_idx": "5d94f1e117eaf786bd079f5622cd74e29f55531fbd0479e1e28eb4750e2418a1",
+"value": "48aa1284319dd8b1ded1db6b1ea2da95cbe506a33f999745630279f093c3328f"
+},
+"meta": {
+"name": "00b84ee4110b3efced97c338.mjson",
+"seat": 0,
+"kyokus": 11,
+"placement": 4,
+"final_score": 4900
+}
+},
+{
+"obs": {
+"players_seq": "d8fdbb4595b3f7c0ec74e3e30c601c89512f5eb5795daa947a50963ae68c35ed",
+"table_seq": "d0d9a50c3085695759367adc57d514ce845126db3b76ba7833d3550fc9885386",
+"tiles_seq": "12923a12b9c313254a3d8f8f2632865c405264cd9610178f60ebba56b080a861"
+},
+"tgt": {
+"action_type": "5323946eb9cd8f9b8247cf30b786d58f15018df03f3bdf656cd034c4e0e48489",
+"tile_idx": "9a12f196b799cfa0505a47c02a2dde1512b5446015f5c1e38a04e29f9bcca175",
+"value": "dbc4b269dd13c7dbecef2b2234d6ce41ff13e2c3241593e0395e93a3da8daf8c"
+},
+"meta": {
+"name": "00b84ee4110b3efced97c338.mjson",
+"seat": 1,
+"kyokus": 11,
+"placement": 3,
+"final_score": 6900
+}
+},
+{
+"obs": {
+"players_seq": "8fd8fbf4feabc6b843e18f1bbfdd6c2d1d278cf22747c042a301fcd57db93fef",
+"table_seq": "35ad129ca62e00e7b6b932f71e4112f2ae2e069d4217d31b88539f9608b89fc1",
+"tiles_seq": "016954ef74771ec33ddfcbce9c18ed99b3605288e6bb2fbdd3cd67db55207b4c"
+},
+"tgt": {
+"action_type": "a98ac361439b563650f663875750506c8e2358488ba37274b0de7095ef84f230",
+"tile_idx": "d44881be8d4f9bd5c5c2c2431a707972d562af27095e344f826a71971459d53d",
+"value": "3f21ab5ee55ce2e111217a24507c51bb2463911faf5a8b7dc62fb181866ae989"
+},
+"meta": {
+"name": "00b84ee4110b3efced97c338.mjson",
+"seat": 2,
+"kyokus": 11,
+"placement": 2,
+"final_score": 28800
+}
+},
+{
+"obs": {
+"players_seq": "561007af7db724dae93062681bc1dd73057cf6face28684e9907fa445667c87b",
+"table_seq": "4b84cb9efb814ce3631e8c4a98b17e7c3597ed3c07064d1d59a24014aaceef45",
+"tiles_seq": "ce6f136ea65fbe3c14a68f0a26694efdb45dc871013ecb46cf56c1ee9cb53681"
+},
+"tgt": {
+"action_type": "fb2ac5e77ea8509b55d49854b00f4c14ec813fab1a937c2956c02d539cc88510",
+"tile_idx": "e518011c13b5157736eafbebbbea8664f72d7c25d2059cc0a8b6279b5d05dfe0",
+"value": "6dd6f1359f9a2e17c58fe840f86b1231e24ae6ed83167e1b165b7cbfd11b3982"
+},
+"meta": {
+"name": "00b84ee4110b3efced97c338.mjson",
+"seat": 3,
+"kyokus": 11,
+"placement": 1,
+"final_score": 59400
+}
+},
+{
+"obs": {
+"players_seq": "c563329cc891235c5bba6665f7491364731b910f8783b156bfb5165ec69837fc",
+"table_seq": "9c0a91704af46a248776be1806ba8710892e03672f747dc660a7dd22301f7032",
+"tiles_seq": "e4eab4e6ebfce479d109dfa70954b5a700fb4bf40d73317f3acb4992c9996191"
+},
+"tgt": {
+"action_type": "610222632b9b78c45fe77d2363936e604e03983f3da68cf63fe7996dc3b1a811",
+"tile_idx": "50dbe5fdf074117dd42ec3062cdb54bb24a46542984eacfbe8d5ea30f99585ca",
+"value": "a31ba8280db3853e43cac67235cd977c59802a3b61b96accd12c13b73b42e5f5"
+},
+"meta": {
+"name": "00c6bb5c1e5c8ce11e1609c4.mjson",
+"seat": 0,
+"kyokus": 14,
+"placement": 1,
+"final_score": 30200
+}
+},
+{
+"obs": {
+"players_seq": "e35c1bc661118540de4f76ee133ef98863c3a0df12d33efe4671c7c20fc90e27",
+"table_seq": "2f5a66739c9396a3d48e70ffe28c6af2ed78e7f1ebf7f425f24b6f8f30f642a3",
+"tiles_seq": "2e5d62f303cb1faa3b9bf681b79f6645fbdbb864cdf4c26530fb6e365f5bd1fa"
+},
+"tgt": {
+"action_type": "203785aabcd727689aa0e5d676487f5600c4e30548154cda69d23e575ab73710",
+"tile_idx": "57b8788390ff2a62cf8cd353b2d0d3d08af6c3297397db8f318dc3d39249420e",
+"value": "71b8b306aa999819295aafa5670d11a90b5eda5cb5426be073977a8134f94841"
+},
+"meta": {
+"name": "00c6bb5c1e5c8ce11e1609c4.mjson",
+"seat": 1,
+"kyokus": 14,
+"placement": 4,
+"final_score": 21400
+}
+},
+{
+"obs": {
+"players_seq": "40268beb28bf74b5c47a4f0ae6e4fc2c61cdfde015f935381e65162b6e94537e",
+"table_seq": "41400b7fe7203562f40fa62b47394aa11a6e2ccef557cc24699c6f4e8e6e859f",
+"tiles_seq": "175fd95ae4c27617836143d1352efeb3c4a38731917425dc2bb944dddb17a742"
+},
+"tgt": {
+"action_type": "02e05e225209e056f8949260724e5b81ba6883c6b1a329cc594f360cff772321",
+"tile_idx": "ae3d4dac48c703604b43fd16ab9c935279bcb8b27dfc378c8c314fed55d2eb28",
+"value": "8b242d0b2719bf3e7dd36bf1f366b47353dd0f30827788cf4afdbf70a0def840"
+},
+"meta": {
+"name": "00c6bb5c1e5c8ce11e1609c4.mjson",
+"seat": 2,
+"kyokus": 14,
+"placement": 3,
+"final_score": 23200
+}
+},
+{
+"obs": {
+"players_seq": "b97255e2e7abf26ad4815fa0c21769640e177fbdcb53763181522ffa819c764a",
+"table_seq": "c02c00f089900a127772400102bd0ee198a9c49e01ca543270d99f0bbe8aff29",
+"tiles_seq": "5ff28a50206b0c8cbc328431e80a7bcc56c7dcfef017df400fb53e3bb8265cae"
+},
+"tgt": {
+"action_type": "308b58fd105f81c37ce3230ca4e690f4c41e953d73a88f7af13061a90f319c98",
+"tile_idx": "52751b7af8022f250f1086fec186c0cd95dc5e82ef3f1c6589a53d9516544e10",
+"value": "c60be87c761e220783501db55c2acaec1a06a1ea248861a3b03179ca5126c838"
+},
+"meta": {
+"name": "00c6bb5c1e5c8ce11e1609c4.mjson",
+"seat": 3,
+"kyokus": 14,
+"placement": 2,
+"final_score": 25200
+}
+}
+]
+}

@@ -1,0 +1,894 @@
+{
+"converter_version": 1,
+"shard_meta": {},
+"samples": [
+{
+"obs": {
+"board_seq": "542b7e492f514f857233df0b1c42bdcf8a39eb7fc83680d2defe097dce654007",
+"globals_seq": "3e6b1daa11993ccc4a5336359d4bd279cfa9a22522c931f83fbe780cd2216d48",
+"hand_seq": "69dadba31f90d32f63ccbebaf2f7786404764d144f24213e81e2fe22edfa8978"
+},
+"tgt": {
+"drop_to_idx": "4eae36aee169cf1ba988be6edd5a49c4bb3b47152c8c7af396ddf132036cb4e3",
+"dropped": "26942f8fba402d49716b182a9a2991bc81e0557a4d5c84d3873e8bc5ef1f5f09",
+"from_idx": "d9d2ebe88452f8fa86025fdf9cbc0a48ccddb045bf162592be47f290dd836557",
+"piece_idx": "2a22df59229cb1c267642876ebddf9fd79a5d963da242f219f18028b80c9f742",
+"promoted": "7b6b6f627978db9772b661840d685a3b517eb8d758d997a3b1f2e196e3f8429f",
+"to_idx": "ee53407ed51621f657ba0fdb01fba096343b00bd75b8a9ee690227fb41eede96",
+"value": "3b9b2ad84674957e23158fce98281b2199c386714487e8ecf543f5d13cdd8b87"
+},
+"meta": {
+"players": [
+"910",
+"AobaFuribisha_w2092_avg_3200p"
+],
+"result": "w",
+"plies": 80
+}
+},
+{
+"obs": {
+"board_seq": "4d7c709a3a97e759ef6206a8ce7ae230d1215ed57fd9b682643a789329eb4e3a",
+"globals_seq": "51a95e0bd967a252b4b91dbedd35edc0aed91c416f16c87eb8cb90883f6fe135",
+"hand_seq": "6ce71b6e4e0441cadf99e8c6ff1c175b90a94cb3f168cc7211594f55fb071a0f"
+},
+"tgt": {
+"drop_to_idx": "9c1764326dd332b037f5e90e4d4f812d1785f48ad402e795e3a26706f5e4b9b2",
+"dropped": "87294a787f76217ac20c68c4c2913e467dcf6ca10d34e5f75e9332802bb33f9e",
+"from_idx": "a0b12f611832a90960fa47fe033308050bde88044abae3a8119209921c74355d",
+"piece_idx": "2b806dbbcf01c5c780edbdfd775aae83d9d31168cee22380f56f8a50abb9e135",
+"promoted": "71130212449511361fcf9aaa432607ddd3970f14b7ebebff509269c585cf0b25",
+"to_idx": "1c2b15e2c6bfa2eb8499ae9c12730e3d9bd868c9aedaa6303c43e3bb5d1d928d",
+"value": "e1ce63d096986f5bd69584c8ed89c01cf616629fd5d61bbb8741e584867b7da8"
+},
+"meta": {
+"players": [
+"910",
+"AobaZero_w4513_n_p800"
+],
+"result": "w",
+"plies": 48
+}
+},
+{
+"obs": {
+"board_seq": "6689477c71db1b3d3d038deb1ee248aa8ae4665ddd81efecd2ec0fc43ea47609",
+"globals_seq": "88b0de2dff99341df58ec08e1c94fde5a60d741d3df666d7604ba3a8896dfa56",
+"hand_seq": "845a25c1fd93489ebf671101ec8dd83b3bd9e47f5233c1179b3b02a715357abd"
+},
+"tgt": {
+"drop_to_idx": "5a25895deab89eb2340522ab63cd2bb269064a396534f4a1a082f6502471a076",
+"dropped": "e344da228080999a3bfef6bf9e479824cc11576a5dc62abf164a4e25f6bbcd3f",
+"from_idx": "9ccd63e4c6e81cc37f8bd726e0d24cd0ec039a8a7e81f185d19ce2cf24b04072",
+"piece_idx": "f0039c36f64d9eed10aa31157064abbdc7c22006f2ffbc73db8f8079a66fe745",
+"promoted": "a36b2170b84de97b465a5a7b367f99775e05c40c86ea206841ac273c607de8a5",
+"to_idx": "39e8237279c908665b0ee7333cfe4aa24e3c6158296e52d9bad0bc07b1f9eda8",
+"value": "8a9cd1ae96e081cb1556be71b9e126864aac2aaee31f8a342e03998196792a14"
+},
+"meta": {
+"players": [
+"910",
+"AobaZero_w4513_n_p800"
+],
+"result": "w",
+"plies": 78
+}
+},
+{
+"obs": {
+"board_seq": "9ff68bacf401901aa58bdbd066d4c623df8b2aa580d000436c56a48f78a35ddb",
+"globals_seq": "94aa12fc28658c425b409eafc23b222e782300730086882a6a5478047f3beb83",
+"hand_seq": "4c92ef2a1b17efe4db87cd622fe537c1bddc54e1e9ef5113e422252c19990aaf"
+},
+"tgt": {
+"drop_to_idx": "0dcf207640c142250056d6c35d516a9f760db85bc0ee877497b8220b93165950",
+"dropped": "b5cbc1c6adf8206ef8e2df31f28d4e2644576ba0310f8d801131e741ec0abfe9",
+"from_idx": "7aea7990e85309b1f3ec38c893ff5d89b0e8d11e83b722e3aaba11735be30128",
+"piece_idx": "6bf6dd14010aa0d19701bb9ccf99912d9ef005c9cc6928873e2d9c0e969b6e71",
+"promoted": "6fc0363d97293aca7bd639a80f9019f81f8e28d3616c682e34f9371a2d66b459",
+"to_idx": "117111b3086cf943b8ceba93615dd2a50f454b6b00b68f6666c5c4a2deba2001",
+"value": "42dac7ed3a8b8af3c65ea3abf94a71db03198995e48c0175686d44b176ea78fd"
+},
+"meta": {
+"players": [
+"910",
+"Gokaku-v2-b8n2c128-n1"
+],
+"result": "w",
+"plies": 50
+}
+},
+{
+"obs": {
+"board_seq": "0a3b72038213c993adea4548504b10fccb7f2f992d25026f3899200d078684c1",
+"globals_seq": "93097646e022d3ed1ae6c101e3ab8f74146f76b84a8f7c56b777496085ad1497",
+"hand_seq": "d18b0738d6859772fb5c32a9c5f0861601d5c8dfd150aebcecf1e65884436aa2"
+},
+"tgt": {
+"drop_to_idx": "d005dd0065254ef48aa9f34be7d1db6e4e17f4974d585ae04aef741fceab32d2",
+"dropped": "208edb7abb2dcd182f66916712eb84d1b05d49be4fbfe35961ff7473c77387ce",
+"from_idx": "518a9e8f63ffe60e84c4e627d76eb61bd0dfc7be4e0337025a5405d9fa7365f6",
+"piece_idx": "333ee0ebfe736157aa92e9dd68a5095c8e378f3ea4d2055078e7000bbaeacec5",
+"promoted": "93e039a03836bb642622cc8f39b21f6a6358f5f9aa95c1c1fee7771365f023ae",
+"to_idx": "1b673a5637b424c2d40a217ce0c3697d4a0858ac2ca9e97f894c27e2cfe05acb",
+"value": "c8c37f214cc6f421c3f5d99692a64e93ed98c8e5e3a5bcb8dcb255099e7ca221"
+},
+"meta": {
+"players": [
+"910",
+"Gokaku-v2-b8n2c128-n1"
+],
+"result": "w",
+"plies": 82
+}
+},
+{
+"obs": {
+"board_seq": "245cbef96a044a777960ef1b3af74459e61214ab99eb4b498a7eddd7ba2d039f",
+"globals_seq": "f1505f5e7b8fc05ffa8f7b7aa0e8e916ca00f2e11f8aa5fa1266f92982d3bf46",
+"hand_seq": "752b882df242a7a8f44fac78ded6560f455afe056b5186e89484299101fb1244"
+},
+"tgt": {
+"drop_to_idx": "ee2c0dac10757613e3bdbf2a617bbf9f0c790af9d1ca69621ed6226f88fa4316",
+"dropped": "2cfe750ed69d8505187b8e1bcd6c90ed8693ee1f0da8d1ca7ae106b0c1e5ec92",
+"from_idx": "b2a90ad4d0851df2404d6052b2d305460e9626c3b5d9e421d018545018a677aa",
+"piece_idx": "50d948d7fca8069d37f5fc73989b6a85e917f1aab604f7cc5e9b530cd749784f",
+"promoted": "0ad5666a451287295ebd79ff3b561cbc9df5aedc7c67a6424323028662be161f",
+"to_idx": "930211facd9ade6fb51c0dc845cdec8df7e67b80d3dad5604520d78415cb4086",
+"value": "8a9cd1ae96e081cb1556be71b9e126864aac2aaee31f8a342e03998196792a14"
+},
+"meta": {
+"players": [
+"910",
+"Sora_Ginko"
+],
+"result": "w",
+"plies": 78
+}
+},
+{
+"obs": {
+"board_seq": "abad5ffb9419e5f05c7fb869d2345adfd4e918ce84962e635afbbf7a580d9ff8",
+"globals_seq": "32ea7b89b01dc881846cd5c5e104e02c40b9523fc5d8065c0a9a971dce84c007",
+"hand_seq": "5b5420bff2ebd27c7fc5183e7be3a216a933130345935d5329ecf0f074f56aa4"
+},
+"tgt": {
+"drop_to_idx": "d921e2e6d3424766cac5c986ad3fa9541c106d9fbfe27b18a609f7a27ae25e6f",
+"dropped": "adda80ccb6d39d360e9d27cf555a5849a236c4084792e39c2035d30db46786a7",
+"from_idx": "27ca32bda4f1790f12f8563f55af3a30547d52d66bf3a61dc78210a7e9e4c3b7",
+"piece_idx": "bae476f29a6a8b7856e335136a3b1001a2ef96cdaa409da7f10ceb922525864b",
+"promoted": "157160a7d786af9394093e20dc56f871e5b83a149527260cd6cf3dab2457dbd2",
+"to_idx": "2f63c3e358fa11c8f1293abfd5f1e7a6f40f0d939319655e33e4deb36b197386",
+"value": "f31c1e6ddb17d08326cc8494d45f7f8c6cfbf087e0679bc83ce7e7c42a5df4d9"
+},
+"meta": {
+"players": [
+"910",
+"Suisho10_YO8.60dev_12700h"
+],
+"result": "w",
+"plies": 56
+}
+},
+{
+"obs": {
+"board_seq": "9c9d2b604241a457b87965d9863549f33d405482fdc92d7c2f11565e515f011a",
+"globals_seq": "d9b38cbf5732aa9ab54c160a2ca441572cbee6ac22e2cb45a7e89767433fa931",
+"hand_seq": "322c29941ce3b0fa8abfde61e1d5f16ad021d3d6f8cc3d1f7383090544a2a975"
+},
+"tgt": {
+"drop_to_idx": "65771d95fe5be3fa7a182f220cb970ba73694d77dbbf04455df9d14d941c0edf",
+"dropped": "96dd2e32c094d5a1d9a0b90c52be6e32d7a6465fb0803a7457e46e58144f7f39",
+"from_idx": "9bad3cead6ea4b4999414b6404f8b73e9b4b8001796a8e2dff632c08f3115f7f",
+"piece_idx": "702401d8299456c063552b003a0d525ffbcc8afa4cf36e12bddc2cbfa0a34ac8",
+"promoted": "f398978447cbd1a3e8ffaaa52740df1e23bd6b8cc886048f09afbd4bfd7f84d4",
+"to_idx": "4fc7175f0902bc3c8478d42751dbdb7981d5bdc3e0a761037e14e377e928c090",
+"value": "6a04bb871c33680893257d410038c56993b387e9a397ae047c6c3812dae344bf"
+},
+"meta": {
+"players": [
+"910",
+"Yowarieren"
+],
+"result": "w",
+"plies": 46
+}
+},
+{
+"obs": {
+"board_seq": "126b0b86bc3b54be8b7bad220c9a64d5382ebaa5fefc401a1211b0f6a0d6b6e6",
+"globals_seq": "9dc85a4ba85a40c656fc33c1275418d8e3a0a978bc74c94136b637b5bd1c2efb",
+"hand_seq": "d7b0be3fbdf73761575d6c3d10d64841f388aafbcc76d819f981a858e8d34a9c"
+},
+"tgt": {
+"drop_to_idx": "6aee2edadc42a41f1ed91ad18fabca8c84d9ce8685f5db1359474b62c29ff2d1",
+"dropped": "d7948a4ff1a5fa3896c65f9befdada40f0f8f2dacc8369d6f20a952041eb5862",
+"from_idx": "a8fb26904c7a4950fbea8bcbf6bb44ba4b255c0fe983a412d46af5107ca43593",
+"piece_idx": "d62ba5dd66672e6f571384fe2f8dad2389067482ae0f827786e869264c76b6f0",
+"promoted": "a9ed4fb4e65d468849d03ddca3c10c21089a029a109d1126143cbb93f43b17dc",
+"to_idx": "17c9dbf4890956af4d864c1deacfe6eb917f3b483175d2ce36d1928e21e60a01",
+"value": "a48e68c6608d5400a5bed0eb6ec1885fbc2a95013645ef2b339788c518b03174"
+},
+"meta": {
+"players": [
+"910",
+"sample1-1"
+],
+"result": "b",
+"plies": 49
+}
+},
+{
+"obs": {
+"board_seq": "5525603dfa8236fdf75c9feb13297bc926e3e51bb95ccba43f81b4f85bd2ced8",
+"globals_seq": "ffe24f2e004084f3f76bdc002c2775bd25de174d6b1d77ee7fa59ecff3c2a2ca",
+"hand_seq": "7cbf170067e1687ec09790dd41539787457dc1c90426769ccf228864be3027ae"
+},
+"tgt": {
+"drop_to_idx": "b34874b333b96110dc81735fd15a43419baa4f4e14db10d4afd0c29a69c0126a",
+"dropped": "cb8353024f8c486dc8ee710ab13ef85271b231305dbcdbc6d1d3a4bc9732ec6a",
+"from_idx": "4a416a92a5996f98d7d677c1b2787520399aa49ae6293bbcf46116105f0e66dd",
+"piece_idx": "30c7b9311c8bb93d476afc420f23748c0645cea6a370d771db57954df0938b65",
+"promoted": "1a68fc5555d8db7f13bfbd85ffbd571182df478654b1b0bb09ac81589357dae2",
+"to_idx": "f2f7c08ed06be1b88ca893205183e3256802abe0008b7ba73c28959f15d374e3",
+"value": "44c6c615cfb8358dbf701cf790726f672e76c05d602176d701b04d41871e082f"
+},
+"meta": {
+"players": [
+"910",
+"sample1-1"
+],
+"result": "b",
+"plies": 57
+}
+},
+{
+"obs": {
+"board_seq": "49d9772ec59fa1d1064f4c4a9bcf53817b11c0b601dd840a54fe31f9426667d9",
+"globals_seq": "e5ecd2e0ce49f9b5b06b041c702764acc536351511d70a53abac5d8777c4e5f6",
+"hand_seq": "0d33839ba8bc9bf63d6afa050d223e81f9b2d451b1db7e2c796858adde03b6d4"
+},
+"tgt": {
+"drop_to_idx": "becb0dfdbb9113c27a726565a8284d286995866d59b54172172fc7fe9e02e2d3",
+"dropped": "3e3ce5e3af988e77335e417fbcaea0bdbef325a4452fb6a986462a6c11c60070",
+"from_idx": "c374b5ed18cdd5d575880d081f0449fcd13d8a3626762761745b17783f7d6cad",
+"piece_idx": "bb72a2a0b455618b9165f8f3e610e4da79252aab315fa905ca14f2c3fe336d4d",
+"promoted": "43aabf3e99411ae2dfd5b73fe5b5d2635ea015e4c7257e8b9171f8c595e0c332",
+"to_idx": "1147fffd8b10e2347d5a537cec565403a0575768a0df624b24882227c0a5736d",
+"value": "e120d04600407ec863876334acaddba49691617b3107a013f3c6ba473210ce05"
+},
+"meta": {
+"players": [
+"910",
+"sample1-1"
+],
+"result": "b",
+"plies": 53
+}
+},
+{
+"obs": {
+"board_seq": "6da7d6891f456a5442a3b24b3ff7ecb9af1fecff3f0a8992212cc1b8781aa3bc",
+"globals_seq": "e2aa3f60c28ecc0267be723f0d8b8712255b415e87dbc38cc3e6af5e71b8b417",
+"hand_seq": "b3468ff6ad9464463874c11e479a9fdfdc565f58606b228bb39b2dc6082f27f7"
+},
+"tgt": {
+"drop_to_idx": "7090dc5de2d330f9c5c5d6c79786468817488eb1bc9cd73d4d6bfb1ab9ab899d",
+"dropped": "c8bb673ada5058552b1c90fbb529e1962e1c59c5455751b0d8e493154a440509",
+"from_idx": "88a9e514fad0eac76d1f1536655ef11b3a5d88b71d708993d5d646ed1a610dc4",
+"piece_idx": "54b829658f6c31b739985d8dabc5bd8345f375bba990e649b6d74d553258c229",
+"promoted": "6708b83886409046c7519f164e2e9376f9236b4c68266756aa16e4f0a4a6051c",
+"to_idx": "26afa4e1d3542596e70eb290841c823e1b46d90f5dc30a2cc66b4de9b80146b8",
+"value": "44c6c615cfb8358dbf701cf790726f672e76c05d602176d701b04d41871e082f"
+},
+"meta": {
+"players": [
+"910",
+"sample1-1"
+],
+"result": "b",
+"plies": 57
+}
+},
+{
+"obs": {
+"board_seq": "98de5dae8c2780bfc3c916cfe9efc36e08fddeba9251e344aab4312722eeef0a",
+"globals_seq": "3c4c3fc5f429ce96434b08b77a5876b8705f29c011ddb32bd6f007d1c8182bc1",
+"hand_seq": "cc80a98a46f9324f4c115064eeb991ecb344cb46116d91c3ab32267791c3cc46"
+},
+"tgt": {
+"drop_to_idx": "759e21a520fc9c19fb6b789f4d07097dc3ff1c3a68b27c67396f885dd24c631d",
+"dropped": "344682c65d18f96ff591331796625597eb507125ca0188d1b2d52efe39bad278",
+"from_idx": "7a490dcee68d333fb82d3fa5d84793f05d6af85043bd4232e0691ea8ea1bbcb4",
+"piece_idx": "03fe9294f9127733d87b56c24f8b082f04f7277f0b27675aa87dad4b82df704a",
+"promoted": "8f7e41304e5917bf658fac246466c165e765787eed0b4c4425a27fe8485d9ca8",
+"to_idx": "6a633fb23ad30076d30a4e94f6629a72afed7080c2631dd276b528b55c091aea",
+"value": "780081912d3e11302722d97044895396cd804f75cfa7b5701b2d3ce68b801fd5"
+},
+"meta": {
+"players": [
+"910",
+"sample1-1"
+],
+"result": "b",
+"plies": 51
+}
+},
+{
+"obs": {
+"board_seq": "b31f852f7bc04d0177974ddeb13399830fc0eadc5edc2b95ef80d2226d2e0d42",
+"globals_seq": "06a5001d0f1e62e0b56bb6cee5cb94b94fc7a3d9430ad1a448a871872825b4c2",
+"hand_seq": "bb8c20ebd52f374e30ccf3cca2612f3acea59f07a231ded9805afbc7370b8e79"
+},
+"tgt": {
+"drop_to_idx": "3e769c7a3f8fd92c03822244b6de9644ae16937e314e8fc5a0dd55498bd9d422",
+"dropped": "2445946b0320d6a4a51068672b0e9a1a66cbd9fe91c454656b4375df47ed51b6",
+"from_idx": "30636c6b3ca9b8526522778d2b3e3560b98b74ecf5416110552df9973bfb8ccd",
+"piece_idx": "5ca60d3f16178d49856c92da45879bf9e747c880bab390d886c01f91b5809b54",
+"promoted": "efa2ac082222a2d9a23142a6287c4205c8b6f4f9ce0c159bf8df6d64c7bd97dd",
+"to_idx": "584fcc326083f4c38697d3338e75452496549b16fba3485479870187ad2dc7ba",
+"value": "88f9e8a5da1df0e39e5f48b7c6edf64edd8503568cfa25917ea8fc5ab11bdf1c"
+},
+"meta": {
+"players": [
+"910",
+"sample1-1"
+],
+"result": "b",
+"plies": 63
+}
+},
+{
+"obs": {
+"board_seq": "69edc9e7a06066dab410e6fdebab311d34684cab88d50e7291105a42ff1b4685",
+"globals_seq": "5441ec8da8de691ff0f969ea12f97f65b61f32bbe350ca2bdb39992eb94d4b4d",
+"hand_seq": "28cb41394870a1891123dcbe658fba9be6eefd9ff5c4ef4c0e70f57531ef17cf"
+},
+"tgt": {
+"drop_to_idx": "6453a98e763828b49abaf065f99922173d709e7075f64e149915dd9fa3c1878e",
+"dropped": "5aeeea47b64b5bf747419f54cb013db968881a0594c9f8519d655be733dddcc3",
+"from_idx": "04c5ed0fc0c60b0e896c7ffaa9f51ff22829342c880989fccf013aa9da76b09e",
+"piece_idx": "89a52c33c7377f2da5b75f952e46939e1b75887c10b69447dfc42f1bc5187720",
+"promoted": "f300e35a6dc2ac3ec859fcc78fec334a8b3a5109765a03ec8e2e9270b4739992",
+"to_idx": "c0fe2db50e255f847883b013491c0b83eec2d7dc42d5882e5dcc386bd929b8f1",
+"value": "470272723dc26eea0dcc3c1230c8adbee43c791d7fcbb1859447782a6d6756c5"
+},
+"meta": {
+"players": [
+"910",
+"sample1-1"
+],
+"result": "b",
+"plies": 45
+}
+},
+{
+"obs": {
+"board_seq": "076ebabcd6870005803801249e64ec29911a2f9b622b553fdaaf8ee376680f7c",
+"globals_seq": "875f87dcc512aacf82ce3a35044d2145a307f8771cb934bb0fd23e5f8e61e734",
+"hand_seq": "9f035bc69f1a3f6be5b8f504847a17cb561511cee2b19821916dbb53b8821585"
+},
+"tgt": {
+"drop_to_idx": "68fc47e16431ff8507904e44111685bfa9c5fda7d855d1d948c78bb6d4b80687",
+"dropped": "ec5b0fac462617dd6a798b9a70b09348fba97da96be7a33d31b861a2bdbe92cc",
+"from_idx": "ea3b7680cd4d03284a2f0a401ea86e322b00bd303fc39c98079fd1121c93cde7",
+"piece_idx": "b6c630f91be2ccef7adc00d784af769fc86bdb0f7238a082885829e8e31bf2ad",
+"promoted": "9d5975a94e870adbf628ab521bae339f614ac0a1d176bc1402ee22d14f02a36f",
+"to_idx": "6f6581870dcb8fb7d70291a7dd43322215e0959a8e8bae41a0f896aaa69b5763",
+"value": "05293d679b016891384709b3ad15cd217749425a60c73cb74b7ed5774468b757"
+},
+"meta": {
+"players": [
+"910",
+"sample1-1"
+],
+"result": "b",
+"plies": 61
+}
+},
+{
+"obs": {
+"board_seq": "4ecca18867084dff259bdf8f360ddf181a06728cac593bdd7c79cd7ec16b2dc2",
+"globals_seq": "8ea78054db5c24c7dc35257a16b2139aa1e396990788eae905e2dfa0d41ec539",
+"hand_seq": "e6e30757ae54a7a48e677bca7c1caa40b46b2a15f7430937e23fc30dd18fbf08"
+},
+"tgt": {
+"drop_to_idx": "ff47812071671bb33163c31c1c74e997a5e94ef12c78cf20759b5091266e70ce",
+"dropped": "d738e2f8620d9435528bccaeb043420d0b9b0e58ce5078473a486ea14aed191f",
+"from_idx": "715db4e59beb1312ff4cd21ec495d434edec8ce7fce08d81d37d78b7ce19801a",
+"piece_idx": "daeae87d0de0d154381ca2872c270fbac67b077f95fb78e76c29da26c3f9bd22",
+"promoted": "d41b161b4f38273a9f677d2efbc9bd63c8780adaf486a6f64acf1942f8eed5db",
+"to_idx": "152270c3f1047cfe5fbda0c0f76d1e995d7f7a7b7337b6f53a625900833ece28",
+"value": "c910a927e061ebf338c341cd7b7536078aeebd7b0dbc81eea746f3576d2d5acb"
+},
+"meta": {
+"players": [
+"910",
+"sample4-6"
+],
+"result": "b",
+"plies": 79
+}
+},
+{
+"obs": {
+"board_seq": "77417a4b3ae11295a8541c409fc6735ee29e0d777184481f21722756aee49e3e",
+"globals_seq": "82afda900faafe59cf6ac227f22573519e4adba2aaf64c16e8661db78635d980",
+"hand_seq": "ee07ce4c952224d969c0ddda457eec91583808d19a3265c0d42506cb4523e895"
+},
+"tgt": {
+"drop_to_idx": "bcf1b32619b9f0118704ca7709d7eafceafc4bcb0b1ad1702f58e8f5b9f9caab",
+"dropped": "a2efeae602a2f7a3e0c224d2696de16b5da51b767644c0b36e551c39e4656faf",
+"from_idx": "f352ba06063cb8b7d9f0b6cceaaabb376e90e749dae5348bf43efe1ef4f208b5",
+"piece_idx": "2780c1434a75798f6fdc3471eb4c6a664c65d5a99a2126fb3cb206ebc9ff6737",
+"promoted": "dfce6885fd5bcad051163e52f042d0826187e46c0d2fb475e9106bf0f9d80d47",
+"to_idx": "2ba6a549791dd36a66a6a436091ce86ba1c9930374a9b7787246b46c87329554",
+"value": "db4e81b8ff2aed83ad0641bf06a52c9a913d03009e0a10efbc0d1c968434d997"
+},
+"meta": {
+"players": [
+"910",
+"sample4-6"
+],
+"result": "w",
+"plies": 72
+}
+},
+{
+"obs": {
+"board_seq": "1b462ad1daa00bfd7561126fd7d91d9cc85e93d7aca26b5a60ed312a43c7fc5d",
+"globals_seq": "d49f804a0c582afad5f92339c4b123899a206be48b6936cd6a32536b4bcebdd1",
+"hand_seq": "7cdb6ed1d5d627b21cf386730cc4871d06fc4182044eacef22b548e9c772a232"
+},
+"tgt": {
+"drop_to_idx": "81d53dbc2de1e1682e5e339f571cbd1fdb58f5c33cb62c41068d960164ef453b",
+"dropped": "c4024ea691eddb7f7bdbfeeaf5133040eef115ef4ab3592648ca958b20cb10c8",
+"from_idx": "44bd99e0de7477df992fa932214065c0ca083be324e533d08cf616cec52b854d",
+"piece_idx": "8a7080bcb3a4418a23143549054b8af806a4e0a97cf898d2f6bec7e9f763beee",
+"promoted": "cd27ea0e9b5be9c3d916d24b83caf278caed87ad10a4195f92f81ec4669c1071",
+"to_idx": "ba314c8bbad9be6709ad8f925d284aa82c154863560cd4b0a4f95889b3ee708d",
+"value": "c06a347e1c786d870dc30b1daf3cb1b11d1135bdb41e1c12a4d992579e561a45"
+},
+"meta": {
+"players": [
+"910",
+"sample4-6"
+],
+"result": "b",
+"plies": 59
+}
+},
+{
+"obs": {
+"board_seq": "77417a4b3ae11295a8541c409fc6735ee29e0d777184481f21722756aee49e3e",
+"globals_seq": "82afda900faafe59cf6ac227f22573519e4adba2aaf64c16e8661db78635d980",
+"hand_seq": "ee07ce4c952224d969c0ddda457eec91583808d19a3265c0d42506cb4523e895"
+},
+"tgt": {
+"drop_to_idx": "bcf1b32619b9f0118704ca7709d7eafceafc4bcb0b1ad1702f58e8f5b9f9caab",
+"dropped": "a2efeae602a2f7a3e0c224d2696de16b5da51b767644c0b36e551c39e4656faf",
+"from_idx": "f352ba06063cb8b7d9f0b6cceaaabb376e90e749dae5348bf43efe1ef4f208b5",
+"piece_idx": "2780c1434a75798f6fdc3471eb4c6a664c65d5a99a2126fb3cb206ebc9ff6737",
+"promoted": "dfce6885fd5bcad051163e52f042d0826187e46c0d2fb475e9106bf0f9d80d47",
+"to_idx": "2ba6a549791dd36a66a6a436091ce86ba1c9930374a9b7787246b46c87329554",
+"value": "db4e81b8ff2aed83ad0641bf06a52c9a913d03009e0a10efbc0d1c968434d997"
+},
+"meta": {
+"players": [
+"910",
+"sample4-6"
+],
+"result": "w",
+"plies": 72
+}
+},
+{
+"obs": {
+"board_seq": "3167bcae23e5d2e9542cd2cd2c8bb2679466dcfc0e7eab7421632a1483942bde",
+"globals_seq": "401a71cfcf787b208b73af0b8459ed98f9194976ccddd8229dad58dd98a7e0c0",
+"hand_seq": "4dfa95afa1413a24cc426c60213aae75a709bda538371cd8000815434c232b67"
+},
+"tgt": {
+"drop_to_idx": "d586874c762f671c5c909e7eefec6063edf8040bfda28c4db6b536471e9db901",
+"dropped": "910da62d9b610d1a94db573e479f87e83aac954582128bff5e1cecffc96a58fe",
+"from_idx": "3effe568148923beb7c44bbb0136d190d520b2173209c320fea9691a5a4202af",
+"piece_idx": "1ea10cb04783b879a1fdfaa172ac0c01d7b94031eeaf0aaeda747417bcd5b16a",
+"promoted": "2204c89a1719bce3a9577f57705f1f5c5a5d079059e56aa7dd344a7f001e9a2a",
+"to_idx": "32ae49d136b8217d41ca0e0e3d4bd913a7a12346deb54129d75555ad9bd52420",
+"value": "09edc5bde25653310ce427b94a2f8d8f27eeaac30768ca5dd26d458824c019e9"
+},
+"meta": {
+"players": [
+"910",
+"sample4-6"
+],
+"result": "b",
+"plies": 73
+}
+},
+{
+"obs": {
+"board_seq": "9e332436f5aec87d1f1088c58416a4ad91bae05e315e393dedcaaadc57ddeb39",
+"globals_seq": "4f7a3f4bfed7d1c343ecddefee1dc9d004be5fe9239e40afa7ccbc76d85b8635",
+"hand_seq": "45102f3ccd23ceed7f658e0bc5c75ed0baec814f6ad152e677b2e4b9aded864a"
+},
+"tgt": {
+"drop_to_idx": "f31ba16e2bace00f5c193f977a5fb7ae4feeba99c1d31d5571a65bdca2b63c5b",
+"dropped": "bf49d59e61eeceb9ee7a428544f27c81bb8d21d1e6b8d0b41d3267ad7503dac2",
+"from_idx": "f5454b843bd1fc187f7ef606b736c0dfa21b4f88c874ff696df6596a4c061177",
+"piece_idx": "c10b7f6d22a97b2508703e5c0ca42c512e7bd54b4b1e8be14f59e7da7bdb6cb7",
+"promoted": "05906e41d39589f49c9b8ccd8e8dbaa68b478b115fd8c3cb30b52b0bda2b3f55",
+"to_idx": "73aff3df6af74f7fe63a9f99bcfb85b0f3d386491fe30e7c97092d2fb00cc817",
+"value": "c275578dd09d24c16d1d71cb8b81a08c8aa41cb4579e6d70d048b77a982198de"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"910"
+],
+"result": "b",
+"plies": 99
+}
+},
+{
+"obs": {
+"board_seq": "811ae2dc5149bf4c037e6838094ea226b65f8a061b296d2952c2cbad6bfdd0f1",
+"globals_seq": "ef2dd38aa2bbaf97d8fb35c8d121dac2a7986a0a6a31bab360f4e99c2b5116a9",
+"hand_seq": "a5e0d74e61c515b21266f71c79ed4efc1752194a16ff492f63a82997647404f8"
+},
+"tgt": {
+"drop_to_idx": "36182ed68714da443aeb29a318f09f396ec0adda12a60d77a79c302fa0c9effb",
+"dropped": "aebe1318d0305bee2cd60b96349a92c01fa7a2933647c7ff47a0ac352381a0ec",
+"from_idx": "a998ea8ead7d630d3af04a9ad28eb00665b3254d0113f80a3beeb83f155f1de4",
+"piece_idx": "8895c6b46208a23728d5500684780e2a0ac62a9b5341c6fa64a177d83893a6e0",
+"promoted": "5a255eba81a53ebb0bb2a1cabb650e571a7331f98aeee11909c00b35a4d52113",
+"to_idx": "fc5a9afbf663761acaeb5cc5ea7bcd217b44af831a58bec02792f60bf528dd66",
+"value": "9f17bfd323169deea3a003e63b6fc0f0ef559aa022b368e1013def0dac281396"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"AobaZero_w4513_n_p800"
+],
+"result": "b",
+"plies": 149
+}
+},
+{
+"obs": {
+"board_seq": "96f5a4073c353bccfb9dcc0bf6eaf094e5c1faa8c3aba6321bbd11c422353c0d",
+"globals_seq": "4ababab48c450ddb16d0942efa21fa415b671c51408ef570317d7f654d2dd136",
+"hand_seq": "c159a0483e886df22d4f91652bcc50396b5025b06f36f8ce46a5c1b10e7b0707"
+},
+"tgt": {
+"drop_to_idx": "37ccd3f71ba6442a542a8cf5f91dc2f108b0a8075b4991bc2cec67210aade5db",
+"dropped": "61476acded87b3bc5051884a163482710d960f50fdacec8cc449414ed8622638",
+"from_idx": "50872efb7cbd190f122bbbea8be5757ea6c0df7afa78d43d3686ba4ad26e3601",
+"piece_idx": "3fd36c93f5069134a4e13a2967a1063aa0ca00d6e118bf58a2218bf83476f2bc",
+"promoted": "ff630f6305d0d9730df17295e639f54b2be6bdcd963aed9c41ec89ee94452122",
+"to_idx": "670e50770d313fad096b7b70a76aa00a53f4e6d677b44e865c9a99ec9119002f",
+"value": "52fdc616d632d84fa8937b2bbf22010628d90643e2a33dc911101d7fbf37772e"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"Kanade_p8_NoBook_QuadroRTX4000"
+],
+"result": "w",
+"plies": 176
+}
+},
+{
+"obs": {
+"board_seq": "a0a1f6124fa2ceb32f2b7022c19a2761d2c3d7014c82ac2557a71038df444a62",
+"globals_seq": "73fba77af0493e51a39de1ad0cd4647bb9e059a92f06270cfe1d9fde861fe341",
+"hand_seq": "4775074a71a00d278f59e4dfd02e22a2296f6a07329b632289cb118dbd6858dd"
+},
+"tgt": {
+"drop_to_idx": "66e667dfbfa1cc424fab9af5044535b87c0fb599147923e91512ab5aa1f1dc18",
+"dropped": "54dba6ebd6882e380fad3e171a734ca66177cbb870bfe491423f95b778448489",
+"from_idx": "c1969be91fa2c995194779742d87dd543e4c0c94ad8a0adc2edfab04b7710a60",
+"piece_idx": "193124383e913843306f85bbce0f2a679fb692ae7788c95ac3c266d65cd74621",
+"promoted": "a020f3a9fef7f9eeee15b121e9e23bcb6c5c2cdff571cb07e433f8b0d7d4847c",
+"to_idx": "54ddf608ac6dc182b901e37947c4b6cb9e3b265d02d03959d4676a0496f0ccfa",
+"value": "db2dff2759350c27a55a0637e096dec92b435215b146226dbeac33d694e9a5e6"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"STATION"
+],
+"result": "w",
+"plies": 136
+}
+},
+{
+"obs": {
+"board_seq": "79c64c734e96516e16a16a6bc510e77677136dce46142bc9ae9ccee8ca3c8e17",
+"globals_seq": "f20da5dbee330b621e311e893cc2c1ddb24eac6af2198c342c86e528bd5bdd4b",
+"hand_seq": "ee2968e8d7de6d637926998b7f7bd2f7b30b19cbc38252d29e0e68abfb6fc24d"
+},
+"tgt": {
+"drop_to_idx": "151fca80f8d4bc357e10e7679317d7ecd063bbf7c0fbc3642c2851607abc7b3c",
+"dropped": "af2127972a8c03b8c3a79076cede560f58029bfc53112daed8e141ad4f3ae769",
+"from_idx": "1f5ecd0f5da5ade90b0cc3979e841f389a2873cd58ff056df01045c2b806b522",
+"piece_idx": "a039aa085dfc2ce5216898f4d395d382f49f85e6e1a210ed64e2b5fac4a7edd6",
+"promoted": "3ac79400e1453178d29dc2caf23f20f68edb71db2a401a15d62c6a66ba042988",
+"to_idx": "7730e75e28501cf4027160ccf8e6a2f95c014d524e6119c37068ff3766710283",
+"value": "e74c063ab0f6d4057e018fe56c1f4e8ca6e8096b528174806f0da18336011abd"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"Sd_RTX4060L"
+],
+"result": "w",
+"plies": 116
+}
+},
+{
+"obs": {
+"board_seq": "b5124d06976ca520214a9c3b9f68bcbbd1ed4e25aeffdfc8864c1f77d502b94d",
+"globals_seq": "f39e4796a5a54de012ee6693f60961654c6dfdde22157e76c1f880fc747a8d93",
+"hand_seq": "f6f4c54dd160d72416b43acf1333d594d4c6321b06cdd17c6368571ea1ee37e5"
+},
+"tgt": {
+"drop_to_idx": "79b7a3d00b6db0a144077d289cdc6f822facdd08a30abfc593d001d942ae5a08",
+"dropped": "65332605ab0f9fce0b903cd3cd7a6e43caa455c003ad0936bfd61d5230cff0ad",
+"from_idx": "412ea80051ab4c625275c69b44cc6315d72c40aaa4c94cd0e4724b29cb9a620f",
+"piece_idx": "ce97d1888dc7d9f2fc6f55d4dc6bb18d07d4bdf5b83cff2eed3a334426599fcf",
+"promoted": "4e02d717c70f096deb22aaab8bf5fb8cebc58858c66b0f8372129326529005a2",
+"to_idx": "74f6a9978d4f842ee84c74fc052859200b3b78d306095b0e26b1410785cb0a00",
+"value": "238aa62c440a6a2a01904c929091f015d064cec0be5111362b0a5113d4c60df8"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"Sd_RTX4060L"
+],
+"result": "w",
+"plies": 146
+}
+},
+{
+"obs": {
+"board_seq": "0f09c34591218cab11c665877ea4d75d4c20eb3f1012ec23cd196aae2db87c5f",
+"globals_seq": "a4abf1f36ef475832d4cd36930d30e09c594c2fb240e345f416e3a143361d020",
+"hand_seq": "d8b9cb828c7bc8cb5a1ec80389668a2931034a3fe0f7749bb1c9b7c996ce7857"
+},
+"tgt": {
+"drop_to_idx": "c750d5a2fc5e528e6b95dac1355fa5cd8bfae7f2c98f40f3c9ff5567c19726ce",
+"dropped": "e40f8f62e2419edc58aeca7171f121f1ccbd156915ef3f9ea8fee1dd932aae76",
+"from_idx": "5c603f265020b4b7c89969008e3bcb1683afc62229cc8a567ae5bdc649990413",
+"piece_idx": "5607ac08e16bc6c230710c5894d0e613407573d6d954d9cf3995e90b355274c2",
+"promoted": "0a650c6a0a6bea43a7960cd41674691296df1f214bc4a21fb4ddea876151f1da",
+"to_idx": "f16a53c185a9bc2e0319ba7fca44a7584b77a0287947f7646ed8637f778297dd",
+"value": "b10a1bffe723df709a555a1bed9a61cec05e710a20b16219def2dbacbf627eb7"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"Suisho10_petabook_low"
+],
+"result": "w",
+"plies": 140
+}
+},
+{
+"obs": {
+"board_seq": "cd83eb7d09953ec8525f6cde876d23e97bd24a1cc7797d627e60291a5ff5bef4",
+"globals_seq": "f6b056259cebdfb646d21da436bce297210432557fadce57083b0128db4edfe0",
+"hand_seq": "223eb16efce1554400533ecde564e23e860255561a5319c970820fd8179e1323"
+},
+"tgt": {
+"drop_to_idx": "961d616328de39815ae14b058987baadd48300e8007d2e70eed0cfb325263289",
+"dropped": "1d4483953ac1e15b6b49e17bd8adca4c393b931a0050604e038b392ca4a8523a",
+"from_idx": "f1288f98365c86e528f38601f015576835f654c3b665348f05153caf1ed31fa1",
+"piece_idx": "5cd0859d814ce89d9ac906787381c0edcc3d447cdc5be383095bda8ec8b92de9",
+"promoted": "f2b4fff0dbd5a1191c0d48d24d59ae66fe32f03a7b01fb501d879b6a5931aa85",
+"to_idx": "e8062a1b7212310988c38746a8e4f0f9609cc9a27aa26c3db1a84fe385965b96",
+"value": "bf6b32f170e867a3a39b49a9ad23571562e083206be824435665a2221eda227a"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"Suisho10_petabook_low"
+],
+"result": "w",
+"plies": 108
+}
+},
+{
+"obs": {
+"board_seq": "7761d886c8e368c86054bbea6012bb6173ed786fae90d619c7e25d1c50e24e2e",
+"globals_seq": "6a2d2617b69a62cc417eae0f32e61dbbff02378ece22f7e500a80b9297bd4154",
+"hand_seq": "8c439b69c8f99669406effa1dab77d08e0684648a81ae7e7ee6b676759f63fde"
+},
+"tgt": {
+"drop_to_idx": "516bfd6555347bf0c82433b6c73691e138102aaf90c9ba67865a4f2e6006b330",
+"dropped": "4d88ecefe866cf48117a64badabbcbcb6f4f24b2c8ffea8b8982fa53ce0bd9e9",
+"from_idx": "44252336d77d498e35abe6618a0e88a08f3ff33533f10d5176f6d164fe11f932",
+"piece_idx": "54f6c6c4362602b344db23e481bc4e33548eb78ba0e71d7755af26ad809d518e",
+"promoted": "524ae5ce3ad60405f3f880be708a1b392fafd32c874b5a65e4b8c6b71d0b4d36",
+"to_idx": "62995afaba5e0c91a6b661eaa17bbad95ff569568805f926ff8d00608d4b0468",
+"value": "da86ec2ecd803afe3a9c1e386498c75129675336592947df880f0ac12e6a9114"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"elmo_WCSC27_479_1000k"
+],
+"result": "b",
+"plies": 123
+}
+},
+{
+"obs": {
+"board_seq": "5594928ceff7a2feb2ac36c8a0d72455e8faa8e5239fcce42f3a0352bc98a00f",
+"globals_seq": "2b905f0e775ec96fcb949f53f33859806afb5889d671997585ae87c0f033219a",
+"hand_seq": "7f8da86318acfdd44f2f40480b0eabed846eaeb215d1146a2a2b0f0ab85a9b25"
+},
+"tgt": {
+"drop_to_idx": "f91b34c0066eaafbd7af89d1997f90636bce050edcf172bbbd0a5354ca9132bb",
+"dropped": "d5210c46fb7aaa675f0dd2934da2f4438b7c072e7462b2a0a7299b7a1accb35e",
+"from_idx": "32fb4ae1190b053587dff824309ca1a0ed9e784a8a3b1d46cdfdfb1ead28d8ee",
+"piece_idx": "ba13c41c32d6e3bcb9fb35558cddd05b3ec29e624fa5f2b7b70da581f2d3dd63",
+"promoted": "6e85fd57fc1ff4dc90c8ef2ee6055a314a820941688a53cfa786672192271cee",
+"to_idx": "d55a276ac7cb1d898dd5e1ef1078f17601e0704aa0649478382adb3b5bc0c042",
+"value": "468f760b7fb5e4962a535db1b64bd225a0bbb5230f704fcdd27ee26ec5c75e4d"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"gikou2_1c"
+],
+"result": "b",
+"plies": 185
+}
+},
+{
+"obs": {
+"board_seq": "72e9c07b2894dc13c5e77a56a1ee5d86193bce64f29f9184093a747a564a46a2",
+"globals_seq": "ea6af04750c07f1295076ad2ac0c015e9fdb96829d3199806930ef8e9ff605e8",
+"hand_seq": "4c7ff36c58c41860ea0ff6644747ee3820c59e6c510ef90749d9eaeca3ac3e6e"
+},
+"tgt": {
+"drop_to_idx": "ee42b4e1d088f1b7447cf2e5e54bfd0450e36c7d99c6ef3c8a489527f809a694",
+"dropped": "85adc8b054aff0c656fb929e7e4d561111b91189c75068d068c32595e97bfcd7",
+"from_idx": "f522cf6e4d0d30145a6501ac61eedb526a6a8ea615f773915e98c196002402b3",
+"piece_idx": "b3fd7764c228712215369c8fcdd8a230215bb8e1b9446c97cdd6a9f4cff4042d",
+"promoted": "42de8aa05a37faec34ea9b6fe04194dc640acf5d85c38090c1e187c0062d3304",
+"to_idx": "5326b3219908a79ec4b21c75d6bd0bc48514e4b87dbf700236437fe041eff610",
+"value": "119886cc27bb70a203673f36ca11eccbd8f52d8dd18b9e55657eea172e6ead61"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"gikou2_1c"
+],
+"result": "b",
+"plies": 121
+}
+},
+{
+"obs": {
+"board_seq": "d3c7267d46d830f370ccf510651c412796ae2caa5486eef8ee360aa356bd8f2b",
+"globals_seq": "a217bafae3f9557d36eb5537a5c50d5959b704bf2f34f9ec9884dc586ae9c0df",
+"hand_seq": "ae976ae3f2351a92753b4ecc97da68defbf43d80550ec6584012d9417d550db2"
+},
+"tgt": {
+"drop_to_idx": "0f57178f3560bf67cf5c8c5097691bbbcf193e679062ea384b69d373c5b5689d",
+"dropped": "55296826809e7194bb09c32dabb335ea333c86ca0db2306d8a58e6f93b38f0f9",
+"from_idx": "a03324716ce5f8941b10d4d5e3fec9d9ef351876163ec60265179a8b40889dff",
+"piece_idx": "0c9c81917cbeecacff785ef4f5b62af7095f59ec97103928b2722329800656e5",
+"promoted": "1b9de22630b483a034ef308cf6d908ac0178ad3c62368a0dd5f7882c050b3051",
+"to_idx": "b3c0adc8b65cd97debcb5dcd69acc36bde94a080cef73c7582f547aac0d3adf9",
+"value": "f339ef1623ae3fd6322f8b616f3017c901e497d0d46dcef05fdaa2181ea1ec42"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"gikou2_1c"
+],
+"result": "b",
+"plies": 173
+}
+},
+{
+"obs": {
+"board_seq": "6487843069960defab3a2c46a67d3e0c135df83e53693ec69821442c1abfd88e",
+"globals_seq": "98b2d22576a72aa72eb26fed49ed6bf446685723b3c342867f409efba384a37a",
+"hand_seq": "b8c14855fadc583ba46d8a400ea9776c24e54d88ea55bb79cce7a2f5fce7f636"
+},
+"tgt": {
+"drop_to_idx": "ff32fee59febf91726ae119fe6d327eceb60353fb641588412a91f8ad120dcb3",
+"dropped": "c12d051455227b95136e51cf96316c1028bd4365fc6850c32e3aefbec86f6780",
+"from_idx": "0089b916e08bc263507d8d4af97300c704c5a92a082782f33a310f3bda22084f",
+"piece_idx": "ed9477fef507eebdd7bc5e597f8f57a5058fd128b92a2745bbe86d6c7d76d33d",
+"promoted": "16d016bf92a95b2be08d5771fe6dea5da0ec2ff96af301f97f5f51a836caedfa",
+"to_idx": "7b87f5779b8653a9d5231d87fda9ef3a68a259b2e7fc7fdb6230e025f676172a",
+"value": "d145e4307a240ee7a277ec5b1a544ae4fbceb8246e221f2767f303d941eb5d4f"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"i3_4160t"
+],
+"result": "w",
+"plies": 100
+}
+},
+{
+"obs": {
+"board_seq": "2531de2a1919da2cadffd726cab36eb5e33dae36ca7a9bf511f4e9b12d2dd8cb",
+"globals_seq": "36d8a638feaeaf2ea67b96f3ff4a359aca5829d5382e608e9d83122aeeb601fe",
+"hand_seq": "5e6a4d44ba1669c9db4af02b85d90680527e836aa3dafb34e536e7c680549e63"
+},
+"tgt": {
+"drop_to_idx": "021f542d7348ddef9eae24c8df6d656916cac217e5c8d2356b9891da7a29e117",
+"dropped": "f11ecf86dd8f6c14f06934fb8f7473edaf62c1d8434a26510b82ab31244225bb",
+"from_idx": "574dcbe56a91ae2a0c17ae345ff0885160ed21f8ed343515f4d7581eece1d682",
+"piece_idx": "060de43396c5175dba93fef9b75f23e7bbd205cf1321971f127823f52decba71",
+"promoted": "41126c6d3374c163f10e84946ae6bd3938766bd48886adb5f04f4b5a25aa9b0c",
+"to_idx": "7f9bb92bffeeb949cb86a707817ebaa2140db25035a06e08758ffd055c6fe3ee",
+"value": "2aed17153675a72c712ad5f94c4d5b0bb4f964e777e48a4880467880a83ef7bb"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"sample1-1"
+],
+"result": "b",
+"plies": 41
+}
+},
+{
+"obs": {
+"board_seq": "5843e49b0bd6399c8cf5b790f72d7a37eb16fb4b4a1205f5781fd342c373ba5a",
+"globals_seq": "ec64fb32b4f2543b3a6bcfd633b4e33bee370411cf667e3bfe9396a15c0fbcae",
+"hand_seq": "fdbd41c26d29e9a97dde681597c8f131158ac34597ac49b832906ba1bbc4693c"
+},
+"tgt": {
+"drop_to_idx": "dfbb68a45aeac64c5c5e507c9b478480c8306364eaade8c18d39761d4624480a",
+"dropped": "3cba4ac75eca717e6219c9a33b5903e2c9649106ebc8689682aa2c451bb9b244",
+"from_idx": "add954ae67f62fd95a2a29328e921193004fdbbbbd717e60a75fab418f178a21",
+"piece_idx": "df1af87794af1a3729effa8d0c4793a28a8bc48a03775c8bba28dafc27e44e6d",
+"promoted": "de29d7a08ade727d6989e430b772d735f08fa437608ecb7727e69fc35b9ec75f",
+"to_idx": "ec2317c4f9f6c6707db55e65adaa5dae55697b6c31d3a4707a9c85217002aa3c",
+"value": "4797e52ffa171adade724a9d257352dacdeb975bbd8512c671da7f38f715cc05"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"suisho5-1M"
+],
+"result": "b",
+"plies": 129
+}
+},
+{
+"obs": {
+"board_seq": "056dfa22db08606b99af17c06f27225bbc1914561307f5ebc4adc6645143fa83",
+"globals_seq": "3acc86ec9205f3d1a37772a39492cdbb77147f7c85fbbb3510df982292547f39",
+"hand_seq": "ef1c2a73c985aa6608e7726ea7ce21de2d4b1266820588edaed5b04237ff2bc4"
+},
+"tgt": {
+"drop_to_idx": "2543a332d275bb1eceb82a202888fc3dd88d25d907911cfaddc04dcdf7a4cfdd",
+"dropped": "ec1d311ca9b22980c98f00fbb827904b52653cff4c195a39d6e1084a5c383d92",
+"from_idx": "1d0372f096c29d2fcfd41c3fb7fdf8e2a46d144411c8d73060b7152c13ceb2e2",
+"piece_idx": "d3d651cb1d434721f2a9cdd2d31d1afa5390dd7c09594958f035436a3cc59f70",
+"promoted": "a8361fe00385cf700fd0bdf638cdb14d953a7644980c4f8ad5b0b70eee6f31f9",
+"to_idx": "6ed4ca842dfd9b7c25291ab9c14ae0321d8789fc1864ef815a6de6201af9c8e9",
+"value": "52a5d2cda7e5b9b9ced923ce5e42b267adbd8142e7e46d7f6ee040697a5c5d70"
+},
+"meta": {
+"players": [
+"AobaFuribisha_w2092_avg_3200p",
+"suisho5-1M"
+],
+"result": "b",
+"plies": 119
+}
+}
+]
+}

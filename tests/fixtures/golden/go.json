@@ -1,0 +1,626 @@
+{
+"converter_version": 1,
+"shard_meta": {},
+"samples": [
+{
+"obs": {
+"board_seq": "e86c477a891216d652aed6485780e1f201bf3621c0470b80d60b284e0b1fa305"
+},
+"tgt": {
+"passed": "f5003ef6e959df2e8f5839fb7c3686e80633ba94d6879e0b9f61b1079b8da20d",
+"place_idx": "9a26166ed6c3e3e56b568460725f05197044f1181adc4467355cb1b548d09b5e",
+"value": "b1df3d0e4d00d7bc4a0f4212999600bf2ab2efd1f7ab3537d5447907398b653b"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 6.5,
+"handicap": 0,
+"n_moves": 92,
+"players": {
+"black": "ELFonShelf",
+"white": "KoreaInsei"
+}
+}
+},
+{
+"obs": {
+"board_seq": "d07c9a595c369e962bd6a07bb93e75af7f1bf933bfa33a09d0551712cd955c95"
+},
+"tgt": {
+"passed": "f9bf3d094f01ac038a841df12854c2cdf144770705e2f700a306eca3676ee95e",
+"place_idx": "b7d1b350ad20c55274531a46f93d869558164be923a1e37ca438d6b26fe16b89",
+"value": "2953bdcb393b8a239c3a70fe13055a944b881fd582861ad564474470b90ab7ac"
+},
+"meta": {
+"result": "B+Time",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 215,
+"players": {
+"black": "TieBot",
+"white": "KoreaInsei"
+}
+}
+},
+{
+"obs": {
+"board_seq": "2d046a41dcc352a4df27bf323714a62c14a77b868a48c308e5f0a32a87e8ce31"
+},
+"tgt": {
+"passed": "f4a0eb9134f4c5ff8e3f927a870fc02563482956858cbff16db59950033f0700",
+"place_idx": "d6ee1c28b7b6c41e7de2391bdd0a12fb2e8278ea22424902c9876178e794635d",
+"value": "758b4878df288b267f7577d8c890caa5ae18dc1d40dd81bf15bdfc4de81bde5a"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 154,
+"players": {
+"black": "petgo3",
+"white": "fearless74"
+}
+}
+},
+{
+"obs": {
+"board_seq": "a1f26883718706fb139f64522d792b8ef3c3fb06ad7d4c85d3716df4c0a8832c"
+},
+"tgt": {
+"passed": "26edcf404fb3f36858655e4a786effc262fd3306508b2a852b64033d1d23f72f",
+"place_idx": "ca50e64b4563e0c974d105d2ac668e68ccd0016834091b12d1080f88680bec65",
+"value": "865c0173a9a9b30fd94a0888c7c8f32c4f6a534d886a9b6195f5456883181c0d"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 134,
+"players": {
+"black": "rx",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "715cc3963887535078b7e44ed9d0e46098b01d65a60bc26f7f9722ab72459c57"
+},
+"tgt": {
+"passed": "325acd6b69f690fb515a4c478ed032fb13a48a7354448528c567d4da45f6067c",
+"place_idx": "7cbf73e0f66d3696db2584f2e1162420768b012da2dfca0249da2ac8e2c757dd",
+"value": "3bd0fb74fef5f961e23c8864570ba253b51f8a8068b08d95f53e30cc5c700163"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 237,
+"players": {
+"black": "gomancer2",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "6a7e4b8f173d53d444387e87e35ba20c249cfac28b8bebbeb721660fc206a45a"
+},
+"tgt": {
+"passed": "92c45515b810f6e42f629e336bb46227c9f6539b706b2b4cd86c1d26572ad9dd",
+"place_idx": "a85904c17c4db669191a600cf2c1bd21859c6c7c1e557516a1c1ec1ff77a2870",
+"value": "3216aad8a87c16b56be20e98361da8413c29c173d0de82390da3cb540763095a"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 194,
+"players": {
+"black": "petgo3",
+"white": "gomancer2"
+}
+}
+},
+{
+"obs": {
+"board_seq": "3a1bd4e8af2024fa38a1f4066e730291bbeab83135aad5accda361fad1579890"
+},
+"tgt": {
+"passed": "7d9bfa6848b087c6d4fcb5634822690bf1ac365523ca29b0087f6642c6a58078",
+"place_idx": "d823ffa985a8f0c649d340d2ec0dbb03f5356421e8b12fdd64e032564de02da3",
+"value": "4b3911e1f55bf70de52f4b500d8f0ef23da976f270e874ac37b901ea183377eb"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 90,
+"players": {
+"black": "kleinbier",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "e374e84980b2eb6e4a443bfc786879d519dcc609fc13a0b539f3bd1ed0e1254f"
+},
+"tgt": {
+"passed": "16a0906c39194137da2626f737e1ea6b2824ac96d4c8d4092006ee6961adf4bc",
+"place_idx": "25d4bf8f99e30655be909f5e1dadf55aace4be1a804bdee84ac1456732a013d0",
+"value": "7075d6159e379d6096f9413885536e3b47747f4dc0b37113fef1e0d920869390"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 307,
+"players": {
+"black": "petgo3",
+"white": "Eddie69"
+}
+}
+},
+{
+"obs": {
+"board_seq": "7b79e5677e708f4b194a94a612e8f043d035a256f5d881e7f49fc2f4c00b7be6"
+},
+"tgt": {
+"passed": "099ec3261640d6ee82027a922c8ae81cdc18802d1d485aaa45ca6df8e6e3a273",
+"place_idx": "97f44571bdbe616f5e558b5827c34ec5c805eba303f7ffcf53781670e2d839b3",
+"value": "4824929d2ac93da95798bedf57e2d349859db17450833d28952f20058f4bfe79"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 150,
+"players": {
+"black": "petgo3",
+"white": "neraimc"
+}
+}
+},
+{
+"obs": {
+"board_seq": "edc4bf4044b4e3a09ad7e42d60b9bc06fbd9076ba99f2eefc1b7e816ee0deec6"
+},
+"tgt": {
+"passed": "9324a239a155efeee21545e3ecfbc2d158dbf1b31ad8aa4e58decc2233aa2449",
+"place_idx": "223d2f431b49728f7ced50663483ace75ea33bb9dadb8717583d19c89256bbb4",
+"value": "a70659f4db944537672b8afc1071d9fbcf6b4a847375a58ee66dd6a5892fd53a"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 324,
+"players": {
+"black": "petgo3",
+"white": "TieBot"
+}
+}
+},
+{
+"obs": {
+"board_seq": "d775c4e02c10ea55f83d49c955bbacd0f5311e1df2da5a6a145e2b33d604b0e5"
+},
+"tgt": {
+"passed": "ded82b06432780a0b94ecd890e3ac7fe9afac3bb47b39e229bba07c3550ee889",
+"place_idx": "daceea2f9d08a489762c8c2b4f4333a9254410ff6bafecb28ee71d0059efad61",
+"value": "ae8a2462a87022fa41a9129f301ba4824227f042df44faaaead352992a613805"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 160,
+"players": {
+"black": "petgo3",
+"white": "Elfv2Blitz"
+}
+}
+},
+{
+"obs": {
+"board_seq": "40b945f142381fdbe8b21a15e45be00cd7c4a430ff845c9264edf48f375191c4"
+},
+"tgt": {
+"passed": "72a238058339ead90aa1eadc1b59f9be887c9ec791c30ac214e99f119a48be5c",
+"place_idx": "2ac741e1de39df35d6823d4b76eb428e07f71f52729bf9ebff25da1269c2e31f",
+"value": "53444ee1884e60c766c2a801a44f06d9df1d78d29a785e168518deb3b6c8a5ab"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 175,
+"players": {
+"black": "petgo3",
+"white": "Elfv2Blitz"
+}
+}
+},
+{
+"obs": {
+"board_seq": "64edb44d6bdb73daedf189aff7b2980b72de97951b94c70be47b7ace766cadb4"
+},
+"tgt": {
+"passed": "72fb68518f5300251641eb783163e33f27f7785ef2562c7119f186e94d31bea5",
+"place_idx": "f634441b089567f925371878a0e9b125e9c20f94dcf346d8cd156247c96c633e",
+"value": "9e6b23d8b053b9b0b9c55a0fcccb12f37ed8b3ad9a0008b51700dc6017ffc1e6"
+},
+"meta": {
+"result": "B+29.50",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 323,
+"players": {
+"black": "petgo3",
+"white": "TieBot"
+}
+}
+},
+{
+"obs": {
+"board_seq": "7e80a06c700f674cf5731decf6226a7a1920121f0731629917cdb7ca753b224e"
+},
+"tgt": {
+"passed": "bb9fd2acd34c32ad9a251531205ed5e573eb711d14b257a792dfed46bf8fcf12",
+"place_idx": "99bb8752d4ced1dc177acd0ee30be99cc87fed3e340b1f9800eb3bc6b52e4a27",
+"value": "2e21be86ee85e405fe123da87b3c03a955ccc7389443eaa5a3245c9290229981"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 106,
+"players": {
+"black": "leader55",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "3dba130f2208bc8bd3583026ae45c3752ebe1ec794620636f58508e94db90e9c"
+},
+"tgt": {
+"passed": "3109b896db36df4987ab23a17b159810ccb37c47c4d24c31de42b516e5e480e6",
+"place_idx": "0eb0abbe9485e78bfb0b09fd7b78521fcc936e5e517d6a4cc053ac460e04cfac",
+"value": "19a210112733954ba18480a7c20bfd22641fd5d2163b95dda894a9c3f0a02ad3"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 279,
+"players": {
+"black": "petgo3",
+"white": "kunihiro66"
+}
+}
+},
+{
+"obs": {
+"board_seq": "26438822b55c73690abb928ce83e70e1933c22c4a9c5b1f1875fedafd43c8965"
+},
+"tgt": {
+"passed": "a3472d6a9bf4f225722d48545ca264327ea5fa109e6593e7eb45a6a15e1c7f41",
+"place_idx": "1a600feba037d0647edc1f637293c1097ded9f78717d13ebd9339f28259999e8",
+"value": "2d14e4b27ccd0aa7cdfc6343c82b4b4187b0851a3fb47577a1a69d387b90fb6e"
+},
+"meta": {
+"result": "W+7.50",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 40,
+"players": {
+"black": "Melliodass",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "f6afc2c599e14f836f68cf3ad2d889541a10806cb5fcb4cb1814a9047b241423"
+},
+"tgt": {
+"passed": "ebb15c1d1e182a68bb32fa70ea37c0222a0bbc6fd6962d6cb2534000a27cde62",
+"place_idx": "7988c6da7cbaadd5561b62635b044128dc4a2611c5015b037f2b51acc9f3956e",
+"value": "feefb66fe9f9350bb9615dcc92a132f864effa08a4a051c5f371a0b0b1291f60"
+},
+"meta": {
+"result": "B+9.50",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 221,
+"players": {
+"black": "petgo3",
+"white": "kleinbier"
+}
+}
+},
+{
+"obs": {
+"board_seq": "ec0a7aa6a563bf63980b46f43fd98be1a1c409dfcd2c98f35bf7678c5126a50c"
+},
+"tgt": {
+"passed": "97e66bdec87c9ad377870af494f237b8f2f8615a0011e3bf65cff228d8ba8952",
+"place_idx": "7a399cd65e2849ec9b92885768091f20b4bfc275af54b1274f41146dacfeef4e",
+"value": "b10a1bffe723df709a555a1bed9a61cec05e710a20b16219def2dbacbf627eb7"
+},
+"meta": {
+"result": "W+Time",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 140,
+"players": {
+"black": "duksama",
+"white": "Elfv2Blitz"
+}
+}
+},
+{
+"obs": {
+"board_seq": "57248397a59099fa9054da3af7c011c7cfcce4599f3df0a5d0f6ece2792d39f6"
+},
+"tgt": {
+"passed": "17bba237865c039fc19dc281a71084dc86cd81ca96c3cd8f2fcc8b23b7254573",
+"place_idx": "cff6185176d3d21da73dc77cc371de08fc1459f5df470cebd58b3b9f1ec96aee",
+"value": "2fa9a0002fe0be543b885d0b22127441c8da00983facdb5de545150d671846b0"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 233,
+"players": {
+"black": "KoreaInsei",
+"white": "HiraBot41"
+}
+}
+},
+{
+"obs": {
+"board_seq": "5ec4d7d4494ddbac32fd6b0da1038d976893c3c9a8cbfe0791b228b772b05e98"
+},
+"tgt": {
+"passed": "7212620c7b767e324fb4abaf8e8dc7ee8b0f5cf5ce269586bd9c8725d4e03c1e",
+"place_idx": "3e2b4250cd03b3db27a0f4e8f57abb43cf0ba80500839a9db824f48f6a830425",
+"value": "5ff7388f2f2a5964db67cb2d8e5a76a80ddd4f4c29975f36f90fa8210d5ddf80"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 103,
+"players": {
+"black": "gomancer",
+"white": "agcStupGod"
+}
+}
+},
+{
+"obs": {
+"board_seq": "62ca9de61f1f0a6f53a765a0321d80a586f0b8d9b51d96c677b7ececdcb4f45e"
+},
+"tgt": {
+"passed": "42086226e667df26bfed8bd7dbd3f4781f58149f162634553e811ef1f11e8611",
+"place_idx": "411577e796f3e9a54d8ce917193c8788f8ac83a8c65ba7a5ea88e6ba9f1303a4",
+"value": "55d771feffd9d9c96b64ef319329aada3d5dba7b0de1a459d6364007adf105a3"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 161,
+"players": {
+"black": "petgo3",
+"white": "measwel"
+}
+}
+},
+{
+"obs": {
+"board_seq": "e048251e08edd639a65a20d6a975e57b8419a7ab5daa2223fca0217fba8da990"
+},
+"tgt": {
+"passed": "e89e291a04677e698296833c0a4e8de493d1fdb0bc74c2975378fd2fc31194aa",
+"place_idx": "2bde5a34889ab6d260aa6a75ab13e17d2f7f72e3e61140776e8d0a20a1531540",
+"value": "d6323954a3d6a05618a90fb38a3995bf4aa502986faca09c779d9c326b88e410"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 0.5,
+"handicap": 0,
+"n_moves": 167,
+"players": {
+"black": "shenkunzun",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "59376f4857cedb99d95dc3473ec8f9407e4bd6088c55380358c2e29349101fe5"
+},
+"tgt": {
+"passed": "97e66bdec87c9ad377870af494f237b8f2f8615a0011e3bf65cff228d8ba8952",
+"place_idx": "09e4e1ac91389438c1b82a892513cba60e8f19d8a28d29c33e2f264e13222214",
+"value": "b10a1bffe723df709a555a1bed9a61cec05e710a20b16219def2dbacbf627eb7"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 140,
+"players": {
+"black": "Muttley",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "33b8f364d54f4823eb7c923921b4c5d257d923403204b2c13cb960374d5e9416"
+},
+"tgt": {
+"passed": "0a6ced6a26b18f618b8dc85f7d1c874e45c6b3be5ae431fb5637be6848b923b5",
+"place_idx": "f4fe7bbd0ff58abf3511133419e9be593bc8112a1789c780d7dd4f864c446717",
+"value": "6e641597624d2960f0a8944548fc4301ee3700ea69d991c5e3876f31120b8887"
+},
+"meta": {
+"result": "B+38.50",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 257,
+"players": {
+"black": "petgo3",
+"white": "scshen88"
+}
+}
+},
+{
+"obs": {
+"board_seq": "b35ca46dfa655b312dd2f398784552a0ab06a8dabbdd04d3700e81ab89c64859"
+},
+"tgt": {
+"passed": "cbdfa59dd77699117ed5f19529fa5fa850f677b81534947e523e4d29dff0b06e",
+"place_idx": "f33af2d6c3b9c3ec018e4775e2bbfaa77ffbf1de7ab6f6a947484e9458e65be5",
+"value": "590d11bf061dbd4a2c17420f8c736d3b899173131e18ad3ce2e5603ad9cc5f16"
+},
+"meta": {
+"result": "W+52.50",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 164,
+"players": {
+"black": "lagny",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "3a613257e00ee8e87638dbc2281769bd0ad2126437935a78448821e5802a5fc8"
+},
+"tgt": {
+"passed": "ba08df277d52759e391d78008b04a9fb57a80ccb158d4f90cdc0551c55c111b6",
+"place_idx": "ec69af53e848e8c72d7cbc25fe9b3cf7623711d100e7714e06e17541190c0124",
+"value": "da261b3b1b3bc93accdc215dded4fb8b9d92396241f18402bbd02e9b41266240"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 216,
+"players": {
+"black": "SaiVN",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "e260e84bd138615d4a1d1589c5e23dfbc40feb6e3f02b22034ed0ea8e8f1643e"
+},
+"tgt": {
+"passed": "b8ff4de82afb21418bb9cd54ef140831eb2435002dce7b677311e3f6c62d74f2",
+"place_idx": "dc96dc1a148d04725dc15bd6f70ea4d740888c39e107956ae31f3f04806734cb",
+"value": "268cc8b919fe73813a22edc5f11dbcd837dc8044dd3756a96585b33e0243bbfa"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 0.5,
+"handicap": 0,
+"n_moves": 229,
+"players": {
+"black": "SaiVN",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "978d9d15720e415e2829779ba9ad729b7fcc697d533de9d34ce152f6ac32b237"
+},
+"tgt": {
+"passed": "4fc4d3d179b331df8c45560a912ff743e12abbd301b742be4127cec9dc5bbe2e",
+"place_idx": "e5a4098f24c0c24dbeaf3b3f48355d325d43eab30c6304e5e8c7a4f9fdaf130c",
+"value": "1fcf95243f4874f45c6d49e9586a1ef0fbac61a11f071a74b7311afc5964cf93"
+},
+"meta": {
+"result": "W+Forfeit",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 68,
+"players": {
+"black": "petgo3",
+"white": "zendan"
+}
+}
+},
+{
+"obs": {
+"board_seq": "d9fbe991230c17f8e37cfd2ca30a8bcc6cc8e43db03eff4f675e0e8adfb2ad9d"
+},
+"tgt": {
+"passed": "b7b057a94286bad11fa52a76aba17663ca7f8fcfe1f62a5eefd31427d831cfd3",
+"place_idx": "b24191a625e5e12ed0a1e452f530747c0fff6081edbcc60d481bc9fb03509386",
+"value": "b7865e919ee34d87eac6b8531351043169e57937acea2eec553ab0307e2bad60"
+},
+"meta": {
+"result": "B+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 197,
+"players": {
+"black": "petgo3",
+"white": "zendan"
+}
+}
+},
+{
+"obs": {
+"board_seq": "d201be3d07beebfd769601351dafcb0d215d143a1bb7169708eb4bad5c1e18be"
+},
+"tgt": {
+"passed": "c44060097b03f6785cb7c6950671d7510958764b12e22a789252fda2b5819f65",
+"place_idx": "d7b30b49955885c19a646d37183603093564a806c6d3f20808e15a81d79e9f72",
+"value": "75d26c3c13a004b52e2e0ce78291c70e96c9940f22aaf95331f39d6c60755066"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 238,
+"players": {
+"black": "scshen88",
+"white": "petgo3"
+}
+}
+},
+{
+"obs": {
+"board_seq": "a528086d7a7db776de4e3898c1391086c900a166d263d3f6468bd6d82002ae89"
+},
+"tgt": {
+"passed": "595f329142f0a760f3c97cbc0a415a24f9ae957f3bdfa316ecdbb34f879a8109",
+"place_idx": "b52b5927c759e0589e98e9b27d78d2900b37254450e0cdac26d39d24c3568da0",
+"value": "523db31bbaf19e4a86c181fec839bc5be17f6b5b80c1824ad2becef8e84c6132"
+},
+"meta": {
+"result": "W+Resign",
+"komi": 7.5,
+"handicap": 0,
+"n_moves": 300,
+"players": {
+"black": "kunihiro66",
+"white": "petgo3"
+}
+}
+}
+]
+}

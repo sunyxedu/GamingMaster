@@ -1,0 +1,1209 @@
+{
+"converter_version": 1,
+"shard_meta": {
+"move_buckets": 256,
+"species_buckets": 512
+},
+"samples": [
+{
+"obs": {
+"field_seq": "602851cf9e8d66395a99c7beac096218f392fdc224ba96846c268cd61acc8029",
+"move_ids": "d3e8de2d95237d2b91f770e56400d8b5d4d6096f5ee25202eb474270917c2e48",
+"poke_feats": "887a10fc1b3ffca7c933870b197304b22c3691090ff23f3da14ba209cbf118b4",
+"slot_mask": "0135409dbb53e0020735fed68b23c9856d34e351780dc290115f095f606b2f5a",
+"species_ids": "97daa6a6bbd89c20b50ae0332fe536089ff907fe68870e6f74ee818fd7b0aabc"
+},
+"tgt": {
+"action_type": "7985244866704ffc0f7019dd9d5211871d87880caafaecc6516be45688e52e8d",
+"active_idx": "f36fe8ad2bc9ea2a415031dc587cebd4c9e4f6c72c447b35f617ac1d389790ff",
+"move_idx": "b11dfcd40c67556d6f2a631db078b4677b2b76c548e0f255596028973f44f5d1",
+"switch_idx": "bfa5c8aad4d563f4f88a06d4e24ebc51fea60ae4448b2bca7babfc6f31d66c6f",
+"tera": "16d86960dcb5d599c6656673f026776612094e149df5728eec00b3adae6e0a57",
+"value": "4585a260f1ec158c458d726734ce21057e1ef0aeef822f144e6ff7286507df34"
+},
+"meta": {
+"replay_id": "gen9ou-2687168812",
+"side": "p1",
+"player": "Omari P",
+"rating": 1638,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "181c28f3828a44daa3b8aa1a7117d18c88b1d336982bccff2f994d920d740b0e",
+"move_ids": "f9d826fbfddc8ad2cc529a722ebb28865c95186b0d1d75c87e82b40d557b0c70",
+"poke_feats": "ba341e21162eeb3bdf395b5f8960fd6d9cf0178199227a9addf8a6d4cbdae32a",
+"slot_mask": "0135409dbb53e0020735fed68b23c9856d34e351780dc290115f095f606b2f5a",
+"species_ids": "ae7dfce3f16dbb21b8432731a344b81eb7a26f548b8c556b9a06597bf3258edc"
+},
+"tgt": {
+"action_type": "b57b02040c9720706c943f13fb90044ea9ae3c4c34647d64a1363f50d365593c",
+"active_idx": "108f94f9b7d72ea92d944caecfe5e891ca1533d8dbf30f1032f2862b467c8115",
+"move_idx": "f4c7ab9327fd9966fd42f7936e4e46a43c3ef607ba3e6816a919a8c175f723f5",
+"switch_idx": "38a0f1dc832ce34868deb1d4d80922849f6ea6ef02f9377df0535d6892dcbb73",
+"tera": "4e5c7e4bac2a917b0c3966703649eb9e3ce18fe90e1e9f4da19f8c36aee22143",
+"value": "4575241cee4177c5ef422ccca8d391b7390ea3926640c3cc1df1297d8f9f96cc"
+},
+"meta": {
+"replay_id": "gen9ou-2687168812",
+"side": "p2",
+"player": "U_Quokka",
+"rating": 1638,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "e06900e37a707ceaa26b9210b8422f958ecc6e5335469ff6d4e6b278b9a6eab4",
+"move_ids": "9d57af3f032340634e080c0c0ed8d7f9deffb43395c48d867e0f39091e0e1dfa",
+"poke_feats": "0a6e2d72f5478643a1f9422b420a2ed75f9b85e9b0baba3b66b0473063c4784c",
+"slot_mask": "60f13632db1d7369e041a2ade72a4deed865a835459f3708a153ca50423658cb",
+"species_ids": "9346b9182110b6e3fea1de7080d2e806e775ef8aa5d86a1e1ebbb81579923d2b"
+},
+"tgt": {
+"action_type": "f3953d26632ab943415e5f57a6da2f9918b1a71ef01203ed95f97607e02c5132",
+"active_idx": "042560621ec6fade1f5f8f02e043e85f32bbe0df43c73fd3c164db5575f9b0c7",
+"move_idx": "ea53bf4becc90f7f4c5dbabb352ec58042c4764e94b2810836674a5ad06a66f7",
+"switch_idx": "f32fd8d6aa7577e19d8d94451e1c9c675bac7be6e6c269a72b42b0f223c381da",
+"tera": "6051fdfd723ba7a4f68a2331ccaa828c5920808d6ce93e0a8b1f086d531dc106",
+"value": "3d61b7dbc88076d67539a818668b66396eb3ce2d9f95142cef1f066c8df23388"
+},
+"meta": {
+"replay_id": "gen9ou-2687172369",
+"side": "p1",
+"player": "Uberzilla",
+"rating": 1531,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "fdf1608fb07a5d77f0617ecdc15f977dc7179c58321bf86749dd2d788508eb13",
+"move_ids": "fae0d17ba00dac3d3e60e68dc2f3c54c6cc1cd79c777e250b94d53eacfee0071",
+"poke_feats": "acb310984a8317a7a5a752c7dc30bf79c21428d3548878a85c0bf459a266a793",
+"slot_mask": "60f13632db1d7369e041a2ade72a4deed865a835459f3708a153ca50423658cb",
+"species_ids": "25d29096b8988422c14f89b2c6bf9ddd5875e92bc4234cd2f3934d3717fb3811"
+},
+"tgt": {
+"action_type": "89997d87a4e50c2256813b38fbd08ff1e3b23611819060ca0b8eb9b558c9d234",
+"active_idx": "ac887aa76993f157e5f612213b4642a8d191bafc9c7fb70e449341063842c8e4",
+"move_idx": "d47cc36c34bc8122965c4bdcbe1547c7664c6d2187dc66be3575e6f4aada045a",
+"switch_idx": "6454f0b0957f0eeee431e77e8fa3937b16ef16f21247db3864accb3c04a4225d",
+"tera": "7768ef96680b6c0ecbf5da2c19153b5d1158d17c3f752f714ee52910ae3744a5",
+"value": "3e340a1efd63baf86042e21fa74b3ab6de8164b5d1c4b4cd67c69100b090fb58"
+},
+"meta": {
+"replay_id": "gen9ou-2687172369",
+"side": "p2",
+"player": "busto2412",
+"rating": 1531,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "3f890e82ee9e9b554fe6f97b23934070014db5d2e2161f1546609dcb98759497",
+"move_ids": "10ccf64055a07f761274aee6e8d4c8c23c19c90a518714ea61213682cf9de51a",
+"poke_feats": "f00e057b20c767d4cb35438bb711ed871be2cbbfea7057c994a4921630e0ab38",
+"slot_mask": "6eccde8dcfc9d0612393a67736dec7426e6e6626d3965dae978d4455f9642f7c",
+"species_ids": "958fbcc5b8b8087d257ff4dd55e71bf477af1b8da065c7aaa552bb748fe97b24"
+},
+"tgt": {
+"action_type": "a7c97b64046f723942e90ee67d6767c929b1b8de5ae3360a7a49b0fc8f642aee",
+"active_idx": "a4c0445aeea7f8b9a691c0a7996684b64657f2091cbab350cce4a8a3732100a5",
+"move_idx": "115fc6bbf7b9346ad008aef780d7f287fd794a6c28f4a0d1e5eb422f7e4fcd93",
+"switch_idx": "8e28724ca8444cde579aa32bf1a9b0c15fa3ef69b25d0b4a88f1507757c5d733",
+"tera": "fe10aef452e04b272451d56091a0b9251ed9245f30ee70d3e7d67cad4aad1bfb",
+"value": "3d6156c9039598cafb3b6470c56f235324e536eb00a7d2550589b85875518186"
+},
+"meta": {
+"replay_id": "gen9ou-2687175005",
+"side": "p1",
+"player": "Omari P",
+"rating": 1717,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "1df4a03b06a2d7dba987f8f93845a71ecfcdddfa1e6fc24ce203a64ef4685666",
+"move_ids": "5f2357f911af59e07d2448bf97d1663fd9c4583d20381fad79c51acb5157b513",
+"poke_feats": "9b21e7b6de014d97d405ff079a5ac6384dae1cc7a8ad065f6f1bce8655f8f6ff",
+"slot_mask": "0135409dbb53e0020735fed68b23c9856d34e351780dc290115f095f606b2f5a",
+"species_ids": "6e72bd62455de5d430c488c33f5c3cb6f7f0af3ff2cd59f04f7951e90acb61d5"
+},
+"tgt": {
+"action_type": "00bfd0b41da9885c95664fe4fbd3efc75f3ce1d395605eeaff36368e7d186899",
+"active_idx": "7859b64d4d047d2316551e38761f3333d5a615f6d4950f756e96df4f510867b0",
+"move_idx": "fe2371936af051486975f4b943c5b117738a0841c7bedbf3e50b2abf0a78dba0",
+"switch_idx": "8ac2755f414994f6a19150bc97587090ab596500cba94415a38f6dbc1c241b9a",
+"tera": "16d86960dcb5d599c6656673f026776612094e149df5728eec00b3adae6e0a57",
+"value": "4585a260f1ec158c458d726734ce21057e1ef0aeef822f144e6ff7286507df34"
+},
+"meta": {
+"replay_id": "gen9ou-2687175005",
+"side": "p2",
+"player": "The median voter",
+"rating": 1717,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "95635ab49cda13940c9efb1d83a0eaf47cb6d04854808f95f94bb869ac4ac331",
+"move_ids": "c636b94b6f8e5f29912fba60516546e8507483fbc5f59763c37120d7aeb79cf3",
+"poke_feats": "1f61a571e71501432e801d9463052297eff1836e4ecf6a030bfefe2c6f6c34c2",
+"slot_mask": "f8134cda2dde74a0905c5b0386f9204a79c015cb0c92675174efd30906161388",
+"species_ids": "9ff54a2e2f779699b3eaafd2a6bc11ec4677f79dcb1d89420f66d03c3d62ddb9"
+},
+"tgt": {
+"action_type": "1f98206f1c3aaf5c5de841b21c3509f6375a41f042d92f0995f20fae0f597007",
+"active_idx": "c724cffff27a654a32d28bcdb7f70e3db5c876e8b5fd15353cccdc45898d1480",
+"move_idx": "06ec2bba409c99872f539d0da72af774df1bfa67f03378893a0a8fb3674da884",
+"switch_idx": "5c4999c3aa696fb92180dc7390770e0a47f0433cba61dbfae26e15969a53bba2",
+"tera": "04ee015e90b435f060e1c6d535b145ccdbc0b164e52f750ca3f5a6bb56259208",
+"value": "f3da5049a4cc67b257002a7b96fd0865e8205aa5017044392dc9016ee2b886f5"
+},
+"meta": {
+"replay_id": "gen9ou-2687175446",
+"side": "p1",
+"player": "brother iggins",
+"rating": 1633,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "8bc9a5537e196c8f39ca5c188990473a060bc9337ffc0a59591ec9f566b331a4",
+"move_ids": "ab26ce3740aeeda7072bfa1e7845bddb42cb728ea5b371a85449c73387b099a7",
+"poke_feats": "367f0ed9ffbce376794d5662bc018aed77909650496b55e0e87fdaaa18ba0aaf",
+"slot_mask": "a7d8bf539dc180aa8bd0ee7946b49ee108461150ff624c7d1876b90d9e55af22",
+"species_ids": "b2d20ad041ab61501735575de8683683a53b5f9632c5a7568fa762856421323c"
+},
+"tgt": {
+"action_type": "b4d0b1f0a331c01773c9d14962020fb9520aceab0db86fa68eec8b10bee4859b",
+"active_idx": "cf4c6095e437e4bbd26a8f9af8fd651c021c0cce640d739cd5167e422e3cd5ad",
+"move_idx": "12b162dc389487f73a43ab492ff4cde0c81189862a8fc04bb61599a774ef2687",
+"switch_idx": "ea277e60febf453133a3646dd03cd42fbe104b16a648b0034336021a8928c7cd",
+"tera": "64ff8bcf9864774c0267cdd6e1e0e2fa29beb649ef9620964f296cef041ab6a2",
+"value": "823ed6db036441d0a22ba501ed8c95309c97ccb972075ba4eb0d29427a7b5849"
+},
+"meta": {
+"replay_id": "gen9ou-2687175446",
+"side": "p2",
+"player": "imuberingrn",
+"rating": 1633,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "64a8124444ca16a44e1062f4f7c365f05f723cff8b942bbc41441105a8446512",
+"move_ids": "5d686678dde9e808be8e0473c18109321d514e5373b6a1812fdb4be7581bde0c",
+"poke_feats": "bd510cb71e605dc15a75d8a1e2decd4a2ee5d2c30857a4c40a2531f94cd292d3",
+"slot_mask": "add528277aa64bca63030693b906e3f54b2b4372190f8478b9ad26442d4575a6",
+"species_ids": "263a3a9ef08260480c52af4454906fcbbf17744622c316dc9c102595ccbb102f"
+},
+"tgt": {
+"action_type": "d88f292ee2bee8bd10d654595b4b1f2d6ea720c344591568e011ee0e199756a4",
+"active_idx": "c450fa9d97a31bd5cb9bb7e12ffe6f666fe06dac230f92c952e01c594cc950bb",
+"move_idx": "9f99a416b6f19ca30a8bab4aa6786c240c5e36d9defc76d7cf0016d1d653ae4d",
+"switch_idx": "fe9cf7e49776b0f65ef769969470bd9bc7e7b094f7d522d18b31e540b9b370e5",
+"tera": "64e580802bd9dc5092936219aaea11f905722b07caae791fdf9b7d77484fd746",
+"value": "341e8e80117af970813f9a271acb14e0754434824aa7c1f81df63df62e1a2483"
+},
+"meta": {
+"replay_id": "gen9ou-2687177583",
+"side": "p1",
+"player": "bigkuza1888",
+"rating": 1622,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "f90ec4ca3137f55b2c9a4485c7b990b51a303ef30ba9ed044cfc62cfd1192d37",
+"move_ids": "0b6204fe721e90d6a091401e20b8200a132a34a2f3449ab92d712ed173945d80",
+"poke_feats": "0153500830490a923ae20c445eea6a67492810cd8ba26318f722e71d31de2ba8",
+"slot_mask": "deb2f9a1f0875ef7af69dc9158e111a1030065703c9488006f77db4605ac1317",
+"species_ids": "a099cee66ec3266f8ab512580901f0215b71410700eab43eca2392a25ffb44e4"
+},
+"tgt": {
+"action_type": "303550ba44c8fe086d963959c90914aa3d06e23316892a26987188584ce90d36",
+"active_idx": "888c6e0f92a7d7eb11d98a7093d260800434367319f1c1bb9efe695d5a33f5f1",
+"move_idx": "6e997aa88266197125fb701eebd94650acb609877cfee0dc0547a638cadd99ac",
+"switch_idx": "b66084aa010459c44fb5afd97885dee340dc1a77ed54853ccd4d81f99424d6c1",
+"tera": "bfdcede619f16ab41f25ee80398d67fad9e88c605613bdb0eb2f18df21fbf181",
+"value": "234925d735b1cd2b0ef36cf6ab1de9a7b432d1b2541eb917beb3dfdae40f4956"
+},
+"meta": {
+"replay_id": "gen9ou-2687177583",
+"side": "p2",
+"player": "imuberingrn",
+"rating": 1622,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "363ab57a760d21d135b020ff8b6d8dc58f74185b725a8146f674738a0c1086c3",
+"move_ids": "a6e9d5da945df4fd46e0ec513733db36661f4fccfbc5b57855f7062df36d2b8a",
+"poke_feats": "2279f5510b46c850fdadb55e2ca08d38b98081569132f00488be6b20f9b81b83",
+"slot_mask": "28638f6c0a636cd4c0165c46019b147bbbcf77e79bf06cda2eaa943349b85e16",
+"species_ids": "9bd083d265842717026ab4ee0cbcc6a3eb267f829574806dd39fcd21cb631c91"
+},
+"tgt": {
+"action_type": "430528047306906a8e154c62245089235f24b62b3d4fa6159da260cf3207200d",
+"active_idx": "1b8452cefba0bfaebffde687147b9b833bea3e92505fb730dbe6986686575c19",
+"move_idx": "5289da453a12bf47790489dbdd934b3a2c55216a60ac88065e8d1d1bf14d0a43",
+"switch_idx": "31c4c33e3ae1010250557c420bd7602f76df385b8ed772e8f972f8d03d5e2794",
+"tera": "43b2f7b5c5fd5b7e06525556a66f35aae3fd8893a3cfa92b1052e0ddabbd54d4",
+"value": "1f8fe5a4c704f6aaaf577f550a0d9d41b8802484026f9c5f017f68d205575c9d"
+},
+"meta": {
+"replay_id": "gen9ou-2687183894",
+"side": "p1",
+"player": "samothy",
+"rating": 1571,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "3850263fb782249a362c92ba8d0982bda96eaf850bc49fbecee3a613d4773de1",
+"move_ids": "b77194c791deabe39f44e012ccb004a8757c0c4cd39229b28ab99f628b143525",
+"poke_feats": "f0351994ab4cf6ede0db5ebaabece2b696c1e6a6b36057093b6116f3ee401230",
+"slot_mask": "ed2c001314c772d8f95ef34a2f8133026de43525b79193f233ddf3a76600f9c7",
+"species_ids": "f3c76f3797f0cccc25998dc4af8e9a6048990b724041f505737573f5468873bb"
+},
+"tgt": {
+"action_type": "3acb82d1afb6e8eb508b30e05cc8f179ab1338595c7b49e96985028f55774f96",
+"active_idx": "7f84f1eefe9dc22012be1de96060a96ce4df48a97563b175aaceae0c1925fe6c",
+"move_idx": "2786e5a1a3e5a009074a3b9462037476f1f9516d1f2e496e10b327f528c1846f",
+"switch_idx": "756916b4a7f56dc1e16678e2aafe9708440ed5d24cb107f071f65c41ab01743d",
+"tera": "0a7c2667a3152e5bab8bf255671702c294377a5091914c759c1f3c3d39d1ab83",
+"value": "899a3300ff78c759c4d049646068b92bab15dee8f0e530b83e9006e1dcdc2004"
+},
+"meta": {
+"replay_id": "gen9ou-2687183894",
+"side": "p2",
+"player": "extra-pseudo man",
+"rating": 1571,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "26892457779a1607e29eb4467e2725d9dce81fcd4dd587687e1e9e018d367f98",
+"move_ids": "a3ef3a5f9bbb1dc12b7a61d77d1c24a4c95e00770e8f9f0cb3416ab135c0b812",
+"poke_feats": "1c0d3d628fba66de4675ff518a8487c76ce14d5f73a1e9e4bbc449cc35c8f77b",
+"slot_mask": "2d0ed990ff0b26d7fa6a26ace878800eb95057150a73feec575a95c59cf22822",
+"species_ids": "43ec7297724e7c53d17ef9b0b85ad5ebccc8bf2d9c09815a9f73d0958cb58f7b"
+},
+"tgt": {
+"action_type": "76af94ec3e77bf46f507fd81cd438993750ef0bd782701a85fba2be8d997e609",
+"active_idx": "fdce68df5e8dd408df18440ff1ddec2e21ee7b08c34b98780b3f9718e6060c18",
+"move_idx": "045bd33a0701d2fe3c73685fa4b6bd79a126d94b5791b0327667e1ea1f334e2f",
+"switch_idx": "efa5fe3bcb7f1473aa50b61dae2d612176cef85c5d0582cc56318350fe13ac35",
+"tera": "fb9962d2a1a73c5da353a7a15c3a220cfa2c838f30204a267eef56ac87ce038e",
+"value": "865c018b70c98c850f825ceb3ea0313ea3e0956b2c723d17d6551df4c1f76ac6"
+},
+"meta": {
+"replay_id": "gen9ou-2687184675",
+"side": "p1",
+"player": "sdhfkjhsd",
+"rating": 1516,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "7d9c87f5934431f88264adbbe3be9aa25175258f8856c50d25a6472ea2622833",
+"move_ids": "f22ef4b7767acd31562a2f8e4bd51fe6323ba32427fc5a4ad259fdaedb4f85a8",
+"poke_feats": "618f89d440398db0d93db71f9c11c3b7523a5e8ca35700e1b1c069ae15588c27",
+"slot_mask": "2d0ed990ff0b26d7fa6a26ace878800eb95057150a73feec575a95c59cf22822",
+"species_ids": "8a78dd2c5ab0ce6d0fd19744dea6b55cb91f736e257234f32029200e1b719ab7"
+},
+"tgt": {
+"action_type": "fd65f3aecbc52ff315dda9e3befc6b27dfae66ef52cb82c1454aac05610b85e1",
+"active_idx": "13a52a981de7152ee199426459f01c43c8285c55528326b62a4001d552aa3556",
+"move_idx": "e4c0493d155c1d5f8643e36cfeb1ff12577303083b887773e96fb851f874a7f6",
+"switch_idx": "6b9119facc1b49b6c94a7f854e00256f385793b2d7a306b6811e1a4e0f9b8fc6",
+"tera": "63c4c5f4bae4a4e132204b7ad1fc65443726726b40dc37f410efe25574f40098",
+"value": "8d95eb7c158cff8b7f48c17bd0d431345fbc2f376b500a82363859879735113e"
+},
+"meta": {
+"replay_id": "gen9ou-2687184675",
+"side": "p2",
+"player": "No1CelestiaKinnie",
+"rating": 1516,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "483513e3f5c7ff7071c8383b92e103c75d818fb52af1b7da3f2681f47de8a54c",
+"move_ids": "947205759bfe2cb58a7f675d30ae36e2edbe44725d8d6fc9320674f72a4e8878",
+"poke_feats": "da61dfe5defde9a60ce74c9eb155aabbe0f20b83adc8e340e16bec99c662f424",
+"slot_mask": "ade8f25b12da3c70663f16ca8c7d098767e728d9f155d6178716ff0f35b51583",
+"species_ids": "e25a657fc84bba4c80203965ddc109669872313f93dc8ffcbe70f72a52274098"
+},
+"tgt": {
+"action_type": "e3c1e780718efcedc6d0993c7e06ac9dedc09f46e4c85fddb383a86089d1c5c8",
+"active_idx": "56ef03ee31a3caead4f79890cf6172c341c825407c86c9d328482c94824fd733",
+"move_idx": "fc331f5d35e2900d1e0b12073d91b3477d195e049dce5f42c959d37d28153d44",
+"switch_idx": "6cc4dc7c50a8b5a4bfe2df059f79a79969ae918b326cdfda56710255123be6fb",
+"tera": "101d3864b781daac480cd3ae6d8af8d9fdc7b3120b2622e193ffc0f887087abe",
+"value": "6d720a277c606280eefe044d9b74f6f22473569779df50829f004c35d73c450d"
+},
+"meta": {
+"replay_id": "gen9ou-2687187496",
+"side": "p1",
+"player": "potayo",
+"rating": 1566,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "e64eec9f80a7b65e272bfada29d6650cc521909b091ae483072c974d5e0a1a7a",
+"move_ids": "1c78e083918cbaebc437274aab743ceb783b5ff2d4b2bd3d0fa2e015e74cc47b",
+"poke_feats": "667c9d1fc98b6bed7981a2f2e9b5a218806e7b24f33ccc744d3ff382cd4fcd3d",
+"slot_mask": "ade8f25b12da3c70663f16ca8c7d098767e728d9f155d6178716ff0f35b51583",
+"species_ids": "b75652b361712dac8b285727baa39f9081e298517655e81e5ef9ec4353bd2c23"
+},
+"tgt": {
+"action_type": "f4d47a8aa8e7eeb69359da1b6e02631373d9e7e7774b7e47b925bf8b208cc56f",
+"active_idx": "3b909bc5fc15651fa2d62b3ca04670ae4bd658878f20b5c8db5e558b288f23fe",
+"move_idx": "6df442a2e7adb6bfe1f3c0839be3592a172306e2ab1c360bdb39b68609119701",
+"switch_idx": "93d0dae1f5ea5fdbf86262761296e5333c357ca27269a5756a2913493bd45a97",
+"tera": "478e14c1160412db7574acb66cd5870f9c5bf96207b689cfeb4dacfc7898f896",
+"value": "09bb97e443dd7208cd76dde14d8b72339808d894795ac69efca441b185fb36bb"
+},
+"meta": {
+"replay_id": "gen9ou-2687187496",
+"side": "p2",
+"player": "No1CelestiaKinnie",
+"rating": 1566,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "3cf90483ad60444c4933af52079cc6377b791b0db68e36da89b4430f1b0b8c2c",
+"move_ids": "b076168ce855fff19fbca5fd65b6f89c94991a924685eb21cc037dd06c3bf521",
+"poke_feats": "2ac674e960de99aee485e0bb03b5aaae3aad1dcceb68aa24f4eb0be566a8125b",
+"slot_mask": "97202b12c7d8f2154095f765c8318599e2384ee1b72ad232ffb542fd3c060544",
+"species_ids": "b6ba2a9a3f9e830e63a839405496decade61b7d9e4a0eebf9d6c357c5429608f"
+},
+"tgt": {
+"action_type": "e79bf5b45af9d5f6ab690688ff553c277e90247991560e5d925aea8d6f13d0f7",
+"active_idx": "63f6d4fa98a8c52add0b83a68d45c6bb059b4315a85e3dbbbf85f0a82437fc9f",
+"move_idx": "d8968ac3139b387eac1527ebafaa1156bf21254ade7e8060676b9cf464c550cb",
+"switch_idx": "1b1de6be2691ec494261785501e3fd03c4b6199f2c53eefc53558c0ca3ed43a7",
+"tera": "7e2a5b67865f57b6d3697a1d55ed2ffe185783452bdf5c194b0ce6c1aae16974",
+"value": "5baf30cc205a848e64f6c93e156e5c38a9a1206b845ff907dd8e4f3f1723f36a"
+},
+"meta": {
+"replay_id": "gen9ou-2687188632",
+"side": "p1",
+"player": "samothy",
+"rating": 1563,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "d07ede4720876f1461913fc953ebdfc8ed856f9a6bfe1bc132e6793ecf111c06",
+"move_ids": "f5f27953b0c708b3a9d04be5b358f9326a45f630f5c59b66482d481dbaac0d2c",
+"poke_feats": "9f64d3a07f35bd74c3df8f9a5d27f213e2ecff0e444d801660a5b49adb426dfe",
+"slot_mask": "464a1c794530ad2a2733d357c8933ab8e08233469aec09f00622e05d9956f666",
+"species_ids": "6e631e365c54339840f102d09ada63c71af6a276ba809d67d98effa767e9c4eb"
+},
+"tgt": {
+"action_type": "8e6dad53333eb077251bb4f3291889989d0be579ebfdcb6711c7280fbdb98ad4",
+"active_idx": "82de5d7fe33f48f84a9cd1cce87bf7736fd73de02f3ba9becabf81f571e29acb",
+"move_idx": "80e0d1b3484703cbc9749e3d9383892630c7fb562bc8be665b0fba2f7931f922",
+"switch_idx": "363f6d3789eb26c3bb23c258585fc10be5f3055b0cc1bb8b416daf7721b9dce1",
+"tera": "cde356c79777274bff3cea8bd5cc512711586965845b74446c3c3ff06421806f",
+"value": "83f26a6edb64e01d42e0059cd736bd14222c9dc8f73f0fe4acb8e0809d58a85a"
+},
+"meta": {
+"replay_id": "gen9ou-2687188632",
+"side": "p2",
+"player": "ChuckMoblius",
+"rating": 1563,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "f2acb407d035e971765a00b077b6da2d7015408df50a753642b5ad280fdd1526",
+"move_ids": "966842199fd9a556b1614996fe8c9f11910d1c1f55cce84babec632567891e3d",
+"poke_feats": "4149d91b5ff3a43a9da10923a45258910d83e114f5f4cada9d8d967b2f26fb19",
+"slot_mask": "a6ccd34d9c2acdc7ff4d85c04e91dd902cd1f309f49734d8213ec8f355a76fa7",
+"species_ids": "49da39908fb54647ebc9f66c057b2d61e16826cae424709859aa716523dd5681"
+},
+"tgt": {
+"action_type": "4f9f49d11371751860479dd8915ee68fe1b1c9063f0d3ffce61f6f56902f4ffb",
+"active_idx": "9ad7eb93a328a81606bab3ac4a92bd99d554eaabfadc40abeee332f16d359874",
+"move_idx": "24799f69222115bf2b49fd5be80c566d79c67c097606d03087c967411c66c1ee",
+"switch_idx": "185d40681552f5244ee582f6aaf928c2f1ec2934a0bc7441db67dc4b33c82378",
+"tera": "fa42588b103cbc633819dca704778c15d5ca23ece2498006f09db39d55fe994b",
+"value": "b9bce25c3aa1f57731f2e5ced2ef751328f621d3135c77d8cfcf67521d9f457b"
+},
+"meta": {
+"replay_id": "gen9ou-2687189039",
+"side": "p1",
+"player": "metaman2938",
+"rating": 1648,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "5e3b647093f878cd908d25a7147ed95f042a181280f26b35e992bc4b32b70565",
+"move_ids": "1292c56f2b28b9fbd5f97323f5f938f6c93b202cd7d4e9d9fee6cb48a3871d0b",
+"poke_feats": "0ac2dacab1e6125e64682741b887334568dc366e8e935e3be8fb448bad4d7e29",
+"slot_mask": "0c927ad7f4ecd3ba510f857fea1cc7bc6d414346670f877934aa1dfff9c4b7d1",
+"species_ids": "f538f0dd63009a8b79d0e39398746aeeef6ece60fa4a022e042b6b086a228c39"
+},
+"tgt": {
+"action_type": "2551c83f8c7af4f835353207e45f875b7d4e2fb9cb6f4f67206ae14b8be52651",
+"active_idx": "128e1b9bc4a9da0b65fb7180a415d32ec4dcc7be322e49546410f860128574f8",
+"move_idx": "0fec38c573c15e2b03a9efcccad9e07d5ca5dedd72b6b58ae319cac32aa6917a",
+"switch_idx": "32e858cdd62bab58841fc3ed301991cb25d1b98f1f7cbf1b185b4d2d4f3fc344",
+"tera": "b46aa7a8b3f383351b121817a1e1bbd5639e0ba933e676081dfe4dc0b6069f87",
+"value": "6ba83b58957b1f395dccd4f8b10b25b8e772a08aa5fc5edf9d65ea293ed0b744"
+},
+"meta": {
+"replay_id": "gen9ou-2687189039",
+"side": "p2",
+"player": "lagent007",
+"rating": 1648,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "2511579c7f869d91755d9ba6ce95ef8b16fb4f8418406ec8a73630524c9f52f5",
+"move_ids": "875e8c92f30ba348213baf21af5972856d1a452c6e88b56ac248bf661fab8486",
+"poke_feats": "8482605c4773e1f677d73df2f241ab0bf31358c12a1409f3b41afdc2126dc84e",
+"slot_mask": "5b9c0b06f2eccf0a9aad175051521fbf0483d20d9b2454e534895fc2a1c7f4ff",
+"species_ids": "16240adb739f651f7a473cf6346f73720e03c9e26f99aba090273c93d3f78020"
+},
+"tgt": {
+"action_type": "b386acdbcf7ed0a62d599c2a1830ea50fee66b5583bbf4bd5b7bc59179519c88",
+"active_idx": "b1afce5bbd14379bd00dc3cfc458e0e1f5b6fe251e4b955763e9833b76089c6e",
+"move_idx": "bfc0a0c5afcbcd5630416b78ef5fc80366a9178a9a6b23636e426d2f564d2429",
+"switch_idx": "c545d365051ea758b1f3217e4de381bba0c8e6a125f6f086fd8af0155e5a16d8",
+"tera": "91a104fe63961da8f0d932f77d16d200e7354f6aaa4e34963e2ad6b4e02a5afe",
+"value": "81b8a6a236a627d8886e2640061274286f0fdca0170bf69e330b1f6072bf4ddc"
+},
+"meta": {
+"replay_id": "gen9ou-2687189919",
+"side": "p1",
+"player": "bigkuza1888",
+"rating": 1588,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "e51c7e235d0865eec4f81d1ef0d21e9e49bc2309069b74ea59f0879069ca0716",
+"move_ids": "502fe8f0a91ca16fbadf61cc28665569dc548411914321e37b16da24899d48c3",
+"poke_feats": "31d9363be63998b35dd502a64e0b13d94aedd2245bdb9a487c8a0f59a08cfe89",
+"slot_mask": "2f3d559a4a7314014d838e586092086e7e329885c7e303b3056791195ce5c2db",
+"species_ids": "9f998071f0613956f194ab76ce6f3b2748d97dcc928f5c039b55bdd569d76a66"
+},
+"tgt": {
+"action_type": "eb0d0e3bd72a1f7cc1011aabd87dcb0b5401d697301fc5ac36a1f15986176441",
+"active_idx": "814ab1632eb96ad4fbdb438d88e87b48f6b0e0786f9995a56c1beae6e9f0c00d",
+"move_idx": "ebbd415cb0b74f85a6399f16c60f001d7a4179c6449b8cb31ebcfb3625979e17",
+"switch_idx": "c25ce17ab7425cdfe03611c96d06bfef1be647a4c74210a3f9b485db63025c44",
+"tera": "9e7955621285778bc12ca63ff52b91fec7d6ca72382aab191810ce254d3fcc70",
+"value": "6315354bc8b472c092ccfc86baed58f55349d2ad0af6d6a96ccc3d0031259650"
+},
+"meta": {
+"replay_id": "gen9ou-2687189919",
+"side": "p2",
+"player": "metaman2938",
+"rating": 1588,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "c49953ca17fc6dedd262e80ca7c7ec8de6447b0b046f991ba5b91bf1abf3febe",
+"move_ids": "22775b88ad23b1891b566b8a1ea76a6ab861226f365ff1cf1bbddc9a2136710a",
+"poke_feats": "94ead98a761bfb9b6fec0bf23f1111c59bb479f8b3603be333e396c0c2535e8e",
+"slot_mask": "dc5fe79532fd69f23c4ebbccff3e7c12465e760081d32656ca915ab8ab27d338",
+"species_ids": "c1d76fc8386741aaac11ac2b67cb939ecd18ae4efc0cd709b3f2861d479bca19"
+},
+"tgt": {
+"action_type": "f39de77c6a3e907522ed150a0abdee5118f42af5c5eeb49eb2760936b31bede9",
+"active_idx": "444002022eb217bdfe490a4f19de48f427c1ee4cd52f410fa17d1dfd2743885a",
+"move_idx": "6ce8bcb158173e7afe7af04a4af391aabf1e7fcff728006d94b3e30ac09acbeb",
+"switch_idx": "fb83bfdafaed0d4af76d93eda1eb9958373815e57db063a48d40d83a61a98e9f",
+"tera": "c3123999aefd1ba84f621cb0fa079dc2a8bbc75b73e928622eff61f7644c7d0a",
+"value": "73d6fc119372f563a99535d777015f01ae08676e38554c43f37287f476cf9188"
+},
+"meta": {
+"replay_id": "gen9ou-2687190551",
+"side": "p1",
+"player": "metaman2938",
+"rating": 1593,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "08c12255bba9b9ca5831e2f674cf9b349d21063779462de83f6612481b829099",
+"move_ids": "615556f4579a25779aa77ece00c899ace580f34f6530ad9937a4bba7b4ca0545",
+"poke_feats": "0458b33f9f43ed8791b1edafa382db6cff84643b9a2a161031bec3f486562dfa",
+"slot_mask": "04959b1776b9f29673823873f4fefac4f8597811c1333a80d5566e32acbcdff4",
+"species_ids": "5e45893498b942ce163293b06acbb88da0106a9df5dbc736f9506e908984f49b"
+},
+"tgt": {
+"action_type": "766412f820a2a32bb57a5f246bdbe7546250bfe3b79d84a63fe5d1fe287e025e",
+"active_idx": "63da9a227766e418bf47e82f24b233dc28b8cc829d261acaac7dbb4a71ab73cb",
+"move_idx": "289b507cb0902737c3c9bc90c834f69918567a002eafd05676fed4776e9bebba",
+"switch_idx": "ec033e2a8b563164705b2febd548348b50029b13c49f6cbed8b9ceafcff9da72",
+"tera": "9e81d0f1fc2af87c2c04425d180673c10a626a2127277641c5dbd48e45a762c4",
+"value": "77d6d9c4be473033d0da5acbdbd20b2c1bb20a4cede9218e97380708e7f6970e"
+},
+"meta": {
+"replay_id": "gen9ou-2687190551",
+"side": "p2",
+"player": "ReadUminekoPls",
+"rating": 1593,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "89dcbf232b7018f9f480a88e1bf05683a127d06a71ac6635e93ae9c56f4dba54",
+"move_ids": "2af712add3679c521ad12cd7b1edccdfeb094fd83e2c4f071fc0a2c3804cf8fa",
+"poke_feats": "277a0d4869d6a74fc3afb7d2a127c3e03e909aee5a5b3ccb0ccea044e1fede9a",
+"slot_mask": "8a11cb27d35eab50af68063428ef87d80f1557f6bfd91592412ca4dfa675159e",
+"species_ids": "83a4f783e55e782beb61053f259ee99cbff89234736cd264212a0cd13c56fb88"
+},
+"tgt": {
+"action_type": "a4045dcced0c34b316788b078d39beedfd475f055e82a1a31a546d256c386051",
+"active_idx": "b1ae04848758982abaef2c63b8b82b7a2505bd456b1b29388f6f1ba5b53f838e",
+"move_idx": "00acdbddd9f74790f238941666cb4749bc4c30643f2bca3a234ad2e6951dc793",
+"switch_idx": "8f53d4765a2b65e9cb208c2ef998c98caffa8e05aaa87ac3552e947a8f213eea",
+"tera": "d9e4a298b4881c199ea1d82084e0e09de1d72938bf3135c92161dd9f30a71f2f",
+"value": "7992fa525e977c70e6fa1a1334374ec5e3780c42310a54db9e71753be4e18328"
+},
+"meta": {
+"replay_id": "gen9ou-2687190838",
+"side": "p1",
+"player": "ThePlumber7",
+"rating": 1552,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "a5bee5d0ff2476c3f17a0079399d7b5c3e5f1e297c71ec6ea819ff822a0ba266",
+"move_ids": "1a80d50c6c53878419f253e3f7f1e817ad3a3877c0eab332e56dd4b1280a8529",
+"poke_feats": "182e989384a0eb523d58cc876b074777f628654a8496cf755554c0fb0b42ca39",
+"slot_mask": "b4abe8d3be67575f4b467d20e3606c92ec769d79a6391ba45a6512982e347b32",
+"species_ids": "838f2c4ae93d7e2afc8c6207c4112edcf7ff9f019131f777c9d9fe118a59b0c1"
+},
+"tgt": {
+"action_type": "a3f0f4d4f93b8b280c80dee024a01fdffce823978df0ff8087e2101951e862c2",
+"active_idx": "adfda1059d828bc9932b3ea85eabcc62ee3e3e4ec32c3af883f33856aa5634d6",
+"move_idx": "653cee16ea9c44930b8becb8c795bf19ac515083ad428d33d6ea94b8b59acc89",
+"switch_idx": "53e25b6cf1d90d483c9b668df602d7e6d50c982169d9faca5623373103781788",
+"tera": "553b6c0ba9d7d6dc990466135cdc2537e113292cb7e53cc377cecf651e19a65a",
+"value": "5ca261ff0966ea0b5ef25feecc17679707e2367f541212022f485232a976beb5"
+},
+"meta": {
+"replay_id": "gen9ou-2687190838",
+"side": "p2",
+"player": "metaman2938",
+"rating": 1552,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "a320d51f09c997898d4d57269905a787fbbb445950ef345333099df9e9989f1c",
+"move_ids": "021219a200e259a79fac0159f391e44feda71fadabcb38358805ff1e77f0103e",
+"poke_feats": "0579679b2f49c82222eac80947ef83bd61c8cf686766d149cd18fa9c2a3e57dd",
+"slot_mask": "a56b71ea4b04f42848de853457dea5ad756befe7780f20c6b2b81bc5122741eb",
+"species_ids": "5746059eeb77b703c17bfc2c424ce0493531448ae6ca827048a50c8645a887fc"
+},
+"tgt": {
+"action_type": "d253782f9f974c9be688941ce7f9c0895678fe7f0fb18d6a50b60900d81cc351",
+"active_idx": "4650c112d886c074db3fa80b49337b5ad7a9c59478a7104d27f5e8fbee103bb4",
+"move_idx": "d9fb167caedac1e694d7f05b8bdb87f481388ffdab4ecb671da85fc77c508365",
+"switch_idx": "fdc3eabfbee917bf1e1e1699b5ead94f47e41c97bc1247b74b858c12caf73be9",
+"tera": "f6d8bbb9689bb48e4f63925e44ac76a51f9d4cf8a6e9c744ec38f4eb82445d18",
+"value": "21f33025df6e461268ffc46eee484b982b19de905035c1cc4d5088ee47dcbf64"
+},
+"meta": {
+"replay_id": "gen9ou-2687191522",
+"side": "p1",
+"player": "metaman2938",
+"rating": 1578,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "30ba4f593deeab4f1020e7e66e7c3b33b85fbddcfca05f4be49c47bb98b3bd8b",
+"move_ids": "74d5b6cb19b63e5f605a093167f4c282abbd86c24934eb0bf9dd902a554c5b07",
+"poke_feats": "251f4c118ad326cb6a78cc89217643606d9ba936413faed41db59e80b9b9fa65",
+"slot_mask": "48e592d357b2a0e2621411898add166d44f26425c3bad28a5ddc67850386064b",
+"species_ids": "edc2f3bda1cc0006297e46f817c8074d5713e794f1692b1640236b0a2115d869"
+},
+"tgt": {
+"action_type": "6b7bc86be137f59893c581f0579ad883204398be3ea590f7fe9ab6d86801d199",
+"active_idx": "00e5efbb2f87a8880aa0f29177f23c311052fa57b8b334c96806682774cfa5d5",
+"move_idx": "c67b7098d48326501883b5c59ca37754b86ae76efd85db0d4450e51860c441fd",
+"switch_idx": "259c9d2e70e089c326272c16ab7bc1caeead6fcb1cfff85d4949121d7fbeaadf",
+"tera": "44eab45be76071e94d03a62a4aad63ee222a0eebb1b85755766c8096e22f3fba",
+"value": "c5581a0a982840da21b68900547abc51be0e919b6ba2ac85ee6a64e406364bb4"
+},
+"meta": {
+"replay_id": "gen9ou-2687191522",
+"side": "p2",
+"player": "2004 Lexus GX470",
+"rating": 1578,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "7ce72317a219a4e51d73252f8c6990a091f9b000e669734ae7c1c37f546f3619",
+"move_ids": "653f329ab5287ada1606dcefaf4a34f596061a783278d88c6568b877f2904b2a",
+"poke_feats": "749a32c5e38f599cfb8ef48716146851a02bcfa5bcc16f99fded2b306c807946",
+"slot_mask": "98b7af37e206e7ec28c11e909c903934af04454441ef695867adf70825efde35",
+"species_ids": "ebfc89af6843faccd687b1c3be473d30b05c332637769130ac2fc42ee48809c6"
+},
+"tgt": {
+"action_type": "7479f597d125dd328ee22fc8733e8380c05ee56e95cbcf2bbb02809c4ee49c31",
+"active_idx": "76646f23c9d6858de5f0b4deb914a2a0125a6ce2a2115d254a8493406a93352b",
+"move_idx": "f7f466f3d0a5464d01e642f2c0b64fc625a13ee8aae124115ebd39411a02e467",
+"switch_idx": "684701dd6d14f1f7fb0ce0041deea471e7e220b5ae6141775c3dac1519d64de9",
+"tera": "5647e0c55dfda9c5e78f49e88cb48b3dafd59b6656923a0c4bc18174ba2caff7",
+"value": "2977df8bb2d185012951de1b99190217685b7b27a14d1a61f8c72f80d2c53e22"
+},
+"meta": {
+"replay_id": "gen9ou-2687191898",
+"side": "p1",
+"player": "ChuckMoblius",
+"rating": 1543,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "af7ed79d1cabc20cc8c0464edcc670e069b64b4fd54520bedfd5142ffc1c9f6d",
+"move_ids": "02db58b60fd2022329740da5ae8f57c9fe8f7fe514c80a2f005d2b96f4b27924",
+"poke_feats": "10a0b32db8d2b78b72d705299ba58d351999271b51454e70da6b8c1e554d220f",
+"slot_mask": "77e143853e12c06211fa0c38697a718a87f72b38e8c5f3a86056f64daa60be52",
+"species_ids": "2c2ae9db0790eb15eddbd17ef50492a6aaa0d3f632cfb73193a085b7e876a374"
+},
+"tgt": {
+"action_type": "a78228eb30c7c9453277f18b83b6068479ff662579d14c04a4fc89dc1fcc805e",
+"active_idx": "bc15e800aa7e4d328e56c43c06cbe51091f947075c33744c7fa9cddd28a29028",
+"move_idx": "c0dcec38d91e8a1c6537b898a184d7155bc6b80a99ed0d05b3932a78f8c0fe22",
+"switch_idx": "a55fc6da9701e9c3054dbad9b64129305bf493b4e0e9f06194ae91640e84f485",
+"tera": "a387c02b4266e233ce100b7fa9ed155cfc9acc0d4f819a1f332bb4579e6951f0",
+"value": "ecc6dcab66d3a2a4829811f2a1795e1959ac8d6d685a18cddeb48a46c7be1034"
+},
+"meta": {
+"replay_id": "gen9ou-2687191898",
+"side": "p2",
+"player": "No1CelestiaKinnie",
+"rating": 1543,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "b41694d61991123140aaabbe211ab9c12c11e83279d796bdc23512263dece4a0",
+"move_ids": "d3d7901320da7ce1fff7d6742923bc5da60c64bcac373f6d1afcd7a8e0f39eee",
+"poke_feats": "716ac47bc66c9c67b555c85035b7d020826d241b9d404a14615f08ff050ffb14",
+"slot_mask": "9958269ad92991c2488244c1e4f893c6d72c92c099475460b5f3e8d65ce6d18f",
+"species_ids": "744f5674b98ba33d262318b7e5ac52f1b047c7236cea1ea1f6c313fed589aec2"
+},
+"tgt": {
+"action_type": "f279a02fe659a69b8ce3dd7059fc4b6b0f28a622f81f33eb3df446befd630890",
+"active_idx": "43d31b5040598865546db9225a51ac7dd9f6e7fd53d828d53f4ed4cf25d8b69e",
+"move_idx": "74e7552a86dac756d5e9573b3dfefdbe5487731e496d26e5099b3f630c53fb7c",
+"switch_idx": "88af9b40c586a94dff0151dd8231614ffe06c5e2970a2cdd59ce5be445981176",
+"tera": "2da68080a08b038638162c4ca1b613e901d3af2124c03d2967d985148147458b",
+"value": "e019d44559171aa38581578ef5edef622acc87996b91450623708873cb912f4e"
+},
+"meta": {
+"replay_id": "gen9ou-2687194592",
+"side": "p1",
+"player": "TheEG3",
+"rating": 1608,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "246785e9980d2c893b1e7d5f5aa8b57724e80e42f13281e12f2e197fe2b10955",
+"move_ids": "3990f8c298b2912d6f88ff9f0784af95b905e96705b7c9818fc5bcd7bdb5bb34",
+"poke_feats": "69a4bd417e220703d3a7815c904acf75ffbde54b544d95a75e7ef307a2a9703a",
+"slot_mask": "b6978f775d242746f8fdc24fb6e711fc70a0cba52a324e9a7e8d6cc538d1cdd5",
+"species_ids": "2ef15abf549de2914448edb648ddb61209e087454514795c95954c509ecd133f"
+},
+"tgt": {
+"action_type": "790aa4dfd1239aecc6edc4d06e193b9e13110f44735d7f0bc34a56cd7be04abf",
+"active_idx": "26b6c9637d5bd807e98d95934f0865b1f86d2d74c4a97bed9c5503b7fd4e8ce7",
+"move_idx": "e5194d1fbfa2a22acf473758bfa78822336c6ec82deaa43e3e489bb372031e6a",
+"switch_idx": "6c9f68ab4130e8adade25564cc60f2d8cd599b8b97a8e347bf1cda7ba864ef9f",
+"tera": "822379003d6cc55f2a2e55f32b9a3093a27e7df2f3ff3237c82af86b416a9f8f",
+"value": "7930983c99afd9b9580d3fff9f48cd5b46fcf60b402eabfddd6dd6bc6f868cef"
+},
+"meta": {
+"replay_id": "gen9ou-2687194592",
+"side": "p2",
+"player": "teto's hubby",
+"rating": 1608,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "b2828600372d6cd19c02f257cba0e1bb1e38e8e1b664eaea164ef20409e54c99",
+"move_ids": "cd0525029421a57ec4fecbfb3d8a92c7da9e24943ce51012e5ba4b98a02beffb",
+"poke_feats": "0225252bf54ed84958ba39ccd4ef3b8a05f05ce40ce385f45d263bd3d57f3a5b",
+"slot_mask": "6eccde8dcfc9d0612393a67736dec7426e6e6626d3965dae978d4455f9642f7c",
+"species_ids": "50ec2baf514ed45fec767dd7335375a229d933ac8b14fec7ec6908efb1e93ab3"
+},
+"tgt": {
+"action_type": "58f6fbc0d63afc96a7e407dc7cded22bf2880706856b0b9dc5444797204dfb24",
+"active_idx": "61ed53f414fab7490d8a0ef33613ac332d8cd9e2db6ed937beb97edec461c51f",
+"move_idx": "122ea92082d20fcafcc3973eb1d1b97a9214bb9d05605eb5970b34b8a44c43a4",
+"switch_idx": "255cf8a34387e8172ce457a8b436155d11c42fd10db589b411524bfd59cab84f",
+"tera": "fe10aef452e04b272451d56091a0b9251ed9245f30ee70d3e7d67cad4aad1bfb",
+"value": "f50586c19c6a288afaec7ce86d15ddf313db330dde169593265c462207e7e886"
+},
+"meta": {
+"replay_id": "gen9ou-2687194997",
+"side": "p1",
+"player": "junya uwatabeme",
+"rating": 1563,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "cc1fc3f6c008fa57b6d15f89bd7e59ae51308e0e3b4c792661d47da691e18a2f",
+"move_ids": "eeaf2a6130765474b933f007250c7f1f2d17cdcb9df05b389788c66d371c3244",
+"poke_feats": "f502cac30957966218797f7c0014f294548059c3f6ef987581252fd1be9bedb8",
+"slot_mask": "dc5fe79532fd69f23c4ebbccff3e7c12465e760081d32656ca915ab8ab27d338",
+"species_ids": "bcda0517147082d992089e946d9324048a14ca441de2209dd9e615128a9a3a34"
+},
+"tgt": {
+"action_type": "0134318d68a0c85dabb129f495a22270d288170f01551a2afbc70bc31140dbba",
+"active_idx": "16c2b1c1792ac82a39174fa95ec1dbf491fb73b91fcdd6b7fa46291544c4355b",
+"move_idx": "f52e97350db56a4247b0e0496d0bdde29da0cf4e1362a6d12f3cd96d45759e75",
+"switch_idx": "9f91cf149b9a02f52e8f940404b1a9e2062234f7e3a273bb59c6cb3d2815b69b",
+"tera": "af0d3b668a9ae7f9ee20955dbe56596508b103b93b877fcc5099365c3476dc68",
+"value": "73d6fc119372f563a99535d777015f01ae08676e38554c43f37287f476cf9188"
+},
+"meta": {
+"replay_id": "gen9ou-2687194997",
+"side": "p2",
+"player": "metaman2938",
+"rating": 1563,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "52b6a922705271aed949b6c6cd579943d1d6c6319f579bb4a6053846f0d85021",
+"move_ids": "5fb1e43587bcd9001b6933514a37b323d904c4e0cd2392ad1aa20526cd2c66db",
+"poke_feats": "31834ea9fdcc5ba7bd3e779411e0477a876cb5814f0783fa5d47bd7882d72a2f",
+"slot_mask": "28638f6c0a636cd4c0165c46019b147bbbcf77e79bf06cda2eaa943349b85e16",
+"species_ids": "06c906352f8f31b074e1d5fc26abe75a5ea2df027fb464f65d7df3902b44ed22"
+},
+"tgt": {
+"action_type": "470e5e26979e9c82f26c895d0d13b396e8aebdea8ccca3f9b5c8c5cb25c5cbed",
+"active_idx": "4a5d97d6148acd769689e947d2fa17ace5bf6652e8c28772a0cc215a1419d50d",
+"move_idx": "c2741eaea72f19b1fae59c7dcfde8213d817644c34b728cc59b209e8a2d64a11",
+"switch_idx": "e31c8f9135ec1c3d1f6b9fce45f07b503d3fe2155d974ba35535805ba700721d",
+"tera": "8a9d42bae12c348e6c77724f97368350b493774f72acd13d89b8075bc65c4f83",
+"value": "732c638494e810be96d6e361549f9289e7c4b1736a5fb534469eb35ebc4e6d10"
+},
+"meta": {
+"replay_id": "gen9ou-2687195296",
+"side": "p1",
+"player": "funnygames(1997)",
+"rating": 1513,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "c6f3db8186f8397953388e06f53c344c3dc833f36fdc87f3068640adf31b01d2",
+"move_ids": "9bd81a0b10a32ffb38dac5cc05c25ab8e399b13039b61a206455e5439efd703a",
+"poke_feats": "dff8e24d42ccbbab1f7dc352c1d40c1295031a4d1b3d135e119c7503fca9c618",
+"slot_mask": "0ec968f3a14a6ac2886cc810f0c58ed0c6d752a800111079d763830df2146e6f",
+"species_ids": "33d949f0761ee34e5975cb10759128c00da49bb9a4c9c3b77ab6ac53351306a8"
+},
+"tgt": {
+"action_type": "10841fcd4c4e2dd240d4d8a56a13eb84a4d6aa65f35f887719ad9d05fa2bdfdc",
+"active_idx": "0c35f6ed88307adcf516a134ca16d591bf6a03fae76bc29d40d60f1ff512a1ec",
+"move_idx": "7f0bc04ec23602035666bd2305236b2a89a073a43532132abb2c967f2a3fa7f0",
+"switch_idx": "b1eae609b0ffb6fda917da89230c7500195384aac59ac75b156dc3d4ef8e50ab",
+"tera": "7afdd63c94a81887e90c476febdd9dd0b4f94df59cf4f30c9c889ff34ea31340",
+"value": "04176574040e07d10c6659e5caa818f213a579e46386781a866d8533576df5d5"
+},
+"meta": {
+"replay_id": "gen9ou-2687195296",
+"side": "p2",
+"player": "samothy",
+"rating": 1513,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "fc469f93cecaf6bdddda079996edfbdbd07ce0de47bd3ce8ea05909c4b9b636e",
+"move_ids": "71d2b0368dbf6d30f5a2c911fd3be3607836fee6306c26b1aa0d31c05d3d9213",
+"poke_feats": "857ea2ceb7cf7ff635381ffa45ea18821c109173755d30aa89cf2ae42cc08bdb",
+"slot_mask": "0ee41bce97aa0afb49948aefcd77bfb3ee38265d76d62e5bc494d6447d61fb83",
+"species_ids": "e97b70e4916f0840697f5162368876258fcbaee697a2d00c64f6504eff42fa82"
+},
+"tgt": {
+"action_type": "a72a4dc87f963902a26ca6ae80e0558372253c7962f879ed7ba676391f691b11",
+"active_idx": "bf52b60f272946e69bdbec5d0315b06ae0c9d0e82ea85b145bcfa3836ea89666",
+"move_idx": "7aff0d89f7e236b92044e0d404588f0e7eab176256b1110695c8eecedafb5edb",
+"switch_idx": "4743cd2dd9ed7f27020953897d808668ed217e62305555d8539cee59aaf9b254",
+"tera": "f03e8118b4ef4b05c7d02799e5ac2ddc2df91e50e25231832366f1e42b66ca4a",
+"value": "df6362b90132fbc1326f6e60a1eedfdee412f99932fc9b4559cef9898accd8a9"
+},
+"meta": {
+"replay_id": "gen9ou-2687196366",
+"side": "p1",
+"player": "metaman2938",
+"rating": 1576,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "79bd19aaaef7c61d324f267ce20e1880f247b67d4f9c02e4fbff6b1fae4b8b60",
+"move_ids": "a39db240cfb3ec9caa8676bda3c65fe3df1bc491da4942559038369161977c66",
+"poke_feats": "4319461491651f1e9e6d7bcef11db9c517a60bb1a35c77a43c57f2b72a66905c",
+"slot_mask": "0ee41bce97aa0afb49948aefcd77bfb3ee38265d76d62e5bc494d6447d61fb83",
+"species_ids": "179e3e761075112ed11356f9450eb3cb1e2a30fcc4bccfa68e6d88bdcdb849ae"
+},
+"tgt": {
+"action_type": "22d481f8afd98e25d3c84f870c51d21cfe2bfa174fa64464205f91d0ae908daa",
+"active_idx": "41a7849de2df8c09c347fa23b638fe8989a4aafca76865930ae85f48d08beaa6",
+"move_idx": "8b98dda43678666d1531ac98357155a0c85c60e4334983c88962f4f86fb00c22",
+"switch_idx": "d1225a249e1eac4c80c4bcf79297db235855978aba2cb323a7f34eb9402ca6f8",
+"tera": "38ff2ba6ed23ec8cc4c074cffc7215540b72e795f144c2994cce5a1afdc4c21c",
+"value": "ef926a78b638edbfb403b21d13c81358f905134771c913bbc4b999b30a7a0d75"
+},
+"meta": {
+"replay_id": "gen9ou-2687196366",
+"side": "p2",
+"player": "dadben",
+"rating": 1576,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "fcb83cda19f508d8efef4510b1b15c9c93b59a22993822703f95ef0d551278ba",
+"move_ids": "4c900ba7466d48ff0e2af4ed0951bf14f4ffc46daed4c82a1287d04bfcc7ff2f",
+"poke_feats": "96ea8a429030b6069fa022b55841dd11b1f6f7d46c003b3e4024e8ae9ac7d948",
+"slot_mask": "edbc6ec5bb8c60c21e008f9de59ac7612bb502a8bb66d9d6b83544f0670ebf74",
+"species_ids": "f7a8768ce94ac2327b31fabec18eb49a120c61736606372767c628e76aac3a9d"
+},
+"tgt": {
+"action_type": "acf7b7ca9163053fc32f21a06982cf1a81ec8ba6ff1a89707908a56a555ace2f",
+"active_idx": "0ef6f9f37d28c74b798b75c88be03a5f547bfc4b7211273d3e560e49166ae2a8",
+"move_idx": "c0a69395168995f40228c3907553e9f843ca7f3b7097244d880d279516204d83",
+"switch_idx": "5695167b1d91af314fbd0ecc6a31c04f1763839b0109032204aac9901c775fae",
+"tera": "5ccef1051c5c5f997efad9068d07fcf769b3ef3ee0b08cf595a972ef4f519b19",
+"value": "cf0ebefbcf53b1ba9331c7390a02f1ead1e8e85d87f87b62fd5fb91436bcb97a"
+},
+"meta": {
+"replay_id": "gen9ou-2687196774",
+"side": "p1",
+"player": "ReadUminekoPls",
+"rating": 1582,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "aba35a3c7be2e52e210aa08788baf40d57876a7d77dcfe8efeed46d8bdd9184f",
+"move_ids": "15f8909b6fd571177e5f7dad5f438edc8f17fa3e601b7e14ade92469926e9a83",
+"poke_feats": "c062cc9d669d753c89326efe10821f496f668f5b99051d83dce7eb9c65d711be",
+"slot_mask": "edbc6ec5bb8c60c21e008f9de59ac7612bb502a8bb66d9d6b83544f0670ebf74",
+"species_ids": "5ca10b9822b730e4a2d23ed32588e25b5d2963bfe0c71f3245a804a904ede477"
+},
+"tgt": {
+"action_type": "7d09b97375536ef5bdcddbcdd6d78354a7aab52bb4f8987770e94ff5ca9e235a",
+"active_idx": "134b3a014b0ef328c5d3d9a29efee20ae9529abab3b1677904bb76ca5122dbce",
+"move_idx": "d3ea5a4cb0d567fbe339c5a1a3637f3e1a9c3b758cd92cfcaf1dedef6fb1a94d",
+"switch_idx": "7843d7e7e19d5763d90fbf35c3ca1e7f36090c272e84fdebb0b73203c3b3aa76",
+"tera": "13a99827c1971864a578c0eba0460503c9ffe14bd0fac3d6d3cd507115431693",
+"value": "9d59d4d40bb36fed0ccd03b63b5e593690680fdbaf48ef02d6002e45d2fdc8e8"
+},
+"meta": {
+"replay_id": "gen9ou-2687196774",
+"side": "p2",
+"player": "No1CelestiaKinnie",
+"rating": 1582,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "8424511a8a36db28ca97cf260b8ef8af60c6ae64660449d0271bc02ade701a78",
+"move_ids": "dc0e48989e4f554ed4fbae990d332cb157dccd29e360904ecfe9171e2381cace",
+"poke_feats": "f4e52683fa56a13cd8056f8d50b51635243e4100b61e5a2c2437fd546338f87f",
+"slot_mask": "556633974726b311826535fdbf503308a45205104463b3959db77c210baa7152",
+"species_ids": "23fdfff21b838f3d993627476f3311a1d7ada2a770eb1328b0913ae043558e18"
+},
+"tgt": {
+"action_type": "733d8d44b0d4db289e27fe45a6505e3fb63dab84503fb4ffeba93572fcd78ec9",
+"active_idx": "2909d083e73853d596a473a9be1942b289267f66ad01b942c93f6e78e1842a73",
+"move_idx": "d39fbed4cffeb10ba2b9d3b59ec692f10751e55284db14b75fc5358be070727a",
+"switch_idx": "59e75780fb8136fbae9b3b4129260447b0b064ab1553fdc4e264f2521441a6bd",
+"tera": "40fb509e50e8a8de23015d87e1b5a90b0765404aa27dc5584f6d008ca29cddf8",
+"value": "06f7750077e1163681a76197cc7c95f85312bfca02eb24d96d3cbd3fde5f1900"
+},
+"meta": {
+"replay_id": "gen9ou-2687197190",
+"side": "p1",
+"player": "junya uwatabeme",
+"rating": 1577,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "7dced2853eb605038bf61039bc4352354c93b93d70661f990cc13d293302652c",
+"move_ids": "08357b251cdc2cfa756506f04f22f4cd21cb9755d899a710145c7f780490cd00",
+"poke_feats": "055b7bad16fd39016346c2ddac97515c4464cdeb7fc8f24e62d9f650c9db34d5",
+"slot_mask": "04959b1776b9f29673823873f4fefac4f8597811c1333a80d5566e32acbcdff4",
+"species_ids": "e2c29e1e2a6e6f80591edd896cf5c388b7ab7e513de832fba370067aa70fadb3"
+},
+"tgt": {
+"action_type": "786da9d6372ad50c9ce98aabb4f72583ec0c305f3280ce052e77addc55ed39ed",
+"active_idx": "2f34f513b06aeb2c84c0fe410e062b6277da466a62d6addcd729eb2ecfe0c9d1",
+"move_idx": "a82292956d54f44e657a4056d17d8c3c28cde7cc073da522100ee2946ff1058c",
+"switch_idx": "5abe5f17bde12c72bf40338386eed95da4891192e94fd494da8cdabd3bf5dec6",
+"tera": "f5e710c36ef1b4b6dce1dc7c94bc9ce2e906ea245e20fe4cfe803519909cebce",
+"value": "9d050aa36d97c4b3eed658871500b2f4e0e222551938b785ffe90b867ad69845"
+},
+"meta": {
+"replay_id": "gen9ou-2687197190",
+"side": "p2",
+"player": "maatmatos",
+"rating": 1577,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "8e76d95860c2f115cc835ae06779d164956a0f84a8ee21e82e3c76035f03f63c",
+"move_ids": "6d3d88920c04dc0d51939c1904849f30d9689fb516c202189f880bbac114eb57",
+"poke_feats": "1df64e62f2003f212e741e5648f527391bcee31c0ef3526d6a161dd679b5d2dc",
+"slot_mask": "ed2c001314c772d8f95ef34a2f8133026de43525b79193f233ddf3a76600f9c7",
+"species_ids": "141d1fc7e05ffd87ce4a7b07842271e811d3914a72b20a051e2bd225d15e9426"
+},
+"tgt": {
+"action_type": "0587670ae9176bf3ef5282b30f8d958b00b7c2218ec4a45b7f27d0f139abb27a",
+"active_idx": "5c559521d9ae8c67f9928cd5d5b6e02abff1e3587a8102e10a20de970bcbfcea",
+"move_idx": "d9d8fc594a624d186678d0ee1f2508e43a434124a0d9a0663e65f5e37f7cf2cd",
+"switch_idx": "2253b24dd8fc0488976bb4424d73c6778fa9309caeb7fbedae40ed850c95e1af",
+"tera": "d26b8c40fd9e180a5f1871db42199c3f9fd454e9975ea5dc6aac64a1b951261c",
+"value": "899a3300ff78c759c4d049646068b92bab15dee8f0e530b83e9006e1dcdc2004"
+},
+"meta": {
+"replay_id": "gen9ou-2687197478",
+"side": "p1",
+"player": "Prav33n",
+"rating": 1688,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "e4c5ce171c9f3a87b37216b732f5d381c4a916bd4c0c0b144a16b7e1de301788",
+"move_ids": "be0756c3b9ecbe30ae0f30366708e655346ec94e23f8fecc8a3c812f01b0557b",
+"poke_feats": "e96c0f600d260c2cab348fca8b311f636b56acd9213ea159f1c9a9a3e25e9594",
+"slot_mask": "ed2c001314c772d8f95ef34a2f8133026de43525b79193f233ddf3a76600f9c7",
+"species_ids": "161204a7037f3236f476c4e0f7753cacf40fc9f260cb8b5c4ecc4530736fbc75"
+},
+"tgt": {
+"action_type": "cecfd3935b7b10376b4f1d8906a60c8cec584cbe35f5b1c4acf82b61df27d4bf",
+"active_idx": "92bae2e8744d76647f71d032434aa7498b7d1d839c0457ad5a4f1834fd0a9713",
+"move_idx": "786a27db254c1c19fbb889f4bc574cc08042ad3b9eef17a071128deb3be01ad3",
+"switch_idx": "63bbeec0c1bd82b0f0e75a8faa03e83eceaf5db5ab365ebd18d4817b862ecd7c",
+"tera": "529f7330efe186e55548cbc6f31508f07bc62b89563a3cb12da83c8c29f783b6",
+"value": "bd18e88754e2dd7013e155b3917b233dadb59fa66d310d27ea49f147db0c6e55"
+},
+"meta": {
+"replay_id": "gen9ou-2687197478",
+"side": "p2",
+"player": "Omari P",
+"rating": 1688,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "46e7ca459ed1e9bfb7c7540ee9e3c5987a412af8144b8a2098e4d1b663723edd",
+"move_ids": "4f4077dfe5fe604c87b6c6c014db7411599e3c90620d74616e1e245188e69529",
+"poke_feats": "f885b817d5ab2930dfa2096ba8abdf61a07793bd2cd579d5e737481d94b53285",
+"slot_mask": "2a532fa41342235e4de791c73534eb5f370d50d7cf9df5d0d31a4911cb4c27bf",
+"species_ids": "f500e06e230021de66f7c0ebc5361d371a080fc83d156a5161f01e68742e2611"
+},
+"tgt": {
+"action_type": "75e8d3f4f456d8e84c88fa4e4fad9d2beeb121e1c6fe351bc2e44afcafa1fd8a",
+"active_idx": "17f24420eef355b8ab6b362b3b9151bdb38fd2098dd126b3d6d5f6b8636efa2b",
+"move_idx": "4ae8bd64278cf7feb61bf31caa7d8044a8bd547e52ba4bc58077e6cec66f5970",
+"switch_idx": "afc24e27977a03ec6531ed9b75ef527f40aac6a3bd187fccbbe525a43149570b",
+"tera": "0d39755b8d3a8657eeda83624300a06225049d05fa87d18035e22d5f1a3a9843",
+"value": "59748cd0fe3b48cb251adffac92953dc3a7a3ceccf7823af2d07dda4382b67ec"
+},
+"meta": {
+"replay_id": "gen9ou-2687197698",
+"side": "p1",
+"player": "baby jesus christ",
+"rating": 1608,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "09681da53a39c49d36aaa1106576b831f8c1652b665c4dcf48e62b7caee4eafe",
+"move_ids": "115581fdd015709113deca56473bcef03bff29c705a08694a0ad805a46d2303b",
+"poke_feats": "9915e2e8e7d56d067d7bf88f2846f6b20a80e68a91d82e8659defbdde9bc288b",
+"slot_mask": "497d6bf5d17b55ab89bd1fe171ee64ce6e9429aabc4c86d1acfb97a3f5a24ee5",
+"species_ids": "cbba1b8abfb3731a32e3dc27a3c2a2ade71ad3cb3b0039bf8242bdb4bc92a20a"
+},
+"tgt": {
+"action_type": "f8745e71eed51c00648bf9c3b432e4d293d30b9eeb5e698f7db88618b65798ac",
+"active_idx": "71d24e0f8145d2bc3a91d3a694ed56468b61e84cbbc82c308f63dd19dd0b5027",
+"move_idx": "c60d97c089118c4657a47a5603613576a3c78da6cd716f2e6374ea39cdd29199",
+"switch_idx": "5d0cb358398ef5c1859bdbf282e3398229f8dc6df51ed1f5f9a64fa255eff038",
+"tera": "fb9ad7d993c69793e3ac29b60f353d644cd7cb8f68f7b219845a960812b3b953",
+"value": "ee414f1aa03f6fa0c45aaf6171c169e2e65a3877c140312fa5adf685890f1ad1"
+},
+"meta": {
+"replay_id": "gen9ou-2687197698",
+"side": "p2",
+"player": "noamm",
+"rating": 1608,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "fb21e1009e5198de7d4546f485925fb71ccfbbdf80c3d36709d6e2f42b180d68",
+"move_ids": "98922aea24fcbfe761e67c92994264ebd9cdcee13e9f319698388a4331d1cc1f",
+"poke_feats": "523011651f9683389d74c6778093cfda57e344d31905ff0816f13b9faabcc10f",
+"slot_mask": "3a76e09cb2a120756237dc4f725805b04743def1747d213691bf6c26022697f7",
+"species_ids": "f6c52ea05563cc9af5b7baf330cc2f6cf2a84ba7d5da031d1bc2512bdd1f2296"
+},
+"tgt": {
+"action_type": "ddd0e0409b5ae7ee8d3c1287af5be254d63c0d501cd530781b0d7b78ed231f1e",
+"active_idx": "e2c99baeb486975299098dbe9e31bb3c281925309b3affa40d661ed0811cbedd",
+"move_idx": "4beb81bb9c6ed1bbe223d05bad1122125162f0260049a082c42e346a551d0288",
+"switch_idx": "c32fb9d30aaa56225df3c8480ce3f69f3e7de291f330fdfd215fd549fec9e81c",
+"tera": "05b213b874e94948918e297c15c272aec66f448d930a6c1c12be8a6cb750b203",
+"value": "7bd0ecb24968f176fec00c936ed59036f1609ba0216a3966583a3fe4a29f9c12"
+},
+"meta": {
+"replay_id": "gen9ou-2687198073",
+"side": "p1",
+"player": "getreyal",
+"rating": 1562,
+"won": false
+}
+},
+{
+"obs": {
+"field_seq": "7963e2a06feacd7eb3e0cf09a9849649f5104ef05b05dc42a6d7ce8046c6f8c5",
+"move_ids": "a953fa496f6dba2f93686edd70a364c7ef9889bf856118ca07c30635b0f5ab7e",
+"poke_feats": "8a8771d6593237da3eb7f9f1b024fe0946f4f697344054d536194c938c4c1c8a",
+"slot_mask": "5380c87754a12081a170f3fe9f58c6234723a3fb779f48f8189e438a8bcd7187",
+"species_ids": "07416a285dfcd0822f1dd66bdabd1ecc9247b1f8164f97bf601ac927c87f6945"
+},
+"tgt": {
+"action_type": "fa39bb8ba6855e04ba3c49c2dedafae6aa2d938fcd0cd997f638cc150631bcb5",
+"active_idx": "56193edfe63bf618d69e2545e298c6cd07f70517cd7b6e20c541bdfd9cc74520",
+"move_idx": "395581758dc7824e39c3005d745c91c0f63af18294ff51a2ae03d6810deaa07b",
+"switch_idx": "9faf7dad97e161b56f1210e8cc3ac41f203bb503b1d08e6d07cc9d101eea9982",
+"tera": "b60ac64d268d8780529ce6daad1ace82911281628a3dadb316480d6fe6574afa",
+"value": "afead38e9f86b62aa6c548c63191bd2dba270f4a4c5cadf82e509f25bc28dab4"
+},
+"meta": {
+"replay_id": "gen9ou-2687198073",
+"side": "p2",
+"player": "No1CelestiaKinnie",
+"rating": 1562,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "2bf0418854a049f2c93ef1cd2f7b848537f0e8ad1ce898da8918c86ff41f0693",
+"move_ids": "a22565c7bfa08e274b11cb2a56d307268cb9099889965a0fe3098a7f62e79f0c",
+"poke_feats": "68a7549e0607e5fa1cfda470a2a9a6f9b923a3d2a2f7f94838d46e467f3c9de3",
+"slot_mask": "97202b12c7d8f2154095f765c8318599e2384ee1b72ad232ffb542fd3c060544",
+"species_ids": "7922bc138ff80d35d248a010ba2f973ee1822e6389cdc422602f091a3d91b75f"
+},
+"tgt": {
+"action_type": "76272ac85afb600a9f84e6bd224452a361aa882047f58ec08fd06f4a5e78bbc3",
+"active_idx": "4341c3a3d7127a5dd7618ee14b378a227ae9e9f2ac55ee1800965ab1cca274b0",
+"move_idx": "9f7408b2d89bc8cc1fd166975bac7ae3eaf7c37f782aa2ad0ab56193ce16097c",
+"switch_idx": "11c237fb331596249fce60cc3cc56ac8d636563132e6ec795ba94e6b30977eae",
+"tera": "a6f290af80fc86c4cb1d0a3750065581271e84e3867e8972e2eb28edcc2d15dd",
+"value": "5baf30cc205a848e64f6c93e156e5c38a9a1206b845ff907dd8e4f3f1723f36a"
+},
+"meta": {
+"replay_id": "gen9ou-2687199426",
+"side": "p1",
+"player": "potayo",
+"rating": 1620,
+"won": true
+}
+},
+{
+"obs": {
+"field_seq": "5e24fec6034e0d9d7134411820262e2f61078a244e645cc09981be0060daffe4",
+"move_ids": "6c16e6b2bec8116ed95cd863a286902a29877e527afe2004fc8de34dc7e740de",
+"poke_feats": "d8da998c49aa87eb0c95a24a25c36244bcb77a06aaca1131b8aef4cd9653722f",
+"slot_mask": "464a1c794530ad2a2733d357c8933ab8e08233469aec09f00622e05d9956f666",
+"species_ids": "df53dad2755b1c9b8730fd7bad9d7e52e216cf3428312336bb11fed2faa41d1f"
+},
+"tgt": {
+"action_type": "b7a6285a02dbdea929fa31070bed5253c1221fcbab0a67ee95ad8facd15f497f",
+"active_idx": "72c192bd1dbc9454865c72045130757d696732db5a9c15e5c22c61bf96f4457e",
+"move_idx": "051ef616674ccc1159e753e74f89b4d59f97def34657f9c7ed8b4ec4af579ff0",
+"switch_idx": "4c43562a8606d0da7088505cb8e844678ce03ac1791f2343bc10351094836ba9",
+"tera": "a79fbbaaac403ee4f35e4a959e05b373c83c9c5dec93b3cc163463836a608f02",
+"value": "83f26a6edb64e01d42e0059cd736bd14222c9dc8f73f0fe4acb8e0809d58a85a"
+},
+"meta": {
+"replay_id": "gen9ou-2687199426",
+"side": "p2",
+"player": "TheEG3",
+"rating": 1620,
+"won": false
+}
+}
+]
+}

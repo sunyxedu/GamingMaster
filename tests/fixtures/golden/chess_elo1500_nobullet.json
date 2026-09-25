@@ -1,0 +1,2568 @@
+{
+"converter_version": 2,
+"shard_meta": {},
+"samples": [
+{
+"obs": {
+"board_seq": "be178d809cc95259018d013ae1663aa312448e72562989c7d7ead9581f16bbf6",
+"globals_seq": "6842249c8c16ef7ab3cb4232efacb1146c7fd54e3b5c923700523b8af6439b02"
+},
+"tgt": {
+"from_idx": "dd4d691b4ab3673a59e90741f231d2b63a13bfcfd9ab582ac4cd419569ac69f6",
+"promotion": "acc66254cac08c1cf717a8010fd9c09e31fd696e3165ab24a1ea438bedb1e471",
+"to_idx": "1546795f4480dc1168dff6dbce491928776be7db8c18ca68f557614355a2d564",
+"value": "52f1820c9ad0f6849b0a7f5531dce73dfa698c68c1ae7b99911bd78596486d6e"
+},
+"meta": {
+"white": "Desmond_Wilson",
+"black": "savinka59",
+"elo": [
+1654,
+1919
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "0f7f0686716899cc810366555790fa312a024cad6820b38b1162ff9a4e3709bb",
+"globals_seq": "9c614a2263b3fe3eb0cc7cff64cdf32fe04a930e2d536b771a02e772444d673b"
+},
+"tgt": {
+"from_idx": "2e1338636b08d2a3c9d0949e7d75253e9690cf915ca5078c9f32a6ceb676895f",
+"promotion": "b9eb16a40525b9c2d3a34069b5d31de605f1229e4d22d646f7d00c27ba31b67e",
+"to_idx": "5fd9d06624b008702bdb968c962b9a24b50072420d22f2e0f81425cb1e7b3f68",
+"value": "e61934b46c2d3028f28c0046da89950ac32c188a7cc2dc70d0d0d43a17281236"
+},
+"meta": {
+"white": "Kozakmamay007",
+"black": "VanillaShamanilla",
+"elo": [
+1643,
+1747
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "2647a0aa0504463366f84649a67181a9197fd33b71dbbe9eeef4dc5000a19c0e",
+"globals_seq": "437956d8e3914ed3628574518cbb1ab2473e9b17cccc8c1cc51f8fc157c87e94"
+},
+"tgt": {
+"from_idx": "ada18970a5843428f299139d1e9cf4a1c681c5dd81c1592b0430da115ad016fe",
+"promotion": "66af4a6da2be76ed99097af97bebc30f1180e6b0c762742e6278487a88c52b1f",
+"to_idx": "d3a2f4fd5e903c76acd9c71434254a3668c5052fe9830a1646c7944874ceebc8",
+"value": "6876994c8db43f8c897a42cb847aaf558e77034919be3ea916c137a68bbca760"
+},
+"meta": {
+"white": "tiggran",
+"black": "arion_6",
+"elo": [
+1541,
+1500
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "ed4dec43d6d64b2773fd906614085a4cc53f8c46c889c0f1beedba10f09592d2",
+"globals_seq": "46721edbd0fabf4340fd71d71cd7068fbff60cb32ef7b92be3073e6fc95689f3"
+},
+"tgt": {
+"from_idx": "1370188565e99d1369511d0bc21c5e7ab188be92e86cffa6a63518d13fe3b5ed",
+"promotion": "bb380287de5b14bab4c78b634ced57515e3ce677156911a68c5682eaf4600c62",
+"to_idx": "119cb07821fb42b1f99a41626cb0370f5922dcff501cb0d32a0884ad125b42e3",
+"value": "52d6d86f797526fe13ef84f18e249601c6ea9e0d3b158cd7a885579114fa32da"
+},
+"meta": {
+"white": "hostking",
+"black": "troepianiz",
+"elo": [
+1765,
+1752
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "3d1cd1aea4062ddc278372ccc2f6424e68674918df8b4ac2ec1ed2a5597d4116",
+"globals_seq": "88c3a4d4253d4296389b2425bb9f11d19a05ab748b22fd3254346645c0656c4e"
+},
+"tgt": {
+"from_idx": "06c0ea73ccb8fa31e7b00edc9dea7e66e5039e3ea31fb9edb4c6952dcc49621d",
+"promotion": "c20c84211aefcc29730c54caf0253e1f6e388130f2c73970eb627eeccb1e7c11",
+"to_idx": "46fe8979db188e94b103b0fbf5b00ab06abf3b0ae510e02af918960ca649ac9b",
+"value": "46c572adfc08a412ab73bc08390c1f74fa668a5cc27cfcad7d0d40aff7e90539"
+},
+"meta": {
+"white": "BFG9k",
+"black": "Sagaz",
+"elo": [
+1644,
+1544
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "968b21ece014eff6e9ba444a063c441e30f2f5c8164a10502d160dfba74a144c",
+"globals_seq": "19a21a166b4d9094b5659b81f8fdaee228209824ecec9573ed0b0e471b4ba667"
+},
+"tgt": {
+"from_idx": "b9cacfbba135ca9cef3b2bf1103c0cb0ccd12a8d0f3eb4459b582ac7bc123b53",
+"promotion": "3809ccb14015f9c4e0b2dcda3b02d5863d10ee6fae9673ccfc13c7dc993f0d04",
+"to_idx": "33cff67863e5d6db31c728e72d87fa7fb47f3cde069557206f93c7774c51514f",
+"value": "bb114cda9674233227c677632141998fbcc1647746163b3bd98a8d27a53bd21d"
+},
+"meta": {
+"white": "arion_6",
+"black": "Naitero_Nagasaki",
+"elo": [
+1957,
+1755
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "a38317d71b49bb7d929fa3a8ce0ce7bed09cb75bf0378b9595623b90897dfd57",
+"globals_seq": "e58d64f1b4778b20847a211d55f5df9d85e75d4080e429d1abcd4f0b59f816c7"
+},
+"tgt": {
+"from_idx": "773d83254c10666dcc0934055e1adc28bc00263da86315657068c64e20ed8bd5",
+"promotion": "a2c2f851b65c2582d6901c0e7d3c53344fb401f9cebb38595e2daa50c2efcaf4",
+"to_idx": "abffdaa349f77174c91d285027ce6b30e0485175842ea6cbe6d4b60200af23ec",
+"value": "a48e68c6608d5400a5bed0eb6ec1885fbc2a95013645ef2b339788c518b03174"
+},
+"meta": {
+"white": "Kozakmamay007",
+"black": "vadi",
+"elo": [
+1656,
+1812
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "8a65ce8215b5815d54aa1b0ccd63c743eb60ace67242b4f143b9aae963897dd8",
+"globals_seq": "f9ac67b22700c98ad8504d571cf35ae723bf8caa6bf41ecf9484254969631fec"
+},
+"tgt": {
+"from_idx": "299e5a81c9890f96201ef968264c4a095dd4d53f75dfe141d824ced0f2ccbcbe",
+"promotion": "1b90ef3339757e60262b63768b7d7b247a973751c7bf557ee6e0ef060a12a20c",
+"to_idx": "dab24949b21135542ab9202962ad05f34766a30b1f0d1437d7f6f557fffec20c",
+"value": "65e064059d364b32eb20aed38e791dd8e923b24864378815ad99d3bc5be26a0e"
+},
+"meta": {
+"white": "nichiren1967",
+"black": "chinokoli",
+"elo": [
+1878,
+1940
+],
+"result": "1/2-1/2"
+}
+},
+{
+"obs": {
+"board_seq": "488237871339f0bb42d1d12796c890f1242dc885122d80125ac7d835a2b945bd",
+"globals_seq": "3ae4056dcb27881e9701fe3c559344fd0f74be4b26bbd117a0db816ac2176bd0"
+},
+"tgt": {
+"from_idx": "59df54227c02c03a8bd2524a159ad80cd20a1cf75e9e3bbf4c63e906df73bd7c",
+"promotion": "36af6ffe0eb5f20db1a83040560798f264d8b37cde075d07d8b7ae44bdd2659a",
+"to_idx": "02a6d717337d23751710f7b1bde1e608b8e1874becabe010d6f38c66b5f324bd",
+"value": "34b739eb1feddbdabbb4c98ade6d6994a1f0794edf81f05b1f6fc5ee93282b00"
+},
+"meta": {
+"white": "troepianiz",
+"black": "hostking",
+"elo": [
+1742,
+1775
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "efecd8f1903c76d59a6534e97c63f99daf83272b15e1f57c0cb2fd194029ac05",
+"globals_seq": "b9416d3e44548ffadacc75558e18f38d5b65489734e2cebdfed023c1f33688f6"
+},
+"tgt": {
+"from_idx": "0ac203ea851f0ff98cca7151c0f6ca25f6cbd071d03154be8d381cbc04330a19",
+"promotion": "38bbdaf55f738adb299caa6328d60e3cf0181b2eec96b0facf0d1a73368d488c",
+"to_idx": "7bd9a2eda042b3424cc0869fa2910956bf38fd9b74fd0ed6e224069da5385d35",
+"value": "889f2f5953b6a93c4b525be65ad672bf9bba29b9964b03ba108e37a0e1fb2865"
+},
+"meta": {
+"white": "Voltvolf",
+"black": "Marzinkus",
+"elo": [
+1824,
+1811
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "3c9f13825be0ddcf06d5a5e015a063bc5d5d6e79eb9bc8891ccfa90fb126e492",
+"globals_seq": "a3030deb7883b9feecf46cdccf1c2f7e39cdccbba0c644da8c30eb5ba867743b"
+},
+"tgt": {
+"from_idx": "52235a3138397b7a481086591111ca6b6d8c4d59e09674ebad0760233bca06d0",
+"promotion": "6c40825220efed2b6c0ba1370d6bf53b471e97e220926f675bb65c704cbbac37",
+"to_idx": "59934657741feaa43dc6e9be78edc9aeda9d04fc644200dfb2be550d4462bbfa",
+"value": "c06a347e1c786d870dc30b1daf3cb1b11d1135bdb41e1c12a4d992579e561a45"
+},
+"meta": {
+"white": "savinka59",
+"black": "Desmond_Wilson",
+"elo": [
+1897,
+1673
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "04a95235e377de63ec2d5031d5506e13f991fadf9e0b48095c9cc403af395ed2",
+"globals_seq": "7ea835fb392b14fc9d297068ed859727924dc10def458edc208da1e115e1d631"
+},
+"tgt": {
+"from_idx": "3f03aa83a01c7823029cc218ba520ca51dd96a888f60246e56ca3613f4b6849d",
+"promotion": "5dbd32cabe062641e3f77cdf788cf18e88eca2047f9400a483f65d2a14ee74a7",
+"to_idx": "cde14e538ea8b353afab9fd1b19d79ec0a0d2ab30af09bc4914b211b24294b8e",
+"value": "074c063ec753d52e7f71ff97524d7aafd3402f99edefb609395f7de4f3403e47"
+},
+"meta": {
+"white": "ghosty",
+"black": "jorespi",
+"elo": [
+1500,
+1585
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "143501f5f240075730b82b5d76a98b0a84999a9a7e385f09a2e245bfd5169a05",
+"globals_seq": "d4cf3c862730137f6c593fc400823d5f1cc3de727da81e63143597627a4f25c3"
+},
+"tgt": {
+"from_idx": "2a1c3693e7f675d054466cd93525ebf26782d2572f3554501f1f397bb9e90a0c",
+"promotion": "4904bad7ec073462f81b1e48918fbc743d83af8e493468a3489a86e23056d93b",
+"to_idx": "935a651711fa06c89c5a922a6a2a3ec6b509143825f0934417be91c050929f21",
+"value": "7cc175c39cd204a492eb5efc64b469b0c435d4cc938a1d3cb15bacd3a6393988"
+},
+"meta": {
+"white": "chinokoli",
+"black": "nichiren1967",
+"elo": [
+1938,
+1880
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "60f0d3a470e4318cd615eca82c0afbc534a3c16c9c819405690c66c87cf96c55",
+"globals_seq": "49752624a3e98385e0b520fc9047ff21c43cee633a10edbdb8f46d44e631bcf9"
+},
+"tgt": {
+"from_idx": "7ce587ca1bc1125943e163e61355fa209c30ebe14b1f5f453e54f062cc17960e",
+"promotion": "b128bed78987b1998dc92b07a1d6a04dc3a1b75b6fb2253f61e6ca7d9d4e5d0a",
+"to_idx": "9805b0446a706eb4d7212b7b0b73d3c874344386afbe4f9860073ac5e9358135",
+"value": "0132737d6ce2e83460f86a8dd256925c7f1b93a9e2436881d4424583ff1761f2"
+},
+"meta": {
+"white": "Federico",
+"black": "Naitero_Nagasaki",
+"elo": [
+1793,
+1827
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "f59e85508149e467d8adebbeaebc74288c637d58f760b5b1a6ad89011cb38c18",
+"globals_seq": "73168467ab8c2ed44ce49f731773604e91c933869b522c97117877ca9b98d268"
+},
+"tgt": {
+"from_idx": "3370544c3e037565281ad6fd85eab9bf6f8e4f7475aea7dc236c12d1864ace3c",
+"promotion": "59ba67a06f220d5c2b97ea17b9920b9e22c319ae005a348ce710577a09c84f8d",
+"to_idx": "0b4deba28d5f6cf07979cebc58c6549423093f0582e4aa429cc81f84941e1b0f",
+"value": "f3705434d7ee540b958b67499efd8fd379963db2272565b2ea398a7cd178d0f2"
+},
+"meta": {
+"white": "hostking",
+"black": "troepianiz",
+"elo": [
+1785,
+1732
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "ab1ca60f0b4fd4f49b2b7bfb4366b0d613d9d20ef1b38189f652cae53c4f4cc5",
+"globals_seq": "0f74836beb8efa68b9fbc2b066cc5562dbdb0f0e1f60ef8508484e23aa3e4a4e"
+},
+"tgt": {
+"from_idx": "57d8edc627aea034f7258b1024dc545296a569c19e471a69a20e121e65967429",
+"promotion": "d1bccc08affc440770edb964c30a18aca92b538f7525ff2dd76cfef6aabba41b",
+"to_idx": "6bd300b8bb985c7fb1c9aa902b48447b586906485692b047097f38a3380079ea",
+"value": "52d6d86f797526fe13ef84f18e249601c6ea9e0d3b158cd7a885579114fa32da"
+},
+"meta": {
+"white": "jorespi",
+"black": "Marzinkus",
+"elo": [
+1711,
+1800
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "da8a4968bbd8c931267d175a1894aa9ae4ab01602c25b3139c28f89702eac2d4",
+"globals_seq": "d6d9f9854442da07acb61be97203bddaae41b25f902da492e2865de1adb43543"
+},
+"tgt": {
+"from_idx": "12d39dbf1c6b58cb437449d30d2c3825a5b9e2dfb0c06f2561684b990f324c9c",
+"promotion": "81fc1411d5e9185948ba508820e1970d8a4f511debdad13bdd7ae9024b4d2468",
+"to_idx": "6ed425b36eb14c0fb7a15fe77fd5f5034f8cca0f90b75175639e57fbb6b4843f",
+"value": "ca9f9f367707fbaca11a8d0dd760184e897904bbdb2a7432768a0b04650b757d"
+},
+"meta": {
+"white": "metrolog",
+"black": "b777",
+"elo": [
+1627,
+1633
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "7bf5209280492a9471c061128e80a5859b11c4d6e439a06d972bf0c98e46a89c",
+"globals_seq": "96b262f48c1845e2f6585236c826353877492aaf1c3e43a2aedc5853a8a8d5b3"
+},
+"tgt": {
+"from_idx": "ba2b4b630e5368cab050b8e9f1e105f651c0752749dd79c329d87948ebd30a78",
+"promotion": "ffac05f2e160814fbe8635c59cf533db33d7a3029972e30bdce79f47dc6ed57f",
+"to_idx": "6386790deba62801d20143ff30036f3c0b68400c5fc6c5df0c66e34b5394d2f3",
+"value": "764ce325a3ec83b164284da7cbb2d2379f2055d7dbfa92f925401d39a43d1c22"
+},
+"meta": {
+"white": "Naitero_Nagasaki",
+"black": "arion_6",
+"elo": [
+1769,
+1799
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "fe134e23c29956eb0406159739ef25b0a5364e793325a70cc869909bf6094fda",
+"globals_seq": "e6dce78ba35a00bdf495b4020a3ff3d75249ed91182e000745ec44158f31ef96"
+},
+"tgt": {
+"from_idx": "f7f9e57dd20b40d04e5187b7ac4b67846066901b6a64ec4549f356a9fdf7bccd",
+"promotion": "ebe0306127bd85c51d45cde69ef761023d6792ba78b3a99fec50da214bddbe36",
+"to_idx": "cf350d00219d92f6b803da6efa555b5f464f63a74b013874824da9b208b7e329",
+"value": "040ac12ca9248bf66f6ba7d057d63c159074f38b65c4f83169c07b8d736cc324"
+},
+"meta": {
+"white": "tiggran",
+"black": "barriosgb2",
+"elo": [
+1533,
+1712
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "c1cc170dbec74d2fb78418edc135e809a5024f3ee1f5ad755500730878419e45",
+"globals_seq": "2653ff5eb50d30801a2bd417bbfe90e1e0041a0bf6757a72663d46a7d99983d3"
+},
+"tgt": {
+"from_idx": "fca6797ca94484c9f190164257bdd0ed4961f90d05b86280a2a164bc227258e6",
+"promotion": "d94651eca77fa0ecc900bf836e3b517c9f31cc98236699061d677711fb694d7b",
+"to_idx": "6813f5d94eb0ec38a0084231b00f4b65af0a687d40ae752d89bab4c65579c3ed",
+"value": "2e21be86ee85e405fe123da87b3c03a955ccc7389443eaa5a3245c9290229981"
+},
+"meta": {
+"white": "troepianiz",
+"black": "hostking",
+"elo": [
+1744,
+1773
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "0c0e54df48c522646113d95506911a664f0f0a4a0dfe1691f06d9ae4714a6c23",
+"globals_seq": "6e60eba2e55d3bd5d7b1f8d9388b639056b82cc1afe7ed453479fc2a95a52da5"
+},
+"tgt": {
+"from_idx": "4122f11e71ceae307c07a593ff26446c6b1fddd00f91adfaee92dc8497a7d823",
+"promotion": "8cc3b407c191e4c79499d3f835c8f7bf8d4f60555eba546739ac3cecd850ab23",
+"to_idx": "7142de76e31969ac9b086595f4412842112871ab2249d590507a36996f6c9db8",
+"value": "ab87c18109692044bea356cdd2709461bcc8b9e49fc109af227741c7377069be"
+},
+"meta": {
+"white": "jorespi",
+"black": "Marzinkus",
+"elo": [
+1725,
+1785
+],
+"result": "1/2-1/2"
+}
+},
+{
+"obs": {
+"board_seq": "1b1978ad057822c42d3ac2fe24c85f85ef884b95a5d9d68744aa5b49df69f147",
+"globals_seq": "c1d8e52552590f5a56fa6e63ec29c9542673aeb20a9042773cedfd30545d122c"
+},
+"tgt": {
+"from_idx": "a4aceb56e463040712f0258db02ee0c3c132b073b602a57496e91174bf5fa333",
+"promotion": "eaef46510654d7a7664e6890d9cca0cbec5becc49adb1ce5ac8fee26b0c7ecd5",
+"to_idx": "3a3ca33bc08d60965d8c9d9e71a5363687e9626cc5ec1294f6d01484b00c3799",
+"value": "e1ce63d096986f5bd69584c8ed89c01cf616629fd5d61bbb8741e584867b7da8"
+},
+"meta": {
+"white": "Desmond_Wilson",
+"black": "Sig",
+"elo": [
+1668,
+1907
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "4568fdf0d67ed8506d97fc4e4356d23a0c8a9cbba01af01db6fc0f85269c0ee7",
+"globals_seq": "11837dc201b552a9cf94279e1d98164898a5ae9126a47bd0ec876a9025a662dc"
+},
+"tgt": {
+"from_idx": "8036fbadaa0639cbae38e4bfc78faf87e21361c1aecd25e16b8a84a9b4f0e46d",
+"promotion": "47868dff5580461063c357fb1d72b784e1c534e03bdaad2f7a5501587997325b",
+"to_idx": "aa7c4bed2383ecab3731966bdd40fc4027e14453f87255f8611d67c43af9f976",
+"value": "71d15a85628fb22adccc887b17f955f85a7df9b522bc2bce93c92f8d704b0450"
+},
+"meta": {
+"white": "barriosgb2",
+"black": "ghosty",
+"elo": [
+1695,
+1757
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "70906a96ea1200c59616be4655f54eed3024a441e7474999db8c8c8ab8e7dbb1",
+"globals_seq": "9e22076f58866310c9f03ccbad37e1b50c5c12d3c5bb249810adad23532e67e7"
+},
+"tgt": {
+"from_idx": "31f42e67ffe7ba7c7ac46e2b4a42972ca1cbc5f220f3058d7dc7425fb6462f7b",
+"promotion": "e4b454965bf28d2480b6eb5727b369b1c3ac1544944d8b2fe4ea61ecdd4687f9",
+"to_idx": "2e0ce5d3096810f53de108c2e7e73532e8c6216aa5d8a52cce9495ce51a552d2",
+"value": "d145e4307a240ee7a277ec5b1a544ae4fbceb8246e221f2767f303d941eb5d4f"
+},
+"meta": {
+"white": "j-jorjik",
+"black": "Maroz",
+"elo": [
+1556,
+1525
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "cf9b269e3fa8056efb24bad864e876a42f608d1337c87b12ea9c35bdd2226509",
+"globals_seq": "c68b2d4bc4ff432d425327a9e5b45934a9fc99dcf3558d65a6f998886a33d5c6"
+},
+"tgt": {
+"from_idx": "d6ed1ccc566f1d83897d783a8e237605e0774cfebb510e039ce03e71c74dd6d2",
+"promotion": "96d4b4b05d88a90638db5fa9aef1c425951d21f441af3d792bd9713e8b110980",
+"to_idx": "a8b1c59d436716561b9936237dbfbcebd1a6fcd486bf0694623231180b838f54",
+"value": "2d2bef9a3bce23d20b699d0f0a476f3e4e18cb58c439dcfed45563fdbd4080bd"
+},
+"meta": {
+"white": "Rodney",
+"black": "neto391994",
+"elo": [
+1514,
+1550
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "4c435762a630a9477a8b5d17459ab6499aa9cc8d201398da0d105a89eb43bec8",
+"globals_seq": "72e105761167b061cc4bf4ca3c1cb0ec544f075714428245295335a002ce937b"
+},
+"tgt": {
+"from_idx": "5451fb186919dc371810f9134ef38c124976ad4c84355d4ab8bec0cd1d009093",
+"promotion": "8c3726a69e9dd0b34c5b290c53ce53962a3a69b8ef8d99c3b5e84af3dc5bddb1",
+"to_idx": "b97d41c716ad6dd0a07669d9b302779248b8687b2e212d8d6e5049081d49e309",
+"value": "9272e925220ac9fdecde3c2b4b53935acdc92100e8bb79ef5790db61b8a4956e"
+},
+"meta": {
+"white": "tiggran",
+"black": "maslick",
+"elo": [
+1549,
+1609
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "fbe0fc3a0c8c4e3f5dbbcb0c0817dadf81d48287287b9afe988a16c0566a0c4b",
+"globals_seq": "492a9e2bd9bba13333a1d08a270dad30ffd02bf57bc5ed12d9f4c3a339eb2326"
+},
+"tgt": {
+"from_idx": "8aab677acdea59a3c96b31b70d17d8218e15650a94b6433bf5bda5218265d4db",
+"promotion": "51db327cb1f9b1c2cc448f8db19c3d9ed6fa11978bff1f1abc5b0e1be2e22a30",
+"to_idx": "00df5766387d006a0f52b768dd416a996a59dc3af546f8e78ced96f537f91737",
+"value": "f31c1e6ddb17d08326cc8494d45f7f8c6cfbf087e0679bc83ce7e7c42a5df4d9"
+},
+"meta": {
+"white": "Beibus",
+"black": "Carroll",
+"elo": [
+1621,
+1661
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "917631ffb12981bbaff0cf857a6d81fe2ffddbfb59353927353ed0521b0525da",
+"globals_seq": "ddf82f17b8c1b0235925e5501d8cde8e1e2147a374cf778246b1d0a9fa984bbb"
+},
+"tgt": {
+"from_idx": "cdde281deffb32809b16cee82a2c0f313c03146146a33e8be52d927370ae760c",
+"promotion": "bb380287de5b14bab4c78b634ced57515e3ce677156911a68c5682eaf4600c62",
+"to_idx": "13c7a808ca58df2fd68e51aafc7952e05620d707dd9c2572c1d80ea83ab3ad4b",
+"value": "52d6d86f797526fe13ef84f18e249601c6ea9e0d3b158cd7a885579114fa32da"
+},
+"meta": {
+"white": "barriosgb2",
+"black": "georgek",
+"elo": [
+1706,
+1570
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "f66b3386f486b5ab5ce575301deb5b4f7b48ba8b60448fda281e558db6e2a71d",
+"globals_seq": "1f39243e9750f896e1231cc7d5183310af1eccc76deadd6fc3ddfb30fff437e6"
+},
+"tgt": {
+"from_idx": "5b3fc0e0204396dbee9208a425b489a923b6023e087fe05464aded3eb17bd900",
+"promotion": "2881dda51329a8347c02cf0b06843f48975ff76ce1d14f6903a81d2020e244d0",
+"to_idx": "3dccda820cca9ef16704f6d3677d99cce18190cc316b6cb9e1e590973af87a3b",
+"value": "a48e68c6608d5400a5bed0eb6ec1885fbc2a95013645ef2b339788c518b03174"
+},
+"meta": {
+"white": "hostking",
+"black": "maslick",
+"elo": [
+1782,
+1666
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "252ad4d3e25c2aa83dc6eb081dc7470f2c944095cd8d285268be977edca49383",
+"globals_seq": "ba40bf46ea411818f657ed59a385eeb8340cc29336c7f6835435b57bc7e23af1"
+},
+"tgt": {
+"from_idx": "f48a22b4b6dda2b5b789df8af62e812138f22a955314a9872120ed778b641461",
+"promotion": "3e7421f9fbe004bb5605295e24517fa86c9235522814323e14d03e4e0f8b0986",
+"to_idx": "8201ea79d73ac66b35f6735bac988eb8da308c10c60517c7e050df6615f5c2a5",
+"value": "c1af0cf0e82141fb9af5c9b91a0a27b6634c9de643a7b9ec79074316f6de5659"
+},
+"meta": {
+"white": "FifthCategory",
+"black": "HeyPepito",
+"elo": [
+1888,
+1771
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "b774c746a336a4b31aa40f0628174e4abe737ff8adf0e1f23a4617cd74dd40be",
+"globals_seq": "f8ccd8d878f92686fc977e0ec58953ae7db9affab8edfa8e8e0a7abb6a295fbe"
+},
+"tgt": {
+"from_idx": "b355ba23067b955163c4e91af625a4eb0b2e52b633049aa831e4084bd231233f",
+"promotion": "a2c2f851b65c2582d6901c0e7d3c53344fb401f9cebb38595e2daa50c2efcaf4",
+"to_idx": "769e442f8e70d812010c5bb8044f45b45a9a0578a8b90674c26b2fed0f6c64fb",
+"value": "a48e68c6608d5400a5bed0eb6ec1885fbc2a95013645ef2b339788c518b03174"
+},
+"meta": {
+"white": "b777",
+"black": "NotGoodAtThis",
+"elo": [
+1622,
+1576
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "c4364ecc926f36304ab49252486ee095a0867bf7798b116c937755831270ce9e",
+"globals_seq": "7b877f9b25d4c094ae44d93017b539ddb1eaea9a27e417e9cf74e8c6f5ee614e"
+},
+"tgt": {
+"from_idx": "94350f70c29173e723b7ec06d8b4d13469f5ed3f705f0c464f05220a6b9efca1",
+"promotion": "a0fead99218f5059ce3a5bc577e63b6b32bb7912548d98a3cf60083ca2a293aa",
+"to_idx": "ce4888a4a05148609e0e1fd89da65a5e1784c9992fb20ad606993d1403e6bd8e",
+"value": "aec2c2b070383633bc4254a1e7829f9fa1bf3d898af780ed8afb53254cd54fd9"
+},
+"meta": {
+"white": "neto391994",
+"black": "Rodney",
+"elo": [
+1528,
+1526
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "49b2cff376ff17ff42cdec4c6e799f1bf0e43f637a350596fe3caece3569ecd6",
+"globals_seq": "4f7f3423f3e375bcc681601abc59c7a9fcc7608691de51082f7431c2752af82b"
+},
+"tgt": {
+"from_idx": "e4ca3c525874829e74eb9a2229d54c55a763279db2fecd7359f032979ebfce59",
+"promotion": "300dba08213350ad6ed17839378f3fb1dd7ce0cb3ead38d3970faf30de144e34",
+"to_idx": "4af8fa9c99a9e4fbb536bcf679a763700049102c37867b59bc82a9dbf7ea53f2",
+"value": "0713ff8ebef63385ccce1e1db92ccaf99b3db1d8400cae8fee43fc8348f00de9"
+},
+"meta": {
+"white": "excel",
+"black": "VanillaShamanilla",
+"elo": [
+1646,
+1678
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "acfcc0c643b9c9797151d3be9543233e08e468bbe1143bfd542dae720aaf0642",
+"globals_seq": "ee14854075edf2083c784bbbbedebcf7ce49957ba786d6e7cf125d5efeadf9fd"
+},
+"tgt": {
+"from_idx": "40e607cffe954292054f9e753f824c87b453f139fd41cf5df6c50ffa90a83a2d",
+"promotion": "751cec090c23721ef70578210019934b1c1fd5897e9bfc5f8c31eae2db234b88",
+"to_idx": "88a64f16b1990f7762e8ff9ee51b62b411983f7d09c33ac24fc4a5ab0bd408ac",
+"value": "b1df3d0e4d00d7bc4a0f4212999600bf2ab2efd1f7ab3537d5447907398b653b"
+},
+"meta": {
+"white": "rennigeb",
+"black": "zanella",
+"elo": [
+1510,
+1805
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "86a3d628ae3ba5c8758a0e7089504a5ca50a8081c429b6ceb72356ba38c0272a",
+"globals_seq": "889166e5089a8f24e1f45e7d4370ad664347320b6930066ddd7a0f3465bb5400"
+},
+"tgt": {
+"from_idx": "fffef7d28c45692bb0017cad49ceb2d9228cfd2b1f33e809544c361f0cdfb129",
+"promotion": "b9eb16a40525b9c2d3a34069b5d31de605f1229e4d22d646f7d00c27ba31b67e",
+"to_idx": "9978d0ddc92e29d600774a20029f1a322fd39699441278bbdb8785bee34449e5",
+"value": "e61934b46c2d3028f28c0046da89950ac32c188a7cc2dc70d0d0d43a17281236"
+},
+"meta": {
+"white": "metrolog",
+"black": "vadi",
+"elo": [
+1638,
+1795
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "7c569c3c385e3869a120d0d03d3c865ea2f43d0d386f5205cc883ba46b1f751b",
+"globals_seq": "d7bd5d703c02cf29e8219a859532fc796d9636c10f2d9e8fc8cd84f3b1547039"
+},
+"tgt": {
+"from_idx": "263b0fe8ab6c93b9626d4b36ad8bb7151e1e02dc47627e6b7c160b28dbd836de",
+"promotion": "b128bed78987b1998dc92b07a1d6a04dc3a1b75b6fb2253f61e6ca7d9d4e5d0a",
+"to_idx": "fca2b947196817b08ecb5b5f1f402597abe81faeb22be0f5177a47995546487b",
+"value": "0132737d6ce2e83460f86a8dd256925c7f1b93a9e2436881d4424583ff1761f2"
+},
+"meta": {
+"white": "FifthCategory",
+"black": "chinokoli",
+"elo": [
+1874,
+1947
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "84d837eafbcb365ef00e0ef6bd0e13ef42f74a4a890275d09668b6a69581631d",
+"globals_seq": "e604302029a8d782795a73bb7cbea8933ced0d77723e04a08f3b35c12fbc9de8"
+},
+"tgt": {
+"from_idx": "ea338769f36d93636095fbbea63a8b1e3aa4c0059ca4e34cc5b2b400d562a96d",
+"promotion": "ec5f49f44b8f5ff2ce922b7f351e096f2e5ec8500ce3a170139a8322bbfcc2df",
+"to_idx": "37e69582a73314d6d731c25a6e120403bc4092fae22adf505c13c588260752d7",
+"value": "b07931ad79f717320010f5b94eb213909eb2f321febb5b379a00866efdd4da0c"
+},
+"meta": {
+"white": "b777",
+"black": "Marzinkus",
+"elo": [
+1630,
+1783
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "a21c61f2b1f4426784d86c46a2b5615aee1003e2335e950d1ec4977dd3118088",
+"globals_seq": "2811c4be8664354c42b7550e682ac75bb4a5663da0455189fb170f033ba50569"
+},
+"tgt": {
+"from_idx": "6c19d84c9f372c2274e67a3bc7d692ebe6f86e84f6a2e81109ddac47a8e99fa5",
+"promotion": "05fa90e8750f4d9158b5ececdcf433fbb3dd1c43af45f98dbd8702d83fc92cb7",
+"to_idx": "c3880a3b3b12a44f762c151d8990b31374960907672806bba714f11ab7665027",
+"value": "f9323ef24cf4495dd3bbd93cb09b73497ba20a14e07bd4f173b7471b9a43ecd6"
+},
+"meta": {
+"white": "maslick",
+"black": "hostking",
+"elo": [
+1657,
+1789
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "f2a801c595eb2bc32baf248824eeb715d139b5af5aa108740f5924917a22c32f",
+"globals_seq": "f1bf04a1f40e848ff48367f5a9baf280493ed35dcfb835a92a772db4dab623ea"
+},
+"tgt": {
+"from_idx": "ea65e35f53f7cee752eca27ae9aa0dfdcd5f0778bb44f4ad4e1a8df5bd54ab44",
+"promotion": "751c847db66810be84e075f7aafc2f9ef12a36119dac34112d63fd0ec62ccbc6",
+"to_idx": "280ffb4fa41dde951ea818608fb36b34ed88f659fd4d6f8f61fb2bca1fa3fd90",
+"value": "09edc5bde25653310ce427b94a2f8d8f27eeaac30768ca5dd26d458824c019e9"
+},
+"meta": {
+"white": "jorespi",
+"black": "sanuch111",
+"elo": [
+1576,
+1576
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "fb34e60e05dfa7d73046875cf08b7cd897b9ea3d7c483a289f87a7718ff267f6",
+"globals_seq": "3aaa56fa9de08c5142c7f01db31b6e8fc4a4c20551da1012136c2d964e2570bc"
+},
+"tgt": {
+"from_idx": "afdbf1d6d70fa204d07403020e1fa7a87598b11458a373bb4b6f7dfca32610f7",
+"promotion": "13d5d2909a037d990bec2ffe73b8c05fe5cc9496c9f3ea27ea6a5efb4f0100da",
+"to_idx": "5453879df0c62bfd34ed8f3e252a1fadbc298214a9fd87feaca8713ef170556b",
+"value": "44c6c615cfb8358dbf701cf790726f672e76c05d602176d701b04d41871e082f"
+},
+"meta": {
+"white": "Sig",
+"black": "Desmond_Wilson",
+"elo": [
+1913,
+1663
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "ba9abd4ef70f9be1c325f5c1ccbc8598aae4f5fdd87b804be929b4ed49f46c04",
+"globals_seq": "6b4dfd3d6c94f2209319499238e653fd1be1e119b03305ff9960237e69efaa02"
+},
+"tgt": {
+"from_idx": "6aabcd0f03c9401ea09c37f849b5171f179b2d66d3f12f38716ccdac17ef397c",
+"promotion": "7d6535d34ee44f1e321b29090c4970cf154cb4045090734bac355cccf8835dd4",
+"to_idx": "088728d65ac60a3726534aaeeee07b1086c370b9ab5fab7308396796834e11b5",
+"value": "780081912d3e11302722d97044895396cd804f75cfa7b5701b2d3ce68b801fd5"
+},
+"meta": {
+"white": "Kyklades",
+"black": "Mariss",
+"elo": [
+1577,
+1755
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "cb660b44a8ef628f24e242db73e5aa30a884916e4056beec2254770d9ea6e86e",
+"globals_seq": "67877e3414f10ef3a9b2683eff3e74f6927d63ce09a06f69c728281bf7d81f98"
+},
+"tgt": {
+"from_idx": "08614d074a5258da1fec19bbc3963a177b61b029629d1f417ef6cf98e700cac5",
+"promotion": "c3a83689ad718c34fb83da66efd02bce0687bc38ed1d60b355168deee6536307",
+"to_idx": "36dceac775100c2ba60034fc124217ebbbfb19551c82dd7247ee183f202f0f95",
+"value": "705ca53221e063568355cbe7771dd39a9907dc9460737cd49a692577329a411d"
+},
+"meta": {
+"white": "FifthCategory",
+"black": "chinokoli",
+"elo": [
+1887,
+1934
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "c119ca7ad712ec579414a4f2ab487ae8f6c56cb4657e03b631bd895c76fa1ff3",
+"globals_seq": "764b675086269f9fc019c31604879dc9ce1721163ade7fdad4670c8be8a612d2"
+},
+"tgt": {
+"from_idx": "28f7d75e27cfbeea9acc409e988ec8f6993f2b9fc141c8055488fdea73f5f9e0",
+"promotion": "bc77a1228523025b7790cc6f647ca339183c8fe84182a9cbf19fe10ee5856fd2",
+"to_idx": "4bad919ec9c13ad972dfa6c5548f1f656e9b76556c933e670c2a0a4455eea2b9",
+"value": "1b334b244285477adc9958f353965bb199c9319da1381a55f1b8855c5d497a81"
+},
+"meta": {
+"white": "Mariss",
+"black": "Kyklades",
+"elo": [
+1739,
+1594
+],
+"result": "1/2-1/2"
+}
+},
+{
+"obs": {
+"board_seq": "17fd817a99d3ac258a6e35f5609780a13a52c6a1fd64f30ad3cd4f9706a2d795",
+"globals_seq": "00e85d477688aa5605af204d4d61d8cab31f80db64581c99b549b8baeff5235a"
+},
+"tgt": {
+"from_idx": "a233ebcbbe319b7802a7271a11d91318efb5945d22ad4ec5729ee46d7a5a0c90",
+"promotion": "acc66254cac08c1cf717a8010fd9c09e31fd696e3165ab24a1ea438bedb1e471",
+"to_idx": "ead08405ed4019efae55a692e9faf3c39a335ca940d84fbced78524a07a15a86",
+"value": "bb849c9aeff1ec03afdd4d3aa668810e681dd967578b84563efb875c3e5230f0"
+},
+"meta": {
+"white": "ghosty",
+"black": "angrom",
+"elo": [
+1632,
+1527
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "6fc5d7a58ada57b7ea30aa831143330dbf62957f8c2972c8f8c07f7c2243108c",
+"globals_seq": "03826dcbd252a4a43a8d451ac335c53eb4cdcf137efb112255bd193312fbb394"
+},
+"tgt": {
+"from_idx": "8261d2b7029e5215d5dc5c4cd66933c7670c4a3bd8ed61e10ab0001d5001d5b2",
+"promotion": "66105c9cc190f761a020047dc722f146a14f0e061b34d53dac7533d43bee9b73",
+"to_idx": "43dcf22dfba04d53848fbc335b7692f7775f6801903fdf297bee000b8d847567",
+"value": "3e6d45dfefa7fccc6d585d9a653d18828a010740063668638ec6cca236239be3"
+},
+"meta": {
+"white": "airtsart",
+"black": "Neuronchess",
+"elo": [
+1500,
+1732
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "976fb9117ea767ed669a22ba909d128bdf60b3ea4216ff4c30f3985db81c1f17",
+"globals_seq": "327e1d37ea0f64f509c9cbad4e78900b3c63d1d3102aff3bcb96618b6642a9a2"
+},
+"tgt": {
+"from_idx": "648c6fc045dba647b5343e7a8dbac5872910cab583584e3205016d1e8aba26b7",
+"promotion": "a387c02b4266e233ce100b7fa9ed155cfc9acc0d4f819a1f332bb4579e6951f0",
+"to_idx": "30d7d4a1169524424e065bf579f274d828d9d3ebe28f94f5c5b47006d1493abe",
+"value": "05293d679b016891384709b3ad15cd217749425a60c73cb74b7ed5774468b757"
+},
+"meta": {
+"white": "peter2",
+"black": "VanillaShamanilla",
+"elo": [
+1507,
+1617
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "8f0d7eed688c8cd9baa310536b8e2f087f2171d798e922203a1e6a6502c226c0",
+"globals_seq": "6e63dfb292daa4c4f600c8ec57548c0a4f5ba7a952a062afd127c8cb6bdce700"
+},
+"tgt": {
+"from_idx": "fb1f5bdc1234c2024e274f34e9c88b44ac32d26bcef07aa935e67df3afd9f058",
+"promotion": "13d5d2909a037d990bec2ffe73b8c05fe5cc9496c9f3ea27ea6a5efb4f0100da",
+"to_idx": "c50f8e48789b52e423e3f39f4ef0c6185d5e329eb8f9e64e0ab1ef9dc9348682",
+"value": "44c6c615cfb8358dbf701cf790726f672e76c05d602176d701b04d41871e082f"
+},
+"meta": {
+"white": "tiggran",
+"black": "rasmussenesq",
+"elo": [
+1540,
+1653
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "1cc46d1affb1395f2c0f4fcb9ead93332efb68962b8991f26a1bf57c8b480f12",
+"globals_seq": "5aada4b7730a02b8b83fdcb5acd4fc7d1637d3bf147729eba3dfd93e60832064"
+},
+"tgt": {
+"from_idx": "072f08251036b5ded338fc74c4e4215c803febdd64f4bb6d27fc8431f06ea2a4",
+"promotion": "ca69359715eb9516b02316119f31c5d6d5ee29ce511e910f0f3db71e1cd7572c",
+"to_idx": "6a9147c272a4708c4ef597a2b67576e88cfd8a462385713040b5b321512b5474",
+"value": "d490ec56882f7842f0d868e044af543a01fcdfaf8d3b32cec4d2f86cb1e5aba0"
+},
+"meta": {
+"white": "Kyklades",
+"black": "Mariss",
+"elo": [
+1599,
+1734
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "9242b6af8a408c10abe5f766e574d67306191583393e6bc2e850844bd45a5c4a",
+"globals_seq": "016a045e94c5fd41f2c0fff346ac26663b3fb096a6922d9c79be37a1676827d2"
+},
+"tgt": {
+"from_idx": "24187bf652f08601e879ec7e8bd9930a5b8013db7511a2ff9da21d79e0b190c9",
+"promotion": "7211ba3316ce20706d0f01ac93c4c2467ad54f9869e3015a099488f47db75630",
+"to_idx": "c40b7307156a5c9115d74d16f8423dcea11e885daf0f500be56e89934f6b60a9",
+"value": "1c2d4a38c25b6acdf42fbea9aa34c6350a718896054230dd75f5238ab1f2e1e4"
+},
+"meta": {
+"white": "FifthCategory",
+"black": "chinokoli",
+"elo": [
+1899,
+1921
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "3ccc5cbb0100ee347525691ec3c28d0e4ec984f3da7f5a0f32d84f5b3ec6e915",
+"globals_seq": "af234afdcb5c78f4c27f731414419d1e9b0dc80c55e80d8d3eabe2fb342e9857"
+},
+"tgt": {
+"from_idx": "e553c516f7d5cb8c6994795fb43fd8076beb13dd1b85c7d0e92d665aa46f1b7e",
+"promotion": "3334b0828437f7cc883797fc1cf385abaa8e5409076382e784ecf3aea883c3b0",
+"to_idx": "25e7e82f48459ef636574227582712b6198ee1e4088858cd1715b6f70161ef83",
+"value": "4fb1a3387d069b9f1b2bc4b25fdef52b623e6627ad2efb4b6b706e4e5ce5e320"
+},
+"meta": {
+"white": "dipo_a",
+"black": "Marzinkus",
+"elo": [
+1664,
+1790
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "4865928c96027cc453def37d11bcbbca1ec0ab5064cb6b278070b7983f76267b",
+"globals_seq": "e27594ad78f18efe60b1ce2a139282a8a97902047e0094fbd651eca354b7d831"
+},
+"tgt": {
+"from_idx": "78dc4c91c71f7bbae4bd01c3066321fe76961e8bc464453aa8b7d4a5dee733a4",
+"promotion": "4e8d92fb40d4d1e16a72d233bf3a0b16bbab66667b124d17835ced677db6e939",
+"to_idx": "a5048f7ba86346bde9bcf162b501d9bd415f43688d906ede67cdc8638ea883f5",
+"value": "e75bdee50f7c31627a59302cf334711eb48b20f8775e419524b158d16cc7b57f"
+},
+"meta": {
+"white": "airtsart",
+"black": "chess345",
+"elo": [
+1869,
+1649
+],
+"result": "1/2-1/2"
+}
+},
+{
+"obs": {
+"board_seq": "47d086a5f28eeda29534259ebd9101077d3eea9b9b2cb3237e1c740c07c4cb49",
+"globals_seq": "b0c83c8d486f992c21c3c729e31daa3bf03e71ed4b901df9f103672811e957f9"
+},
+"tgt": {
+"from_idx": "91eedce386798f1a4dc0efd4dc2d4c72887ba5c786fe9d150ef05ece6db3eca0",
+"promotion": "0f0d96590e162e34a8d19e236e7b6eb162cdd2637fee437c8ced8c0d7d089e63",
+"to_idx": "fada6bd829ddbc9620a95c0deade698d084110601d496deb145197b9bf458aa4",
+"value": "af452781f3aa04608b5688960268a890087c87f7bfd257ecca896366d563ea0c"
+},
+"meta": {
+"white": "zanella",
+"black": "Neuronchess",
+"elo": [
+1814,
+1717
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "b91a1974019bfcc84b27ac1c60890ce6293dfe961623ec5b2832fb146fef80ef",
+"globals_seq": "fdd43eaad9588abb92a23e2b33edc326862cc1381106275681cda332e3766a6b"
+},
+"tgt": {
+"from_idx": "9500c2905b313bd7ed043aa1ccaf9be04103c6dec795e8a9ba886553696644fb",
+"promotion": "3554d0140840b000614804d4f139010976532fe1d484f4c5617d3f150fc17434",
+"to_idx": "0ca4e2fcd327d183b65357623028657c3929422271903e3c8d083709970bdd2c",
+"value": "470272723dc26eea0dcc3c1230c8adbee43c791d7fcbb1859447782a6d6756c5"
+},
+"meta": {
+"white": "djarfur",
+"black": "blizz",
+"elo": [
+1523,
+1500
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "f8f74186cf4a06927178116c14c9ec7b07ba2e72706c491433184f4108ace0f2",
+"globals_seq": "fa4b8a7a120b9dcddd51bc59440a735f76c4a9da232aca4997c344409ad52cb7"
+},
+"tgt": {
+"from_idx": "625b0fd39d3829d01ca46661caab19e3fff4409ac2602f2639f6d851d0cb3903",
+"promotion": "e8dbd975ea9d0257ec1dc3e370e1bf6844f7b8e5ea76d2892b53689da03cb36f",
+"to_idx": "8c3029fc46fac31f39b07149bee3e04a2263a9be5ce47c3c229025b4f80e832d",
+"value": "da86ec2ecd803afe3a9c1e386498c75129675336592947df880f0ac12e6a9114"
+},
+"meta": {
+"white": "peter2",
+"black": "Maroz",
+"elo": [
+1521,
+1539
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "cafbf1be5fb22b2e199d7c7acbfbd8d484df74bd1e7260832f9eef3d5a9538ee",
+"globals_seq": "1115afaeaace8acf3516d395a6013dee4aafc310dd17f1ca2466cf631ebe6e48"
+},
+"tgt": {
+"from_idx": "327be02d3511310fb66908517294eef84562d74d34118109ab8fe516df880bd4",
+"promotion": "b46aa7a8b3f383351b121817a1e1bbd5639e0ba933e676081dfe4dc0b6069f87",
+"to_idx": "0ea25e80418004e3af937c934671284597bd9cc8295709104228ef5f5f7a663d",
+"value": "6a04bb871c33680893257d410038c56993b387e9a397ae047c6c3812dae344bf"
+},
+"meta": {
+"white": "Desmond_Wilson",
+"black": "Sig",
+"elo": [
+1659,
+1920
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "88ace00017164e747efc14b3bbd6b48bcae5061b34d85a10192b35974e4a5aeb",
+"globals_seq": "e7ebf227cbc0531dd39a3913efe9a1cf94fe09d0d1d9a2bac244bfae06740bd6"
+},
+"tgt": {
+"from_idx": "b5419622f38327fb1af71782990357d4dba44c7e2b9c1d9bdfb71e1f668777b3",
+"promotion": "8a6829e1e64ac585717f8e987386fde71c52cc0cda309e7b46c02cadd0781531",
+"to_idx": "3e1d619f65c8ad1e01422411c48ff11e1656df876256ad77a05e321cf761ac69",
+"value": "05c7266fec43d531eb7db6aa5f2680b4f0b152ae19cde23ebb19bc204487bb42"
+},
+"meta": {
+"white": "FifthCategory",
+"black": "chinokoli",
+"elo": [
+1889,
+1932
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "93c3313785c5d453765f2a53eeab0a52ec732c2cc42c7d0f4d0b29bb98b338aa",
+"globals_seq": "803576cb8baeb9b94a49fa88b1e1f3b670173c4bcbbc74bf21d1a3bb7a783678"
+},
+"tgt": {
+"from_idx": "a23a8c4b89be6cdf9caec1f33485b9783c10f65a159b57af8d94604bd0992f60",
+"promotion": "0d8309a9d62c449d37ef210788691fefbbb35e82a08e9d7fc469982bd9ae2afd",
+"to_idx": "c4ae56793939eef8c3d1dc4f0929ccae8dbf27d687fee48cc2ae8cc66ff3a74b",
+"value": "7d3614bcbe2161f7b19379eafd067db174bf329600b9ff679e478e12b9a090c5"
+},
+"meta": {
+"white": "vadi",
+"black": "Marzinkus",
+"elo": [
+1777,
+1775
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "684a6881350b09188e3c836baa4e2c814de52505c7c9c01deb4d3bc6fc39673f",
+"globals_seq": "ecdd06e58cd57016e1f258e2d4cd2c2165c5b8da491f345d37a493f05b04dbd2"
+},
+"tgt": {
+"from_idx": "bf1c2ec61ee031d441f35801c78f09052c970395e33245f9bd7a3a8e47907323",
+"promotion": "b1c313cab94ff26a87c4fdee57de6b7943a93a93bf080012d3af6dca9210de20",
+"to_idx": "904bd0220d66cf406dc5d0c57a08f443c1240fb24bfe6880acd6502833413cd9",
+"value": "da86ec2ecd803afe3a9c1e386498c75129675336592947df880f0ac12e6a9114"
+},
+"meta": {
+"white": "Beibus",
+"black": "troepianiz",
+"elo": [
+1802,
+1734
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "54570215b19be596d2d6878cb3b5c2a0a4edf9eaf2ed5a908a07fb089a103aad",
+"globals_seq": "3e684a8a96c2b8b6e9cb1a8dcd8967fd52babfb5d23fa88236b903b49f943de4"
+},
+"tgt": {
+"from_idx": "ca277ae44de117f6427f3a9e098f0d2139703147541bb2607b1c5e4e8c5672b9",
+"promotion": "16d86960dcb5d599c6656673f026776612094e149df5728eec00b3adae6e0a57",
+"to_idx": "14e6430df0b02b77b9e8e0dfcf39157ca10a499ba5f6b112d88b643cce819acb",
+"value": "45a04fe9fb98f7de2c8eb02764ca8c18a5b80c0bb90db64052ada2ee88d33f88"
+},
+"meta": {
+"white": "chess345",
+"black": "BCJ",
+"elo": [
+1722,
+1747
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "b2da100404cc5eff4985f7a9b94df4edec58cd5fda7753cc5a29f63a8351f14b",
+"globals_seq": "2e7836a61c85340c49cffe4bb13daf7bb861ae21315c3e73d47bfdeddd3a5af7"
+},
+"tgt": {
+"from_idx": "03d907b45c8e726442b1063a0094e784c40296814033dd0e391d431d7027d0c0",
+"promotion": "3554d0140840b000614804d4f139010976532fe1d484f4c5617d3f150fc17434",
+"to_idx": "be49ac32a154df9f0f0d7fa431ba451949e54e4ecaca49b8550a54de7f656ca2",
+"value": "470272723dc26eea0dcc3c1230c8adbee43c791d7fcbb1859447782a6d6756c5"
+},
+"meta": {
+"white": "namesnik",
+"black": "Kyklades",
+"elo": [
+1642,
+1615
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "f9dc691f9740e72c6db98701e91f7039bc9509e17952fcd923b75113689df9c7",
+"globals_seq": "88db69cbec510d45f529aae412bb8c09acb536aff0cde15b729000f0f8be50cb"
+},
+"tgt": {
+"from_idx": "17c22168ced7fed3fcfb73798629a7705ca4f2e455991986f6c1888c1011f028",
+"promotion": "41ef5c58b4ebdfd7d353d47b7ff7834a7ca33e01e422bb5d42fcf459e286a19b",
+"to_idx": "57f719a6388a672e772978ea05df6ebd892bfb59517e1dd027a889c4bbe271dc",
+"value": "d8e913da9a0ab1cf3040e3b1d258678668cd4700d05626b84aa57a80813e9ccd"
+},
+"meta": {
+"white": "tiggran",
+"black": "georgek",
+"elo": [
+1555,
+1563
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "ee9d90147236d7b1e721560b87c95a597cc89c1506d018a619b8a926625bf838",
+"globals_seq": "f81b42b48f3fb6b89650d2f92e20db76894688de3e7d5ffc80f69ff0960d2420"
+},
+"tgt": {
+"from_idx": "d918b2665ebc8999cf0877e16f17fd4c8990cae20923c3705b1bfd227c6c7952",
+"promotion": "7211ba3316ce20706d0f01ac93c4c2467ad54f9869e3015a099488f47db75630",
+"to_idx": "aed619a15de9b209d535e32cde1f4f5ceb83fd3fe2f066e0f7f6ddb6446eb5af",
+"value": "1c2d4a38c25b6acdf42fbea9aa34c6350a718896054230dd75f5238ab1f2e1e4"
+},
+"meta": {
+"white": "FifthCategory",
+"black": "chinokoli",
+"elo": [
+1880,
+1941
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "7b9e7fe0e3b1b904b3e7f7c18bd9fc5ec330d811f2e25ffbc2e86dbc089d28cf",
+"globals_seq": "9f5199a9c3b8cc73577cb084ba8e6fceaa08ae732abf6b3620530a191b1ee013"
+},
+"tgt": {
+"from_idx": "30316612d02fd7ac1738bc9cc590e5015545c6980aacc1dc306d878bf6f821b4",
+"promotion": "751cec090c23721ef70578210019934b1c1fd5897e9bfc5f8c31eae2db234b88",
+"to_idx": "cba8747add05a75e832d505d626451c7c0da958c58acba8442d40b35aa33a256",
+"value": "b1df3d0e4d00d7bc4a0f4212999600bf2ab2efd1f7ab3537d5447907398b653b"
+},
+"meta": {
+"white": "FifthCategory",
+"black": "chinokoli",
+"elo": [
+1871,
+1951
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "d6411b7c90b9d7ad41885578ea1a22fc9ab85d5ae28b0f20486a89c0a6fdc30c",
+"globals_seq": "defb67eddb8aec3b33012bc040a114b84a30d2c1457f59f8395d2619e297c2b0"
+},
+"tgt": {
+"from_idx": "602e4898e8befe78801ef752be6b8c4435d146ef3539c4ade6363fb2ff88b3e4",
+"promotion": "2001e0108f3192fa20f32291b0eef917c0f7f31d8177c7efb2c6723456d4b840",
+"to_idx": "0df3f3db5df7651940f76c30832b69ad4ce205459b32a0d81f1c9bad272ebfc5",
+"value": "1fcf95243f4874f45c6d49e9586a1ef0fbac61a11f071a74b7311afc5964cf93"
+},
+"meta": {
+"white": "Danut68",
+"black": "Kyklades",
+"elo": [
+1561,
+1604
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "93945808153eb579495c4182ee79f463fd6f109480e52d2583b36e8ef1ec3994",
+"globals_seq": "c61f2aaa642042b9b7b6f189d95e325be9279292a739e4d37bdc47f24ad0a0ef"
+},
+"tgt": {
+"from_idx": "61f2508e8ed05e510ab5b5aec83a4923649efa7691a44c0727067ebf87949af0",
+"promotion": "51db327cb1f9b1c2cc448f8db19c3d9ed6fa11978bff1f1abc5b0e1be2e22a30",
+"to_idx": "c5c39f63ab77acaea1d0d727f516eaf591752b240c73df15290146ada0237ea1",
+"value": "f31c1e6ddb17d08326cc8494d45f7f8c6cfbf087e0679bc83ce7e7c42a5df4d9"
+},
+"meta": {
+"white": "Papachaco",
+"black": "namesnik",
+"elo": [
+1622,
+1654
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "45f2584d77f1c53d3c0d33293beddc8743c13ff9990e39af40dfd30c8269180c",
+"globals_seq": "f6e76ca35c658046b6ead734f23a3de52016f95cbfa4c4224cef02ced7c2c1b5"
+},
+"tgt": {
+"from_idx": "da6e711d6376b85108f3b1ceb1b0da2aee08fc74d00a659e74da0238ef9cb795",
+"promotion": "51db327cb1f9b1c2cc448f8db19c3d9ed6fa11978bff1f1abc5b0e1be2e22a30",
+"to_idx": "2b3552b52367f11a3b429410a03e5df06b82eab76011a6e4e46215f9ceacfc62",
+"value": "f31c1e6ddb17d08326cc8494d45f7f8c6cfbf087e0679bc83ce7e7c42a5df4d9"
+},
+"meta": {
+"white": "georgek",
+"black": "Neuronchess",
+"elo": [
+1542,
+1707
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "87aaa741936defd7ffc424711dfde8774b336e90e7de86271e38ee75a1d95605",
+"globals_seq": "87eba80ee7e9d149f1dfd4f9a733878d3810757265bc751da7eec538c539fc8a"
+},
+"tgt": {
+"from_idx": "71117253e42121b6202de0b44e9c75fc8f478173ec2ec2b26746ea6f2cd22e77",
+"promotion": "6d826cec86a9554c969cd09466ce2b8525f5fc57f049522a6e061a6ec7446e31",
+"to_idx": "1142e48bd78a9873d1f9945365ff68ed33fdafbdef2bce0745748f26eddfe19c",
+"value": "1458519a07eed8cbd581a6ac0cc075001f1bd7db8e226d248a5609892eea2f0b"
+},
+"meta": {
+"white": "Sig",
+"black": "Desmond_Wilson",
+"elo": [
+1925,
+1654
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "7c23a39c6e59355cfd5bcb5c952df4e3e91f406308d9cf2c2867b90c352732b5",
+"globals_seq": "66a749d766e2d5c021fb31bae19f18cd0b1636642261731e0534a7a85ce70b30"
+},
+"tgt": {
+"from_idx": "306f07807c8f4bae8f87e82f3649f23d0a694107c5d502adac433afd681a865a",
+"promotion": "330ffb96b947b7a5bad7e00ab69ad24b7fa459464316ee437249abf2f49eb533",
+"to_idx": "7533c6cd9234d16831e5e6509fd7972e7fd697ab0dd287fa1db20d88d51e57d2",
+"value": "e120d04600407ec863876334acaddba49691617b3107a013f3c6ba473210ce05"
+},
+"meta": {
+"white": "FifthCategory",
+"black": "Luminosity",
+"elo": [
+1863,
+1864
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "bad0eedaca150e2ec953367cf2f9eda0b6fa3542761b9c45b3521b18420d4a27",
+"globals_seq": "1fb5eb8e71319d05a49e277468123d48d5c1b366bea368fbd6533c6692374d37"
+},
+"tgt": {
+"from_idx": "8630516da33d90d5f50ce85bef3ad4fa41c72464b0af3d33b613b5fc6bf7bc22",
+"promotion": "0d8309a9d62c449d37ef210788691fefbbb35e82a08e9d7fc469982bd9ae2afd",
+"to_idx": "53723232ecfbcdb270d3bfd0b2a7993a8427667c4d737ece5e1cc1c7d6f40d71",
+"value": "7d3614bcbe2161f7b19379eafd067db174bf329600b9ff679e478e12b9a090c5"
+},
+"meta": {
+"white": "vivelafete",
+"black": "namesnik",
+"elo": [
+1882,
+1665
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "e68fd67855ecc81d3db0f1a21ec2998605272e6354b56d5598587d7560f6bfe4",
+"globals_seq": "15d2121d8296fb12c5ab0838e7fda7ea46556b6abd6d95ebd776300336549142"
+},
+"tgt": {
+"from_idx": "e9f6a5390f2d5162d1c5d240b600d68de2c5587601b0ef78be00672ebefef85b",
+"promotion": "0387ea3ee402ddf9d6e0767d62bdaf4011aedf3cbd4ca8cb155c4c7b7c04989e",
+"to_idx": "fad4c08a25a8fa8f3471608324028199186d4fefbdb9c2c0b0f3e0b9679dd907",
+"value": "82f579f0b9f0a381588fa9fe52cf0c520522a5ecee1cf205120c83d51db9a5eb"
+},
+"meta": {
+"white": "j-jorjik",
+"black": "metrolog",
+"elo": [
+1550,
+1654
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "94d1a266a4ac37228977773b27edb3c44daa78cd3425e563a7de9390e18f6f29",
+"globals_seq": "d46673a2216ab0a74b4adde98bca851d11081a5a032b0d038f5efb3f2c542c7b"
+},
+"tgt": {
+"from_idx": "d6b4ed874d01821fac31a98ff4fd27da3320399cd9777b1903c29d48b21c3090",
+"promotion": "51db327cb1f9b1c2cc448f8db19c3d9ed6fa11978bff1f1abc5b0e1be2e22a30",
+"to_idx": "9033514d362fc2a18f2040f65a162be585e89c396e7866de8c3379cad996669f",
+"value": "78986ef9f75200a48bbe244e1949cf5bdb5deeb258c15f4cfeaa06139e51f09a"
+},
+"meta": {
+"white": "dissident_with_love",
+"black": "Beibus",
+"elo": [
+1768,
+1830
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "6c9c961142a756018c359f60afbe28d736628ba80231d3757c670f7e9e3719f1",
+"globals_seq": "bc881262f339d457d5ef7ec5844fd79cacb8c06b51e569fb52c42c2737dd7019"
+},
+"tgt": {
+"from_idx": "bd4f4669c1cad1e9b0d42ac26bbceb032833055a79c60020c00e175699a9b000",
+"promotion": "ca69359715eb9516b02316119f31c5d6d5ee29ce511e910f0f3db71e1cd7572c",
+"to_idx": "08f19fc73f28889c4bc48cda48826b0dd98670343177b87bb720658d605f90eb",
+"value": "efdf913011894b024acf4d4a426d4cb6d201c1d4bf62d27f6d38e3369d4b3a43"
+},
+"meta": {
+"white": "vadi",
+"black": "Neuronchess",
+"elo": [
+1765,
+1715
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "c961e5516f8c5a2348f693a5a0cb42ccd0f43c0154f3be3a5ba814608f689704",
+"globals_seq": "9d654864c19cd03408f1b5281e573795e69323344f21584e20079b5f406a329b"
+},
+"tgt": {
+"from_idx": "606b2e1a76805135c7f22329c180afd5ef911fcb525f258daf454cc75327a496",
+"promotion": "51ef0114685e230f8573136f04b49db9ed555a62c6591913b865e61bf0a47877",
+"to_idx": "a7adf57b78902a765cf0e8d78d98c3575c8e0742f6f5ecdc83c38971c29ee484",
+"value": "b54cee70e93412c41876ab6bc588791436dc85837ca02cdd09c915e609ecfbb9"
+},
+"meta": {
+"white": "Kyklades",
+"black": "Danut68",
+"elo": [
+1614,
+1551
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "fa6810727822dfffbc5725bb3385a9156043586af6f32a2e3f6c5da55f064f12",
+"globals_seq": "55b35246001667e9c10296618d23f20ddf46f4877b7a34fae2ff5e0558336435"
+},
+"tgt": {
+"from_idx": "e45c5f9119479aa849d709925dc4bc05a863ab6deae18cacee46429825380695",
+"promotion": "7211ba3316ce20706d0f01ac93c4c2467ad54f9869e3015a099488f47db75630",
+"to_idx": "71bd55a00e972ad08aaf36901c062ca3e90bcdb29a4615cfc050b93b7d50083f",
+"value": "1c2d4a38c25b6acdf42fbea9aa34c6350a718896054230dd75f5238ab1f2e1e4"
+},
+"meta": {
+"white": "troepianiz",
+"black": "chinokoli",
+"elo": [
+1726,
+1958
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "72b44d537e237f92472b5e6a8f3e401de23533426cdb237d9488925fd53e8871",
+"globals_seq": "8f7164b924be20fc64e15bdfde346a7d4f8150262b3ca805ceb566487909e711"
+},
+"tgt": {
+"from_idx": "127782ca8b1923fc920f0edde3cedc99c37188e85c544bf9c0602bdca906def7",
+"promotion": "e98e7b2a93c320fc0124d0ef21e0bff66dab62292e027a2753280a5f44c04c4f",
+"to_idx": "a6659b1add1511b1208e7e07e69deadbfa0840866a76a94ced04a8dd35e92086",
+"value": "87b2c27878f470df750472824fb1f76c857498cb9f635c706588644a2aa221ce"
+},
+"meta": {
+"white": "TheWeebles",
+"black": "ADRNLNNJECTD",
+"elo": [
+1562,
+1556
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "6dc5e0dfbdbd6932210bbadc294fa59aba584589d80d324aaeb695f1c8451d98",
+"globals_seq": "2428437afdf5f86f612bdb9c823320452bdceb854d11c10433944439f8a1c130"
+},
+"tgt": {
+"from_idx": "e50cf9599d1774eda257b4f1ba5b617683229943063b43b4cb1b01c72dcf513f",
+"promotion": "aedb475587d6f0d033cf8f141790ca455896820d4c912eeb8afde6d5bb3e7ae1",
+"to_idx": "831197c197063ca29f12638a403290582c58662b7a4865a6386393e8a11d0573",
+"value": "9c4469b17ab142bb79e1dcc8820794d6d2ebad47b52d6c53b291d764222be429"
+},
+"meta": {
+"white": "Krieg",
+"black": "2girls1cup",
+"elo": [
+1672,
+1795
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "48318db9995a30e2bb29dca7e70813a561392a7eb7a8b519487beb99b2dad8f8",
+"globals_seq": "d008e66ad14a30b2cb18643d869510f9bb33498badc3490115f21d90ab2c46d6"
+},
+"tgt": {
+"from_idx": "c966fc32e650d1f1dcbac93d3e8327a6a43cf80e3f7553ef89ed8c3f80421dd9",
+"promotion": "fb4b9523f723b3d044a25ad455160c53d5565972397da03c5452ca92b57bee87",
+"to_idx": "4c33f6b1e4ddf1743f7a0761f0e666f2954c7942b6e789c9f1073aa22e8a5e44",
+"value": "2ca9ea76d3cce68013c032918c7185dee6b456214531a8f8d7e75acaf6d8cf1d"
+},
+"meta": {
+"white": "vivelafete",
+"black": "Luminosity",
+"elo": [
+1861,
+1853
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "956f38d96ce6300be95afc7964d04d150130a9e77e21cf3d5553f99a140050bf",
+"globals_seq": "3222fd1be1cc5b0aa2fc47810a106b2cd01494bf199d2c6e64bca21856d8031d"
+},
+"tgt": {
+"from_idx": "7f53098e3301d0092ae0ebc95367a01addfa8dcd0c80330167c1c2b0fe356f27",
+"promotion": "1bc0c5d4963860596c63218780adfbe607ab7cc9f095f6338f41f5da1b1c2016",
+"to_idx": "ab6f4b550b88ee0fbcc18f351462c1ae4b9be9465ef89b1541aa2efa89a52d68",
+"value": "cd76eb8ed4ca422407b8b96eddfa3a5215daf632060f7a8dd1a005675d523aa4"
+},
+"meta": {
+"white": "2girls1cup",
+"black": "Krieg",
+"elo": [
+1803,
+1665
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "6772a7a59d12808307c63867ead1a093f00ca28d3bb6446e8dd9f49e933439dc",
+"globals_seq": "3509619d593020236a81632ca482ff8532a78bcb2c8fd69f4c3aa3dd172caa5e"
+},
+"tgt": {
+"from_idx": "88378bf6ad11d3f1bd4b57afbfb21dc671931320be9554bb124c2b477e29a0e6",
+"promotion": "47ee504083ea7f8a1085f2ad79bb73899807cc03e3ac793af6c29da4ba67ac14",
+"to_idx": "6ebbb2c77ef6954de6f188a24fd7f29ff849108252741a60bae0585828ffc424",
+"value": "e02099c1012addfab56290c8700f5146e14684720ac6deda56f3db66c3751ee0"
+},
+"meta": {
+"white": "vivelafete",
+"black": "namesnik",
+"elo": [
+1874,
+1685
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "14cd78e0d7a9c00ecddcee6dd3e554872b7c32f0749baae7650bfeeb2a94afca",
+"globals_seq": "4f6a8d2638db05669c4a206b95985f8edc5813d189b2f855636ca3247ce530bd"
+},
+"tgt": {
+"from_idx": "0aff805998cd8389774ace4896c691c1b5ce5b18004a9b59046f9f733e2ae4f2",
+"promotion": "8cc3b407c191e4c79499d3f835c8f7bf8d4f60555eba546739ac3cecd850ab23",
+"to_idx": "0061fd6c1a87582a3f4d873331c24a81d60a6ba9bca91d34d0877eba9e1cf872",
+"value": "bf6b32f170e867a3a39b49a9ad23571562e083206be824435665a2221eda227a"
+},
+"meta": {
+"white": "Rambo007max",
+"black": "mufasa",
+"elo": [
+1584,
+1663
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "ef0a742b4edf50487f06bff61321a633836d3d8749bc6d1986f36307e8377779",
+"globals_seq": "d939ef688c72a3177890268c1adc3686c84c6fd9928d1d78a49c868de8a3e2bb"
+},
+"tgt": {
+"from_idx": "5fc87aaa6e7206b46f009ac0a3c5c4e90998a3c1cb49498d8ddb415995250224",
+"promotion": "6c40825220efed2b6c0ba1370d6bf53b471e97e220926f675bb65c704cbbac37",
+"to_idx": "1d7fd842a75ac4908609a72864c9a9e14c7e2730a25d86726a92fc8ffda08a4e",
+"value": "c06a347e1c786d870dc30b1daf3cb1b11d1135bdb41e1c12a4d992579e561a45"
+},
+"meta": {
+"white": "j-jorjik",
+"black": "metrolog",
+"elo": [
+1541,
+1663
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "232e8edd46870f879d3d5b5612746a249c4464a7c20518d720fc8163fc89e952",
+"globals_seq": "65399d2c80517390cfd05305ed47e2456d494e3a74b0d7dc3be23abd0a6a10b7"
+},
+"tgt": {
+"from_idx": "3034314c72064fd66b90bf565202f6042ae9fceda25b9a97f9e6cf95546b30d3",
+"promotion": "6cae6fb22952505f08c5289111259436018a2f313eced2c12af2510f1ba0eef7",
+"to_idx": "cc359906c3098fade0c3dce2579613d9b13662824dd70c823dcf4780cc3962c6",
+"value": "f9323ef24cf4495dd3bbd93cb09b73497ba20a14e07bd4f173b7471b9a43ecd6"
+},
+"meta": {
+"white": "Krieg",
+"black": "2girls1cup",
+"elo": [
+1680,
+1786
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "a7dc2fde95e7370f22dd77c0dd429fdb397a9ed501ba4fa6c5fd50905156fff3",
+"globals_seq": "bddfa4b0bce4920ca064aca8293ca5f1f3abab9c51307b97282febf98ca15440"
+},
+"tgt": {
+"from_idx": "fb245bf5b02a0ef994b6950e23ec2c626c8f0272f0d9094ae5b4eb41d0db83b2",
+"promotion": "20f36affe6029f7f813975fb7d9e40b51f6f535fc43e45af0b79cf8305dbb8aa",
+"to_idx": "b76cf3c16dd2fcef192a3a071cfdbd281d1784eca3b2d8086bda27c9f56e5e3a",
+"value": "1cbebc4c3551cd6dc99bb16216badd3dba794e28237b104431f469edc46a28a2"
+},
+"meta": {
+"white": "vivelafete",
+"black": "cougar1",
+"elo": [
+1881,
+1669
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "2bae367a419f1be004ba7767bdc1d5c1f99b6eb2aa8e27e061bbf1a52e6030c8",
+"globals_seq": "444714a1c4936616b95888309989a33bfff7e8d1330261b3d4563688a5483187"
+},
+"tgt": {
+"from_idx": "1159b010c2d0d674bf0ea4b0734da7823f54173cd87daa7e54cadc24666430a0",
+"promotion": "a2c2f851b65c2582d6901c0e7d3c53344fb401f9cebb38595e2daa50c2efcaf4",
+"to_idx": "9d97b01a5d693e354003e32ab77b977d640b92a636d43ebc402513632ff106a5",
+"value": "aa96806c84a55e8f93b4f359ff421260368d6493781b51bc5328e3001e195820"
+},
+"meta": {
+"white": "SiNiC",
+"black": "Marzinkus",
+"elo": [
+1643,
+1786
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "e3f3b686298d0eae8d2aca27b4f786765777a06a4dec4053d5b44efc15f790fb",
+"globals_seq": "93068183f5aa1415ac506b7e210c5591032ec50cbd3b6773251275b2405ddd4f"
+},
+"tgt": {
+"from_idx": "a7226cb9379500fefd679678b876437df5b9e131b6fe54f6846790c248b0759d",
+"promotion": "d94651eca77fa0ecc900bf836e3b517c9f31cc98236699061d677711fb694d7b",
+"to_idx": "0f57df850818735b29e503d50c49f0b5760e43d4c28049cb42b146c7684eeb6d",
+"value": "2e21be86ee85e405fe123da87b3c03a955ccc7389443eaa5a3245c9290229981"
+},
+"meta": {
+"white": "vivelafete",
+"black": "Kyklades",
+"elo": [
+1887,
+1623
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "33790a3f22d1778c1c86c24dce1c6837417abc9a5d36947c4a6bc2f87f5d2215",
+"globals_seq": "5849abe0cd3cb0677f03a25ddabe843b9a9e42994c98823ca695b0e3f9d70313"
+},
+"tgt": {
+"from_idx": "65c40fc8f66acc1a42135aac30c38fa75c2b750c3a1ee86b79e9b7e739a070d1",
+"promotion": "79deb914a367ab2cc01b140982b122fbec93a4cee9561994d8f7ed220e663f24",
+"to_idx": "6c50922f67157835168276e4e61e4dd94a912baa7e055c9ba15a2b452a794469",
+"value": "ea5b9c521456df2f7ac115f63a8b3d068a69c0075b43fc4f3c59b6946616bf61"
+},
+"meta": {
+"white": "2girls1cup",
+"black": "Krieg",
+"elo": [
+1771,
+1693
+],
+"result": "1/2-1/2"
+}
+},
+{
+"obs": {
+"board_seq": "5f4911d717f6c2dbf390f213035b96d347bfc22a64d42e090e5ca19e5f7fab13",
+"globals_seq": "a192a5be29d055c5be8f4e96ae7ff77c029eafbfc879683ce070a740b5f892b2"
+},
+"tgt": {
+"from_idx": "d65e6503e9a938b725b8de65f212f49624d4d4dcae4d0f69bea984a0a725442b",
+"promotion": "a2bb12c4071dac5d1c7b130e6dfefe84c4e8dcbf7017706b6509736263265c67",
+"to_idx": "4e98d555d72512a65c70f99a9bf41c7453ef394e7a97cd4ab3aa4bbef1c51cd0",
+"value": "1955b81fae99f6fed10aaded01299dde1f04e0c237cfbd729bdc69e0c9cfd9e3"
+},
+"meta": {
+"white": "peter2",
+"black": "Killi",
+"elo": [
+1519,
+1572
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "26b5c51575cca14b684f5d7f5564351d4b054529596ccbdf251562da3afa03dd",
+"globals_seq": "282daf6c5e7d0db971575c8a7ed4032743613d9b8a372c0689fbdbcf651c4198"
+},
+"tgt": {
+"from_idx": "8e34755c7ff87064eb045bea936def03ea496663e2b671a27106386d8aba62ea",
+"promotion": "3554d0140840b000614804d4f139010976532fe1d484f4c5617d3f150fc17434",
+"to_idx": "905f5ac37b0e223e611463b996935ee1a8c24ecc596abf7227c6e42bb4c6f33d",
+"value": "470272723dc26eea0dcc3c1230c8adbee43c791d7fcbb1859447782a6d6756c5"
+},
+"meta": {
+"white": "Krieg",
+"black": "2girls1cup",
+"elo": [
+1696,
+1768
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "130e81f160c730692d487fe17eb9eb662624d144ff7fd3d54c36a68c0952ffc5",
+"globals_seq": "f605dad27ecff7718a7a83534ba4e1053c4447efa2127944beca37bd39593374"
+},
+"tgt": {
+"from_idx": "10f913a2d6551d6f54fb38faf8c99e3f9659b66de7b453ce9b4ab2ddac340b71",
+"promotion": "7e29f8a8591e5d6aeb59144d2c0c5459ebcf008a026705b1dbd248318bc665c9",
+"to_idx": "672b9d073e7bd9130a5c6a3401818e2d468ba2a1e933c8a1a7c461af25308bbf",
+"value": "9dc154efadb90a3ccb5e86188477620c9d7a636c480e6cf458e626cce83edf18"
+},
+"meta": {
+"white": "H___N",
+"black": "TheWeebles",
+"elo": [
+1595,
+1546
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "e131d426898c97e29106ee37fa3af7a3c4c3bafb1a884e6b1414e9867d1135a5",
+"globals_seq": "2670e8c8115959d1403e19e25b79fb1ae7946b803259fcc9ab81079122f06827"
+},
+"tgt": {
+"from_idx": "df3110d2e006601cfd25b43e80ad2c41b039deb951a5734a6a2dd256cb492bd9",
+"promotion": "68d0be31ee77196a8dd013ba444539ba10f3129673fde7a91d79fcf385a78971",
+"to_idx": "e7529bbd4f6d7327b22b52136765f65f6defffe4df6e7d3dd27b644e3935e2aa",
+"value": "c8c37f214cc6f421c3f5d99692a64e93ed98c8e5e3a5bcb8dcb255099e7ca221"
+},
+"meta": {
+"white": "ADRNLNNJECTD",
+"black": "Desmond_Wilson",
+"elo": [
+1567,
+1650
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "9f60aeecb4df76480771480f16766260dcfaf9ecf1af859c0c8847e65fb3ed05",
+"globals_seq": "53ac10d6999803c7a12da24514aa0ead5d2a196ab4de6a53b8a4ec74c4619d6f"
+},
+"tgt": {
+"from_idx": "6d17e36b8d49133a6864bef8098e6f7d1bb77e68b0edad7bd57ea9e6f914668e",
+"promotion": "943914a15d5d340469ebf1982ac46c084631cf7e287b80805715d42181e9cfc6",
+"to_idx": "8632948d7b8be05ef17281845f0a46d2acb971798a62a70a26de3e8927da17f0",
+"value": "db4e81b8ff2aed83ad0641bf06a52c9a913d03009e0a10efbc0d1c968434d997"
+},
+"meta": {
+"white": "peter2",
+"black": "Killi",
+"elo": [
+1510,
+1581
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "11e71cc74c80a13a6b32a39edf177108a6c665e81a26a5286d1e3aee99da6a29",
+"globals_seq": "a49d760bd7d9ada8adf4d1c9e671d57516a62b33d92c8dc6d594583389e3c99d"
+},
+"tgt": {
+"from_idx": "b1981cd0a3098aac3d30c96da3f70e9fba3c16bd797e0f11d785cd7c91064837",
+"promotion": "2d21eba087762f0236f1f387301176c66a3849039fc638ff4b878d6a084ba07a",
+"to_idx": "375d5fb951ab824e2f7f04bfcd1dfde77d1ee62577d5d0cd402d4ca0ff3b05e3",
+"value": "f9323ef24cf4495dd3bbd93cb09b73497ba20a14e07bd4f173b7471b9a43ecd6"
+},
+"meta": {
+"white": "2girls1cup",
+"black": "Krieg",
+"elo": [
+1754,
+1708
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "5052130bdd67a3ba33b0c4f61979c690d3bd0c9d372d3f227cbcbea3a6345d50",
+"globals_seq": "f9560a9521f5d1b8b8a19e7fc24470b94f30a395fe6e62d39b1b3e286e8fa462"
+},
+"tgt": {
+"from_idx": "92a91c462d704de5cb9fc941a8502274163535c726a74ad103aa0831f40e1f97",
+"promotion": "31bc5f40591665a2ed49f6cff5a916999857ec7fb34c0dd4874663a3056785cd",
+"to_idx": "093c428a192cdffced087619f46be23e9736bdf6dd7dd75806a2c422fe9a6e3f",
+"value": "41bb34213396f3832892c2690f4b7ec22062b15c0d8fc7d67d80bc946d5b8a5d"
+},
+"meta": {
+"white": "vivelafete",
+"black": "chinekeboy",
+"elo": [
+1866,
+1500
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "ddcf42a61c4ec52801f91309c10574f6047f3ee53b068afaf7d774a648037537",
+"globals_seq": "47932d3a2028bf03571356c0109a3beeaca4d595b6154a8715d1e1f1ed850065"
+},
+"tgt": {
+"from_idx": "e14c5818e5870fdab1e090ed42f329b4b72e54119876313f362dbce2ac1c6aa4",
+"promotion": "72004f9f1db6fe8dd846b604f7aeb635607cc8258a2ba0c91ab259c6c279b65c",
+"to_idx": "b2af2b774a4a65d6dd0d5ab76da32c82993dea12b3807da0ecf07fa459204d46",
+"value": "c910a927e061ebf338c341cd7b7536078aeebd7b0dbc81eea746f3576d2d5acb"
+},
+"meta": {
+"white": "Marzinkus",
+"black": "Neuronchess",
+"elo": [
+1793,
+1731
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "58dbeac914fd4574cc198ae5293d2a1a4f7c58a36e6d9ff0a55ac3d42a231e8b",
+"globals_seq": "c0825a7ffcf305a41b473fadffaac86be90dcea1116887477bc0245a300bcc85"
+},
+"tgt": {
+"from_idx": "fe0c49d1a0abbaabd5ccbd0c5126c3a181ff05043ff67634d652780544f6d9d5",
+"promotion": "81fc1411d5e9185948ba508820e1970d8a4f511debdad13bdd7ae9024b4d2468",
+"to_idx": "906cf373a59171e094c30a5e0ac51654e6b84f615f40541c4fd332316c6f6a2e",
+"value": "ca9f9f367707fbaca11a8d0dd760184e897904bbdb2a7432768a0b04650b757d"
+},
+"meta": {
+"white": "dipo_a",
+"black": "Kyklades",
+"elo": [
+1588,
+1642
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "e3afffcce9cb9e524bbf1d4528b299d0a205e31dab7df5d769fbbf6a61f07455",
+"globals_seq": "ca9fe26719509e372cafdf291b392328812023126838be3b92794e4469769363"
+},
+"tgt": {
+"from_idx": "fb1230f36dd8f0fd02dd0d20feb8b1b6c55b77828cadbf40bfea32acf9927c5a",
+"promotion": "68bfd1ff0525e897c1f3c1715de501f700d3436791dabc66a72168b92c314675",
+"to_idx": "b8c5c3d5eb23211f159d8d46bf86ca0ef1ca3e5505187ff81a163c5abcf16be3",
+"value": "1662221eec13a2576ad0c56be39ef067d6fe212aa64d6d8ad0163e3179fd49d0"
+},
+"meta": {
+"white": "vivelafete",
+"black": "chinekeboy",
+"elo": [
+1851,
+1940
+],
+"result": "1/2-1/2"
+}
+},
+{
+"obs": {
+"board_seq": "583a8e1f5888e2a41bb15c5a19d56cb9c241fb506fd9b9179d7f7f18b89e9472",
+"globals_seq": "5e0a3c1a724c38aba4bb78515c9a90b8f0d9165064ac19b7630372a363a3fa33"
+},
+"tgt": {
+"from_idx": "debb081aec829253ba9b477d41ae34d57e31767b11815a4f37a7ee12575c592c",
+"promotion": "41caaac2c1a4aa1e0b4b1de7b057fbcce3ecd2c3b91a1a0c72dcf89abc8f52fc",
+"to_idx": "5f15cb32d3fef923b0da8ee2bc0e41cb5f996101d7786a5ecb111afbe6766a41",
+"value": "e74c063ab0f6d4057e018fe56c1f4e8ca6e8096b528174806f0da18336011abd"
+},
+"meta": {
+"white": "j-jorjik",
+"black": "Killi",
+"elo": [
+1557,
+1590
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "343ccefc1d5b370cf2d69e9afbe72b04d501e56ded6e7a47d4fac9af4471b6c2",
+"globals_seq": "cfd51c8f6d804200a6d4f918269d001e3bd56ce1f133568b6148be9c4c006082"
+},
+"tgt": {
+"from_idx": "495378864ac697c67d0a281ab5f61951493e04dab4f3763e53d9109cf411c9a2",
+"promotion": "255a55eff3520f33f78170774ab7f6c267d973a8df53f9785fbb83f2a4504ad5",
+"to_idx": "6de04ef7e968a3bae83c27eb791c535859d584b3a4143c5ed902a717282a69b1",
+"value": "c8c37f214cc6f421c3f5d99692a64e93ed98c8e5e3a5bcb8dcb255099e7ca221"
+},
+"meta": {
+"white": "Kyklades",
+"black": "sport",
+"elo": [
+1629,
+1502
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "07d408704ffa646c9af9ef97e107d32e5c9445f26cfbf7042e0615381ab0156c",
+"globals_seq": "876a0b2220f1771062a204cfa0c9c11024cff11a42f75081ae7bc47d7507e3f7"
+},
+"tgt": {
+"from_idx": "941951773cc5d20c6879ddad73dc0e6f1e46bf79c8aeb11fedb03eb579ec3adc",
+"promotion": "3334b0828437f7cc883797fc1cf385abaa8e5409076382e784ecf3aea883c3b0",
+"to_idx": "da51aee4dbc49df8fe1d4dc331e726b1d498a4e2430d515aef1e8efa09be31a2",
+"value": "4fb1a3387d069b9f1b2bc4b25fdef52b623e6627ad2efb4b6b706e4e5ce5e320"
+},
+"meta": {
+"white": "hostking",
+"black": "DangerCat",
+"elo": [
+1775,
+1773
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "2b645ca72759ef3396930b007759839026e283100cc05d0d845a1fce771986df",
+"globals_seq": "d8e6555a8c79aa91e5b2d262eae6a70ca0ae9840706b737a4fc9b9b8f1198ea5"
+},
+"tgt": {
+"from_idx": "6eb6f790cdb514fcf4788ee732d2d904b1c10303d59a9c8d6ae8de8d5703acc4",
+"promotion": "bb380287de5b14bab4c78b634ced57515e3ce677156911a68c5682eaf4600c62",
+"to_idx": "bf3067438aca60a9b6a2886e96e6e161a800693d4559961d3bcad440e31160fb",
+"value": "be5406c4d7989d185818007f3c6d3005ab50c8dd1628a9b6df2a610287e2abf4"
+},
+"meta": {
+"white": "Rodney",
+"black": "jaquen81",
+"elo": [
+1516,
+1532
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "ffe158311b122f7480576e4b61b32f172240d5cf5950950b77f0fa0feb3a260c",
+"globals_seq": "237ab1a8e9365e0ff5c3981018616bdd266644b37f80d611972edd18eb1d3d6c"
+},
+"tgt": {
+"from_idx": "43f9268b43909e0ee4b00e07573912c5fc0e0cfbea03ef0f46c9e4fa7f99f056",
+"promotion": "06823ecac93499685f902b7f71247d19a9bef375f71bb357745f2135c3e75de1",
+"to_idx": "baba4bafdcd89a96c0f16eb76bd537e68a2e9478bf3294f81e9bb0afac1482f9",
+"value": "88f9e8a5da1df0e39e5f48b7c6edf64edd8503568cfa25917ea8fc5ab11bdf1c"
+},
+"meta": {
+"white": "psonio",
+"black": "vivelafete",
+"elo": [
+1670,
+1853
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "75b1578323811993a50ab0312b0205ea143c40bbf5057d3cb0f31f26b9199d33",
+"globals_seq": "960e6d351dcfa568dcadcb0bec930e1d780bfacbc9c8322c83f13d174ed68135"
+},
+"tgt": {
+"from_idx": "db0f19c029a0bf0af0228d05abf333bdeb481366e234dce261dfb3fe4f227ce0",
+"promotion": "6c40825220efed2b6c0ba1370d6bf53b471e97e220926f675bb65c704cbbac37",
+"to_idx": "9defba8528f86ad2d1f2975508189bdef996edded526190b499d813a809f3340",
+"value": "c06a347e1c786d870dc30b1daf3cb1b11d1135bdb41e1c12a4d992579e561a45"
+},
+"meta": {
+"white": "TheWeebles",
+"black": "H___N",
+"elo": [
+1562,
+1558
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "4606b60cc5cc9f91f68c8e88db2922ed44ddc397db652853da16d7f617b2e344",
+"globals_seq": "cb21603591e1776ae7ceceb7e6838a5d6e0c51e287768677dc0bdc7c490d62ce"
+},
+"tgt": {
+"from_idx": "b9acc65be453df3da8d2ffcd242717d8915bd2ef0e2d7ae0c58822162da5316c",
+"promotion": "7211ba3316ce20706d0f01ac93c4c2467ad54f9869e3015a099488f47db75630",
+"to_idx": "a7e3281f8a6e45ed6de764910d5c4077069b29d8fdbc7ee5c2a0d9e7978f3452",
+"value": "1c2d4a38c25b6acdf42fbea9aa34c6350a718896054230dd75f5238ab1f2e1e4"
+},
+"meta": {
+"white": "zebrao",
+"black": "metrolog",
+"elo": [
+1512,
+1647
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "6b9b9534f1c299ed75e7291e000d149ab889768279005b42f284ecb8e5e8dd8f",
+"globals_seq": "b0d6b2cb52e9834c8c2142b3da0c73b3caa86a49b4b69fb3b49461181ebf30ff"
+},
+"tgt": {
+"from_idx": "106a969d9809a0e0d812b7ab8ca471f77f34b2043fa9c939d24403f0f043eca1",
+"promotion": "3d9657c11b92928ebdb43b5144335d31a33b4c7f5f7600d20eed69611d975fe1",
+"to_idx": "a9298f9c82593796a616ecca9512d96c8ba27fad60bac1caf4e02644e35c7137",
+"value": "c48fb60bd7a81af562cd7bedd8e72393ecaedaa1654570017c6ac989a74efcc4"
+},
+"meta": {
+"white": "crazy2013",
+"black": "Neuronchess",
+"elo": [
+1874,
+1720
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "a08d75f070898896997da0c965e08188de29615ab0c3ccf231fdf03e9361627a",
+"globals_seq": "8680dde097909b77def7c08725dbe06fa1213c7e164a49265a0bad5342b45148"
+},
+"tgt": {
+"from_idx": "2f647142ca87710654c20456b6f4ab3acdb4e4386f955abdb3368b6a9b0b7cc2",
+"promotion": "ca69359715eb9516b02316119f31c5d6d5ee29ce511e910f0f3db71e1cd7572c",
+"to_idx": "8d533c9a825085ae82c9e8c2893cab319e6bc425d835624cc5a7f6bbf9864eaf",
+"value": "efdf913011894b024acf4d4a426d4cb6d201c1d4bf62d27f6d38e3369d4b3a43"
+},
+"meta": {
+"white": "vivelafete",
+"black": "psonio",
+"elo": [
+1838,
+1856
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "9660f4d7d90d66ddf638fae28fe45c6fc00d2dda41be0d054df503b55f45b698",
+"globals_seq": "3f6a2c91f768df95329e771ae19bbe9f2f2fed27bc94a2c1081d8b809e4b4eff"
+},
+"tgt": {
+"from_idx": "392287b9a90d23d462898df951c3070e6860c2d4c12c9de94ed960253e3639ee",
+"promotion": "6c40825220efed2b6c0ba1370d6bf53b471e97e220926f675bb65c704cbbac37",
+"to_idx": "02b88038803f91e992f5cb6566413b0e27369f6edc120ad6eebe9b581f8929cf",
+"value": "c06a347e1c786d870dc30b1daf3cb1b11d1135bdb41e1c12a4d992579e561a45"
+},
+"meta": {
+"white": "sport",
+"black": "troepianiz",
+"elo": [
+1517,
+1568
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "68f25308e1c8e544cb6e7d3d5eb9a6c9bdee15b655321091aa70c3c3cc7d9cff",
+"globals_seq": "6cf039dd6fdab84d5e913f799ec324295a574315d92368605fc05c26ba59f0a9"
+},
+"tgt": {
+"from_idx": "e4e902ca8e2c562c1261090424c610d52b6f0ae0e7b044d001fddfc5b43703fc",
+"promotion": "6cae6fb22952505f08c5289111259436018a2f313eced2c12af2510f1ba0eef7",
+"to_idx": "970e87db45be3fe50f96fe35ceb1a1fb5e3f0a321927cf6452ee78a788a380e8",
+"value": "65e064059d364b32eb20aed38e791dd8e923b24864378815ad99d3bc5be26a0e"
+},
+"meta": {
+"white": "airtsart",
+"black": "nujabes",
+"elo": [
+1865,
+1633
+],
+"result": "1/2-1/2"
+}
+},
+{
+"obs": {
+"board_seq": "d33f77016abe08815589265340c305f3b129b958a8f27019ba43254a806c9222",
+"globals_seq": "1c8aec11c9401821e29ccd2e471ec2d227b991e15008877a54d5b582ad8c9ea3"
+},
+"tgt": {
+"from_idx": "5997089b718a1fb7da4cddde3101ab1b4120d85b17c213145cec7993902bdd34",
+"promotion": "efff20143101c38a2bb4a1e338e8bb8b99e3f6b47edb8f7e93a73384e1db3701",
+"to_idx": "7740e20061cf84782398d1c20ed5e8f84e56424b2a76d7774cf075ef9f3e7ece",
+"value": "2aed17153675a72c712ad5f94c4d5b0bb4f964e777e48a4880467880a83ef7bb"
+},
+"meta": {
+"white": "chinekeboy",
+"black": "61Doc",
+"elo": [
+1903,
+1609
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "ec853dc2e557b0173704ee4f0e53214430966e82e244bedc1438e7b1d6428b7d",
+"globals_seq": "e86b4a4a4ac1d814d0782f2d1c0eb574c13e162eee6f25bdf4418e3cd9cd3b84"
+},
+"tgt": {
+"from_idx": "0207f206e8fe5dd3a4e06c23b83a7cbe53452f144f91a48f251455a3d352045d",
+"promotion": "13d5d2909a037d990bec2ffe73b8c05fe5cc9496c9f3ea27ea6a5efb4f0100da",
+"to_idx": "3d06ec6887421593b756f1c0fcd39a1f9c7c01aff00497bd2eb42e05b1fd913a",
+"value": "44c6c615cfb8358dbf701cf790726f672e76c05d602176d701b04d41871e082f"
+},
+"meta": {
+"white": "vivelafete",
+"black": "kingofconcentration",
+"elo": [
+1828,
+1646
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "8279ed6ffb329c3b430328c896506703120ca65fd3012ffdcbef9ce499e573a2",
+"globals_seq": "9a0c5764965fb032b63c653c68b7b60f4bfdd89554ef5d5463fd31911a0b4a32"
+},
+"tgt": {
+"from_idx": "44a056be62a7e97dfff79b5b33523663301a00d2b12864e79b105112c2aa0abf",
+"promotion": "d66f756d3603e38dcd23383acb4ce23bcb721058d70d7dd3a931c53961dc4f24",
+"to_idx": "90dc53868a12e35ea4e0d962ea9c4fbe869d93703c23188796222ddb123d0299",
+"value": "394c549d553ba6b1d4cbd3c3b663a5111d28ad2e0362dfd9b35d6e9323338fc5"
+},
+"meta": {
+"white": "4di4",
+"black": "La-la-la",
+"elo": [
+1500,
+1500
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "2d73645d7e284d8632bf76b706862f40012465e76cc6035ce1252635fcd58561",
+"globals_seq": "6bb0f96fe44e1f833af3cc446a6795b51455b4845ff67baf14926b932fb94b9c"
+},
+"tgt": {
+"from_idx": "5139ee37e749144e895e65414a4d5793302917bd623cbc8c1ca066bd6cb31313",
+"promotion": "ca69359715eb9516b02316119f31c5d6d5ee29ce511e910f0f3db71e1cd7572c",
+"to_idx": "42b9d1f43d3e7830b1931a78604ed94dc1d1a7e071c063cb590ea74229c1b836",
+"value": "efdf913011894b024acf4d4a426d4cb6d201c1d4bf62d27f6d38e3369d4b3a43"
+},
+"meta": {
+"white": "troepianiz",
+"black": "Neuronchess",
+"elo": [
+1721,
+1712
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "c3a5b7e7f7899e5682cb3354bd32b75507264805731d47afbefd6ec5b9b9185c",
+"globals_seq": "0b71d6cc669796f1f93d2be2afa1c9ae6e0e8505c91d5bbcf7ae7b85d77543b8"
+},
+"tgt": {
+"from_idx": "8fd0362bcb5e58bbd78e918dcbd2aa9fce1b493cd934da8cdf6390d458094272",
+"promotion": "5dbd32cabe062641e3f77cdf788cf18e88eca2047f9400a483f65d2a14ee74a7",
+"to_idx": "143b9670fa041dbb32bf6f26180938ba7479554b38157ebb63bd84fd4406ed69",
+"value": "17f712977d6c9e5c6482bc0475e6afdbfe326324a10e2f975e6d6fe79922dfde"
+},
+"meta": {
+"white": "kingofconcentration",
+"black": "vivelafete",
+"elo": [
+1639,
+1834
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "0eabc885ca10457debd7a05e7fe4c4070156c36908dd6b22ae58f04efa91a88f",
+"globals_seq": "3ccd3e81453b1a197f4ccdd49996608efbd125d60700e32680dac1ea1d1e132d"
+},
+"tgt": {
+"from_idx": "7805cc179064b97211204cb9ebbc02900b441d7f6060782c86b0b2f0279a3808",
+"promotion": "b46aa7a8b3f383351b121817a1e1bbd5639e0ba933e676081dfe4dc0b6069f87",
+"to_idx": "7f84a30f56654e232fcc2a5c7424ac5944b4f3a7d22407ab2a8fa44295cef149",
+"value": "a90ae37efcc95e011ef05d7c80bf2968190dfe1bc9d6e3d50529ef9bc3c59e13"
+},
+"meta": {
+"white": "TheWeebles",
+"black": "metrolog",
+"elo": [
+1576,
+1655
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "cacc11f431739bf1dc7d4fb3681efd5b8149664daa28dc70b8008824f16b9ffc",
+"globals_seq": "44a007457c66d179f25bc07bebcb2618b1a51276de8ac24b86490d44a4142dd6"
+},
+"tgt": {
+"from_idx": "dca289624acbb9979c6b3057037ae5a5f860ca31bd83a03e59ea495b4400cbf4",
+"promotion": "0d8309a9d62c449d37ef210788691fefbbb35e82a08e9d7fc469982bd9ae2afd",
+"to_idx": "c1fd2b877f5a2825329dd3f272719b1741a15e01dae8bcf3e98f175256afe36b",
+"value": "7d3614bcbe2161f7b19379eafd067db174bf329600b9ff679e478e12b9a090c5"
+},
+"meta": {
+"white": "sport",
+"black": "crazy2013",
+"elo": [
+1530,
+1625
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "830226a9b4d95923d45c61429b149f147d5215c944528d261e293c2018b8018f",
+"globals_seq": "28a2a0a1d7d012631b7c39fa69c4aae3b824c15c5997ee76774c29cdc51b5198"
+},
+"tgt": {
+"from_idx": "4e569ba9f53b39038237da2ec2f1e14ea39a994123d5ab371524c728fcc1149c",
+"promotion": "aedaa6f4fdf8e6655e3ef6ae18b11d97099aae98bdd122e7f34e0d468b102a69",
+"to_idx": "48ecd3a8cf944b23a1078597444b6b320eccb8d879ada9b145573fca87534be7",
+"value": "5f51df18973cd096896d04c396c8f3c960a02b7ef62a90a9395e2891f728d501"
+},
+"meta": {
+"white": "peter2",
+"black": "sanuch111",
+"elo": [
+1502,
+1720
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "c7c3750433f1caf4dc5655174ec88705f0824513e49c1dc65bbaf9064ce1d55c",
+"globals_seq": "7772ca32bda6514fcb2ddc0dadc9e747085b1d6b691e055a8c63f1619cc97262"
+},
+"tgt": {
+"from_idx": "17030b05d8b8bdc606ee195931bdf3fcf4ea1e9fb08b2b99e035e1c37d347ccd",
+"promotion": "41ef5c58b4ebdfd7d353d47b7ff7834a7ca33e01e422bb5d42fcf459e286a19b",
+"to_idx": "76df986e57e2742205ce7cd1e4f0dd39355b9330b07706c5b14b4866d38e629b",
+"value": "d8e913da9a0ab1cf3040e3b1d258678668cd4700d05626b84aa57a80813e9ccd"
+},
+"meta": {
+"white": "vivelafete",
+"black": "ptdhina",
+"elo": [
+1841,
+1758
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "7cc847b178fc0010b6364db1aba5ca7eabb6251e10d910d1a7372a7dd2199645",
+"globals_seq": "fc12cb75e75c23166b5d12a5902ab8691352f15e339a317cf4f488f2ac45bbc8"
+},
+"tgt": {
+"from_idx": "71cea65f16ae5ae23cf6247db3c612ebe8ed80354686042b8fb701ad02b19056",
+"promotion": "0ffb8e7d8c576fa23e098258c7701b8b82f98130c74edffdc3101a3d1defad72",
+"to_idx": "8d745e5fad68baa3a506af023f902da080687bd2ae353330754e76f677e77fbe",
+"value": "613b87e0ac7e1b780faeba91fd44c0dc9b4751592584d4ade70beb0df8b8c275"
+},
+"meta": {
+"white": "Marzinkus",
+"black": "kingofconcentration",
+"elo": [
+1803,
+1820
+],
+"result": "1-0"
+}
+},
+{
+"obs": {
+"board_seq": "e34a955fe8f5eec0d79548a9bb7d1f8324f7dd776723b6956bb2ae57255f34e4",
+"globals_seq": "4ddd46872fae16c5c64c10cb12f7efedade9e09f6fd84217621623ef882d7d5f"
+},
+"tgt": {
+"from_idx": "57291aba427bb2108cc40e442da73e254d30a683770e29d476e3fb87c30b5de5",
+"promotion": "976b6665a3bb1fb09a2f94fdb0b09281d98819654bce89c9c747a78cf3563b98",
+"to_idx": "2c7e4ac5d84d1d20759708a7f432dc62722e2a4372b1eabe47149a2bee9b3d92",
+"value": "c287217e721599dcb2015065a5e172165f98929ec65c23bfa4d7dc7c66351503"
+},
+"meta": {
+"white": "ptdhina",
+"black": "vivelafete",
+"elo": [
+1750,
+1851
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "bc780820f4602225c9c2d6a152296a99042444de10999edbaa43155805ab7036",
+"globals_seq": "fc12777a23a587ba54b800897a4b1683e3129113ea0fa07520d5e189773c0a65"
+},
+"tgt": {
+"from_idx": "540ab2b685a1332a29564465f33bb688b0b7980880b0acd55401859489d4e415",
+"promotion": "31bc5f40591665a2ed49f6cff5a916999857ec7fb34c0dd4874663a3056785cd",
+"to_idx": "9488e3cd8953d9bbdb8c6f8272f7d573bf57a9e474ddae0c1d556c9f6ee0ca4e",
+"value": "41bb34213396f3832892c2690f4b7ec22062b15c0d8fc7d67d80bc946d5b8a5d"
+},
+"meta": {
+"white": "FashionBoy",
+"black": "Quentono",
+"elo": [
+1605,
+1651
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "4669d90bd595aeae0c4a6793854fb441b790207663df910b068577eb0583a478",
+"globals_seq": "f0c55b74399db2097d48700cfa8bd52f36c6c83bc7eaf29c80f4164ec8aeda18"
+},
+"tgt": {
+"from_idx": "623bc0342bd247175532db909fb1a0c64e73060e88bba9638ee8450310f30b62",
+"promotion": "31bc5f40591665a2ed49f6cff5a916999857ec7fb34c0dd4874663a3056785cd",
+"to_idx": "ff4a2af24ea66dce0a17915d00da7fcc631c3b911aebce869decd2d98d8b4b72",
+"value": "41bb34213396f3832892c2690f4b7ec22062b15c0d8fc7d67d80bc946d5b8a5d"
+},
+"meta": {
+"white": "alexanderthal",
+"black": "namesnik",
+"elo": [
+1641,
+1500
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "444b286bb4e014f2d9466697288c80884f6ed6c590125795365689fdfb400ab5",
+"globals_seq": "7bdbef8a9b966dc4f40059057cea8e304ef721b3b761f5b7a13e78c7f9156c3a"
+},
+"tgt": {
+"from_idx": "ec3813a1c231c37184cbae1469539b87482d3bc207da48dbe2c79a29962aa73d",
+"promotion": "66af4a6da2be76ed99097af97bebc30f1180e6b0c762742e6278487a88c52b1f",
+"to_idx": "94656d298d65b03cdefd3b8660be3804ea73f0a3dedac3de0ce64ab3eedc35f5",
+"value": "6876994c8db43f8c897a42cb847aaf558e77034919be3ea916c137a68bbca760"
+},
+"meta": {
+"white": "metrolog",
+"black": "Munius",
+"elo": [
+1645,
+1679
+],
+"result": "0-1"
+}
+},
+{
+"obs": {
+"board_seq": "86a07c6334f83da2532fbe50bbae553d92d5ca981515dbb1ed71cede0c0a480c",
+"globals_seq": "11b2ef2109f5e2a15e906c25524af8c1a3ed8c5085a96952a3fb0656cb691540"
+},
+"tgt": {
+"from_idx": "c60ef920371479c13235c33872c3cacc7489e9fa8444a710b2e9fd77281b6782",
+"promotion": "31bc5f40591665a2ed49f6cff5a916999857ec7fb34c0dd4874663a3056785cd",
+"to_idx": "68e60ca47c666558a1ea72b7e6c5415aac8cd3805352967b26d45d54af211f3a",
+"value": "41bb34213396f3832892c2690f4b7ec22062b15c0d8fc7d67d80bc946d5b8a5d"
+},
+"meta": {
+"white": "vivelafete",
+"black": "ptdhina",
+"elo": [
+1860,
+1742
+],
+"result": "0-1"
+}
+}
+]
+}

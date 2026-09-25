@@ -1,0 +1,608 @@
+{
+"converter_version": 1,
+"shard_meta": {
+"board_size": 20
+},
+"samples": [
+{
+"obs": {
+"board_seq": "5e90dfaee6666e6d863ae8d31f4faa483a512905eb1f7b09593af09171b72768"
+},
+"tgt": {
+"passed": "9894c151c28476bb6df8086979ef0fb9a3f3ccd43cdada09ef6a61bffd85bcc9",
+"place_idx": "bdee7d67e0c170aa6b779e79eead42039d32f18d2315c38f8feb1c2952f36740",
+"value": "8811ce5a188fd9b11ce7d1c112f6d451b57bb17ba6ce883d8dc022cead2cf347"
+},
+"meta": {
+"source": "0_0_10_2.psq",
+"plies": 84,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "ed2232fb7db033323bb4e1c4000b8a7362e696da00088c5d94a7549e8dca6618"
+},
+"tgt": {
+"passed": "d40a4f99ed740521e8581d6c2d427a0185d1719aa620398ca53e9135edcb3e5b",
+"place_idx": "93c431d7787059b43e4d29282dfe89c0f72cf2a3703506862e163cfa1cb9dd06",
+"value": "942e6f3344fe8445b228277adda75a128b648a0de6865705f1b58f8051f05e59"
+},
+"meta": {
+"source": "0_0_11_2.psq",
+"plies": 34,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "c4b97d2e38045f999dc119cc5cc4caf63ae904ea3c34c0bf2dfe75423e5760fe"
+},
+"tgt": {
+"passed": "0fe50475886c3fbd7fa80ce3d7aea003fe333e243a1c74e76dc96d49fb585c9e",
+"place_idx": "54be349961857bda6ea0379efec9c32e3e3f073a2c71bc1a59e8c4f834a4a293",
+"value": "9272e925220ac9fdecde3c2b4b53935acdc92100e8bb79ef5790db61b8a4956e"
+},
+"meta": {
+"source": "0_0_12_2.psq",
+"plies": 44,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "d4824aa2b01cec2bbbf47922cb5ae7698dc27739c7fd3bf84d72a25f2aec84c4"
+},
+"tgt": {
+"passed": "d3d3ec59a056e21831fa7286c01288f55f8bb172aed1777d91a35cccf755f20a",
+"place_idx": "99f0127e89e75d897ca8e6e2d86a4b399201817788d56f432ac3d44728175aef",
+"value": "13437e6d80c9bbd45a4fbea8eee011b4f6fe075a502274b014778aa15204c5d9"
+},
+"meta": {
+"source": "0_0_13_2.psq",
+"plies": 64,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "a9ee3101d6d5a8e2d4ec7a22a4cbd697a3d2da150eacee4c7efadd44ecbf2c5f"
+},
+"tgt": {
+"passed": "c2a6d1ee9394d13e86791e99dbbc404dcf0ea9e48013705ef791434c5b433aa4",
+"place_idx": "f65febe2b7701c432c7efbc112d46647e96e175e3744ed21d4216fef89831e65",
+"value": "db4e81b8ff2aed83ad0641bf06a52c9a913d03009e0a10efbc0d1c968434d997"
+},
+"meta": {
+"source": "0_0_14_2.psq",
+"plies": 72,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "fd4acd9051dc2b3175b7abf867606d9b571b61583c7b5a8bba670cc518c3dc9b"
+},
+"tgt": {
+"passed": "5f0a930eeef9945a3ad2752c405ad5b62e4d321017dd4aa1705ca25cecfb177f",
+"place_idx": "f36ec2d52822307ff430c8778531ef93d3afac120e45ac99960ceaad58ebcf05",
+"value": "f31c1e6ddb17d08326cc8494d45f7f8c6cfbf087e0679bc83ce7e7c42a5df4d9"
+},
+"meta": {
+"source": "0_0_15_2.psq",
+"plies": 56,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "a9612d370c7f2271ace0f4f767d0456aaa3170e60b6bfde53d49292a4828c637"
+},
+"tgt": {
+"passed": "d21930aca728e5cccd3f1283ba227da04f96a09458f964208c6ff6304359b153",
+"place_idx": "e118b15a3379198e77d5a75473546d3bdc74180414c9b44b10929eed9edaae66",
+"value": "d145e4307a240ee7a277ec5b1a544ae4fbceb8246e221f2767f303d941eb5d4f"
+},
+"meta": {
+"source": "0_0_1_2.psq",
+"plies": 100,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "93f61b7fcebf0a6b43cd8baacca7c3ff044bb423b2c3458ec878b3712e39329e"
+},
+"tgt": {
+"passed": "7141a1981216c665231c1041b6be5dd6ec40c8c897ddb50491973129ffbbe0f1",
+"place_idx": "0ca9772f72c82680c4aa07e86cdaac6aba312d434b44d442f9fa6a6c2803878f",
+"value": "6876994c8db43f8c897a42cb847aaf558e77034919be3ea916c137a68bbca760"
+},
+"meta": {
+"source": "0_0_2_2.psq",
+"plies": 38,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "41b91a576e54fc21af836fedc2856cbbb401ef287afe0d0a8eb7e3967a452ad6"
+},
+"tgt": {
+"passed": "afe19d357d30b1e87c98dffb47203f881df23d02ca8234de7bc9fd75d11b1b6b",
+"place_idx": "a66a55cfd4f26149497bc88eded9c332b6d85247be6b6ed18f0d2c62270693e4",
+"value": "77098b0ce1d4d082b3e06b1ee6cbff3b877994dd7b98107a75683cf44b9a9cf3"
+},
+"meta": {
+"source": "0_0_3_2.psq",
+"plies": 110,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "67f689d2e1c5f480770c379ea2efbefbabab7537a25239848a6febe5271f2cf7"
+},
+"tgt": {
+"passed": "070ff4415b9799ebc1315a79d1421a43e8482277f7f71bdc645791e89a0de403",
+"place_idx": "69332f97abe66f205d0cf4ef338030c8de15f005b978e00e25d6793e67ef1ea0",
+"value": "027fc1c58c78ee59367e082d218f09ecad5d45f886b8bbc1b9ef9296e68db0cc"
+},
+"meta": {
+"source": "0_0_4_1.psq",
+"plies": 111,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "95a86aefe07a963f9d7fd75bcda4dc210c4f188085c90f26ca27435b03303385"
+},
+"tgt": {
+"passed": "7d9bfa6848b087c6d4fcb5634822690bf1ac365523ca29b0087f6642c6a58078",
+"place_idx": "ec47f6a431d1454299a762a841dce17096244d994959b25d4fd9e915f53bdfcf",
+"value": "4b3911e1f55bf70de52f4b500d8f0ef23da976f270e874ac37b901ea183377eb"
+},
+"meta": {
+"source": "0_0_5_2.psq",
+"plies": 90,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "9f22d76ab29861f82d3fd926b1050b9e7ddd06918259f7a5964c4c9862cad094"
+},
+"tgt": {
+"passed": "1c5e48f60d5a6dd29f1def9881d8a965e6c5be7cbbfc3292576391c2d64c2b1b",
+"place_idx": "b37bb2b755fb04e32ba5b8c0d185d137183c503557db897d9956abd3a9f96a20",
+"value": "3b9b2ad84674957e23158fce98281b2199c386714487e8ecf543f5d13cdd8b87"
+},
+"meta": {
+"source": "0_0_6_2.psq",
+"plies": 80,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "1ed3eba8b81b844298cf7aa77eb455b34520d998f88413e5f8e81b7b1bb30608"
+},
+"tgt": {
+"passed": "604b9fb1347cae801a98487183b248981505a2517282d0bb4b9853e72c7e8bed",
+"place_idx": "ad7e92d2a6d7870ce39debec77183147e21476e4c0380c9f03d359fc0ae4f2b4",
+"value": "41bb34213396f3832892c2690f4b7ec22062b15c0d8fc7d67d80bc946d5b8a5d"
+},
+"meta": {
+"source": "0_0_7_2.psq",
+"plies": 52,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "7b97cf3ff8f848fe04d751dd35ed66c001e4dda9346ebbd6ca521c094fba8b26"
+},
+"tgt": {
+"passed": "14cce7117354a04eb2328ea32141da5f99e78b414beb7746be4ea7ce1471cb4e",
+"place_idx": "c8430e2145469b19c33db4540cfefa4f0ef6a4283614adae7bf80236d7d90e04",
+"value": "b07931ad79f717320010f5b94eb213909eb2f321febb5b379a00866efdd4da0c"
+},
+"meta": {
+"source": "0_0_8_2.psq",
+"plies": 60,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "5fee526fd16e057d95b421cfaaf8fcf5daa0f4387856e040bc9623ac47e860c5"
+},
+"tgt": {
+"passed": "3b93a99ced00665cb5723f3eab727b105f1ee3cf11fedf5d3effcfb3b9036bef",
+"place_idx": "20acdbd8590959fef83224a242eb64b5d94253e1b72e8e8fe2b9c4e3bd5e709c",
+"value": "0d74d7b68d1b14e053d1548dd67cb875450d80043ea6032d2d3085e039e165b3"
+},
+"meta": {
+"source": "0_0_9_2.psq",
+"plies": 12,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "0cd10550ef21fae0dc59b9c7a73688ab84d7bb576aea2c88a92798e1601bc549"
+},
+"tgt": {
+"passed": "ef92ce80fd14a3c7c4df5dece553752f49908dcc8b7e9e0d51def984920cf75d",
+"place_idx": "b3ecc74cf78426ef3e913deb979533bc56435aa31834d0719c4998d31b44e0bd",
+"value": "2aed17153675a72c712ad5f94c4d5b0bb4f964e777e48a4880467880a83ef7bb"
+},
+"meta": {
+"source": "0_10_0_1.psq",
+"plies": 41,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "fbe2f159b5da9d61c8e2e20a962158f7957aa9f3a37822dfd2fd44f74d45d3e2"
+},
+"tgt": {
+"passed": "c289bac98964686b12957cc5630439d8578019877b4c63f51830c516404df9d0",
+"place_idx": "f3c1f6b9f87b2d51d7361ae0171cc29f815223df7620d0d84583e850527d5acf",
+"value": "8a9cd1ae96e081cb1556be71b9e126864aac2aaee31f8a342e03998196792a14"
+},
+"meta": {
+"source": "0_10_11_2.psq",
+"plies": 78,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "7b62d124f2e1faba68c67c82272e259c91d396b343b234c2a72d393fb0559bf1"
+},
+"tgt": {
+"passed": "070ff4415b9799ebc1315a79d1421a43e8482277f7f71bdc645791e89a0de403",
+"place_idx": "8b41850a01700a55212778156ed7e1e034d0af713e75e464bb7135422d2de9d2",
+"value": "027fc1c58c78ee59367e082d218f09ecad5d45f886b8bbc1b9ef9296e68db0cc"
+},
+"meta": {
+"source": "0_10_12_1.psq",
+"plies": 111,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "b585711bc7639c71ca0ffeebc2522214785552832d80d13ecc539f511f9026c0"
+},
+"tgt": {
+"passed": "1c5e48f60d5a6dd29f1def9881d8a965e6c5be7cbbfc3292576391c2d64c2b1b",
+"place_idx": "ae17aebf0d860a05b307ac26191e026a92dd6a992d8c5df10c3a0a1800b87fe8",
+"value": "3b9b2ad84674957e23158fce98281b2199c386714487e8ecf543f5d13cdd8b87"
+},
+"meta": {
+"source": "0_10_13_2.psq",
+"plies": 80,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "aba2af34157d1e2fc006342472d4b4256bc63b859a543e9f5d7d0da087b05243"
+},
+"tgt": {
+"passed": "604b9fb1347cae801a98487183b248981505a2517282d0bb4b9853e72c7e8bed",
+"place_idx": "ff0eda224d517a79f5baf4ce245770bb707ac72f45b4be262d37d34a46278be1",
+"value": "41bb34213396f3832892c2690f4b7ec22062b15c0d8fc7d67d80bc946d5b8a5d"
+},
+"meta": {
+"source": "0_10_14_2.psq",
+"plies": 52,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "b76a43cd3b2038d51b05c892437de95052808d635df8359b0129a22a58961cf5"
+},
+"tgt": {
+"passed": "3e971e678b36d225ec3b98aa9fb6cf5491b061a55bd55ecff929d1c4da8d519d",
+"place_idx": "cc1d7b543b4b38f6e0e765b5008c516175ca5eedc16c393da7a935491b333c12",
+"value": "705ca53221e063568355cbe7771dd39a9907dc9460737cd49a692577329a411d"
+},
+"meta": {
+"source": "0_10_15_1.psq",
+"plies": 87,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "c810fdbfdcc7e7a40ad71bd1ba512999a319c68945518ebb92a22cd0467a8beb"
+},
+"tgt": {
+"passed": "52855474ee422788f712a12c788277d00ea7c08b9d12b18e9c40157fdd5fff28",
+"place_idx": "45d28c7a66041f81b09b4ce4b22175e9930f054c0dace5183efdf1e4b10d1fc4",
+"value": "e120d04600407ec863876334acaddba49691617b3107a013f3c6ba473210ce05"
+},
+"meta": {
+"source": "0_10_1_1.psq",
+"plies": 53,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "c9290a77aa3c6257943001b9baa92c026eb22ad7f90e95cecde484b46be59ff0"
+},
+"tgt": {
+"passed": "e72c20fccd0019f09ede6512ae02b25ace733ef187fa6ff0a3e2cad3727d171d",
+"place_idx": "86ed24ba443c5c35ce35f799294a63744075a555934eaba8bf88eb359ab454e0",
+"value": "71d15a85628fb22adccc887b17f955f85a7df9b522bc2bce93c92f8d704b0450"
+},
+"meta": {
+"source": "0_10_2_1.psq",
+"plies": 43,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "b784d7a26015d1147df9e2f4a1d666df9271cae2c107c9c7fa6c3e97388998f9"
+},
+"tgt": {
+"passed": "a131398d9db0d673044eb02eb7fe8175def7d7af171ee5fa46b9b5766fccd9bb",
+"place_idx": "664a6ff69c226d39670ee7ffaab58f4615e113a0ec18441036c131dbafc37625",
+"value": "ad42fb4df614c8b8cac9fdd278787885916272edfe66dbbdcd775d32360e5dc3"
+},
+"meta": {
+"source": "0_10_3_1.psq",
+"plies": 65,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "43ad2043a4d302bedbb6fcc256003bdfa14a2d39fa5434741c7b1ef86b5d8d73"
+},
+"tgt": {
+"passed": "7df6743a5861071ad43a09815c715ee7ead0f6cc1bc47246aa64576862bcac3e",
+"place_idx": "8ffa631b668528ecbb63c3cb11d111e05bd2a720d2684532ed38f3d6cbff179d",
+"value": "780081912d3e11302722d97044895396cd804f75cfa7b5701b2d3ce68b801fd5"
+},
+"meta": {
+"source": "0_10_4_1.psq",
+"plies": 51,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "cce8713b5af548410cfc81a9b36c6b5758ec18a5d96de094b98f12b0343aab0b"
+},
+"tgt": {
+"passed": "05d86f5e2bd522f63ae777023703891f17f06ab48f2179bc6ba23048748a710f",
+"place_idx": "62cfb463ed83a28acf7cec5260ef413fb14492498c10900f4cb5e90794cd3b3f",
+"value": "c06a347e1c786d870dc30b1daf3cb1b11d1135bdb41e1c12a4d992579e561a45"
+},
+"meta": {
+"source": "0_1_0_1.psq",
+"plies": 59,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "b96f4c63ca623be4faf3c44efdfbbe4b378957627fc02c04379be0630e3bdc69"
+},
+"tgt": {
+"passed": "c2a6d1ee9394d13e86791e99dbbc404dcf0ea9e48013705ef791434c5b433aa4",
+"place_idx": "fac38a77329d52195c15f8e1ea7a4d65e7be52c3d31649c47e81f9d8562a1458",
+"value": "db4e81b8ff2aed83ad0641bf06a52c9a913d03009e0a10efbc0d1c968434d997"
+},
+"meta": {
+"source": "0_1_10_2.psq",
+"plies": 72,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "fe3b63b8c30d7c530a7ad8ad25aa563b44823630b211636938a040db96276c7c"
+},
+"tgt": {
+"passed": "2429843d162bf94150b18e9d5f42a616e9bc8ab783e87230e137b34c3f5a1f40",
+"place_idx": "7295b9b8bd61dacaf76e71cb8dd748d3c95d65464c07f1c0cdd921af47249077",
+"value": "bd050f3e3ca8c4396d189879a2afc91ce8db1df4497fd11f63ae829dd03f446a"
+},
+"meta": {
+"source": "0_1_11_2.psq",
+"plies": 66,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "768b2c60163cfc19a242ecbb0611123488315b5a8be9a82757fab93ac71adab8"
+},
+"tgt": {
+"passed": "2429843d162bf94150b18e9d5f42a616e9bc8ab783e87230e137b34c3f5a1f40",
+"place_idx": "44b95237aa94740c70f00ec8036dd9a233c0a076151ae10716117bdf989b66c7",
+"value": "bd050f3e3ca8c4396d189879a2afc91ce8db1df4497fd11f63ae829dd03f446a"
+},
+"meta": {
+"source": "0_1_12_2.psq",
+"plies": 66,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "f2f709b20a4c28ec4f3e2309e1b570f20c79fb0557924aad0ac9133bf8f8d5a4"
+},
+"tgt": {
+"passed": "7d0adbf944d0e6cc418343e7ac3e2bbd65b78e2920d8f29bac5be5f89176fc33",
+"place_idx": "fd6dca57d94549bdb2c0107c279eda910db221c15a4682040a07b5496a3b88e8",
+"value": "5f51df18973cd096896d04c396c8f3c960a02b7ef62a90a9395e2891f728d501"
+},
+"meta": {
+"source": "0_1_13_2.psq",
+"plies": 96,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "07d156bcf06b87137df20a28778bf571e591a9bf267857fcf55fef4f96a04e4e"
+},
+"tgt": {
+"passed": "1c5e48f60d5a6dd29f1def9881d8a965e6c5be7cbbfc3292576391c2d64c2b1b",
+"place_idx": "d708d42df63fcc023b055fb76c398c9dd61ab0eb5890ba3f089676e93cfe3d36",
+"value": "3b9b2ad84674957e23158fce98281b2199c386714487e8ecf543f5d13cdd8b87"
+},
+"meta": {
+"source": "0_1_14_2.psq",
+"plies": 80,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "4ed035e011204545483c0a3794ede1cf7a427afe8c3b2a654227cd57e441c6ee"
+},
+"tgt": {
+"passed": "2e3b952624fd69018fcbc88866b80fb4c821c07c1911768964d6ad79936a6a53",
+"place_idx": "7321acd5d37e02ebcb71e5f0d16424f870993ed08001301d1da746b946fa01a2",
+"value": "82f579f0b9f0a381588fa9fe52cf0c520522a5ecee1cf205120c83d51db9a5eb"
+},
+"meta": {
+"source": "0_1_15_2.psq",
+"plies": 70,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "ccf56276e9978efd5703d852fa7b9830808ef003f389169c055768b55ab12699"
+},
+"tgt": {
+"passed": "e9ac07be212223d97d8a15e574efae22cc45ffc53e1fbb91cf526c7bf14634ba",
+"place_idx": "53947087fcf5b66116efa350dc80636601e39cf7a64e9b7aa9e917248f473de1",
+"value": "9dc154efadb90a3ccb5e86188477620c9d7a636c480e6cf458e626cce83edf18"
+},
+"meta": {
+"source": "0_1_2_2.psq",
+"plies": 124,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "83a5ce342fbbf95bfb1b71658e84b89d83fe5d2ddf9e542c7f594caa9eeeeb15"
+},
+"tgt": {
+"passed": "ec539a72ca589b4ac7a263fa8a59cb9f8706bbc4be2380e9f0a945e4452863b8",
+"place_idx": "9a9516dc0adaa060daff3592dcb251012b2189bd7e730e945c277768ac2885ff",
+"value": "05c7266fec43d531eb7db6aa5f2680b4f0b152ae19cde23ebb19bc204487bb42"
+},
+"meta": {
+"source": "0_1_3_2.psq",
+"plies": 148,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "b9bffa3b1b5e2ec1198950e19beef112ae59dfe2b075a9ee39cb53428faa5741"
+},
+"tgt": {
+"passed": "1889375d8ad1b02d11766559273dc6c482ab5b47c0f7f924d3875c7bd2560373",
+"place_idx": "68667e7d2e5b8277d29d01bbb1bddbdc8f2e5565805f6db2562b07a441770128",
+"value": "a48e68c6608d5400a5bed0eb6ec1885fbc2a95013645ef2b339788c518b03174"
+},
+"meta": {
+"source": "0_1_4_1.psq",
+"plies": 49,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "923e621946b2ae2dedd8fa1f1a4f3d1922c1ae230b758cfc0328b2cfde02f5b4"
+},
+"tgt": {
+"passed": "ef92ce80fd14a3c7c4df5dece553752f49908dcc8b7e9e0d51def984920cf75d",
+"place_idx": "5c982751575be06c4222895c8b74f40d8689b38e7416a77f7888bca97e37367d",
+"value": "2aed17153675a72c712ad5f94c4d5b0bb4f964e777e48a4880467880a83ef7bb"
+},
+"meta": {
+"source": "0_1_5_1.psq",
+"plies": 41,
+"winner": "black"
+}
+},
+{
+"obs": {
+"board_seq": "365d13bb1cc1283ff5a9930183a51f03927fd05cf854acc20c0dde06afe5b813"
+},
+"tgt": {
+"passed": "963a38470ad362426e9639e7421357e55eda281b94a4bba345cf8affe2d3077b",
+"place_idx": "a520acf263f3c729b6ae535804339dacc99273ee66d9e5a7a78dd0bdc2bb8234",
+"value": "394c549d553ba6b1d4cbd3c3b663a5111d28ad2e0362dfd9b35d6e9323338fc5"
+},
+"meta": {
+"source": "0_1_6_2.psq",
+"plies": 94,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "b698a23f314a1f11e4924f800ad486f0f59099e25e8f95ce1f5e13d7182e8b99"
+},
+"tgt": {
+"passed": "2e3b952624fd69018fcbc88866b80fb4c821c07c1911768964d6ad79936a6a53",
+"place_idx": "4d9cc92a2f52e351f95360e97f0662f15284108475bd12dfd260e39e184bcf29",
+"value": "82f579f0b9f0a381588fa9fe52cf0c520522a5ecee1cf205120c83d51db9a5eb"
+},
+"meta": {
+"source": "0_1_7_2.psq",
+"plies": 70,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "d1a2f1f5ae68bb26280b30b41bfaa96410afe26485b78d2bca84825ab968d5c5"
+},
+"tgt": {
+"passed": "dae2006a9cced9a319a8f7b90d75102c557579fa3f2ed03bd5b4ffc9708d46cd",
+"place_idx": "c621b8e870764dad22b3cd2ada75ec1d36f71299588989d920d4cc665739cd3d",
+"value": "7d3614bcbe2161f7b19379eafd067db174bf329600b9ff679e478e12b9a090c5"
+},
+"meta": {
+"source": "0_1_8_2.psq",
+"plies": 76,
+"winner": "white"
+}
+},
+{
+"obs": {
+"board_seq": "5fee526fd16e057d95b421cfaaf8fcf5daa0f4387856e040bc9623ac47e860c5"
+},
+"tgt": {
+"passed": "3b93a99ced00665cb5723f3eab727b105f1ee3cf11fedf5d3effcfb3b9036bef",
+"place_idx": "d71214e209777ad3a346a655640e49cb1d52ad73b0cdd9d084b6404709e2d536",
+"value": "0d74d7b68d1b14e053d1548dd67cb875450d80043ea6032d2d3085e039e165b3"
+},
+"meta": {
+"source": "0_1_9_2.psq",
+"plies": 12,
+"winner": "white"
+}
+}
+]
+}
