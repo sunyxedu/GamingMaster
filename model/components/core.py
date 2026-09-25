@@ -30,7 +30,8 @@ MoE — DeepSeek-V3 routing (arXiv 2412.19437 §2.1.1-2.1.2):
 
 Auxiliary-loss-free balancing: b is not trained by gradient; after every
 optimizer step b_e ← b_e + γ·sign(mean load − load_e), with the loads summed
-over EVERY micro-batch of the step.  In joint multi-game training the
+over EVERY micro-batch of the step (under data parallelism also over every
+rank, :func:`allreduce_moe_loads`).  In joint multi-game training the
 balance is thus enforced on the global mixture, not per game — a per-batch
 balancing loss would force every single game to spread uniformly over all
 experts and forbid game specialisation.  Padded tokens are excluded from
@@ -45,6 +46,7 @@ import math
 from typing import Dict, Iterable, Optional, Tuple
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
@@ -448,6 +450,24 @@ class RecurrentDepthCore(nn.Module):
 
 def moe_layers(module: nn.Module):
     return [m for m in module.modules() if isinstance(m, MoEFFN)]
+
+
+@torch.no_grad()
+def allreduce_moe_loads(module: nn.Module) -> None:
+    """Sum every MoE layer's step load tally across the ranks of the default
+    process group (one all-reduce), so the next :func:`update_moe_balance`
+    sees the GLOBAL load of all ranks' micro-batches and moves the balance
+    bias identically on every rank.  No-op without a process group or with
+    one rank.  Call on every rank, right before ``update_moe_balance``."""
+    if not (dist.is_available() and dist.is_initialized()) or dist.get_world_size() == 1:
+        return
+    layers = moe_layers(module)
+    if not layers:
+        return
+    flat = torch.cat([m.load for m in layers])
+    dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+    for m, ld in zip(layers, flat.split([m.load.numel() for m in layers])):
+        m.load.copy_(ld)
 
 
 @torch.no_grad()

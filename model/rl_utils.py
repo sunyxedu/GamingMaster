@@ -9,14 +9,12 @@ Reinforcement-learning utilities.
 
 from __future__ import annotations
 
-import math
 from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
-
 
 # ======================================================================
 # GAE
@@ -373,7 +371,8 @@ def compute_policy_kl_rl(
 # Distributed gradient sync (manual DDP replacement)
 # ======================================================================
 
-def sync_gradients(model: nn.Module, world_size: int) -> None:
+def sync_gradients(model: nn.Module, world_size: int, *, warn_partial: bool = True,
+                   bucket_mb: float = 0.0) -> None:
     """All-reduce gradients across ranks with a RANK-INVARIANT collective
     schedule.
 
@@ -392,7 +391,16 @@ def sync_gradients(model: nn.Module, world_size: int) -> None:
     and prints which ones, since that asymmetry is an autograd anomaly
     worth investigating. Parameters with no gradient on ANY rank are
     skipped by all ranks alike, preserving the previous semantics (heads
-    untouched by the objective are never allreduced, never stepped).
+    untouched by the objective are never allreduced, never stepped): their
+    grad stays None, so the optimizer skips them (no moment or weight decay).
+
+    ``warn_partial=False`` silences the partial-coverage warning for callers
+    where it is expected — joint multi-game training leaves a game's
+    encoder/decoder without gradient on every rank that did not draw it.
+    ``bucket_mb > 0`` coalesces the participating gradients (in parameter
+    order, per dtype) into flat buffers of at most that many MiB, one
+    all-reduce per bucket instead of one per parameter; the bucket layout
+    depends only on the agreed mask, so it is rank-invariant too.
     """
     named = list(model.named_parameters())
     device = named[0][1].device
@@ -405,19 +413,49 @@ def sync_gradients(model: nn.Module, world_size: int) -> None:
     # A rank with NO local gradients at all is a legitimate empty
     # accumulation chunk (buffer counts vary across ranks under mirror
     # self-play) — only a PARTIAL gap is an autograd anomaly worth noise.
-    if bool(gap.any()) and bool(local.any()):
+    if warn_partial and bool(gap.any()) and bool(local.any()):
         names = [named[i][0] for i in gap.nonzero(as_tuple=True)[0].tolist()]
         print(f"  [grad-sync] rank {dist.get_rank()}: no local gradient for "
               f"{len(names)} participating parameter(s), contributing zeros "
               f"— autograd anomaly, e.g. {names[:6]}", flush=True)
 
+    grads = []
     for has_grad, (_, p) in zip(participating.tolist(), named):
         if not has_grad:
             continue
         if p.grad is None:
             p.grad = torch.zeros_like(p)
-        dist.all_reduce(p.grad, op=dist.ReduceOp.SUM)
-        p.grad.div_(world_size)
+        grads.append(p.grad)
+    if bucket_mb <= 0:
+        for g in grads:
+            dist.all_reduce(g, op=dist.ReduceOp.SUM)
+            g.div_(world_size)
+        return
+    for bucket in _grad_buckets(grads, int(bucket_mb * 2 ** 20)):
+        flat = torch._utils._flatten_dense_tensors(bucket)
+        dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+        flat.div_(world_size)
+        for g, synced in zip(bucket, torch._utils._unflatten_dense_tensors(flat, bucket)):
+            g.copy_(synced)
+
+
+def _grad_buckets(grads: List[torch.Tensor], cap_bytes: int) -> List[List[torch.Tensor]]:
+    """Split ``grads`` (kept in order) into same-dtype runs of at most
+    ``cap_bytes`` each (a single larger tensor gets a bucket of its own)."""
+    buckets: List[List[torch.Tensor]] = []
+    open_: Dict[torch.dtype, int] = {}          # dtype -> index of its open bucket
+    size: Dict[int, int] = {}
+    for g in grads:
+        nbytes = g.numel() * g.element_size()
+        i = open_.get(g.dtype)
+        if i is None or size[i] + nbytes > cap_bytes:
+            i = len(buckets)
+            buckets.append([])
+            size[i] = 0
+            open_[g.dtype] = i
+        buckets[i].append(g)
+        size[i] += nbytes
+    return buckets
 
 
 # ======================================================================

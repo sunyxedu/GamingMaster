@@ -34,9 +34,14 @@ WORLD = 2
 JOIN_TIMEOUT_S = 180
 
 
-def _worker(rank, init_file, scenario, queue):
+def _worker(rank, init_file, scenario, queue, sync_kw=None):
     """Runs in a spawned process: build the model, plant per-rank grads,
-    sync, and report the first element of every grad back to the parent."""
+    sync, and report the first element of every grad back to the parent.
+
+    With ``sync_kw`` (keyword arguments for sync_gradients) the planted
+    gradients differ per element and per tensor — (rank+1)·(1 + arange) + i
+    for the i-th parameter — and the FULL synced gradients are reported, so a
+    bucket that scatters values back into the wrong tensor or offset shows."""
     import torch
     import torch.distributed as dist
 
@@ -53,8 +58,10 @@ def _worker(rank, init_file, scenario, queue):
         net = GeneralsNetwork(ModelConfig(**SMALL_CFG))
 
         # Deterministic per-rank gradients: rank 0 → 1.0, rank 1 → 2.0
-        for _, p in net.named_parameters():
+        for i, (_, p) in enumerate(net.named_parameters()):
             p.grad = torch.full_like(p, float(rank + 1))
+            if sync_kw is not None:
+                p.grad += (rank + 1) * torch.arange(p.numel(), dtype=p.dtype).view_as(p) + i
 
         if scenario == "divergent" and rank == 1:
             # The production incident: one rank misses the q_head module
@@ -67,10 +74,14 @@ def _worker(rank, init_file, scenario, queue):
 
         buf = io.StringIO()
         with redirect_stdout(buf):
-            sync_gradients(net, WORLD)
+            sync_gradients(net, WORLD, **(sync_kw or {}))
 
+        # full grads travel as numpy (pickled by value): a torch tensor would
+        # go through shared memory that dies with this process
         grads = {
-            name: (None if p.grad is None else p.grad.flatten()[0].item())
+            name: (None if p.grad is None
+                   else p.grad.numpy().copy() if sync_kw is not None
+                   else p.grad.flatten()[0].item())
             for name, p in net.named_parameters()
         }
         queue.put((rank, grads, "[grad-sync]" in buf.getvalue()))
@@ -78,12 +89,12 @@ def _worker(rank, init_file, scenario, queue):
         dist.destroy_process_group()
 
 
-def _run(scenario, tmp_path):
+def _run(scenario, tmp_path, sync_kw=None):
     ctx = torch.multiprocessing.get_context("spawn")
     queue = ctx.Queue()
     init_file = tmp_path / f"store-{scenario}"
     procs = [
-        ctx.Process(target=_worker, args=(r, str(init_file), scenario, queue))
+        ctx.Process(target=_worker, args=(r, str(init_file), scenario, queue, sync_kw))
         for r in range(WORLD)
     ]
     for p in procs:
@@ -140,3 +151,31 @@ def test_nowhere_coverage_skips_param_on_all_ranks(tmp_path):
                 assert g is None, f"rank {rank} {name}"
             else:
                 assert g == pytest.approx(1.5), f"rank {rank} {name}"
+
+
+@pytest.mark.parametrize("bucket_mb", [0.0, 0.001, 1000.0])
+def test_bucketed_sync_is_exact_per_element(tmp_path, bucket_mb):
+    """Per-tensor (0), many small buckets and one big bucket all average
+    every element into the right tensor and offset; rank 1's missing q_head
+    is zero-filled; ``warn_partial=False`` silences the expected-gap warning."""
+    results = _run("divergent", tmp_path,
+                   sync_kw=dict(bucket_mb=bucket_mb, warn_partial=False))
+    for rank in range(WORLD):
+        grads, warned = results[rank]
+        assert not warned
+        for i, (name, g) in enumerate(grads.items()):
+            g = torch.from_numpy(g)
+            idx = torch.arange(g.numel(), dtype=g.dtype).view_as(g)
+            if name.startswith("trm.q_head."):
+                want = (1 + idx + i) / 2                   # (rank-0 value + 0) / 2
+            else:
+                want = 1.5 + 1.5 * idx + i
+            assert torch.equal(g, want), f"rank {rank} {name}"
+
+
+def test_bucketed_sync_keeps_nowhere_params_none(tmp_path):
+    results = _run("nowhere", tmp_path, sync_kw=dict(bucket_mb=0.001, warn_partial=False))
+    for rank in range(WORLD):
+        grads, _ = results[rank]
+        for name, g in grads.items():
+            assert (g is None) == name.startswith("obs_encoder.next_obs_head."), name
