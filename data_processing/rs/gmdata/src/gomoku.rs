@@ -84,6 +84,12 @@ pub fn parse_psq(text: &str) -> std::result::Result<(i32, i32, Vec<(i32, i32)>),
     Ok((w, h, moves))
 }
 
+/// Engine names from the trailer (the two lines ending in `.zip` after the moves).
+pub fn trailer_engines(text: &str) -> Option<(String, String)> {
+    let names: Vec<&str> = text.lines().map(|l| l.trim()).filter(|l| l.to_lowercase().ends_with(".zip")).collect();
+    (names.len() >= 2).then(|| (names[0].to_string(), names[1].to_string()))
+}
+
 /// `^\s*(\d+),(\d+)(?:,(-?\d+))?\s*$`
 fn parse_move_line(line: &str) -> Option<(i32, i32)> {
     let t = line.trim_matches(|c: char| c.is_whitespace());
@@ -172,21 +178,76 @@ pub enum Cmd {
         rule: String,
         #[arg(long)]
         keep_undecided: bool,
+        /// keep only games where both engines are among the N best by win rate over the
+        /// input directory (computed in a first pass; engine names from the psq trailer)
+        #[arg(long)]
+        top_engines: Option<usize>,
     },
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Engine → win rate over decisive games in `files`; engines with fewer than 10 games are unranked.
+fn engine_ranking(files: &[PathBuf], n: i32, exact_five: bool) -> Vec<(String, f64, usize)> {
+    let mut rec: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for f in files {
+        let Ok(bytes) = std::fs::read(f) else { continue };
+        let text = String::from_utf8_lossy(&bytes);
+        let (Ok((w, h, moves)), Some((e1, e2))) = (parse_psq(&text), trailer_engines(&text)) else { continue };
+        if (w, h) != (n, n) || moves.is_empty() {
+            continue;
+        }
+        let mut b = vec![EMPTY; (n * n) as usize];
+        let mut player = BLACK;
+        let mut winner = None;
+        for &(r, c) in &moves {
+            if !(0..n).contains(&r) || !(0..n).contains(&c) || b[(r * n + c) as usize] != EMPTY {
+                break;
+            }
+            b[(r * n + c) as usize] = player;
+            if wins(&b, n, player, r, c, exact_five) {
+                winner = Some(player);
+                break;
+            }
+            player = opponent(player);
+        }
+        let Some(wp) = winner else { continue };
+        let (we, le) = if wp == BLACK { (&e1, &e2) } else { (&e2, &e1) };
+        rec.entry(we.clone()).or_default().0 += 1;
+        rec.entry(we.clone()).or_default().1 += 1;
+        rec.entry(le.clone()).or_default().1 += 1;
+    }
+    let mut v: Vec<(String, f64, usize)> = rec.into_iter().filter(|(_, (_, g))| *g >= 10).map(|(e, (w, g))| (e, w as f64 / g as f64, g)).collect();
+    v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap().then(a.0.cmp(&b.0)));
+    v
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<usize>, min_moves: usize, board_size: i32,
-               rule: &str, keep_undecided: bool) -> Result<serde_json::Value> {
+               rule: &str, keep_undecided: bool, top_engines: Option<usize>) -> Result<serde_json::Value> {
     anyhow::ensure!((5..=25).contains(&board_size), "board_size must be within [5, 25], got {board_size}");
     anyhow::ensure!(rule == "freestyle" || rule == "standard", "unknown rule {rule:?}");
     let exact_five = rule == "standard";
     let mut w = ShardWriter::new(out, "gomoku", 1, json!({"board_size": board_size}), shard_size)?;
     let mut stats: BTreeMap<String, usize> = BTreeMap::new();
     let (mut seen, mut kept) = (0usize, 0usize);
-    for path in common::find_files(input, &[".psq"])? {
+    let files = common::find_files(input, &[".psq"])?;
+    let top: Option<std::collections::HashSet<String>> = top_engines.map(|k| {
+        let r = engine_ranking(&files, board_size, exact_five);
+        eprintln!("engine ranking (win rate, games): {}", r.iter().take(k).map(|(e, w, g)| format!("{e} {w:.2}/{g}")).collect::<Vec<_>>().join(", "));
+        r.into_iter().take(k).map(|x| x.0).collect()
+    });
+    for path in files {
         seen += 1;
         let text = String::from_utf8_lossy(&std::fs::read(&path)?).to_string();
+        if let Some(t) = &top {
+            match trailer_engines(&text) {
+                Some((a, b)) if t.contains(&a) && t.contains(&b) => {}
+                _ => {
+                    *stats.entry("low_quality".into()).or_default() += 1;
+                    continue;
+                }
+            }
+        }
         let res = parse_psq(&text).and_then(|(wd, ht, moves)| {
             if (wd, ht) != (board_size, board_size) {
                 return Err("wrong_board_size".to_string());
@@ -215,8 +276,8 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<us
 
 pub fn run(cmd: Cmd) -> Result<()> {
     match cmd {
-        Cmd::Convert { input, out, shard_size, max_games, min_moves, board_size, rule, keep_undecided } => {
-            println!("{}", convert(&input, &out, shard_size, max_games, min_moves, board_size, &rule, keep_undecided)?);
+        Cmd::Convert { input, out, shard_size, max_games, min_moves, board_size, rule, keep_undecided, top_engines } => {
+            println!("{}", convert(&input, &out, shard_size, max_games, min_moves, board_size, &rule, keep_undecided, top_engines)?);
             Ok(())
         }
     }
