@@ -13,6 +13,7 @@ mod chess;
 mod common;
 mod generals;
 mod go;
+mod lux;
 mod gomoku;
 mod othello;
 mod shogi;
@@ -54,6 +55,11 @@ enum Game {
         #[command(subcommand)]
         cmd: shogi::Cmd,
     },
+    /// Lux AI Season 3 (Kaggle episode replays)
+    Lux {
+        #[command(subcommand)]
+        cmd: lux::Cmd,
+    },
     /// Gomoku (Gomocup .psq records)
     Gomoku {
         #[command(subcommand)]
@@ -68,6 +74,7 @@ fn main() -> Result<()> {
         Game::Chess { cmd } => chess::run(cmd),
         Game::Gomoku { cmd } => gomoku::run(cmd),
         Game::Go { cmd } => go::run(cmd),
+        Game::Lux { cmd } => lux::run(cmd),
         Game::Shogi { cmd } => shogi::run(cmd),
     }
 }

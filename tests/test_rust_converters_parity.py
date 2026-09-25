@@ -104,3 +104,18 @@ def test_shogi(gmdata, tmp_path, allow_no_result):
     subprocess.run([gmdata, "shogi", "convert", "--input", src, "--out", tmp_path / "rs"]
                    + (["--allow-no-result"] if allow_no_result else []), check=True, capture_output=True)
     assert_same(tmp_path / "py", tmp_path / "rs", ("players", "result", "plies"))
+
+
+def test_lux(gmdata, tmp_path):
+    import json
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_pipeline_lux import _mini_episode
+    from data_processing.games.lux.convert import convert
+    src = tmp_path / "raw"
+    src.mkdir()
+    for k in range(2):
+        json.dump(_mini_episode(), open(src / f"ep{k}.json", "w"))
+    convert(str(src), str(tmp_path / "py"))
+    subprocess.run([gmdata, "lux", "convert", "--input", src, "--out", tmp_path / "rs"], check=True, capture_output=True)
+    assert_same(tmp_path / "py", tmp_path / "rs", ("agent", "team", "match_index", "match_value"))
