@@ -1,3 +1,3 @@
-Created [harness.py](/Users/hemlix/Documents/GamingMaster/runs/r5-snake/search/candidates/0002/harness.py), [proposal.md](/Users/hemlix/Documents/GamingMaster/runs/r5-snake/search/candidates/0002/proposal.md), and [notes.md](/Users/hemlix/Documents/GamingMaster/runs/r5-snake/search/notes.md).
+Created [harness.py](<repo>/runs/r5-snake/search/candidates/0002/harness.py), [proposal.md](<repo>/runs/r5-snake/search/candidates/0002/proposal.md), and [notes.md](<repo>/runs/r5-snake/search/notes.md).
 
 Candidate 0002 tests tick-local control with asynchronous Astra policy compilation and Jev strategy selection. Syntax and short stand-in checks passed, including garbage output, runaway policies, error propagation, and worker cleanup. Real evaluation remains pending.

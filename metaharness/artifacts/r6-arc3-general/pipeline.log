@@ -1,4 +1,4 @@
-[16:28:44] run: game='ARC-AGI-3' dir=/Users/hemlix/Documents/GamingMaster/runs/r6-arc3 agent=codex:gpt-6-astra
+[16:28:44] run: game='ARC-AGI-3' dir=<repo>/runs/r6-arc3 agent=codex:gpt-6-astra
 [16:40:35] study: done — tier 1, interface official env: arc-agi Python SDK, in-process OFFLINE mode
 [16:48:28] adapt: adaptor validated after 1 attempt(s)
 [16:48:28] search: tier 1 on adaptor game 'ARC-AGI-3'

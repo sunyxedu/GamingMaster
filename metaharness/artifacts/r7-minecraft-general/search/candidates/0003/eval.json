@@ -1,5 +1,5 @@
 {
-  "harness_path": "/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/search/candidates/0003/harness.py",
+  "harness_path": "<repo>/runs/r7-minecraft/search/candidates/0003/harness.py",
   "game": "Minecraft Java 1.21.1 \u2014 natural survival",
   "fatal": null,
   "mean_score": 26.666666666666668,

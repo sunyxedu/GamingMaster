@@ -1,6 +1,6 @@
 # Build the adaptor for **Minecraft**
 
-Working directory: `/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/adaptor`. Study documents from the previous phase are in `/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/study`
+Working directory: `<repo>/runs/r7-minecraft/adaptor`. Study documents from the previous phase are in `<repo>/runs/r7-minecraft/study`
 (read `interfaces.md` first; `study.json` summarises the chosen interface, credentials and scenarios).
 
 ## Contract
@@ -114,7 +114,7 @@ class RealtimeGame(Protocol):
   If something needs the user (account login, purchase, a GUI step), write `NEEDS.md` listing exactly
   what and stop.
 * Write `ADAPTOR.md`, `requirements.txt` (if any), `env.example`. The evaluator's interpreter is
-  `/Users/hemlix/Documents/GamingMaster/.venv/bin/python` (Python 3.14.5; `metaharness` is importable there). Install
-  requirements into *that* environment: `/Users/hemlix/Documents/GamingMaster/.venv/bin/python -m pip install ...`.
-* Test it yourself: `/Users/hemlix/Documents/GamingMaster/.venv/bin/python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/adaptor').to_markdown())"`
+  `<repo>/.venv/bin/python` (Python 3.14.5; `metaharness` is importable there). Install
+  requirements into *that* environment: `<repo>/.venv/bin/python -m pip install ...`.
+* Test it yourself: `<repo>/.venv/bin/python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('<repo>/runs/r7-minecraft/adaptor').to_markdown())"`
   must print PASS. Then play a few random actions and check the observation and score make sense.

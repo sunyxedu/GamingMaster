@@ -1,6 +1,6 @@
 # Study the game: **Snake**
 
-Working directory: `/Users/hemlix/Documents/GamingMaster/runs/r5-snake/study` (write everything here).
+Working directory: `<repo>/runs/r5-snake/study` (write everything here).
 User notes (platform, account, constraints — may be empty): Classic snake. No external account; if no ready-made programmatic version fits, the adaptor may implement the game locally, faithfully to the classic rules.
 
 We are building an agent for this game out of two foundation models plus a generated harness:

@@ -24,7 +24,7 @@ No emulator/ROM interface is needed: these environments are Python engine progra
 
 ## Exact software and configuration
 
-Interpreter: `/Users/hemlix/Documents/GamingMaster/.venv/bin/python` — **Python 3.14.5**. Do not use the system Python to judge compatibility.
+Interpreter: `<repo>/.venv/bin/python` — **Python 3.14.5**. Do not use the system Python to judge compatibility.
 
 Installed and verified: `arc-agi==0.9.9`, `arcengine==0.9.3`, `numpy==2.4.2`, `pydantic==2.13.5`. Both ARC distributions declare `Requires-Python: >=3.12`; 3.12 is a minimum, not an exact version requirement. All cached games initialized on 3.14.5. No install or upgrade is currently needed. If reconstructing the environment, retain these versions and install the toolkit's declared dependencies: Flask, Matplotlib, Pydantic, python-dotenv, Pillow, requests, and arcengine; arcengine requires NumPy. Full dependency constraints are in [runtime-check.json](runtime-check.json). Torch, a GPU, SciPy, pygame, and browser automation are not prerequisites.
 
@@ -55,7 +55,7 @@ API signatures verified in the installed package:
 - `env.action_space` is a list of `GameAction` values inferred from that response.
 - `env.step(action, data=None, reasoning=None)` and `env.reset()` return an observation or `None`.
 
-[Wrapper reference](https://docs.arcprize.org/toolkit/environment_wrapper). For version-sensitive implementation details, the installed sources take precedence over changing web examples: `arc_agi/base.py`, `local_wrapper.py`, `wrapper.py`, and `arcengine/enums.py`, under `/Users/hemlix/Documents/GamingMaster/.venv/lib/python3.14/site-packages/`.
+[Wrapper reference](https://docs.arcprize.org/toolkit/environment_wrapper). For version-sensitive implementation details, the installed sources take precedence over changing web examples: `arc_agi/base.py`, `local_wrapper.py`, `wrapper.py`, and `arcengine/enums.py`, under `<repo>/.venv/lib/python3.14/site-packages/`.
 
 The adaptor phase should follow this sequence:
 
@@ -101,7 +101,7 @@ The installed `FrameDataRaw` has these public fields:
 | `full_reset` | Whether a full restart occurred; not a general indication of every level retry |
 | `game_id`, `guid` | Versioned game ID and session identifier; useful for evaluation logs |
 
-**Critical:** `frame` is a Pydantic private-backed property and is omitted from `model_dump()` and `model_dump_json()`. Assemble the payload explicitly, converting each frame with `.tolist()`. A naïve model dump yields metadata without the board. `GameAction.value` in this installed enum is the integer action ID; use explicit names/IDs for robust JSON rather than serializing enum internals. Source: installed [enums.py](/Users/hemlix/Documents/GamingMaster/.venv/lib/python3.14/site-packages/arcengine/enums.py).
+**Critical:** `frame` is a Pydantic private-backed property and is omitted from `model_dump()` and `model_dump_json()`. Assemble the payload explicitly, converting each frame with `.tolist()`. A naïve model dump yields metadata without the board. `GameAction.value` in this installed enum is the integer action ID; use explicit names/IDs for robust JSON rather than serializing enum internals. Source: installed [enums.py](<repo>/.venv/lib/python3.14/site-packages/arcengine/enums.py).
 
 Recommended adaptor JSON: `state`, `levels_completed`, `win_levels`, `available_actions`, `full_reset`, `frame` (last 2D grid), `animation_frames` (all grids or selected event grids), `last_action`, `episode_actions`, `retries`, `score`, and a monotonically increasing `observation_id`. Keep the game ID in evaluator logs; the agent can solve from public observations without an ID lookup table. Raw pixels remain accessible even if the agent usually sees a compressed object summary.
 
@@ -121,7 +121,7 @@ Handle `WIN` and `GAME_OVER` before sending numbered actions. The installed engi
 
 ### Player RESET is not a fresh evaluator episode
 
-In installed `ARCBaseGame.handle_reset`, after at least one action in the current level, RESET ordinarily retries that level. At action count zero, or after WIN, RESET ordinarily performs a full reset. Setting a level zeros its action count. Therefore a duplicate RESET, or RESET immediately after a level transition, can erase earlier progress. `ONLY_RESET_LEVELS=true` changes part of this behavior. `env.reset()` calls the same RESET action; it accepts no seed. These details come from installed [base_game.py](/Users/hemlix/Documents/GamingMaster/.venv/lib/python3.14/site-packages/arcengine/base_game.py), not an assumption based on Gym APIs. Game subclasses may customize reset behavior, so always inspect the returned metadata.
+In installed `ARCBaseGame.handle_reset`, after at least one action in the current level, RESET ordinarily retries that level. At action count zero, or after WIN, RESET ordinarily performs a full reset. Setting a level zeros its action count. Therefore a duplicate RESET, or RESET immediately after a level transition, can erase earlier progress. `ONLY_RESET_LEVELS=true` changes part of this behavior. `env.reset()` calls the same RESET action; it accepts no seed. These details come from installed [base_game.py](<repo>/.venv/lib/python3.14/site-packages/arcengine/base_game.py), not an assumption based on Gym APIs. Game subclasses may customize reset behavior, so always inspect the returned metadata.
 
 ## Score, budget, and logging contract
 

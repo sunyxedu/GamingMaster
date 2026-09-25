@@ -127,7 +127,7 @@ objects are exposed in observations or logs.
 Run the required generic validator:
 
 ```sh
-/Users/hemlix/Documents/GamingMaster/.venv/bin/python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('/Users/hemlix/Documents/GamingMaster/runs/r6-arc3/adaptor').to_markdown())"
+<repo>/.venv/bin/python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('<repo>/runs/r6-arc3/adaptor').to_markdown())"
 ```
 
 `test_adaptor.py` performs live cache initialization, seeded random development

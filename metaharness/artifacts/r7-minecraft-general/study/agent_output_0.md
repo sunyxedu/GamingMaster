@@ -1,9 +1,9 @@
 Created all four deliverables:
 
-- [brief.md](/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/study/brief.md)
-- [interfaces.md](/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/study/interfaces.md)
-- [strategies.md](/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/study/strategies.md)
-- [study.json](/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/study/study.json)
+- [brief.md](<repo>/runs/r7-minecraft/study/brief.md)
+- [interfaces.md](<repo>/runs/r7-minecraft/study/interfaces.md)
+- [strategies.md](<repo>/runs/r7-minecraft/study/strategies.md)
+- [study.json](<repo>/runs/r7-minecraft/study/study.json)
 
 Recommendation: **tier 2**, Mineflayer through a Node bridge, with an adaptor-owned offline localhost server and five-minute episodes.
 

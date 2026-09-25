@@ -5,10 +5,10 @@ This is a **Tier 2, real vanilla Minecraft 1.21.1** adaptor. Python owns a priva
 ## Install and run
 
 ```sh
-cd /Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/adaptor
+cd <repo>/runs/r7-minecraft/adaptor
 ./setup.sh
-/Users/hemlix/Documents/GamingMaster/.venv/bin/python -m pip install -r requirements.txt
-/Users/hemlix/Documents/GamingMaster/.venv/bin/python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/adaptor').to_markdown())"
+<repo>/.venv/bin/python -m pip install -r requirements.txt
+<repo>/.venv/bin/python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('<repo>/runs/r7-minecraft/adaptor').to_markdown())"
 ```
 
 The runtime has already been installed and tested with the specified Python **3.14.5**, Node **26.0.0**, and local Temurin **21.0.12.1+1**. Python uses only its standard library plus the evaluator's `metaharness`. Node dependencies are `mineflayer@4.39.0`, `mineflayer-pathfinder@2.4.5`, and `vec3@0.1.10`; `bridge/package-lock.json` fixes their complete dependency tree. Setup uses `npm ci` with a local cache, not a global installation.
@@ -49,7 +49,7 @@ Admission is preparation-only, before any scored play. Its fixed predicate is im
 Each attempt, witness set, selected spawn, world seed and rejection reason is saved in a baseline manifest. A rejected harness seed raises `InadmissibleSeed`; it is **never silently replaced with a different world**. Infrastructure/readiness failures likewise do not become low-score trials. Prepare a declared evaluation set ahead of time:
 
 ```sh
-/Users/hemlix/Documents/GamingMaster/.venv/bin/python prepare_seeds.py 100000 100001 100002 100003
+<repo>/.venv/bin/python prepare_seeds.py 100000 100001 100002 100003
 ```
 
 This command only prepares worlds and prints admission results; the above held-out example has not been run during development. Development exercised seeds **0, 1, 2, 3**; exclude those entire world seeds from held-out evaluation. Repeat matched trials because mob AI, item trajectories/drops, entity scheduling and network timing are not bitwise deterministic. Both policies must use the same admitted seed list, configuration, dependency lock and 300-second limit.

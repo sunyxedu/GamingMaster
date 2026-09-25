@@ -1,6 +1,6 @@
 # Build the adaptor for **Snake**
 
-Working directory: `/Users/hemlix/Documents/GamingMaster/runs/r5-snake/adaptor`. Study documents from the previous phase are in `/Users/hemlix/Documents/GamingMaster/runs/r5-snake/study`
+Working directory: `<repo>/runs/r5-snake/adaptor`. Study documents from the previous phase are in `<repo>/runs/r5-snake/study`
 (read `interfaces.md` first; `study.json` summarises the chosen interface, credentials and scenarios).
 
 ## Contract
@@ -115,5 +115,5 @@ class RealtimeGame(Protocol):
   what and stop.
 * Write `ADAPTOR.md`, `requirements.txt` (if any), `env.example`. Install requirements into the
   current Python environment (`uv pip install ...` or `pip install ...`).
-* Test it yourself: `python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('/Users/hemlix/Documents/GamingMaster/runs/r5-snake/adaptor').to_markdown())"`
+* Test it yourself: `python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('<repo>/runs/r5-snake/adaptor').to_markdown())"`
   must print PASS. Then play a few random actions and check the observation and score make sense.

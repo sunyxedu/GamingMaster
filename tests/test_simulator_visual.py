@@ -201,7 +201,10 @@ class InteractiveVisualizer:
 
 
 if __name__ == "__main__":
-    replay_path = "/Users/hemlix/Documents/GamingMaster/data/my_replays/replays/1T7ieIkAz.json"
+    import sys
+    if len(sys.argv) != 2:
+        sys.exit("usage: python tests/test_simulator_visual.py <replay.json>")
+    replay_path = sys.argv[1]
 
     with open(replay_path, 'r') as f:
         data = json.load(f)

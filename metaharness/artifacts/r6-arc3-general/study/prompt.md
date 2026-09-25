@@ -1,6 +1,6 @@
 # Study the game: **ARC-AGI-3**
 
-Working directory: `/Users/hemlix/Documents/GamingMaster/runs/r6-arc3/study` (write everything here). The evaluator's Python is `/Users/hemlix/Documents/GamingMaster/.venv/bin/python`
+Working directory: `<repo>/runs/r6-arc3/study` (write everything here). The evaluator's Python is `<repo>/.venv/bin/python`
 (Python 3.14.5); judge software requirements against it, not the system python.
 User notes (platform, account, constraints — may be empty): Use the official arc-agi Python package, already installed in the evaluator interpreter. No ARC_API_KEY and no network to the ARC servers: run in OFFLINE mode with the environment variables OPERATION_MODE=offline and ENVIRONMENTS_DIR already set in the process environment (cached game ids: cd82 lf52 ls20 sb26 sp80 tn36 tu93 vc33). Map reset(seed) onto game ids so that some ids can be held out. Levels completed is the natural score.
 

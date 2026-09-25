@@ -14,8 +14,8 @@ project's `.venv/bin/python`, installs `requirements.txt` into that environment,
 runs the regression suite, and requires the generic validator to pass.
 
 ```sh
-export PATH="/Users/hemlix/Documents/GamingMaster/.venv/bin:$PATH"
-python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('/Users/hemlix/Documents/GamingMaster/runs/r5-snake/adaptor').to_markdown())"
+export PATH="<repo>/.venv/bin:$PATH"
+python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('<repo>/runs/r5-snake/adaptor').to_markdown())"
 python run_local.py --seed 3 --output verification/wall-seed-3.json
 python run_local.py --replay verification/wall-seed-3.json
 ```

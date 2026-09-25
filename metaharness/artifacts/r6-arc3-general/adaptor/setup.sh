@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")"
-PYTHON=/Users/hemlix/Documents/GamingMaster/.venv/bin/python
+PYTHON=<repo>/.venv/bin/python
 "$PYTHON" -m pip --version >/dev/null 2>&1 || "$PYTHON" -m ensurepip --upgrade
 "$PYTHON" -m pip install -r requirements.txt
 "$PYTHON" - <<'PY'

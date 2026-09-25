@@ -1,6 +1,6 @@
 # Study the game: **Minecraft**
 
-Working directory: `/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/study` (write everything here). The evaluator's Python is `/Users/hemlix/Documents/GamingMaster/.venv/bin/python`
+Working directory: `<repo>/runs/r7-minecraft/study` (write everything here). The evaluator's Python is `<repo>/.venv/bin/python`
 (Python 3.14.5); judge software requirements against it, not the system python.
 User notes (platform, account, constraints — may be empty): Java Edition. No Microsoft/Mojang account is available, so use a LOCAL server in offline mode (online-mode=false) that the adaptor starts and stops itself (node v26 and java are installed; install anything else you need under the run directory). Prefer a mature bot library (e.g. Mineflayer via a Node bridge) over screen capture. Survival mode single player-like scenario; a score that reflects early-game progress (resources gathered, crafting milestones, survival) is fine. Keep episodes to a few minutes.
 

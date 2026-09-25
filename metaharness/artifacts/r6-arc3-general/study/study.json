@@ -7,7 +7,7 @@
     "chosen": "official env: arc-agi Python SDK, in-process OFFLINE mode",
     "why": "Already installed and all eight cached versions initialize on the evaluator's Python 3.14.5. It supplies exact NumPy pixel grids and state/progress metadata without ARC server access, credentials, GUI input, or HTTP overhead. Use public wrapper observations rather than hidden engine state. See https://docs.arcprize.org/local-vs-online and interfaces.md.",
     "software": [
-      "/Users/hemlix/Documents/GamingMaster/.venv/bin/python (Python 3.14.5; use this interpreter)",
+      "<repo>/.venv/bin/python (Python 3.14.5; use this interpreter)",
       "arc-agi==0.9.9 (already installed; no upgrade needed)",
       "arcengine==0.9.3 (already installed)",
       "numpy==2.4.2 and pydantic==2.13.5 (already installed)",

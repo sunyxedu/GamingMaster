@@ -1,6 +1,6 @@
 Minecraft: Java Edition — adaptor interface specification
 
-Researched 2026-09-21. This document specifies a future adaptor; it contains no implemented game-playing logic. All proposed files, downloads, caches, worlds, and logs belong under `/Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/study/`. Treat timings and resource budgets below as engineering estimates until measured.
+Researched 2026-09-21. This document specifies a future adaptor; it contains no implemented game-playing logic. All proposed files, downloads, caches, worlds, and logs belong under `<repo>/runs/r7-minecraft/study/`. Treat timings and resource budgets below as engineering estimates until measured.
 
 **Choose Mineflayer through a persistent Node bridge, connected to an adaptor-owned vanilla 1.21.1 server on loopback.** Python 3.14.5 owns the lifecycle and sends JSON Lines over subprocess pipes. Node owns the connected player and uninterrupted physics. The server uses `online-mode=false`; the bot uses `auth: 'offline'`. No Microsoft/Mojang account, launcher, access token, API key, renderer, or paid hosting is technically required for this connection. The mature Mineflayer API supplies world, inventory, movement, digging, crafting, and entity abstractions that a raw protocol client would have to rebuild. [Mineflayer project](https://github.com/PrismarineJS/mineflayer), [offline protocol login](https://github.com/PrismarineJS/node-minecraft-protocol).
 
@@ -27,7 +27,7 @@ Researched 2026-09-21. This document specifies a future adaptor; it contains no 
 | Minecraft Pi API / RaspberryJuice | Older educational block/world/player scripting, often through Bukkit. | Fast simple calls, but artificial world edits and missing modern survival interaction. | Not an equivalent Java survival agent. [RaspberryJuice](https://github.com/zhuowei/RaspberryJuice). |
 | Bedrock Script API / Education APIs / emulation | Official Bedrock APIs expose entities/world/game tests, but target another edition; an emulator does not supply a Java survival API. | Different runtime and mechanics, account/platform restrictions; unsupported substitution. | Out of scope for Java Edition. [Microsoft Script API](https://learn.microsoft.com/en-us/minecraft/creator/scriptapi/?view=minecraft-bedrock-stable). |
 
-**Compatibility and exact install candidates.** Locally verified: `node --version` = v26.0.0; `java -version` = Temurin OpenJDK 26.0.2; `/Users/hemlix/Documents/GamingMaster/.venv/bin/python --version` = Python 3.14.5. These are executable checks, not a server integration test.
+**Compatibility and exact install candidates.** Locally verified: `node --version` = v26.0.0; `java -version` = Temurin OpenJDK 26.0.2; `<repo>/.venv/bin/python --version` = Python 3.14.5. These are executable checks, not a server integration test.
 
 | Component | Install / version decision |
 |---|---|

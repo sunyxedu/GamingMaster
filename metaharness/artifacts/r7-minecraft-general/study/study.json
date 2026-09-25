@@ -7,7 +7,7 @@
     "chosen": "bot library",
     "why": "Mineflayer with mineflayer-pathfinder, running in a persistent Node subprocess and connected to an adaptor-owned loopback vanilla server with offline authentication, exposes structured client state and ordinary survival actions without an account, GUI or renderer. A JSON Lines subprocess bridge lets the evaluator use Python 3.14.5 standard-library modules without relying on legacy MineRL/Malmo native dependencies. Server stdin handles reset and shutdown separately from policy actions. Tagged upstream source includes 1.21.1 support; installation and integration still require runtime verification.",
     "software": [
-      "Evaluator Python /Users/hemlix/Documents/GamingMaster/.venv/bin/python, verified 3.14.5; standard library only for the wrapper",
+      "Evaluator Python <repo>/.venv/bin/python, verified 3.14.5; standard library only for the wrapper",
       "Existing Node.js v26.0.0 and npm; Mineflayer 4.39.0 requires Node >=22",
       "mineflayer@4.39.0, source-verified candidate pin; confirm npm availability and lock transitive dependencies",
       "mineflayer-pathfinder@2.4.5, source-verified candidate pin",
@@ -19,7 +19,7 @@
     "env": [
       {
         "var": "MC_RUN_DIR",
-        "description": "Optional absolute runtime root under the study directory; default /Users/hemlix/Documents/GamingMaster/runs/r7-minecraft/study/runtime. The adaptor creates all downloads, caches, worlds and logs here.",
+        "description": "Optional absolute runtime root under the study directory; default <repo>/runs/r7-minecraft/study/runtime. The adaptor creates all downloads, caches, worlds and logs here.",
         "required": false
       },
       {

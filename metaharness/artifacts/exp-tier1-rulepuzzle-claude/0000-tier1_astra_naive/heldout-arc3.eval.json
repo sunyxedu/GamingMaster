@@ -8,7 +8,7 @@
   "system1_calls": 0,
   "system2_calls": 0,
   "errors": [
-    "Traceback (most recent call last):\n  File \"/Users/hemlix/Documents/GamingMaster/metaharness/core/runner.py\", line 237, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/metaharness/baselines/tier1_astra_naive.py\", line 18, in run_episode\n    prompt = (f\"{game.describe()}\\nLegend (digit=colour): {obs['legend']}\\n\"\n                                                           ~~~^^^^^^^^^^\nKeyError: 'legend'\n"
+    "Traceback (most recent call last):\n  File \"<repo>/metaharness/core/runner.py\", line 237, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"<repo>/metaharness/baselines/tier1_astra_naive.py\", line 18, in run_episode\n    prompt = (f\"{game.describe()}\\nLegend (digit=colour): {obs['legend']}\\n\"\n                                                           ~~~^^^^^^^^^^\nKeyError: 'legend'\n"
   ],
   "episodes": [
     {
@@ -26,7 +26,7 @@
         "n": 0
       },
       "wall_s": 0.0009799003601074219,
-      "error": "Traceback (most recent call last):\n  File \"/Users/hemlix/Documents/GamingMaster/metaharness/core/runner.py\", line 237, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"/Users/hemlix/Documents/GamingMaster/metaharness/baselines/tier1_astra_naive.py\", line 18, in run_episode\n    prompt = (f\"{game.describe()}\\nLegend (digit=colour): {obs['legend']}\\n\"\n                                                           ~~~^^^^^^^^^^\nKeyError: 'legend'\n",
+      "error": "Traceback (most recent call last):\n  File \"<repo>/metaharness/core/runner.py\", line 237, in _run\n    program.run_episode(view)\n    ~~~~~~~~~~~~~~~~~~~^^^^^^\n  File \"<repo>/metaharness/baselines/tier1_astra_naive.py\", line 18, in run_episode\n    prompt = (f\"{game.describe()}\\nLegend (digit=colour): {obs['legend']}\\n\"\n                                                           ~~~^^^^^^^^^^\nKeyError: 'legend'\n",
       "info": {
         "levels_done": 0,
         "actions_used": 0,

@@ -1,6 +1,6 @@
 # Meta-Harness iteration -> candidate `0002`
 
-Working directory: `/Users/hemlix/Documents/GamingMaster/runs/r5-snake/search` (you have full read/write access here).
+Working directory: `<repo>/runs/r5-snake/search` (you have full read/write access here).
 
 ## Task
 Design a harness for a **real-time** game (tier 2).

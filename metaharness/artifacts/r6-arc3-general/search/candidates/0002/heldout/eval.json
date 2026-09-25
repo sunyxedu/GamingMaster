@@ -1,5 +1,5 @@
 {
-  "harness_path": "/Users/hemlix/Documents/GamingMaster/runs/r6-arc3/search/candidates/0002/harness.py",
+  "harness_path": "<repo>/runs/r6-arc3/search/candidates/0002/harness.py",
   "game": "ARC-AGI-3",
   "fatal": null,
   "mean_score": 2.5,

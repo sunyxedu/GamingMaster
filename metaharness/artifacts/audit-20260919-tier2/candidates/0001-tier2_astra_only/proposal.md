@@ -1,1 +1,1 @@
-Seed candidate copied from /Users/hemlix/Documents/GamingMaster/metaharness/baselines/tier2_astra_only.py.
+Seed candidate copied from <repo>/metaharness/baselines/tier2_astra_only.py.

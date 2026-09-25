@@ -1,5 +1,5 @@
 {
-  "harness_path": "/Users/hemlix/Documents/GamingMaster/runs/r5-snake/search/candidates/0003/harness.py",
+  "harness_path": "<repo>/runs/r5-snake/search/candidates/0003/harness.py",
   "game": "Snake",
   "fatal": null,
   "mean_score": 0.6494845360824743,

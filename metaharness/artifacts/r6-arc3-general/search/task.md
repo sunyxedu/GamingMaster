@@ -105,7 +105,7 @@ No emulator/ROM interface is needed: these environments are Python engine progra
 
 ## Exact software and configuration
 
-Interpreter: `/Users/hemlix/Documents/GamingMaster/.venv/bin/python` — **Python 3.14.5**. Do not use the system Python to judge compatibility.
+Interpreter: `<repo>/.venv/bin/python` — **Python 3.14.5**. Do not use the system Python to judge compatibility.
 
 Installed and verified: `arc-agi==0.9.9`, `arcengine==0.9.3`, `numpy==2.4.2`, `pydantic==2.13.5`. Both ARC distributions declare `Requires-Python: >=3.12`; 3.12 is a minimum, not an exact version requirement. All cached games initialized on 3.14.5. No install or upgrade is currently needed. If reconstructing the environment, retain these versions and install the toolkit's declared dependencies: Flask, Matplotlib, Pydantic, python-dotenv, Pillow, requests, and arcengine; arcengine requires NumPy. Full dependency constraints are in [runtime-check.json](runtime-check.json). Torch, a GPU, SciPy, pygame, and browser automation are not prerequisites.
 
@@ -320,7 +320,7 @@ objects are exposed in observations or logs.
 Run the required generic validator:
 
 ```sh
-/Users/hemlix/Documents/GamingMaster/.venv/bin/python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('/Users/hemlix/Documents/GamingMaster/runs/r6-arc3/adaptor').to_markdown())"
+<repo>/.venv/bin/python -c "from metaharness.games.adaptor import validate_adaptor; print(validate_adaptor('<repo>/runs/r6-arc3/adaptor').to_markdown())"
 ```
 
 `test_adaptor.py` performs live cache initialization, seeded random development
