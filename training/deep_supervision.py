@@ -1,41 +1,49 @@
-"""TRM deep supervision, as trained by the reference implementation.
+"""TRM deep supervision, written the way the reference trains.
 
-Reference (arXiv 2510.04871 Fig. 3; SamsungSAILMontreal/TinyRecursiveModels
-``pretrain.py`` + ``TinyRecursiveReasoningModel_ACTV1.forward``):
+Reference: SamsungSAILMontreal/TinyRecursiveModels ``pretrain.py``
+(``train_batch``) + ``TinyRecursiveReasoningModel_ACTV1.forward``:
 
-    for x, y_true in loader:
-        y, z = y_init, z_init
-        for step in range(N_sup):                    # N_sup = halt_max_steps
-            (y, z), y_hat, q_hat = deep_recursion(x, y, z)   # carry detached
-            loss = CE(y_hat, y_true) + 0.5 * BCE(q_hat, y_hat == y_true)
-            loss.backward(); opt.step(); opt.zero_grad()      # EMA update
-            halt examples with q_hat > 0 (training only; exploration: with
-            prob 0.1 an example must run at least U{2..N_sup} steps)
+    train_state.carry = None                      # persists across batches/epochs
+    for batch in loader:                          # one batch = ONE ACT step
+        if carry is None: carry = initial_carry(batch)   # everything "halted"
+        # rows that halted last step: reset latents to (H_init, L_init),
+        # steps to 0, and take THIS batch's row i as their data; rows still
+        # running keep their old data (this batch's row i is dropped)
+        carry, loss = model(carry, batch)          # one deep recursion
+        (loss / global_batch_size).backward()
+        optimizer.step(); zero_grad(); ema.update()
+        # halting (training only): halted = steps >= N_sup | q_halt > 0,
+        # exploration: w.p. 0.1 an example must reach U{2..N_sup} steps
+    total_steps = epochs * N / global_batch_size   # fixed
 
-Every supervision step is its own optimizer step; the latents are carried
-(detached) between steps and each halted example leaves the loop.  At
-evaluation every example runs all N_sup steps.
+:class:`BatchCarry` is ``train_state.carry``.  Our "example" is a frame
+(the TRM ponders each frame's tokens); a batch row is one game sequence,
+because Stage 1 encodes the whole sequence.  Frames halt individually —
+a halted frame's latents are frozen and it leaves the loss — and a row is
+swapped for new data once all its frames have halted (or reached N_sup).
 
-Here an "example" is one frame (the TRM ponders each frame's tokens), so
-halting is per frame.  Stage 1 is recomputed at every supervision step
-(the weights changed), exactly like the reference re-embeds the input.
+Loss normalisation: the reference divides the summed per-example loss by
+the fixed global batch size.  Our loss functions return the mean over the
+active frames, so each step multiplies it by ``n_active / n_frames`` (all
+real frames currently in the batch): every (frame, step) pair weighs
+1 / n_frames regardless of how many frames are still pondering.
 
-Loss normalisation: the reference divides every step's summed loss by the
-FIXED global batch size (its batch never shrinks — halted examples are
-swapped for new data).  Our batch shrinks as frames halt, so each step's
-active-frame MEAN loss is multiplied by ``n_active / n_frames``: every
-(frame, step) pair then weighs 1 / n_frames, as in the reference, instead
-of a few hard late frames getting a full-size update.
+Evaluation (reference ``evaluate``): every example runs all N_sup steps —
+``net(..., act_steps=halt_max_steps)``.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
 
 #: weight of the q_halt BCE relative to the task loss (reference ACTLossHead)
 Q_HALT_WEIGHT = 0.5
+
+#: batch groups whose tensors are [B, T, ...] per-frame data
+FRAME_GROUPS = ("obs", "tgt", "aux")
 
 
 def halt_update(
@@ -67,75 +75,156 @@ def halt_update(
         return new_steps, active & ~halted
 
 
-def run_deep_supervision(
-    n_micro: int,
-    frame_masks: List[torch.Tensor],
-    forward_backward: Callable[[int, Optional[Tuple[torch.Tensor, torch.Tensor]],
-                                torch.Tensor, float],
-                               Tuple[Dict[str, torch.Tensor], Dict[str, float]]],
-    optimizer_step: Callable[[], None],
-    n_sup: int,
-    exploration_prob: float,
-    any_live: Optional[Callable[[bool], bool]] = None,
-    carry_store: Optional[torch.device] = None,
-) -> Dict[str, float]:
-    """Drive deep supervision over one optimizer window of ``n_micro``
-    micro-batches (gradient accumulation).
+# ---------------------------------------------------------------------------
+# row <-> batch
+# ---------------------------------------------------------------------------
 
-    ``forward_backward(i, carry, active, weight)`` runs micro-batch ``i``
-    from ``carry`` on the ``active`` frames, calls ``backward()`` on
-    ``weight * mean_active_loss / n_micro`` (``weight`` = n_active /
-    n_frames, see the module docstring) and returns ``(pred, stats)``;
-    ``pred`` must hold ``q_halt`` [B, T] and ``carry``.  ``optimizer_step()`` is called
-    once per supervision step.  ``any_live(local_live)`` lets distributed
-    callers make the continue decision collective (every rank must run the
-    same number of optimizer steps).  ``carry_store`` (e.g. CPU) parks the
-    carried latents of the micro-batches not being processed — with
-    gradient accumulation every micro-batch's [B*T, S, d] carry must
-    survive until its next supervision step.
+def split_rows(batch: Dict) -> List[Dict]:
+    """Collated batch → per-row data, every [B, T, ...] tensor of the
+    ``obs`` / ``tgt`` / ``aux`` groups trimmed to the row's length."""
+    lengths = [int(n) for n in batch["meta"]["lengths"]]
+    rows = []
+    for i, L in enumerate(lengths):
+        row = {"T": L}
+        for g in FRAME_GROUPS:
+            if g in batch:
+                row[g] = {k: v[i, :L] for k, v in batch[g].items()}
+        rows.append(row)
+    return rows
 
-    Returns mean stats over all supervision steps plus ``sup_steps`` (steps
-    run) and ``halt_depth`` (mean supervision steps per frame).
-    """
-    carries: List[Optional[Tuple[torch.Tensor, torch.Tensor]]] = [None] * n_micro
-    active = [m.clone() for m in frame_masks]
-    n_total = [max(int(m.sum()), 1) for m in frame_masks]
-    steps = [torch.zeros(m.shape, dtype=torch.long, device=m.device) for m in frame_masks]
-    agg: Dict[str, float] = {}
-    n_stats = 0
-    sup_steps = 0
-    for _ in range(max(1, n_sup)):
-        local_live = any(bool(a.any()) for a in active)
-        live = any_live(local_live) if any_live is not None else local_live
-        if not live:
-            break
-        for i in range(n_micro):
-            if not bool(active[i].any()):
-                continue
-            carry = carries[i]
-            if carry is not None and carry_store is not None:
-                dev = active[i].device
-                carry = (carry[0].to(dev, non_blocking=True),
-                         carry[1].to(dev, non_blocking=True))
-            weight = int(active[i].sum()) / n_total[i]
-            pred, stats = forward_backward(i, carry, active[i], weight)
-            new_carry = pred["carry"]
-            if carry_store is not None:
-                # blocking: a non_blocking device→host copy may still be in
-                # flight when the tensor is next read
-                new_carry = (new_carry[0].to(carry_store),
-                             new_carry[1].to(carry_store))
-            carries[i] = new_carry
-            steps[i], active[i] = halt_update(
-                pred["q_halt"].detach(), steps[i], active[i], n_sup,
-                exploration_prob, training=True)
-            for k, v in stats.items():
-                agg[k] = agg.get(k, 0.0) + float(v)
-            n_stats += 1
-        optimizer_step()
-        sup_steps += 1
-    out = {k: v / max(n_stats, 1) for k, v in agg.items()}
-    n_frames = sum(int(m.sum()) for m in frame_masks)
-    out["sup_steps"] = float(sup_steps)
-    out["halt_depth"] = (sum(int(s.sum()) for s in steps) / max(n_frames, 1))
+
+def merge_rows(rows: List[Dict]) -> Dict:
+    """Per-row data → zero-padded batch (the padding both dataset collates
+    use), with ``meta.lengths`` and ``meta.frame_mask``."""
+    lengths = [r["T"] for r in rows]
+    B, T_max = len(rows), max(lengths)
+    out: Dict = {}
+    for g in FRAME_GROUPS:
+        if g not in rows[0]:
+            continue
+        grp = {}
+        for k, ref in rows[0][g].items():
+            t = ref.new_zeros((B, T_max, *ref.shape[1:]))
+            for i, r in enumerate(rows):
+                t[i, : r["T"]] = r[g][k]
+            grp[k] = t
+        out[g] = grp
+    dev = next(iter(rows[0]["obs"].values())).device
+    frame_mask = torch.zeros(B, T_max, dtype=torch.bool, device=dev)
+    for i, L in enumerate(lengths):
+        frame_mask[i, :L] = True
+    out["meta"] = {"lengths": lengths, "frame_mask": frame_mask}
     return out
+
+
+@dataclass
+class _Row:
+    data: Dict
+    steps: torch.Tensor                   # [T] long
+    active: torch.Tensor                  # [T] bool
+    carry: Optional[Tuple[torch.Tensor, torch.Tensor]] = None   # [T, S, d] x 2
+
+
+ForwardBackward = Callable[
+    [Dict, Optional[Tuple[torch.Tensor, torch.Tensor]], torch.Tensor,
+     torch.Tensor, float],
+    Tuple[Dict[str, torch.Tensor], Dict[str, float]],
+]
+
+
+class BatchCarry:
+    """The reference ``train_state.carry`` for one (micro-)batch slot.
+
+    Call :meth:`step` once per loader batch.  It swaps halted rows for the
+    new batch's rows at the same positions, runs ``forward_backward`` once
+    (one ACT step for every row) and applies the halting rule.
+    """
+
+    def __init__(self, n_sup: int, exploration_prob: float,
+                 store: Optional[torch.device] = None):
+        self.n_sup = max(1, n_sup)
+        self.exploration_prob = exploration_prob
+        self.store = store              # park latents here between steps
+        self.rows: List[Optional[_Row]] = []
+
+    def step(self, new_rows: List[Dict], forward_backward: ForwardBackward
+             ) -> Optional[Dict[str, float]]:
+        """``new_rows``: this batch's per-row data (:func:`split_rows`, after
+        any per-example preparation such as teacher-forcing draws).
+        ``forward_backward(batch, carry, active, reset, weight)`` must run
+        the model with those arguments, ``backward()`` on
+        ``weight * active_mean_loss`` (divided by any accumulation factor)
+        and return ``(pred, stats)`` with ``pred["q_halt"]`` / ``["carry"]``.
+        """
+        # reference: new_current_data = where(halted, batch, current_data)
+        n = max(len(self.rows), len(new_rows))
+        self.rows += [None] * (n - len(self.rows))
+        for i in range(n):
+            r = self.rows[i]
+            if r is None or not bool(r.active.any()):
+                if i < len(new_rows):
+                    d = new_rows[i]
+                    dev = next(iter(d["obs"].values())).device
+                    self.rows[i] = _Row(
+                        data=d,
+                        steps=torch.zeros(d["T"], dtype=torch.long, device=dev),
+                        active=torch.ones(d["T"], dtype=torch.bool, device=dev))
+                else:
+                    self.rows[i] = None   # short final batch: slot stays empty
+        live = [r for r in self.rows if r is not None]
+        if not live:
+            return None
+
+        batch = merge_rows([r.data for r in live])
+        frame_mask = batch["meta"]["frame_mask"]
+        B, T_max = frame_mask.shape
+        dev = frame_mask.device
+        active = torch.zeros(B, T_max, dtype=torch.bool, device=dev)
+        steps = torch.zeros(B, T_max, dtype=torch.long, device=dev)
+        for i, r in enumerate(live):
+            active[i, : r.data["T"]] = r.active
+            steps[i, : r.data["T"]] = r.steps
+        # reference reset_carry: fresh rows start from (H_init, L_init)
+        reset = frame_mask & (steps == 0)
+        carry = None
+        ref = next((r.carry for r in live if r.carry is not None), None)
+        if ref is not None:
+            S, d = ref[0].shape[1:]
+            zc = [torch.zeros(B, T_max, S, d, dtype=ref[j].dtype, device=dev)
+                  for j in range(2)]
+            for i, r in enumerate(live):
+                if r.carry is not None:
+                    for j in range(2):
+                        zc[j][i, : r.data["T"]] = r.carry[j].to(dev)
+            carry = (zc[0].reshape(B * T_max, S, d), zc[1].reshape(B * T_max, S, d))
+
+        n_frames = int(frame_mask.sum())
+        weight = int(active.sum()) / max(n_frames, 1)
+        pred, stats = forward_backward(batch, carry, active, reset, weight)
+
+        new_steps, new_active = halt_update(
+            pred["q_halt"].detach(), steps, active, self.n_sup,
+            self.exploration_prob, training=True)
+        z = pred["carry"]
+        S, d = z[0].shape[1:]
+        zH = z[0].reshape(B, T_max, S, d)
+        zL = z[1].reshape(B, T_max, S, d)
+        halted_now = active & ~new_active
+        for i, r in enumerate(live):
+            T = r.data["T"]
+            c = (zH[i, :T], zL[i, :T])
+            if self.store is not None:
+                # blocking copy: a non_blocking device→host copy may still
+                # be in flight when the tensor is next read
+                c = (c[0].to(self.store), c[1].to(self.store))
+            r.carry = c
+            r.steps = new_steps[i, :T]
+            r.active = new_active[i, :T]
+
+        stats = dict(stats)
+        n_halt = int(halted_now.sum())
+        stats["active_frac"] = weight
+        stats["halted_frames"] = float(n_halt)
+        stats["halt_depth"] = (float(new_steps[halted_now].float().mean())
+                               if n_halt else float("nan"))
+        return stats

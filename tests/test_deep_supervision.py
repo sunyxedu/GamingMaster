@@ -10,7 +10,7 @@ from model.components.trm import ReferenceTRMBlock, TRMBlock
 from model.config import ModelConfig, config_from_dict, upgrade_config_dict
 from model.network import GeneralsNetwork
 from model.optim import AdamATan2, ModelEMA, cosine_schedule_with_warmup_lr_lambda
-from training.deep_supervision import halt_update, run_deep_supervision
+from training.deep_supervision import BatchCarry, halt_update, merge_rows, split_rows
 
 TINY = dict(d_model=64, n_heads=4, d_ff=128, n_st_layers=1, trm_H_cycles=2,
             trm_L_cycles=2, trm_block_layers=1, encoder_channels=16, dropout=0.0,
@@ -141,49 +141,109 @@ def test_active_rows_match_full_batch_and_frozen_rows_keep_carry():
 
 
 # ---------------------------------------------------------------------------
-# driver
+# driver: reference train_state.carry
 # ---------------------------------------------------------------------------
 
-def test_run_deep_supervision_one_optimizer_step_per_supervision_step():
-    net = _net(halt_max_steps=4, halt_exploration_prob=0.0)
+def _rows(grid, glb, lengths, tag):
+    """Per-row data with a per-frame tag so tests can see which batch a row
+    came from."""
+    B, T = grid.shape[:2]
+    batch = {"obs": {"grid_seq": grid, "globals_seq": glb},
+             "tgt": {"tag": torch.full((B, T), tag)},
+             "meta": {"lengths": lengths}}
+    return split_rows(batch)
+
+
+def test_split_merge_roundtrip_zero_pads():
+    grid, glb = _batch(B=2, T=4)
+    rows = _rows(grid, glb, [4, 2], 0)
+    assert [r["T"] for r in rows] == [4, 2]
+    m = merge_rows(rows)
+    assert torch.equal(m["obs"]["grid_seq"][0], grid[0])
+    assert torch.equal(m["obs"]["grid_seq"][1, :2], grid[1, :2])
+    assert m["obs"]["grid_seq"][1, 2:].abs().sum() == 0
+    assert m["meta"]["frame_mask"].tolist() == [[True] * 4, [True, True, False, False]]
+
+
+def _fb(net, log):
+    def fb(batch, carry, active, reset, weight):
+        log.append(dict(tags=batch["tgt"]["tag"][:, 0].tolist(), carry=carry,
+                        reset=reset.clone(), active=active.clone(), weight=weight))
+        out = net(batch["obs"]["grid_seq"], batch["obs"]["globals_seq"],
+                  frame_mask=batch["meta"]["frame_mask"], carry=carry,
+                  active=active, reset=reset, return_carry=True)
+        log[-1]["out"] = out
+        return out, {"loss": 0.0}
+    return fb
+
+
+def test_carried_steps_reproduce_multi_step_forward():
+    """k BatchCarry steps (nothing halts) == one forward with act_steps=k."""
+    net = _net(halt_max_steps=8).eval()
+    torch.nn.init.constant_(net.trm.q_head.bias, -5.0)
     grid, glb = _batch()
-    mask = torch.ones(2, 3, dtype=torch.bool)
-    calls = {"fb": 0, "opt": 0}
-    torch.nn.init.constant_(net.trm.q_head.bias, -5.0)   # never halts
-
-    def fb(i, carry, active, weight):
-        calls["fb"] += 1
-        assert weight == 1.0                            # nothing halts
-        if carry is not None:
-            assert not carry[0].requires_grad          # carry is detached
-        out = net(grid, glb, carry=carry, active=active, return_carry=True)
-        out["source_logits"].square().mean().backward()
-        return out, {"loss": 1.0}
-
-    def opt():
-        calls["opt"] += 1
-
-    stats = run_deep_supervision(1, [mask], fb, opt, n_sup=4, exploration_prob=0.0)
-    assert calls == {"fb": 4, "opt": 4}
-    assert stats["sup_steps"] == 4 and stats["halt_depth"] == 4
+    bc = BatchCarry(n_sup=8, exploration_prob=0.0)
+    log = []
+    for k in range(3):
+        bc.step(_rows(grid, glb, [3, 3], k), _fb(net, log))
+    assert [e["tags"] for e in log] == [[0, 0]] * 3      # rows kept, new rows dropped
+    with torch.no_grad():
+        ref = net(grid, glb, act_steps=3)
+    assert torch.allclose(log[-1]["out"]["source_logits"], ref["source_logits"], atol=1e-5)
+    assert log[0]["reset"].all() and not log[1]["reset"].any()
 
 
-def test_run_deep_supervision_stops_when_all_frames_halt():
-    net = _net(halt_max_steps=16)
-    torch.nn.init.constant_(net.trm.q_head.bias, 5.0)    # halts at once
+def test_halted_rows_swapped_for_new_batch_rows_with_reset():
+    net = _net(halt_max_steps=2).eval()
+    torch.nn.init.constant_(net.trm.q_head.bias, -5.0)   # only the step limit halts
     grid, glb = _batch()
-    mask = torch.tensor([[True, True, False], [True, False, False]])
-    n = {"opt": 0}
+    bc = BatchCarry(n_sup=2, exploration_prob=0.0)
+    log = []
+    for k in range(3):
+        bc.step(_rows(grid, glb, [3, 3], k), _fb(net, log))
+    # step 0: batch 0; step 1: still batch 0 (2 steps each); step 2: batch 2
+    assert [e["tags"] for e in log] == [[0, 0], [0, 0], [2, 2]]
+    assert log[2]["reset"].all()
+    # the rows restarted from (H_init, L_init): identical to a fresh forward
+    with torch.no_grad():
+        fresh = net(grid, glb, act_steps=1)
+    assert torch.allclose(log[2]["out"]["source_logits"], fresh["source_logits"], atol=1e-5)
 
-    def fb(i, carry, active, weight):
-        out = net(grid, glb, carry=carry, active=active, return_carry=True)
-        return out, {}
 
-    def opt():
-        n["opt"] += 1
+def test_per_frame_halting_and_loss_weight():
+    net = _net(halt_max_steps=4).eval()
+    grid, glb = _batch()
+    bc = BatchCarry(n_sup=4, exploration_prob=0.0)
+    log = []
 
-    stats = run_deep_supervision(1, [mask], fb, opt, n_sup=16, exploration_prob=0.0)
-    assert n["opt"] == 1 and stats["halt_depth"] == 1.0
+    def fb(batch, carry, active, reset, weight):
+        out, st = _fb(net, log)(batch, carry, active, reset, weight)
+        q = torch.full_like(out["q_halt"], -1.0)
+        if len(log) == 1:
+            q[0, :2] = 1.0                                # halt 2 frames of row 0
+            q[1, :] = 1.0                                 # halt all of row 1
+        out["q_halt"] = q
+        return out, st
+
+    bc.step(_rows(grid, glb, [3, 3], 0), fb)
+    stats = bc.step(_rows(grid, glb, [3, 3], 1), fb)
+    e = log[1]
+    assert e["tags"] == [0, 1]                            # row 1 swapped, row 0 kept
+    assert e["active"].tolist() == [[False, False, True], [True, True, True]]
+    assert e["reset"].tolist() == [[False, False, False], [True, True, True]]
+    assert abs(e["weight"] - 4 / 6) < 1e-9
+    assert stats["active_frac"] == e["weight"]
+
+
+def test_short_final_batch_leaves_slots_empty():
+    net = _net(halt_max_steps=1).eval()
+    grid, glb = _batch()
+    bc = BatchCarry(n_sup=1, exploration_prob=0.0)
+    log = []
+    bc.step(_rows(grid, glb, [3, 3], 0), _fb(net, log))
+    bc.step(_rows(grid[:1], glb[:1], [2], 1), _fb(net, log))
+    assert log[1]["tags"] == [1]
+    assert bc.step([], _fb(net, log)) is None
 
 
 # ---------------------------------------------------------------------------
@@ -222,26 +282,6 @@ def test_adam_atan2_matches_reference_kernel_over_steps():
     q.grad = torch.ones(1)
     AdamATan2([q], lr=1e-3, weight_decay=0.0).step()
     assert math.isclose(-q.item(), 1e-3 / 0.1 * math.atan2(0.1, 1.0), rel_tol=1e-5)
-
-
-def test_loss_weight_is_active_fraction():
-    net = _net(halt_max_steps=3, halt_exploration_prob=0.0)
-    grid, glb = _batch()
-    mask = torch.tensor([[True, True, True], [True, False, False]])
-    seen = []
-
-    def fb(i, carry, active, weight):
-        seen.append((int(active.sum()), weight))
-        out = net(grid, glb, carry=carry, active=active, return_carry=True)
-        # halt exactly two of the frames after the first step
-        q = torch.full_like(out["q_halt"], -1.0)
-        if len(seen) == 1:
-            q[0, 0] = q[0, 1] = 1.0
-        out["q_halt"] = q
-        return out, {}
-
-    run_deep_supervision(1, [mask], fb, lambda: None, n_sup=3, exploration_prob=0.0)
-    assert seen == [(4, 1.0), (2, 0.5), (2, 0.5)]
 
 
 def test_schedule_is_constant_after_warmup_by_default():

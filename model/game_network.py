@@ -129,6 +129,7 @@ class GameNetwork(nn.Module):
         act_steps: Optional[int],
         carry: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         rows: Optional[torch.Tensor] = None,
+        reset: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Run ``act_steps`` TRM supervision steps starting from ``carry``.
 
@@ -142,9 +143,18 @@ class GameNetwork(nn.Module):
         carried state (their answer is frozen, as when the reference
         swaps a halted example out of the batch).
 
+        ``reset`` [BT] bool (reference ``reset_carry``): rows whose carry is
+        replaced by (H_init, L_init) — examples newly swapped into the batch.
+
         Returns (z_H [BT, S, d], q_halt [BT], new_carry (z_H, z_L) detached).
         """
         steps = max(1, act_steps or 1)
+        if carry is not None and reset is not None:
+            BT, S, _ = x.shape
+            init = self.trm.initial_carry(BT, S, x)
+            r = reset.reshape(BT, 1, 1)
+            carry = (torch.where(r, init[0].to(carry[0].dtype), carry[0]),
+                     torch.where(r, init[1].to(carry[1].dtype), carry[1]))
         full_carry = None
         if rows is not None:
             BT, S, _ = x.shape
@@ -212,14 +222,17 @@ class GameNetwork(nn.Module):
         carry: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         active: Optional[torch.Tensor] = None,
         return_carry: bool = False,
+        reset: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Full-sequence forward.
 
         ``carry`` / ``active`` / ``return_carry`` drive deep supervision
         (training.deep_supervision): ``carry`` is the detached (z_H, z_L)
         from the previous supervision step of the SAME batch, ``active``
-        [B, T] bool selects the frames that have not halted yet, and
-        ``out["carry"]`` returns the new detached latents.
+        [B, T] bool selects the frames that have not halted yet, ``reset``
+        [B, T] bool marks frames whose carry restarts from (H_init, L_init)
+        (reference ``reset_carry``), and ``out["carry"]`` returns the new
+        detached latents.
         """
         cfg = self.cfg
         d = cfg.d_model
@@ -258,7 +271,9 @@ class GameNetwork(nn.Module):
         x = tokens.reshape(BT, S, d)                  # input embeddings for TRM
         rows = (active.reshape(BT).nonzero().squeeze(1)
                 if active is not None else None)
-        z_H, q_halt, new_carry = self._trm_ponder(x, act_steps, carry, rows)
+        z_H, q_halt, new_carry = self._trm_ponder(
+            x, act_steps, carry, rows,
+            reset.reshape(BT) if reset is not None else None)
         z_H = self.post_norm(z_H)
 
         # ── Decode ──

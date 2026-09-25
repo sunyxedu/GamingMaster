@@ -49,7 +49,7 @@ from model.optim import (
     trm_lr_lambda,
 )
 from model.rl_utils import load_model_state, optim_param_groups
-from training.deep_supervision import Q_HALT_WEIGHT, run_deep_supervision
+from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry, split_rows
 
 # Teacher-forcing conditioning labels per game: the tgt keys the decoder
 # reads from ``labels`` in decode() (−1 → sample from its own policy).
@@ -275,11 +275,32 @@ def prepare_batch(game: str, batch: Dict, device: torch.device,
     return dict(obs=obs, tgt=tgt, frame_mask=frame_mask, labels=labels, legal=legal)
 
 
+def prepare_rows(game: str, batch: Dict, device: torch.device,
+                 tf_prob: float) -> List[Dict]:
+    """Batch → per-row data for training.deep_supervision.BatchCarry; the
+    teacher-forcing draw belongs to the example (kept while it ponders)."""
+    mb = prepare_batch(game, batch, device, tf_prob)
+    aux = {f"label:{k}": v for k, v in (mb["labels"] or {}).items()}
+    return split_rows({"obs": mb["obs"], "tgt": mb["tgt"], "aux": aux,
+                       "meta": {"lengths": batch["meta"]["lengths"]}})
+
+
+def mb_from_merged(game: str, merged: Dict) -> Dict:
+    """BatchCarry's merged batch → the ``mb`` dict batch_loss consumes."""
+    aux = merged.get("aux", {})
+    labels = {k[len("label:"):]: v for k, v in aux.items() if k.startswith("label:")}
+    obs = merged["obs"]
+    legal_fn = LEGAL_FROM_OBS.get(game)
+    return dict(obs=obs, tgt=merged["tgt"], frame_mask=merged["meta"]["frame_mask"],
+                labels=labels or None,
+                legal=legal_fn(obs) if legal_fn is not None else None)
+
+
 def batch_loss(
     net, mb: Dict, device: torch.device, value_weight: float,
     q_halt_weight: float, bf16: bool,
     carry=None, active: Optional[torch.Tensor] = None,
-    act_steps: Optional[int] = None,
+    act_steps: Optional[int] = None, reset: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, torch.Tensor]]:
     """One TRM supervision step: decoder IL loss + value MSE + q_halt BCE
     (target = whole action exactly right, reference ACTLossHead), all on
@@ -289,7 +310,7 @@ def batch_loss(
     with autocast:
         pred = net(mb["obs"], legal=mb["legal"], labels=mb["labels"],
                    act_steps=act_steps, frame_mask=mb["frame_mask"],
-                   carry=carry, active=active, return_carry=True)
+                   carry=carry, active=active, reset=reset, return_carry=True)
         losses = net.action_decoder.il_loss(pred, mb["tgt"], mask)
         loss = losses["loss"]
         tgt = mb["tgt"]
@@ -433,9 +454,9 @@ def main() -> None:
                               weight_decay=args.weight_decay)
     else:
         optimizer = torch.optim.AdamW(groups, lr=args.lr, betas=(args.beta1, args.beta2))
-    # one optimizer step per supervision step (at most halt_max_steps per window)
-    total_steps = max(1, args.epochs * len(loader) // args.grad_accum
-                      * max(1, cfg.halt_max_steps))
+    # reference total_steps = epochs * N / global_batch: one optimizer step
+    # per accumulation window of loader batches
+    total_steps = max(1, args.epochs * len(loader) // args.grad_accum)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, trm_lr_lambda(args.warmup_steps, total_steps, args.lr_min_ratio))
 
@@ -482,42 +503,41 @@ def main() -> None:
             ema.update(net)
         opt_step += 1
 
+    # Reference train_state.carry: one per accumulation slot, persisting
+    # across batches and epochs (training/deep_supervision.py).
+    store = (torch.device("cpu")
+             if args.grad_accum > 1 and device.type == "cuda" else None)
+    carries = [BatchCarry(cfg.halt_max_steps, cfg.halt_exploration_prob, store=store)
+               for _ in range(max(1, args.grad_accum))]
+
     for epoch in range(start_epoch, args.epochs):
         frac = epoch / max(1, args.epochs - 1)
         tf_prob = args.tf_start + (args.tf_end - args.tf_start) * frac
         t0 = time.time()
         optimizer.zero_grad(set_to_none=True)
-        pending: List[Dict] = []
+        slot = 0
+        n_slots = max(1, args.grad_accum)
         for i, batch in enumerate(loader):
-            pending.append(prepare_batch(args.game, batch, device, tf_prob))
-            if len(pending) < args.grad_accum and (i + 1) < len(loader):
-                continue
-            window, pending = pending, []
-            n_mb = len(window)
-
-            def forward_backward(j, carry, active, weight, window=window, n_mb=n_mb):
+            # one loader batch = ONE supervision (ACT) step of the slot's
+            # carried batch; halted rows are replaced by this batch's rows
+            def forward_backward(merged, carry, active, reset, weight):
                 loss, stats, pred = batch_loss(
-                    net, window[j], device, args.value_weight,
-                    args.q_halt_weight, args.bf16, carry=carry, active=active)
+                    net, mb_from_merged(args.game, merged), device,
+                    args.value_weight, args.q_halt_weight, args.bf16,
+                    carry=carry, active=active, reset=reset)
                 # weight = n_active / n_frames (reference fixed-batch
-                # normalisation, training/deep_supervision.py)
-                (loss * (weight / n_mb)).backward()
+                # normalisation)
+                (loss * (weight / n_slots)).backward()
                 return pred, stats
 
-            # Deep supervision (training/deep_supervision.py): up to
-            # halt_max_steps optimizer steps on this window, latents
-            # carried, frames halted by q_halt (+ exploration).
-            stats = run_deep_supervision(
-                n_micro=n_mb,
-                frame_masks=[mb["frame_mask"] for mb in window],
-                forward_backward=forward_backward,
-                optimizer_step=optimizer_step,
-                n_sup=cfg.halt_max_steps,
-                exploration_prob=cfg.halt_exploration_prob,
-                carry_store=(torch.device("cpu")
-                             if n_mb > 1 and device.type == "cuda" else None),
-            )
-            if (i // args.grad_accum) % args.log_every == 0:
+            stats = carries[slot].step(
+                prepare_rows(args.game, batch, device, tf_prob), forward_backward)
+            slot += 1
+            if slot < n_slots and (i + 1) < len(loader):
+                continue
+            slot = 0
+            optimizer_step()
+            if stats is not None and (opt_step - 1) % args.log_every == 0:
                 head = " ".join(f"{k}={v:.4f}" for k, v in sorted(stats.items()))
                 print(f"[e{epoch} b{i}/{len(loader)}] tf={tf_prob:.2f} "
                       f"lr={scheduler.get_last_lr()[0]:.2e} {head}", flush=True)

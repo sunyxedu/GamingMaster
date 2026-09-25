@@ -34,7 +34,7 @@ from model.optim import (
     trm_lr_lambda,
 )
 from model.rl_utils import load_model_state, sync_gradients
-from training.deep_supervision import run_deep_supervision
+from training.deep_supervision import BatchCarry, split_rows
 
 
 def parse_args():
@@ -117,14 +117,16 @@ ACC_KEYS = ["src_acc", "dir_acc", "full_acc", "complete_acc"]
 
 def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, args,
                 rank0=True, save_fn=None, start_step=0, tf_ratio=1.0, distributed=False,
-                ema=None):
-    """One epoch of TRM deep supervision (training/deep_supervision.py).
+                ema=None, carries=None):
+    """One epoch in the reference ``pretrain.py`` layout.
 
-    Each optimizer window of ``grad_accum`` micro-batches is supervised for
-    up to ``halt_max_steps`` steps; every supervision step is one optimizer
-    step, the TRM latents are carried (detached) between steps, and frames
-    whose q_halt turns positive leave the loop (reference ACT halting with
-    exploration). ``loader`` steps count micro-batches as before.
+    Every loader batch is ONE TRM supervision (ACT) step and ONE optimizer
+    step: ``carries`` (one training.deep_supervision.BatchCarry per
+    accumulation slot = the reference ``train_state.carry``, persisting
+    across epochs) swaps halted rows for the new batch's rows, runs one
+    deep recursion from the carried latents, and halts frames by q_halt
+    (+ exploration). ``grad_accum`` consecutive loader batches feed the
+    ``grad_accum`` slots of one optimizer step.
     """
     model.train()
     from collections import deque
@@ -132,7 +134,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
     recent_loss = deque(maxlen=window)
     recent_parts = {k: deque(maxlen=window) for k in PART_KEYS}
     recent_acc = {k: deque(maxlen=window) for k in ACC_KEYS}
-    recent_sup = deque(maxlen=window)
+    recent_halt = deque(maxlen=window)
     epoch_loss_sum = 0.0
     epoch_parts_sum = {k: 0.0 for k in PART_KEYS}
     epoch_acc_sum = {k: 0.0 for k in ACC_KEYS}
@@ -140,59 +142,50 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
     use_amp = device.type == "cuda"
     accum = max(1, getattr(args, "grad_accum", 1))
     optimizer.zero_grad(set_to_none=True)
-    cfg = model.cfg
 
-    def prepare(batch):
-        grid_seq = batch["obs"]["grid_seq"].to(device)
-        globals_seq = batch["obs"]["globals_seq"].to(device)
-        legal_mask = batch["obs"]["legal_source_mask_seq"].to(device)
+    def prepare_rows(batch):
+        """Batch → per-row data; the teacher-forcing draw is part of the
+        example (kept for all of its supervision steps)."""
         tgt = {k: v.to(device) for k, v in batch["tgt"].items()}
-        lengths = batch["meta"]["lengths"]
-        # True for real frames — keeps zero-padded frames out of BatchNorm stats
-        frame_mask = (
-            torch.arange(grid_seq.shape[1], device=device)[None, :]
-            < torch.as_tensor(lengths, device=device)[:, None]
-        )
-        source_y = tgt["src_y"][:, :, 0]
-        source_x = tgt["src_x"][:, :, 0]
-        # Per-timestep teacher forcing, drawn once per batch and kept for
-        # all of its supervision steps (same example, same conditioning).
-        move_mask = tgt["count"] > 0  # [B, T]
+        obs = {k: v.to(device) for k, v in batch["obs"].items()}
+        aux = {}
         if tf_ratio > 0:
+            source_y = tgt["src_y"][:, :, 0]
+            source_x = tgt["src_x"][:, :, 0]
+            move_mask = tgt["count"] > 0
             tf_mask = torch.rand_like(source_y, dtype=torch.float32) < tf_ratio
             use_gt = tf_mask & move_mask
-            source_y = torch.where(use_gt, source_y, torch.full_like(source_y, -1))
-            source_x = torch.where(use_gt, source_x, torch.full_like(source_x, -1))
-        else:
-            use_gt = source_y = source_x = None
-        return dict(grid_seq=grid_seq, globals_seq=globals_seq, legal_mask=legal_mask,
-                    tgt=tgt, frame_mask=frame_mask, source_y=source_y,
-                    source_x=source_x, use_gt=use_gt)
+            aux = {"source_y": torch.where(use_gt, source_y, torch.full_like(source_y, -1)),
+                   "source_x": torch.where(use_gt, source_x, torch.full_like(source_x, -1)),
+                   "use_gt": use_gt}
+        return split_rows({"obs": obs, "tgt": tgt, "aux": aux,
+                           "meta": {"lengths": batch["meta"]["lengths"]}})
 
-    def forward_backward(mb, carry, active, weight):
+    def forward_backward(mb, carry, active, reset, weight):
+        aux = mb.get("aux", {})
+        grid_seq = mb["obs"]["grid_seq"]
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
             pred = model(
-                mb["grid_seq"], mb["globals_seq"],
-                legal_mask=mb["legal_mask"],
-                source_y=mb["source_y"], source_x=mb["source_x"],
-                frame_mask=mb["frame_mask"],
-                carry=carry, active=active, return_carry=True,
+                grid_seq, mb["obs"]["globals_seq"],
+                legal_mask=mb["obs"]["legal_source_mask_seq"],
+                source_y=aux.get("source_y"), source_x=aux.get("source_x"),
+                frame_mask=mb["meta"]["frame_mask"],
+                carry=carry, active=active, reset=reset, return_carry=True,
             )
-            losses = criterion(pred, mb["tgt"], tf_mask=mb["use_gt"], frame_mask=active)
+            losses = criterion(pred, mb["tgt"], tf_mask=aux.get("use_gt"), frame_mask=active)
             if args.world_model_weight > 0 and "next_state_logits" in pred:
-                wm = next_obs_loss(pred, mb["grid_seq"], active)
+                wm = next_obs_loss(pred, grid_seq, active)
                 wm_total = wm["state_loss"] + wm["army_loss"]
                 losses["loss"] = losses["loss"] + args.world_model_weight * wm_total
                 losses["wm_loss"] = wm_total.detach()
             else:
                 losses["wm_loss"] = losses["loss"].new_tensor(0.0)
         loss = losses["loss"]
-        # A non-finite micro-batch is dropped rank-locally (no collective:
-        # ranks may run different micro-batch counts per supervision step);
-        # the gradient sync below stays collective.
+        # A non-finite micro-batch is dropped rank-locally; the gradient
+        # sync below stays collective (one per optimizer step on every rank).
         if torch.isfinite(loss.detach()):
-            # weight = n_active / n_frames: fixed per-(frame, step) weight
-            # like the reference's fixed-batch-size normalisation
+            # weight = n_active / n_frames: the reference's fixed
+            # global-batch normalisation (training/deep_supervision.py)
             (loss * (weight / accum)).backward()
             stats = {"loss": loss.item()}
             stats.update({f"{k}_loss": losses[f"{k}_loss"].item() for k in PART_KEYS})
@@ -200,7 +193,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
         else:
             stats = {}
             if rank0:
-                print(f"  [NaN] dropped a micro-batch (T={mb['grid_seq'].shape[1]})")
+                print(f"  [NaN] dropped a micro-batch (T={grid_seq.shape[1]})")
         return pred, stats
 
     def optimizer_step():
@@ -208,7 +201,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             # replaces DDP's bucketed allreduce; grads are averaged so every
             # rank steps identically. sync_gradients keeps the collective
             # schedule identical even when a rank has no gradient for a
-            # parameter (e.g. all its frames already halted).
+            # parameter.
             sync_gradients(model, dist.get_world_size())
         # max_norm=inf only MEASURES the norm (clip coefficient clamps to 1),
         # so the non-finite guard below works with clipping off too
@@ -219,7 +212,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             # rank takes this branch together
             optimizer.zero_grad(set_to_none=True)
             if rank0:
-                print(f"  [NaN] dropped a supervision step (grad_norm={grad_norm.item():.4f})")
+                print(f"  [NaN] dropped an optimizer step (grad_norm={grad_norm.item():.4f})")
             return
         optimizer.step()
         scheduler.step()
@@ -227,51 +220,43 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
         if ema is not None:
             ema.update(model)
 
-    def any_live(local: bool) -> bool:
-        if not distributed:
-            return local
-        flag = torch.tensor([1.0 if local else 0.0], device=device)
-        dist.all_reduce(flag, op=dist.ReduceOp.MAX)
-        return bool(flag.item() > 0)
-
-    pending = []
     n_batches = len(loader)
+    slot = 0
+    window_stats = []
     for step, batch in enumerate(loader):
         if step < start_step:
             continue
-        pending.append(prepare(batch))
-        if len(pending) < accum and step + 1 < n_batches:
-            continue
-        window_mbs, pending = pending, []
-        T_cur = max(mb["grid_seq"].shape[1] for mb in window_mbs)
+        T_cur = batch["obs"]["grid_seq"].shape[1]
         try:
-            stats = run_deep_supervision(
-                n_micro=len(window_mbs),
-                frame_masks=[mb["frame_mask"] for mb in window_mbs],
-                forward_backward=lambda i, c, a, w: forward_backward(window_mbs[i], c, a, w),
-                optimizer_step=optimizer_step,
-                n_sup=cfg.halt_max_steps,
-                exploration_prob=cfg.halt_exploration_prob,
-                any_live=any_live,
-                # with accumulation, park the other micro-batches' TRM
-                # latents on the host (each is [B*T, S, d] x 2)
-                carry_store=(torch.device("cpu")
-                             if len(window_mbs) > 1 and device.type == "cuda" else None),
-            )
+            st = carries[slot].step(prepare_rows(batch), forward_backward)
         except torch.cuda.OutOfMemoryError:
             if distributed:
                 # A rank-local skip desynchronizes the gradient allreduce.
                 raise
             torch.cuda.empty_cache()
             optimizer.zero_grad(set_to_none=True)
+            slot = 0
+            window_stats = []
             if rank0:
-                print(f"  [OOM] Skipped window at step {step+1} (T={T_cur})")
+                print(f"  [OOM] Skipped step {step+1} (T={T_cur})")
             continue
-        if "loss" not in stats:
+        if st is not None and "loss" in st:
+            window_stats.append(st)
+        slot += 1
+        if slot < accum and step + 1 < n_batches:
             continue
+        slot = 0
+        optimizer_step()
+        if not window_stats:
+            continue
+        stats = {k: sum(w[k] for w in window_stats) / len(window_stats)
+                 for k in window_stats[0] if k != "halt_depth"}
+        depths = [w["halt_depth"] for w in window_stats if w["halt_depth"] == w["halt_depth"]]
+        window_stats = []
 
         recent_loss.append(stats["loss"])
-        recent_sup.append((stats["sup_steps"], stats["halt_depth"]))
+        if depths:
+            recent_halt.append(sum(depths) / len(depths))
         epoch_loss_sum += stats["loss"]
         epoch_steps += 1
         for k in recent_parts:
@@ -290,11 +275,10 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             ep_avg = epoch_loss_sum / epoch_steps
             ep_parts = {k: epoch_parts_sum[k] / epoch_steps for k in epoch_parts_sum}
             ep_acc = {k: epoch_acc_sum[k] / epoch_steps for k in epoch_acc_sum}
-            sup = sum(x for x, _ in recent_sup) / len(recent_sup)
-            depth = sum(y for _, y in recent_sup) / len(recent_sup)
+            depth = (sum(recent_halt) / len(recent_halt)) if recent_halt else float("nan")
             print(
                 f"  Epoch {epoch} Step {step+1}/{n_batches}  T={T_cur}  loss={avg:.4f}[{ep_avg:.4f}]  "
-                f"sup_steps={sup:.1f} halt_depth={depth:.2f}:\n"
+                f"active={stats['active_frac']:.2f} halt_depth={depth:.2f}:\n"
                 f"    src={parts['source']:.4f}[{ep_parts['source']:.4f}]  "
                 f"dir={parts['direction']:.4f}[{ep_parts['direction']:.4f}]  split={parts['split']:.4f}[{ep_parts['split']:.4f}]  "
                 f"pass={parts['pass']:.4f}[{ep_parts['pass']:.4f}]  val={parts['value']:.4f}[{ep_parts['value']:.4f}]  "
@@ -305,7 +289,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                 f"complete={acc['complete_acc']:.1%}[{ep_acc['complete_acc']:.1%}]"
             )
 
-        if save_fn and rank0 and (step + 1) // args.save_steps != (step + 1 - len(window_mbs)) // args.save_steps:
+        if save_fn and rank0 and (step + 1) // args.save_steps != (step + 1 - accum) // args.save_steps:
             save_fn(epoch, step + 1)
 
     avg_loss = epoch_loss_sum / max(epoch_steps, 1)
@@ -407,10 +391,9 @@ def main():
         print(f"Dataset: {len(dataset)} replays from {args.data_dir}")
 
     world_size = dist.get_world_size() if distributed else 1
-    # Scheduler horizon counts OPTIMIZER steps: one per supervision step of
-    # each accumulation window (at most halt_max_steps per window).
-    steps_per_epoch = (len(dataset) // (args.batch_size * world_size * max(1, args.grad_accum))
-                       * max(1, cfg.halt_max_steps))
+    # Scheduler horizon counts OPTIMIZER steps (one per accumulation window
+    # of loader batches — reference total_steps = epochs * N / global_batch)
+    steps_per_epoch = len(dataset) // (args.batch_size * world_size * max(1, args.grad_accum))
     if rank0 and args.grad_accum > 1:
         print(f"Effective batch: {args.batch_size} x {world_size} GPUs x "
               f"{args.grad_accum} accum = {args.batch_size * world_size * args.grad_accum} sequences")
@@ -546,6 +529,14 @@ def main():
         torch.save(ckpt, path)
         print(f"  Saved {path}")
 
+    # Reference train_state.carry: one per accumulation slot, persisting
+    # across batches AND epochs. With accumulation the other slots' TRM
+    # latents are parked on the host.
+    store = (torch.device("cpu")
+             if max(1, args.grad_accum) > 1 and device.type == "cuda" else None)
+    carries = [BatchCarry(cfg.halt_max_steps, cfg.halt_exploration_prob, store=store)
+               for _ in range(max(1, args.grad_accum))]
+
     for epoch in range(start_epoch, args.epochs + 1):
         if sampler is not None:
             sampler.set_epoch(epoch)
@@ -557,6 +548,7 @@ def main():
             model, loader, criterion, optimizer, scheduler, device, epoch, args,
             rank0=rank0, save_fn=save_checkpoint, start_step=start_step,
             tf_ratio=tf_ratio, distributed=distributed, ema=ema,
+            carries=carries,
         )
         start_step = 0  # only skip steps for the first epoch after resume
         elapsed = time.time() - t0
