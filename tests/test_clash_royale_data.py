@@ -128,10 +128,10 @@ def test_rust_converter_end_to_end(tmp_path):
                       "payload_json": pa.array([r[1] for r in rows], pa.large_string()), "requested_player_tag": ["", ""]})
     pq.write_table(table, raw / "part-000000.parquet")
 
-    build = subprocess.run([CARGO, "build", "--release", "-q"], cwd=CRATE, capture_output=True, text=True)
+    build = subprocess.run([CARGO, "build", "--release", "-q", "-p", "crdata"], cwd=os.path.join(ROOT, "data_processing"), capture_output=True, text=True)
     if build.returncode != 0:
         pytest.skip(f"cargo build failed: {build.stderr[-500:]}")
-    binary = os.path.join(CRATE, "target", "release", "crdata")
+    binary = os.path.join(ROOT, "data_processing", "target", "release", "crdata")
     frames = tmp_path / "frames"
     res = subprocess.run([binary, "convert", "--input", str(tmp_path / "raw"), "--out", str(frames), "--recent", "4"],
                          capture_output=True, text=True)

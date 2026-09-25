@@ -651,6 +651,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "gmdata"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "gmshard",
+ "rayon",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "gmshard"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
