@@ -687,7 +687,34 @@ pub enum Cmd {
         species_buckets: u32,
         #[arg(long, default_value_t = 256)]
         move_buckets: u32,
+        /// drop replays shorter than this many turns
+        #[arg(long, default_value_t = 0)]
+        min_turns: i64,
+        /// drop replays that end in a forfeit (usually a concession: only the last turn is affected)
+        #[arg(long)]
+        exclude_forfeit: bool,
+        /// drop replays decided by the inactivity timer
+        #[arg(long)]
+        exclude_inactivity: bool,
+        /// imitate only the winning side
+        #[arg(long)]
+        winner_only: bool,
+        /// high-quality preset: rating >= 1500, >= 5 turns, no inactivity losses
+        #[arg(long)]
+        hq: bool,
     },
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct Quality {
+    pub min_turns: i64,
+    pub exclude_forfeit: bool,
+    pub exclude_inactivity: bool,
+    pub winner_only: bool,
+}
+
+fn n_turns(log: &str) -> i64 {
+    log.lines().filter_map(|l| l.strip_prefix("|turn|")).filter_map(|t| t.trim().parse::<i64>().ok()).max().unwrap_or(0)
 }
 
 const BASE: &str = "https://replay.pokemonshowdown.com";
@@ -754,9 +781,10 @@ fn fetch(format: &str, min_rating: i64, max: usize, sleep_ms: u64, out: &Path) -
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max_replays: Option<usize>, sb: u32, mb: u32) -> Result<Value> {
+pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max_replays: Option<usize>, sb: u32, mb: u32,
+               q: Quality) -> Result<Value> {
     let mut w = ShardWriter::new(out, "pokemon", 1, json!({"move_buckets": mb, "species_buckets": sb}), shard_size)?;
-    let mut st: BTreeMap<&str, usize> = ["seen", "kept", "samples", "frames", "no_winner", "low_rating", "not_replay"].into_iter().map(|k| (k, 0)).collect();
+    let mut st: BTreeMap<&str, usize> = ["seen", "kept", "samples", "frames", "no_winner", "low_rating", "not_replay", "low_quality"].into_iter().map(|k| (k, 0)).collect();
     let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
     let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
     let mut files: Vec<PathBuf> = std::fs::read_dir(input)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().map(|e| e == "json").unwrap_or(false)).collect();
@@ -777,7 +805,14 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max
             *st.get_mut("low_rating").unwrap() += 1;
             continue;
         }
-        let p = parse_log(r["log"].as_str().unwrap_or(""));
+        let log = r["log"].as_str().unwrap_or("");
+        if (q.min_turns > 0 && n_turns(log) < q.min_turns)
+            || (q.exclude_forfeit && log.contains(" forfeited."))
+            || (q.exclude_inactivity && log.contains("due to inactivity")) {
+            *st.get_mut("low_quality").unwrap() += 1;
+            continue;
+        }
+        let p = parse_log(log);
         for (k, v) in &p.skipped {
             *skipped.entry(k.clone()).or_default() += v;
         }
@@ -788,7 +823,10 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max
             *st.get_mut("no_winner").unwrap() += 1;
             continue;
         }
-        let ss = replay_samples(&r, sb, mb, &p);
+        let mut ss = replay_samples(&r, sb, mb, &p);
+        if q.winner_only {
+            ss.retain(|smp| smp.meta["won"] == json!(true));
+        }
         if ss.is_empty() {
             continue;
         }
@@ -813,8 +851,16 @@ pub fn run(cmd: Cmd) -> Result<()> {
             println!("{}", fetch(&format, min_rating, max_replays, sleep_ms, &out)?);
             Ok(())
         }
-        Cmd::Convert { input, out, shard_size, min_rating, max_replays, species_buckets, move_buckets } => {
-            println!("{}", convert(&input, &out, shard_size, min_rating, max_replays, species_buckets, move_buckets)?);
+        Cmd::Convert { input, out, shard_size, min_rating, max_replays, species_buckets, move_buckets, min_turns, exclude_forfeit,
+                       exclude_inactivity, winner_only, hq } => {
+            let mut q = Quality { min_turns, exclude_forfeit, exclude_inactivity, winner_only };
+            let mut min_rating = min_rating;
+            if hq {
+                min_rating = min_rating.max(1500);
+                q.min_turns = q.min_turns.max(5);
+                q.exclude_inactivity = true;
+            }
+            println!("{}", convert(&input, &out, shard_size, min_rating, max_replays, species_buckets, move_buckets, q)?);
             Ok(())
         }
     }
