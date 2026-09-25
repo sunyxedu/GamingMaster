@@ -112,6 +112,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
 name = "arrow-array"
 version = "54.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -276,6 +282,15 @@ checksum = "a334ef7c9e23abf0ce748e8cd309037da93e606ad52eb372e4ce327a0dcfbdfd"
 dependencies = [
  "alloc-no-stdlib",
  "alloc-stdlib",
+]
+
+[[package]]
+name = "btoi"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b5ab9db53bcda568284df0fd39f6eac24ad6f7ba7ff1168b9e76eba6576b976"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -726,12 +741,15 @@ dependencies = [
  "clap",
  "flate2",
  "gmshard",
+ "pgn-reader",
  "rayon",
  "reqwest",
  "serde",
  "serde_json",
+ "shakmaty",
  "tar",
  "zip",
+ "zstd 0.14.0",
 ]
 
 [[package]]
@@ -1191,6 +1209,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "nohash-hasher"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
+
+[[package]]
 name = "num"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1313,7 +1337,7 @@ dependencies = [
  "snap",
  "thrift",
  "twox-hash 1.6.3",
- "zstd",
+ "zstd 0.13.3",
 ]
 
 [[package]]
@@ -1327,6 +1351,17 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "pgn-reader"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b822a2cfc1c90c109ea35458ad9bff6669198fdd4ea8de1132e702b4d9f64b88"
+dependencies = [
+ "btoi",
+ "memchr",
+ "shakmaty",
+]
 
 [[package]]
 name = "pin-project-lite"
@@ -1686,6 +1721,19 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest",
+]
+
+[[package]]
+name = "shakmaty"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8377322ffda8ac1d6c24af5d4c2cacaf6e059c5581c6082f222364ec759578c"
+dependencies = [
+ "arrayvec",
+ "bitflags 2.13.2",
+ "btoi",
+ "nohash-hasher",
+ "serde",
 ]
 
 [[package]]
@@ -2441,7 +2489,16 @@ version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
 dependencies = [
- "zstd-safe",
+ "zstd-safe 7.3.0",
+]
+
+[[package]]
+name = "zstd"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf06bd8162af0734b344780deb55b42a2429ae430870d13fcc12f238e880fe6e"
+dependencies = [
+ "zstd-safe 8.0.0",
 ]
 
 [[package]]
@@ -2449,6 +2506,15 @@ name = "zstd-safe"
 version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64d80649ab6db9d9f6f9c80a40becd948eda4714a0a5ac8c4d157a32231c7882"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "8.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae42c0555055784c70058d19ba8e275528e8a99a706684868ace5da4e716a4ab"
 dependencies = [
  "zstd-sys",
 ]

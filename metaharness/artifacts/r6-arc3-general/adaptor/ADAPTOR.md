@@ -10,7 +10,7 @@ credential, or download is needed with the supplied cache.
 
 Export `OPERATION_MODE=offline` and the existing `ENVIRONMENTS_DIR`; see
 `env.example`. In this run the supplied cache is
-`/Users/hemlix/Documents/arc3-wm/environment_files`. Do not replace it with an
+`$ENVIRONMENTS_DIR`. Do not replace it with an
 empty directory. Run `./setup.sh` to install requirements in the evaluator's
 Python 3.14.5 environment and initialize all eight games. It bootstraps pip if
 necessary. Missing exact versions fail explicitly; no online fallback occurs.

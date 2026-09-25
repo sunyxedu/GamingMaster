@@ -9,6 +9,7 @@
 //! for `GameShardDataset`. generals keeps its historical per-replay JSON
 //! training records (read by `SeqReplayDataset`).
 
+mod chess;
 mod common;
 mod generals;
 mod go;
@@ -32,6 +33,11 @@ enum Game {
         #[command(subcommand)]
         cmd: generals::Cmd,
     },
+    /// Chess (Lichess PGN dumps)
+    Chess {
+        #[command(subcommand)]
+        cmd: chess::Cmd,
+    },
     /// Othello (WTHOR databases)
     Othello {
         #[command(subcommand)]
@@ -53,6 +59,7 @@ fn main() -> Result<()> {
     match Cli::parse().game {
         Game::Generals { cmd } => generals::run(cmd),
         Game::Othello { cmd } => othello::run(cmd),
+        Game::Chess { cmd } => chess::run(cmd),
         Game::Gomoku { cmd } => gomoku::run(cmd),
         Game::Go { cmd } => go::run(cmd),
     }
