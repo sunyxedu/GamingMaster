@@ -505,7 +505,7 @@ fn convert_game(evs: &[Value], name: &str, min_frames: usize) -> R<Vec<Sample>> 
 }
 
 /// (name, mjson text) for every game in `input`.
-fn iter_games(input: &Path, mut f: impl FnMut(&str, &str) -> Result<bool>) -> Result<()> {
+fn iter_games(input: &Path, mut f: impl FnMut(&str, &str, Option<bool>) -> Result<bool>) -> Result<()> {
     let is_parquet = |p: &Path| p.extension().map(|e| e == "parquet").unwrap_or(false);
     if input.is_file() && !is_parquet(input) {
         let bytes = std::fs::read(input)?;
@@ -520,13 +520,13 @@ fn iter_games(input: &Path, mut f: impl FnMut(&str, &str) -> Result<bool>) -> Re
                 let mut buf = Vec::new();
                 m.read_to_end(&mut buf)?;
                 let text = String::from_utf8_lossy(&common::read_maybe_gz(buf)?).to_string();
-                if !f(&name, &text)? {
+                if !f(&name, &text, None)? {
                     return Ok(());
                 }
             }
         } else {
             let text = String::from_utf8_lossy(&common::read_maybe_gz(bytes)?).to_string();
-            f(&input.file_name().unwrap().to_string_lossy(), &text)?;
+            f(&input.file_name().unwrap().to_string_lossy(), &text, None)?;
         }
         return Ok(());
     }
@@ -538,7 +538,8 @@ fn iter_games(input: &Path, mut f: impl FnMut(&str, &str) -> Result<bool>) -> Re
             let schema = b.schema().clone();
             let ev_idx = schema.index_of("events").context("parquet needs an `events` column")?;
             let id_idx = schema.index_of("game_id").ok();
-            let cols: Vec<usize> = std::iter::once(ev_idx).chain(id_idx).collect();
+            let kf_idx = schema.index_of("kyoku_first").ok();
+            let cols: Vec<usize> = std::iter::once(ev_idx).chain(id_idx).chain(kf_idx).collect();
             let mask = parquet::arrow::ProjectionMask::roots(b.parquet_schema(), cols);
             for batch in b.with_projection(mask).with_batch_size(512).build()? {
                 let batch = batch?;
@@ -552,10 +553,21 @@ fn iter_games(input: &Path, mut f: impl FnMut(&str, &str) -> Result<bool>) -> Re
                 };
                 let evs = get("events").context("events must be a string column")?;
                 let ids = get("game_id");
+                let kf: Option<Vec<Option<i64>>> = batch.column_by_name("kyoku_first").map(|c| {
+                    let c = arrow_cast::cast(c, &arrow_schema::DataType::Int64).ok();
+                    match c {
+                        Some(c) => {
+                            let a = c.as_any().downcast_ref::<arrow_array::Int64Array>().unwrap().clone();
+                            (0..a.len()).map(|i| (!a.is_null(i)).then(|| a.value(i))).collect()
+                        }
+                        None => vec![None; batch.num_rows()],
+                    }
+                });
                 for (r, e) in evs.into_iter().enumerate() {
                     let Some(e) = e else { continue };
                     let name = ids.as_ref().and_then(|v| v[r].clone()).unwrap_or_else(|| format!("{}#{r}", p.display()));
-                    if !f(&name, &e)? {
+                    let hanchan = kf.as_ref().and_then(|v| v[r]).map(|k| k == 0);
+                    if !f(&name, &e, hanchan)? {
                         return Ok(());
                     }
                 }
@@ -565,7 +577,7 @@ fn iter_games(input: &Path, mut f: impl FnMut(&str, &str) -> Result<bool>) -> Re
     }
     for p in common::find_files(input, &[".mjson", ".mjson.gz"])? {
         let text = String::from_utf8_lossy(&common::read_maybe_gz(std::fs::read(&p)?)?).to_string();
-        if !f(&p.file_name().unwrap().to_string_lossy(), &text)? {
+        if !f(&p.file_name().unwrap().to_string_lossy(), &text, None)? {
             return Ok(());
         }
     }
@@ -594,22 +606,46 @@ pub enum Cmd {
         max_games: Option<usize>,
         #[arg(long, default_value_t = 8)]
         min_frames: usize,
+        /// keep only hanchan (East-South) games: the parquet `kyoku_first` column, or for
+        /// mjson input the presence of a South-round kyoku
+        #[arg(long)]
+        hanchan_only: bool,
+        /// imitate only seats that finished in the top N (1..4)
+        #[arg(long)]
+        top_placements: Option<usize>,
+        /// high-quality preset: hanchan only (all seats are phoenix-room players)
+        #[arg(long)]
+        hq: bool,
     },
 }
 
-pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<usize>, min_frames: usize) -> Result<Value> {
+pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<usize>, min_frames: usize, hanchan_only: bool,
+               top_placements: Option<usize>) -> Result<Value> {
     let mut w = ShardWriter::new(out, "mahjong", 1, json!({}), shard_size)?;
     let (mut games, mut skipped, mut samples, mut frames) = (0usize, 0usize, 0usize, 0usize);
     let mut hist: BTreeMap<&str, usize> = ACTION_NAMES.iter().map(|&n| (n, 0)).collect();
-    iter_games(input, |name, text| {
+    let mut low_quality = 0usize;
+    iter_games(input, |name, text, hanchan| {
         if max_games.map(|m| games >= m).unwrap_or(false) {
             return Ok(false);
+        }
+        if hanchan_only {
+            let is_hanchan = hanchan.unwrap_or_else(|| text.contains("\"bakaze\":\"S\""));
+            if !is_hanchan {
+                low_quality += 1;
+                return Ok(true);
+            }
         }
         let evs: std::result::Result<Vec<Value>, _> = text.lines().filter(|l| !l.trim().is_empty()).map(serde_json::from_str).collect();
         match evs.ok().and_then(|e| convert_game(&e, name, min_frames).ok()) {
             Some(ss) => {
                 games += 1;
                 for smp in ss {
+                    if let Some(k) = top_placements {
+                        if smp.meta["placement"].as_u64().unwrap_or(4) as usize > k {
+                            continue;
+                        }
+                    }
                     samples += 1;
                     if let Some(t) = smp.tensors.iter().find(|t| t.name == "tgt.action_type") {
                         if let gmshard::Column::I64(v) = &t.col {
@@ -627,7 +663,8 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<us
         Ok(true)
     })?;
     w.flush()?;
-    Ok(json!({"games": games, "skipped": skipped, "samples": samples, "frames": frames, "shards": w.written_shards, "action_hist": hist}))
+    Ok(json!({"games": games, "skipped": skipped, "low_quality": low_quality, "samples": samples, "frames": frames,
+              "shards": w.written_shards, "action_hist": hist}))
 }
 
 pub fn run(cmd: Cmd) -> Result<()> {
@@ -641,8 +678,8 @@ pub fn run(cmd: Cmd) -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Convert { input, out, shard_size, max_games, min_frames } => {
-            println!("{}", convert(&input, &out, shard_size, max_games, min_frames)?);
+        Cmd::Convert { input, out, shard_size, max_games, min_frames, hanchan_only, top_placements, hq } => {
+            println!("{}", convert(&input, &out, shard_size, max_games, min_frames, hanchan_only || hq, top_placements)?);
             Ok(())
         }
     }

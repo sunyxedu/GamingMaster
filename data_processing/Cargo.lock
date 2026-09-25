@@ -786,6 +786,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow-array",
+ "arrow-cast",
+ "arrow-schema",
  "bzip2",
  "clap",
  "crc32fast",
