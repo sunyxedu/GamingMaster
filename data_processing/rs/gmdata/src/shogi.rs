@@ -587,6 +587,9 @@ pub enum Cmd {
         year: Option<u32>,
         #[arg(long, default_value = "data/shogi/floodgate")]
         out: PathBuf,
+        /// also save the rating table of this date (YYYYMMDD) as <out>/ratings-<date>.json
+        #[arg(long)]
+        ratings: Option<String>,
     },
     /// Convert .csa files (recursive) to gm-shards
     Convert {
@@ -602,13 +605,89 @@ pub enum Cmd {
         min_moves: usize,
         #[arg(long)]
         allow_no_result: bool,
+        /// ratings JSON written by `fetch --ratings`
+        #[arg(long)]
+        ratings: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        min_rating: i64,
+        /// e.g. floodgate-300-10F (drops test channels such as floodgatea-*)
+        #[arg(long)]
+        game_type: Option<String>,
+        #[arg(long)]
+        no_time_up: bool,
+        /// high-quality preset: both engines >= 3500 (needs --ratings), floodgate-300-10F,
+        /// no time-up results, decisive games
+        #[arg(long)]
+        hq: bool,
     },
 }
 
 const FLOODGATE: &str = "https://wdoor.c.u-tokyo.ac.jp/shogi";
 
-fn fetch(day: Option<String>, year: Option<u32>, out: &Path) -> Result<()> {
+/// Parse a floodgate rating page (players-floodgate-YYYYMMDD.html) → name → rating
+/// (max over accounts sharing a display name).
+pub fn parse_ratings(html: &str) -> BTreeMap<String, i64> {
+    let mut out = BTreeMap::new();
+    let mut rest = html;
+    while let Some(i) = rest.find("<td class=\"name\">") {
+        rest = &rest[i + 17..];
+        let Some(a) = rest.find("\">") else { break };
+        let Some(e) = rest[a + 2..].find("</a>") else { break };
+        let name = rest[a + 2..a + 2 + e].trim().to_string();
+        let Some(r) = rest.find("<td class=\"rate\">") else { break };
+        let after = &rest[r..];
+        let Some(sp) = after.find("\">") .and_then(|x| after[x + 2..].find('>').map(|y| x + 2 + y + 1)) else { break };
+        let val: String = after[sp..].chars().take_while(|c| *c != '<').collect();
+        if let Ok(v) = val.trim().parse::<i64>() {
+            let e = out.entry(name).or_insert(v);
+            *e = (*e).max(v);
+        }
+        rest = &rest[r..];
+    }
+    out
+}
+
+/// Quality filters (off by default): both engines rated ≥ `min_rating` on the given rating
+/// table, main floodgate channel only, time-up results dropped.
+#[derive(Clone, Default)]
+pub struct Quality {
+    pub ratings: Option<BTreeMap<String, i64>>,
+    pub min_rating: i64,
+    pub game_type: Option<String>,
+    pub no_time_up: bool,
+}
+
+fn passes_quality(text: &str, file_name: &str, q: &Quality) -> bool {
+    if let Some(gt) = &q.game_type {
+        if !file_name.contains(&format!("+{gt}+")) {
+            return false;
+        }
+    }
+    if q.no_time_up && text.lines().any(|l| l.trim_start().starts_with("%TIME_UP")) {
+        return false;
+    }
+    if let Some(r) = &q.ratings {
+        for tag in ["N+", "N-"] {
+            let name = text.lines().find_map(|l| l.strip_prefix(tag)).map(|n| n.trim_end_matches('\r'));
+            match name.and_then(|n| r.get(n)) {
+                Some(&v) if v >= q.min_rating => {}
+                _ => return false,
+            }
+        }
+    }
+    true
+}
+
+fn fetch(day: Option<String>, year: Option<u32>, ratings: Option<String>, out: &Path) -> Result<()> {
     let client = common::http()?;
+    if let Some(date) = ratings {
+        let html = client.get(format!("{FLOODGATE}/x/rating/players-floodgate-{date}.html")).send()?.error_for_status()?.text()?;
+        let table = parse_ratings(&html);
+        anyhow::ensure!(!table.is_empty(), "no ratings parsed for {date}");
+        std::fs::create_dir_all(out)?;
+        std::fs::write(out.join(format!("ratings-{date}.json")), serde_json::to_vec_pretty(&table)?)?;
+        eprintln!("{} rated engines saved", table.len());
+    }
     if let Some(day) = day {
         let dir = format!("{FLOODGATE}/x/{}/", day.trim_matches('/'));
         let html = client.get(&dir).send()?.error_for_status()?.text()?;
@@ -631,16 +710,21 @@ fn fetch(day: Option<String>, year: Option<u32>, out: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<usize>, min_moves: usize, allow_no_result: bool) -> Result<Value> {
+pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<usize>, min_moves: usize, allow_no_result: bool,
+               q: &Quality) -> Result<Value> {
     let files: Vec<PathBuf> = common::find_files(input, &[".csa"])?.into_iter().filter(|p| p.extension().map(|e| e == "csa").unwrap_or(false)).collect();
     anyhow::ensure!(!files.is_empty(), "no .csa files under {}", input.display());
     let mut w = ShardWriter::new(out, "shogi", 1, json!({}), shard_size)?;
-    let mut stats: BTreeMap<&str, usize> = ["converted", "parse_error", "too_short", "no_result", "illegal_move"].into_iter().map(|k| (k, 0)).collect();
+    let mut stats: BTreeMap<&str, usize> = ["converted", "parse_error", "too_short", "no_result", "illegal_move", "low_quality"].into_iter().map(|k| (k, 0)).collect();
     for path in files {
         if max_games.map(|m| stats["converted"] >= m).unwrap_or(false) {
             break;
         }
         let text = String::from_utf8_lossy(&std::fs::read(&path)?).to_string();
+        if !passes_quality(&text, &path.file_name().unwrap().to_string_lossy(), q) {
+            *stats.get_mut("low_quality").unwrap() += 1;
+            continue;
+        }
         match convert_game(&text, min_moves, allow_no_result) {
             Ok(mut s) => {
                 s.meta["source"] = json!(path.file_name().unwrap().to_string_lossy());
@@ -658,9 +742,22 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<us
 
 pub fn run(cmd: Cmd) -> Result<()> {
     match cmd {
-        Cmd::Fetch { day, year, out } => fetch(day, year, &out),
-        Cmd::Convert { input, out, shard_size, max_games, min_moves, allow_no_result } => {
-            println!("{}", convert(&input, &out, shard_size, max_games, min_moves, allow_no_result)?);
+        Cmd::Fetch { day, year, out, ratings } => fetch(day, year, ratings, &out),
+        Cmd::Convert { input, out, shard_size, max_games, min_moves, allow_no_result, ratings, min_rating, game_type, no_time_up, hq } => {
+            let table = match &ratings {
+                Some(p) => Some(serde_json::from_slice::<BTreeMap<String, i64>>(&std::fs::read(p)?)?),
+                None => None,
+            };
+            let mut q = Quality { ratings: table, min_rating, game_type, no_time_up };
+            let mut allow_no_result = allow_no_result;
+            if hq {
+                anyhow::ensure!(q.ratings.is_some(), "--hq needs --ratings (run `gmdata shogi fetch --ratings YYYYMMDD`)");
+                q.min_rating = q.min_rating.max(3500);
+                q.game_type.get_or_insert_with(|| "floodgate-300-10F".to_string());
+                q.no_time_up = true;
+                allow_no_result = false;
+            }
+            println!("{}", convert(&input, &out, shard_size, max_games, min_moves, allow_no_result, &q)?);
             Ok(())
         }
     }
