@@ -1,10 +1,10 @@
 """Optimisation recipe of the reference TRM implementation
 (SamsungSAILMontreal/TinyRecursiveModels, pretrain.py + models/ema.py):
 
-- :class:`AdamATan2` — Adam with ``atan2(m̂, b·√v̂)`` in place of
-  ``m̂ / (√v̂ + ε)`` (scale-invariant, no epsilon) and decoupled weight
-  decay.  The reference imports the CUDA-only ``adam_atan2`` package; this
-  is a pure-PyTorch version of the same update so it also runs on CPU/MPS.
+- :class:`AdamATan2` — Adam with ``atan2`` in place of ``m / (√v + ε)``
+  (no epsilon) and decoupled weight decay.  The reference imports the
+  CUDA-only ``adam-atan2`` package; this replicates its kernel exactly in
+  PyTorch so it also runs on CPU/MPS.
 - :func:`cosine_schedule_with_warmup_lr_lambda` — linear warmup, then
   cosine towards ``min_ratio``; the reference configs use
   ``lr_min_ratio=1.0``, i.e. constant LR after warmup.
@@ -31,20 +31,28 @@ TRM_EMA_RATE = 0.999
 
 
 class AdamATan2(torch.optim.Optimizer):
-    """Adam-atan2 (Everett et al., 2024) with decoupled weight decay.
+    """Pure-PyTorch replica of the ``adam-atan2`` 0.0.3 CUDA kernel that
+    the reference imports (csrc/adam_atan2.cu ``adam_math``), per step t:
 
-    update = a · atan2(m / (1-β1^t), b · sqrt(v / (1-β2^t)))
-    θ ← θ · (1 - lr·wd) - lr · update
+        p   ← p · (1 − lr·wd)
+        m   ← lerp(m, g, 1 − β1);   v ← lerp(v, g², 1 − β2)
+        p   ← p − (lr / (1 − β1^t)) · atan2(m, √v / √(1 − β2^t))
+
+    No extra scale factor, and the first-moment bias correction sits
+    OUTSIDE the atan2 (unlike the Everett et al. / lucidrains variant).
+    Math runs in fp32 for sub-fp32 parameters, like the kernel's opmath.
     """
 
     def __init__(self, params: Iterable, lr: float = TRM_LR,
-                 betas=TRM_BETAS, weight_decay: float = TRM_WEIGHT_DECAY,
-                 a: float = 1.27, b: float = 1.0):
+                 betas=TRM_BETAS, weight_decay: float = TRM_WEIGHT_DECAY):
         if lr < 0:
             raise ValueError(f"invalid lr {lr}")
-        defaults = dict(lr=lr, betas=tuple(betas), weight_decay=weight_decay,
-                        a=a, b=b)
-        super().__init__(params, defaults)
+        if not (0.0 <= betas[0] < 1.0 and 0.0 <= betas[1] < 1.0):
+            raise ValueError(f"invalid betas {betas}")
+        if weight_decay < 0:
+            raise ValueError(f"invalid weight_decay {weight_decay}")
+        super().__init__(params, dict(lr=lr, betas=tuple(betas),
+                                      weight_decay=weight_decay))
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -55,12 +63,10 @@ class AdamATan2(torch.optim.Optimizer):
         for group in self.param_groups:
             lr, wd = group["lr"], group.get("weight_decay", 0.0)
             beta1, beta2 = group.get("betas", TRM_BETAS)
-            a, b = group.get("a", 1.27), group.get("b", 1.0)
             for p in group["params"]:
                 if p.grad is None:
                     continue
-                grad = p.grad
-                if grad.is_sparse:
+                if p.grad.is_sparse:
                     raise RuntimeError("AdamATan2 does not support sparse gradients")
                 state = self.state[p]
                 if not state:
@@ -69,16 +75,27 @@ class AdamATan2(torch.optim.Optimizer):
                     state["exp_avg_sq"] = torch.zeros_like(p, memory_format=torch.preserve_format)
                 state["step"] = int(state["step"]) + 1
                 t = state["step"]
+                step_size = lr / (1.0 - beta1 ** t)
+                bc2_sqrt = math.sqrt(1.0 - beta2 ** t)
+
                 exp_avg, exp_avg_sq = state["exp_avg"], state["exp_avg_sq"]
-                if wd:
-                    p.mul_(1.0 - lr * wd)
-                exp_avg.lerp_(grad, 1.0 - beta1)
-                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1.0 - beta2)
-                bc1 = 1.0 - beta1 ** t
-                bc2 = 1.0 - beta2 ** t
-                den = exp_avg_sq.mul(b * b / bc2).sqrt_()
-                update = exp_avg.mul(1.0 / bc1).atan2_(den)
-                p.add_(update, alpha=-lr * a)
+                low = p.dtype in (torch.float16, torch.bfloat16)
+                math_dtype = torch.float32 if low else p.dtype
+                param = p.to(math_dtype)
+                grad = p.grad.to(math_dtype)
+                m = exp_avg.to(math_dtype)
+                v = exp_avg_sq.to(math_dtype)
+
+                param.mul_(1.0 - lr * wd)
+                m.lerp_(grad, 1.0 - beta1)
+                v.lerp_(grad * grad, 1.0 - beta2)
+                param.sub_(torch.atan2(m, v.sqrt() / bc2_sqrt), alpha=step_size)
+
+                if param is not p:
+                    p.copy_(param)
+                if m is not exp_avg:
+                    exp_avg.copy_(m)
+                    exp_avg_sq.copy_(v)
         return loss
 
 

@@ -151,8 +151,9 @@ def test_run_deep_supervision_one_optimizer_step_per_supervision_step():
     calls = {"fb": 0, "opt": 0}
     torch.nn.init.constant_(net.trm.q_head.bias, -5.0)   # never halts
 
-    def fb(i, carry, active):
+    def fb(i, carry, active, weight):
         calls["fb"] += 1
+        assert weight == 1.0                            # nothing halts
         if carry is not None:
             assert not carry[0].requires_grad          # carry is detached
         out = net(grid, glb, carry=carry, active=active, return_carry=True)
@@ -174,7 +175,7 @@ def test_run_deep_supervision_stops_when_all_frames_halt():
     mask = torch.tensor([[True, True, False], [True, False, False]])
     n = {"opt": 0}
 
-    def fb(i, carry, active):
+    def fb(i, carry, active, weight):
         out = net(grid, glb, carry=carry, active=active, return_carry=True)
         return out, {}
 
@@ -189,18 +190,58 @@ def test_run_deep_supervision_stops_when_all_frames_halt():
 # optimiser / schedule / EMA
 # ---------------------------------------------------------------------------
 
-def test_adam_atan2_matches_formula():
+def _kernel_reference(param, grad, exp_avg, exp_avg_sq, lr, wd, beta1, beta2, t):
+    """adam-atan2 0.0.3 adam_atan2_test._adam_atan2_reference_impl (the
+    package's own spec of its CUDA kernel)."""
+    param = param.clone()
+    exp_avg = exp_avg.clone()
+    exp_avg_sq = exp_avg_sq.clone()
+    param.mul_(1 - lr * wd)
+    exp_avg.lerp_(grad, 1 - beta1)
+    exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+    denom = exp_avg_sq.sqrt() / math.sqrt(1 - beta2 ** t)
+    param.add_(torch.atan2(exp_avg, denom), alpha=-lr / (1 - beta1 ** t))
+    return param, exp_avg, exp_avg_sq
+
+
+def test_adam_atan2_matches_reference_kernel_over_steps():
     torch.manual_seed(0)
-    p = torch.nn.Parameter(torch.randn(5))
-    p0 = p.detach().clone()
-    g = torch.randn(5)
-    opt = AdamATan2([p], lr=0.1, betas=(0.9, 0.95), weight_decay=0.5)
-    p.grad = g.clone()
-    opt.step()
-    m = 0.1 * g / (1 - 0.9)
-    v = 0.05 * g * g / (1 - 0.95)
-    expect = p0 * (1 - 0.1 * 0.5) - 0.1 * 1.27 * torch.atan2(m, v.sqrt())
-    assert torch.allclose(p.detach(), expect, atol=1e-6)
+    p = torch.nn.Parameter(torch.randn(64))
+    ref_p = p.detach().clone()
+    m = torch.zeros(64)
+    v = torch.zeros(64)
+    opt = AdamATan2([p], lr=1e-2, betas=(0.9, 0.95), weight_decay=0.1)
+    for t in range(1, 8):
+        g = torch.randn(64)
+        p.grad = g.clone()
+        opt.step()
+        ref_p, m, v = _kernel_reference(ref_p, g, m, v, 1e-2, 0.1, 0.9, 0.95, t)
+        assert torch.allclose(p.detach(), ref_p, atol=1e-6, rtol=0)  # fp32 ulp: lerp vs addcmul
+    # first step: |update| = lr/(1-β1) · atan2(0.1 g, |g|) — no 1.27 factor
+    q = torch.nn.Parameter(torch.zeros(1))
+    q.grad = torch.ones(1)
+    AdamATan2([q], lr=1e-3, weight_decay=0.0).step()
+    assert math.isclose(-q.item(), 1e-3 / 0.1 * math.atan2(0.1, 1.0), rel_tol=1e-5)
+
+
+def test_loss_weight_is_active_fraction():
+    net = _net(halt_max_steps=3, halt_exploration_prob=0.0)
+    grid, glb = _batch()
+    mask = torch.tensor([[True, True, True], [True, False, False]])
+    seen = []
+
+    def fb(i, carry, active, weight):
+        seen.append((int(active.sum()), weight))
+        out = net(grid, glb, carry=carry, active=active, return_carry=True)
+        # halt exactly two of the frames after the first step
+        q = torch.full_like(out["q_halt"], -1.0)
+        if len(seen) == 1:
+            q[0, 0] = q[0, 1] = 1.0
+        out["q_halt"] = q
+        return out, {}
+
+    run_deep_supervision(1, [mask], fb, lambda: None, n_sup=3, exploration_prob=0.0)
+    assert seen == [(4, 1.0), (2, 0.5), (2, 0.5)]
 
 
 def test_schedule_is_constant_after_warmup_by_default():

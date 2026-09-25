@@ -140,7 +140,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tf_start", type=float, default=1.0,
                    help="teacher-forcing prob at epoch 0 (conditioning labels)")
     p.add_argument("--tf_end", type=float, default=1.0)
-    p.add_argument("--clip_grad", type=float, default=1.0)
+    p.add_argument("--clip_grad", type=float, default=0.0,
+                   help="max grad norm; 0 = no clipping (reference TRM)")
     p.add_argument("--num_workers", type=int, default=0)
     p.add_argument("--save_dir", default="checkpoints/il_game")
     p.add_argument("--resume", default=None)
@@ -468,7 +469,12 @@ def main() -> None:
 
     def optimizer_step():
         nonlocal opt_step
-        torch.nn.utils.clip_grad_norm_(net.parameters(), args.clip_grad)
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            net.parameters(), args.clip_grad if args.clip_grad > 0 else float("inf"))
+        if not torch.isfinite(grad_norm):
+            optimizer.zero_grad(set_to_none=True)
+            print(f"  [NaN] dropped a supervision step (grad_norm={grad_norm.item():.4f})")
+            return
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
@@ -489,11 +495,13 @@ def main() -> None:
             window, pending = pending, []
             n_mb = len(window)
 
-            def forward_backward(j, carry, active, window=window, n_mb=n_mb):
+            def forward_backward(j, carry, active, weight, window=window, n_mb=n_mb):
                 loss, stats, pred = batch_loss(
                     net, window[j], device, args.value_weight,
                     args.q_halt_weight, args.bf16, carry=carry, active=active)
-                (loss / n_mb).backward()
+                # weight = n_active / n_frames (reference fixed-batch
+                # normalisation, training/deep_supervision.py)
+                (loss * (weight / n_mb)).backward()
                 return pred, stats
 
             # Deep supervision (training/deep_supervision.py): up to

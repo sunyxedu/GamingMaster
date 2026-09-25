@@ -19,6 +19,13 @@ evaluation every example runs all N_sup steps.
 Here an "example" is one frame (the TRM ponders each frame's tokens), so
 halting is per frame.  Stage 1 is recomputed at every supervision step
 (the weights changed), exactly like the reference re-embeds the input.
+
+Loss normalisation: the reference divides every step's summed loss by the
+FIXED global batch size (its batch never shrinks — halted examples are
+swapped for new data).  Our batch shrinks as frames halt, so each step's
+active-frame MEAN loss is multiplied by ``n_active / n_frames``: every
+(frame, step) pair then weighs 1 / n_frames, as in the reference, instead
+of a few hard late frames getting a full-size update.
 """
 
 from __future__ import annotations
@@ -64,7 +71,8 @@ def run_deep_supervision(
     n_micro: int,
     frame_masks: List[torch.Tensor],
     forward_backward: Callable[[int, Optional[Tuple[torch.Tensor, torch.Tensor]],
-                                torch.Tensor], Tuple[Dict[str, torch.Tensor], Dict[str, float]]],
+                                torch.Tensor, float],
+                               Tuple[Dict[str, torch.Tensor], Dict[str, float]]],
     optimizer_step: Callable[[], None],
     n_sup: int,
     exploration_prob: float,
@@ -74,10 +82,11 @@ def run_deep_supervision(
     """Drive deep supervision over one optimizer window of ``n_micro``
     micro-batches (gradient accumulation).
 
-    ``forward_backward(i, carry, active)`` runs micro-batch ``i`` from
-    ``carry`` on the ``active`` frames, calls ``backward()`` on its (already
-    accumulation-scaled) loss and returns ``(pred, stats)``; ``pred`` must
-    hold ``q_halt`` [B, T] and ``carry``.  ``optimizer_step()`` is called
+    ``forward_backward(i, carry, active, weight)`` runs micro-batch ``i``
+    from ``carry`` on the ``active`` frames, calls ``backward()`` on
+    ``weight * mean_active_loss / n_micro`` (``weight`` = n_active /
+    n_frames, see the module docstring) and returns ``(pred, stats)``;
+    ``pred`` must hold ``q_halt`` [B, T] and ``carry``.  ``optimizer_step()`` is called
     once per supervision step.  ``any_live(local_live)`` lets distributed
     callers make the continue decision collective (every rank must run the
     same number of optimizer steps).  ``carry_store`` (e.g. CPU) parks the
@@ -90,6 +99,7 @@ def run_deep_supervision(
     """
     carries: List[Optional[Tuple[torch.Tensor, torch.Tensor]]] = [None] * n_micro
     active = [m.clone() for m in frame_masks]
+    n_total = [max(int(m.sum()), 1) for m in frame_masks]
     steps = [torch.zeros(m.shape, dtype=torch.long, device=m.device) for m in frame_masks]
     agg: Dict[str, float] = {}
     n_stats = 0
@@ -107,7 +117,8 @@ def run_deep_supervision(
                 dev = active[i].device
                 carry = (carry[0].to(dev, non_blocking=True),
                          carry[1].to(dev, non_blocking=True))
-            pred, stats = forward_backward(i, carry, active[i])
+            weight = int(active[i].sum()) / n_total[i]
+            pred, stats = forward_backward(i, carry, active[i], weight)
             new_carry = pred["carry"]
             if carry_store is not None:
                 # blocking: a non_blocking device→host copy may still be in

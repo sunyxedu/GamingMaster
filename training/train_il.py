@@ -72,7 +72,9 @@ def parse_args():
     p.add_argument("--log_interval", type=int, default=10, help="Log every N steps")
     p.add_argument("--save_interval", type=int, default=1, help="Save every N epochs")
     p.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every N steps within epoch")
-    p.add_argument("--grad_clip", type=float, default=1.0)
+    p.add_argument("--grad_clip", type=float, default=0.0,
+                   help="max grad norm; 0 = no clipping (the reference TRM "
+                        "does not clip; the non-finite check runs either way)")
     p.add_argument("--num_workers", type=int, default=16)
     p.add_argument("--device", type=str, default="auto")
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
@@ -167,7 +169,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                     tgt=tgt, frame_mask=frame_mask, source_y=source_y,
                     source_x=source_x, use_gt=use_gt)
 
-    def forward_backward(mb, carry, active):
+    def forward_backward(mb, carry, active, weight):
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
             pred = model(
                 mb["grid_seq"], mb["globals_seq"],
@@ -189,7 +191,9 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
         # ranks may run different micro-batch counts per supervision step);
         # the gradient sync below stays collective.
         if torch.isfinite(loss.detach()):
-            (loss / accum).backward()
+            # weight = n_active / n_frames: fixed per-(frame, step) weight
+            # like the reference's fixed-batch-size normalisation
+            (loss * (weight / accum)).backward()
             stats = {"loss": loss.item()}
             stats.update({f"{k}_loss": losses[f"{k}_loss"].item() for k in PART_KEYS})
             stats.update({k: losses[k].item() for k in ACC_KEYS})
@@ -206,10 +210,10 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             # schedule identical even when a rank has no gradient for a
             # parameter (e.g. all its frames already halted).
             sync_gradients(model, dist.get_world_size())
-        if args.grad_clip > 0:
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-        else:
-            grad_norm = torch.tensor(0.0)
+        # max_norm=inf only MEASURES the norm (clip coefficient clamps to 1),
+        # so the non-finite guard below works with clipping off too
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(), args.grad_clip if args.grad_clip > 0 else float("inf"))
         if not torch.isfinite(grad_norm):
             # grads are bitwise-equal across ranks after the sync, so every
             # rank takes this branch together
@@ -244,7 +248,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             stats = run_deep_supervision(
                 n_micro=len(window_mbs),
                 frame_masks=[mb["frame_mask"] for mb in window_mbs],
-                forward_backward=lambda i, c, a: forward_backward(window_mbs[i], c, a),
+                forward_backward=lambda i, c, a, w: forward_backward(window_mbs[i], c, a, w),
                 optimizer_step=optimizer_step,
                 n_sup=cfg.halt_max_steps,
                 exploration_prob=cfg.halt_exploration_prob,
