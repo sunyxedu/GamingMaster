@@ -15,11 +15,18 @@ from typing import Dict, List, Optional
 import torch
 from torch.utils.data import DataLoader
 
-from data_processing.games.dataset import GameShardDataset, collate_game_sequences
+from data_processing.games.dataset import collate_game_sequences
 from model.config import upgrade_config_dict
 from model.multi_game import MultiGameNetwork
 from training.deep_supervision import Q_HALT_WEIGHT
-from training.train_il_game import batch_loss, build_net_tolerant, pick_device, prepare_batch
+from training.train_il_game import (
+    UNCROPPABLE,
+    batch_loss,
+    build_net_tolerant,
+    open_dataset,
+    pick_device,
+    prepare_batch,
+)
 
 
 def load_multi(path: str, device: torch.device, raw: bool = False) -> MultiGameNetwork:
@@ -45,7 +52,7 @@ def eval_game(net, game: str, loader: DataLoader, device, depth: Optional[int],
     for i, batch in enumerate(loader):
         if max_batches and i >= max_batches:
             break
-        mb = prepare_batch(game, batch, device, tf_prob=1.0)
+        mb = prepare_batch(game, batch, device, tf_prob=1.0, cfg=net.cfg)
         _, stats, _ = batch_loss(net, mb, device, 0.0, Q_HALT_WEIGHT, bf16,
                                  act_steps=depth if depth is not None else net.default_depth)
         for k, v in stats.items():
@@ -81,8 +88,11 @@ def main(argv: Optional[List[str]] = None) -> None:
             print(f"[skip] {g}: not in checkpoint games {model.games}")
             continue
         gb = {k: int(v) for k, v in (x.split("=", 1) for x in a.game_batch)}
-        loader = DataLoader(GameShardDataset(d, game=g, max_len=a.max_len),
-                            batch_size=gb.get(g, a.batch_size), collate_fn=collate_game_sequences)
+        # the trainer's crop policy: generals keeps the first --max_len frames,
+        # clash_royale is never cropped, the others take random windows
+        ds = open_dataset(g, d, None if g in UNCROPPABLE else a.max_len)
+        loader = DataLoader(ds, batch_size=gb.get(g, a.batch_size),
+                            collate_fn=collate_game_sequences)
         for depth in depths:
             m = eval_game(model[g], g, loader, device, depth, a.max_batches, a.bf16)
             key = str(depth if depth is not None else model[g].default_depth)

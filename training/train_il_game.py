@@ -8,9 +8,10 @@ cross-entropy with ``--override hl_gauss_value=True``; see value_losses).
     uv run python -m training.train_il_game --game othello \
         --data_dir data/othello/train --epochs 10 --batch_size 8
 
-generals keeps its dedicated ``training/train_il.py`` (teacher-forcing schedule,
-world-model objective and cluster plumbing live there); this trainer
-covers every other adapter with one code path.
+generals runs here too (gio record directories or ``gmdata generals shard``
+gm-shards; its decoder's il_loss is train_il.py's ImitationLoss, so the
+objective is the same), and training/train_il.py stays its dedicated
+trainer (world-model objective, multi-node plumbing, legacy checkpoints).
 
 Single-process on purpose: the multi-node story (manual grad allreduce,
 NaN voting) stays in training/train_il.py until a non-generals game actually
@@ -33,13 +34,14 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from data_processing.games.dataset import (
-    GameShardDataset,
-    ShardLocalitySampler,
     collate_game_sequences,
+    open_game_dataset,
+    training_sampler,
 )
 from model.components.core import update_moe_balance
 from model.config import upgrade_config_dict
 from model.games import build_game_network
+from model.games import generals as generals_adapter
 from model.losses import hl_gauss_cross_entropy
 from model.optim import (
     TRM_BETAS,
@@ -59,6 +61,8 @@ from training.diagnostics import attention_probe, format_attention, logit_lse_ab
 # Teacher-forcing conditioning labels per game: the tgt keys the decoder
 # reads from ``labels`` in decode() (−1 → sample from its own policy).
 LABEL_KEYS = {
+    # derived from count / src_y / src_x (LABELS_FROM_TGT), not stored
+    "generals": ("source_y", "source_x"),
     "chess": ("from_idx", "to_idx"),
     "othello": (),
     "gomoku": (),
@@ -82,6 +86,15 @@ STATE_LABEL_KEYS = {
     "pokemon": ("active_idx",),
 }
 
+# Conditioning labels computed from the stored targets instead of read from
+# tgt keys of the same name: generals teacher-forces the source cell of move
+# frames only — pass / dropped-move frames get −1 and the decoder samples
+# its own source there (training/train_il.py's rule; forcing a label onto a
+# pass frame would feed its pass head a conditioning it never sees in play).
+LABELS_FROM_TGT = {
+    "generals": generals_adapter.source_labels,
+}
+
 # Per-game legality derived from the observation itself: some decoders
 # need ``legal`` at decode time even during IL (lux's il_loss masks by
 # pred["unit_present"], which decode() reads from legal["unit"]; the
@@ -89,6 +102,8 @@ STATE_LABEL_KEYS = {
 # slots — at tf_prob=1.0 it is never consulted).
 # Applied inside run_batch, so training and evaluate() share the mask.
 LEGAL_FROM_OBS = {
+    # source mask (+ direction mask when present), as train_il.py passes it
+    "generals": generals_adapter.legal_from_obs,
     "lux": lambda obs: {"unit": obs["unit_mask"].bool()},
     "starcraft": lambda obs: {"actor": obs["unit_mask"].bool()},
     # entity_mask (True = slot occupied) keeps tf_prob<1 actor
@@ -113,11 +128,72 @@ META_ARCH_KEYS = {
         "card_feature_dim", "cr_global_features")},
     "pokemon": {"move_buckets": ("pokemon_move_buckets",),
                 "species_buckets": ("pokemon_species_buckets",)},
+    # gio records (GeneralsGioDataset.shard_meta / `gmdata generals shard`);
+    # with turn_globals the net has TURN_GLOBAL_FEATURES more globals than
+    # the data (meta_arch_value), appended at batch time (OBS_HOOKS)
+    "generals": {k: (k,) for k in (
+        "grid_h", "grid_w", "grid_channels", "global_features")},
 }
 
 # Games whose sequences must not be random-cropped: the clash_royale wait
 # head derives absolute time from t0=0 (model/games/clash_royale.py decode).
 UNCROPPABLE = frozenset({"clash_royale"})
+
+# Games whose ``max_len`` keeps the FIRST frames instead of a random window:
+# the generals pass head reads the absolute frame index (decoded at t0=0),
+# turn_globals derive the turn from it, and the fog-of-war memory needs the
+# game from its start (data_processing/games/generals.py).
+PREFIX_CROP = frozenset({"generals"})
+
+
+def open_dataset(game: str, data_dir: str, max_len: Optional[int] = None):
+    """``game``'s dataset under ``data_dir`` with its crop policy (random
+    windows, or the first frames for PREFIX_CROP games); generals also reads
+    gio record directories (data_processing.games.dataset.open_game_dataset).
+    UNCROPPABLE games are the caller's business (max_len=None)."""
+    return open_game_dataset(data_dir, game, max_len=max_len,
+                             crop="prefix" if game in PREFIX_CROP else "random")
+
+
+def _generals_obs(obs: Dict[str, torch.Tensor], cfg) -> Dict[str, torch.Tensor]:
+    """turn_globals nets expect 3 more globals than the records carry:
+    derive them from the frame index (records are prefix-truncated, so
+    frame t is turn t) — the same features training/train_rl.py appends to
+    its IL batches."""
+    if cfg is None or not getattr(cfg, "turn_globals", False):
+        return obs
+    g = obs["globals_seq"]
+    if g.shape[-1] + generals_adapter.TURN_GLOBAL_FEATURES != cfg.global_features:
+        return obs
+    return {**obs, "globals_seq": generals_adapter.append_turn_globals(g)}
+
+
+# Per-game observation transforms that depend on the model config, applied
+# in prepare_batch (training and evaluation alike).
+OBS_HOOKS = {
+    "generals": _generals_obs,
+}
+
+
+def meta_arch_value(game: str, meta_key: str, value, cfg_get):
+    """The config value implied by shard meta ``meta_key`` = ``value``
+    (``cfg_get(field, default)`` reads the run's config / overrides)."""
+    if (game == "generals" and meta_key == "global_features"
+            and cfg_get("turn_globals", False)):
+        return value + generals_adapter.TURN_GLOBAL_FEATURES
+    return value
+
+
+def apply_meta_arch_defaults(game: str, kw: Dict, shard_meta: Dict) -> Dict:
+    """Fresh runs: default ``game``'s data-dependent config fields
+    (META_ARCH_KEYS) from the shard meta; explicit values in ``kw`` win
+    (check_meta_arch then rejects a contradiction)."""
+    for meta_key, cfg_keys in META_ARCH_KEYS.get(game, {}).items():
+        if meta_key in shard_meta:
+            v = meta_arch_value(game, meta_key, shard_meta[meta_key], kw.get)
+            for ck in cfg_keys:
+                kw.setdefault(ck, v)
+    return kw
 
 # Converter generations with semantic changes: shards older than this
 # train, but against re-converted data they are a different game (chess
@@ -228,8 +304,10 @@ def check_meta_arch(game: str, cfg, shard_meta: Dict) -> None:
     for meta_key, cfg_keys in META_ARCH_KEYS.get(game, {}).items():
         if meta_key not in shard_meta:
             continue
+        want = meta_arch_value(game, meta_key, shard_meta[meta_key],
+                               lambda f, d=None: getattr(cfg, f, d))
         for ck in cfg_keys:
-            if getattr(cfg, ck) != shard_meta[meta_key]:
+            if getattr(cfg, ck) != want:
                 raise ValueError(
                     f"shards were converted with {meta_key}="
                     f"{shard_meta[meta_key]} but the model has "
@@ -266,29 +344,35 @@ def build_labels(
     probability ``tf_prob`` per frame, else −1 (decoder self-samples).
     STATE_LABEL_KEYS entries are copied unconditionally — they are game
     state, not decisions, and must never be dropped to −1."""
-    keys = [k for k in LABEL_KEYS[game] if k in tgt]
+    derive = LABELS_FROM_TGT.get(game)
+    src = derive(tgt) if derive is not None else tgt
+    keys = [k for k in LABEL_KEYS[game] if k in src]
     if not keys:
         return None
     state_keys = set(STATE_LABEL_KEYS.get(game, ()))
     labels = {}
     if tf_prob >= 1.0:
         for k in keys:
-            labels[k] = tgt[k]
+            labels[k] = src[k]
         return labels
     keep = (torch.rand(frame_mask.shape, device=frame_mask.device) < tf_prob)
     for k in keys:
         if k in state_keys:
-            labels[k] = tgt[k]
+            labels[k] = src[k]
         else:
-            labels[k] = torch.where(keep, tgt[k], torch.full_like(tgt[k], -1))
+            labels[k] = torch.where(keep, src[k], torch.full_like(src[k], -1))
     return labels
 
 
 def prepare_batch(game: str, batch: Dict, device: torch.device,
-                  tf_prob: float) -> Dict:
+                  tf_prob: float, cfg=None) -> Dict:
     """Move a batch to ``device`` and draw its teacher-forcing labels once
-    (kept for every supervision step of the batch)."""
+    (kept for every supervision step of the batch).  ``cfg`` (the game
+    network's config) feeds the config-dependent OBS_HOOKS."""
     obs = {k: v.to(device) for k, v in batch["obs"].items()}
+    hook = OBS_HOOKS.get(game)
+    if hook is not None:
+        obs = hook(obs, cfg)
     tgt = {k: v.to(device) for k, v in batch["tgt"].items()}
     frame_mask = batch["meta"]["frame_mask"].to(device)
     labels = build_labels(game, tgt, tf_prob, frame_mask)
@@ -298,10 +382,10 @@ def prepare_batch(game: str, batch: Dict, device: torch.device,
 
 
 def prepare_rows(game: str, batch: Dict, device: torch.device,
-                 tf_prob: float) -> List[Dict]:
+                 tf_prob: float, cfg=None) -> List[Dict]:
     """Batch → per-row data for training.deep_supervision.BatchCarry; the
     teacher-forcing draw belongs to the example (kept while it ponders)."""
-    mb = prepare_batch(game, batch, device, tf_prob)
+    mb = prepare_batch(game, batch, device, tf_prob, cfg=cfg)
     aux = {f"label:{k}": v for k, v in (mb["labels"] or {}).items()}
     return split_rows({"obs": mb["obs"], "tgt": mb["tgt"], "aux": aux,
                        "meta": {"lengths": batch["meta"]["lengths"]}})
@@ -444,7 +528,7 @@ def evaluate(net, game, loader, device, value_weight, q_halt_weight, bf16,
     n = 0
     with torch.no_grad():
         for i, batch in enumerate(loader):
-            mb = prepare_batch(game, batch, device, tf_prob=1.0)
+            mb = prepare_batch(game, batch, device, tf_prob=1.0, cfg=model.cfg)
             probe = (attention_probe(model) if diag is not None and i == 0
                      else contextlib.nullcontext())
             with probe as attn:
@@ -483,11 +567,10 @@ def main() -> None:
                 f"checkpoint is for game {resume_ckpt.get('game')!r}, not {args.game!r}"
             )
 
-    dataset = GameShardDataset(args.data_dir, game=args.game, max_len=args.max_len)
+    dataset = open_dataset(args.game, args.data_dir, args.max_len)
     val_dataset = None
     if args.val_dir:
-        val_dataset = GameShardDataset(args.val_dir, game=args.game,
-                                       max_len=args.max_len)
+        val_dataset = open_dataset(args.game, args.val_dir, args.max_len)
         if (val_dataset.converter_version != dataset.converter_version
                 or val_dataset.shard_meta != dataset.shard_meta):
             raise ValueError(
@@ -510,11 +593,7 @@ def main() -> None:
     if resume_ckpt is not None:
         arch = resume_arch_overrides(resume_ckpt, overrides)
     else:
-        arch = dict(overrides)
-        for meta_key, cfg_keys in META_ARCH_KEYS.get(args.game, {}).items():
-            if meta_key in dataset.shard_meta:
-                for ck in cfg_keys:
-                    arch.setdefault(ck, dataset.shard_meta[meta_key])
+        arch = apply_meta_arch_defaults(args.game, dict(overrides), dataset.shard_meta)
     net, dropped = build_net_tolerant(args.game, arch)
     if dropped:
         print(f"[warn] checkpoint config fields unknown to current code, "
@@ -530,7 +609,7 @@ def main() -> None:
     # shard from disk for nearly every sample (the dataset caches one
     # shard); this sampler shuffles shard order + within-shard order.
     loader = DataLoader(dataset, batch_size=args.batch_size,
-                        sampler=ShardLocalitySampler(dataset),
+                        sampler=training_sampler(dataset),
                         num_workers=args.num_workers,
                         collate_fn=collate_game_sequences, drop_last=False)
     val_loader = None
@@ -635,7 +714,7 @@ def main() -> None:
                 return pred, stats
 
             stats = carries[slot].step(
-                prepare_rows(args.game, batch, device, tf_prob), forward_backward)
+                prepare_rows(args.game, batch, device, tf_prob, cfg=cfg), forward_backward)
             slot += 1
             if slot < n_slots and (i + 1) < len(loader):
                 continue

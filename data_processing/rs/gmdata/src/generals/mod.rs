@@ -1,5 +1,6 @@
 //! generals.io: metadata API → `.gior` replays → per-player fog-of-war
-//! simulation → `gio` training records.
+//! simulation → `gio` training records (→ `shard`: gm-shards for the
+//! multi-game trainers).
 
 pub mod api;
 pub mod filter;
@@ -8,6 +9,7 @@ pub mod gior;
 pub mod ladder;
 pub mod lz;
 pub mod pipeline;
+pub mod shard;
 pub mod sim;
 
 use anyhow::{Context, Result};
@@ -89,6 +91,18 @@ pub enum Cmd {
     },
     /// End-to-end resumable pipeline per player (fetch → filter → download → simulate → convert)
     Pipeline(PipelineCli),
+    /// gio training records → gm-shard directories (GameShardDataset, train_multi_game)
+    Shard {
+        /// gio record directories (`*.json`, searched recursively) or files, in order
+        #[arg(long, num_args = 1..)]
+        input: Vec<PathBuf>,
+        /// output directory (use a fresh one: shard numbering continues after existing shards)
+        #[arg(long)]
+        out: PathBuf,
+        /// records per shard directory
+        #[arg(long, default_value_t = 128)]
+        shard_size: usize,
+    },
 }
 
 #[derive(Args)]
@@ -172,6 +186,9 @@ pub fn run(cmd: Cmd) -> Result<()> {
         Cmd::Ladder { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency } => {
             let a = ladder::LadderArgs { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency };
             println!("{}", ladder::run(&a)?);
+        }
+        Cmd::Shard { input, out, shard_size } => {
+            println!("{}", shard::shard(&input, &out, shard_size)?);
         }
         Cmd::Pipeline(p) => {
             if p.merge {

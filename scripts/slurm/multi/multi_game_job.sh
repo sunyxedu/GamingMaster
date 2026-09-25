@@ -16,6 +16,14 @@
 #
 #   MODULE=training.eval_multi_game RUN=eval-x ARGS="--ckpt ... --val ..." sbatch ...
 #
+# generals joins like any game: --data generals=DIR takes a gio record
+# directory (gmdata generals ladder|pipeline output, e.g. .../training) or,
+# much faster to load and ~10x smaller, its gm-shards
+#   data_processing/target/release/gmdata generals shard --input DIR --out SHARDS
+# Its sequences are ~10x longer and 627 tokens per frame, and they are cut to
+# their FIRST frames: bound them with --game_max_len generals=512
+# --game_val_max_len generals=512 --game_batch generals=2.
+#
 # Paths live under $GM_HOME (default ~/gm-core) — not /scratch.
 set -euo pipefail
 GM_HOME=${GM_HOME:-$HOME/gm-core}

@@ -1447,11 +1447,8 @@ def il_auxiliary_update(
     # truncates tail-only, so frame i IS turn i.
     if (model.cfg.turn_globals
             and globals_seq.shape[-1] < model.cfg.global_features):
-        B_il, T_il, _ = globals_seq.shape
-        t = torch.arange(T_il, device=device, dtype=torch.float32)
-        t = t.view(1, T_il, 1).expand(B_il, -1, -1)
-        extra = torch.cat([(t % 50) / 50.0, t % 2, t / 500.0], dim=-1)
-        globals_seq = torch.cat([globals_seq, extra], dim=-1)
+        from model.games.generals import append_turn_globals
+        globals_seq = append_turn_globals(globals_seq)
     legal_mask = il_batch["obs"]["legal_source_mask_seq"].to(device)
     tgt = {k: v.to(device) for k, v in il_batch["tgt"].items()}
     lengths = il_batch["meta"]["lengths"]

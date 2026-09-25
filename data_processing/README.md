@@ -31,7 +31,15 @@ samples are frame ranges) plus `index.json` (game, converter version, shard meta
 per-sample meta). One-hot planes are stored bit-packed and unpacked on load.
 `GameShardDataset(dir, game=...)` memory-maps them directly — no conversion to
 `.pt`. It refuses to mix converter versions, shard meta or key sets. generals.io
-keeps its historical per-game gio JSON (`SeqReplayDataset`).
+keeps its historical per-game gio JSON (`SeqReplayDataset`, `training/train_il.py`).
+For the multi-game trainers generals reads either those gio directories directly
+(`games/generals.py::GeneralsGioDataset`, same decoding) or gm-shards made from
+them — bit-packed, memory-mapped, ~10x smaller, and pinned tensor-for-tensor to
+`SeqReplayDataset` by `tests/test_rust_generals_parity.py`:
+
+```sh
+$G generals shard --input data/generals/training --out data/generals/shards
+```
 
 ## Games, sources and the high-quality recipe
 

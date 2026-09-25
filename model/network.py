@@ -14,11 +14,14 @@ Source → Direction / Split / Pass decoder) live in
 API (tensor-argument ``forward``/``step``/``step_rl`` signatures, legacy
 attribute names, and old checkpoint state-dict keys) onto the generic
 core so existing training scripts, tools and checkpoints keep working.
+``forward`` / ``step`` also accept the generic :class:`GameNetwork` call
+(an obs dict first, ``legal=`` / ``labels=`` dicts), which is how the
+multi-game trainers drive generals next to every other game.
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Mapping, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -192,8 +195,8 @@ class GeneralsNetwork(GameNetwork):
 
     def forward(
         self,
-        grid_seq: torch.Tensor,
-        globals_seq: torch.Tensor,
+        grid_seq: Union[torch.Tensor, Mapping[str, torch.Tensor]],
+        globals_seq: Optional[torch.Tensor] = None,
         legal_mask: Optional[torch.Tensor] = None,
         source_y: Optional[torch.Tensor] = None,
         source_x: Optional[torch.Tensor] = None,
@@ -204,7 +207,35 @@ class GeneralsNetwork(GameNetwork):
         active: Optional[torch.Tensor] = None,
         return_carry: bool = False,
         reset: Optional[torch.Tensor] = None,
+        *,
+        legal: Optional[Mapping[str, torch.Tensor]] = None,
+        labels: Optional[Mapping[str, torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
+        """Legacy tensor API (``grid_seq, globals_seq, legal_mask=...,
+        source_y=..., source_x=..., direction_mask=...``), or — when the
+        first argument is an obs DICT — the generic :class:`GameNetwork` API
+        ``forward(obs, legal=..., labels=..., act_steps=..., frame_mask=...,
+        carry=..., active=..., return_carry=..., reset=...)`` the multi-game
+        trainers drive every game with (obs keys ``grid_seq`` /
+        ``globals_seq``; legal keys ``source`` / ``direction``; label keys
+        ``source_y`` / ``source_x``).  Both reach the same core call."""
+        if isinstance(grid_seq, Mapping):
+            if any(x is not None for x in (globals_seq, legal_mask, source_y,
+                                           source_x, direction_mask)):
+                raise TypeError(
+                    "GeneralsNetwork.forward(obs_dict, ...): pass legality and "
+                    "teacher forcing as legal=/labels= dicts, not legacy tensor "
+                    "arguments")
+            return super().forward(
+                grid_seq, legal=legal, labels=labels,
+                act_steps=act_steps, frame_mask=frame_mask,
+                carry=carry, active=active, return_carry=return_carry, reset=reset,
+            )
+        if legal is not None or labels is not None:
+            raise TypeError("legal=/labels= dicts need an obs dict as the first "
+                            "argument (generic API)")
+        if globals_seq is None:
+            raise TypeError("GeneralsNetwork.forward() missing globals_seq")
         obs, legal, labels = self._pack(
             grid_seq, globals_seq, legal_mask, source_y, source_x,
             direction_mask,
@@ -221,14 +252,30 @@ class GeneralsNetwork(GameNetwork):
 
     def step(
         self,
-        grid: torch.Tensor,
-        globals_vec: torch.Tensor,
+        grid: Union[torch.Tensor, Mapping[str, torch.Tensor]],
+        globals_vec: Optional[torch.Tensor] = None,
         legal_mask: Optional[torch.Tensor] = None,
         st_cache: Optional[List[torch.Tensor]] = None,
         step_idx: Union[int, torch.Tensor] = 0,
         act_steps: Optional[int] = None,
         direction_mask: Optional[torch.Tensor] = None,
+        *,
+        legal: Optional[Mapping[str, torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
+        """Legacy tensor API, or the generic ``step(obs, legal=...,
+        st_cache=..., step_idx=..., act_steps=...)`` when ``grid`` is an obs
+        dict (see :meth:`forward`)."""
+        if isinstance(grid, Mapping):
+            if any(x is not None for x in (globals_vec, legal_mask, direction_mask)):
+                raise TypeError(
+                    "GeneralsNetwork.step(obs_dict, ...): pass legality as a "
+                    "legal= dict, not legacy tensor arguments")
+            return super().step(grid, legal=legal, st_cache=st_cache,
+                                step_idx=step_idx, act_steps=act_steps)
+        if legal is not None:
+            raise TypeError("legal= dict needs an obs dict as the first argument")
+        if globals_vec is None:
+            raise TypeError("GeneralsNetwork.step() missing globals_vec")
         obs, legal, _ = self._pack(grid, globals_vec, legal_mask,
                                    direction_mask=direction_mask)
         return super().step(

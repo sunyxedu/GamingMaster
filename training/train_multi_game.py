@@ -14,6 +14,22 @@ and adaptation of a trained brain to a new game.
     # the same on 4 GPUs of one node (data parallel, see below)
     uv run torchrun --standalone --nproc_per_node=4 -m training.train_multi_game ...
 
+    # generals next to the others: a directory of gio records (the output of
+    # `gmdata generals ladder|pipeline`, read with SeqReplayDataset's decoding)
+    # or its `gmdata generals shard` gm-shards (faster, ~10x smaller)
+    uv run python -m training.train_multi_game \\
+        --data generals=data/generals/training --data othello=data/othello/train \\
+        --game_batch generals=2 --game_max_len generals=512 ...
+
+Games and data.  Every registered game except generals reads GameShardDataset
+shards (.pt / gm-shard directories); generals reads gio record directories or
+gm-shards (data_processing/games/generals.py).  All games go through the same
+GameNetwork interface and the decoder's own ``il_loss`` (generals: train_il.py's
+ImitationLoss).  Crops: ``--max_len`` (per game ``--game_max_len``) takes a
+random window, except for generals, whose adapter reads the absolute frame
+index (pass head, turn_globals, fog-of-war memory): it keeps the FIRST frames,
+like train_il.py's --max_seq_len; clash_royale is never cropped.
+
 Objective.  Every optimizer step averages K micro-batches (``--games_per_step``),
 each from a game drawn i.i.d. from the mixture
 
@@ -27,8 +43,9 @@ usual temperature compromise (HPT uses √N, π0 N^0.43).
 Value heads are per game.  The value loss is MSE for the scalar head, or the
 HL-Gauss cross-entropy with ``--override hl_gauss_value=True`` (every game
 gets a categorical head over [-hl_gauss_vmax, hl_gauss_vmax]; IL targets are
-final outcomes in [-1, 1]).  Logs report ``value_loss`` (the trained loss)
-and ``value_mse`` (MSE of the scalar prediction, comparable across heads).
+final outcomes in [-1, 1], generals' an outcome / army-ratio blend in [-1, 1]).
+Logs report ``value_loss`` (the trained loss) and ``value_mse`` (MSE of the
+scalar prediction, comparable across heads).
 
 Everything else is the IL recipe of training/train_il_game.py: AdamATan2,
 warmup then constant LR, EMA weights for evaluation/checkpoints, deep
@@ -87,11 +104,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import BatchSampler, DataLoader, SequentialSampler
 
-from data_processing.games.dataset import (
-    GameShardDataset,
-    ShardLocalitySampler,
-    collate_game_sequences,
-)
+from data_processing.games.dataset import collate_game_sequences, training_sampler
 from model.components.core import allreduce_moe_loads, update_moe_balance
 from model.config import upgrade_config_dict
 from model.multi_game import (
@@ -124,12 +137,15 @@ from training.distributed import (
 )
 from training.train_il_game import (
     LABEL_KEYS,
-    META_ARCH_KEYS,
+    PREFIX_CROP,
     UNCROPPABLE,
+    apply_meta_arch_defaults,
     batch_loss,
     build_net_tolerant,
+    check_meta_arch,
     describe_value_head,
     mb_from_merged,
+    open_dataset,
     parse_overrides,
     pick_device,
     prepare_batch,
@@ -156,13 +172,23 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "exclusive with --games_per_step")
     p.add_argument("--sample_alpha", type=float, default=0.5,
                    help="mixture temperature: w_g ∝ frames_g^alpha")
-    p.add_argument("--max_len", type=int, default=None, help="random-crop training sequences")
+    p.add_argument("--max_len", type=int, default=None,
+                   help="crop training sequences (random window; generals: first frames)")
     p.add_argument("--val_max_len", type=int, default=None,
                    help="validation crop (default: full sequences, so every evaluation "
                         "sees exactly the same frames)")
+    p.add_argument("--game_max_len", action="append", default=[], metavar="GAME=N",
+                   help="per-game --max_len (sequence lengths differ by orders of "
+                        "magnitude across games)")
+    p.add_argument("--game_val_max_len", action="append", default=[], metavar="GAME=N",
+                   help="per-game --val_max_len (e.g. bound generals' ~1000-frame "
+                        "games; a prefix crop is deterministic)")
     p.add_argument("--override", nargs="*", default=[], metavar="KEY=VALUE",
                    help="core/config overrides shared by all games")
-    p.add_argument("--tf_prob", type=float, default=1.0)
+    p.add_argument("--tf_prob", type=float, default=1.0,
+                   help="teacher-forcing probability of the conditioning labels")
+    p.add_argument("--game_tf", action="append", default=[], metavar="GAME=P",
+                   help="per-game --tf_prob (train_il.py trains generals at 0 by default)")
     p.add_argument("--value_weight", type=float, default=0.2)
     p.add_argument("--lr", type=float, default=TRM_LR)
     p.add_argument("--weight_decay", type=float, default=TRM_WEIGHT_DECAY)
@@ -204,12 +230,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _pairs(items: List[str]) -> Dict[str, str]:
+def _pairs(items: List[str], what: str = "DIR") -> Dict[str, str]:
     out = {}
     for it in items:
         g, sep, d = it.partition("=")
         if not sep or g not in LABEL_KEYS:
-            raise SystemExit(f"expected GAME=DIR with GAME in {sorted(LABEL_KEYS)}, got {it!r}")
+            raise SystemExit(f"expected GAME={what} with GAME in {sorted(LABEL_KEYS)}, "
+                             f"got {it!r}")
         out[g] = d
     return out
 
@@ -274,6 +301,28 @@ def load_core_checkpoint(path: str):
     return state, core_config_overrides(upgrade_config_dict(ck["config"]))
 
 
+def game_checkpoint(ck: Dict, game: str) -> Dict:
+    """One game's network out of a multi-game checkpoint ``ck``, in the
+    single-game format (``game``, ``config``, ``model_state`` = EMA weights,
+    ``train_model_state`` = raw weights): what training/train_il.py
+    ``--finetune_from``, training/train_rl.py ``--il_checkpoint`` (generals)
+    and ``build_game_network(game, **config)`` + ``load_state_dict`` consume
+    — the per-game post-training entry point of a jointly pretrained brain."""
+    if game not in ck["games"]:
+        raise KeyError(f"{game!r} not in the checkpoint's games {ck['games']}")
+    pre = f"nets.{game}."
+
+    def part(state: Dict) -> Dict:
+        return {k[len(pre):]: v for k, v in state.items() if k.startswith(pre)}
+
+    out = {"game": game, "config": dict(ck["configs"][game]),
+           "model_state": part(ck["model_state"]),
+           "source": {"multi_game_games": list(ck["games"]), "step": ck.get("step")}}
+    if "train_model_state" in ck:
+        out["train_model_state"] = part(ck["train_model_state"])
+    return out
+
+
 EvalSums = Dict[str, Tuple[Dict[str, float], int]]
 
 
@@ -295,7 +344,7 @@ def eval_sums(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
         for i, batch in enumerate(loader):
             if max_batches and i >= max_batches:
                 break
-            mb = prepare_batch(g, batch, device, tf_prob=1.0)
+            mb = prepare_batch(g, batch, device, tf_prob=1.0, cfg=net.cfg)
             probe = (attention_probe(net) if diag is not None and i == 0
                      else contextlib.nullcontext())
             with probe as attn:
@@ -384,7 +433,10 @@ def main(argv=None) -> Dict[str, object]:
 
     data_dirs, val_dirs = _pairs(args.data), _pairs(args.val)
     games = list(data_dirs)
-    game_batch = {g: int(n) for g, n in (x.split("=", 1) for x in args.game_batch)}
+    game_batch = {g: int(n) for g, n in _pairs(args.game_batch, "N").items()}
+    game_max_len = {g: int(n) for g, n in _pairs(args.game_max_len, "N").items()}
+    game_val_max_len = {g: int(n) for g, n in _pairs(args.game_val_max_len, "N").items()}
+    game_tf = {g: float(v) for g, v in _pairs(args.game_tf, "P").items()}
 
     K, k_glob, k_div = micro_batch_plan(args.games_per_step, args.global_games_per_step,
                                         len(games), rank, world)
@@ -399,10 +451,10 @@ def main(argv=None) -> Dict[str, object]:
             raise SystemExit(f"{args.resume} trained games {resume['games']}, "
                              f"this run has {games} (same --data order required)")
 
-    def crop(g: str, max_len):
-        return None if g in UNCROPPABLE else max_len
+    def crop(g: str, max_len, per_game: Dict[str, int]):
+        return None if g in UNCROPPABLE else per_game.get(g, max_len)
 
-    datasets = {g: GameShardDataset(d, game=g, max_len=crop(g, args.max_len))
+    datasets = {g: open_dataset(g, d, crop(g, args.max_len, game_max_len))
                 for g, d in data_dirs.items()}
     frames = {g: ds.total_frames() for g, ds in datasets.items()}
     weights = mixture_weights(frames, args.sample_alpha)
@@ -418,14 +470,11 @@ def main(argv=None) -> Dict[str, object]:
 
     nets = {}
     for g in games:
-        kw = dict(core_kw)
-        for meta_key, cfg_keys in META_ARCH_KEYS.get(g, {}).items():
-            if meta_key in datasets[g].shard_meta:
-                for ck in cfg_keys:
-                    kw.setdefault(ck, datasets[g].shard_meta[meta_key])
+        kw = apply_meta_arch_defaults(g, dict(core_kw), datasets[g].shard_meta)
         net, dropped = build_net_tolerant(g, kw)
         if dropped:
             log(f"[warn] {g}: config fields unknown to {g}'s config, ignored: {dropped}")
+        check_meta_arch(g, net.cfg, datasets[g].shard_meta)
         nets[g] = net
     model = MultiGameNetwork(nets).to(device)
     first = model[games[0]]
@@ -451,6 +500,13 @@ def main(argv=None) -> Dict[str, object]:
         log(f"[note] qk_norm=False comes from the --init_core checkpoint "
             f"({args.init_core}): a pre-QK-norm core cannot switch it on")
     log("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,} w={weights[g]:.3f}" for g in games))
+    for g in games:
+        if g in PREFIX_CROP:
+            ml = crop(g, args.max_len, game_max_len)
+            log(f"[data] {g}: {type(datasets[g]).__name__}, sequences cut to their first "
+                f"{ml} frames" if ml is not None else
+                f"[data] {g}: {type(datasets[g]).__name__}, FULL games (no --game_max_len "
+                f"{g}=N / --max_len): bound them if memory is short")
     if dist_env.enabled:
         lo, hi = k_glob // world, -(-k_glob // world)
         log(f"[dist] micro-batches per optimizer step: {k_glob} = {world} ranks x "
@@ -458,14 +514,14 @@ def main(argv=None) -> Dict[str, object]:
             f"--games_per_step {k_glob})")
 
     loaders = {g: _cycle(DataLoader(ds, batch_size=game_batch.get(g, args.batch_size),
-                                    sampler=ShardLocalitySampler(ds),
+                                    sampler=training_sampler(ds),
                                     num_workers=args.num_workers,
                                     collate_fn=collate_game_sequences))
                for g, ds in datasets.items()}
     has_val = any(g in games for g in val_dirs)
 
     def val_loader(g: str, d: str) -> DataLoader:
-        ds = GameShardDataset(d, game=g, max_len=crop(g, args.val_max_len))
+        ds = open_dataset(g, d, crop(g, args.val_max_len, game_val_max_len))
         bs = game_batch.get(g, args.batch_size)
         if dist_env.enabled:
             return _sharded_val_loader(ds, bs, rank, world, args.eval_batches)
@@ -541,7 +597,8 @@ def main(argv=None) -> Dict[str, object]:
                     (loss * (weight / k_div)).backward()
                 return pred, stats
 
-            st = carries[g].step(prepare_rows(g, next(loaders[g]), device, args.tf_prob),
+            st = carries[g].step(prepare_rows(g, next(loaders[g]), device,
+                                              game_tf.get(g, args.tf_prob), cfg=net.cfg),
                                  forward_backward)
             if st is not None and "loss" in st:
                 window.setdefault(f"{g}/loss", []).append(st["loss"])
