@@ -81,7 +81,7 @@ class GmShard:
         for name, arr in self.arrays().items():
             group, key = name.split(".", 1)
             dtype = self.index["tensors"][name]["dtype"]
-            v = torch.from_numpy(np.ascontiguousarray(arr[a:b]))
+            v = torch.from_numpy(np.array(arr[a:b]))  # copy: mmap slices are read-only
             if dtype == "bool":
                 v = v.bool()
             out[group][key] = v
