@@ -21,7 +21,13 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from model.components.core import CoreBlock, MoEFFN, QKNorm
+from model.components.core import (
+    QK_NORM_INIT_CAP,
+    CoreBlock,
+    MoEFFN,
+    QKNorm,
+    qk_norm_init_scale,
+)
 from model.components.transformer import SpatiotemporalBlock
 from model.config import ModelConfig, config_from_dict, upgrade_config_dict
 from model.game_network import GameNetwork
@@ -40,8 +46,8 @@ TINY = dict(d_model=32, n_heads=4, d_ff=64, n_st_layers=2, encoder_channels=16,
             dropout=0.0, rd_prelude_layers=1, rd_recurrent_layers=1, rd_coda_layers=1,
             rd_mean_iters=2, rd_backprop_iters=1, core_layers=2)
 D_HEAD = TINY["d_model"] // TINY["n_heads"]
-G0 = 1.0                                 # initial QK scale
-INIT_CAP = D_HEAD ** 0.5 * G0 * G0       # initial logit cap
+G0 = qk_norm_init_scale(D_HEAD)          # initial QK scale (8^¼ for 8-dim heads)
+INIT_CAP = D_HEAD ** 0.5 * G0 * G0       # = QK_NORM_INIT_CAP (8) for small heads
 CORES = ("recurrent_depth", "transformer")
 MIXERS = ("attention", "recurrent")
 
@@ -302,12 +308,30 @@ def test_qk_norm_bound_holds_for_any_input_scale_and_is_tight():
             q, k = torch.randn(2, 3, 40, D) * scale, torch.randn(2, 3, 40, D) * scale
             top, _ = _logits_entropy(*qkn(q, k), causal=False)
             assert top <= bound.item() * (1 + 1e-5), (scale, top, bound)
-        # at init, aligned one-hot rows reach the initial cap √D
+        # at init, aligned one-hot rows reach the initial cap √D·g0²
         fresh = QKNorm(D)
         e = torch.zeros(1, 1, 1, D)
         e[..., 0] = 100.0
         top, _ = _logits_entropy(*fresh(e, e), causal=False)
-        assert abs(top - D ** 0.5) < 1e-4
+        assert abs(top - QK_NORM_INIT_CAP) < 1e-4
+
+
+def test_qk_norm_init_scale_starts_the_cap_at_8():
+    """Small heads start with scales > 1 so the logit cap √D·g_q·g_k is 8
+    (unit scales would give √32 ≈ 5.7 for the study's 32-dim heads); heads
+    of ≥ 64 dims keep the standard unit init."""
+    assert QK_NORM_INIT_CAP == 8.0 and INIT_CAP == pytest.approx(8.0)
+    for d in (8, 16, 32, 64, 128, 256):
+        assert d ** 0.5 * qk_norm_init_scale(d) ** 2 == pytest.approx(max(d ** 0.5, 8.0))
+    assert qk_norm_init_scale(32) == pytest.approx(2 ** 0.25)
+    assert qk_norm_init_scale(64) == 1.0 and qk_norm_init_scale(128) == 1.0
+    qkn = QKNorm(32)
+    for w in (qkn.q_norm.weight, qkn.k_norm.weight):
+        assert torch.equal(w, torch.full((32,), qk_norm_init_scale(32)))
+    # GameNetwork's blanket init pass leaves the QK scales alone
+    net = _net("recurrent_depth", "attention", qk_norm=True)
+    assert all(torch.equal(p, torch.full((D_HEAD,), G0))
+               for n, p in net.named_parameters() if "qk_norm" in n)
 
 
 @pytest.mark.parametrize("qk_norm", [False, True])

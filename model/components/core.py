@@ -86,13 +86,37 @@ class RMSNorm(nn.RMSNorm):
         return y * self.weight.to(x.dtype)
 
 
+#: minimum attention-logit cap √D·g_q·g_k the QK-norm scales start at
+QK_NORM_INIT_CAP = 8.0
+
+
+def qk_norm_init_scale(head_dim: int) -> float:
+    """Initial value of every QK-norm scale: 1 for head_dim ≥ 64, else
+    (8 / √head_dim)^½, so that the cap √D·g_q·g_k starts at
+    max(√D, :data:`QK_NORM_INIT_CAP`).
+
+    With unit scales a 32-dim head caps logits at √32 ≈ 5.7: a query exactly
+    aligned with its key among ~360 random ones (a go board) gets only ~1/3
+    of the attention mass, and sharpening needs g_q·g_k ≈ 2 — thousands of
+    steps at lr 3e-4, since each scale moves ≤ ~π/2·lr per AdamATan2 step
+    and nothing but the scales can raise the cap (softening stays fast: the
+    q/k directions do it).  The price of a higher start is noisier random
+    attention at init (logit std = g_q·g_k): for D=32 and 363 keys, cap
+    5.7 / 8 / 11.3 give aligned-key mass 0.33 / 0.75 / 0.97 and normalised
+    init entropy 0.92 / 0.83 / 0.69 — 8 buys most of the sharpness for a
+    modest loss of init entropy."""
+    return max(1.0, (QK_NORM_INIT_CAP / math.sqrt(head_dim)) ** 0.5)
+
+
 class QKNorm(nn.Module):
     """QK-normalisation (``cfg.qk_norm``): per-head RMSNorm of queries and
     keys over head_dim — one [head_dim] learnable scale for q and one for k,
     shared by all heads (the per-head form of ViT-22B, Dehghani et al. 2023,
     and Qwen3; OLMo 2 instead normalises the full-width q/k projection
     before the head split) — applied right before
-    ``scaled_dot_product_attention``.  The scales start at 1.
+    ``scaled_dot_product_attention``.  The scales start at
+    :func:`qk_norm_init_scale` (1 for heads of ≥ 64 dims, 2^¼ for 32-dim
+    ones: initial cap 8).
 
     After it every q, k row has RMS |g| (‖q̂‖ ≤ √D·max|g_q|), so with SDPA's
     1/√D scaling each attention logit obeys
@@ -112,6 +136,10 @@ class QKNorm(nn.Module):
         super().__init__()
         self.q_norm = RMSNorm(head_dim, eps=eps)
         self.k_norm = RMSNorm(head_dim, eps=eps)
+        g0 = qk_norm_init_scale(head_dim)
+        with torch.no_grad():
+            self.q_norm.weight.fill_(g0)
+            self.k_norm.weight.fill_(g0)
 
     def forward(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.q_norm(q), self.k_norm(k)
