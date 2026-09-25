@@ -20,6 +20,21 @@ materialised initial state, so every frame hits the same graph.  All modes but
 eager need the recurrent temporal mixer (fixed-size state; the attention
 mixer's KV cache grows every frame); the two graph modes need CUDA.
 
+MoE expert path (``--moe-path``, recorded as ``moe_path`` in every record):
+``auto`` is the model's own inference choice — the sync-free dense
+all-experts path on an accelerator at batch 1 (N·E <= MoEFFN.
+DENSE_MAX_TOKEN_EXPERTS), the routed sparse path on the CPU.  ``sparse``
+measures the routed path (one host sync per expert; what eager MoE records
+from before the dense path measured), ``dense`` forces the all-experts one.
+cuda-graph always captures the dense path (the sparse one cannot be
+captured).
+
+Caveat for ``--bf16 --mode cuda-graph``: capture requires autocast's
+weight-cast cache to be off, so every fp32→bf16 weight cast is replayed on
+each use (recurrent blocks: r times per step), where eager casts once per
+step.  Part of the bf16 graph-vs-eager gap is that cast traffic, not launch
+overhead (the network does not yet run with bf16 weights and no autocast).
+
     uv run python scripts/bench_latency.py --game generals --device cuda \\
         --cores recurrent_depth transformer --depths 1 2 4 8 16 --moe 0 8 --bf16 \\
         --mode eager cuda-graph compile-reduce-overhead
@@ -38,6 +53,7 @@ from typing import Callable, Dict, List
 
 import torch
 
+from model.components.core import MoEFFN
 from model.games import build_game_network
 
 MODES = ("eager", "compile", "compile-reduce-overhead", "cuda-graph")
@@ -104,27 +120,45 @@ def _stepper(net, mode: str, obs: Dict[str, torch.Tensor], depth: int, bf16: boo
     raise ValueError(f"unknown mode {mode!r}")
 
 
+def _moe_path(net, mode: str, device) -> "str | None":
+    """The MoE expert path this configuration runs (None without MoE),
+    resolved under the active ``MoEFFN.inference_path``."""
+    moe = next((m for m in net.modules() if isinstance(m, MoEFFN)), None)
+    if moe is None:
+        return None
+    if mode == "cuda-graph":
+        return "dense"
+    with torch.no_grad():
+        return moe.expert_path(net.obs_encoder.n_tokens + 2, device)   # batch 1
+
+
 def bench_one(game: str, core: str, depth: int, moe: int, bf16: bool, mode: str,
-              frames: int, warmup: int, device, base: Dict) -> Dict:
+              frames: int, warmup: int, device, base: Dict,
+              moe_path: str = "auto") -> Dict:
+    if moe and mode == "cuda-graph" and moe_path == "sparse":
+        raise ValueError("--moe-path sparse cannot be captured in a CUDA graph "
+                         "(data-dependent expert batches); use eager / compile")
     torch.manual_seed(0)
     kw = dict(base, core_type=core, moe_experts=moe)
     net = build_game_network(game, **kw).to(device).eval()
     obs = _obs_like(net, game, device)
-    run = _stepper(net, mode, obs, depth, bf16, device)
     times: List[float] = []
     sync = (torch.cuda.synchronize if device.type == "cuda"
             else (torch.mps.synchronize if device.type == "mps" else (lambda: None)))
-    for t in range(warmup + frames):
-        sync()
-        t0 = time.perf_counter()
-        run(t)
-        sync()
-        if t >= warmup:
-            times.append((time.perf_counter() - t0) * 1e3)
+    with MoEFFN.inference_path(moe_path):
+        path = _moe_path(net, mode, device)
+        run = _stepper(net, mode, obs, depth, bf16, device)
+        for t in range(warmup + frames):
+            sync()
+            t0 = time.perf_counter()
+            run(t)
+            sync()
+            if t >= warmup:
+                times.append((time.perf_counter() - t0) * 1e3)
     q = statistics.quantiles(times, n=100)
     n_params = sum(p.numel() for p in net.parameters())
     return {"game": game, "core": core, "depth": depth, "moe": moe, "bf16": bf16,
-            "mode": mode, "compile": mode.startswith("compile"),
+            "mode": mode, "compile": mode.startswith("compile"), "moe_path": path,
             "params_M": round(n_params / 1e6, 2),
             "p50_ms": round(q[49], 3), "p90_ms": round(q[89], 3), "p99_ms": round(q[98], 3),
             "device": str(device), "frames": frames}
@@ -142,6 +176,9 @@ def main() -> None:
                    help="execution modes to measure (default: eager)")
     p.add_argument("--compile", action="store_true",
                    help="legacy: also measure mode 'compile'")
+    p.add_argument("--moe-path", choices=("auto", "dense", "sparse"), default="auto",
+                   help="MoE expert path for eager / compile modes (default: the "
+                        "model's automatic choice; cuda-graph is always dense)")
     p.add_argument("--frames", type=int, default=200)
     p.add_argument("--warmup", type=int, default=30)
     p.add_argument("--override", nargs="*", default=[], metavar="KEY=VALUE")
@@ -173,10 +210,11 @@ def main() -> None:
                 for mode in modes:
                     try:
                         r = bench_one(a.game, core, depth, moe, a.bf16, mode,
-                                      a.frames, a.warmup, device, base)
+                                      a.frames, a.warmup, device, base, a.moe_path)
                     except Exception as e:  # keep the sweep going; record the failure
                         r = {"core": core, "depth": depth, "moe": moe, "mode": mode,
                              "compile": mode.startswith("compile"),
+                             "moe_path_arg": a.moe_path,
                              "error": f"{type(e).__name__}: {e}"[:300]}
                     print(json.dumps(r), flush=True)
                     with contextlib.suppress(Exception):
