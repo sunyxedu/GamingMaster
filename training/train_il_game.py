@@ -35,6 +35,7 @@ from data_processing.games.dataset import (
     ShardLocalitySampler,
     collate_game_sequences,
 )
+from model.components.core import update_moe_balance
 from model.config import upgrade_config_dict
 from model.games import build_game_network
 from model.optim import (
@@ -49,7 +50,6 @@ from model.optim import (
     trm_lr_lambda,
 )
 from model.rl_utils import load_model_state, optim_param_groups
-from model.components.core import update_moe_balance
 from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry, split_rows
 
 # Teacher-forcing conditioning labels per game: the tgt keys the decoder

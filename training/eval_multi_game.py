@@ -79,8 +79,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             m = eval_game(model[g], g, loader, device, depth, a.max_batches)
             key = str(depth if depth is not None else model[g].default_depth)
             results.setdefault(g, {})[key] = m
-            print(f"{g} r={key}: loss={m['loss']:.4f} exact_acc={m.get('exact_acc', float('nan')):.4f}",
-                  flush=True)
+            acc = m.get("exact_acc", float("nan"))
+            print(f"{g} r={key}: loss={m['loss']:.4f} exact_acc={acc:.4f}", flush=True)
     if a.json:
         with open(a.json, "w") as f:
             json.dump(results, f, indent=1)
