@@ -31,6 +31,21 @@ import torch.nn.functional as F
 # Shared sampling / masking utilities
 # ---------------------------------------------------------------------------
 
+def categorical_sample(probs: torch.Tensor) -> torch.Tensor:
+    """Draw one index per row from ``probs`` [..., N] → [...].
+
+    Exactly ``torch.multinomial(probs, 1).squeeze(-1)`` — the same
+    exponential race (argmax of p / q, q ~ Exp(1)) torch uses internally
+    for a single draw, consuming the same random numbers, so samples are
+    bit-identical under the same generator state — minus multinomial's
+    host-side validity checks (``.item()`` syncs that also make it
+    impossible to capture in a CUDA graph).  Callers must pass a valid
+    distribution (non-negative, finite, non-zero rows), which every caller
+    guarantees via :func:`safe_masked_logits` or a softmax.
+    """
+    return (probs / torch.empty_like(probs).exponential_(1)).argmax(-1)
+
+
 def safe_masked_logits(
     logits: torch.Tensor, mask: Optional[torch.Tensor],
 ) -> torch.Tensor:
@@ -41,21 +56,20 @@ def safe_masked_logits(
     - rows containing NaN (bf16 overflow) fall back to uniform.
 
     Always returns a detached float32 copy — callers use it for sampling
-    and log-prob bookkeeping, never for gradient flow.
+    and log-prob bookkeeping, never for gradient flow.  Branch-free (the
+    fallbacks are masked writes that leave healthy rows untouched): no
+    host sync, CUDA-graph capturable.
     """
     safe = logits.detach().clone().float()
     if mask is not None:
         safe = safe.masked_fill(~mask, float("-inf"))
         all_masked = (safe.isinf() & (safe < 0)).all(dim=-1)
-        if all_masked.any():
-            # Column-slice write, NOT `safe[all_masked, ..., 0]`: mixing a
-            # boolean mask with a trailing index is only valid for 1-D
-            # masks, and callers pass [B, T, N] logits too.
-            safe[..., 0] = safe[..., 0].masked_fill(all_masked, 0.0)
-    nan_rows = safe.isnan().any(dim=-1)
-    if nan_rows.any():
-        safe[nan_rows] = 0.0
-    return safe
+        # Column-slice write, NOT `safe[all_masked, ..., 0]`: mixing a
+        # boolean mask with a trailing index is only valid for 1-D masks,
+        # and callers pass [B, T, N] logits too.
+        safe[..., 0] = safe[..., 0].masked_fill(all_masked, 0.0)
+    nan_rows = safe.isnan().any(dim=-1, keepdim=True)
+    return safe.masked_fill(nan_rows, 0.0)
 
 
 def masked_sample(
@@ -65,7 +79,7 @@ def masked_sample(
     with torch.no_grad():
         safe = safe_masked_logits(logits, mask)
         probs = F.softmax(safe, dim=-1)
-        return torch.multinomial(probs, 1).squeeze(-1)
+        return categorical_sample(probs)
 
 
 def masked_log_prob(
@@ -82,10 +96,10 @@ def masked_log_prob(
     if mask is not None:
         safe = logits.masked_fill(~mask, float("-inf"))
         all_masked = (safe.isinf() & (safe < 0)).all(dim=-1)
-        if all_masked.any():
-            # Column-slice write — see safe_masked_logits.
-            safe = safe.clone()
-            safe[..., 0] = safe[..., 0].masked_fill(all_masked, 0.0)
+        # Column-slice write — see safe_masked_logits (branch-free: a no-op
+        # on rows with any legal entry).
+        safe = safe.clone()
+        safe[..., 0] = safe[..., 0].masked_fill(all_masked, 0.0)
     else:
         safe = logits
     return F.log_softmax(safe, dim=-1).gather(

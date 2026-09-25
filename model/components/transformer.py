@@ -47,17 +47,42 @@ class TransformerBlock(nn.Module):
 # Spatiotemporal factored block
 # ---------------------------------------------------------------------------
 
-def _sinusoidal_pe(length: int, d_model: int, device: torch.device) -> torch.Tensor:
-    """Sinusoidal positional encoding [length, d_model]."""
-    pos = torch.arange(length, device=device, dtype=torch.float32).unsqueeze(1)
+def _pe_from_positions(pos: torch.Tensor, d_model: int) -> torch.Tensor:
+    """Sinusoidal encoding of float32 positions [L, 1] → [L, d_model]."""
+    device = pos.device
     div = torch.exp(
         torch.arange(0, d_model, 2, device=device, dtype=torch.float32)
         * -(math.log(10000.0) / d_model)
     )
-    pe = torch.zeros(length, d_model, device=device)
+    pe = torch.zeros(pos.shape[0], d_model, device=device)
     pe[:, 0::2] = torch.sin(pos * div)
     pe[:, 1::2] = torch.cos(pos * div[:d_model // 2])
     return pe
+
+
+def _sinusoidal_pe(length: int, d_model: int, device: torch.device) -> torch.Tensor:
+    """Sinusoidal positional encoding [length, d_model]."""
+    pos = torch.arange(length, device=device, dtype=torch.float32).unsqueeze(1)
+    return _pe_from_positions(pos, d_model)
+
+
+def sinusoidal_pe_rows(t0, length: int, d_model: int,
+                       device: torch.device) -> torch.Tensor:
+    """Rows t0 .. t0+length-1 of :func:`_sinusoidal_pe`: [length, d_model].
+
+    ``t0`` is a Python int (the historical path, unchanged) or a
+    single-element integer tensor on ``device``.  The tensor form keeps the
+    absolute time a runtime VALUE instead of a trace-time constant, so a
+    CUDA-graph-captured / compiled step can advance time without
+    re-capturing, and it never reads the value on the host (no sync).
+    Positions are exact integers in float32 (< 2^24), so both forms encode
+    the same angles.
+    """
+    if not isinstance(t0, torch.Tensor):
+        return _sinusoidal_pe(t0 + length, d_model, device)[t0: t0 + length]
+    pos = (t0.reshape(()).to(device=device, dtype=torch.float32)
+           + torch.arange(length, device=device, dtype=torch.float32)).unsqueeze(1)
+    return _pe_from_positions(pos, d_model)
 
 
 class SpatiotemporalBlock(nn.Module):
