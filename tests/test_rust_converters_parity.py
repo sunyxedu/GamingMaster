@@ -119,3 +119,11 @@ def test_lux(gmdata, tmp_path):
     convert(str(src), str(tmp_path / "py"))
     subprocess.run([gmdata, "lux", "convert", "--input", src, "--out", tmp_path / "rs"], check=True, capture_output=True)
     assert_same(tmp_path / "py", tmp_path / "rs", ("agent", "team", "match_index", "match_value"))
+
+
+def test_mahjong(gmdata, tmp_path):
+    from data_processing.games.mahjong.convert import main
+    src = os.path.join(FIX, "mahjong")
+    main(["--input", src, "--output_dir", str(tmp_path / "py")])
+    subprocess.run([gmdata, "mahjong", "convert", "--input", src, "--out", tmp_path / "rs"], check=True, capture_output=True)
+    assert_same(tmp_path / "py", tmp_path / "rs", ("name", "seat", "kyokus", "placement", "final_score"))

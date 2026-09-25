@@ -784,10 +784,12 @@ name = "gmdata"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arrow-array",
  "bzip2",
  "clap",
  "flate2",
  "gmshard",
+ "parquet",
  "pgn-reader",
  "rayon",
  "reqwest",

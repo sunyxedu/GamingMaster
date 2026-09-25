@@ -14,6 +14,7 @@ mod common;
 mod generals;
 mod go;
 mod lux;
+mod mahjong;
 mod gomoku;
 mod othello;
 mod shogi;
@@ -60,6 +61,11 @@ enum Game {
         #[command(subcommand)]
         cmd: lux::Cmd,
     },
+    /// Riichi mahjong (mjai logs)
+    Mahjong {
+        #[command(subcommand)]
+        cmd: mahjong::Cmd,
+    },
     /// Gomoku (Gomocup .psq records)
     Gomoku {
         #[command(subcommand)]
@@ -75,6 +81,7 @@ fn main() -> Result<()> {
         Game::Gomoku { cmd } => gomoku::run(cmd),
         Game::Go { cmd } => go::run(cmd),
         Game::Lux { cmd } => lux::run(cmd),
+        Game::Mahjong { cmd } => mahjong::run(cmd),
         Game::Shogi { cmd } => shogi::run(cmd),
     }
 }
