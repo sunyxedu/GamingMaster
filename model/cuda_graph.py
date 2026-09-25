@@ -22,11 +22,22 @@ once into a ``torch.cuda.CUDAGraph`` and replays it per frame, with
 The graph replays exactly the eager step: same kernels on the same
 addresses, identical outputs (sampled actions use the default CUDA
 generator, which advances on every replay).  What capture freezes: the
-batch size, the ``legal`` key set (masked or not), ``act_steps``, the
-precision, and ``action_decoder.greedy`` — rebuild the wrapper to change
-any of them.  Output tensors are overwritten by the next call; clone what
-you keep.  Requires a sync-free step (eval mode, non-TRM core); see
-``GameNetwork.step``.
+batch size, the obs / ``legal`` key sets and shapes (checked per call),
+``act_steps``, the precision, and ``action_decoder.greedy`` — rebuild the
+wrapper to change any of them.  Output tensors are overwritten by the next
+call; clone what you keep.
+
+Weights are read by address: an in-place update (``load_state_dict``
+without ``assign``, an optimizer step, a learner→actor ``copy_``) is picked
+up by the next replay, and :meth:`GraphedStep.reset` re-reads the live
+h_init.  Anything that reallocates parameters (``.to()``, ``assign=True``)
+needs a new wrapper.
+
+Requires a sync-free step (eval mode, non-TRM core); see
+``GameNetwork.step``.  MoE layers are captured on their dense
+(all-experts, sync-free) path at any batch size — the sparse routed path
+cannot be captured — so a large captured batch pays E/k × the routed
+expert FLOPs and ~N·E·(3·inter + 2·d) elements of graph-pool memory.
 """
 
 from __future__ import annotations
@@ -36,6 +47,7 @@ from typing import Dict, List, Optional
 
 import torch
 
+from model.components.core import MoEFFN
 from model.game_network import GameNetwork
 
 
@@ -71,33 +83,38 @@ class GraphedStep:
             raise ValueError("call net.eval() first: training-mode MoE routing and "
                              "recurrent-depth sampling sync with the host")
         self.net = net
+        self.device = device
         self.act_steps = act_steps
-        batch = next(iter(example_obs.values())).shape[0]
+        self.batch = next(iter(example_obs.values())).shape[0]
         with torch.no_grad():
             self.obs = {k: v.detach().to(device).clone() for k, v in example_obs.items()}
             self.legal = ({k: v.detach().to(device).clone() for k, v in example_legal.items()}
                           if example_legal else None)
             self.step_idx = torch.zeros((), dtype=torch.long, device=device)
-            self.st_cache: List[torch.Tensor] = net.initial_st_cache(batch)
-            self._st_init = [c.clone() for c in self.st_cache]
+            self.st_cache: List[torch.Tensor] = net.initial_st_cache(self.batch)
         net.prepare_inference(device)
         self._autocast = (
             torch.autocast("cuda", dtype=autocast_dtype, cache_enabled=False)
             if autocast_dtype is not None else contextlib.nullcontext())
 
         # Warm-up on a side stream (lazy cuBLAS/cuDNN init, allocator), then
-        # capture.  Capture only records kernels — the state it reads is
-        # restored after warm-up, before the first real frame.
-        side = torch.cuda.Stream(device)
-        side.wait_stream(torch.cuda.current_stream(device))
-        with torch.cuda.stream(side):
-            for _ in range(max(1, warmup_iters)):
-                self._run()
-        torch.cuda.current_stream(device).wait_stream(side)
-        self.reset()
-        self.graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(self.graph):
-            self.out = self._run()
+        # capture — both on the NETWORK's device (torch.cuda.graph's default
+        # capture stream is created once, on whichever device is current at
+        # first use), with every MoE layer forced onto the dense path so
+        # warm-up and capture run the same kernels.  Capture only records
+        # kernels — the state it reads is restored after warm-up, before the
+        # first real frame.
+        with torch.cuda.device(device), MoEFFN.inference_path("dense"):
+            side = torch.cuda.Stream(device)
+            side.wait_stream(torch.cuda.current_stream(device))
+            with torch.cuda.stream(side):
+                for _ in range(max(1, warmup_iters)):
+                    self._run()
+            torch.cuda.current_stream(device).wait_stream(side)
+            self.reset()
+            self.graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(self.graph, stream=torch.cuda.Stream(device)):
+                self.out = self._run()
         self.reset()
 
     def _run(self) -> Dict[str, torch.Tensor]:
@@ -110,9 +127,11 @@ class GraphedStep:
         return out
 
     def reset(self) -> None:
-        """Start a new episode: Stage-1 state := its learned initial value."""
+        """Start a new episode: Stage-1 state := its learned initial value,
+        read from the live h_init parameters (so weights loaded in place
+        since capture are honoured)."""
         with torch.no_grad():
-            for static, init in zip(self.st_cache, self._st_init):
+            for static, init in zip(self.st_cache, self.net.initial_st_cache(self.batch)):
                 static.copy_(init)
 
     def __call__(
@@ -127,6 +146,12 @@ class GraphedStep:
         if (legal is None) != (self.legal is None):
             raise ValueError("legal masks must be given iff the graph was "
                              "captured with example_legal")
+        # Host-side metadata checks only (no sync): copy_ would silently
+        # broadcast a mis-shaped input, and a key absent at capture would be
+        # silently ignored (e.g. a direction mask → unmasked directions).
+        self._check_inputs("obs", obs, self.obs)
+        if legal is not None:
+            self._check_inputs("legal", legal, self.legal)
         with torch.no_grad():
             for k, buf in self.obs.items():
                 buf.copy_(obs[k], non_blocking=True)
@@ -136,3 +161,14 @@ class GraphedStep:
             self.step_idx.fill_(step_idx)
         self.graph.replay()
         return self.out
+
+    @staticmethod
+    def _check_inputs(what: str, given: Dict[str, torch.Tensor],
+                      static: Dict[str, torch.Tensor]) -> None:
+        if given.keys() != static.keys():
+            raise ValueError(f"{what} keys {sorted(given)} != the keys captured "
+                             f"{sorted(static)}; rebuild the GraphedStep")
+        for k, buf in static.items():
+            if given[k].shape != buf.shape:
+                raise ValueError(f"{what}[{k!r}] has shape {tuple(given[k].shape)}, "
+                                 f"captured {tuple(buf.shape)}")

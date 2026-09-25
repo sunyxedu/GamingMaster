@@ -1,8 +1,10 @@
 """Sync-free, CUDA-graph-capturable per-decision inference.
 
-* dense (all-experts) MoE inference path == sparse routed path;
+* dense (all-experts) MoE inference path == sparse routed path; every
+  autograd path stays sparse;
 * the sampling / masking helpers are branch-free rewrites with identical
-  results (``categorical_sample`` is bit-identical to ``torch.multinomial``);
+  results (``categorical_sample`` is bit-identical to ``torch.multinomial``
+  and still rejects invalid distributions, without a host sync);
 * the eval ``GameNetwork.step`` path never reads a tensor on the host
   (CPU: forbidden-call monkeypatching; CUDA: ``set_sync_debug_mode("error")``);
 * a tensor ``step_idx`` + materialised initial state reproduce the int /
@@ -75,8 +77,14 @@ def _moe(E=5, k=2, n_shared=1, d=16, seed=0):
 
 
 def _sparse(m, x):
-    """The routed path, forced (DENSE_MAX_TOKEN_EXPERTS=0)."""
-    with _dense_max(0):
+    """The routed path, forced."""
+    with MoEFFN.inference_path("sparse"):
+        return m(x)
+
+
+def _dense(m, x):
+    """The all-experts path, forced (the automatic choice is sparse on CPU)."""
+    with MoEFFN.inference_path("dense"):
         return m(x)
 
 
@@ -95,24 +103,30 @@ def test_dense_moe_equals_sparse(E, k, n_shared):
     m = _moe(E, k, n_shared)
     x = torch.randn(3, 7, 16)
     with torch.no_grad():
-        dense, sparse = m(x), _sparse(m, x)
+        dense, sparse = _dense(m, x), _sparse(m, x)
     torch.testing.assert_close(dense, sparse, rtol=1e-5, atol=1e-6)
 
 
-def test_dense_moe_gradients_equal_sparse():
-    """Eval mode with autograd on (e.g. a frozen-policy KL term): the dense
-    path differentiates like the routed one, incl. centroids via the gates."""
-    m = _moe(6, 2, 1)
-    x = torch.randn(2, 9, 16)
-    grads = []
-    for force_sparse in (False, True):
-        m.zero_grad()
-        xx = x.clone().requires_grad_(True)
-        with _dense_max(0 if force_sparse else MoEFFN.DENSE_MAX_TOKEN_EXPERTS):
-            m(xx).square().sum().backward()
-        grads.append([xx.grad] + [p.grad.clone() for p in m.parameters()])
-    for a, b in zip(*grads):
-        torch.testing.assert_close(a, b, rtol=1e-4, atol=1e-5)
+def test_autograd_always_takes_the_sparse_path(monkeypatch):
+    """Eval mode WITH autograd is the PPO update regime (train_rl*.py run the
+    update in eval mode): it must stay on the routed path even when dense is
+    forced — the dense backward would put 0·inf = NaN into w_down.grad for
+    an overflowing expert the token was never routed to."""
+    m = _moe(4, 2, 1)
+    with torch.no_grad():
+        m.balance_bias.copy_(torch.tensor([0.0, 0.0, 0.0, -100.0]))   # never pick 3
+        m.w_gate_up[3].fill_(1e30)                                     # overflows
+    x = torch.randn(2, 5, 16)
+
+    def boom(*_a, **_k):
+        raise AssertionError("dense MoE path under autograd")
+
+    with monkeypatch.context() as mp, MoEFFN.inference_path("dense"):
+        mp.setattr(m, "_dense_experts", boom)
+        assert m.expert_path(10, torch.device("cuda")) == "sparse"
+        m(x).square().sum().backward()
+    for name, prm in m.named_parameters():
+        assert torch.isfinite(prm.grad).all(), name
 
 
 def test_dense_moe_ignores_non_finite_unselected_expert():
@@ -124,7 +138,7 @@ def test_dense_moe_ignores_non_finite_unselected_expert():
         m.w_down[3].fill_(float("inf"))
     x = torch.randn(2, 5, 16)
     with torch.no_grad():
-        dense = m(x)
+        dense = _dense(m, x)
     assert torch.isfinite(dense).all()
     torch.testing.assert_close(dense, _sparse(m, x), rtol=1e-5, atol=1e-6)
 
@@ -133,25 +147,50 @@ def test_dense_moe_under_bf16_autocast_matches_sparse():
     m = _moe(8, 2, 1)
     x = torch.randn(2, 11, 16)
     with torch.no_grad(), torch.autocast("cpu", dtype=torch.bfloat16):
-        dense, sparse = m(x), _sparse(m, x)
+        dense, sparse = _dense(m, x), _sparse(m, x)
     assert dense.dtype == sparse.dtype
     torch.testing.assert_close(dense.float(), sparse.float(), rtol=2e-2, atol=2e-2)
 
 
 def test_moe_path_selection(monkeypatch):
-    """Dense exactly when not training and N·E <= DENSE_MAX_TOKEN_EXPERTS."""
+    """Automatic: dense exactly in eval mode, autograd off, on an accelerator,
+    with N·E <= DENSE_MAX_TOKEN_EXPERTS.  inference_path() forces the no-grad
+    eval path; training and autograd are always sparse."""
     m = _moe(4, 2, 1)
-    x = torch.randn(2, 5, 16)                          # N·E = 10·4 = 40
+    cuda, cpu = torch.device("cuda"), torch.device("cpu")
+    with torch.no_grad():
+        with _dense_max(40):
+            assert m.expert_path(10, cuda) == "dense"          # 40 <= 40
+            assert m.expert_path(11, cuda) == "sparse"         # 44 > 40
+            assert m.expert_path(10, "mps") == "dense"
+            assert m.expert_path(10, cpu) == "sparse"          # CPU: routed is cheaper
+        with MoEFFN.inference_path("dense"), _dense_max(0):
+            assert m.expert_path(10 ** 6, cpu) == "dense"
+        with MoEFFN.inference_path("sparse"):
+            assert m.expert_path(1, cuda) == "sparse"
+        assert MoEFFN._INFERENCE_PATH == "auto"                # restored
+        m.train()
+        with MoEFFN.inference_path("dense"):
+            assert m.expert_path(1, cuda) == "sparse"          # training
+        m.eval()
+    with MoEFFN.inference_path("dense"):
+        assert m.expert_path(1, cuda) == "sparse"              # autograd on
+    with pytest.raises(ValueError, match="auto"):
+        with MoEFFN.inference_path("fast"):
+            pass
+
+    x = torch.randn(2, 5, 16)                                  # N = 10
 
     def boom(*_a, **_k):
         raise AssertionError("wrong MoE path")
 
-    with monkeypatch.context() as mp, _dense_max(40):  # eval, 40 <= 40 → dense
-        mp.setattr(m, "_sparse_experts", boom)
-        m(x)
-    with monkeypatch.context() as mp, _dense_max(39):  # eval, 40 > 39 → sparse
-        mp.setattr(m, "_dense_experts", boom)
-        m(x)
+    with torch.no_grad():
+        with monkeypatch.context() as mp, MoEFFN.inference_path("dense"):
+            mp.setattr(m, "_sparse_experts", boom)
+            m(x)
+        with monkeypatch.context() as mp:                      # CPU auto → sparse
+            mp.setattr(m, "_dense_experts", boom)
+            m(x)
     m.train()
     with monkeypatch.context() as mp:                  # training → sparse + load tally
         mp.setattr(m, "_dense_experts", boom)
@@ -159,7 +198,8 @@ def test_moe_path_selection(monkeypatch):
     assert m.load.sum().item() == 2 * 5 * m.top_k
     m.eval()
     m.load.zero_()
-    m(x)
+    with torch.no_grad(), MoEFFN.inference_path("dense"):
+        m(x)
     assert m.load.sum().item() == 0                    # no tally at inference
 
 
@@ -168,9 +208,10 @@ def test_recurrent_depth_eval_dense_vs_sparse_network():
     obs, legal = _obs(2), _legal(2)
     with torch.no_grad():
         torch.manual_seed(5)
-        a = GameNetwork.step(net, obs, legal, act_steps=2)
+        with MoEFFN.inference_path("dense"):
+            a = GameNetwork.step(net, obs, legal, act_steps=2)
         torch.manual_seed(5)
-        with _dense_max(0):
+        with MoEFFN.inference_path("sparse"):
             b = GameNetwork.step(net, obs, legal, act_steps=2)
     for key in LOGIT_KEYS:
         torch.testing.assert_close(a[key], b[key], rtol=1e-4, atol=1e-5)
@@ -191,6 +232,36 @@ def test_categorical_sample_is_bitwise_multinomial():
         got = categorical_sample(probs)
         assert torch.equal(got, ref)
         assert torch.equal(torch.rand(2), ref_next)      # same RNG consumption
+
+
+@pytest.mark.parametrize("bad", [
+    [[0.2, float("nan"), 0.8]], [[0.2, float("inf"), 0.8]], [[0.5, -0.1, 0.6]],
+    [[0.5, 0.5, 0.0], [0.0, 0.0, 0.0]]])
+def test_categorical_sample_rejects_invalid_probs_like_multinomial(bad):
+    """Still loud on an invalid distribution (async assert, no host read)."""
+    probs = torch.tensor(bad)
+    with pytest.raises(RuntimeError):
+        torch.multinomial(probs, 1)
+    with pytest.raises(RuntimeError, match="probability tensor"):
+        categorical_sample(probs)
+
+
+def test_nan_direction_logits_fail_loudly_not_a_nan_log_prob():
+    """The direction / split heads have no NaN-row fallback (only the source
+    head does): a NaN there must crash the rollout, as multinomial did,
+    rather than record a NaN action_log_prob for the PPO update."""
+    net = _net(moe=0)
+    B, N = 2, H * W
+    pred = {"source_logits": torch.randn(B, N), "src_idx": torch.tensor([3, 7]),
+            "direction_logits": torch.randn(B, 4), "split_logits": torch.randn(B, 2),
+            "pass_logits": torch.randn(B)}
+    pred["direction_logits"][0] = float("nan")
+    with pytest.raises(RuntimeError, match="probability tensor"):
+        net.action_decoder.sample(pred)
+    pred["direction_logits"][0] = 0.0
+    pred["split_logits"][1, 0] = float("nan")
+    with pytest.raises(RuntimeError, match="probability tensor"):
+        net.action_decoder.sample(pred)
 
 
 def _old_safe_masked_logits(logits, mask):
@@ -344,7 +415,9 @@ def test_eval_step_path_is_sync_free_cpu(case, tensor_t, monkeypatch):
     net.prepare_inference()
     cache = net.initial_st_cache(B)
     t = torch.tensor(3) if tensor_t else 3
-    with torch.no_grad(), monkeypatch.context() as mp:
+    # dense MoE forced: the automatic choice is the routed path on the CPU
+    # (where nonzero is no sync); on an accelerator batch 2 is dense anyway.
+    with torch.no_grad(), monkeypatch.context() as mp, MoEFFN.inference_path("dense"):
         _forbid_host_syncs(mp)
         out = GameNetwork.step(net, obs, legal, st_cache=cache, step_idx=t, act_steps=2)
         out2 = GameNetwork.step(net, obs, legal, st_cache=out["st_cache"],
@@ -383,6 +456,10 @@ def test_initial_st_cache_is_the_none_state():
         assert c.shape == (3 * S, TINY["d_model"]) and c.dtype == torch.float32
         assert c.is_contiguous() and not c.requires_grad
         assert torch.equal(c, layer.temporal_rnn.initial_state(3 * S))
+    # documented: the materialised cache is stepped with a tensor step_idx;
+    # an int 0 with a cache present trips the forgotten-step_idx guard
+    with torch.no_grad(), pytest.raises(ValueError, match="step_idx"):
+        GameNetwork.step(net, _obs(3), st_cache=cache, step_idx=0, act_steps=1)
     with pytest.raises(ValueError, match="recurrent"):
         _net(temporal_mixer="attention").initial_st_cache(1)
 
@@ -425,14 +502,15 @@ def test_time_pe_tensor_rows_match_int_rows():
 def test_rollout_log_prob_replays_exactly(replay_sparse):
     """Rollout through the graph-friendly step (tensor time, static cache,
     dense MoE) → sequence forward + compute_log_prob: ratio == 1, also when
-    the replay routes the MoE sparsely (as a large update batch does)."""
+    the replay routes the MoE sparsely (as the with-grad PPO update always
+    does)."""
     cfg_net = _net(moe=4)
     T = 5
     cache = cfg_net.initial_st_cache(1)
     rec = {k: [] for k in ("grid", "glb", "src_m", "dir_m", "src", "dir", "spl", "pass", "lp")}
     for t in range(T):
         obs, legal = _obs(1, seed=t), _legal(1, seed=t)
-        with torch.no_grad():
+        with torch.no_grad(), MoEFFN.inference_path("dense"):
             out = GameNetwork.step(cfg_net, obs, legal, st_cache=cache,
                                    step_idx=torch.tensor(t), act_steps=2)
         cache = out["st_cache"]
@@ -448,7 +526,7 @@ def test_rollout_log_prob_replays_exactly(replay_sparse):
                "split": torch.stack(rec["spl"])[None],
                "passed": torch.stack(rec["pass"])[None]}
     src_m = torch.stack(rec["src_m"])[None]
-    with torch.no_grad(), _dense_max(0 if replay_sparse else MoEFFN.DENSE_MAX_TOKEN_EXPERTS):
+    with torch.no_grad(), MoEFFN.inference_path("sparse" if replay_sparse else "dense"):
         pred = cfg_net(torch.stack(rec["grid"])[None], torch.stack(rec["glb"])[None],
                        legal_mask=src_m,
                        source_y=actions["source_idx"] // W,
@@ -571,3 +649,138 @@ def test_graphed_step_requires_cuda_network():
     with pytest.raises(ValueError, match="CUDA"):
         GraphedStep(_net(), _obs(1))
 
+
+
+@needs_cuda
+def test_graph_replay_samples_like_eager_cuda():
+    """Sampling inside the graph (exponential_ race + bernoulli on the
+    default CUDA generator): the same seed gives the eager step's actions
+    and log-probs, and successive replays draw fresh samples."""
+    from model.cuda_graph import GraphedStep
+
+    dev = torch.device("cuda")
+    net = _net(moe=4, device=dev)
+    assert not net.action_decoder.greedy
+    B = 8
+    g = GraphedStep(net, _obs(B, dev), _legal(B, dev), act_steps=2)
+    cache = None
+    for t in range(3):
+        obs, legal = _obs(B, dev, seed=t), _legal(B, dev, seed=t)
+        torch.manual_seed(1000 + t)
+        with torch.no_grad():
+            e = GameNetwork.step(net, obs, legal, st_cache=cache, step_idx=t, act_steps=2)
+        cache = e["st_cache"]
+        torch.manual_seed(1000 + t)
+        r = g(obs, t, legal)
+        for key in ACTION_KEYS:
+            assert torch.equal(r[key], e[key]), (t, key)
+        torch.testing.assert_close(r["action_log_prob"], e["action_log_prob"],
+                                   rtol=1e-5, atol=1e-5)
+    obs, legal = _obs(B, dev, seed=5), _legal(B, dev, seed=5)
+    draws = []
+    for _ in range(2):
+        g.reset()
+        r = g(obs, 0, legal)
+        draws.append({k: r[k].clone() for k in ACTION_KEYS})
+    assert any(not torch.equal(draws[0][k], draws[1][k]) for k in ACTION_KEYS)
+
+
+@needs_cuda
+def test_graph_captures_moe_above_the_auto_dense_batch_cuda():
+    """Above DENSE_MAX_TOKEN_EXPERTS the automatic choice is the (uncapturable)
+    routed path; GraphedStep forces the dense one, so capture still works."""
+    from model.cuda_graph import GraphedStep
+
+    dev = torch.device("cuda")
+    net = _net(moe=4, device=dev)
+    net.action_decoder.greedy = True
+    S = net.obs_encoder.n_tokens + 2
+    B = MoEFFN.DENSE_MAX_TOKEN_EXPERTS // (S * 4) + 1
+    moe = next(m for m in net.modules() if isinstance(m, MoEFFN))
+    with torch.no_grad():
+        assert moe.expert_path(B * S, dev) == "sparse"
+    g = GraphedStep(net, _obs(B, dev), _legal(B, dev), act_steps=2)
+    cache = None
+    for t in range(2):
+        obs, legal = _obs(B, dev, seed=t), _legal(B, dev, seed=t)
+        with torch.no_grad(), MoEFFN.inference_path("dense"):
+            e = GameNetwork.step(net, obs, legal, st_cache=cache, step_idx=t, act_steps=2)
+        cache = e["st_cache"]
+        r = g(obs, t, legal)
+        for key in LOGIT_KEYS:
+            torch.testing.assert_close(r[key], e[key], rtol=1e-5, atol=1e-5)
+
+
+@needs_cuda
+def test_graph_reset_reads_live_h_init_cuda():
+    """Weights loaded in place after capture: replay reads them by address,
+    and reset() starts the episode from the NEW h_init."""
+    from model.cuda_graph import GraphedStep
+
+    dev = torch.device("cuda")
+    net = _net(moe=0, device=dev)
+    net.action_decoder.greedy = True
+    g = GraphedStep(net, _obs(1, dev), act_steps=1)
+    with torch.no_grad():
+        for layer in net.st_layers:
+            layer.temporal_rnn.h_init.add_(0.5)
+    g.reset()
+    obs = _obs(1, dev, seed=3)
+    r = g(obs, 0)
+    with torch.no_grad():
+        e = GameNetwork.step(net, obs, act_steps=1)
+    torch.testing.assert_close(r["source_logits"], e["source_logits"], rtol=1e-5, atol=1e-5)
+    for cs, ce in zip(g.st_cache, e["st_cache"]):
+        torch.testing.assert_close(cs, ce, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.skipif(torch.cuda.device_count() < 2, reason="needs 2 GPUs")
+def test_graph_captures_on_the_network_device_multi_gpu():
+    from model.cuda_graph import GraphedStep
+
+    dev = torch.device("cuda:1")
+    net = _net(moe=4, device=dev)
+    net.action_decoder.greedy = True
+    with torch.cuda.device(0):
+        g = GraphedStep(net, _obs(1, dev), act_steps=2)
+        obs = _obs(1, dev, seed=1)
+        r = g(obs, 0)
+        with torch.no_grad():
+            e = GameNetwork.step(net, obs, act_steps=2)
+    assert r["source_logits"].device == dev
+    torch.testing.assert_close(r["source_logits"], e["source_logits"], rtol=1e-5, atol=1e-5)
+
+
+def test_graphed_step_reset_uses_live_h_init_cpu_logic():
+    """reset()'s logic without CUDA: it re-reads h_init, not a capture-time copy."""
+    from model.cuda_graph import GraphedStep
+
+    net = _net(moe=0)
+    g = GraphedStep.__new__(GraphedStep)
+    g.net, g.batch = net, 2
+    g.st_cache = net.initial_st_cache(2)
+    with torch.no_grad():
+        for layer in net.st_layers:
+            layer.temporal_rnn.h_init.add_(0.25)
+        for c in g.st_cache:
+            c.fill_(7.0)
+    g.reset()
+    for c, layer in zip(g.st_cache, net.st_layers):
+        assert torch.equal(c, layer.temporal_rnn.initial_state(c.shape[0]))
+
+
+def test_graphed_step_input_checks():
+    """Mismatched keys / shapes are rejected instead of silently ignored or
+    broadcast by copy_ into the static buffers."""
+    from model.cuda_graph import GraphedStep
+
+    static = {"source": torch.zeros(2, 1, 5, 5, dtype=torch.bool)}
+    GraphedStep._check_inputs("legal", {"source": torch.ones(2, 1, 5, 5, dtype=torch.bool)},
+                              static)
+    with pytest.raises(ValueError, match="keys"):
+        GraphedStep._check_inputs(
+            "legal", {"source": torch.ones(2, 1, 5, 5, dtype=torch.bool),
+                      "direction": torch.ones(2, 4, 5, 5, dtype=torch.bool)}, static)
+    with pytest.raises(ValueError, match="shape"):
+        GraphedStep._check_inputs("legal", {"source": torch.ones(1, 1, 5, 5, dtype=torch.bool)},
+                                  static)

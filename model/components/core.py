@@ -123,23 +123,61 @@ class MoEFFN(nn.Module):
     differ only in float summation order):
 
     * sparse — each expert runs on the tokens routed to it.  Finding those
-      tokens (``nonzero``) is a host sync per expert, but compute is only
-      the routed k/E fraction.  Used in training and for large inference
-      batches.
+      tokens (``nonzero``) is a host sync per expert on an accelerator, but
+      compute is only the routed k/E fraction.  Used whenever autograd is
+      on (training, and the eval-mode PPO update), on the CPU (no sync to
+      save there, so the routed compute is simply cheaper) and for large
+      inference batches.
     * dense — every expert runs on every token (one batched matmul over the
       expert axis) and a gate matrix G [N, E], zero except the top-k
       selected entries, combines them.  No data-dependent shapes, no host
-      sync — capturable in a CUDA graph.  Used when not training and
-      tokens × experts is at most :attr:`DENSE_MAX_TOKEN_EXPERTS`
-      (batch-1 inference).
+      sync — capturable in a CUDA graph.  Inference only: used in eval mode
+      with autograd off, on an accelerator, when tokens × experts is at most
+      :attr:`DENSE_MAX_TOKEN_EXPERTS` (batch-1 inference) — or always within
+      ``MoEFFN.inference_path("dense")`` (what CUDA-graph capture uses).
+
+    Every autograd path is therefore the sparse one, bit for bit as before.
     """
 
-    #: largest N·E (tokens × experts) the dense inference path handles.  Its
-    #: transient memory is ~N·E·(3·inter + 2·d) elements and its FLOPs E/k ×
-    #: the routed ones, so large eval batches keep the sparse path.
-    #: Class-level knob (0 disables the dense path); a batch-1 generals
-    #: frame is 627 tokens, so it stays dense up to 104 experts.
+    #: largest N·E (tokens × experts) the automatic choice sends down the
+    #: dense inference path.  Its transient memory is ~N·E·(3·inter + 2·d)
+    #: elements and its FLOPs E/k × the routed ones, so large eval batches
+    #: keep the sparse path.  Class-level knob (0 disables the automatic
+    #: dense path); a batch-1 generals frame is 627 tokens, so it stays
+    #: dense up to 104 experts.
     DENSE_MAX_TOKEN_EXPERTS = 65536
+
+    #: "auto" (the rule above) | "dense" | "sparse" — the no-grad inference
+    #: path; set it with :meth:`inference_path`, never directly.
+    _INFERENCE_PATH = "auto"
+
+    @classmethod
+    @contextlib.contextmanager
+    def inference_path(cls, path: str):
+        """Within the block, every MoE layer's no-grad eval forward takes
+        ``path`` ("dense" | "sparse" | "auto").  Training / autograd always
+        stays sparse.  "dense" is the CUDA-graph-capturable path at any batch
+        size (``model.cuda_graph.GraphedStep`` captures under it)."""
+        if path not in ("auto", "dense", "sparse"):
+            raise ValueError(f"MoE inference path must be auto|dense|sparse, got {path!r}")
+        prev, cls._INFERENCE_PATH = cls._INFERENCE_PATH, path
+        try:
+            yield
+        finally:
+            cls._INFERENCE_PATH = prev
+
+    def expert_path(self, n_tokens: int, device: torch.device) -> str:
+        """The expert path ("dense" | "sparse") a forward over ``n_tokens``
+        tokens on ``device`` takes in the current mode (training, grad mode,
+        :meth:`inference_path`)."""
+        if self.training or torch.is_grad_enabled():
+            return "sparse"
+        if self._INFERENCE_PATH != "auto":
+            return self._INFERENCE_PATH
+        if (torch.device(device).type != "cpu"
+                and n_tokens * self.n_experts <= self.DENSE_MAX_TOKEN_EXPERTS):
+            return "dense"
+        return "sparse"
 
     def __init__(self, d: int, n_experts: int, top_k: int, n_shared: int,
                  expansion: float, std: float, out_std: float):
@@ -178,7 +216,7 @@ class MoEFFN(nn.Module):
                 self.load += torch.bincount(sel.reshape(-1),
                                             minlength=self.n_experts).float()
 
-        if not self.training and N * self.n_experts <= self.DENSE_MAX_TOKEN_EXPERTS:
+        if self.expert_path(N, xf.device) == "dense":
             out = self._dense_experts(xf, top_i, gates)
         else:
             out = self._sparse_experts(xf, top_i, gates)
@@ -207,8 +245,11 @@ class MoEFFN(nn.Module):
 
         Unselected experts are dropped with ``where`` rather than a 0 gate,
         so a non-finite activation of an expert the token was NOT routed to
-        cannot leak in (0·inf = NaN) — exactly the sparse path's semantics.
-        Weight/activation dtypes mirror :meth:`_sparse_experts` op for op.
+        cannot leak into the output (0·inf = NaN) — the sparse path's forward
+        semantics.  Forward only: its backward would form exactly that 0·inf
+        in w_down.grad, which is why :meth:`expert_path` never picks it with
+        autograd on.  Weight/activation dtypes mirror :meth:`_sparse_experts`
+        op for op.
         """
         N, E = xf.shape[0], self.n_experts
         sel = torch.zeros(N, E, dtype=torch.bool, device=xf.device).scatter_(1, top_i, True)

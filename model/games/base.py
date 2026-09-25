@@ -31,18 +31,40 @@ import torch.nn.functional as F
 # Shared sampling / masking utilities
 # ---------------------------------------------------------------------------
 
+_INVALID_PROBS = "probability tensor contains either `inf`, `nan` or element < 0, " \
+                 "or a row summing to 0"
+
+
+def check_distribution(probs: torch.Tensor) -> None:
+    """``torch.multinomial``'s input checks (no NaN / inf / negative entry,
+    no all-zero row), without its host sync where the device allows.
+
+    CPU and CUDA: ``torch._assert_async`` — on CUDA a device-side assert
+    (no host read, capturable in a CUDA graph; a failure aborts the CUDA
+    context at the next sync).  Other devices (MPS has no async assert):
+    a host-side check, the sync multinomial always paid there.
+    """
+    lo, hi = probs.aminmax()
+    ok = (lo >= 0) & (hi < float("inf")) & (probs.sum(-1) != 0).all()
+    if probs.device.type in ("cpu", "cuda"):
+        torch._assert_async(ok, _INVALID_PROBS)
+    elif not ok:
+        raise RuntimeError(_INVALID_PROBS)
+
+
 def categorical_sample(probs: torch.Tensor) -> torch.Tensor:
     """Draw one index per row from ``probs`` [..., N] → [...].
 
     Exactly ``torch.multinomial(probs, 1).squeeze(-1)`` — the same
     exponential race (argmax of p / q, q ~ Exp(1)) torch uses internally
     for a single draw, consuming the same random numbers, so samples are
-    bit-identical under the same generator state — minus multinomial's
-    host-side validity checks (``.item()`` syncs that also make it
-    impossible to capture in a CUDA graph).  Callers must pass a valid
-    distribution (non-negative, finite, non-zero rows), which every caller
-    guarantees via :func:`safe_masked_logits` or a softmax.
+    bit-identical under the same generator state.  Invalid input (NaN / inf
+    / negative entries, e.g. a head whose logits overflowed) still fails
+    loudly like multinomial, but via :func:`check_distribution`'s async
+    assert instead of multinomial's ``.item()`` syncs, which also made the
+    call impossible to capture in a CUDA graph.
     """
+    check_distribution(probs)
     return (probs / torch.empty_like(probs).exponential_(1)).argmax(-1)
 
 

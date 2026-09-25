@@ -176,11 +176,15 @@ class GameNetwork(nn.Module):
         """Materialised Stage-1 state at t=0 for ``batch`` streams: one
         [batch * S, d] float32 tensor per spatiotemporal layer.
 
-        Stepping from it is identical to passing ``st_cache=None`` (the
-        recurrence starts from its learned h_init either way), but the
-        tensors have a fixed shape and address — what a CUDA graph needs
-        (copy each step's new state back into them in place).  Only the
-        recurrent temporal mixer has a fixed-size state; the attention
+        It holds the same state as ``st_cache=None`` (the recurrence starts
+        from its learned h_init either way), but the tensors have a fixed
+        shape and address — what a CUDA graph needs (copy each step's new
+        state back into them in place).  Step from it with a TENSOR
+        ``step_idx`` (the graph-capturable form): with a Python int, a
+        present cache at step_idx 0 trips step()'s forgotten-step_idx guard,
+        so the int path keeps passing ``st_cache=None`` at t=0.  The values
+        are a snapshot of h_init: rebuild after loading new weights.  Only
+        the recurrent temporal mixer has a fixed-size state; the attention
         mixer's KV cache grows by one frame per step.
         """
         if self.cfg.temporal_mixer != "recurrent":
@@ -414,14 +418,20 @@ class GameNetwork(nn.Module):
         logits (T squeezed away), the sampled action dict, value, q_halt
         and the updated ``st_cache``.
 
-        Sync-free in eval mode with the recurrent temporal mixer and a
-        non-TRM core: no ``.item()`` / ``nonzero`` / data-dependent Python
-        branch, so the call can be captured in a CUDA graph (see
-        ``model.cuda_graph.GraphedStep``).  For that, pass ``step_idx`` as a
-        single-element integer tensor on the model's device (the decoder's
-        time feature then reads it at run time instead of baking the
-        capture-time value in), start from :meth:`initial_st_cache`, and
-        call :meth:`prepare_inference` (or run a warm-up step) first.
+        Sync-free in eval mode under ``torch.no_grad()`` with the recurrent
+        temporal mixer and a non-TRM core: no ``.item()`` / ``nonzero`` /
+        data-dependent Python branch, so the call can be captured in a CUDA
+        graph (see ``model.cuda_graph.GraphedStep``).  Condition for MoE
+        cores: the layers must take the dense expert path — automatic on an
+        accelerator while batch × tokens × experts is at most
+        ``MoEFFN.DENSE_MAX_TOKEN_EXPERTS`` (generals 25×25, 8 experts:
+        batch ≤ 13), otherwise force it with
+        ``MoEFFN.inference_path("dense")`` (GraphedStep does).  For capture,
+        pass ``step_idx`` as a single-element integer tensor on the model's
+        device (the decoder's time feature then reads it at run time instead
+        of baking the capture-time value in), start from
+        :meth:`initial_st_cache`, and call :meth:`prepare_inference` (or run
+        a warm-up step) first.
         """
         cfg = self.cfg
         d = cfg.d_model
