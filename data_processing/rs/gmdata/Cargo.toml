@@ -28,3 +28,4 @@ zstd = "0.14.0"
 sevenz-rust = "0.6.1"
 parquet = { version = "54", default-features = false, features = ["arrow", "snap", "zstd", "lz4", "brotli", "flate2"] }
 arrow-array = "54"
+crc32fast = "1.5.2"

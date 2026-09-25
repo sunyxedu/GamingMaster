@@ -127,3 +127,12 @@ def test_mahjong(gmdata, tmp_path):
     main(["--input", src, "--output_dir", str(tmp_path / "py")])
     subprocess.run([gmdata, "mahjong", "convert", "--input", src, "--out", tmp_path / "rs"], check=True, capture_output=True)
     assert_same(tmp_path / "py", tmp_path / "rs", ("name", "seat", "kyokus", "placement", "final_score"))
+
+
+def test_pokemon(gmdata, tmp_path):
+    from data_processing.games.pokemon.convert import convert
+    src = os.path.join(FIX, "pokemon")
+    convert(src, str(tmp_path / "py"))
+    subprocess.run([gmdata, "pokemon", "convert", "--input", src, "--out", tmp_path / "rs"], check=True, capture_output=True)
+    assert_same(tmp_path / "py", tmp_path / "rs", ("replay_id", "side", "player", "rating", "won"))
+    assert GameShardDataset(str(tmp_path / "rs")).shard_meta == {"move_buckets": 256, "species_buckets": 512}

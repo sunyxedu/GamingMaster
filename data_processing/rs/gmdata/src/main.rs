@@ -17,6 +17,7 @@ mod lux;
 mod mahjong;
 mod gomoku;
 mod othello;
+mod pokemon;
 mod shogi;
 
 use anyhow::Result;
@@ -66,6 +67,11 @@ enum Game {
         #[command(subcommand)]
         cmd: mahjong::Cmd,
     },
+    /// Pokémon Showdown replays
+    Pokemon {
+        #[command(subcommand)]
+        cmd: pokemon::Cmd,
+    },
     /// Gomoku (Gomocup .psq records)
     Gomoku {
         #[command(subcommand)]
@@ -82,6 +88,7 @@ fn main() -> Result<()> {
         Game::Go { cmd } => go::run(cmd),
         Game::Lux { cmd } => lux::run(cmd),
         Game::Mahjong { cmd } => mahjong::run(cmd),
+        Game::Pokemon { cmd } => pokemon::run(cmd),
         Game::Shogi { cmd } => shogi::run(cmd),
     }
 }
