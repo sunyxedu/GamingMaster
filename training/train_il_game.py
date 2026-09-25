@@ -326,21 +326,24 @@ def batch_loss(
             losses["value_loss"] = v_loss.detach()
         correct = losses.pop("answer_correct", None)
         answer_mask = losses.pop("answer_mask", None)
-        # q_halt exists only for the legacy TRM core (its halting head);
-        # other cores emit a constant 0, which would only add a constant
-        if correct is not None and "q_halt" in pred and getattr(net, "core_type", "trm") == "trm":
+        if correct is not None:
             q_mask = (answer_mask if answer_mask is not None else mask) & mask
             q_f = q_mask.float()
-            q_bce = F.binary_cross_entropy_with_logits(
-                pred["q_halt"].float(), correct.float(), reduction="none").nan_to_num(0.0)
-            q_loss = (q_bce * q_f).sum() / q_f.sum().clamp(min=1)
-            loss = loss + q_halt_weight * q_loss
-            losses["q_halt_loss"] = q_loss.detach()
+            n_q = q_f.sum().clamp(min=1)
             with torch.no_grad():
-                n_q = q_f.sum().clamp(min=1)
+                # whole action exactly right (all heads), every core
                 losses["exact_acc"] = (correct.float() * q_f).sum() / n_q
-                losses["q_halt_acc"] = (((pred["q_halt"] > 0) == correct).float()
-                                        * q_f).sum() / n_q
+            # q_halt exists only for the legacy TRM core (its halting head);
+            # other cores emit a constant 0, which would only add a constant
+            if "q_halt" in pred and getattr(net, "core_type", "trm") == "trm":
+                q_bce = F.binary_cross_entropy_with_logits(
+                    pred["q_halt"].float(), correct.float(), reduction="none").nan_to_num(0.0)
+                q_loss = (q_bce * q_f).sum() / n_q
+                loss = loss + q_halt_weight * q_loss
+                losses["q_halt_loss"] = q_loss.detach()
+                with torch.no_grad():
+                    losses["q_halt_acc"] = (((pred["q_halt"] > 0) == correct).float()
+                                            * q_f).sum() / n_q
 
     stats = {k: float(v) for k, v in losses.items() if k != "loss"}
     stats["loss"] = float(loss.detach())
