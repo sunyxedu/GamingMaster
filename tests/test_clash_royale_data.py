@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from data_processing.games.clash_royale.expand import expand
-from data_processing.games.dataset import GameShardDataset
+from data_processing.games.dataset import VALUE_TARGET_BOUND, GameShardDataset
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WS = os.path.join(ROOT, "data_processing")
@@ -103,5 +103,11 @@ def test_rust_converter_end_to_end(tmp_path):
     assert float(obs["arena_seq"][5, 0, 14, 9]) > 0              # own deployment heat after the play
     opp = ds[1]
     assert opp["meta"]["side"] == "opponent" and torch.all(opp["tgt"]["value"] == -1)
+    # tgt.value contract: the battle result for the sample's side, constant
+    # over the sample, inside [-1, 1] (and so inside the HL-Gauss support)
+    for i in range(len(ds)):
+        s = ds[i]
+        v = s["tgt"]["value"]
+        assert torch.all(v == s["meta"]["result"]) and v.abs().max() <= VALUE_TARGET_BOUND
     f = 6                                                        # its giant at tick 65 on (8, 20), mirrored
     assert not bool(opp["tgt"]["waited"][f]) and int(opp["tgt"]["place_idx"][f]) == (31 - 20) * 18 + (17 - 8)

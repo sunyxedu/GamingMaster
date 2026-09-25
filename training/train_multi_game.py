@@ -20,9 +20,15 @@ each from a game drawn i.i.d. from the mixture
     w_g ∝ N_g^α          (N_g = frames of game g, α = --sample_alpha)
 
 so the expected step gradient is ∇ Σ_g w_g L_g, where L_g is game g's mean
-per-frame loss (decoder IL loss + value MSE).  α = 1 weighs every frame
+per-frame loss (decoder IL loss + value loss).  α = 1 weighs every frame
 equally (concatenated data), α = 0 weighs games equally, α ≈ 0.5 is the
 usual temperature compromise (HPT uses √N, π0 N^0.43).
+
+Value heads are per game.  The value loss is MSE for the scalar head, or the
+HL-Gauss cross-entropy with ``--override hl_gauss_value=True`` (every game
+gets a categorical head over [-hl_gauss_vmax, hl_gauss_vmax]; IL targets are
+final outcomes in [-1, 1]).  Logs report ``value_loss`` (the trained loss)
+and ``value_mse`` (MSE of the scalar prediction, comparable across heads).
 
 Everything else is the IL recipe of training/train_il_game.py: AdamATan2,
 warmup then constant LR, EMA weights for evaluation/checkpoints, deep
@@ -120,6 +126,7 @@ from training.train_il_game import (
     UNCROPPABLE,
     batch_loss,
     build_net_tolerant,
+    describe_value_head,
     mb_from_merged,
     parse_overrides,
     pick_device,
@@ -409,7 +416,8 @@ def main(argv=None) -> Dict[str, object]:
     n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
     wtag = f" world={world}" if dist_env.enabled else ""
     log(f"[init] games={games} core={first.cfg.core_type} moe={first.cfg.moe_experts} "
-        f"params={n_total:,} trainable={n_train:,} device={device.type}{wtag}")
+        f"params={n_total:,} trainable={n_train:,} device={device.type}{wtag} "
+        f"value_head={describe_value_head(first.cfg)}")
     log("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,} w={weights[g]:.3f}" for g in games))
     if dist_env.enabled:
         lo, hi = k_glob // world, -(-k_glob // world)
@@ -549,7 +557,7 @@ def main(argv=None) -> Dict[str, object]:
                                args.eval_batches)
             del ev_model
             for g, m in res.items():
-                keys = [k for k in sorted(m) if k.endswith("loss") or k.endswith("acc")]
+                keys = [k for k in sorted(m) if k.endswith(("loss", "acc", "mse"))]
                 log(f"[val {step}] {g}: " + " ".join(f"{k}={m[k]:.4f}" for k in keys),
                     flush=True)
         if args.ckpt_every and (step % args.ckpt_every == 0 or step == args.steps) and rank0:

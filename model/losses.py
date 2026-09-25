@@ -406,6 +406,37 @@ def hl_gauss_target_probs(
     return probs / total
 
 
+def hl_gauss_cross_entropy(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    vmax: float,
+    sigma: float,
+) -> torch.Tensor:
+    """Per-element HL-Gauss loss: cross-entropy of the predicted categorical
+    against :func:`hl_gauss_target_probs` of the scalar targets.
+
+    Minimised (over logits) exactly at the smeared target distribution, where
+    it equals that distribution's entropy; the gradient w.r.t. the logits is
+    ``softmax(logits) − target_probs``.  Shared by the RL critic loss
+    (``RLLoss``) and the IL value loss (``training.train_il_game``).
+
+    Args:
+        logits:  [..., n_bins] (any float dtype; computed in ≥ fp32)
+        targets: [...] scalar targets — clamped to [-vmax, vmax] by the
+                 target construction, so callers that must not clamp
+                 silently check the range first
+    Returns:
+        [...] cross-entropy per element
+    """
+    with torch.no_grad():
+        target_p = hl_gauss_target_probs(targets, logits.size(-1), vmax, sigma)
+    # fp32 for bf16/fp16/fp32 logits (identical to ``.float()``); fp64 stays
+    # fp64 so the loss can be gradchecked.
+    lp = F.log_softmax(logits.to(torch.promote_types(logits.dtype, torch.float32)),
+                       dim=-1)
+    return -(target_p * lp).sum(-1)
+
+
 class RLLoss(nn.Module):
     """PPO loss for RL training.
 
@@ -496,12 +527,8 @@ class RLLoss(nn.Module):
                 raise ValueError(
                     "RLLoss(hl_gauss=True) needs value_logits — the model "
                     "config and the loss disagree about the critic head")
-            n_bins = value_logits.size(-1)
-            with torch.no_grad():
-                target_p = hl_gauss_target_probs(
-                    returns, n_bins, self.hl_gauss_vmax, self.hl_gauss_sigma)
-            ce = -(target_p * F.log_softmax(value_logits.float(), dim=-1)
-                   ).sum(-1)
+            ce = hl_gauss_cross_entropy(
+                value_logits, returns, self.hl_gauss_vmax, self.hl_gauss_sigma)
             value_loss = (ce * mask_f).sum() / n_valid
         else:
             # Huber, scaled to match MSE for |err| < 1 and linear beyond:

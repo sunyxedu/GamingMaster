@@ -19,6 +19,25 @@ Shard format (one ``.pt`` file, ``torch.save``):
       ],
     }
 
+``tgt["value"]`` contract (all converters; checked by
+tests/test_rust_converters_parity.py): the FINAL outcome of the game (match
+for lux) from the perspective of the player acting in that frame, in
+[-VALUE_TARGET_BOUND, VALUE_TARGET_BOUND] = [-1, 1]:
+
+    chess, shogi, go     +1 win / 0 draw or no result / −1 loss (mover)
+    othello              sign(final own − opponent discs) for the mover
+    gomoku               ±1 for the mover (undecided kept games: last mover wins)
+    lux                  ±1 / 0 per match for the agent's team (wins, then points)
+    mahjong              final placement 1st..4th → +1, +1/3, −1/3, −1 (seat)
+    pokemon              ±1 for the recorded side
+    clash_royale         +1 victory / 0 draw / −1 defeat for the side (crdata)
+
+The board-game samples (chess, shogi, go, othello, gomoku) hold both players'
+moves, so the sign alternates with the mover; the other games' samples hold
+one player's view, so their value is constant over the sample.
+training/train_il_game.py rejects targets outside an HL-Gauss value head's
+support (check_value_support).
+
 Design notes:
   - One sample = one full game from one player's perspective (like the
     generals pipeline). Converters decide perspective/augmentation.
@@ -40,6 +59,7 @@ from torch.utils.data import Dataset
 
 FORMAT_VERSION = 1
 GM_SHARD_FORMAT = "gm-shard.v1"   # directories written by the Rust converters (gmshard crate)
+VALUE_TARGET_BOUND = 1.0          # |tgt["value"]| ≤ this for every converter (see above)
 
 
 class GmShard:

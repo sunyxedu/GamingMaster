@@ -95,7 +95,8 @@ class GameNetwork(nn.Module):
         self.mid_norm = nn.LayerNorm(cfg.d_model)
         self.post_norm = nn.LayerNorm(cfg.d_model)
 
-        # --- Value head (reads the HL decision token; shared by all games) ---
+        # --- Value head (reads the HL decision token; game-agnostic class, but
+        # not a core module: one per game in a MultiGameNetwork) ---
         if getattr(cfg, "hl_gauss_value", False):
             self.value_head = HLGaussValueHead(
                 cfg.d_model, cfg.hl_gauss_bins, cfg.hl_gauss_vmax)
