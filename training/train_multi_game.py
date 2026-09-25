@@ -144,6 +144,7 @@ from training.train_il_game import (
     build_net_tolerant,
     check_meta_arch,
     describe_value_head,
+    greedy_decoding,
     mb_from_merged,
     open_dataset,
     parse_overrides,
@@ -331,7 +332,8 @@ def eval_sums(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
               value_weight: float, bf16: bool, max_batches: int = 0,
               diag: Optional[Dict[str, str]] = None) -> EvalSums:
     """Per game: (sum over batches of each batch-mean statistic, batch count)
-    at the default inference depth (EMA weights are passed in by the caller).
+    at the default inference depth, with deterministic conditioning
+    (greedy_decoding; EMA weights are passed in by the caller).
     With ``diag`` (a dict) the first batch of each game also runs under
     training.diagnostics.attention_probe, and ``diag[g]`` gets its
     format_attention line."""
@@ -347,7 +349,7 @@ def eval_sums(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
             mb = prepare_batch(g, batch, device, tf_prob=1.0, cfg=net.cfg)
             probe = (attention_probe(net) if diag is not None and i == 0
                      else contextlib.nullcontext())
-            with probe as attn:
+            with probe as attn, greedy_decoding(net):
                 _, stats, pred = batch_loss(net, mb, device, value_weight, Q_HALT_WEIGHT,
                                             bf16, act_steps=net.default_depth)
             if attn is not None:

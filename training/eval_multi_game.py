@@ -23,6 +23,7 @@ from training.train_il_game import (
     UNCROPPABLE,
     batch_loss,
     build_net_tolerant,
+    greedy_decoding,
     open_dataset,
     pick_device,
     prepare_batch,
@@ -53,8 +54,9 @@ def eval_game(net, game: str, loader: DataLoader, device, depth: Optional[int],
         if max_batches and i >= max_batches:
             break
         mb = prepare_batch(game, batch, device, tf_prob=1.0, cfg=net.cfg)
-        _, stats, _ = batch_loss(net, mb, device, 0.0, Q_HALT_WEIGHT, bf16,
-                                 act_steps=depth if depth is not None else net.default_depth)
+        with greedy_decoding(net):
+            _, stats, _ = batch_loss(net, mb, device, 0.0, Q_HALT_WEIGHT, bf16,
+                                     act_steps=depth if depth is not None else net.default_depth)
         for k, v in stats.items():
             agg[k] = agg.get(k, 0.0) + v
         n += 1

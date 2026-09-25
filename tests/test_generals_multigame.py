@@ -318,10 +318,13 @@ def test_il_loss_contract(gio_dir):
 
 
 def test_turn_globals_from_the_frame_index(gio_dir):
+    """turn_globals / derive_army_channels stay config choices on the data's
+    4 globals and 12 planes (the phase-5+ RL input features)."""
     ds = gdata.GeneralsGioDataset(gio_dir)
     kw = apply_meta_arch_defaults("generals", {**TINY, **CORES["transformer"],
-                                               "turn_globals": True}, ds.shard_meta)
-    assert kw["global_features"] == 7
+                                               "turn_globals": True,
+                                               "derive_army_channels": True}, ds.shard_meta)
+    assert kw["global_features"] == 7 and kw["grid_channels"] == 12
     net, _ = build_net_tolerant("generals", kw)
     check_meta_arch("generals", net.cfg, ds.shard_meta)
     b = _batch(ds)
@@ -340,6 +343,23 @@ def test_turn_globals_from_the_frame_index(gio_dir):
         check_meta_arch("generals", _net(ds).cfg, {**ds.shard_meta, "global_features": 7})
     with pytest.raises(ValueError, match="grid_h"):
         check_meta_arch("generals", _net(ds).cfg, {**ds.shard_meta, "grid_h": 25})
+
+
+def test_generals_validation_is_deterministic(gio_dir):
+    """Pass frames carry no source label: evaluation conditions them on the
+    argmax source (greedy_decoding), so metrics ignore the RNG state; the
+    flag is restored for training, which keeps sampling."""
+    from training.train_il_game import evaluate
+
+    ds = gdata.GeneralsGioDataset(gio_dir)
+    net = _net(ds)
+    loader = torch.utils.data.DataLoader(ds, batch_size=2, collate_fn=collate_game_sequences)
+    runs = []
+    for seed in (0, 1):
+        torch.manual_seed(seed)
+        runs.append(evaluate(net, "generals", loader, CPU, 0.2, Q_HALT_WEIGHT, False))
+    assert runs[0] == runs[1]
+    assert net.action_decoder.greedy is False and net.training
 
 
 def test_value_targets_respect_the_hl_gauss_support(gio_dir):
@@ -463,3 +483,83 @@ def test_train_il_game_trains_generals(gio_dir, tmp_path, monkeypatch, capsys):
     net, _ = build_net_tolerant("generals", ck["config"])
     assert isinstance(net, GeneralsNetwork)
     net.load_state_dict(ck["model_state"])
+
+
+# ---------------------------------------------------------------------------
+# data parallel
+# ---------------------------------------------------------------------------
+
+def _ddp_worker(rank: int, port: int, gio: str, othello: str, out: str) -> None:
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank),
+                      LOCAL_RANK=str(rank), WORLD_SIZE="2")
+    torch.set_num_threads(1)
+    from torch.utils.data import DataLoader
+
+    from training import train_multi_game as tmg
+
+    evals, shard_eval = [], tmg.evaluate_sharded
+
+    def checking_eval(model, loaders, device, value_weight, bf16):
+        res = shard_eval(model, loaders, device, value_weight, bf16)
+        full = {g: DataLoader(ld.dataset, batch_size=2, collate_fn=collate_game_sequences)
+                for g, ld in loaders.items()}
+        evals.append((res, tmg.evaluate(model, full, device, value_weight, bf16)))
+        return res
+
+    tmg.evaluate_sharded = checking_eval
+    core = [f"{k}={v}" for k, v in {**TINY, **CORES["recurrent_depth"], "moe_experts": 2}.items()]
+    res = tmg.main([
+        "--data", f"generals={gio}", "--data", f"othello={othello}",
+        "--val", f"generals={gio}", "--batch_size", "2", "--games_per_step", "1",
+        "--steps", "4", "--eval_every", "2", "--log_every", "2", "--warmup_steps", "1",
+        "--game_max_len", "generals=8", "--game_val_max_len", "generals=8",
+        "--ema_rate", "0.9", "--seed", "5", "--device", "cpu", "--dist_timeout", "2",
+        "--save_dir", os.path.join(out, "ck"), "--override", *core])
+    model, ema = res["model"], res["ema"]
+    torch.save({"params": {n: p.detach().clone() for n, p in model.named_parameters()},
+                "buffers": {n: b.detach().clone() for n, b in model.named_buffers()},
+                "ema": {n: v.clone() for n, v in ema.shadow.items()},
+                "evals": evals}, os.path.join(out, f"rank{rank}.pt"))
+
+
+def test_ddp_generals_othello_ranks_stay_identical(gio_dir, tmp_path):
+    """2 gloo ranks, one micro-batch each per step (the ranks draw different
+    games, so generals' adapter often has a gradient on one rank only):
+    parameters, buffers (generals BatchNorm statistics, MoE biases) and EMA
+    stay bit-identical, and sharded generals validation equals the
+    single-process one."""
+    from multiprocessing.connection import wait
+
+    from tests.test_multi_game_ddp import _assert_rank_identical, _free_port
+
+    (tmp_path / "othello").mkdir()
+    save_shard(str(tmp_path / "othello" / "a.pt"), "othello", _board_samples("othello", 4, 6))
+    ctx = torch.multiprocessing.get_context("spawn")
+    port = _free_port()
+    procs = [ctx.Process(target=_ddp_worker,
+                         args=(r, port, gio_dir, str(tmp_path / "othello"), str(tmp_path)))
+             for r in range(2)]
+    for p in procs:
+        p.start()
+    try:
+        while any(p.is_alive() for p in procs):
+            wait([p.sentinel for p in procs if p.is_alive()], timeout=1.0)
+            bad = [p.exitcode for p in procs if p.exitcode not in (None, 0)]
+            assert not bad, f"rank failed with exit code {bad[0]}"
+    finally:
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
+            p.join(timeout=10)
+    r0, r1 = (torch.load(tmp_path / f"rank{r}.pt", weights_only=False) for r in range(2))
+    _assert_rank_identical(r0, r1)
+    bn = [n for n in r0["buffers"] if n.startswith("nets.generals.obs_encoder")
+          and n.endswith("running_mean")]
+    assert bn and any(r0["buffers"][n].abs().sum() > 0 for n in bn)
+    assert len(r0["evals"]) == 2
+    for sharded, full in r0["evals"]:
+        assert sharded.keys() == full.keys() == {"generals"}
+        for k, v in full["generals"].items():
+            assert sharded["generals"][k] == pytest.approx(v, rel=1e-5, abs=1e-6), k
+    ck = torch.load(tmp_path / "ck" / "multi_final.pt", weights_only=False)
+    assert ck["world_size"] == 2 and ck["games"] == ["generals", "othello"]

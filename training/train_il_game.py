@@ -515,18 +515,35 @@ def batch_loss(
     return loss, stats, pred
 
 
+@contextlib.contextmanager
+def greedy_decoding(net):
+    """Evaluation: a decoder that self-samples a conditioning index where the
+    data has no label (generals' source on pass / dropped-move frames) takes
+    the argmax instead (``ActionDecoder.greedy``), so validation metrics do
+    not depend on the RNG state — the same on any rank split.  Training
+    keeps sampling."""
+    dec = net.action_decoder
+    prev = dec.greedy
+    dec.greedy = True
+    try:
+        yield
+    finally:
+        dec.greedy = prev
+
+
 def evaluate(net, game, loader, device, value_weight, q_halt_weight, bf16,
              ema: Optional[ModelEMA] = None,
              diag: Optional[List[str]] = None) -> Dict[str, float]:
     """Validation at full depth (all halt_max_steps supervision steps, as
-    the reference evaluates), on the EMA weights when enabled.  With
-    ``diag`` (a list) the first batch also runs under
-    training.diagnostics.attention_probe and its line is appended."""
+    the reference evaluates), on the EMA weights when enabled, with
+    deterministic conditioning (greedy_decoding).  With ``diag`` (a list)
+    the first batch also runs under training.diagnostics.attention_probe
+    and its line is appended."""
     model = ema.ema_copy(net) if ema is not None else net
     model.eval()
     agg: Dict[str, float] = {}
     n = 0
-    with torch.no_grad():
+    with torch.no_grad(), greedy_decoding(model):
         for i, batch in enumerate(loader):
             mb = prepare_batch(game, batch, device, tf_prob=1.0, cfg=model.cfg)
             probe = (attention_probe(model) if diag is not None and i == 0
