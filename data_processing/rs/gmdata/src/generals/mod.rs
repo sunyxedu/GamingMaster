@@ -5,6 +5,7 @@ pub mod api;
 pub mod filter;
 pub mod gio;
 pub mod gior;
+pub mod ladder;
 pub mod lz;
 pub mod pipeline;
 pub mod sim;
@@ -60,6 +61,31 @@ pub enum Cmd {
         out: PathBuf,
         #[arg(long, default_value_t = 4)]
         max_actions_per_tick: usize,
+    },
+    /// High-quality IL data from the global ladder: strong human players only
+    Ladder {
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "duel")]
+        ladder: String,
+        #[arg(long, default_value = "na")]
+        server: String,
+        /// stars required of the imitated side (winner, or both with --both)
+        #[arg(long, default_value_t = 70)]
+        min_stars: i64,
+        /// imitate both players (both must reach --min-stars)
+        #[arg(long)]
+        both: bool,
+        #[arg(long)]
+        allow_bots: bool,
+        #[arg(long, default_value_t = 100)]
+        min_turns: i64,
+        #[arg(long, default_value_t = 1000)]
+        max_games: usize,
+        #[arg(long, default_value_t = 10000)]
+        max_pages: usize,
+        #[arg(long, default_value_t = 8)]
+        concurrency: usize,
     },
     /// End-to-end resumable pipeline per player (fetch → filter → download → simulate → convert)
     Pipeline(PipelineCli),
@@ -136,6 +162,10 @@ pub fn run(cmd: Cmd) -> Result<()> {
             let s = sim::Simulator::new(&r, &player, true)?.simulate();
             let g = gio::convert(&s, max_actions_per_tick, true);
             write_json(&out, &g)?;
+        }
+        Cmd::Ladder { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency } => {
+            let a = ladder::LadderArgs { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency };
+            println!("{}", ladder::run(&a)?);
         }
         Cmd::Pipeline(p) => {
             let args = pipeline::PipelineArgs {
