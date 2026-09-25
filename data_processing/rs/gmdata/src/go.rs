@@ -362,6 +362,44 @@ fn parse_result(re: Option<&str>) -> Option<i32> {
     None
 }
 
+/// Rank → comparable strength: 30k..1k → -30..-1, 1d..9d → 1..9, 1p..9p → 11..19.
+pub fn rank_value(r: &str) -> Option<i64> {
+    let t = r.trim().trim_end_matches('?').trim().to_lowercase();
+    let (num, kind) = t.split_at(t.find(|c: char| !c.is_ascii_digit())?);
+    let n: i64 = num.parse().ok()?;
+    match kind.trim() {
+        "k" | "kyu" => Some(-n),
+        "d" | "dan" => Some(n),
+        "p" | "pro" => Some(10 + n),
+        _ => None,
+    }
+}
+
+/// Quality filters (off by default; `--hq` = both ≥ 6d, no time/forfeit results, ≥ 50 moves).
+#[derive(Clone, Copy, Default)]
+pub struct Quality {
+    pub min_rank: Option<i64>,
+    pub no_time_loss: bool,
+    pub no_forfeit: bool,
+}
+
+fn passes_quality(g: &SgfGame, q: &Quality) -> bool {
+    if let Some(min) = q.min_rank {
+        let ok = |k: &str| g.first(k).and_then(rank_value).map(|v| v >= min).unwrap_or(false);
+        if !ok("BR") || !ok("WR") {
+            return false;
+        }
+    }
+    let re = g.first("RE").unwrap_or("").to_uppercase();
+    if q.no_time_loss && (re.ends_with("+T") || re.contains("+TIME")) {
+        return false;
+    }
+    if q.no_forfeit && (re.ends_with("+F") || re.contains("+FORFEIT")) {
+        return false;
+    }
+    true
+}
+
 fn opt_str(v: Option<&str>) -> Value {
     v.map(Value::from).unwrap_or(Value::Null)
 }
@@ -466,6 +504,16 @@ pub enum Cmd {
         allow_handicap: bool,
         #[arg(long)]
         allow_no_result: bool,
+        /// both players at least this rank (e.g. 6d, 1p)
+        #[arg(long)]
+        min_rank: Option<String>,
+        #[arg(long)]
+        no_time_loss: bool,
+        #[arg(long)]
+        no_forfeit: bool,
+        /// high-quality preset: both >= 6d, no time-loss / forfeit results, >= 50 moves, no handicap
+        #[arg(long)]
+        hq: bool,
     },
 }
 
@@ -494,12 +542,12 @@ pub fn fetch(url: &str, out: &Path) -> Result<()> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn convert(input: &Path, out: &Path, shard_size: usize, board_size: i32, max_games: Option<usize>, min_moves: usize,
-               allow_handicap: bool, allow_no_result: bool) -> Result<Value> {
+               allow_handicap: bool, allow_no_result: bool, q: Quality) -> Result<Value> {
     let files = common::find_files(input, &[".sgf"])?;
     anyhow::ensure!(!files.is_empty(), "no .sgf files under {:?}", input);
     let mut w = ShardWriter::new(out, "go", 1, json!({}), shard_size)?;
     let mut stats: BTreeMap<&str, usize> = BTreeMap::new();
-    for k in ["converted", "unparseable_files", "wrong_board_size", "handicap", "no_result", "too_short", "illegal_move"] {
+    for k in ["converted", "unparseable_files", "wrong_board_size", "handicap", "no_result", "too_short", "illegal_move", "low_quality"] {
         stats.insert(k, 0);
     }
     'files: for path in files {
@@ -511,6 +559,10 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, board_size: i32, max
         let p = path.to_string_lossy().to_string();
         for (gi, g) in games.iter().enumerate() {
             let source = if games.len() == 1 { p.clone() } else { format!("{p}#{gi}") };
+            if !passes_quality(g, &q) {
+                *stats.get_mut("low_quality").unwrap() += 1;
+                continue;
+            }
             match game_to_sample(g, board_size, allow_handicap, allow_no_result, min_moves, &source) {
                 Ok(s) => {
                     w.push(s)?;
@@ -530,8 +582,20 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, board_size: i32, max
 pub fn run(cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Fetch { url, out } => fetch(&url, &out),
-        Cmd::Convert { input, out, shard_size, board_size, max_games, min_moves, allow_handicap, allow_no_result } => {
-            println!("{}", convert(&input, &out, shard_size, board_size, max_games, min_moves, allow_handicap, allow_no_result)?);
+        Cmd::Convert { input, out, shard_size, board_size, max_games, min_moves, allow_handicap, allow_no_result, min_rank, no_time_loss, no_forfeit, hq } => {
+            let mut q = Quality { min_rank: match &min_rank {
+                Some(r) => Some(rank_value(r).ok_or_else(|| anyhow::anyhow!("bad rank {r:?} (use e.g. 6d, 3k, 1p)"))?),
+                None => None,
+            }, no_time_loss, no_forfeit };
+            let mut min_moves = min_moves;
+            let (mut allow_handicap, mut allow_no_result) = (allow_handicap, allow_no_result);
+            if hq {
+                q = Quality { min_rank: Some(q.min_rank.unwrap_or(6).max(6)), no_time_loss: true, no_forfeit: true };
+                min_moves = min_moves.max(50);
+                allow_handicap = false;
+                allow_no_result = false;
+            }
+            println!("{}", convert(&input, &out, shard_size, board_size, max_games, min_moves, allow_handicap, allow_no_result, q)?);
             Ok(())
         }
     }
@@ -554,5 +618,10 @@ mod tests {
         assert!(!b.play(WHITE, Some((1, 1)))); // ko
         assert_eq!(parse_result(Some("B+R")), Some(1));
         assert_eq!(parse_result(Some("Void")), None);
+        assert_eq!(rank_value("7d"), Some(7));
+        assert_eq!(rank_value("3k"), Some(-3));
+        assert_eq!(rank_value("1p"), Some(11));
+        assert_eq!(rank_value("6d?"), Some(6));
+        assert_eq!(rank_value("-"), None);
     }
 }
