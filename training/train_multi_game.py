@@ -68,6 +68,7 @@ from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry
 from training.train_il_game import (
     LABEL_KEYS,
     META_ARCH_KEYS,
+    UNCROPPABLE,
     batch_loss,
     build_net_tolerant,
     mb_from_merged,
@@ -85,6 +86,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--val", action="append", default=[], metavar="GAME=DIR")
     p.add_argument("--steps", type=int, default=10000, help="optimizer steps")
     p.add_argument("--batch_size", type=int, default=8)
+    p.add_argument("--game_batch", action="append", default=[], metavar="GAME=N",
+                   help="per-game batch size override (losses are per-frame means, so "
+                        "this changes gradient noise, not the mixture objective)")
     p.add_argument("--games_per_step", type=int, default=0,
                    help="micro-batches per optimizer step (0 = number of games)")
     p.add_argument("--sample_alpha", type=float, default=0.5,
@@ -191,10 +195,13 @@ def main(argv=None) -> None:
     device = torch.device(args.device) if args.device else pick_device()
     data_dirs, val_dirs = _pairs(args.data), _pairs(args.val)
     games = list(data_dirs)
-    if "clash_royale" in games and args.max_len is not None:
-        raise SystemExit("clash_royale cannot be random-cropped (see train_il_game)")
+    game_batch = {g: int(n) for g, n in (x.split("=", 1) for x in args.game_batch)}
 
-    datasets = {g: GameShardDataset(d, game=g, max_len=args.max_len) for g, d in data_dirs.items()}
+    def crop(g: str, max_len):
+        return None if g in UNCROPPABLE else max_len
+
+    datasets = {g: GameShardDataset(d, game=g, max_len=crop(g, args.max_len))
+                for g, d in data_dirs.items()}
     frames = {g: ds.total_frames() for g, ds in datasets.items()}
     weights = mixture_weights(frames, args.sample_alpha)
 
@@ -231,13 +238,14 @@ def main(argv=None) -> None:
           f"params={n_total:,} trainable={n_train:,} device={device.type}")
     print("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,} w={weights[g]:.3f}" for g in games))
 
-    loaders = {g: _cycle(DataLoader(ds, batch_size=args.batch_size,
+    loaders = {g: _cycle(DataLoader(ds, batch_size=game_batch.get(g, args.batch_size),
                                     sampler=ShardLocalitySampler(ds),
                                     num_workers=args.num_workers,
                                     collate_fn=collate_game_sequences))
                for g, ds in datasets.items()}
-    val_loaders = {g: DataLoader(GameShardDataset(d, game=g, max_len=args.val_max_len),
-                                 batch_size=args.batch_size, collate_fn=collate_game_sequences)
+    val_loaders = {g: DataLoader(GameShardDataset(d, game=g, max_len=crop(g, args.val_max_len)),
+                                 batch_size=game_batch.get(g, args.batch_size),
+                                 collate_fn=collate_game_sequences)
                    for g, d in val_dirs.items() if g in games}
 
     params = [p for p in model.parameters() if p.requires_grad]

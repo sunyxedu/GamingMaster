@@ -106,6 +106,10 @@ META_ARCH_KEYS = {
                 "species_buckets": ("pokemon_species_buckets",)},
 }
 
+# Games whose sequences must not be random-cropped: the clash_royale wait
+# head derives absolute time from t0=0 (model/games/clash_royale.py decode).
+UNCROPPABLE = frozenset({"clash_royale"})
+
 # Converter generations with semantic changes: shards older than this
 # train, but against re-converted data they are a different game (chess
 # v2 = rank-mirror a7f5242; v1 frames are 180°-rotated for black).

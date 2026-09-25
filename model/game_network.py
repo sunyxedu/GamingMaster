@@ -300,7 +300,8 @@ class GameNetwork(nn.Module):
         # ── Stage 1: Spatiotemporal encoding (checkpointed) ──
         tokens = self.pre_norm(tokens)
         for layer in self.st_layers:
-            tokens = checkpoint(layer, tokens, use_reentrant=True)
+            tokens = (checkpoint(layer, tokens, use_reentrant=True)
+                      if torch.is_grad_enabled() else layer(tokens))
         tokens = self.mid_norm(tokens)
 
         # ── Stage 2: TRM pondering ──
