@@ -41,7 +41,7 @@ def _build_go(**overrides) -> nn.Module:
     overrides.setdefault("board_h", 19)
     overrides.setdefault("board_w", 19)
     # own stones / opponent stones / empty / simple-ko forbidden point —
-    # matches the SGF converter's plane layout (data_processing/games/go).
+    # matches the SGF converter plane layout (gmdata go convert).
     overrides.setdefault("piece_channels", 4)
     overrides.setdefault("board_global_features", 0)
     overrides.setdefault("n_promotions", 0)
@@ -53,7 +53,7 @@ def _build_othello(**overrides) -> nn.Module:
     """Othello/Reversi: 8×8 placement + pass.  3 planes: own discs /
     opponent discs / empty, from the side-to-move perspective (channel
     swap, no geometric flip) — matches
-    ``data_processing.games.othello.convert.board_planes``.
+    ``data_processing.games.othello.rules.board_planes`` (same layout as ``gmdata othello convert``).
 
     The cheapest full-pipeline smoke-test game (WTHOR human data, trivial
     exact rules) — see docs/game-data-sources.md.

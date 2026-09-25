@@ -59,3 +59,11 @@ def wins(board: bytearray, size: int, player: int, row: int, col: int,
 
 def board_full(board: bytearray) -> bool:
     return EMPTY not in board
+
+
+def board_planes(board: bytearray, size: int, mover: int):
+    """[3, size, size] float32 from ``mover``'s perspective (own / opp / empty) — the
+    observation layout of the gomoku adapter (and of `gmdata gomoku convert`)."""
+    import torch
+    grid = torch.tensor(list(board), dtype=torch.uint8).reshape(size, size)
+    return torch.stack([grid == mover, grid == opponent(mover), grid == EMPTY]).float()

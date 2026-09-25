@@ -1,7 +1,5 @@
-"""Data processing utilities for replay simulation and filtering."""
+"""generals.io reference replay simulator (viewers, play_model, parity tests)."""
 
-from .filter import filter_replays
 from .simulator import simulate_replay
 
-__all__ = ['filter_replays', 'simulate_replay']
-
+__all__ = ['simulate_replay']

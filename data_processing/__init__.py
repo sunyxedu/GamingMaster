@@ -1,10 +1,15 @@
 """
-Data processing pipeline for generals.io replays.
+Python side of the data layer. The pipelines themselves (fetch → filter →
+replay/simulate → convert) are Rust: data_processing/rs/gmdata (`gmdata <game> …`)
+and data_processing/games/clash_royale/crdata. What stays in Python:
 
-Modules:
-- download: Fetch replay metadata and files
-- parsers: Convert to training format
-- processing: Filter and simulate replays
+- datasets: ``dataset_seq.SeqReplayDataset`` (generals) and
+  ``games.dataset.GameShardDataset`` (gm-shard / .pt shards) for training
+- the generals.io reference replay decoder + fog-of-war simulator + gio converter
+  (``download.replay_fetcher`` / ``download.deserializer``, ``processing.simulator``,
+  ``parsers.generals_json``), used by the replay viewers and ``scripts/play_model.py``;
+  the Rust pipeline is tested bit-identical to them
+- othello / gomoku rules used by the RL self-play environment
 
 Submodules are imported lazily: the download/filter stages must work on
 machines where numpy wheels cannot load (e.g. pre-x86-64-v2 login nodes),
@@ -13,13 +18,8 @@ and numpy is only needed by the convert stage.
 
 _LAZY = {
     # Download (no numpy)
-    "fetch_replay_list": "data_processing.download.api_client",
-    "save_replay_list": "data_processing.download.api_client",
     "ReplayFetcher": "data_processing.download.replay_fetcher",
     "download_replays": "data_processing.download.replay_fetcher",
-    # Filter (no numpy)
-    "filter_replays": "data_processing.processing.filter",
-    "filter_replay_file": "data_processing.processing.filter",
     # Simulate (no numpy)
     "ReplaySimulator": "data_processing.processing.simulator",
     "simulate_replay": "data_processing.processing.simulator",

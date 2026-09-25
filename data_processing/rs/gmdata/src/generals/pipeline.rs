@@ -29,6 +29,9 @@ pub struct PipelineArgs {
     pub max_concurrent: usize,
     pub server: String,
     pub max_actions_per_tick: usize,
+    /// shard k of n: this job owns metadata pages k, k+n, k+2n, … (disjoint games,
+    /// independent manifests, target split evenly)
+    pub shard: (usize, usize),
 }
 
 struct Manifest {
@@ -116,6 +119,30 @@ pub fn process_game(replay_path: &Path, player: &str, training_path: &Path, k: u
     }
 }
 
+/// Merge per-shard filtered lists into filtered/<player>.json.
+pub fn merge_shards(player: &str, output: &Path) -> Result<usize> {
+    let dir = output.join("filtered");
+    let mut merged: BTreeMap<String, Value> = BTreeMap::new();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)?.filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.file_name().map(|n| n.to_string_lossy().starts_with(&format!("{player}.shard-"))).unwrap_or(false)).collect();
+    files.sort();
+    let whole = dir.join(format!("{player}.json"));
+    if whole.exists() {
+        files.push(whole.clone());
+    }
+    for f in files {
+        let v: Value = serde_json::from_slice(&std::fs::read(&f)?)?;
+        for e in v.as_array().cloned().unwrap_or_default() {
+            if let Some(id) = e.get("id").and_then(|x| x.as_str()) {
+                merged.insert(id.to_string(), e);
+            }
+        }
+    }
+    let list: Vec<Value> = merged.into_values().collect();
+    std::fs::write(&whole, serde_json::to_vec_pretty(&list)?)?;
+    Ok(list.len())
+}
+
 pub fn run_player(player: &str, output: &Path, a: &PipelineArgs) -> Result<()> {
     let manifest_dir = output.join("manifest");
     let replays_dir = output.join("replays");
@@ -124,7 +151,13 @@ pub fn run_player(player: &str, output: &Path, a: &PipelineArgs) -> Result<()> {
     for d in [&manifest_dir, &replays_dir, &training_dir, &filtered_dir] {
         std::fs::create_dir_all(d)?;
     }
-    let mut m = Manifest::load(manifest_dir.join(format!("{player}.json")))?;
+    let (sk, sn) = a.shard;
+    let tag = if sn > 1 { format!(".shard-{sk}-of-{sn}") } else { String::new() };
+    let mut m = Manifest::load(manifest_dir.join(format!("{player}{tag}.json")))?;
+    if m.games.is_empty() && m.offset == 0 {
+        m.offset = sk * PAGE;
+    }
+    let target = a.target.div_ceil(sn.max(1));
     let flt = filter::Filter {
         min_turns: a.min_turns,
         player_name: Some(player.to_string()),
@@ -132,14 +165,14 @@ pub fn run_player(player: &str, output: &Path, a: &PipelineArgs) -> Result<()> {
         start_date: Some(a.start_date.clone().unwrap_or_else(|| FILTER_START_DATE.to_string())),
         ..Default::default()
     };
-    eprintln!("\n=== {player}: {}/{} trainable ===", m.trainable(), a.target);
+    eprintln!("\n=== {player}{}: {}/{} trainable ===", if sn > 1 { format!(" [shard {sk}/{sn}]") } else { String::new() }, m.trainable(), target);
     for id in m.by_status(&["error"]) {
         m.set(&id, "pending", None);
     }
     let client = api::client()?;
     let mut exhausted = false;
     loop {
-        if m.trainable() >= a.target {
+        if m.trainable() >= target {
             break;
         }
         let mut pending = m.by_status(&["pending"]);
@@ -160,7 +193,7 @@ pub fn run_player(player: &str, output: &Path, a: &PipelineArgs) -> Result<()> {
                 continue;
             }
             let n = page.len();
-            m.offset += n;
+            m.offset += PAGE * sn.max(1);
             for entry in page.iter().filter(|e| filter::passes(e, &flt)) {
                 if let Some(id) = entry.get("id").and_then(|i| i.as_str()) {
                     if !m.games.contains_key(id) {
@@ -176,7 +209,7 @@ pub fn run_player(player: &str, output: &Path, a: &PipelineArgs) -> Result<()> {
             continue;
         }
         // take a batch: at most what is still needed (plus slack for rejections)
-        let need = a.target - m.trainable();
+        let need = target - m.trainable();
         // just what is still needed (+ slack for simulator rejections), capped at 2×workers
         pending.truncate((need + need / 4 + 1).min(2 * a.workers).max(1));
         let missing: Vec<String> = pending.iter().filter(|g| !replays_dir.join(format!("{g}.json")).exists()).cloned().collect();
@@ -207,11 +240,11 @@ pub fn run_player(player: &str, output: &Path, a: &PipelineArgs) -> Result<()> {
             }
         }
         m.save()?;
-        eprintln!("  trainable {}/{}", m.trainable(), a.target);
+        eprintln!("  trainable {}/{}", m.trainable(), target);
     }
     m.save()?;
-    if m.trainable() < a.target {
-        eprintln!("  history exhausted: {}/{} trainable", m.trainable(), a.target);
+    if m.trainable() < target {
+        eprintln!("  history exhausted: {}/{} trainable", m.trainable(), target);
     }
     let trainable_meta: Vec<Value> = m
         .games
@@ -219,7 +252,7 @@ pub fn run_player(player: &str, output: &Path, a: &PipelineArgs) -> Result<()> {
         .filter(|g| matches!(g.get("status").and_then(|s| s.as_str()), Some("converted") | Some("simulated")))
         .filter_map(|g| g.get("meta").cloned())
         .collect();
-    std::fs::write(filtered_dir.join(format!("{player}.json")), serde_json::to_vec_pretty(&trainable_meta)?)?;
+    std::fs::write(filtered_dir.join(format!("{player}{tag}.json")), serde_json::to_vec_pretty(&trainable_meta)?)?;
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for g in m.games.values() {
         *counts.entry(g.get("status").and_then(|s| s.as_str()).unwrap_or("?").to_string()).or_default() += 1;

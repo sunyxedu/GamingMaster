@@ -8,7 +8,6 @@ Organized by module:
   4. Model Components — encoder, heads, transformer, TRM
   5. Losses (losses.py) — masking, NaN handling, edge cases
   6. Network (network.py) — GRU vs ST consistency, step vs full, shape checks
-  7. Mock data (make_mock_replays.py) — data validity
 """
 
 import json
@@ -311,107 +310,7 @@ def test_convert_tick_bucket():
 
 
 # =====================================================================
-# 2. Filter tests (data_processing/processing/filter.py)
-# =====================================================================
-
-def test_filter_min_turns():
-    """Replays below min_turns are excluded."""
-    print("\n=== filter: min_turns ===")
-    from data_processing.processing.filter import filter_replays
-
-    replays = [
-        {"type": "1v1", "turns": 100, "ranking": [{"name": "A"}, {"name": "B"}]},
-        {"type": "1v1", "turns": 50, "ranking": [{"name": "A"}, {"name": "B"}]},
-        {"type": "1v1", "turns": 80, "ranking": [{"name": "A"}, {"name": "B"}]},
-    ]
-    result = filter_replays(replays, min_turns=80)
-    assert len(result) == 2, f"Expected 2, got {len(result)}"
-    assert all(r["turns"] >= 80 for r in result)
-    print("  min_turns filtering correct ✓")
-
-
-def test_filter_game_type():
-    """Only 1v1 and custom (with ≤ max_players) pass."""
-    print("\n=== filter: game type ===")
-    from data_processing.processing.filter import filter_replays
-
-    replays = [
-        {"type": "1v1", "turns": 100, "ranking": [{"name": "A"}, {"name": "B"}]},
-        {"type": "custom", "turns": 100, "ranking": [{"name": "A"}, {"name": "B"}]},
-        {"type": "custom", "turns": 100, "ranking": [{"name": "A"}, {"name": "B"}, {"name": "C"}]},
-        {"type": "ffa", "turns": 100, "ranking": [{"name": "A"}, {"name": "B"}]},
-    ]
-    result = filter_replays(replays, min_turns=0, max_players=2)
-    assert len(result) == 2, f"Expected 2 (1v1 + custom 2p), got {len(result)}"
-    types = [r["type"] for r in result]
-    assert "ffa" not in types, "FFA should be excluded"
-    print("  Game type filtering correct ✓")
-
-
-def test_filter_opponent_stars():
-    """min_opponent_stars filters based on opponent's star count."""
-    print("\n=== filter: opponent stars ===")
-    from data_processing.processing.filter import filter_replays
-
-    replays = [
-        {"type": "1v1", "turns": 100, "ranking": [
-            {"name": "me", "stars": 80},
-            {"name": "weak", "stars": 30},
-        ]},
-        {"type": "1v1", "turns": 100, "ranking": [
-            {"name": "me", "stars": 80},
-            {"name": "strong", "stars": 70},
-        ]},
-    ]
-    result = filter_replays(replays, min_turns=0, player_name="me", min_opponent_stars=50)
-    assert len(result) == 1, f"Expected 1, got {len(result)}"
-    assert result[0]["ranking"][1]["name"] == "strong"
-    print("  Opponent stars filtering correct ✓")
-
-
-def test_filter_date():
-    """start_date filters by started timestamp."""
-    print("\n=== filter: date ===")
-    from data_processing.processing.filter import filter_replays
-
-    replays = [
-        {"type": "1v1", "turns": 100, "ranking": [], "started": "2024-01-15T10:00:00Z"},
-        {"type": "1v1", "turns": 100, "ranking": [], "started": "2024-06-15T10:00:00Z"},
-    ]
-    result = filter_replays(replays, min_turns=0, start_date="2024-03-01T00:00:00Z")
-    assert len(result) == 1, f"Expected 1, got {len(result)}"
-    assert "2024-06" in result[0]["started"]
-    print("  Date filtering correct ✓")
-
-
-def test_filter_combined():
-    """Multiple filters applied together."""
-    print("\n=== filter: combined ===")
-    from data_processing.processing.filter import filter_replays
-
-    replays = [
-        {"type": "1v1", "turns": 100, "ranking": [
-            {"name": "me", "stars": 80},
-            {"name": "opp", "stars": 60},
-        ]},
-        {"type": "1v1", "turns": 50, "ranking": [  # too few turns
-            {"name": "me", "stars": 80},
-            {"name": "opp", "stars": 60},
-        ]},
-        {"type": "1v1", "turns": 100, "ranking": [
-            {"name": "me", "stars": 80},
-            {"name": "opp", "stars": 20},  # too weak
-        ]},
-    ]
-    result = filter_replays(
-        replays, min_turns=80, player_name="me", min_opponent_stars=50
-    )
-    assert len(result) == 1
-    print("  Combined filtering correct ✓")
-
-
-# =====================================================================
-# 3. Dataset tests (data_processing/dataset_seq.py)
+# 2. (filter tests live with the Rust filter: data_processing/rs/gmdata/src/generals/filter.rs)
 # =====================================================================
 
 def test_dataset_loading_shapes():
@@ -1259,12 +1158,6 @@ def main():
         test_convert_value_blending_with_outcome,
         test_convert_army_channel,
         test_convert_tick_bucket,
-        # 2. Filter
-        test_filter_min_turns,
-        test_filter_game_type,
-        test_filter_opponent_stars,
-        test_filter_date,
-        test_filter_combined,
         # 3. Dataset
         test_dataset_loading_shapes,
         test_dataset_truncation,

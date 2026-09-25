@@ -20,19 +20,15 @@ from typing import Dict, Optional
 
 import torch
 
-from data_processing.games.gomoku.convert import (
-    board_planes as gomoku_planes,
-)
 from data_processing.games.gomoku.rules import (
+    board_planes as gomoku_planes,
     apply_move as gomoku_apply,
     board_full,
     initial_board as gomoku_initial,
     wins,
 )
-from data_processing.games.othello.convert import (
-    board_planes as othello_planes,
-)
 from data_processing.games.othello.rules import (
+    board_planes as othello_planes,
     apply_move as othello_apply,
     disc_counts,
     has_legal_move,

@@ -96,6 +96,7 @@ open viz_output/replay.html
 
 ```bash
 uv run python -m scripts.prepare_data --players Human.exe --output data/output --target 1000 --min-turns 80
+# (wraps the Rust pipeline; all games: data_processing/README.md, e.g. `gmdata generals ladder --min-stars 70`)
 ```
 
 #### Train with imitation learning

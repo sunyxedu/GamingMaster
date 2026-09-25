@@ -114,6 +114,12 @@ pub struct PipelineCli {
     server: String,
     #[arg(long, default_value_t = 4)]
     max_actions_per_tick: usize,
+    /// "k/n": this job's shard (Slurm array: $SLURM_ARRAY_TASK_ID/$SLURM_ARRAY_TASK_COUNT)
+    #[arg(long, default_value = "0/1")]
+    shard: String,
+    /// merge per-shard filtered lists into filtered/<player>.json and exit
+    #[arg(long)]
+    merge: bool,
 }
 
 fn write_json<T: serde::Serialize>(path: &std::path::Path, v: &T) -> Result<()> {
@@ -168,6 +174,15 @@ pub fn run(cmd: Cmd) -> Result<()> {
             println!("{}", ladder::run(&a)?);
         }
         Cmd::Pipeline(p) => {
+            if p.merge {
+                for player in &p.players {
+                    let n = pipeline::merge_shards(player, &p.output)?;
+                    eprintln!("{player}: merged {n} trainable games");
+                }
+                return Ok(());
+            }
+            let (k, n) = p.shard.split_once('/').and_then(|(a, b)| Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?)))
+                .filter(|(k, n)| *n >= 1 && k < n).ok_or_else(|| anyhow::anyhow!("--shard must be k/n with 0 <= k < n"))?;
             let args = pipeline::PipelineArgs {
                 target: p.target,
                 min_turns: p.min_turns,
@@ -177,6 +192,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 max_concurrent: p.max_concurrent,
                 server: p.server,
                 max_actions_per_tick: p.max_actions_per_tick,
+                shard: (k, n),
             };
             for player in &p.players {
                 pipeline::run_player(player, &p.output, &args)?;

@@ -122,3 +122,11 @@ def disc_counts(board: bytearray) -> Tuple[int, int]:
         elif v == WHITE:
             white += 1
     return black, white
+
+
+def board_planes(board: bytearray, mover: int):
+    """[3, 8, 8] float32 from ``mover``'s perspective (own / opp / empty) — the
+    observation layout of the othello adapter (and of `gmdata othello convert`)."""
+    import torch
+    grid = torch.tensor(list(board), dtype=torch.uint8).reshape(BOARD_SIZE, BOARD_SIZE)
+    return torch.stack([grid == mover, grid == opponent(mover), grid == EMPTY]).float()

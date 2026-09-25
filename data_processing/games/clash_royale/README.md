@@ -28,8 +28,8 @@ rest are spells cast into the enemy half), which fixes the side convention.
 ## Pipeline
 
 Runs on macOS and Linux: the converter is pure Rust (stable toolchain, TLS via
-rustls, no system libraries beyond a C compiler for the zstd codec); the
-loader needs only numpy + torch. `tests/test_clash_royale_data.py` builds the
+rustls, no system libraries beyond a C compiler for the zstd codec); loading
+needs only numpy + torch. `tests/test_clash_royale_data.py` builds the
 crate and runs it end-to-end when `cargo` is on the path or in `~/.cargo/bin`.
 
 ```sh

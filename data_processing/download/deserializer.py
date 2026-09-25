@@ -1,9 +1,6 @@
 """Deserializer for generals.io replay files (.gior format)."""
 
 import json
-import subprocess
-import tempfile
-from pathlib import Path
 
 try:
     import lzstring
@@ -53,23 +50,6 @@ def deserialize_chat(serialized):
     }
 
 
-def _ensure_lz_string(script_dir: Path) -> None:
-    """Install the lz-string npm package if it is missing."""
-    if (script_dir / "node_modules" / "lz-string").exists():
-        return
-    print("lz-string not found – running npm install …")
-    result = subprocess.run(
-        ["npm", "install", "lz-string"],
-        capture_output=True, text=True, cwd=str(script_dir),
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"npm install lz-string failed:\n{result.stderr}\n"
-            "Please run  cd data_processing/download && npm install lz-string  manually."
-        )
-    print("lz-string installed successfully.")
-
-
 def deserialize_replay_python(serialized_bytes: bytes) -> list:
     """Pure-Python decompression — no Node.js needed (containers, clusters).
 
@@ -89,55 +69,6 @@ def deserialize_replay_python(serialized_bytes: bytes) -> list:
     return json.loads(text)
 
 
-def deserialize_replay_nodejs(serialized_bytes: bytes) -> dict:
-    """
-    Deserialize using Node.js (more reliable for LZ-string).
-    
-    This uses a fixed Node.js script in the same directory.
-    """
-    # Path to the Node.js decompressor script
-    script_dir = Path(__file__).parent
-    script_path = script_dir / "decompress.js"
-
-    if not script_path.exists():
-        raise ValueError(f"Node.js decompressor script not found at {script_path}")
-
-    _ensure_lz_string(script_dir)
-
-    # Create a temporary directory for I/O files
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Write the binary data to a temp file
-        input_file = Path(tmpdir) / "replay.gior"
-        output_file = Path(tmpdir) / "replay.json"
-
-        with open(input_file, 'wb') as f:
-            f.write(serialized_bytes)
-
-        # Run Node.js script from its directory (where node_modules is)
-        try:
-            result = subprocess.run(
-                ['node', str(script_path), str(input_file), str(output_file)],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd=str(script_dir)  # Run from script directory where node_modules is
-            )
-
-            if result.returncode != 0:
-                raise ValueError(f"Node.js decompression failed: {result.stderr}")
-
-            # Read the decompressed JSON
-            with open(output_file, 'r') as f:
-                obj = json.load(f)
-
-            return obj
-
-        except subprocess.TimeoutExpired:
-            raise ValueError("Node.js decompression timed out")
-        except FileNotFoundError:
-            raise ValueError("Node.js not found - please install Node.js")
-
-
 def deserialize_replay(serialized_bytes: bytes) -> dict:
     """
     Deserialize a generals.io replay from .gior format.
@@ -148,12 +79,9 @@ def deserialize_replay(serialized_bytes: bytes) -> dict:
     Returns:
         Dictionary containing deserialized replay data
     """
-    # Pure-Python decompression by default (works in containers/clusters
-    # without Node.js); the Node.js path remains as a fallback.
-    if _HAS_LZSTRING:
-        obj = deserialize_replay_python(serialized_bytes)
-    else:
-        obj = deserialize_replay_nodejs(serialized_bytes)
+    if not _HAS_LZSTRING:
+        raise ImportError("the lzstring package is required (it is a project dependency)")
+    obj = deserialize_replay_python(serialized_bytes)
 
     replay = {}
     i = 0
