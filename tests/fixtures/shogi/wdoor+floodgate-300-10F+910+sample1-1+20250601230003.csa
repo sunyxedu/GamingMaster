@@ -1,0 +1,116 @@
+V2
+N+910
+N-sample1-1
+'Max_Moves:512
+'Least_Time_Per_Move:0
+'Increment:10
+$EVENT:wdoor+floodgate-300-10F+910+sample1-1+20250601230003
+$START_TIME:2025/06/01 23:00:02
+P1-KY-KE-GI-KI-OU-KI-GI-KE-KY
+P2 * -HI *  *  *  *  * -KA * 
+P3-FU-FU-FU-FU-FU-FU-FU-FU-FU
+P4 *  *  *  *  *  *  *  *  * 
+P5 *  *  *  *  *  *  *  *  * 
+P6 *  *  *  *  *  *  *  *  * 
+P7+FU+FU+FU+FU+FU+FU+FU+FU+FU
+P8 * +KA *  *  *  *  * +HI * 
+P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
++
+'rating:910+e205ee2a5de471a70c1fd1b46033a75f:sample1-1+81dc9bdb52d04dc20036dbd8313ed055
+'black_rate:910+e205ee2a5de471a70c1fd1b46033a75f:1469.0
+'white_rate:sample1-1+81dc9bdb52d04dc20036dbd8313ed055:407.0
++2726FU
+T0
+'** 0
+-3334FU
+T0
+'** 0
++7776FU
+T0
+'** 0
+-2288UM
+T0
+'** 0
++7988GI
+T0
+'** 0
+-6172KI
+T0
+'** 0
++0045KA
+T0
+'** 107 -3122GI +4534KA -4132KI
+-0096KA
+T0
+'** 0
++9796FU
+T0
+'** 3898 -4132KI +4534KA -3122GI
+-3122GI
+T0
+'** 0
++4534KA
+T0
+'** 3903 -4132KI +6978KI -2233GI
+-5354FU
+T0
+'** 0
++3443UM
+T0
+'** 4523 -4131KI +4354UM -2233GI
+-1314FU
+T0
+'** 0
++4321UM
+T0
+'** 6959 -4131KI +0043KE -5161OU
+-5162OU
+T0
+'** 0
++0044KA
+T0
+'** 9310 -6251OU +4422UM -4152KI
+-6252OU
+T0
+'** 0
++4422UM
+T0
+'** 9330 -7262KI +2154UM -6261KI
+-5261OU
+T0
+'** 0
++0053KE
+T0
+'** 10120 -6152OU +5341NK -5241OU
+-6162OU
+T0
+'** 0
++5341NK
+T0
+'** 12259 -5455FU +2211UM -5556FU
+-8292HI
+T0
+'** 0
++2244UM
+T0
+'** 100000
+-6261OU
+T0
+'** 0
++2143UM
+T0
+'** 100000
+%TORYO
+'P1-KY-KE-GI-OU * +NK *  * -KY
+'P2-HI * -KI *  *  *  *  *  * 
+'P3-FU-FU-FU-FU * +UM * -FU * 
+'P4 *  *  *  * -FU+UM *  * -FU
+'P5 *  *  *  *  *  *  *  *  * 
+'P6+FU * +FU *  *  *  * +FU * 
+'P7 * +FU * +FU+FU+FU+FU * +FU
+'P8 * +GI *  *  *  *  * +HI * 
+'P9+KY+KE * +KI+OU+KI+GI+KE+KY
+'P+00FU00FU00GI00KI
+'-
+'summary:toryo:910 win:sample1-1 lose
+'$END_TIME:2025/06/01 23:00:09

@@ -15,6 +15,7 @@ mod generals;
 mod go;
 mod gomoku;
 mod othello;
+mod shogi;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -48,6 +49,11 @@ enum Game {
         #[command(subcommand)]
         cmd: go::Cmd,
     },
+    /// Shogi (floodgate CSA records)
+    Shogi {
+        #[command(subcommand)]
+        cmd: shogi::Cmd,
+    },
     /// Gomoku (Gomocup .psq records)
     Gomoku {
         #[command(subcommand)]
@@ -62,5 +68,6 @@ fn main() -> Result<()> {
         Game::Chess { cmd } => chess::run(cmd),
         Game::Gomoku { cmd } => gomoku::run(cmd),
         Game::Go { cmd } => go::run(cmd),
+        Game::Shogi { cmd } => shogi::run(cmd),
     }
 }

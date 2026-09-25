@@ -1,0 +1,183 @@
+V2
+N+910
+N-sample1-1
+'Max_Moves:512
+'Least_Time_Per_Move:0
+'Increment:10
+$EVENT:wdoor+floodgate-300-10F+910+sample1-1+20250601003009
+$START_TIME:2025/06/01 00:30:02
+P1-KY-KE-GI-KI-OU-KI-GI-KE-KY
+P2 * -HI *  *  *  *  * -KA * 
+P3-FU-FU-FU-FU-FU-FU-FU-FU-FU
+P4 *  *  *  *  *  *  *  *  * 
+P5 *  *  *  *  *  *  *  *  * 
+P6 *  *  *  *  *  *  *  *  * 
+P7+FU+FU+FU+FU+FU+FU+FU+FU+FU
+P8 * +KA *  *  *  *  * +HI * 
+P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
++
+'rating:910+e205ee2a5de471a70c1fd1b46033a75f:sample1-1+81dc9bdb52d04dc20036dbd8313ed055
+'black_rate:910+e205ee2a5de471a70c1fd1b46033a75f:1469.0
+'white_rate:sample1-1+81dc9bdb52d04dc20036dbd8313ed055:407.0
++7776FU
+T0
+'** 0
+-8262HI
+T0
+'** 0
++3938GI
+T0
+'** 1 -3142GI +6958KI -4152KI
+-9394FU
+T0
+'** 0
++6958KI
+T0
+'** 5 -3142GI +7968GI -4152KI
+-9495FU
+T0
+'** 0
++7968GI
+T0
+'** 8 -7172GI +6877GI -3142GI
+-6364FU
+T0
+'** 0
++6877GI
+T0
+'** 10 -6152KI +5968OU -7172GI
+-6232HI
+T0
+'** 0
++3736FU
+T0
+'** -24 -5162OU +3837GI -3142GI
+-5152OU
+T0
+'** 0
++3837GI
+T0
+'** -10 -5262OU +5968OU -3142GI
+-9193KY
+T0
+'** 0
++5968OU
+T0
+'** -4 -5262OU +6878OU -3142GI
+-5354FU
+T0
+'** 0
++7786GI
+T0
+'** 0 -5262OU +8675GI -6465FU
+-5455FU
+T0
+'** 0
++8855KA
+T0
+'** 220 -5253OU +8675GI -6465FU
+-9596FU
+T0
+'** 0
++9796FU
+T0
+'** 429 -5253OU +8675GI -6465FU
+-9396KY
+T0
+'** 0
++9996KY
+T0
+'** 1467 -3334FU +5564KA -2288UM
+-5263OU
+T0
+'** 0
++9691NY
+T0
+'** 2053 -3252HI +5756FU -7172GI
+-1314FU
+T0
+'** 0
++9181NY
+T0
+'** 3610 -7172GI +8182NY -6151KI
+-3142GI
+T0
+'** 0
++0026KY
+T0
+'** 4272 -3334FU +8171NY -2255KA
+-3231HI
+T0
+'** 0
++2623NY
+T0
+'** 6282 -4132KI +2322NY -3222KI
+-0091FU
+T0
+'** 0
++2322NY
+T0
+'** 10390 -9192FU +8171NY -6171KI
+-2113KE
+T0
+'** 0
++0023KE
+T0
+'** 11282 -6354OU +2331NK -5455OU
+-3334FU
+T0
+'** 0
++2231NY
+T0
+'** 12239 -4231GI +2331NK -4131KI
+-4231GI
+T0
+'** 0
++2331NK
+T0
+'** 12765 -4131KI +5511UM -9192FU
+-4131KI
+T0
+'** 0
++5511UM
+T2
+'** 12977 -1325KE +0033HI -2537NK
+-0044KE
+T0
+'** 0
++8171NY
+T2
+'** 15050 -6171KI +0051HI -4436KE
+-6171KI
+T0
+'** 0
++0051HI
+T1
+'** 15419 -3121KI +5121RY -6372OU
+-4436KE
+T0
+'** 0
++0054KA
+T0
+'** 100000
+-6374OU
+T0
+'** 0
++0075GI
+T0
+'** 100000
+%TORYO
+'P1-FU * -KI * +HI * -KI * +UM
+'P2 *  *  *  *  *  *  *  *  * 
+'P3 * -FU-FU *  * -FU *  * -KE
+'P4 *  * -OU-FU+KA * -FU * -FU
+'P5 *  * +GI *  *  *  *  *  * 
+'P6 * +GI+FU *  *  * -KE *  * 
+'P7 * +FU * +FU+FU+FU+GI+FU+FU
+'P8 *  *  * +OU+KI *  * +HI * 
+'P9 * +KE *  *  * +KI * +KE+KY
+'P+00FU00FU00FU00GI00KY
+'P-00FU00KY00KY
+'-
+'summary:toryo:910 win:sample1-1 lose
+'$END_TIME:2025/06/01 00:30:22

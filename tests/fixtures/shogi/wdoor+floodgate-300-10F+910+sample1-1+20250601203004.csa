@@ -1,0 +1,171 @@
+V2
+N+910
+N-sample1-1
+'Max_Moves:512
+'Least_Time_Per_Move:0
+'Increment:10
+$EVENT:wdoor+floodgate-300-10F+910+sample1-1+20250601203004
+$START_TIME:2025/06/01 20:30:02
+P1-KY-KE-GI-KI-OU-KI-GI-KE-KY
+P2 * -HI *  *  *  *  * -KA * 
+P3-FU-FU-FU-FU-FU-FU-FU-FU-FU
+P4 *  *  *  *  *  *  *  *  * 
+P5 *  *  *  *  *  *  *  *  * 
+P6 *  *  *  *  *  *  *  *  * 
+P7+FU+FU+FU+FU+FU+FU+FU+FU+FU
+P8 * +KA *  *  *  *  * +HI * 
+P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
++
+'rating:910+e205ee2a5de471a70c1fd1b46033a75f:sample1-1+81dc9bdb52d04dc20036dbd8313ed055
+'black_rate:910+e205ee2a5de471a70c1fd1b46033a75f:1469.0
+'white_rate:sample1-1+81dc9bdb52d04dc20036dbd8313ed055:407.0
++2726FU
+T0
+'** 0
+-7374FU
+T0
+'** 0
++6978KI
+T0
+'** 0 -4132KI +5968OU -6152KI
+-3132GI
+T0
+'** 0
++7776FU
+T0
+'** 8 -4152KI +8855KA -8292HI
+-9192KY
+T0
+'** 0
++8855KA
+T0
+'** 212 -8272HI +5591UM -8173KE
+-1314FU
+T0
+'** 0
++5582UM
+T0
+'** 423 -7182GI +7988GI -5142OU
+-7182GI
+T0
+'** 0
++3948GI
+T0
+'** 390 -3334FU +8977KE -5162OU
+-0016KA
+T0
+'** 0
++1716FU
+T0
+'** 4171 -3334FU +7877KI -5162OU
+-5142OU
+T0
+'** 0
++0056KA
+T0
+'** 4288 -4251OU +5674KA -5162OU
+-5354FU
+T0
+'** 0
++5674KA
+T0
+'** 4301 -4253OU +5968OU -5362OU
+-4151KI
+T0
+'** 0
++7463UM
+T0
+'** 5199 -6171KI +0053HI -5161KI
+-4231OU
+T0
+'** 0
++6364UM
+T0
+'** 8177 -3141OU +6482UM -5152KI
+-5142KI
+T0
+'** 0
++6482UM
+T0
+'** 8176 -3334FU +8977KE -4252KI
+-6152KI
+T0
+'** 0
++0071HI
+T0
+'** 9689 -4241KI +7181RY -8384FU
+-3241GI
+T0
+'** 0
++8292UM
+T0
+'** 9540 -3334FU +8977KE -5455FU
+-5455FU
+T0
+'** 0
++0054KY
+T0
+'** 10107 -5263KI +5451NY -4132GI
+-2113KE
+T0
+'** 0
++5452NY
+T0
+'** 11033 -4252KI +0061GI -8384FU
+-4252KI
+T0
+'** 0
++7181HI
+T0
+'** 10947 -9394FU +5968OU -9495FU
+-0012KY
+T0
+'** 0
++1615FU
+T0
+'** 11840 -3334FU +1514FU -5556FU
+-1415FU
+T0
+'** 0
++0014KE
+T0
+'** 12984 -5242KI +1422NK -3122OU
+-9394FU
+T0
+'** 0
++1422NK
+T0
+'** 15008 -3122OU +8141RY -5263KI
+-3122OU
+T0
+'** 0
++8141RY
+T1
+'** 17472 -2324FU +4152RY -2231OU
+-0065FU
+T0
+'** 0
++0031GI
+T0
+'** 100000
+-2221OU
+T0
+'** 0
++0022GI
+T0
+'** 100000
+%TORYO
+'P1 *  *  *  *  * +RY+GI-OU-KY
+'P2+UM *  *  * -KI *  * +GI-KY
+'P3 * -FU *  *  * -FU-FU-FU-KE
+'P4-FU *  *  *  *  *  *  *  * 
+'P5 *  *  * -FU-FU *  *  * -FU
+'P6 *  * +FU *  *  *  * +FU * 
+'P7+FU+FU * +FU+FU+FU+FU *  * 
+'P8 *  * +KI *  * +GI * +HI * 
+'P9+KY+KE+GI * +OU+KI * +KE+KY
+'P+00FU00FU00KA00KI
+'P-00KE
+'-
+'summary:toryo:910 win:sample1-1 lose
+'$END_TIME:2025/06/01 20:30:15

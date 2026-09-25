@@ -93,3 +93,14 @@ def test_chess(gmdata, tmp_path, flags):
                    check=True, capture_output=True)
     assert_same(tmp_path / "py", tmp_path / "rs", ("white", "black", "result"))
     assert GameShardDataset(str(tmp_path / "rs")).converter_version == 2
+
+
+@pytest.mark.parametrize("allow_no_result", [False, True])
+def test_shogi(gmdata, tmp_path, allow_no_result):
+    pytest.importorskip("shogi")
+    from data_processing.games.shogi.convert import main
+    src = os.path.join(FIX, "shogi")
+    main(["--input", src, "--output_dir", str(tmp_path / "py")] + (["--allow_no_result"] if allow_no_result else []))
+    subprocess.run([gmdata, "shogi", "convert", "--input", src, "--out", tmp_path / "rs"]
+                   + (["--allow-no-result"] if allow_no_result else []), check=True, capture_output=True)
+    assert_same(tmp_path / "py", tmp_path / "rs", ("players", "result", "plies"))
