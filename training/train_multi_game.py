@@ -114,6 +114,7 @@ from model.optim import (
 )
 from model.rl_utils import qk_norm_param_ids, sync_gradients
 from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry
+from training.diagnostics import attention_probe, format_attention, logit_lse_absmax, qk_caps
 from training.distributed import (
     BatchNormStatSync,
     broadcast_module_state,
@@ -121,7 +122,6 @@ from training.distributed import (
     init_distributed,
     rank_seed,
 )
-from training.diagnostics import attention_probe, format_attention, logit_lse_absmax, qk_caps
 from training.train_il_game import (
     LABEL_KEYS,
     META_ARCH_KEYS,
