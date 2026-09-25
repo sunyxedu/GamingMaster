@@ -16,6 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from data_processing.games.dataset import GameShardDataset, collate_game_sequences
+from model.config import upgrade_config_dict
 from model.multi_game import MultiGameNetwork
 from training.deep_supervision import Q_HALT_WEIGHT
 from training.train_il_game import batch_loss, build_net_tolerant, pick_device, prepare_batch
@@ -27,7 +28,9 @@ def load_multi(path: str, device: torch.device, raw: bool = False) -> MultiGameN
     ck = torch.load(path, map_location="cpu", weights_only=False)
     nets = {}
     for g in ck["games"]:
-        net, _ = build_net_tolerant(g, dict(ck["configs"][g]))
+        # fields newer than the checkpoint take their legacy value (e.g.
+        # qk_norm=False), so the rebuilt net matches the saved weights
+        net, _ = build_net_tolerant(g, upgrade_config_dict(dict(ck["configs"][g])))
         nets[g] = net
     model = MultiGameNetwork(nets)
     model.load_state_dict(ck["train_model_state" if raw else "model_state"])

@@ -42,7 +42,7 @@ CORE_CONFIG_FIELDS = (
     "rd_mean_iters", "rd_backprop_iters", "rd_max_iters", "rd_eval_iters",
     "moe_experts", "moe_top_k", "moe_shared_experts", "moe_expansion",
     "trm_arch", "trm_H_cycles", "trm_L_cycles", "trm_block_layers",
-    "trm_expansion", "halt_max_steps",
+    "trm_expansion", "halt_max_steps", "qk_norm",
 )
 
 _NORM_TYPES = (nn.LayerNorm, nn.RMSNorm)

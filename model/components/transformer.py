@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from model.components.core import QKNorm
 from model.components.recurrence import GatedRecurrence
 from model.config import ModelConfig
 
@@ -100,6 +101,14 @@ class SpatiotemporalBlock(nn.Module):
     history (cfg.temporal_mixer="attention", KV cache at inference) or a
     gated linear recurrence (cfg.temporal_mixer="recurrent", fixed-size
     state at inference — episode memory lives in the neurons).
+
+    ``cfg.qk_norm`` adds per-head q/k RMSNorm (``QKNorm``) to the spatial
+    attention and to the temporal attention: the NEW submodules
+    ``spatial_qk_norm`` / ``temporal_qk_norm`` exist only when it is on, so
+    a qk_norm=False block (every checkpoint saved before the field) has
+    exactly the historical parameters and forward code.  With it on,
+    forward_step runs the same SDPA code as forward instead of
+    ``nn.MultiheadAttention.forward``.
     """
 
     def __init__(self, cfg: ModelConfig):
@@ -130,6 +139,14 @@ class SpatiotemporalBlock(nn.Module):
         )
         self.ff_norm = nn.LayerNorm(cfg.d_model)
 
+        # QK-norm (registered last: qk_norm=False keeps the legacy
+        # parameter set and order)
+        qk = getattr(cfg, "qk_norm", False)
+        d_head = cfg.d_model // cfg.n_heads
+        self.spatial_qk_norm = QKNorm(d_head) if qk else None
+        self.temporal_qk_norm = (QKNorm(d_head)
+                                 if qk and self.mixer == "attention" else None)
+
     def _spatial_sdpa(self, x: torch.Tensor) -> torch.Tensor:
         """Spatial self-attention via F.scaled_dot_product_attention.
 
@@ -144,6 +161,8 @@ class SpatiotemporalBlock(nn.Module):
         qkv = F.linear(x, self.spatial_attn.in_proj_weight, self.spatial_attn.in_proj_bias)
         qkv = qkv.reshape(B, S, 3, n_heads, d_head).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
+        if self.spatial_qk_norm is not None:
+            q, k = self.spatial_qk_norm(q, k)
 
         # Pin the kernel set so the re-entrant checkpoint recompute cannot
         # dispatch to a different backend (they consume dropout RNG
@@ -172,6 +191,8 @@ class SpatiotemporalBlock(nn.Module):
         qkv = F.linear(x, self.temporal_attn.in_proj_weight, self.temporal_attn.in_proj_bias)
         qkv = qkv.reshape(B, T, 3, n_heads, d_head).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)  # each [B, n_heads, T, d_head]
+        if self.temporal_qk_norm is not None:
+            q, k = self.temporal_qk_norm(q, k)
 
         dropout_p = self.temporal_attn.dropout if self.training else 0.0
         with torch.nn.attention.sdpa_kernel([
@@ -184,6 +205,33 @@ class SpatiotemporalBlock(nn.Module):
             )
         attn_out = attn_out.permute(0, 2, 1, 3).reshape(B, T, d)
         return self.temporal_attn.out_proj(attn_out)
+
+    def _temporal_attn_step(self, x_q: torch.Tensor, x_kv: torch.Tensor) -> torch.Tensor:
+        """One query frame attending to the cached history + itself —
+        the last row of :meth:`_causal_temporal_attn` (same projection
+        weights, same QK-norm).  Used by forward_step when qk_norm is on.
+
+        x_q [N, 1, d] (current frame), x_kv [N, t, d] (history + current).
+        """
+        N, t, d = x_kv.shape
+        n_heads = self.temporal_attn.num_heads
+        d_head = d // n_heads
+        w, b = self.temporal_attn.in_proj_weight, self.temporal_attn.in_proj_bias
+        w_q, w_kv = w.split([d, 2 * d])
+        b_q, b_kv = b.split([d, 2 * d]) if b is not None else (None, None)
+        q = F.linear(x_q, w_q, b_q).reshape(N, 1, n_heads, d_head).transpose(1, 2)
+        kv = F.linear(x_kv, w_kv, b_kv).reshape(N, t, 2, n_heads, d_head).permute(2, 0, 3, 1, 4)
+        k, v = kv.unbind(0)                                  # each [N, n_heads, t, d_head]
+        q, k = self.temporal_qk_norm(q, k)
+        dropout_p = self.temporal_attn.dropout if self.training else 0.0
+        with torch.nn.attention.sdpa_kernel([
+            torch.nn.attention.SDPBackend.FLASH_ATTENTION,
+            torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION,
+            torch.nn.attention.SDPBackend.MATH,
+        ]):
+            # the query is the newest frame: every key is in its past
+            attn_out = F.scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+        return self.temporal_attn.out_proj(attn_out.transpose(1, 2).reshape(N, 1, d))
 
     def forward(
         self,
@@ -238,7 +286,10 @@ class SpatiotemporalBlock(nn.Module):
 
         # ── spatial (only current timestep) ──
         x_flat = x_cur.reshape(B, S, d)
-        sa_out, _ = self.spatial_attn(x_flat, x_flat, x_flat, need_weights=False)
+        if self.spatial_qk_norm is not None:
+            sa_out = self._spatial_sdpa(x_flat)
+        else:
+            sa_out, _ = self.spatial_attn(x_flat, x_flat, x_flat, need_weights=False)
         x_flat = self.spatial_norm(x_flat + sa_out)
 
         if self.mixer == "recurrent":
@@ -256,7 +307,10 @@ class SpatiotemporalBlock(nn.Module):
                 kv = q  # [B*S, 1, d]
             new_cache = kv
 
-            ta_out, _ = self.temporal_attn(q, kv, kv, need_weights=False)
+            if self.temporal_qk_norm is not None:
+                ta_out = self._temporal_attn_step(q, kv)
+            else:
+                ta_out, _ = self.temporal_attn(q, kv, kv, need_weights=False)
             q = self.temporal_norm(q + ta_out)
             x_out = q.reshape(B, S, d)
 

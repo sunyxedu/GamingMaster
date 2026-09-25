@@ -1,18 +1,14 @@
 """Tests for the shared shard dataset and the generic multi-game IL trainer."""
 
-import os
-
 import pytest
 import torch
 
 from data_processing.games.dataset import (
-    FORMAT_VERSION,
     GameShardDataset,
     collate_game_sequences,
     save_shard,
 )
 from training.train_il_game import (
-    LABEL_KEYS,
     batch_loss,
     build_labels,
     parse_overrides,
@@ -141,15 +137,18 @@ def test_resume_arch_prefers_checkpoint_config(capsys):
     # fields newer than the checkpoint get their LEGACY values
     assert resume_arch_overrides(ckpt, {}) == {
         "d_model": 48, "board_h": 6,
-        "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0}
+        "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0,
+        "qk_norm": False}
     # explicit CLI override is the escape hatch and applies loudly
     arch = resume_arch_overrides(ckpt, {"d_model": 64})
     assert arch == {"d_model": 64, "board_h": 6,
-                    "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0}
+                    "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0,
+                    "qk_norm": False}
     assert "replaces checkpoint arch values" in capsys.readouterr().out
     # legacy checkpoint without a full config falls back to overrides
     assert resume_arch_overrides({"config_overrides": {"d_ff": 32}}, {}) == {
-        "d_ff": 32, "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0}
+        "d_ff": 32, "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0,
+        "qk_norm": False}
 
 
 def test_resume_rebuilds_exact_arch_from_config():

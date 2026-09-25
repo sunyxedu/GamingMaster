@@ -323,16 +323,19 @@ def test_parameter_registration_order_is_pinned():
     the rename-based precedent).
     """
     # legacy TRM block = every checkpoint saved before trm_arch existed;
-    # "trm" = the reference block (new runs)
-    for arch, pinned in (("legacy", "1949922d1663c575"),
-                         ("trm", "f5255664c631a880")):
-        net = small_net(seed=0, trm_arch=arch)
+    # "trm" = the reference block.  Both lineages predate qk_norm (their
+    # configs load it as False); qk_norm=True is the new-run default and
+    # only ADDS parameters.
+    for arch, qk_norm, pinned in (("legacy", False, "1949922d1663c575"),
+                                  ("trm", False, "f5255664c631a880"),
+                                  ("trm", True, "9366decf8ee41e0e")):
+        net = small_net(seed=0, trm_arch=arch, qk_norm=qk_norm)
         names = [n for n, _ in net.named_parameters()]
         digest = hashlib.sha256("\n".join(names).encode()).hexdigest()[:16]
         assert digest == pinned, (
             f"parameter registration order changed for trm_arch={arch} "
-            f"(digest {digest}); optimizer states in existing checkpoints "
-            f"are now misaligned"
+            f"qk_norm={qk_norm} (digest {digest}); optimizer states in "
+            f"existing checkpoints are now misaligned"
         )
 
 

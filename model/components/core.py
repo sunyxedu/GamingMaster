@@ -86,6 +86,34 @@ class RMSNorm(nn.RMSNorm):
         return y * self.weight.to(x.dtype)
 
 
+class QKNorm(nn.Module):
+    """QK-normalisation (``cfg.qk_norm``): per-head RMSNorm of queries and
+    keys over head_dim, each with its own learnable scale (init 1), applied
+    right before ``scaled_dot_product_attention``.
+
+    After it every q, k row has RMS |g| (‖q̂‖ ≤ √D·max|g_q|), so with SDPA's
+    1/√D scaling each attention logit obeys
+
+        |q̂·k̂| / √D ≤ √D · max|g_q| · max|g_k|           (D = head_dim)
+
+    whatever the scale of the activations or of the q/k projection weights.
+    Unbounded logit growth — the attention collapsing onto one-hot rows, the
+    late loss / grad-norm blow-up of Wortsman et al. 2023 (arXiv 2309.14322)
+    — can then only come from the scales themselves, which move at the
+    learning rate.  Same fix as ViT-22B (Dehghani et al. 2023) and OLMo 2.
+
+    forward(q, k [..., D]) → (q̂, k̂) in the input dtype (fp32 statistics).
+    """
+
+    def __init__(self, head_dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.q_norm = RMSNorm(head_dim, eps=eps)
+        self.k_norm = RMSNorm(head_dim, eps=eps)
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.q_norm(q), self.k_norm(k)
+
+
 class CoreLinear(nn.Module):
     """Bias-free linear with truncated-normal init of a chosen std.  Not an
     ``nn.Linear`` so GameNetwork's blanket std-0.02 init leaves it alone."""
@@ -292,7 +320,10 @@ class CoreBlock(nn.Module):
         x = x + n2(Attn(n1(x)));   x = x + n4(FFN(n3(x)))
 
     Non-causal multi-head attention over one frame's tokens (positions are
-    already in the input)."""
+    already in the input).  With ``cfg.qk_norm`` the per-head q and k are
+    RMS-normalised (:class:`QKNorm`) before the dot product; the sandwich
+    norms stay.  Configs without the field (old checkpoints) build no
+    ``qk_norm`` submodule, so their state dicts load strictly."""
 
     def __init__(self, cfg: ModelConfig, out_std: float, moe: bool):
         super().__init__()
@@ -306,12 +337,17 @@ class CoreBlock(nn.Module):
                            cfg.moe_expansion, std, out_std,
                            bias_clip=getattr(cfg, "moe_bias_clip", 0.0))
                     if moe else SwiGLUFFN(d, cfg.core_expansion, std, out_std))
+        # registered last: parameter order of qk_norm=False blocks unchanged
+        self.qk_norm = (QKNorm(d // cfg.n_heads, eps=1e-6)
+                        if getattr(cfg, "qk_norm", False) else None)
 
     def forward(self, x: torch.Tensor, valid: Optional[torch.Tensor] = None) -> torch.Tensor:
         B, S, d = x.shape
         h = self.norms[0](x)
         q, k, v = self.qkv(h).view(B, S, 3, self.n_heads, d // self.n_heads).permute(
             2, 0, 3, 1, 4).unbind(0)
+        if self.qk_norm is not None:
+            q, k = self.qk_norm(q, k)
         a = F.scaled_dot_product_attention(q, k, v)
         x = x + self.norms[1](self.o(a.permute(0, 2, 1, 3).reshape(B, S, d)))
         return x + self.norms[3](self.ffn(self.norms[2](x), valid))
