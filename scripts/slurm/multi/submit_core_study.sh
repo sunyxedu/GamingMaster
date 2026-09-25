@@ -34,9 +34,10 @@ data_args() {
     echo "$out"
 }
 
-submit() {   # RUN ARGS [extra sbatch flags...]
+submit() {   # RUN ARGS [extra sbatch flags...]; $SBATCH_EXTRA is appended
     local run=$1 args=$2; shift 2
-    GM_HOME=$SNAP RUN=$run ARGS="$args" sbatch --requeue --gres="$GRES" "$@" \
+    # shellcheck disable=SC2086
+    GM_HOME=$SNAP RUN=$run ARGS="$args" sbatch --requeue --gres="$GRES" "$@" ${SBATCH_EXTRA:-} \
         "$SNAP/scripts/slurm/multi/multi_game_job.sh"
 }
 
@@ -74,6 +75,18 @@ q3)
         submit "q3-$g-frozennorm"  "$A --init_core $B --freeze_core --train_core_norms"
         submit "q3-$g-finetune"    "$A --init_core $B"
         submit "q3-$g-scratch"     "$A --override $BASE $RDMOE"
+    done
+    ;;
+q4)
+    # inference-depth sweep of the recurrent-depth runs (+ default-depth eval
+    # of the others) on the full validation sets
+    for run in ${RUNS:-q1-rd q1-rdmoe}; do
+        V=""
+        for g in "${GAMES[@]}"; do V="$V --val $g=$D/$g/val"; done
+        MODULE=training.eval_multi_game GM_HOME=$SNAP RUN="q4-$run" \
+            ARGS="--ckpt $HOME/gm-runs/multi/$run/multi_final.pt $V --depths ${DEPTHS:-1 2 4 8 16 32} \
+--batch_size 8 --json $HOME/gm-runs/multi/$run/depth_sweep.json" \
+            sbatch --requeue --gres="$GRES" ${SBATCH_EXTRA:-} "$SNAP/scripts/slurm/multi/multi_game_job.sh"
     done
     ;;
 *) echo "unknown study $STUDY" >&2; exit 2 ;;
