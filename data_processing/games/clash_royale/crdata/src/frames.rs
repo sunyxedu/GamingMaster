@@ -360,3 +360,44 @@ mod tests {
         assert_eq!(them.meta.n_plays, 1);
     }
 }
+
+
+/// One player-sequence as a gm-shard sample: compact per-frame fields under `raw.*`
+/// (expanded into the adapter's observation by the loader) and the IL targets.
+pub fn to_gm(s: Sample, cat: &Catalog) -> gmshard::Sample {
+    let c = &s.cols;
+    let t = c.len();
+    let k = if t == 0 { 0 } else { c.recent_side.len() / t };
+    let next_cost: Vec<f32> = c.next_card.iter().map(|&id| cat.cost(id)).collect();
+    let recent_cost: Vec<f32> = c.recent_card.iter().map(|&id| cat.cost(id)).collect();
+    let place_idx: Vec<i64> = (0..t)
+        .map(|i| if c.waited[i] != 0 { -1 } else { c.place_y[i] as i64 * GRID_W as i64 + c.place_x[i] as i64 })
+        .collect();
+    let value = vec![s.meta.result as f32; t];
+    let meta = serde_json::to_value(&s.meta).unwrap_or(serde_json::Value::Null);
+    gmshard::Sample::new(meta)
+        .i32("raw.tick", &[], c.tick.clone())
+        .f32("raw.time_s", &[], c.time_s.clone())
+        .u8("raw.phase", &[], c.phase.clone())
+        .u8("raw.overtime", &[], c.overtime.clone())
+        .f32("raw.elixir", &[], c.elixir.clone())
+        .f32("raw.opp_elixir", &[], c.opp_elixir.clone())
+        .u16("raw.hand_ids", &[HAND], c.hand_ids.clone())
+        .u8("raw.hand_form", &[HAND], c.hand_form.clone())
+        .u8("raw.hand_kind", &[HAND], c.hand_kind.clone())
+        .f32("raw.hand_cost", &[HAND], c.hand_cost.clone())
+        .f32("raw.hand_prob", &[HAND], c.hand_prob.clone())
+        .f32("raw.next_cost", &[], next_cost)
+        .u8("raw.recent_side", &[k], c.recent_side.clone())
+        .u16("raw.recent_card", &[k], c.recent_card.clone())
+        .f32("raw.recent_cost", &[k], recent_cost)
+        .i8("raw.recent_x", &[k], c.recent_x.clone())
+        .i8("raw.recent_y", &[k], c.recent_y.clone())
+        .i32("raw.recent_age", &[k], c.recent_age.clone())
+        .u8("raw.ability", &[], c.ability.clone())
+        .u16("raw.ability_card", &[], c.ability_card.clone())
+        .bool("tgt.waited", &[], c.waited.iter().map(|&w| w != 0).collect())
+        .i64("tgt.card_slot", &[], c.card_slot.iter().map(|&x| x as i64).collect())
+        .i64("tgt.place_idx", &[], place_idx)
+        .f32("tgt.value", &[], value)
+}

@@ -14,9 +14,9 @@
 //! Every tensor's leading axis is the frame axis; sample `i` owns rows
 //! `start..start+length` of every tensor. Tensor names are `obs.<key>` /
 //! `tgt.<key>` — exactly the keys the game's `ObservationEncoder` and
-//! `ActionDecoder.il_loss` expect. `data_processing/games/rs_shards.py`
-//! turns a shard directory into the `.pt` shards `GameShardDataset` reads,
-//! or serves it directly. No dependency on NumPy or Torch on this side;
+//! `ActionDecoder.il_loss` expect — or `raw.<key>` for compact per-frame
+//! fields that a registered loader expander turns into `obs` at load time. `data_processing/games/dataset.py::GameShardDataset`
+//! reads shard directories directly (memory-mapped). No dependency on NumPy or Torch on this side;
 //! `.npy` is written by hand.
 
 use anyhow::{bail, Context, Result};
@@ -221,6 +221,16 @@ impl Sample {
 
     pub fn u8(mut self, name: &str, frame_shape: &[usize], data: Vec<u8>) -> Self {
         self.tensors.push(Tensor { name: name.into(), frame_shape: frame_shape.to_vec(), col: Column::U8(data) });
+        self
+    }
+
+    pub fn u16(mut self, name: &str, frame_shape: &[usize], data: Vec<u16>) -> Self {
+        self.tensors.push(Tensor { name: name.into(), frame_shape: frame_shape.to_vec(), col: Column::U16(data) });
+        self
+    }
+
+    pub fn i8(mut self, name: &str, frame_shape: &[usize], data: Vec<i8>) -> Self {
+        self.tensors.push(Tensor { name: name.into(), frame_shape: frame_shape.to_vec(), col: Column::I8(data) });
         self
     }
 

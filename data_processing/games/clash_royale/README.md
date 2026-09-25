@@ -7,8 +7,8 @@ shards for that adapter.
 ```
 catalog/cards.json      122 cards: dense id, RoyaleAPI card_key, cost, kind, stats
 catalog/timeline.json   elixir regeneration schedule, match sections, tick length
-crdata/                 Rust converter (fetch / stats / convert)
-loader.py               cr-frames.v1 shards -> .pt shards (GameShardDataset)
+crdata/                 Rust converter (fetch / stats / convert) -> gm-shard.v1
+expand.py               load-time expansion of compact raw.* fields into the adapter obs
 ```
 
 ## Source data
@@ -33,13 +33,16 @@ loader needs only numpy + torch. `tests/test_clash_royale_data.py` builds the
 crate and runs it end-to-end when `cargo` is on the path or in `~/.cargo/bin`.
 
 ```sh
-cd data_processing/games/clash_royale/crdata && cargo build --release
+cd data_processing && cargo build --release -p crdata
 B=target/release/crdata
 $B fetch   --out data/cr/raw --limit 3                 # SHA-256 verified, resumable
 $B stats   --input data/cr/raw --limit 1
-$B convert --input data/cr/raw --out data/cr/frames    # 5000 replays ≈ 2 s on a laptop
-uv run python -m data_processing.games.clash_royale.loader --frames data/cr/frames --out data/cr/shards
+$B convert --input data/cr/raw --out data/cr/shards    # 5000 replays ≈ 2.5 s, 0.8 GB
 ```
+
+`GameShardDataset("data/cr/shards", game="clash_royale")` reads the shards
+directly; the dense arena planes are built per sample at load time (~10 ms for
+a 3-minute match), so disk holds only compact per-frame fields.
 
 `convert` emits **two samples per replay** (one per player, in that player's
 own frame: own back line = row 0, x mirrored for the top player) at one frame
@@ -53,13 +56,13 @@ every `--step-ticks` (10 = 0.5 s). Per frame:
 | `waited`, `card_slot`, `place_x/y`, `ability` | the first own action inside the frame window |
 | `phase`, `overtime` | single / double / triple elixir and overtime flags |
 
-`loader.py` builds the adapter's observation: deployment planes (where each
+`expand.py` builds the adapter's observation at load time: deployment planes (where each
 side committed elixir and how long ago, exponential decay), own/enemy half and
 river planes, broadcast scalars, hand features, legality masks (affordable
 cards; own half, whole arena when a spell is in hand), and targets
 (`waited`, `card_slot`, `place_idx`, `value`). Shard `meta` carries
 `n_cards`, `arena_channels`, `step_ticks` etc. so `GameShardDataset` refuses to
-mix generations.
+mix generations (converter_version 2 = gm-shard output).
 
 Known limits: no unit state (an IL model trained here learns *when and where
 people deploy given plays and elixir*, not reactions to unit positions);

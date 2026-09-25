@@ -514,6 +514,7 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "clap",
+ "gmshard",
  "hex",
  "parquet",
  "rayon",

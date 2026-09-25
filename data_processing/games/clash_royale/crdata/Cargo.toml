@@ -11,6 +11,7 @@ name = "crdata"
 path = "src/main.rs"
 
 [dependencies]
+gmshard = { path = "../../../rs/gmshard" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

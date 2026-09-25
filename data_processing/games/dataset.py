@@ -77,7 +77,7 @@ class GmShard:
         import numpy as np
         info = self.index["samples"][j]
         a, b = info["start"], info["start"] + info["length"]
-        out: Dict = {"obs": {}, "tgt": {}, "meta": info.get("meta") or {}}
+        out: Dict = {"obs": {}, "tgt": {}, "raw": {}, "meta": info.get("meta") or {}}
         for name, arr in self.arrays().items():
             group, key = name.split(".", 1)
             tinfo = self.index["tensors"][name]
@@ -92,6 +92,12 @@ class GmShard:
             if dtype == "bool":
                 v = v.bool()
             out[group][key] = v
+        raw = out.pop("raw")
+        exp = _expander(self.game)
+        if exp is not None:
+            out["obs"].update(exp[0](raw, self.index.get("meta") or {}))
+        elif raw:
+            out["raw"] = raw
         return out
 
     def as_shard_dict(self) -> Dict:
@@ -99,6 +105,15 @@ class GmShard:
                 "converter_version": self.index.get("converter_version", 1),
                 "meta": self.index.get("meta") or {},
                 "samples": [self.sample(j) for j in range(len(self))]}
+
+
+def _expander(game: str):
+    """Load-time expanders: games whose gm-shards store compact ``raw.*`` fields
+    and build their dense observation when a sample is read."""
+    if game == "clash_royale":
+        from data_processing.games.clash_royale import expand
+        return expand.expand, frozenset(expand.OBS_KEYS)
+    return None
 
 
 def find_gm_shards(data_dir: str) -> List[str]:
@@ -199,8 +214,11 @@ class GameShardDataset(Dataset):
                     "meta": sh.index.get("meta") or {}, "n_samples": len(sh), "_gm": sh}
             if header_only:
                 names = list(sh.index["tensors"])
-                head["_keys"] = (frozenset(n.split(".", 1)[1] for n in names if n.startswith("obs.")),
-                                 frozenset(n.split(".", 1)[1] for n in names if n.startswith("tgt.")))
+                obs_keys = frozenset(n.split(".", 1)[1] for n in names if n.startswith("obs."))
+                exp = _expander(sh.game)
+                if exp is not None:
+                    obs_keys = obs_keys | exp[1]
+                head["_keys"] = (obs_keys, frozenset(n.split(".", 1)[1] for n in names if n.startswith("tgt.")))
             return head
         shard = torch.load(path, map_location="cpu", weights_only=False)
         shard["n_samples"] = len(shard["samples"])

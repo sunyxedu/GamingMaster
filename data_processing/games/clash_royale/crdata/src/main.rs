@@ -5,9 +5,9 @@
 //!   crdata stats   --input data/cr/raw [--limit 1]
 //!
 //! Input: RoyaleAPI action replays (`royaleapi-battle-replay.v1` payloads in
-//! Parquet). Output: per-player decision frames (`cr-frames.v1`, `.npy` shards)
-//! that `data_processing/games/clash_royale/loader.py` turns into the
-//! `model/games/clash_royale.py` observation / target dict.
+//! Parquet). Output: gm-shard.v1 directories (compact per-frame `raw.*` fields +
+//! IL targets); `GameShardDataset` expands `raw.*` into the
+//! `model/games/clash_royale.py` observation at load time.
 
 #![allow(dead_code)]
 mod catalog;
@@ -15,9 +15,7 @@ mod elixir;
 mod fetch;
 mod frames;
 mod hand;
-mod npy;
 mod replay;
-mod shard;
 
 use anyhow::{Context, Result};
 use catalog::{Catalog, Timeline};
@@ -128,7 +126,12 @@ fn cmd_convert(
     let cfg = FrameConfig { step_ticks, recent };
     let modes: Option<Vec<String>> = game_modes.map(|s| s.split(',').map(|m| m.trim().to_string()).collect());
     let parts = parquet_parts(&input)?;
-    let mut writer = shard::ShardWriter::new(&out, samples_per_shard, step_ticks, recent, &cat.version, 0)?;
+    let shard_meta = serde_json::json!({
+        "arena_h": 32, "arena_w": 18, "arena_channels": 16, "hand_size": 4, "n_cards": cat.len() + 2,
+        "card_feature_dim": 8, "cr_global_features": 6, "step_ticks": step_ticks, "recent": recent,
+        "tau_ticks": 60.0, "catalog_version": cat.version,
+    });
+    let mut writer = gmshard::ShardWriter::new(&out, "clash_royale", 2, shard_meta, samples_per_shard)?;
     let mut n_rows = 0usize;
     let mut n_parse_err = 0usize;
     let mut n_mode_skip = 0usize;
@@ -174,7 +177,7 @@ fn cmd_convert(
                             n_viol_drop += 1;
                             continue;
                         }
-                        writer.push(s)?;
+                        writer.push(frames::to_gm(s, &cat))?;
                     }
                 }
                 Err(_) => n_parse_err += 1,
@@ -188,7 +191,7 @@ fn cmd_convert(
     }
     writer.flush()?;
     let summary = serde_json::json!({
-        "format": "cr-frames.v1", "input": input, "parts": parts.len(), "rows": n_rows,
+        "format": "gm-shard.v1", "input": input, "parts": parts.len(), "rows": n_rows,
         "parse_errors": n_parse_err, "mode_skipped": n_mode_skip, "hand_inference_failed": n_hand_fail,
         "elixir_violation_dropped": n_viol_drop, "shards": writer.written_shards,
         "samples": writer.written_samples, "frames": writer.written_frames,
