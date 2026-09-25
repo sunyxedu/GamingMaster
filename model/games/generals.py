@@ -19,11 +19,12 @@ import torch.nn.functional as F
 
 from model.components.encoder import SpatialEncoder
 from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead
-from model.components.transformer import _sinusoidal_pe
+from model.components.transformer import sinusoidal_pe_rows
 from model.config import ModelConfig
 from model.games.base import (
     ActionDecoder,
     ObservationEncoder,
+    categorical_sample,
     masked_sample,
     safe_masked_logits,
 )
@@ -238,9 +239,10 @@ class GeneralsDecoder(ActionDecoder):
         )  # [BT, n_dir]
         split_logits = self.split_head(source_embed, ll)  # [BT, n_split]
 
-        # Time PE for PassHead: absolute frame indices t0 .. t0+T-1
+        # Time PE for PassHead: absolute frame indices t0 .. t0+T-1 (t0 an
+        # int, or a device tensor for a CUDA-graph-captured step)
         pe_dim = self.pass_head.time_pe_dim
-        time_pe = _sinusoidal_pe(t0 + T, pe_dim, device)[t0: t0 + T]  # [T, pe]
+        time_pe = sinusoidal_pe_rows(t0, T, pe_dim, device)  # [T, pe]
         time_pe = time_pe.unsqueeze(0).expand(B, T, pe_dim).reshape(BT, pe_dim)
 
         # PassHead reads the RAW direction logits (masking first would feed
@@ -253,18 +255,17 @@ class GeneralsDecoder(ActionDecoder):
         # Hard direction mask at the selected source. -1e9 (finite) instead
         # of -inf keeps p*log_p and its backward NaN-free without special
         # casing. Rows with no valid direction (a cell fully enclosed by
-        # mountains/borders) fall back to the raw logits.
+        # mountains/borders) fall back to the raw logits (branch-free: no
+        # host sync on the inference path).
         dir_legal = legal.get("direction") if legal else None
         if dir_legal is not None:
             dm = dir_legal.reshape(BT, cfg.n_directions, N).gather(
                 2, src_idx.view(BT, 1, 1).expand(BT, cfg.n_directions, 1),
             ).squeeze(-1)                                     # [BT, 4]
-            masked_dir = direction_logits.masked_fill(~dm, -1e9)
             dead = ~dm.any(-1)
-            if dead.any():
-                masked_dir = torch.where(
-                    dead.unsqueeze(-1), direction_logits, masked_dir)
-            direction_logits = masked_dir
+            direction_logits = torch.where(
+                dead.unsqueeze(-1), direction_logits,
+                direction_logits.masked_fill(~dm, -1e9))
 
         return {
             "source_logits": source_logits.reshape(B, T, N),
@@ -329,7 +330,7 @@ class GeneralsDecoder(ActionDecoder):
                 dir_idx = direction_logits.argmax(-1)
             else:
                 dir_probs = F.softmax(direction_logits, dim=-1)
-                dir_idx = torch.multinomial(dir_probs, 1).squeeze(-1)
+                dir_idx = categorical_sample(dir_probs)
             dir_lp = F.log_softmax(direction_logits, dim=-1)[arange_B, dir_idx]
 
             # --- split ---
@@ -337,7 +338,7 @@ class GeneralsDecoder(ActionDecoder):
                 spl_idx = split_logits.argmax(-1)
             else:
                 spl_probs = F.softmax(split_logits, dim=-1)
-                spl_idx = torch.multinomial(spl_probs, 1).squeeze(-1)
+                spl_idx = categorical_sample(spl_probs)
             spl_lp = F.log_softmax(split_logits, dim=-1)[arange_B, spl_idx]
 
             # Hierarchical: pass → only pass_lp; move → pass_lp + move heads
@@ -566,11 +567,9 @@ class JointGeneralsDecoder(ActionDecoder):
 
         # Pass is always legal, so no all-masked fallback is ever needed;
         # NaN rows (bf16 overflow etc.) fall back to uniform, mirroring
-        # safe_masked_logits semantics.
-        nan_rows = joint.isnan().any(dim=-1)
-        if nan_rows.any():
-            joint = torch.where(nan_rows.unsqueeze(-1),
-                                torch.zeros_like(joint), joint)
+        # safe_masked_logits semantics (branch-free: no host sync).
+        nan_rows = joint.isnan().any(dim=-1, keepdim=True)
+        joint = joint.masked_fill(nan_rows, 0.0)
         return joint, arr, pass_logit
 
     def _views(self, arr, pass_logit, src_idx, BT, legal, move_lse):
@@ -589,11 +588,9 @@ class JointGeneralsDecoder(ActionDecoder):
         if dir_legal is not None:
             dm = dir_legal.reshape(BT, D, N).gather(
                 2, src_idx.view(BT, 1, 1).expand(BT, D, 1)).squeeze(-1)
-            sel_m = sel.masked_fill(~dm.unsqueeze(1), -1e9)
             dead = ~dm.any(-1)
-            if dead.any():
-                sel_m = torch.where(dead.view(BT, 1, 1), sel, sel_m)
-            sel = sel_m
+            sel = torch.where(dead.view(BT, 1, 1), sel,
+                              sel.masked_fill(~dm.unsqueeze(1), -1e9))
 
         direction_logits = torch.logsumexp(sel, dim=1)         # [BT, D]
         split_logits = torch.logsumexp(sel, dim=2)             # [BT, 2]
@@ -660,7 +657,7 @@ class JointGeneralsDecoder(ActionDecoder):
                         best_arrow)
                 else:
                     probs = F.softmax(joint.float(), dim=-1)
-                    j_idx = torch.multinomial(probs, 1).squeeze(-1)
+                    j_idx = categorical_sample(probs)
             src_idx = torch.where(
                 j_idx >= 2 * D * N,
                 torch.zeros_like(j_idx), j_idx % N)

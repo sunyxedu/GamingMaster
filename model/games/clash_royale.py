@@ -24,7 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from model.components.encoder import ResBlock
-from model.components.transformer import _sinusoidal_pe
+from model.components.transformer import sinusoidal_pe_rows
 from model.config import ModelConfig
 from model.games.base import (
     ActionDecoder,
@@ -251,7 +251,7 @@ class CardPlacementDecoder(ActionDecoder):
         # frames early-game time features.  Train clash_royale WITHOUT
         # --max_len (or source match time from globals_seq instead) until
         # a converter lands and this is settled.
-        pe = _sinusoidal_pe(t0 + T, self.time_pe_dim, device)[t0: t0 + T]
+        pe = sinusoidal_pe_rows(t0, T, self.time_pe_dim, device)
         pe = pe.unsqueeze(0).expand(B, T, self.time_pe_dim).reshape(BT, self.time_pe_dim)
         wait_logits = self.wait_head(torch.cat([ll, pe], dim=-1)).squeeze(-1)
 

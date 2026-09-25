@@ -20,7 +20,7 @@ boundary defined in ``model.games.base``:
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -148,6 +148,54 @@ class GameNetwork(nn.Module):
         """Non-TRM cores: (z [BT, S, d], q_halt zeros [BT], depth)."""
         z, depth = self.core(x, steps, valid)
         return z, x.new_zeros(x.shape[0]), depth
+
+    # ------------------------------------------------------------------
+    # Static inference state (CUDA-graph / compiled step support)
+    # ------------------------------------------------------------------
+
+    def prepare_inference(self, device: Optional[torch.device] = None,
+                          dtype: Optional[torch.dtype] = None) -> None:
+        """Precompute every lazily-built inference constant so that
+        :meth:`step` performs no host→device copy.  Required before
+        capturing the step in a CUDA graph (a warm-up step also does it).
+
+        Today that is the recurrent-depth core's fixed initial state s_0
+        for this game's token count.  ``dtype`` is the core's residual-stream
+        dtype: the parameter dtype by default (float32 also under bf16
+        autocast)."""
+        core = getattr(self, "core", None)
+        if not isinstance(core, RecurrentDepthCore):
+            return
+        p = next(core.parameters())
+        core.prepare_inference(self.obs_encoder.n_tokens + 2,
+                               p.device if device is None else torch.device(device),
+                               p.dtype if dtype is None else dtype)
+
+    @torch.no_grad()
+    def initial_st_cache(self, batch: int) -> List[torch.Tensor]:
+        """Materialised Stage-1 state at t=0 for ``batch`` streams: one
+        [batch * S, d] float32 tensor per spatiotemporal layer.
+
+        It holds the same state as ``st_cache=None`` (the recurrence starts
+        from its learned h_init either way), but the tensors have a fixed
+        shape and address — what a CUDA graph needs (copy each step's new
+        state back into them in place).  Step from it with a TENSOR
+        ``step_idx`` (the graph-capturable form): with a Python int, a
+        present cache at step_idx 0 trips step()'s forgotten-step_idx guard,
+        so the int path keeps passing ``st_cache=None`` at t=0.  The values
+        are a snapshot of h_init: rebuild after loading new weights.  Only
+        the recurrent temporal mixer has a fixed-size state; the attention
+        mixer's KV cache grows by one frame per step.
+        """
+        if self.cfg.temporal_mixer != "recurrent":
+            raise ValueError(
+                "a static Stage-1 cache needs temporal_mixer='recurrent' "
+                f"(got {self.cfg.temporal_mixer!r}: the attention mixer's KV "
+                "cache grows every step, so its shapes cannot be captured)")
+        S = self.obs_encoder.n_tokens + 2
+        return [layer.temporal_rnn.initial_state(batch * S)
+                .clone(memory_format=torch.contiguous_format)
+                for layer in self.st_layers]
 
     def _build_pe(self) -> torch.Tensor:
         """Game-token PE (from the encoder) + decision-token PE: [1, S+2, d]."""
@@ -360,7 +408,7 @@ class GameNetwork(nn.Module):
         obs: Dict[str, torch.Tensor],
         legal: Optional[Dict[str, torch.Tensor]] = None,
         st_cache: Optional[List[torch.Tensor]] = None,
-        step_idx: int = 0,
+        step_idx: Union[int, torch.Tensor] = 0,
         act_steps: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         """Single-frame inference with Stage-1 temporal cache.
@@ -369,6 +417,21 @@ class GameNetwork(nn.Module):
         mode where the model may select anything.  Returns the decoder's
         logits (T squeezed away), the sampled action dict, value, q_halt
         and the updated ``st_cache``.
+
+        Sync-free in eval mode under ``torch.no_grad()`` with the recurrent
+        temporal mixer and a non-TRM core: no ``.item()`` / ``nonzero`` /
+        data-dependent Python branch, so the call can be captured in a CUDA
+        graph (see ``model.cuda_graph.GraphedStep``).  Condition for MoE
+        cores: the layers must take the dense expert path — automatic on an
+        accelerator while batch × tokens × experts is at most
+        ``MoEFFN.DENSE_MAX_TOKEN_EXPERTS`` (generals 25×25, 8 experts:
+        batch ≤ 13), otherwise force it with
+        ``MoEFFN.inference_path("dense")`` (GraphedStep does).  For capture,
+        pass ``step_idx`` as a single-element integer tensor on the model's
+        device (the decoder's time feature then reads it at run time instead
+        of baking the capture-time value in), start from
+        :meth:`initial_st_cache`, and call :meth:`prepare_inference` (or run
+        a warm-up step) first.
         """
         cfg = self.cfg
         d = cfg.d_model
@@ -391,8 +454,10 @@ class GameNetwork(nn.Module):
             # time feature below still uses the caller-supplied step index.
             # The fixed-size cache carries no step count, so a caller that
             # threads the cache but forgets step_idx would silently freeze
-            # the time feature at 0 — catch it.
-            if st_cache is not None and step_idx == 0:
+            # the time feature at 0 — catch it.  (A tensor step_idx is the
+            # graph-capturable form; its value is never read on the host.)
+            if (st_cache is not None and not isinstance(step_idx, torch.Tensor)
+                    and step_idx == 0):
                 raise ValueError(
                     "recurrent mode: pass step_idx to step()/step_rl() "
                     "(cache present but step_idx is still 0)"

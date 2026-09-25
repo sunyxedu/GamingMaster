@@ -18,7 +18,7 @@ core so existing training scripts, tools and checkpoints keep working.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -225,7 +225,7 @@ class GeneralsNetwork(GameNetwork):
         globals_vec: torch.Tensor,
         legal_mask: Optional[torch.Tensor] = None,
         st_cache: Optional[List[torch.Tensor]] = None,
-        step_idx: int = 0,
+        step_idx: Union[int, torch.Tensor] = 0,
         act_steps: Optional[int] = None,
         direction_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
@@ -241,7 +241,7 @@ class GeneralsNetwork(GameNetwork):
         grid: torch.Tensor,
         globals_vec: torch.Tensor,
         st_cache: Optional[List[torch.Tensor]] = None,
-        step_idx: int = 0,
+        step_idx: Union[int, torch.Tensor] = 0,
         act_steps: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         """Single-step inference without legal mask (RL mode).
