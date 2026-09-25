@@ -41,11 +41,25 @@ class ModelConfig:
     # Stage 1: Spatiotemporal encoding (separate weights per layer)
     n_st_layers: int = 3
 
-    # Stage 2: TRM pondering
-    trm_H_cycles: int = 3    # outer loop — refine answer
-    trm_L_cycles: int = 6    # inner loop — refine reasoning
-    trm_block_layers: int = 3  # transformer layers inside the shared reasoning module
-    halt_max_steps: int = 5   # ACT pondering steps at inference (1 = no ACT)
+    # Stage 2: TRM (Tiny Recursive Model, arXiv 2510.04871; defaults follow
+    # the reference implementation SamsungSAILMontreal/TinyRecursiveModels,
+    # config/arch/trm.yaml)
+    trm_H_cycles: int = 3    # T: outer loop — refine answer z_H
+    trm_L_cycles: int = 6    # n: inner loop — refine reasoning z_L
+    trm_block_layers: int = 2  # layers inside the single shared network
+    # Deep supervision: at most N_sup = halt_max_steps supervision steps per
+    # example in training (each its own optimizer step, latents carried
+    # detached); inference ALWAYS runs all halt_max_steps steps (the
+    # reference halts early only during training).
+    halt_max_steps: int = 16
+    halt_exploration_prob: float = 0.1
+    # Block layout. "trm" = reference block: post-norm RMSNorm (no weight),
+    # bias-free attention + SwiGLU, no dropout, truncated LeCun init.
+    # "legacy" = the pre-2026-09 LayerNorm/GELU/dropout block; checkpoints
+    # saved before this field existed load as legacy (upgrade_config_dict).
+    trm_arch: str = "trm"
+    trm_expansion: float = 4.0
+    trm_rms_eps: float = 1e-5
 
     # Temporal modelling ("spatiotemporal" is the only supported value; the
     # field is kept so old checkpoints' configs load unchanged)
@@ -91,3 +105,29 @@ class ModelConfig:
     hl_gauss_vmax: float = 1.5
     hl_gauss_sigma: float = 0.06
 
+
+
+#: values a checkpoint config written before a field existed must get so the
+#: rebuilt network matches the saved weights (current defaults differ).
+LEGACY_CONFIG_DEFAULTS = {
+    "trm_arch": "legacy",
+    "halt_exploration_prob": 0.0,
+}
+
+
+def upgrade_config_dict(d: dict) -> dict:
+    """Checkpoint config dict → kwargs for the current config class: fields
+    missing from an old checkpoint take their LEGACY value, not the new
+    default (e.g. the TRM block layout)."""
+    out = dict(d)
+    for k, v in LEGACY_CONFIG_DEFAULTS.items():
+        out.setdefault(k, v)
+    return out
+
+
+def config_from_dict(d: dict, cls=None):
+    """Build ``cls`` (default ModelConfig) from a checkpoint config dict,
+    dropping unknown keys and applying :func:`upgrade_config_dict`."""
+    cls = cls or ModelConfig
+    d = upgrade_config_dict(d)
+    return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})

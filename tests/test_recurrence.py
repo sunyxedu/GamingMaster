@@ -417,7 +417,10 @@ def test_grad_accumulation_matches_large_batch():
     print("\n=== gradient accumulation == large batch ===")
     torch.manual_seed(12)
     model, _ = _small_recurrent_net()
-    model.train()
+    # eval(): train-mode BatchNorm in the spatial encoder couples the
+    # samples of a batch, so split vs concatenated batches differ by
+    # construction; this test checks the LOSS SCALING only.
+    model.eval()
 
     B, T = 2, 3
     grids = [torch.rand(B, T, 12, 25, 25) for _ in range(2)]

@@ -20,7 +20,7 @@ import torch
 from torch.utils.data import ConcatDataset, DataLoader
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
-from model.config import ModelConfig
+from model.config import ModelConfig, config_from_dict
 from model.losses import ImitationLoss, next_obs_loss
 from model.network import GeneralsNetwork
 from model.rl_utils import load_model_state
@@ -123,8 +123,7 @@ def main():
     results = []
     for path in args.checkpoints:
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
-        cfg = ModelConfig(**{k: v for k, v in ckpt["config"].items()
-                             if k in ModelConfig.__dataclass_fields__})
+        cfg = config_from_dict(ckpt["config"])
         if model is None or cfg != prev_cfg:
             model = GeneralsNetwork(cfg).to(device)
             criterion = ImitationLoss(grid_w=cfg.grid_w, focal_gamma=args.focal_gamma)

@@ -14,12 +14,21 @@ scratchpad"; z_H is the high-level "answer" state.  Nested loops:
 
 Only the last H_cycle propagates gradients (the rest are detached for
 memory efficiency, following the paper).
+
+Block layout (``cfg.trm_arch``): "trm" reproduces the reference block
+(models/recursive_reasoning/trm.py + models/layers.py): post-norm
+RMSNorm without weight, bias-free attention and SwiGLU, no dropout,
+truncated LeCun-normal init.  "legacy" is the earlier LayerNorm / GELU /
+dropout block, kept so existing checkpoints load unchanged.
 """
+
+import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
+
 from model.config import ModelConfig
 
 
@@ -72,6 +81,97 @@ class TRMBlock(nn.Module):
         return x
 
 
+def trunc_normal_init_(tensor: torch.Tensor, std: float = 1.0,
+                       lower: float = -2.0, upper: float = 2.0) -> torch.Tensor:
+    """JAX-style truncated normal whose std really is ``std`` (reference
+    models/common.py; torch's trunc_normal_ under-shoots the std)."""
+    with torch.no_grad():
+        if std == 0:
+            return tensor.zero_()
+        sqrt2 = math.sqrt(2)
+        a = math.erf(lower / sqrt2)
+        b = math.erf(upper / sqrt2)
+        z = (b - a) / 2
+        c = (2 * math.pi) ** -0.5
+        pdf_u = c * math.exp(-0.5 * lower ** 2)
+        pdf_l = c * math.exp(-0.5 * upper ** 2)
+        comp_std = std / math.sqrt(
+            1 - (upper * pdf_u - lower * pdf_l) / z - ((pdf_u - pdf_l) / z) ** 2)
+        tensor.uniform_(a, b)
+        tensor.erfinv_()
+        tensor.mul_(sqrt2 * comp_std)
+        tensor.clip_(lower * comp_std, upper * comp_std)
+    return tensor
+
+
+def rms_norm(x: torch.Tensor, eps: float) -> torch.Tensor:
+    """Weightless RMSNorm computed in fp32 (reference models/layers.py)."""
+    dtype = x.dtype
+    x = x.float()
+    x = x * torch.rsqrt(x.square().mean(-1, keepdim=True) + eps)
+    return x.to(dtype)
+
+
+class TRMLinear(nn.Module):
+    """Linear layer with truncated LeCun-normal init (reference CastedLinear).
+
+    Deliberately NOT an ``nn.Linear`` subclass so the network-wide
+    ``_init_weights`` pass (std 0.02) leaves it alone."""
+
+    def __init__(self, in_features: int, out_features: int, bias: bool = False):
+        super().__init__()
+        self.weight = nn.Parameter(trunc_normal_init_(
+            torch.empty(out_features, in_features), std=in_features ** -0.5))
+        self.bias = nn.Parameter(torch.zeros(out_features)) if bias else None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.linear(x, self.weight.to(x.dtype),
+                        None if self.bias is None else self.bias.to(x.dtype))
+
+
+def _find_multiple(a: int, b: int) -> int:
+    return (-(a // -b)) * b
+
+
+class SwiGLU(nn.Module):
+    def __init__(self, hidden: int, expansion: float):
+        super().__init__()
+        inter = _find_multiple(round(expansion * hidden * 2 / 3), 256)
+        self.gate_up_proj = TRMLinear(hidden, inter * 2)
+        self.down_proj = TRMLinear(inter, hidden)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
+        return self.down_proj(F.silu(gate) * up)
+
+
+class ReferenceTRMBlock(nn.Module):
+    """Reference TRM block: x = rms(x + attn(x)); x = rms(x + swiglu(x)).
+
+    Non-causal multi-head attention without biases.  Positions are already
+    in the input (the network adds learned PEs before Stage 1), matching
+    the reference's ``pos_encodings: learned`` mode."""
+
+    def __init__(self, cfg: ModelConfig):
+        super().__init__()
+        d = cfg.d_model
+        self.n_heads = cfg.n_heads
+        self.head_dim = d // cfg.n_heads
+        self.eps = cfg.trm_rms_eps
+        self.qkv_proj = TRMLinear(d, 3 * d)
+        self.o_proj = TRMLinear(d, d)
+        self.mlp = SwiGLU(d, cfg.trm_expansion)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, S, d = x.shape
+        qkv = self.qkv_proj(x).view(B, S, 3, self.n_heads, self.head_dim)
+        q, k, v = qkv.permute(2, 0, 3, 1, 4).unbind(0)
+        a = F.scaled_dot_product_attention(q, k, v)
+        a = self.o_proj(a.permute(0, 2, 1, 3).reshape(B, S, d))
+        x = rms_norm(x + a, self.eps)
+        return rms_norm(x + self.mlp(x), self.eps)
+
+
 class TRMReasoningModule(nn.Module):
     """
     Shared reasoning module: additive input injection → TransformerBlock × N.
@@ -81,8 +181,12 @@ class TRMReasoningModule(nn.Module):
 
     def __init__(self, cfg: ModelConfig):
         super().__init__()
+        arch = getattr(cfg, "trm_arch", "trm")
+        if arch not in ("trm", "legacy"):
+            raise ValueError(f"unknown trm_arch {arch!r} (expected 'trm' or 'legacy')")
+        block = ReferenceTRMBlock if arch == "trm" else TRMBlock
         self.layers = nn.ModuleList(
-            [TRMBlock(cfg) for _ in range(cfg.trm_block_layers)]
+            [block(cfg) for _ in range(cfg.trm_block_layers)]
         )
 
     def forward(
@@ -111,9 +215,14 @@ class TRM(nn.Module):
         # Shared reasoning module (used for both z_L and z_H updates)
         self.reasoning = TRMReasoningModule(cfg)
 
-        # Fixed initial states (not trainable, following the paper)
-        self.register_buffer("H_init", torch.randn(cfg.d_model))
-        self.register_buffer("L_init", torch.randn(cfg.d_model))
+        # Fixed initial states (not trainable, following the paper;
+        # reference: trunc_normal std 1)
+        if getattr(cfg, "trm_arch", "trm") == "trm":
+            self.register_buffer("H_init", trunc_normal_init_(torch.empty(cfg.d_model)))
+            self.register_buffer("L_init", trunc_normal_init_(torch.empty(cfg.d_model)))
+        else:
+            self.register_buffer("H_init", torch.randn(cfg.d_model))
+            self.register_buffer("L_init", torch.randn(cfg.d_model))
 
         # Q-halt head: predicts whether the current answer is good enough
         self.q_head = nn.Linear(cfg.d_model, 1, bias=True)
@@ -124,6 +233,14 @@ class TRM(nn.Module):
         # the network's token layout).  Falls back to token 0 when the
         # sequence is shorter (e.g. unit tests running TRM standalone).
         self.q_token_idx = cfg.grid_h * cfg.grid_w
+
+    def initial_carry(self, B: int, S: int, like: torch.Tensor
+                      ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Fresh (z_H, z_L) = (H_init, L_init) broadcast to [B, S, d]."""
+        d = self.cfg.d_model
+        z_H = self.H_init.to(like.dtype).expand(B, S, d)
+        z_L = self.L_init.to(like.dtype).expand(B, S, d)
+        return z_H, z_L
 
     def _reasoning_with_injection(
         self,

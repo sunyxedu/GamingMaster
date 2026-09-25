@@ -19,7 +19,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from model.config import ModelConfig
+from model.config import ModelConfig, config_from_dict
 from model.network import GeneralsNetwork
 
 DIR_NAMES = ["down", "right", "up", "left"]
@@ -37,7 +37,7 @@ def load_model(checkpoint_path, device):
 
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     cfg_dict = ckpt["config"]
-    cfg = ModelConfig(**{k: v for k, v in cfg_dict.items() if k in ModelConfig.__dataclass_fields__})
+    cfg = config_from_dict(cfg_dict)
     model = GeneralsNetwork(cfg)
     state_key = "model_state" if "model_state" in ckpt else "model_state_dict"
     load_model_state(model, ckpt[state_key], ctx=checkpoint_path)
@@ -512,7 +512,8 @@ def main():
     p.add_argument("--max_steps", type=int, default=None)
     p.add_argument("--device", type=str, default="cpu")
     p.add_argument("--act_steps", type=int, default=None,
-                   help="Fixed TRM ACT depth (match train_rl --act_steps for RL checkpoints)")
+                   help="Fixed TRM depth (match train_rl --act_steps for RL checkpoints; "
+                        "default = full depth cfg.halt_max_steps)")
     p.add_argument("--show_grid", action="store_true", help="Show ASCII grid at each step")
     p.add_argument("--only_moves", action="store_true", help="Only show steps with actual moves")
     p.add_argument("--html", type=str, default=None, help="Output HTML visualization to this path")

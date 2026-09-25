@@ -124,16 +124,33 @@ class GameNetwork(nn.Module):
         )
 
     def _trm_ponder(
-        self, x: torch.Tensor, act_steps: Optional[int],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Run ``act_steps`` ACT steps of the TRM with detached carry.
+        self,
+        x: torch.Tensor,
+        act_steps: Optional[int],
+        carry: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        rows: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """Run ``act_steps`` TRM supervision steps starting from ``carry``.
 
         The first ``act_steps - 1`` steps run without gradient; only the
-        final step is differentiated (deep-supervision one-step gradient,
-        matching the TRM recursion itself).  ``act_steps=None`` → 1 step.
+        last is differentiated (the reference's per-step gradient: every
+        supervision step backpropagates through one full recursion, the
+        carry entering it is detached).  ``act_steps=None`` → 1 step.
+
+        ``rows`` (LongTensor of flat frame indices) restricts the TRM to
+        the frames still being supervised; the other rows keep their
+        carried state (their answer is frozen, as when the reference
+        swaps a halted example out of the batch).
+
+        Returns (z_H [BT, S, d], q_halt [BT], new_carry (z_H, z_L) detached).
         """
         steps = max(1, act_steps or 1)
-        carry = None
+        full_carry = None
+        if rows is not None:
+            BT, S, _ = x.shape
+            full_carry = carry if carry is not None else self.trm.initial_carry(BT, S, x)
+            x = x[rows]
+            carry = (full_carry[0][rows], full_carry[1][rows])
         if steps > 1:
             with torch.no_grad():
                 for _ in range(steps - 1):
@@ -147,60 +164,39 @@ class GameNetwork(nn.Module):
             # recompute and are immune). Drop the poisoned entries so the
             # final step re-casts with autograd tracking.
             torch.clear_autocast_cache()
-        z_H, q_halt, _ = self.trm(x, carry)
-        return z_H, q_halt
+        z_H, q_halt, new_carry = self.trm(x, carry)
+        if full_carry is None:
+            return z_H, q_halt, new_carry
+        BT = full_carry[0].shape[0]
+        z_full = full_carry[0].to(z_H.dtype).index_copy(0, rows, z_H)
+        q_full = q_halt.new_zeros(BT).index_copy(0, rows, q_halt)
+        carry_full = (
+            full_carry[0].to(new_carry[0].dtype).index_copy(0, rows, new_carry[0]),
+            full_carry[1].to(new_carry[1].dtype).index_copy(0, rows, new_carry[1]),
+        )
+        return z_full, q_full, carry_full
 
     def _trm_act_loop(
         self,
         x: torch.Tensor,
         act_steps: Optional[int],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Inference-time ACT.
+        """Inference: a FIXED number of TRM supervision steps.
 
-        Fixed depth when ``act_steps`` is given (needed for exact policy
-        replay in RL). ``act_steps=None`` → ADAPTIVE per-row halting: each
-        batch row ponders until its own q_halt turns positive (or
-        cfg.halt_max_steps), halted rows leave the batch so late steps
-        only pay for the rows still thinking.
+        ``act_steps=None`` → ``cfg.halt_max_steps``: the reference runs all
+        N_sup steps at test time (q_halt only shortens training).  A fixed
+        depth is also what makes RL rollouts exactly replayable.
 
-        Returns (z_H, q_halt, act_depth[B]) — realized pondering depths.
+        Returns (z_H, q_halt, act_depth[B]).
         """
+        steps = max(1, act_steps if act_steps is not None
+                    else self.cfg.halt_max_steps)
         z_H, q_halt, carry = self.trm(x)
-        if act_steps is not None:
-            steps = max(1, act_steps)
-            for _ in range(steps - 1):
-                z_H, q_halt, carry = self.trm(x, carry)
-            depth = torch.full((x.shape[0],), steps, dtype=torch.long,
-                               device=x.device)
-            return z_H, q_halt, depth
-
-        max_steps = max(1, self.cfg.halt_max_steps)
-        B = x.shape[0]
-        final_z = z_H.clone()
-        final_q = q_halt.clone()
-        depth = torch.full((B,), max_steps, dtype=torch.long,
+        for _ in range(steps - 1):
+            z_H, q_halt, carry = self.trm(x, carry)
+        depth = torch.full((x.shape[0],), steps, dtype=torch.long,
                            device=x.device)
-        alive = torch.arange(B, device=x.device)
-        cur_x, cur_z, cur_q, cur_carry = x, z_H, q_halt, carry
-        for step_i in range(1, max_steps):
-            halted = cur_q > 0
-            if halted.any():
-                rows = alive[halted]
-                final_z[rows] = cur_z[halted]
-                final_q[rows] = cur_q[halted]
-                depth[rows] = step_i
-                keep = ~halted
-                if not keep.any():
-                    alive = alive[:0]
-                    break
-                alive = alive[keep]
-                cur_x = cur_x[keep]
-                cur_carry = (cur_carry[0][keep], cur_carry[1][keep])
-            cur_z, cur_q, cur_carry = self.trm(cur_x, cur_carry)
-        if alive.numel():
-            final_z[alive] = cur_z
-            final_q[alive] = cur_q
-        return final_z, final_q, depth
+        return z_H, q_halt, depth
 
     # ------------------------------------------------------------------
     # Full-sequence forward (training)
@@ -213,7 +209,18 @@ class GameNetwork(nn.Module):
         labels: Optional[Dict[str, torch.Tensor]] = None,
         act_steps: Optional[int] = None,
         frame_mask: Optional[torch.Tensor] = None,
+        carry: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        active: Optional[torch.Tensor] = None,
+        return_carry: bool = False,
     ) -> Dict[str, torch.Tensor]:
+        """Full-sequence forward.
+
+        ``carry`` / ``active`` / ``return_carry`` drive deep supervision
+        (training.deep_supervision): ``carry`` is the detached (z_H, z_L)
+        from the previous supervision step of the SAME batch, ``active``
+        [B, T] bool selects the frames that have not halted yet, and
+        ``out["carry"]`` returns the new detached latents.
+        """
         cfg = self.cfg
         d = cfg.d_model
 
@@ -249,7 +256,9 @@ class GameNetwork(nn.Module):
         # ── Stage 2: TRM pondering ──
         S = tokens.shape[2]
         x = tokens.reshape(BT, S, d)                  # input embeddings for TRM
-        z_H, q_halt = self._trm_ponder(x, act_steps)  # [BT, S, d], [BT]
+        rows = (active.reshape(BT).nonzero().squeeze(1)
+                if active is not None else None)
+        z_H, q_halt, new_carry = self._trm_ponder(x, act_steps, carry, rows)
         z_H = self.post_norm(z_H)
 
         # ── Decode ──
@@ -270,6 +279,8 @@ class GameNetwork(nn.Module):
         else:
             out["value"] = self.value_head(hl_out).reshape(B, T)
         out["q_halt"] = q_halt.reshape(B, T)
+        if return_carry:
+            out["carry"] = new_carry
 
         # Self-supervised next-observation prediction from belief tokens
         if cfg.predict_next_obs:

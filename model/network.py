@@ -200,6 +200,9 @@ class GeneralsNetwork(GameNetwork):
         act_steps: Optional[int] = None,
         frame_mask: Optional[torch.Tensor] = None,
         direction_mask: Optional[torch.Tensor] = None,
+        carry: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        active: Optional[torch.Tensor] = None,
+        return_carry: bool = False,
     ) -> Dict[str, torch.Tensor]:
         obs, legal, labels = self._pack(
             grid_seq, globals_seq, legal_mask, source_y, source_x,
@@ -208,6 +211,7 @@ class GeneralsNetwork(GameNetwork):
         return super().forward(
             obs, legal=legal, labels=labels,
             act_steps=act_steps, frame_mask=frame_mask,
+            carry=carry, active=active, return_carry=return_carry,
         )
 
     # ------------------------------------------------------------------

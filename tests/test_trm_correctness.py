@@ -43,34 +43,27 @@ def _obs(cfg, b):
             torch.ones(b, 4, 25, 25, dtype=torch.bool))
 
 
-def test_adaptive_row_matches_fixed_depth():
+def test_none_depth_equals_fixed_full_depth():
+    """act_steps=None is the fixed full depth (cfg.halt_max_steps), per row
+    and batched alike — no data-dependent early exit at inference."""
     net, cfg = _make(halt_max=4)
-    # input-dependent halting so rows diverge and the batch shrinks.
-    # A random q_head gives large positive low-variance logits — measure
-    # the depth-1 spread and bias to its median so the batch splits.
     torch.manual_seed(11)
     torch.nn.init.normal_(net.trm.q_head.weight, std=1.5)
     torch.nn.init.zeros_(net.trm.q_head.bias)
     b = 6
     grid, glb, lm, dm = _obs(cfg, b)
     with torch.no_grad():
-        q1 = net.step(grid, glb, legal_mask=lm, direction_mask=dm,
-                      act_steps=1)["q_halt"]
-    torch.nn.init.constant_(net.trm.q_head.bias, -float(q1.median()))
-    with torch.no_grad():
         out = net.step(grid, glb, legal_mask=lm, direction_mask=dm,
                        act_steps=None)
-    depths = out["act_depth"].tolist()
-    assert len(set(depths)) > 1, "need divergent depths to test shrinking"
+    assert out["act_depth"].tolist() == [4] * b
     for r in range(b):
         with torch.no_grad():
             ref = net.step(grid[r:r + 1], glb[r:r + 1],
                            legal_mask=lm[r:r + 1],
                            direction_mask=dm[r:r + 1],
-                           act_steps=depths[r])
+                           act_steps=4)
         assert torch.allclose(out["source_logits"][r],
-                              ref["source_logits"][0], atol=1e-4), (
-            f"row {r} (depth {depths[r]}): adaptive != fixed")
+                              ref["source_logits"][0], atol=1e-4)
         assert torch.allclose(out["value"][r], ref["value"][0], atol=1e-4)
 
 

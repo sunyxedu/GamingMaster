@@ -55,8 +55,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--value_coef", type=float, default=0.5)
     p.add_argument("--entropy_coef", type=float, default=0.01)
     p.add_argument("--clip_grad", type=float, default=1.0)
-    p.add_argument("--act_steps", type=int, default=1,
-                   help="fixed TRM ACT depth for rollout AND update")
+    p.add_argument("--act_steps", type=int, default=0,
+                   help="fixed TRM depth for rollout AND update "
+                        "(0 = the model's full depth cfg.halt_max_steps)")
     p.add_argument("--freeze_encoder", action="store_true")
     p.add_argument("--save_dir", default="checkpoints/rl_game")
     p.add_argument("--save_interval", type=int, default=25)
@@ -286,6 +287,8 @@ def main() -> None:
     net.load_state_dict(ckpt["model_state"], strict=True)
     net = net.to(device)
     cfg = net.cfg
+    if args.act_steps <= 0:
+        args.act_steps = max(1, cfg.halt_max_steps)
     board_size = args.board_size or cfg.board_h
     if (cfg.board_h, cfg.board_w) != (board_size, board_size):
         raise ValueError(

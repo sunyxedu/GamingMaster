@@ -322,13 +322,18 @@ def test_parameter_registration_order_is_pinned():
     checkpoints saved before the change (see is_legacy_state_dict for
     the rename-based precedent).
     """
-    net = small_net(seed=0)
-    names = [n for n, _ in net.named_parameters()]
-    digest = hashlib.sha256("\n".join(names).encode()).hexdigest()[:16]
-    assert digest == "1949922d1663c575", (
-        f"parameter registration order changed (digest {digest}); "
-        f"optimizer states in existing checkpoints are now misaligned"
-    )
+    # legacy TRM block = every checkpoint saved before trm_arch existed;
+    # "trm" = the reference block (new runs)
+    for arch, pinned in (("legacy", "1949922d1663c575"),
+                         ("trm", "f5255664c631a880")):
+        net = small_net(seed=0, trm_arch=arch)
+        names = [n for n, _ in net.named_parameters()]
+        digest = hashlib.sha256("\n".join(names).encode()).hexdigest()[:16]
+        assert digest == pinned, (
+            f"parameter registration order changed for trm_arch={arch} "
+            f"(digest {digest}); optimizer states in existing checkpoints "
+            f"are now misaligned"
+        )
 
 
 # ======================================================================

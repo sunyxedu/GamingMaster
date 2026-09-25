@@ -36,7 +36,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
 from env.generals_env import GeneralsEnv
-from model.config import ModelConfig
+from model.config import ModelConfig, config_from_dict
 from model.losses import ImitationLoss, RLLoss
 from model.magnet import expander_magnet_heads
 from model.network import GeneralsNetwork
@@ -85,9 +85,12 @@ def parse_args():
     p.add_argument("--clip_range", type=float, default=0.2)
     p.add_argument("--gamma", type=float, default=0.999)
     p.add_argument("--gae_lambda", type=float, default=0.95)
-    p.add_argument("--act_steps", type=int, default=1,
-                   help="Fixed TRM ACT depth used for BOTH rollout and PPO update "
-                        "(the two must match for the PPO ratio to be valid)")
+    p.add_argument("--act_steps", type=int, default=0,
+                   help="Fixed TRM depth used for BOTH rollout and PPO update "
+                        "(the two must match for the PPO ratio to be valid). "
+                        "0 = the model's full depth cfg.halt_max_steps — the "
+                        "reference TRM always runs every supervision step at "
+                        "test time")
     p.add_argument("--act_steps_dist", type=str, default="",
                    help="Depth-randomized rollout (TRM deep-supervision "
                         "analog): 'depth:prob,...' e.g. "
@@ -491,6 +494,15 @@ class CaptureHead(torch.nn.Module):
 # Self-play rollout collection
 # ======================================================================
 
+def full_depth(net: torch.nn.Module) -> int:
+    """The network's full TRM depth (cfg.halt_max_steps) — what a depth of
+    ``None`` means: the reference runs every supervision step at test time."""
+    cfg = getattr(net, "cfg", None)
+    if cfg is None:
+        cfg = getattr(getattr(net, "net", None), "cfg", None)
+    return int(getattr(cfg, "halt_max_steps", 1))
+
+
 def collect_selfplay_episode(
     model: GeneralsNetwork,
     opponent: GeneralsNetwork,
@@ -559,19 +571,15 @@ def collect_selfplay_episode(
 
     # act_steps may be a single depth for both seats, or {pid: depth} to
     # pit different TRM pondering depths against each other (depth
-    # probes). A depth of None = ADAPTIVE per-position halting (q_halt
-    # gated) — inference only: realized depths are data-dependent, so
-    # PPO cannot replay them yet.
-    act_by_pid = (act_steps if isinstance(act_steps, dict)
+    # probes). A depth of None = the net's full depth (halt_max_steps),
+    # resolved here so every stored buffer replays at a fixed depth.
+    act_by_pid = (dict(act_steps) if isinstance(act_steps, dict)
                   else {0: act_steps, 1: act_steps})
-    adaptive = any(v is None for v in act_by_pid.values())
-    if adaptive and collect_buffers:
-        raise ValueError(
-            "adaptive act_steps (None) cannot be replayed by the PPO "
-            "update — use collect_buffers=False (probes/eval only)")
-    if adaptive:
-        reward_totals.update({"d0_sum": 0.0, "d0_n": 0.0,
-                              "d1_sum": 0.0, "d1_n": 0.0})
+    for pid in (0, 1):
+        if act_by_pid[pid] is None:
+            act_by_pid[pid] = full_depth(nets[pid])
+    for pid, buf in buffers.items():
+        buf.act_steps = act_by_pid[pid]
 
     for _step in range(max_steps):
         step_out = {}
@@ -597,11 +605,6 @@ def collect_selfplay_episode(
 
             caches[pid] = out.get("st_cache")
             step_out[pid] = out
-            if adaptive and "act_depth" in out:
-                reward_totals[f"d{pid}_sum"] += float(
-                    out["act_depth"].float().sum())
-                reward_totals[f"d{pid}_n"] += float(
-                    out["act_depth"].numel())
 
         # Build env actions. With masking, a player with NO legal source
         # (e.g. turn 0, all armies == 1) sampled through the all-masked
@@ -761,10 +764,7 @@ def collect_selfplay_episodes_vec(
     if len(depths) != n:
         raise ValueError(f"act_steps list has {len(depths)} entries "
                          f"for {n} envs")
-    if any(d is None for d in depths):
-        raise ValueError("adaptive depth (None) is not supported in the "
-                         "vectorized training collector — sampled fixed "
-                         "depths only")
+    depths = [full_depth(model) if d is None else d for d in depths]
     for i in range(n):
         for pid in (0, 1):
             buffers[i][pid].act_steps = depths[i]
@@ -1010,8 +1010,7 @@ def load_sparring_net(path: str, device: torch.device,
     setting per run), hence the explicit check instead of a silent slice.
     """
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    sp_cfg = ModelConfig(**{k: v for k, v in ckpt["config"].items()
-                            if k in ModelConfig.__dataclass_fields__})
+    sp_cfg = config_from_dict(ckpt["config"])
     if sp_cfg.global_features != expected_globals:
         raise ValueError(
             f"sparring checkpoint expects {sp_cfg.global_features} globals "
@@ -1520,13 +1519,12 @@ def main():
 
     il_ckpt = None
     if rl_ckpt is not None and "config" in rl_ckpt:
-        cfg = ModelConfig(**{k: v for k, v in rl_ckpt["config"].items()
-                             if k in ModelConfig.__dataclass_fields__})
+        cfg = config_from_dict(rl_ckpt["config"])
         src_msg = f"Architecture from resume checkpoint {args.resume}"
     elif args.il_checkpoint:
         il_ckpt = torch.load(args.il_checkpoint, map_location=device,
                              weights_only=False)
-        cfg = ModelConfig(**il_ckpt["config"])
+        cfg = config_from_dict(il_ckpt["config"])
         src_msg = f"Loaded IL checkpoint from {args.il_checkpoint}"
     else:
         cfg = ModelConfig(
@@ -1564,6 +1562,8 @@ def main():
         hl_gauss_migrated = True
     value_reinit = ("value_head",) if hl_gauss_migrated else ()
 
+    if args.act_steps <= 0:
+        args.act_steps = max(1, cfg.halt_max_steps)
     model = GeneralsNetwork(cfg).to(device)
     if il_ckpt is not None:
         load_model_state(model, il_ckpt["model_state"], ctx="IL checkpoint",
@@ -1800,7 +1800,11 @@ def main():
     # AlphaStar-style auxiliary regularization targets the POLICY heads only:
     # the replay-outcome value labels live on a different scale and state
     # distribution than the PPO returns and would fight the critic every step.
-    il_criterion = ImitationLoss(grid_w=cfg.grid_w, value_weight=0.0)
+    # q_halt_weight pinned to the pre-deep-supervision 0.2 so the running
+    # RL lineages keep their exact objective (the IL default is now the
+    # reference 0.5).
+    il_criterion = ImitationLoss(grid_w=cfg.grid_w, value_weight=0.0,
+                                 q_halt_weight=0.2)
 
     # ---- Optimiser -----------------------------------------------------
     # optim_param_groups keeps weight decay off the recurrence memory

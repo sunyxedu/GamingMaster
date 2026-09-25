@@ -39,7 +39,7 @@ import torch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from env.generals_env import GeneralsEnv                     # noqa: E402
-from model.config import ModelConfig                         # noqa: E402
+from model.config import config_from_dict                    # noqa: E402
 from model.network import GeneralsNetwork                    # noqa: E402
 from model.rl_utils import load_model_state                  # noqa: E402
 from training.train_rl import collect_selfplay_episode                # noqa: E402
@@ -59,7 +59,10 @@ def parse_args():
     p.add_argument("--play_refs", action="store_true",
                    help="Also play missing ref-vs-ref pairings (round robin)")
     p.add_argument("--rollout_steps", type=int, default=2048)
-    p.add_argument("--act_steps", type=int, default=1)
+    p.add_argument("--act_steps", type=int, default=0,
+                   help="fixed TRM depth for both nets (0 = each net's full "
+                        "depth cfg.halt_max_steps; RL lineages trained at a "
+                        "fixed depth should pass that depth)")
     p.add_argument("--seed_base", type=int, default=77_000_000)
     p.add_argument("--device", type=str, default="auto")
     p.add_argument("--replay_dir", type=str, default=None)
@@ -135,8 +138,7 @@ class WidthAdapter:
 
 def load_net(path, device):
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    cfg = ModelConfig(**{k: v for k, v in ckpt["config"].items()
-                         if k in ModelConfig.__dataclass_fields__})
+    cfg = config_from_dict(ckpt["config"])
     net = GeneralsNetwork(cfg).to(device)
     state_key = "model_state" if "model_state" in ckpt else "model_state_dict"
     load_model_state(net, ckpt[state_key], ctx=path)
@@ -237,7 +239,7 @@ def main():
         seed_base = args.seed_base + pair_id * 10_000
         wa, wb, dr = play_pairing(net_a, net_b, env, device, args.games,
                                   seed_base, args.rollout_steps,
-                                  args.act_steps)
+                                  args.act_steps or None)
         rec = {"a": a, "b": b, "wins_a": wa, "wins_b": wb, "draws": dr}
         records.append(rec)
         print(f"{a} vs {b}: {wa}-{wb}-{dr}")

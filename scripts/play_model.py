@@ -27,7 +27,7 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data_processing.processing.simulator import ReplaySimulator
-from model.config import ModelConfig
+from model.config import ModelConfig, config_from_dict
 from model.network import GeneralsNetwork
 from model.rl_utils import load_model_state
 
@@ -43,7 +43,7 @@ DIR_DC = [0, 1, 0, -1]
 def load_model(checkpoint_path, device):
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     cfg_dict = ckpt["config"]
-    cfg = ModelConfig(**{k: v for k, v in cfg_dict.items() if k in ModelConfig.__dataclass_fields__})
+    cfg = config_from_dict(cfg_dict)
     model = GeneralsNetwork(cfg)
     state_key = "model_state" if "model_state" in ckpt else "model_state_dict"
     load_model_state(model, ckpt[state_key], ctx=checkpoint_path)
@@ -666,7 +666,8 @@ def main():
     p.add_argument("--act_steps", type=int, default=None,
                    help="Fixed TRM ACT depth. RL checkpoints are trained at a fixed depth "
                         "(train_rl --act_steps) and should be deployed at the same one; "
-                        "default None uses the q_halt-gated loop (IL checkpoints)")
+                        "default None runs the full depth cfg.halt_max_steps (IL checkpoints, "
+                        "as the reference TRM evaluates)")
     p.add_argument("--mask", action="store_true", default=False,
                    help="Enable legal masking for source and direction during inference")
     args = p.parse_args()
