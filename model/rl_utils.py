@@ -462,8 +462,27 @@ def _grad_buckets(grads: List[torch.Tensor], cap_bytes: int) -> List[List[torch.
 # Optimizer parameter groups
 # ======================================================================
 
+def qk_norm_param_ids(model: nn.Module) -> set:
+    """ids of the QK-norm scales (``cfg.qk_norm``) in ``model``.
+
+    They are the attention temperature: every logit is bounded by
+    √head_dim·max|g_q|·max|g_k|, and nothing downstream can compensate a
+    shrunken scale (a pre-norm scale is absorbed by the following linear
+    layer; these sit right before the dot product).  Decoupled weight decay
+    therefore pulls attention toward uniform whenever the gradient signal
+    is weak — at a high LR the attention collapsed that way instead of
+    training.  They stay out of weight decay; qk_norm=False models have none,
+    so their parameter groups are unchanged.
+    """
+    from model.components.core import QKNorm
+
+    return {id(p) for m in model.modules() if isinstance(m, QKNorm)
+            for p in m.parameters()}
+
+
 def optim_param_groups(model: nn.Module, weight_decay: float) -> List[Dict]:
-    """Parameter groups excluding recurrence memory parameters from decay.
+    """Parameter groups excluding recurrence memory parameters (and the
+    QK-norm scales, see :func:`qk_norm_param_ids`) from decay.
 
     AdamW's decoupled decay shrinks ``retention_bias`` toward 0 every step
     (a → 0.5), and the shrinkage hits the longest-memory channels hardest
@@ -472,11 +491,13 @@ def optim_param_groups(model: nn.Module, weight_decay: float) -> List[Dict]:
     slowest channel from 1024 to ~370 ticks over ~1.5M steps. ``h_init``
     is likewise decayed against a weak one-sample-per-sequence gradient.
     """
+    qk = qk_norm_param_ids(model)
     no_decay, decay = [], []
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        if name.endswith("retention_bias") or name.endswith("temporal_rnn.h_init"):
+        if (name.endswith("retention_bias") or name.endswith("temporal_rnn.h_init")
+                or id(p) in qk):
             no_decay.append(p)
         else:
             decay.append(p)
@@ -550,7 +571,8 @@ def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint"
     Fails loudly if any model parameter is missing from the checkpoint —
     a silent partial load (strict=False with ignored return value) leaves
     whole modules randomly initialized while training continues.
-    Unused checkpoint keys only warn (e.g. optional world-model weights).
+    Unused checkpoint keys only warn (e.g. optional world-model weights),
+    except QK-norm scales (``cfg.qk_norm`` mismatch), which are fatal.
 
     ``reinit_prefixes`` opts specific submodules out of the strict check:
     matching checkpoint keys are dropped and the model's fresh init is kept.
@@ -613,6 +635,16 @@ def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint"
         raise RuntimeError(
             f"{ctx}: {len(missing)} model keys missing from checkpoint "
             f"(would stay randomly initialized), e.g. {missing[:8]}"
+        )
+    # QK-norm scales are not optional weights: dropping them runs a
+    # qk_norm=True checkpoint as a different function (e.g. a KL reference
+    # deep-copied from a qk_norm=False learner).
+    qk_unused = [k for k in unexpected if "qk_norm." in k]
+    if qk_unused:
+        raise RuntimeError(
+            f"{ctx}: the checkpoint has QK-norm scales but the model was built "
+            f"with qk_norm=False ({len(qk_unused)} keys, e.g. {qk_unused[:4]}); "
+            f"build it from the checkpoint's own config"
         )
     if unexpected:
         print(f"  [warn] {ctx}: {len(unexpected)} unused checkpoint keys, "

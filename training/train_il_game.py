@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
 import os
 import random
 import re
@@ -53,6 +54,7 @@ from model.optim import (
 )
 from model.rl_utils import load_model_state, optim_param_groups
 from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry, split_rows
+from training.diagnostics import attention_probe, format_attention, logit_lse_absmax, qk_caps
 
 # Teacher-forcing conditioning labels per game: the tgt keys the decoder
 # reads from ``labels`` in decode() (−1 → sample from its own policy).
@@ -175,6 +177,11 @@ def parse_overrides(pairs) -> Dict:
         key, _, raw = pair.partition("=")
         if not _:
             raise ValueError(f"--override expects KEY=VALUE, got {pair!r}")
+        if raw.lower() in ("true", "false"):
+            # any spelling: the string 'false' would be truthy (qk_norm=false
+            # silently building QK-norm)
+            out[key] = raw.lower() == "true"
+            continue
         try:
             out[key] = ast.literal_eval(raw)
         except (ValueError, SyntaxError):
@@ -425,19 +432,27 @@ def batch_loss(
 
 
 def evaluate(net, game, loader, device, value_weight, q_halt_weight, bf16,
-             ema: Optional[ModelEMA] = None) -> Dict[str, float]:
+             ema: Optional[ModelEMA] = None,
+             diag: Optional[List[str]] = None) -> Dict[str, float]:
     """Validation at full depth (all halt_max_steps supervision steps, as
-    the reference evaluates), on the EMA weights when enabled."""
+    the reference evaluates), on the EMA weights when enabled.  With
+    ``diag`` (a list) the first batch also runs under
+    training.diagnostics.attention_probe and its line is appended."""
     model = ema.ema_copy(net) if ema is not None else net
     model.eval()
     agg: Dict[str, float] = {}
     n = 0
     with torch.no_grad():
-        for batch in loader:
+        for i, batch in enumerate(loader):
             mb = prepare_batch(game, batch, device, tf_prob=1.0)
-            _, stats, _ = batch_loss(model, mb, device, value_weight,
-                                     q_halt_weight, bf16,
-                                     act_steps=model.default_depth)
+            probe = (attention_probe(model) if diag is not None and i == 0
+                     else contextlib.nullcontext())
+            with probe as attn:
+                _, stats, pred = batch_loss(model, mb, device, value_weight,
+                                            q_halt_weight, bf16,
+                                            act_steps=model.default_depth)
+            if attn is not None:
+                diag.append(format_attention(attn, logit_lse_absmax(pred, mb["frame_mask"])))
             for k, v in stats.items():
                 agg[k] = agg.get(k, 0.0) + v
             n += 1
@@ -528,9 +543,12 @@ def main() -> None:
 
     if args.halt_max_steps > 0:
         cfg.halt_max_steps = args.halt_max_steps
-    print(f"[init] core={cfg.core_type} moe_experts={cfg.moe_experts} "
+    print(f"[init] core={cfg.core_type} moe_experts={cfg.moe_experts} qk_norm={cfg.qk_norm} "
           f"supervision_steps={net.supervision_steps} inference_depth={net.default_depth} "
           f"value_head={describe_value_head(cfg)}")
+    if args.resume and not cfg.qk_norm:
+        print("[note] qk_norm=False comes from the resume checkpoint's config "
+              "(a pre-QK-norm lineage cannot switch it on)")
 
     groups = optim_param_groups(net, args.weight_decay)
     if args.optimizer == "adam_atan2":
@@ -625,14 +643,21 @@ def main() -> None:
             optimizer_step()
             if stats is not None and (opt_step - 1) % args.log_every == 0:
                 head = " ".join(f"{k}={v:.4f}" for k, v in sorted(stats.items()))
+                caps = qk_caps(net)
+                if caps:
+                    head += f" qk_cap_max={max(caps.values()):.2f}"
                 print(f"[e{epoch} b{i}/{len(loader)}] tf={tf_prob:.2f} "
                       f"lr={scheduler.get_last_lr()[0]:.2e} {head}", flush=True)
 
         if val_loader is not None:
+            diag: List[str] = []
             val = evaluate(net, args.game, val_loader, device,
-                           args.value_weight, args.q_halt_weight, args.bf16, ema=ema)
+                           args.value_weight, args.q_halt_weight, args.bf16, ema=ema,
+                           diag=diag)
             print(f"[e{epoch} val] " + " ".join(
                 f"{k}={v:.4f}" for k, v in sorted(val.items())))
+            for line in diag:
+                print(f"[e{epoch} attn] {line}", flush=True)
 
         ckpt_path = os.path.join(args.save_dir, f"{args.game}_epoch{epoch}.pt")
         ckpt = {

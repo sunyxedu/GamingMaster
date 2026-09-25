@@ -306,7 +306,7 @@ def main() -> None:
     )
     n_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
     print(f"[init] game={args.game} device={device.type} "
-          f"board={board_size} trainable={n_params:,}")
+          f"board={board_size} trainable={n_params:,} qk_norm={cfg.qk_norm}")
 
     os.makedirs(args.save_dir, exist_ok=True)
     for it in range(args.iters):

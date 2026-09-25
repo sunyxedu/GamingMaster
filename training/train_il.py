@@ -358,7 +358,7 @@ def main():
         cfg.halt_max_steps = args.halt_max_steps
     if rank0:
         print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, core={cfg.core_type}, "
-              f"moe_experts={cfg.moe_experts}")
+              f"moe_experts={cfg.moe_experts}, qk_norm={cfg.qk_norm}")
 
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())

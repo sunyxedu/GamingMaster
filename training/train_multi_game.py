@@ -77,10 +77,11 @@ supervision carries restart empty.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import random
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -111,7 +112,7 @@ from model.optim import (
     ModelEMA,
     trm_lr_lambda,
 )
-from model.rl_utils import sync_gradients
+from model.rl_utils import qk_norm_param_ids, sync_gradients
 from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry
 from training.distributed import (
     BatchNormStatSync,
@@ -120,6 +121,7 @@ from training.distributed import (
     init_distributed,
     rank_seed,
 )
+from training.diagnostics import attention_probe, format_attention, logit_lse_absmax, qk_caps
 from training.train_il_game import (
     LABEL_KEYS,
     META_ARCH_KEYS,
@@ -239,6 +241,22 @@ def micro_batch_plan(games_per_step: int, global_games_per_step: int, n_games: i
     return K, K * world, K
 
 
+def multi_game_param_groups(model: torch.nn.Module, weight_decay: float) -> List[Dict]:
+    """Every trainable parameter once (shared core tensors de-duplicated),
+    decayed — except the QK-norm scales (wd 0, see
+    ``model.rl_utils.qk_norm_param_ids``).  Not ``optim_param_groups``: this
+    trainer decays the recurrence memory parameters, and a qk_norm=False
+    model keeps exactly its historical single group."""
+    qk = qk_norm_param_ids(model)
+    params = [p for p in model.parameters() if p.requires_grad]
+    groups = [{"params": [p for p in params if id(p) not in qk],
+               "weight_decay": weight_decay}]
+    no_decay = [p for p in params if id(p) in qk]
+    if no_decay:
+        groups.append({"params": no_decay, "weight_decay": 0.0})
+    return groups
+
+
 def _cycle(loader):
     while True:
         for b in loader:
@@ -261,9 +279,13 @@ EvalSums = Dict[str, Tuple[Dict[str, float], int]]
 
 @torch.no_grad()
 def eval_sums(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
-              value_weight: float, bf16: bool, max_batches: int = 0) -> EvalSums:
+              value_weight: float, bf16: bool, max_batches: int = 0,
+              diag: Optional[Dict[str, str]] = None) -> EvalSums:
     """Per game: (sum over batches of each batch-mean statistic, batch count)
-    at the default inference depth (EMA weights are passed in by the caller)."""
+    at the default inference depth (EMA weights are passed in by the caller).
+    With ``diag`` (a dict) the first batch of each game also runs under
+    training.diagnostics.attention_probe, and ``diag[g]`` gets its
+    format_attention line."""
     model.eval()
     res = {}
     for g, loader in loaders.items():
@@ -274,8 +296,13 @@ def eval_sums(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
             if max_batches and i >= max_batches:
                 break
             mb = prepare_batch(g, batch, device, tf_prob=1.0)
-            _, stats, _ = batch_loss(net, mb, device, value_weight, Q_HALT_WEIGHT, bf16,
-                                     act_steps=net.default_depth)
+            probe = (attention_probe(net) if diag is not None and i == 0
+                     else contextlib.nullcontext())
+            with probe as attn:
+                _, stats, pred = batch_loss(net, mb, device, value_weight, Q_HALT_WEIGHT,
+                                            bf16, act_steps=net.default_depth)
+            if attn is not None:
+                diag[g] = format_attention(attn, logit_lse_absmax(pred, mb["frame_mask"]))
             for k, v in stats.items():
                 agg[k] = agg.get(k, 0.0) + v
             n += 1
@@ -289,9 +316,11 @@ def _normalise(sums: EvalSums) -> Dict[str, Dict[str, float]]:
 
 
 def evaluate(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
-             value_weight: float, bf16: bool, max_batches: int = 0) -> Dict[str, Dict[str, float]]:
+             value_weight: float, bf16: bool, max_batches: int = 0,
+             diag: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, float]]:
     """Per-game validation: the mean over batches of every statistic."""
-    return _normalise(eval_sums(model, loaders, device, value_weight, bf16, max_batches))
+    return _normalise(eval_sums(model, loaders, device, value_weight, bf16, max_batches,
+                                diag=diag))
 
 
 def evaluate_sharded(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
@@ -416,8 +445,11 @@ def main(argv=None) -> Dict[str, object]:
     n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
     wtag = f" world={world}" if dist_env.enabled else ""
     log(f"[init] games={games} core={first.cfg.core_type} moe={first.cfg.moe_experts} "
-        f"params={n_total:,} trainable={n_train:,} device={device.type}{wtag} "
-        f"value_head={describe_value_head(first.cfg)}")
+        f"qk_norm={first.cfg.qk_norm} params={n_total:,} trainable={n_train:,} "
+        f"device={device.type}{wtag} value_head={describe_value_head(first.cfg)}")
+    if args.init_core and not first.cfg.qk_norm:
+        log(f"[note] qk_norm=False comes from the --init_core checkpoint "
+            f"({args.init_core}): a pre-QK-norm core cannot switch it on")
     log("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,} w={weights[g]:.3f}" for g in games))
     if dist_env.enabled:
         lo, hi = k_glob // world, -(-k_glob // world)
@@ -442,8 +474,8 @@ def main(argv=None) -> Dict[str, object]:
     val_loaders = {g: val_loader(g, d) for g, d in val_dirs.items() if g in games}
 
     params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = AdamATan2(params, lr=args.lr, betas=(args.beta1, args.beta2),
-                          weight_decay=args.weight_decay)
+    optimizer = AdamATan2(multi_game_param_groups(model, args.weight_decay), lr=args.lr,
+                          betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, trm_lr_lambda(args.warmup_steps, args.steps, args.lr_min_ratio))
     ema = ModelEMA(model, mu=args.ema_rate) if args.ema_rate > 0 else None
@@ -543,23 +575,29 @@ def main(argv=None) -> Dict[str, object]:
             extra = ""
             if loads is not None:
                 extra = f"  moe_load_cv={float(loads.std(-1).mean()):.3f}"
+            caps = qk_caps(first)
+            if caps:
+                extra += f"  qk_cap_max={max(caps.values()):.2f}"
             log(f"[step {step}/{args.steps}] lr={scheduler.get_last_lr()[0]:.2e} "
                 f"gnorm={float(grad_norm):.3f} {msg}{extra}  ({time.time() - t0:.0f}s)",
                 flush=True)
             window = {}
         if has_val and (step % args.eval_every == 0 or step == args.steps):
             ev_model = ema.ema_copy(model) if ema is not None else model
+            diag: Dict[str, str] = {}
             if dist_env.enabled:
                 res = evaluate_sharded(ev_model, val_loaders, device, args.value_weight,
                                        args.bf16)
             else:
                 res = evaluate(ev_model, val_loaders, device, args.value_weight, args.bf16,
-                               args.eval_batches)
+                               args.eval_batches, diag=diag)
             del ev_model
             for g, m in res.items():
                 keys = [k for k in sorted(m) if k.endswith(("loss", "acc", "mse"))]
                 log(f"[val {step}] {g}: " + " ".join(f"{k}={m[k]:.4f}" for k in keys),
                     flush=True)
+                if diag.get(g):
+                    log(f"[attn {step}] {g}: {diag[g]}", flush=True)
         if args.ckpt_every and (step % args.ckpt_every == 0 or step == args.steps) and rank0:
             save("latest", step, resumable=True)
     if rank0:

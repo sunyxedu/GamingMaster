@@ -28,8 +28,8 @@ def load_multi(path: str, device: torch.device, raw: bool = False) -> MultiGameN
     ck = torch.load(path, map_location="cpu", weights_only=False)
     nets = {}
     for g in ck["games"]:
-        # fields newer than the checkpoint take their LEGACY value, as in
-        # every other checkpoint loader
+        # fields newer than the checkpoint take their legacy value (e.g.
+        # qk_norm=False), so the rebuilt net matches the saved weights
         net, _ = build_net_tolerant(g, upgrade_config_dict(dict(ck["configs"][g])))
         nets[g] = net
     model = MultiGameNetwork(nets)
