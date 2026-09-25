@@ -40,6 +40,8 @@ TINY = dict(d_model=32, n_heads=4, d_ff=64, n_st_layers=2, encoder_channels=16,
             dropout=0.0, rd_prelude_layers=1, rd_recurrent_layers=1, rd_coda_layers=1,
             rd_mean_iters=2, rd_backprop_iters=1, core_layers=2)
 D_HEAD = TINY["d_model"] // TINY["n_heads"]
+G0 = 1.0                                 # initial QK scale
+INIT_CAP = D_HEAD ** 0.5 * G0 * G0       # initial logit cap
 CORES = ("recurrent_depth", "transformer")
 MIXERS = ("attention", "recurrent")
 
@@ -97,7 +99,7 @@ def test_qk_norm_submodules_exist_only_when_enabled(core, mixer):
     assert len(names) == expected
     for n, p in on.named_parameters():
         if "qk_norm" in n:
-            assert p.shape == (D_HEAD,) and torch.equal(p, torch.ones(D_HEAD)), n
+            assert p.shape == (D_HEAD,) and torch.equal(p, torch.full((D_HEAD,), G0)), n
     for blk in on.st_layers:
         assert (blk.temporal_qk_norm is not None) == (mixer == "attention")
     # qk_norm only ADDS parameters: the others keep their names, order and
@@ -300,11 +302,11 @@ def test_qk_norm_bound_holds_for_any_input_scale_and_is_tight():
             q, k = torch.randn(2, 3, 40, D) * scale, torch.randn(2, 3, 40, D) * scale
             top, _ = _logits_entropy(*qkn(q, k), causal=False)
             assert top <= bound.item() * (1 + 1e-5), (scale, top, bound)
-        # with unit scales, aligned one-hot rows reach √D
-        unit = QKNorm(D)
+        # at init, aligned one-hot rows reach the initial cap √D
+        fresh = QKNorm(D)
         e = torch.zeros(1, 1, 1, D)
         e[..., 0] = 100.0
-        top, _ = _logits_entropy(*unit(e, e), causal=False)
+        top, _ = _logits_entropy(*fresh(e, e), causal=False)
         assert abs(top - D ** 0.5) < 1e-4
 
 
@@ -327,10 +329,10 @@ def test_core_block_logits_bounded_under_qk_weight_growth(qk_norm, monkeypatch):
     (top0, ent0), (top_in, ent_in), (top_w, ent_w) = [_logits_entropy(*r) for r in rec]
     assert ent_in == pytest.approx(ent0, abs=1e-4)
     if qk_norm:
-        assert max(top0, top_in, top_w) <= D_HEAD ** 0.5 * (1 + 1e-5)
+        assert max(top0, top_in, top_w) <= INIT_CAP * (1 + 1e-5)
         assert ent_w == pytest.approx(ent0, abs=1e-4)
     else:
-        assert top_w > 100 * D_HEAD ** 0.5
+        assert top_w > 100 * INIT_CAP
         assert ent_w < 0.25 * ent0
 
 
@@ -358,7 +360,7 @@ def test_stage1_logits_bounded_under_input_and_weight_scale(qk_norm, monkeypatch
     (s_top0, s_ent0), (s_top1, s_ent1) = _logits_entropy(*sp0), _logits_entropy(*sp1)
     (t_top0, t_ent0), (t_top1, t_ent1) = _logits_entropy(*tp0), _logits_entropy(*tp1)
     if qk_norm:
-        bound = D_HEAD ** 0.5 * (1 + 1e-5)
+        bound = INIT_CAP * (1 + 1e-5)
         assert max(s_top0, s_top1, t_top0, t_top1) <= bound
         assert s_ent1 == pytest.approx(s_ent0, abs=1e-4)
         assert t_ent1 == pytest.approx(t_ent0, abs=1e-3)
@@ -366,8 +368,8 @@ def test_stage1_logits_bounded_under_input_and_weight_scale(qk_norm, monkeypatch
         for q, k, causal in rec[4:]:
             assert _logits_entropy(q, k, causal)[0] <= bound
     else:
-        assert s_top1 > 100 * D_HEAD ** 0.5 and s_ent1 < 0.25 * s_ent0
-        assert t_top1 > 100 * D_HEAD ** 0.5 and t_ent1 < 0.5 * t_ent0
+        assert s_top1 > 100 * INIT_CAP and s_ent1 < 0.25 * s_ent0
+        assert t_top1 > 100 * INIT_CAP and t_ent1 < 0.5 * t_ent0
 
 
 # ---------------------------------------------------------------------------
@@ -429,14 +431,15 @@ def test_qk_norm_scales_are_not_weight_decayed(mixer):
     assert {id(p) for p in mg_on[1]["params"]} == qk and mg_on[1]["weight_decay"] == 0.0
     assert sum(len(g["params"]) for g in mg_on) == len(list(on.parameters()))
 
-    # pure decay (zero gradients): QK scales stay at 1, other norm scales shrink
+    # pure decay (zero gradients): QK scales keep their init, other norm scales shrink
     opt = AdamATan2(mg_on, lr=1e-2, weight_decay=0.1)
     for p in on.parameters():
         p.grad = torch.zeros_like(p)
     for _ in range(50):
         opt.step()
-    assert torch.equal(on.core.prelude[0].qk_norm.q_norm.weight, torch.ones(D_HEAD))
-    assert torch.equal(on.st_layers[0].spatial_qk_norm.k_norm.weight, torch.ones(D_HEAD))
+    assert torch.equal(on.core.prelude[0].qk_norm.q_norm.weight, torch.full((D_HEAD,), G0))
+    assert torch.equal(on.st_layers[0].spatial_qk_norm.k_norm.weight,
+                       torch.full((D_HEAD,), G0))
     assert (on.core.prelude[0].norms[0].weight < 1).all()
 
 
@@ -500,3 +503,161 @@ def test_graph_replay_matches_eager_cuda(qk_norm, core):
         r = g(obs, t, legal)
         for key in ("source_logits", "value", "action_log_prob"):
             torch.testing.assert_close(r[key], e[key], rtol=1e-5, atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# review fixes: fatal qk_norm mismatch on lenient loads, boolean overrides,
+# diagnostics
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("core", CORES + ("trm",))
+def test_lenient_load_rejects_qk_norm_mismatch(core):
+    """train_rl builds its KL reference / opening anchor as a deepcopy of the
+    learner filled by load_model_state, which only warns on unused keys.
+    A qk_norm=True checkpoint into a qk_norm=False learner must not load as
+    a QK-norm-less (different) network; the reverse fails on missing keys."""
+    import copy
+
+    from model.rl_utils import load_model_state
+
+    kw = dict(trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1)
+    learner = _net(core, "attention", qk_norm=False, **kw)
+    anchor = _net(core, "attention", qk_norm=True, seed=1, **kw)
+    ref = copy.deepcopy(learner)
+    with pytest.raises(RuntimeError, match="qk_norm=False"):
+        load_model_state(ref, anchor.state_dict(), ctx="KL reference checkpoint")
+    with pytest.raises(RuntimeError, match="missing"):
+        load_model_state(copy.deepcopy(anchor), learner.state_dict(), ctx="KL reference")
+    # matching configs still load (and other unused keys still only warn)
+    extra = {**anchor.state_dict(), "world_model.w": torch.zeros(1)}
+    load_model_state(_net(core, "attention", qk_norm=True, seed=2, **kw), extra, ctx="ok")
+
+
+def test_boolean_overrides_parse_in_any_case():
+    from training.train_il_game import parse_overrides
+
+    got = parse_overrides(["qk_norm=false", "a=FALSE", "b=True", "c=true",
+                           "d_model=256", "temporal_mixer=recurrent", "lr=3e-4"])
+    assert got == {"qk_norm": False, "a": False, "b": True, "c": True,
+                   "d_model": 256, "temporal_mixer": "recurrent", "lr": 3e-4}
+    assert got["qk_norm"] is False
+    from model.games import build_game_network
+    net = build_game_network("othello", **dict(TINY, n_st_layers=1),
+                             **parse_overrides(["qk_norm=false"]))
+    assert net.cfg.qk_norm is False and _qk_names(net) == []
+
+
+def test_qk_caps_reports_the_logit_bound():
+    from training.diagnostics import qk_caps
+
+    assert qk_caps(_net(qk_norm=False)) == {}
+    net = _net("recurrent_depth", "attention", qk_norm=True)
+    caps = qk_caps(net)
+    assert len(caps) == sum(isinstance(m, QKNorm) for m in net.modules())
+    assert all(c == pytest.approx(INIT_CAP) for c in caps.values())
+    with torch.no_grad():
+        net.core.prelude[0].qk_norm.q_norm.weight[3] = -3.0
+    assert qk_caps(net)["core.prelude.0.qk_norm"] == pytest.approx(D_HEAD ** 0.5 * 3.0 * G0)
+
+
+@pytest.mark.parametrize("qk_norm", [False, True])
+def test_attention_probe_is_read_only_and_names_every_attention(qk_norm):
+    from training.diagnostics import attention_probe, qk_caps
+
+    net = _net("recurrent_depth", "attention", qk_norm=qk_norm)
+    grid, glb = _frames(T=3)
+    with torch.no_grad():
+        ref = net(grid, glb, act_steps=2)
+        with attention_probe(net) as attn:
+            out = net(grid, glb, act_steps=2)
+    for k in ("source_logits", "value"):
+        assert torch.equal(out[k], ref[k]), k
+    blocks = [n for n, m in net.named_modules() if isinstance(m, CoreBlock)]
+    st = [f"st_layers.{i}" for i in range(TINY["n_st_layers"])]
+    assert set(attn) == set(blocks) | set(st) | {n + "[causal]" for n in st}
+    for s in attn.values():
+        assert 0.0 <= s["entropy"] <= 1.0 + 1e-6 and s["max_logit"] > 0
+    assert attn["core.recurrent.0"]["calls"] == 2                 # once per iteration
+    if qk_norm:
+        assert max(s["max_logit"] for s in attn.values()) <= max(qk_caps(net).values()) * (1 + 1e-5)
+    # hooks and the SDPA patch are gone afterwards
+    assert F.scaled_dot_product_attention.__name__ == "scaled_dot_product_attention"
+    assert not any(m._forward_hooks or m._forward_pre_hooks for m in net.modules())
+
+
+def test_attention_probe_matches_direct_computation_and_sees_collapse(monkeypatch):
+    """Probe numbers = the test helper's on the same call; ×100 q/k weights
+    without QK-norm show up as a large logit and a near-zero entropy."""
+    from training.diagnostics import attention_probe
+
+    torch.manual_seed(0)
+    blk = CoreBlock(ModelConfig(d_model=32, n_heads=4, qk_norm=False), out_std=0.02,
+                    moe=False).eval()
+    x = torch.randn(2, 24, 32)
+    rec = _spy_sdpa(monkeypatch)
+    with torch.no_grad():
+        with attention_probe(blk) as a0:
+            blk(x)
+        blk.qkv.weight.mul_(100.0)
+        with attention_probe(blk) as a1:
+            blk(x)
+    for (q, k, causal), a in zip(rec, (a0, a1)):
+        top, _ = _logits_entropy(q, k, causal)
+        assert a["<root>"]["max_logit"] == pytest.approx(top, rel=1e-5)
+    assert a0["<root>"]["entropy"] > 0.9 and a1["<root>"]["entropy"] < 0.1
+    assert a1["<root>"]["max_logit"] > 100 * a0["<root>"]["max_logit"]
+
+
+def test_attention_probe_causal_rows_and_chunking():
+    from training.diagnostics import _attn_stats
+
+    torch.manual_seed(0)
+    q, k = torch.randn(3, 2, 7, 8), torch.randn(3, 2, 7, 8)
+    full = _attn_stats(q, k, None, True, None, max_elems=1 << 20)
+    chunked = _attn_stats(q, k, None, True, None, max_elems=49)   # one row-block per chunk
+    assert full[2] == chunked[2] == 3 * 2 * 6                     # row 0 has one key
+    assert full[0] == pytest.approx(chunked[0]) and full[1] == pytest.approx(chunked[1])
+    # an explicit boolean causal mask is the same thing
+    tri = torch.ones(7, 7, dtype=torch.bool).tril()
+    assert _attn_stats(q, k, tri, False, None, 1 << 20) == pytest.approx(full)
+    # uniform attention has normalised entropy 1
+    zero = torch.zeros(1, 1, 5, 8)
+    top, ent, rows = _attn_stats(zero, zero, None, False, None, 1 << 20)
+    assert top == 0.0 and ent / rows == pytest.approx(1.0)
+
+
+def test_logit_lse_absmax():
+    from training.diagnostics import logit_lse_absmax
+
+    fm = torch.tensor([[True, True, False]])
+    cat = torch.zeros(1, 3, 4)
+    cat[0, 1] = torch.tensor([50.0, 0.0, 0.0, 0.0])
+    cat[0, 2] = 1e3                                   # padded frame: ignored
+    bern = torch.tensor([[-7.0, 2.0, 99.0]])          # [B, T] Bernoulli logit
+    masked = torch.full((1, 3, 2, 2), float("-inf"))  # fully masked rows: skipped
+    pred = {"a_logits": cat, "wait_logits": bern, "b_logits": masked,
+            "value": torch.full((1, 3), 1e6)}
+    assert logit_lse_absmax(pred, fm) == pytest.approx(50.0, abs=1e-3)
+    assert logit_lse_absmax({"wait_logits": bern}, fm) == pytest.approx(7.0)
+    assert logit_lse_absmax({"value": bern}, fm) is None
+
+
+def test_train_multi_game_logs_qk_norm_and_attention(tmp_path, capsys):
+    from data_processing.games.dataset import save_shard
+    from tests.test_core_moe import _board_samples
+    from training import train_multi_game
+
+    d = tmp_path / "othello"
+    d.mkdir()
+    save_shard(str(d / "a.pt"), "othello", _board_samples("othello", 4, 6))
+    core = dict(TINY, n_st_layers=1, core_type="recurrent_depth", temporal_mixer="attention")
+    train_multi_game.main([
+        "--data", f"othello={d}", "--val", f"othello={d}", "--steps", "2",
+        "--batch_size", "2", "--warmup_steps", "1", "--eval_every", "2", "--log_every", "1",
+        "--save_dir", str(tmp_path / "ck"), "--device", "cpu",
+        "--override", *[f"{k}={v}" for k, v in core.items()], "qk_norm=true"])
+    out = capsys.readouterr().out
+    assert "qk_norm=True" in out and "qk_cap_max=" in out
+    attn = [ln for ln in out.splitlines() if ln.startswith("[attn 2] othello:")]
+    assert len(attn) == 1 and "max_logit=" in attn[0] and "min_entropy=" in attn[0]
+    assert "st_layers.0[causal]=" in attn[0] and "lse_absmax=" in attn[0]

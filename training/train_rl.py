@@ -1590,7 +1590,8 @@ def main():
 
     n_params = sum(p.numel() for p in model.parameters())
     if rank0:
-        print(f"Model parameters: {n_params:,}")
+        print(f"Model parameters: {n_params:,} (core={cfg.core_type}, "
+              f"qk_norm={cfg.qk_norm})")
 
     # ---- Resume: load weights & counters FIRST -------------------------
     # Must happen before the KL reference model and opponent pool are

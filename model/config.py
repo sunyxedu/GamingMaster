@@ -66,12 +66,13 @@ class ModelConfig:
     moe_bias_clip: float = 0.0           # bound on |balance bias| (0 = unbounded)
     # QK-normalisation: per-head RMSNorm (learnable scale over head_dim,
     # init 1) of queries and keys before the dot product, in the Stage-2
-    # transformer / recurrent_depth core blocks (not the legacy TRM) and the
+    # transformer / recurrent_depth core blocks (not the TRM cores) and the
     # Stage-1 spatial / temporal attention.  Bounds every
     # attention logit by √head_dim·max|g_q|·max|g_k|, so logits cannot grow
     # with the activations or the q/k weights — the "attention logit growth"
-    # divergence of Wortsman et al. 2023 (arXiv 2309.14322), Dehghani et al.
-    # 2023 (ViT-22B, arXiv 2302.05442), OLMo 2 (arXiv 2501.00656).
+    # divergence of Wortsman et al. 2023 (arXiv 2309.14322).  Per-head form
+    # as in ViT-22B (Dehghani et al. 2023, arXiv 2302.05442) / Qwen3 (OLMo 2
+    # normalises the full-width projection instead).
     # Checkpoints saved before this field existed load with it OFF.
     qk_norm: bool = True
 

@@ -31,10 +31,11 @@ loads of ALL K micro-batches, i.e. balanced on the game mixture.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import random
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import torch
 from torch.utils.data import DataLoader
@@ -66,6 +67,7 @@ from model.optim import (
 )
 from model.rl_utils import qk_norm_param_ids
 from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry
+from training.diagnostics import attention_probe, format_attention, logit_lse_absmax, qk_caps
 from training.train_il_game import (
     LABEL_KEYS,
     META_ARCH_KEYS,
@@ -182,9 +184,12 @@ def load_core_checkpoint(path: str):
 
 @torch.no_grad()
 def evaluate(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
-             value_weight: float, bf16: bool, max_batches: int = 0) -> Dict[str, Dict[str, float]]:
+             value_weight: float, bf16: bool, max_batches: int = 0,
+             diag: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, float]]:
     """Per-game validation at the default inference depth (EMA weights are
-    passed in by the caller)."""
+    passed in by the caller).  With ``diag`` (a dict) the first batch of each
+    game also runs under training.diagnostics.attention_probe, and
+    ``diag[g]`` gets its format_attention line."""
     model.eval()
     res = {}
     for g, loader in loaders.items():
@@ -195,8 +200,13 @@ def evaluate(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
             if max_batches and i >= max_batches:
                 break
             mb = prepare_batch(g, batch, device, tf_prob=1.0)
-            _, stats, _ = batch_loss(net, mb, device, value_weight, Q_HALT_WEIGHT, bf16,
-                                     act_steps=net.default_depth)
+            probe = (attention_probe(net) if diag is not None and i == 0
+                     else contextlib.nullcontext())
+            with probe as attn:
+                _, stats, pred = batch_loss(net, mb, device, value_weight, Q_HALT_WEIGHT,
+                                            bf16, act_steps=net.default_depth)
+            if attn is not None:
+                diag[g] = format_attention(attn, logit_lse_absmax(pred, mb["frame_mask"]))
             for k, v in stats.items():
                 agg[k] = agg.get(k, 0.0) + v
             n += 1
@@ -252,7 +262,11 @@ def main(argv=None) -> None:
     n_total = sum(p.numel() for p in model.parameters())
     n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"[init] games={games} core={first.cfg.core_type} moe={first.cfg.moe_experts} "
-          f"params={n_total:,} trainable={n_train:,} device={device.type}")
+          f"qk_norm={first.cfg.qk_norm} params={n_total:,} trainable={n_train:,} "
+          f"device={device.type}")
+    if args.init_core and not first.cfg.qk_norm:
+        print(f"[note] qk_norm=False comes from the --init_core checkpoint "
+              f"({args.init_core}): a pre-QK-norm core cannot switch it on")
     print("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,} w={weights[g]:.3f}" for g in games))
 
     loaders = {g: _cycle(DataLoader(ds, batch_size=game_batch.get(g, args.batch_size),
@@ -333,18 +347,24 @@ def main(argv=None) -> None:
             extra = ""
             if loads is not None:
                 extra = f"  moe_load_cv={float(loads.std(-1).mean()):.3f}"
+            caps = qk_caps(first)
+            if caps:
+                extra += f"  qk_cap_max={max(caps.values()):.2f}"
             print(f"[step {step}/{args.steps}] lr={scheduler.get_last_lr()[0]:.2e} "
                   f"gnorm={float(grad_norm):.3f} {msg}{extra}  ({time.time() - t0:.0f}s)",
                   flush=True)
             window = {}
         if val_loaders and (step % args.eval_every == 0 or step == args.steps):
             ev_model = ema.ema_copy(model) if ema is not None else model
+            diag: Dict[str, str] = {}
             res = evaluate(ev_model, val_loaders, device, args.value_weight, args.bf16,
-                           args.eval_batches)
+                           args.eval_batches, diag=diag)
             for g, m in res.items():
                 keys = [k for k in sorted(m) if k.endswith("loss") or k.endswith("acc")]
                 print(f"[val {step}] {g}: " + " ".join(f"{k}={m[k]:.4f}" for k in keys),
                       flush=True)
+                if diag.get(g):
+                    print(f"[attn {step}] {g}: {diag[g]}", flush=True)
             del ev_model
     print(f"[done] saved {save('final')}")
 

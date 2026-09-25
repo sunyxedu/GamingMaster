@@ -6,6 +6,11 @@
 #   SNAP=~/gm-snap/<sha> STEPS=8000 bash scripts/slurm/multi/submit_core_study.sh q2   # single-game
 #   BRAIN=<ckpt> bash scripts/slurm/multi/submit_core_study.sh q3  # held-out adaptation
 #
+# QK_NORM (default False = the architecture of the finished q1/q2 runs) is
+# pinned in BASE instead of inheriting ModelConfig's default, so runs from
+# different snapshots stay comparable; q3's scratch arm copies the brain's
+# value (its --init_core arms inherit it from the brain's core_config).
+#
 # Q1  joint 5-game IL, core ∈ {transformer-6, transformer-12, recurrent-depth,
 #     recurrent-depth+MoE, transformer-6+MoE}
 # Q2  each game alone with the recurrent-depth+MoE core, trained on exactly as
@@ -25,7 +30,7 @@ COMMON="--batch_size 8 --game_batch clash_royale=2 --max_len 64 --bf16 --num_wor
 --lr 3e-4 --warmup_steps 500 --log_every 100 --eval_every 1000 --eval_batches 40 --seed 0"
 BASE="d_model=256 n_heads=8 d_ff=1024 n_st_layers=2 dropout=0.0 temporal_mixer=recurrent \
 core_expansion=4.0 rd_prelude_layers=2 rd_recurrent_layers=2 rd_coda_layers=2 \
-rd_mean_iters=8 rd_backprop_iters=4 rd_max_iters=32"
+rd_mean_iters=8 rd_backprop_iters=4 rd_max_iters=32 qk_norm=${QK_NORM:-False}"
 RDMOE="core_type=recurrent_depth moe_experts=8 moe_top_k=2 moe_shared_experts=1 moe_expansion=2.0"
 
 data_args() {
@@ -69,12 +74,19 @@ print(round($STEPS * len(games) * mixture_weights(fr, 0.5)['$g']))")
 q3)
     B=${BRAIN:?set BRAIN to the q1 brain checkpoint}
     AS=${ADAPT_STEPS:-4000}
+    # the scratch arm must match the brain's architecture: take qk_norm from
+    # its core_config exactly as --init_core does (legacy brains -> False)
+    QB=$(cd "$SNAP" && .venv/bin/python -c "
+from training.train_multi_game import load_core_checkpoint
+print(load_core_checkpoint('$B')[1]['qk_norm'])")
+    echo "q3: brain qk_norm=$QB"
+    QBASE="${BASE% qk_norm=*} qk_norm=$QB"    # BASE with its (last) qk_norm replaced
     for g in shogi pokemon; do
         A="$(data_args "$g") $COMMON --steps $AS --eval_every 500"
         submit "q3-$g-frozen"      "$A --init_core $B --freeze_core"
         submit "q3-$g-frozennorm"  "$A --init_core $B --freeze_core --train_core_norms"
         submit "q3-$g-finetune"    "$A --init_core $B"
-        submit "q3-$g-scratch"     "$A --override $BASE $RDMOE"
+        submit "q3-$g-scratch"     "$A --override $QBASE $RDMOE"
     done
     ;;
 q4)

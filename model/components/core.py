@@ -88,8 +88,11 @@ class RMSNorm(nn.RMSNorm):
 
 class QKNorm(nn.Module):
     """QK-normalisation (``cfg.qk_norm``): per-head RMSNorm of queries and
-    keys over head_dim, each with its own learnable scale (init 1), applied
-    right before ``scaled_dot_product_attention``.
+    keys over head_dim — one [head_dim] learnable scale for q and one for k,
+    shared by all heads (the per-head form of ViT-22B, Dehghani et al. 2023,
+    and Qwen3; OLMo 2 instead normalises the full-width q/k projection
+    before the head split) — applied right before
+    ``scaled_dot_product_attention``.  The scales start at 1.
 
     After it every q, k row has RMS |g| (‖q̂‖ ≤ √D·max|g_q|), so with SDPA's
     1/√D scaling each attention logit obeys
@@ -100,7 +103,7 @@ class QKNorm(nn.Module):
     Unbounded logit growth — the attention collapsing onto one-hot rows, the
     late loss / grad-norm blow-up of Wortsman et al. 2023 (arXiv 2309.14322)
     — can then only come from the scales themselves, which move at the
-    learning rate.  Same fix as ViT-22B (Dehghani et al. 2023) and OLMo 2.
+    learning rate.
 
     forward(q, k [..., D]) → (q̂, k̂) in the input dtype (fp32 statistics).
     """
