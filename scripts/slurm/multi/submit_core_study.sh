@@ -85,7 +85,8 @@ q4)
         for g in "${GAMES[@]}"; do V="$V --val $g=$D/$g/val"; done
         MODULE=training.eval_multi_game GM_HOME=$SNAP RUN="q4-$run" \
             ARGS="--ckpt $HOME/gm-runs/multi/$run/multi_final.pt $V --depths ${DEPTHS:-1 2 4 8 16 32} \
---batch_size 8 --json $HOME/gm-runs/multi/$run/depth_sweep.json" \
+--batch_size 8 --game_batch clash_royale=1 --game_batch go=4 --bf16 \
+--json $HOME/gm-runs/multi/$run/depth_sweep.json" \
             sbatch --requeue --gres="$GRES" ${SBATCH_EXTRA:-} "$SNAP/scripts/slurm/multi/multi_game_job.sh"
     done
     ;;

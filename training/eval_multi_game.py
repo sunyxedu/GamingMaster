@@ -36,14 +36,14 @@ def load_multi(path: str, device: torch.device, raw: bool = False) -> MultiGameN
 
 @torch.no_grad()
 def eval_game(net, game: str, loader: DataLoader, device, depth: Optional[int],
-              max_batches: int = 0) -> Dict[str, float]:
+              max_batches: int = 0, bf16: bool = False) -> Dict[str, float]:
     agg: Dict[str, float] = {}
     n = 0
     for i, batch in enumerate(loader):
         if max_batches and i >= max_batches:
             break
         mb = prepare_batch(game, batch, device, tf_prob=1.0)
-        _, stats, _ = batch_loss(net, mb, device, 0.0, Q_HALT_WEIGHT, False,
+        _, stats, _ = batch_loss(net, mb, device, 0.0, Q_HALT_WEIGHT, bf16,
                                  act_steps=depth if depth is not None else net.default_depth)
         for k, v in stats.items():
             agg[k] = agg.get(k, 0.0) + v
@@ -58,6 +58,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     p.add_argument("--depths", type=int, nargs="*", default=[],
                    help="inference depths to sweep (default: the model's own)")
     p.add_argument("--batch_size", type=int, default=16)
+    p.add_argument("--game_batch", action="append", default=[], metavar="GAME=N",
+                   help="per-game batch size (full-length clash_royale sequences are "
+                        "~460 frames x 580 tokens: use 1-2)")
+    p.add_argument("--bf16", action="store_true")
     p.add_argument("--max_len", type=int, default=None)
     p.add_argument("--max_batches", type=int, default=0)
     p.add_argument("--raw", action="store_true", help="raw weights instead of EMA")
@@ -73,10 +77,11 @@ def main(argv: Optional[List[str]] = None) -> None:
         if g not in model.games:
             print(f"[skip] {g}: not in checkpoint games {model.games}")
             continue
+        gb = {k: int(v) for k, v in (x.split("=", 1) for x in a.game_batch)}
         loader = DataLoader(GameShardDataset(d, game=g, max_len=a.max_len),
-                            batch_size=a.batch_size, collate_fn=collate_game_sequences)
+                            batch_size=gb.get(g, a.batch_size), collate_fn=collate_game_sequences)
         for depth in depths:
-            m = eval_game(model[g], g, loader, device, depth, a.max_batches)
+            m = eval_game(model[g], g, loader, device, depth, a.max_batches, a.bf16)
             key = str(depth if depth is not None else model[g].default_depth)
             results.setdefault(g, {})[key] = m
             acc = m.get("exact_acc", float("nan"))
