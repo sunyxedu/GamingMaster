@@ -2,12 +2,14 @@
 //!
 //! A shard is a directory:
 //!
-//!     <out>/<game>_00012/
-//!       index.json          format, game, converter_version, shard meta,
-//!                           tensor table, per-sample (start, length, meta)
-//!       obs.board_seq.npy   float32 [N, 14, 8, 8]   (N = frames of all samples)
-//!       tgt.from_idx.npy    int64   [N]
-//!       ...
+//! ```text
+//! <out>/<game>_00012/
+//!   index.json          format, game, converter_version, shard meta,
+//!                       tensor table, per-sample (start, length, meta)
+//!   obs.board_seq.npy   float32 [N, 14, 8, 8]   (N = frames of all samples)
+//!   tgt.from_idx.npy    int64   [N]
+//!   ...
+//! ```
 //!
 //! Every tensor's leading axis is the frame axis; sample `i` owns rows
 //! `start..start+length` of every tensor. Tensor names are `obs.<key>` /
