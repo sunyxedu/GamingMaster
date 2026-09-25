@@ -254,17 +254,25 @@ def arbitrary_value(p):
     return float(np.tanh(_W[0] @ p[0].ravel() - 0.5 * _W[1] @ p[1].ravel()))
 
 
+def overshoot_value(p):
+    """Unbounded like the real ValueHead: confident frames exceed |V| = 1."""
+    return 1.3 * arbitrary_value(p)
+
+
 def ref_node(fn, b, w, to_move, depth, root):
-    """Independent depth-limited minimax in the root mover's frame."""
+    """Independent depth-limited minimax in the root mover's frame; returns
+    (exactness class, value): an exact win beats every estimate, an exact
+    loss loses to every estimate."""
     own, opp = op.sides(b, w, to_move)
     if not op.legal_moves(own, opp):
         if not op.legal_moves(opp, own):
-            return op.outcome_sign(*op.sides(b, w, root))
+            z = op.outcome_sign(*op.sides(b, w, root))
+            return (z, z)
         to_move = op.other(to_move)                      # forced pass: free
         own, opp = opp, own
     if depth == 0:
         v = fn(op.planes_batch([(own, opp)])[0])
-        return v if to_move == root else -v
+        return (0.0, v if to_move == root else -v)
     vals = [ref_node(fn, *op.colours(*op.play(own, opp, sq), to_move),
                      op.other(to_move), depth - 1, root)
             for sq in op.iter_bits(op.legal_moves(own, opp))]
@@ -303,7 +311,7 @@ def test_la1_forced_pass_reads_the_movers_own_frame():
     ev = StubEval(disc_diff_value)
     root_hist = (b"root",)
     res = op.search(ev, [op.Root(b, w, p, (root_hist, 0), np.zeros(64))], 1, r=1)
-    (_, vals), = res
+    vals = res[0].values
     own, opp = op.sides(b, w, p)
     for mv, v in vals.items():
         o2, p2 = op.play(own, opp, mv)
@@ -321,33 +329,80 @@ def test_la1_forced_pass_reads_the_movers_own_frame():
 
 
 @pytest.mark.parametrize("depth", [1, 2])
-@pytest.mark.parametrize("fn", [disc_diff_value, arbitrary_value])
+@pytest.mark.parametrize("fn", [disc_diff_value, arbitrary_value, overshoot_value])
 def test_search_equals_independent_minimax(fn, depth):
-    pos = [x[:3] for x in _pass_positions(3)] + random_positions(7, 6, 0, 50)
+    pos = ([x[:3] for x in _pass_positions(3)] + random_positions(7, 6, 0, 50)
+           + random_positions(8, 12, 0, 3))                  # terminals within reach
     ev = StubEval(fn)
     roots = [op.Root(b, w, p, ((b"r%d" % i,), 0), StubEval.logit(op.planes_batch(
         [op.sides(b, w, p)])[0])) for i, (b, w, p) in enumerate(pos)]
     res = op.search(ev, roots, depth, r=1)
-    for (b, w, p), rt, (mv, vals) in zip(pos, roots, res):
+    n_terminal = 0
+    for (b, w, p), rt, (mv, vals, term) in zip(pos, roots, res):
         want = ref_move_values(fn, b, w, p, depth)
         assert vals.keys() == want.keys()
         for k in want:
-            assert vals[k] == pytest.approx(want[k], abs=1e-12)
+            assert vals[k] == pytest.approx(want[k][1], abs=1e-12)
         best = max(want.values())
-        tied = [k for k in want if abs(want[k] - best) < 1e-12]
+        tied = [k for k in want if want[k][0] == best[0] and abs(want[k][1] - best[1]) < 1e-12]
         assert mv == max(tied, key=lambda k: rt.logits[k])     # tie-break by policy logit
+        n_terminal += term
+    assert n_terminal > 0
 
 
-def test_search_tie_break_prefers_policy_logit():
-    # two mirror-image moves (each forces white to pass) with equal values:
-    # only the root policy logit decides
-    b, w = board(". W W W W W W B", *["W W W W W W W W"] * 6, ". W W W W W W B")
-    ev = StubEval(disc_diff_value)
-    for fav in (0, 56):
+def _stub_const(v):
+    """Evaluator whose every frame has value ``v`` (for the frame's mover)."""
+    return StubEval(lambda p: v)
+
+
+@pytest.mark.parametrize("v", [-1.0, -1.001, -1.05])
+def test_exact_win_beats_an_overshooting_estimate(v):
+    """Review regression: white to move, 57 ends the game in a win (+10),
+    56 loses (-2).  With the opponent's frame after 56 read at V <= -1 (so
+    >= +1 for white) the search must still take the certain win."""
+    b, w = 0x3f03072f5d373f, 0xfcc0fcf8d0a2c8c0
+    own, opp = op.sides(b, w, op.WHITE)
+    assert op.exact_move_values(own, opp) == {56: -2, 57: 10}
+    o2, p2 = op.play(own, opp, 57)
+    assert op.is_game_over(o2, p2) and op.outcome_sign(o2, p2) == 1.0
+    logits = np.zeros(64)
+    logits[56] = 5.0                                         # the policy prefers the loss
+    (mv, vals, term), = op.search(_stub_const(v), [op.Root(b, w, op.WHITE, ((), 0), logits)],
+                                  1, 1)
+    assert vals[57] == 1.0 and vals[56] == pytest.approx(-v)
+    assert mv == 57 and term
+
+
+def test_estimate_beats_an_exact_loss_and_compares_with_an_exact_draw():
+    """Play on at V = -1.05 rather than end the game in a certain loss; an
+    exact draw compares with estimates by value (a tie goes to the logit).
+    Sparse boards, black to move: one live move and one game-ending move."""
+    b, w, live, dead = 0x80010, 0x8000400000015080, 5, 20      # 20 ends in a loss
+    kinds = {sq: op.is_game_over(*op.play(b, w, sq)) for sq in op.iter_bits(op.legal_moves(b, w))}
+    assert kinds == {live: False, dead: True}
+    assert op.outcome_sign(*op.play(b, w, dead)) == -1.0
+    logits = np.zeros(64)
+    logits[dead] = 5.0
+    for v in (1.05, 1.0, -1.05):                               # live move scores -1.05 / -1 / ..
+        (mv, vals, _), = op.search(_stub_const(v), [op.Root(b, w, BLACK, ((), 0), logits)], 1, 1)
+        assert vals[dead] == -1.0 and mv == live
+
+    b, w, live, dead = 0x800000600000, 0x200000028000508, 36, 37    # 37 ends in a draw
+    kinds = {sq: op.is_game_over(*op.play(b, w, sq)) for sq in op.iter_bits(op.legal_moves(b, w))}
+    assert kinds == {live: False, dead: True}
+    assert op.outcome_sign(*op.play(b, w, dead)) == 0.0
+    seen = set()
+    for v in (0.2, -0.2):
+        (mv, vals, _), = op.search(_stub_const(v), [op.Root(b, w, BLACK, ((), 0), np.zeros(64))],
+                                   1, 1)
+        assert vals[dead] == 0.0 and abs(vals[live]) == pytest.approx(0.2)
+        assert mv == (live if vals[live] > 0 else dead)
+        seen.add(mv)
+    assert seen == {live, dead}
+    for fav in (live, dead):                                   # exact tie: policy logit
         logits = np.zeros(64)
         logits[fav] = 1.0
-        (mv, vals), = op.search(ev, [op.Root(b, w, BLACK, (("x",), 0), logits)], 1, 1)
-        assert set(vals) == {0, 56} and vals[0] == vals[56]
+        (mv, _, _), = op.search(_stub_const(0.0), [op.Root(b, w, BLACK, ((), 0), logits)], 1, 1)
         assert mv == fav
 
 
@@ -431,7 +486,7 @@ def test_net_lookahead_matches_sequential_streaming(mixer):
     root = frames[k]
     own, opp = root.own_opp()
     for depth in (1, 2):
-        (_, vals), = op.search(ev, [op.Root(root.black, root.white, root.mover, ref,
+        (_, vals, _), = op.search(ev, [op.Root(root.black, root.white, root.mover, ref,
                                             logits[0])], depth, r)
         for sq, v in vals.items():
             b2, w2 = op.colours(*op.play(own, opp, sq), root.mover)
@@ -485,6 +540,29 @@ def test_history_is_depth_independent_and_matches_training_forward():
     assert np.allclose(np.stack(logits), out["place_logits"][0].numpy(), atol=1e-4)
 
 
+def test_bf16_keeps_value_head_and_decoder_in_fp32():
+    """Under bf16 autocast the value head / decoder run in fp32 (a bf16 value
+    has 8 significant bits: artificial lookahead ties); the overrides are
+    removed afterwards and the parameters untouched."""
+    net = _tiny_net("recurrent")
+    seq = wthor_samples()[0]["obs"]["board_seq"].numpy()
+    dtypes = []
+    hook = net.value_head.register_forward_hook(lambda m, i, o: dtypes.append(o.dtype))
+    obs = {"board_seq": torch.from_numpy(seq[:4])}
+    with torch.no_grad(), torch.autocast("cpu", dtype=torch.bfloat16):
+        plain = net.step(obs, act_steps=2)
+    assert dtypes[-1] == torch.bfloat16 and plain["value"].dtype == torch.bfloat16
+    ev16 = op.NetEvaluator(net, torch.device("cpu"), bf16=True)
+    lg16, v16, _ = ev16.feed([ev16.empty_ref()] * 4, seq[:4], 2)
+    assert dtypes[-1] == torch.float32
+    hook.remove()
+    assert "forward" not in net.value_head.__dict__ and "decode" not in net.action_decoder.__dict__
+    ev32 = op.NetEvaluator(net, torch.device("cpu"))
+    lg32, v32, _ = ev32.feed([ev32.empty_ref()] * 4, seq[:4], 2)
+    assert np.allclose(v16, v32, atol=0.1) and np.allclose(lg16, lg32, atol=0.2)
+    assert not np.array_equal(v16, v32)                     # the trunk did run in bf16
+
+
 # ---------------------------------------------------------------------------
 # match statistics and the end-to-end script
 # ---------------------------------------------------------------------------
@@ -500,6 +578,124 @@ def test_match_stats():
     assert blo <= st["elo"] <= bhi
     sweep = op.match_stats([(1, 1)] * 5)
     assert np.isfinite(sweep["elo"]) and sweep["elo"] > 0
+
+
+def test_gate_verdict_is_three_way():
+    def st(elo, lo, hi, pairs=200):
+        return {"elo": elo, "pairs": pairs, "elo_ci95_normal": [lo, hi],
+                "elo_ci95_bootstrap": [lo + 1, hi - 1]}
+    assert op.gate_verdict(st(45, 12, 78), 30)["verdict"] == "GO"
+    assert op.gate_verdict(st(45, -3, 93), 30)["verdict"] == "INCONCLUSIVE"   # CI hits 0
+    assert op.gate_verdict(st(25, 2, 48), 30)["verdict"] == "INCONCLUSIVE"    # point < 30
+    assert op.gate_verdict(st(5, -20, 29), 30)["verdict"] == "NO-GO"
+    assert op.gate_verdict(st(-40, -70, -10), 30)["verdict"] == "NO-GO"
+    assert op.gate_verdict(st(45, 12, 78, pairs=20), 30)["verdict"] == "INCONCLUSIVE"
+    g = op.gate_verdict(st(45, 12, 78), 30)
+    assert g["go"] and g["ci95"] == [12, 78] and g["pairs"] == 200     # union of the CIs
+    assert op.gate_verdict({"elo": 50.0, "pairs": 1, "elo_ci95_normal": None,
+                            "elo_ci95_bootstrap": None}, 30)["verdict"] == "INCONCLUSIVE"
+
+
+def test_cluster_mean_ci_resamples_games():
+    groups = [0, 0, 0, 1, 2, 2]
+    vals = [1.0, 1.0, np.nan, 0.0, 1.0, 0.0]
+    r = op.cluster_mean_ci(groups, vals, n_boot=500)
+    assert (r["n"], r["games"]) == (5, 3) and r["mean"] == pytest.approx(3 / 5)
+    assert r["ci95"][0] <= r["mean"] <= r["ci95"][1]
+    assert op.cluster_mean_ci([0, 0], [1.0, 0.0])["ci95"] is None     # one game: no CI
+    assert op.cluster_mean_ci([0], [np.nan])["n"] == 0
+    # 100 rows from 2 games are 2 units, not 100: the CI stays wide
+    wide = op.cluster_mean_ci([0] * 50 + [1] * 50, [1.0] * 50 + [0.0] * 50, n_boot=500)
+    assert wide["ci95"][1] - wide["ci95"][0] > 0.5
+
+
+def test_openings_dedupe_positions_and_raise_plies():
+    from scripts.dial_probe import collect_openings
+    samples = wthor_samples()[:300]
+    order = list(range(len(samples)))
+    seqs, boards = set(), set()
+    for x in samples:
+        fr = op.frames_from_sample(x)
+        if len(fr) > 6:
+            seqs.add(tuple(f.action for f in fr[:6]))
+            boards.add((fr[6].black, fr[6].white, fr[6].mover))
+    assert len(boards) < len(seqs)                       # the fixture has transpositions
+    ops, plies = collect_openings(samples, order, 6, 10 ** 6, {}, 6)
+    assert plies == 6 and len(ops) == len(boards)
+    # not enough 6-ply positions: the smallest sufficient even ply count is used
+    want = len(boards) + 5
+    ops, plies = collect_openings(samples, order, 6, want, {}, 16)
+    assert plies > 6 and len(ops) == want
+    keys = set()
+    for o in ops:
+        b, w, p = op.INITIAL_BLACK, op.INITIAL_WHITE, BLACK
+        for a in o:
+            if a != PASS:
+                b, w = op.colours(*op.play(*op.sides(b, w, p), a), p)
+            p = op.other(p)
+        keys.add((b, w, p))
+    assert len(keys) == want and all(len(o) == plies for o in ops)
+    ops2, plies2 = collect_openings(samples, order, 6, want, {}, plies - 2)
+    assert plies2 == plies - 2 and len(ops2) < want      # capped: the most there are
+
+
+def test_select_positions_spreads_and_skips_forced_moves():
+    from scripts.dial_probe import select_positions
+    samples = wthor_samples()[:120]
+    sel = select_positions(samples, range(len(samples)), 10, 100, {}, human_stride=4,
+                           human_per_game=3, endgame_per_game=2, seed=1)
+    n_end = sum(len(e) for _, _, e in sel)
+    n_hum = sum(len(h) for _, h, _ in sel)
+    assert n_end == 100 and n_hum == 100
+    assert sum(1 for _, _, e in sel if e) >= 50          # spread over >= 50 games
+    for g, hum, end in sel:
+        assert len(hum) <= 3 and len(end) <= 2
+        for t in hum | end:
+            f = g.frames[t]
+            assert f.action != PASS and op.legal_moves(*f.own_opp()).bit_count() >= 2
+        for t in end:
+            assert op.n_empties(g.frames[t].black, g.frames[t].white) <= 10
+        for t in hum:
+            assert (t + g.index) % 4 == 0
+
+
+def test_skipped_validation_games_counted_once():
+    from scripts.dial_probe import collect_openings, select_positions
+    samples = list(wthor_samples()[:30])
+    bad = dict(samples[3])
+    bad["obs"] = {"board_seq": samples[3]["obs"]["board_seq"].clone()}
+    bad["obs"]["board_seq"][5] = bad["obs"]["board_seq"][5][[1, 0, 2]]
+    samples[3] = bad
+    skipped = {}
+    collect_openings(samples, range(30), 6, 10 ** 6, skipped, 6)
+    select_positions(samples, range(30), 10, 10 ** 6, skipped)
+    assert list(skipped) == [3]
+
+
+def test_play_games_search_stats_and_solver_endgame():
+    ev = StubEval(disc_diff_value)
+    ops = [tuple(f.action for f in op.frames_from_sample(s)[:4]) for s in wthor_samples()[:12]]
+    raw, la1 = op.PlayerSpec(0, 1), op.PlayerSpec(1, 1)
+    res = op.play_games(ev, [(o, la1, raw) for o in ops], parallel=5)
+    tot = {k: sum(r["stats"]["black"][k] for r in res) for k in op._STATS0}
+    assert all(r["stats"]["white"]["searched"] == 0 for r in res)        # raw never searches
+    assert tot["searched"] > 0 and tot["terminal"] > 0 and tot["solved"] == 0
+    assert tot["terminal_changed"] <= tot["terminal"] <= tot["searched"]
+    # solver endgame: every decision at <= 6 empties plays an exactly optimal move
+    res = op.play_games(ev, [(o, la1, raw) for o in ops], parallel=5, solve_empties=6)
+    n_solved = 0
+    for r in res:
+        n_solved += r["stats"]["black"]["solved"] + r["stats"]["white"]["solved"]
+        b, w, p = op.INITIAL_BLACK, op.INITIAL_WHITE, BLACK
+        for a in r["actions"]:
+            own, opp = op.sides(b, w, p)
+            if a != PASS:
+                if op.n_empties(b, w) <= 6:
+                    ex = op.exact_move_values(own, opp)
+                    assert ex[a] == max(ex.values())
+                b, w = op.colours(*op.play(own, opp, a), p)
+            p = op.other(p)
+    assert n_solved > 0
 
 
 def test_dial_probe_end_to_end(tmp_path):
@@ -521,15 +717,19 @@ def test_dial_probe_end_to_end(tmp_path):
     res = dial_probe.main([
         "--ckpt", str(tmp_path / "ck" / "multi_final.pt"), "--val_dir", str(tmp_path / "val"),
         "--pairs", "2", "--opening_plies", "6", "--depths", "1", "2", "--empties", "6",
-        "--max_positions", "15", "--device", "cpu", "--solver_workers", "1",
-        "--parallel", "3", "--json", str(out)])
+        "--max_positions", "15", "--endgame_per_game", "3", "--device", "cpu",
+        "--solver_workers", "1", "--parallel", "3", "--json", str(out)])
     with open(out) as fh:
         disk = json.load(fh)
     assert disk["gate"]["match"] == "la1@2 vs raw@2"
+    # 2 pairs < --gate_min_pairs: never a GO / NO-GO on a degenerate CI
+    assert disk["gate"]["verdict"] == "INCONCLUSIVE" and disk["gate"]["pairs"] == 2
+    assert disk["gate"]["opening_plies"] == disk["opening_plies"] == 6
     assert [m["a"] for m in disk["matches"]] == ["la1@2", "la2@2"]
     for m in disk["matches"]:
         assert m["games"] == 4 and m["W"] + m["D"] + m["L"] == 4
         assert len(m["per_game"]) == 4 and m["elo_ci95_normal"] is not None
+        assert m["search"]["a"]["searched"] > 0 and m["search"]["b"].get("searched", 0) == 0
         for g in m["per_game"]:
             assert g["frames"] >= 6 and g["black"] + g["white"] <= 64
     # seat swap: the same opening is played with A as black, then as white
@@ -540,7 +740,11 @@ def test_dial_probe_end_to_end(tmp_path):
         assert set(disk[part]["per_depth"]) == {"1", "2"}
     e = disk["endgame"]["per_depth"]["2"]
     assert e["n"] == disk["endgame"]["n_positions"] == 15
+    assert e["games"] == disk["endgame"]["n_games"] >= 15 / 3
     assert 0 <= e["raw_best"] <= 1 and e["raw_regret"] >= 0 and e["la1_regret"] >= 0
+    assert e["n_contested"] <= e["n"] and e["n_critical"] <= e["n"]
+    assert set(e["la1_minus_raw"]) == {"best_contested", "regret_contested", "blunder_critical"}
     h = disk["human"]["per_depth"]["1"]
     assert h["n"] == 15 and 0 <= h["raw_top1"] <= 1 and 0 <= h["la1_top1"] <= 1
+    assert h["la1_minus_raw_top1"]["n"] == 15
     assert res["skipped_val_games"] == []

@@ -34,12 +34,21 @@ Perspective / sign conventions of the search:
   * interior nodes take the max over children when their decision player is
     m and the min otherwise (depth-limited minimax, i.e. negamax written in
     the root mover's frame).
+  * exact results strictly dominate estimates: nodes compare as
+    (exactness class, value) with class +1 for an exact win, −1 for an exact
+    loss and 0 for a network leaf or an exact draw.  The value head is
+    unbounded (MSE on {−1, 0, +1}, confident frames overshoot to ±1.0x), so
+    comparing plain values would let a leaf at V = 1.02 outrank a move that
+    wins on the spot, or end the game in a certain loss rather than play on
+    at V = −1.05.  Leaves keep their raw order among themselves (no clamp);
+    an exact draw compares with leaves by value.
 """
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -364,6 +373,39 @@ class CacheBlock:
 Ref = Tuple[CacheBlock, int]
 
 
+def _f32(x):
+    return x.float() if torch.is_tensor(x) and x.is_floating_point() else x
+
+
+@contextlib.contextmanager
+def fp32_heads(net, device_type: str):
+    """Inside a bf16 autocast region, run the value head and the action
+    decoder in fp32 (inputs upcast, autocast disabled): a bf16 output has 8
+    significant bits, so values near |V| = 1 would be quantised to steps of
+    2^-8 and many lookahead candidates would tie exactly — ties go to the
+    policy logit, which drags LA toward RAW.  The trunk stays in bf16.
+    Implemented as temporary instance-level overrides, restored on exit
+    (the parameters and the state dict are untouched)."""
+    patched = []
+    for mod, name in ((net.value_head, "forward"), (net.action_decoder, "decode")):
+        fn = getattr(mod, name)
+
+        def island(*args, _fn=fn, **kw):
+            with torch.autocast(device_type, enabled=False):
+                return _fn(*map(_f32, args), **{k: _f32(v) for k, v in kw.items()})
+
+        patched.append((mod, name, mod.__dict__.get(name)))
+        mod.__dict__[name] = island
+    try:
+        yield
+    finally:
+        for mod, name, prev in reversed(patched):
+            if prev is None:
+                del mod.__dict__[name]
+            else:
+                mod.__dict__[name] = prev
+
+
 class NetEvaluator:
     """Appends one frame to many game histories at once with
     ``GameNetwork.step`` and returns policy logits, values and the new
@@ -376,6 +418,9 @@ class NetEvaluator:
     ``[batch * S, ...]`` with S = game tokens + 2 decision tokens).  Rows
     are evaluated independently (eval-mode BatchNorm, per-token MoE
     routing), so batching changes results only up to float summation order.
+
+    ``bf16``: bf16 autocast for the trunk, with the value head and the
+    decoder kept in fp32 (:func:`fp32_heads`).
     """
 
     def __init__(self, net, device: torch.device, max_batch: int = 1024,
@@ -383,7 +428,7 @@ class NetEvaluator:
         self.net = net.eval()
         self.device = device
         self.max_batch = max(1, int(max_batch))
-        self.bf16 = bf16 and device.type == "cuda"
+        self.bf16 = bool(bf16)
         self.S = net.obs_encoder.n_tokens + 2
         self.calls = 0
         self.rows = 0
@@ -429,7 +474,11 @@ class NetEvaluator:
             sub = (None if cache is None
                    else [c[a * self.S:b * self.S] for c in cache])
             obs = {"board_seq": torch.from_numpy(planes[a:b]).to(self.device)}
-            with torch.autocast(self.device.type, dtype=torch.bfloat16, enabled=self.bf16):
+            if self.bf16:
+                with torch.autocast(self.device.type, dtype=torch.bfloat16), \
+                        fp32_heads(self.net, self.device.type):
+                    out = self.net.step(obs, legal=None, st_cache=sub, step_idx=t, act_steps=r)
+            else:
                 out = self.net.step(obs, legal=None, st_cache=sub, step_idx=t, act_steps=r)
             logits.append(out["place_logits"].float().cpu())
             values.append(out["value"].float().cpu())
@@ -492,24 +541,32 @@ class Root:
     logits: np.ndarray
 
 
+class SearchResult(NamedTuple):
+    move: int                   # chosen move
+    values: Dict[int, float]    # every legal move's value for the root mover
+    terminal: bool              # an exact terminal position was reached in the tree
+
+
 class _Node:
     __slots__ = ("black", "white", "mover", "ref", "parent", "move", "value", "root")
 
     def __init__(self, black, white, mover, ref, parent, move, root):
         self.black, self.white, self.mover, self.ref = black, white, mover, ref
-        self.parent, self.move, self.root, self.value = parent, move, root, None
+        self.parent, self.move, self.root = parent, move, root
+        self.value: Optional[Tuple[float, float]] = None   # (exactness class, value)
 
 
-def search(ev, roots: Sequence[Root], depth: int, r: int
-           ) -> List[Tuple[int, Dict[int, float]]]:
+def search(ev, roots: Sequence[Root], depth: int, r: int) -> List[SearchResult]:
     """Depth-limited minimax over ``depth`` plies of real decisions (forced
     passes are free) with the network value, read at depth ``r``, at the
     leaves and exact W/D/L at terminal positions — see the module docstring
-    for the sign conventions.  All roots are searched together, one batched
-    ``feed`` per tree level (per history length).
+    for the sign conventions and why exact results dominate estimates.  All
+    roots are searched together, one batched ``feed`` per tree level (per
+    history length).
 
-    Returns per root (chosen move, {move: value for the root mover}); the
-    move maximises the value, ties broken by the root policy logit."""
+    Returns per root the chosen move (maximal (exactness class, value), ties
+    broken by the root policy logit), every legal move's value for the root
+    mover, and whether the tree reached an exact terminal position."""
     if depth < 1:
         raise ValueError("search depth must be >= 1")
     levels: List[List[_Node]] = [[_Node(rt.black, rt.white, rt.mover, rt.ref, -1, PASS, i)
@@ -517,6 +574,7 @@ def search(ev, roots: Sequence[Root], depth: int, r: int
     for i, nd in enumerate(levels[0]):
         if not legal_moves(*sides(nd.black, nd.white, nd.mover)):
             raise ValueError(f"root {i} has no legal move (pass frames need no search)")
+    saw_terminal = [False] * len(roots)
     for lvl in range(1, depth + 1):
         leaf = lvl == depth
         kids: List[_Node] = []
@@ -540,8 +598,10 @@ def search(ev, roots: Sequence[Root], depth: int, r: int
                 second.append(i)
                 k.mover = other(k.mover)                   # decision player after it
             else:                                          # game over: exact W/D/L
-                k.value = outcome_sign(*sides(k.black, k.white, m))
+                z = outcome_sign(*sides(k.black, k.white, m))
+                k.value = (z, z)                           # class = the result itself
                 k.mover = None
+                saw_terminal[k.root] = True
         passed = set(second)
         pending = {}                                       # kid -> value of its last frame fed
         for keep in (True, False):
@@ -566,23 +626,24 @@ def search(ev, roots: Sequence[Root], depth: int, r: int
         if leaf:
             for i, v in pending.items():
                 k = kids[i]
-                k.value = v if k.mover == roots[k.root].mover else -v
+                k.value = (0.0, v if k.mover == roots[k.root].mover else -v)
         levels.append(kids)
     # back up: max where the decision player is the root mover, else min
     for lvl in range(depth, 0, -1):
-        agg: Dict[int, List[float]] = {}
+        agg: Dict[int, List[Tuple[float, float]]] = {}
         for k in levels[lvl]:
             agg.setdefault(k.parent, []).append(k.value)
         for pi, vals in agg.items():
             p = levels[lvl - 1][pi]
             p.value = max(vals) if p.mover == roots[p.root].mover else min(vals)
-    out: List[Tuple[int, Dict[int, float]]] = [(PASS, {}) for _ in roots]
+    keyed: List[Dict[int, Tuple[float, float]]] = [{} for _ in roots]
     for k in levels[1]:
-        out[k.root][1][k.move] = k.value
-    for i, (_, vals) in enumerate(out):
+        keyed[k.root][k.move] = k.value
+    out: List[SearchResult] = []
+    for i, kv in enumerate(keyed):
         lg = roots[i].logits
-        best = max(vals, key=lambda sq: (vals[sq], float(lg[sq])))
-        out[i] = (best, vals)
+        best = max(kv, key=lambda sq: (*kv[sq], float(lg[sq])))
+        out.append(SearchResult(best, {sq: v for sq, (_, v) in kv.items()}, saw_terminal[i]))
     return out
 
 
@@ -614,9 +675,16 @@ def parse_player(text: str, default_r: int) -> PlayerSpec:
     return PlayerSpec(depth, int(r) if r else default_r)
 
 
+# per player and game: decisions taken by search, of those the ones whose tree
+# reached an exact terminal position, and of those the ones where the search
+# move differs from the RAW move (the exact-terminal confound: RAW never sees
+# exact results); decisions played by the exact solver (``solve_empties``)
+_STATS0 = {"searched": 0, "terminal": 0, "terminal_changed": 0, "solved": 0}
+
+
 class _Game:
     __slots__ = ("black", "white", "to_move", "ref", "ply", "opening", "specs",
-                 "logits", "action", "is_pass", "tag", "actions")
+                 "logits", "action", "is_pass", "tag", "actions", "stats")
 
     def __init__(self, opening, specs, ref, tag):
         self.black, self.white, self.to_move = INITIAL_BLACK, INITIAL_WHITE, BLACK
@@ -625,16 +693,29 @@ class _Game:
         self.action = PASS
         self.is_pass = False
         self.actions: List[int] = []
+        self.stats = {BLACK: dict(_STATS0), WHITE: dict(_STATS0)}
+
+
+def solved_move(own: int, opp: int, logits: np.ndarray) -> int:
+    """An exactly optimal move (max final disc differential), ties broken by
+    the policy logit."""
+    ex = exact_move_values(own, opp)
+    return max(ex, key=lambda sq: (ex[sq], float(logits[sq])))
 
 
 def play_games(ev, games: Sequence[Tuple[Sequence[int], PlayerSpec, PlayerSpec]],
-               parallel: int = 64, progress: Optional[Callable[[int], None]] = None
-               ) -> List[Dict]:
+               parallel: int = 64, progress: Optional[Callable[[int], None]] = None,
+               solve_empties: int = 0) -> List[Dict]:
     """Play every (opening actions, black player, white player) game to the
     end, ``parallel`` games in lockstep; each game's frames stream through
     one shared history exactly as a training sample would (opening frames
-    included).  Returns per game {black, white, frames, actions}: final disc
-    counts, number of frames, and the action of every frame (PASS = -1)."""
+    included).  With ``solve_empties`` > 0 both players play an exactly
+    optimal move at every decision with at most that many empties (an
+    ablation that removes lookahead's exact-terminal advantage over RAW).
+
+    Returns per game {black, white, frames, actions, stats}: final disc
+    counts, number of frames, the action of every frame (PASS = -1) and per
+    colour ("black" / "white") the search counters of ``_STATS0``."""
     results: List[Optional[Dict]] = [None] * len(games)
     for c0 in range(0, len(games), max(1, parallel)):
         active = [_Game(list(op), {BLACK: b, WHITE: w}, ev.empty_ref(), c0 + j)
@@ -645,7 +726,9 @@ def play_games(ev, games: Sequence[Tuple[Sequence[int], PlayerSpec, PlayerSpec]]
                 if is_game_over(g.black, g.white):
                     results[g.tag] = {"black": g.black.bit_count(),
                                       "white": g.white.bit_count(), "frames": g.ply,
-                                      "actions": list(g.actions)}
+                                      "actions": list(g.actions),
+                                      "stats": {"black": g.stats[BLACK],
+                                                "white": g.stats[WHITE]}}
                     if progress is not None:
                         progress(g.tag)
                 else:
@@ -677,6 +760,9 @@ def play_games(ev, games: Sequence[Tuple[Sequence[int], PlayerSpec, PlayerSpec]]
                                          f"contradicts the rules")
                 elif g.is_pass:
                     g.action = PASS
+                elif solve_empties > 0 and n_empties(g.black, g.white) <= solve_empties:
+                    g.action = solved_move(own, opp, g.logits)
+                    g.stats[g.to_move]["solved"] += 1
                 elif spec.depth == 0:
                     g.action = masked_argmax(g.logits, legal_moves(own, opp))
                 else:
@@ -684,8 +770,15 @@ def play_games(ev, games: Sequence[Tuple[Sequence[int], PlayerSpec, PlayerSpec]]
             for spec, gs in searches.items():
                 res = search(ev, [Root(g.black, g.white, g.to_move, g.ref, g.logits)
                                   for g in gs], spec.depth, spec.r)
-                for g, (mv, _) in zip(gs, res):
-                    g.action = mv
+                for g, sr in zip(gs, res):
+                    g.action = sr.move
+                    st = g.stats[g.to_move]
+                    st["searched"] += 1
+                    if sr.terminal:
+                        st["terminal"] += 1
+                        raw = masked_argmax(g.logits, legal_moves(*sides(g.black, g.white,
+                                                                         g.to_move)))
+                        st["terminal_changed"] += int(sr.move != raw)
             for g in active:
                 if g.action != PASS:
                     own, opp = sides(g.black, g.white, g.to_move)
@@ -743,6 +836,53 @@ def game_score(result: Dict, a_is_black: bool) -> float:
     return s if a_is_black else 1.0 - s
 
 
+def gate_verdict(st: Dict, threshold: float, min_pairs: int = 100) -> Dict:
+    """Three-way go/no-go on a lookahead-over-RAW match (``match_stats``
+    output).  The interval is the union of the normal and the bootstrap 95%
+    CIs (the more conservative reading):
+
+      GO            point estimate >= ``threshold`` and the CI excludes 0
+                    (lookahead is significantly better than RAW)
+      NO-GO         the CI's upper end is below ``threshold``
+      INCONCLUSIVE  otherwise, or fewer than ``min_pairs`` opening pairs
+                    (degenerate CIs) — play more pairs"""
+    cis = [c for c in (st.get("elo_ci95_normal"), st.get("elo_ci95_bootstrap")) if c]
+    pairs = int(st.get("pairs", 0))
+    ci = [min(c[0] for c in cis), max(c[1] for c in cis)] if cis else None
+    if ci is None or pairs < min_pairs:
+        verdict = "INCONCLUSIVE"
+    elif ci[1] < threshold:
+        verdict = "NO-GO"
+    elif st["elo"] >= threshold and ci[0] > 0:
+        verdict = "GO"
+    else:
+        verdict = "INCONCLUSIVE"
+    return {"verdict": verdict, "go": verdict == "GO", "elo": st.get("elo"),
+            "ci95": ci, "pairs": pairs, "threshold": threshold, "min_pairs": min_pairs}
+
+
+def cluster_mean_ci(groups: Sequence[int], values: Sequence[float], n_boot: int = 2000,
+                    seed: int = 0) -> Dict:
+    """Mean of ``values`` over the rows that are not NaN, with a 95%
+    percentile CI from resampling whole groups (games): positions of one game
+    are correlated, so rows are not independent units."""
+    g = np.asarray(groups)
+    v = np.asarray(values, dtype=np.float64)
+    ok = ~np.isnan(v)
+    if not ok.any():
+        return {"n": 0, "games": 0, "mean": float("nan"), "ci95": None}
+    _, inv = np.unique(g[ok], return_inverse=True)
+    S = np.bincount(inv, weights=v[ok])
+    N = np.bincount(inv).astype(np.float64)          # >= 1 per group
+    G = len(S)
+    ci = None
+    if G > 1:
+        idx = np.random.RandomState(seed).randint(0, G, size=(n_boot, G))
+        boot = S[idx].sum(axis=1) / N[idx].sum(axis=1)
+        ci = [float(np.percentile(boot, 2.5)), float(np.percentile(boot, 97.5))]
+    return {"n": int(ok.sum()), "games": G, "mean": float(S.sum() / N.sum()), "ci95": ci}
+
+
 # ---------------------------------------------------------------------------
 # Validation positions: value vs exact solver, move agreement
 # ---------------------------------------------------------------------------
@@ -754,38 +894,41 @@ class ValGame:
     values: List[float]          # tgt.value (W/D/L for each frame's mover)
 
 
-def iter_val_games(dataset, order: Iterable[int], skipped: Optional[List[str]] = None
+def iter_val_games(dataset, order: Iterable[int], skipped: Optional[Dict[int, str]] = None
                    ) -> Iterator[ValGame]:
     """Validated games of a GameShardDataset in ``order``; games whose
     recorded actions / planes contradict the rules are skipped (noted in
-    ``skipped``)."""
+    ``skipped``, keyed by game index, so several passes count a game once)."""
     for i in order:
         sample = dataset[i]
         try:
             frames = frames_from_sample(sample)
         except ValueError as e:
             if skipped is not None:
-                skipped.append(f"game {i}: {e}")
+                skipped[i] = str(e)
             continue
         yield ValGame(i, frames, sample["tgt"]["value"].float().tolist())
 
 
+def _sgn(x: float) -> float:
+    return float((x > 0) - (x < 0))
+
+
 def analyse_positions(ev, games: Sequence[Tuple[ValGame, set, set]], depths: Sequence[int],
-                      exact: Dict[Tuple[int, int], Dict[int, int]], parallel: int = 64
-                      ) -> Dict[str, Dict[int, Dict[str, float]]]:
+                      exact: Dict[Tuple[int, int], Dict[int, int]], parallel: int = 64,
+                      n_boot: int = 2000, seed: int = 0
+                      ) -> Dict[str, Dict[int, Dict]]:
     """Stream every selected game through the network (lockstep, ``parallel``
     games at a time) and, on the selected decision frames, compare the value
     and the RAW / LOOKAHEAD-1 moves at every depth r against the human move
     (``human`` frames) and the exact solver (``endgame`` frames).
 
     ``games``: (game, human frame indices, endgame frame indices);
-    ``exact[(game_pos, t)]``: exact move values for the endgame frames."""
-    acc = {"human": {r: {} for r in depths}, "endgame": {r: {} for r in depths}}
-
-    def add(kind, r, key, v):
-        d = acc[kind][r]
-        d[key] = d.get(key, 0.0) + float(v)
-
+    ``exact[(game_pos, t)]``: exact move values for the endgame frames.
+    Returns per kind and r the summary of :func:`summarise_endgame` /
+    :func:`summarise_human`."""
+    rows: Dict[str, Dict[int, List[Dict]]] = {"human": {r: [] for r in depths},
+                                              "endgame": {r: [] for r in depths}}
     for c0 in range(0, len(games), max(1, parallel)):
         chunk = games[c0:c0 + parallel]
         refs: List[Ref] = [ev.empty_ref()] * len(chunk)
@@ -819,44 +962,102 @@ def analyse_positions(ev, games: Sequence[Tuple[ValGame, set, set]], depths: Seq
                 for j, (i, f) in enumerate(zip(an, fr)):
                     g, hum, end = chunk[i]
                     raw_mv = masked_argmax(logits[j], legal_moves(*f.own_opp()))
-                    la_mv = la[j][0]
+                    la_mv = la[j].move
                     v = float(values[j])
                     if t in hum:
-                        add("human", r, "n", 1)
-                        add("human", r, "raw_top1", raw_mv == f.action)
-                        add("human", r, "la1_top1", la_mv == f.action)
-                        add("human", r, "value_sq_err_vs_result", (v - g.values[t]) ** 2)
+                        rows["human"][r].append({
+                            "game": c0 + i, "raw_top1": float(raw_mv == f.action),
+                            "la1_top1": float(la_mv == f.action),
+                            "value_sq_err": (v - g.values[t]) ** 2})
                     if t in end:
                         ex = exact[(c0 + i, t)]
                         best = max(ex.values())
-                        z = float((best > 0) - (best < 0))       # exact W/D/L target
-                        add("endgame", r, "n", 1)
-                        add("endgame", r, "value_sq_err", (v - z) ** 2)
-                        if z != 0:
-                            add("endgame", r, "n_decisive", 1)
-                            add("endgame", r, "value_sign_ok", np.sign(v) == z)
+                        z = _sgn(best)                      # exact W/D/L target
+                        wdl = {sq: _sgn(x) for sq, x in ex.items()}
+                        row = {"game": c0 + i, "empties": n_empties(f.black, f.white),
+                               "z": z, "v": v, "contested": len(set(ex.values())) > 1,
+                               "critical": min(wdl.values()) < z,
+                               "la1_terminal": float(la[j].terminal)}
                         for name, mv in (("raw", raw_mv), ("la1", la_mv)):
-                            add("endgame", r, f"{name}_best", ex[mv] == best)
-                            add("endgame", r, f"{name}_regret", best - ex[mv])
-                            zc = float((ex[mv] > 0) - (ex[mv] < 0))
-                            add("endgame", r, f"{name}_wdl_blunder", zc < z)
-    out: Dict[str, Dict[int, Dict[str, float]]] = {"human": {}, "endgame": {}}
+                            row[f"{name}_best"] = float(ex[mv] == best)
+                            row[f"{name}_regret"] = float(best - ex[mv])
+                            row[f"{name}_blunder"] = float(wdl[mv] < z)
+                        rows["endgame"][r].append(row)
+    out: Dict[str, Dict[int, Dict]] = {"human": {}, "endgame": {}}
     for r in depths:
-        h = acc["human"][r]
-        if h.get("n"):
-            n = h["n"]
-            out["human"][r] = {"n": int(n), "raw_top1": h["raw_top1"] / n,
-                               "la1_top1": h["la1_top1"] / n,
-                               "value_mse_vs_result": h["value_sq_err_vs_result"] / n}
-        e = acc["endgame"][r]
-        if e.get("n"):
-            n = e["n"]
-            nd = e.get("n_decisive", 0.0)
-            out["endgame"][r] = {
-                "n": int(n), "n_decisive": int(nd),
-                "value_sign_acc": (e["value_sign_ok"] / nd) if nd else float("nan"),
-                "value_mse_wdl": e["value_sq_err"] / n,
-                **{f"{p}_{k}": e[f"{p}_{k}"] / n
-                   for p in ("raw", "la1") for k in ("best", "regret", "wdl_blunder")},
-            }
+        if rows["human"][r]:
+            out["human"][r] = summarise_human(rows["human"][r], n_boot, seed)
+        if rows["endgame"][r]:
+            out["endgame"][r] = summarise_endgame(rows["endgame"][r], n_boot, seed)
+    return out
+
+
+def _col(rows: Sequence[Dict], key: str, where: Optional[str] = None) -> np.ndarray:
+    """Column ``key`` of ``rows``; NaN where the boolean column ``where`` is
+    False (row not counted)."""
+    return np.array([r[key] if where is None or r[where] else np.nan for r in rows],
+                    dtype=np.float64)
+
+
+def _mean(x: np.ndarray) -> float:
+    return float(np.nanmean(x)) if (~np.isnan(x)).any() else float("nan")
+
+
+def summarise_human(rows: Sequence[Dict], n_boot: int = 2000, seed: int = 0) -> Dict:
+    """Top-1 agreement with the human move and value MSE vs the game result;
+    the LA1 − RAW agreement difference with a game-clustered bootstrap CI."""
+    g = [r["game"] for r in rows]
+    return {"n": len(rows), "games": len(set(g)),
+            "raw_top1": _mean(_col(rows, "raw_top1")),
+            "la1_top1": _mean(_col(rows, "la1_top1")),
+            "value_mse_vs_result": _mean(_col(rows, "value_sq_err")),
+            "la1_minus_raw_top1": cluster_mean_ci(
+                g, _col(rows, "la1_top1") - _col(rows, "raw_top1"), n_boot, seed)}
+
+
+def summarise_endgame(rows: Sequence[Dict], n_boot: int = 2000, seed: int = 0) -> Dict:
+    """Endgame metrics vs the exact solver.
+
+    all positions:  value sign accuracy (decisive positions), value MSE vs the
+                    exact W/D/L, optimal-move rate, mean exact disc regret,
+                    W/D/L-losing blunder rate of RAW and LA1
+    contested:      positions whose moves do not all have the same exact
+                    value (elsewhere every move is optimal) — optimal-move
+                    rate and regret
+    critical:       positions where some move changes the exact W/D/L
+                    (elsewhere a result-changing blunder is impossible) —
+                    blunder rate, also split by empties (<= 2 / > 2: at <= 2
+                    empties LA sees exact terminals, RAW does not)
+    la1_minus_raw:  LA1 − RAW differences on those subsets with 95% CIs from
+                    resampling whole games"""
+    g = [r["game"] for r in rows]
+    z = _col(rows, "z")
+    v = _col(rows, "v")
+    dec = z != 0
+    out = {
+        "n": len(rows), "games": len(set(g)), "n_decisive": int(dec.sum()),
+        "value_sign_acc": float((np.sign(v[dec]) == z[dec]).mean()) if dec.any() else float("nan"),
+        "value_mse_wdl": float(((v - z) ** 2).mean()),
+        "n_contested": int(sum(r["contested"] for r in rows)),
+        "n_critical": int(sum(r["critical"] for r in rows)),
+        "la1_terminal": _mean(_col(rows, "la1_terminal")),
+    }
+    for p in ("raw", "la1"):
+        out[f"{p}_best"] = _mean(_col(rows, f"{p}_best"))
+        out[f"{p}_regret"] = _mean(_col(rows, f"{p}_regret"))
+        out[f"{p}_wdl_blunder"] = _mean(_col(rows, f"{p}_blunder"))
+        out[f"{p}_best_contested"] = _mean(_col(rows, f"{p}_best", "contested"))
+        out[f"{p}_regret_contested"] = _mean(_col(rows, f"{p}_regret", "contested"))
+        out[f"{p}_blunder_critical"] = _mean(_col(rows, f"{p}_blunder", "critical"))
+    out["la1_minus_raw"] = {
+        f"{k}_{sub}": cluster_mean_ci(g, _col(rows, f"la1_{k}", sub) - _col(rows, f"raw_{k}", sub),
+                                      n_boot, seed)
+        for k, sub in (("best", "contested"), ("regret", "contested"), ("blunder", "critical"))}
+    by_e = {}
+    for name, sel in (("<=2", lambda e: e <= 2), (">2", lambda e: e > 2)):
+        sub = [r for r in rows if r["critical"] and sel(r["empties"])]
+        by_e[name] = {"n": len(sub),
+                      "raw": _mean(_col(sub, "raw_blunder")) if sub else float("nan"),
+                      "la1": _mean(_col(sub, "la1_blunder")) if sub else float("nan")}
+    out["blunder_critical_by_empties"] = by_e
     return out
