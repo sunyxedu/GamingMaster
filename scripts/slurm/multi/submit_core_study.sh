@@ -2,8 +2,8 @@
 # Shared-core study on hephaestus: one code snapshot, one hyper-parameter
 # set; every run differs from the base only in the factor under study.
 #
-#   STEPS=20000 bash scripts/slurm/multi/submit_core_study.sh q1   # core architectures
-#   STEPS=20000 bash scripts/slurm/multi/submit_core_study.sh q2   # single-game baselines
+#   SNAP=~/gm-snap/<sha> STEPS=8000 bash scripts/slurm/multi/submit_core_study.sh q1   # cores
+#   SNAP=~/gm-snap/<sha> STEPS=8000 bash scripts/slurm/multi/submit_core_study.sh q2   # single-game
 #   BRAIN=<ckpt> bash scripts/slurm/multi/submit_core_study.sh q3  # held-out adaptation
 #
 # Q1  joint 5-game IL, core ∈ {transformer-6, transformer-12, recurrent-depth,
@@ -15,14 +15,14 @@
 #     frozen core | frozen core + trainable norms | full fine-tune | scratch
 set -euo pipefail
 STUDY=${1:?q1|q2|q3}
-STEPS=${STEPS:-20000}
+STEPS=${STEPS:-8000}
 GRES=${GRES:-gpu:nvidia_h200_nvl:1}
 SNAP=${SNAP:?set SNAP to a gm-snap worktree}
 D=${DATA_ROOT:-$HOME/gm-data/split}
 GAMES=(othello chess go mahjong clash_royale)
 
 COMMON="--batch_size 8 --game_batch clash_royale=2 --max_len 64 --bf16 --num_workers 4 \
---lr 3e-4 --warmup_steps 1000 --log_every 100 --eval_every 2000 --eval_batches 40 --seed 0"
+--lr 3e-4 --warmup_steps 500 --log_every 100 --eval_every 1000 --eval_batches 40 --seed 0"
 BASE="d_model=256 n_heads=8 d_ff=1024 n_st_layers=2 dropout=0.0 temporal_mixer=recurrent \
 core_expansion=4.0 rd_prelude_layers=2 rd_recurrent_layers=2 rd_coda_layers=2 \
 rd_mean_iters=8 rd_backprop_iters=4 rd_max_iters=32"
@@ -50,11 +50,18 @@ q1)
     submit q1-tf6moe  "$J $COMMON --steps $STEPS --override $BASE core_type=transformer core_layers=6 moe_experts=8 moe_top_k=2 moe_shared_experts=1 moe_expansion=2.0"
     ;;
 q2)
-    # mixture weights of the joint run (alpha = 0.5 on capped frames), read
-    # from its checkpoint so the per-game budget is exact
-    W=${JOINT:?set JOINT to the q1-rdmoe checkpoint}
+    # the joint run's mixture weights, computed exactly as train_multi_game
+    # does (alpha = 0.5 on frames capped at --max_len; clash_royale uncropped)
     for g in "${GAMES[@]}"; do
-        S=$("$SNAP/.venv/bin/python" -c "import torch,sys; w=torch.load('$W',weights_only=False)['mixture']; print(round($STEPS*5*w['$g']))")
+        S=$(cd "$SNAP" && .venv/bin/python -c "
+from data_processing.games.dataset import GameShardDataset
+from training.train_il_game import UNCROPPABLE
+from training.train_multi_game import mixture_weights
+games = '${GAMES[*]}'.split()
+fr = {x: GameShardDataset('$D/' + x + '/train', game=x,
+                          max_len=None if x in UNCROPPABLE else 64).total_frames() for x in games}
+print(round($STEPS * len(games) * mixture_weights(fr, 0.5)['$g']))")
+        echo "q2-$g: $S steps"
         submit "q2-$g" "$(data_args "$g") $COMMON --steps $S --games_per_step 1 --override $BASE $RDMOE"
     done
     ;;
