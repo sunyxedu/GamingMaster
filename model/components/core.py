@@ -118,7 +118,28 @@ class MoEFFN(nn.Module):
     """DeepSeek-V3 MoE feed-forward (see module docstring).
 
     forward(x [B, S, d], valid [B] bool | None) → y [B, S, d]
+
+    Two numerically equivalent expert paths (same routing, same gates; they
+    differ only in float summation order):
+
+    * sparse — each expert runs on the tokens routed to it.  Finding those
+      tokens (``nonzero``) is a host sync per expert, but compute is only
+      the routed k/E fraction.  Used in training and for large inference
+      batches.
+    * dense — every expert runs on every token (one batched matmul over the
+      expert axis) and a gate matrix G [N, E], zero except the top-k
+      selected entries, combines them.  No data-dependent shapes, no host
+      sync — capturable in a CUDA graph.  Used when not training and
+      tokens × experts is at most :attr:`DENSE_MAX_TOKEN_EXPERTS`
+      (batch-1 inference).
     """
+
+    #: largest N·E (tokens × experts) the dense inference path handles.  Its
+    #: transient memory is ~N·E·(3·inter + 2·d) elements and its FLOPs E/k ×
+    #: the routed ones, so large eval batches keep the sparse path.
+    #: Class-level knob (0 disables the dense path); a batch-1 generals
+    #: frame is 627 tokens, so it stays dense up to 104 experts.
+    DENSE_MAX_TOKEN_EXPERTS = 65536
 
     def __init__(self, d: int, n_experts: int, top_k: int, n_shared: int,
                  expansion: float, std: float, out_std: float):
@@ -157,7 +178,18 @@ class MoEFFN(nn.Module):
                 self.load += torch.bincount(sel.reshape(-1),
                                             minlength=self.n_experts).float()
 
-        out = xf.new_zeros(N, d)
+        if not self.training and N * self.n_experts <= self.DENSE_MAX_TOKEN_EXPERTS:
+            out = self._dense_experts(xf, top_i, gates)
+        else:
+            out = self._sparse_experts(xf, top_i, gates)
+        for sh in self.shared:
+            out = out + sh(xf)
+        return out.reshape(shape)
+
+    def _sparse_experts(self, xf: torch.Tensor, top_i: torch.Tensor,
+                        gates: torch.Tensor) -> torch.Tensor:
+        """Σ_selected g·FFN_e(x), each expert on its routed tokens only."""
+        out = xf.new_zeros(xf.shape)
         for e in range(self.n_experts):
             rows, slot = (top_i == e).nonzero(as_tuple=True)
             if rows.numel() == 0:
@@ -166,9 +198,26 @@ class MoEFFN(nn.Module):
             g, u = (h @ self.w_gate_up[e].to(h.dtype)).chunk(2, dim=-1)
             h = (F.silu(g) * u) @ self.w_down[e].to(h.dtype)
             out.index_add_(0, rows, h * gates[rows, slot].unsqueeze(-1))
-        for sh in self.shared:
-            out = out + sh(xf)
-        return out.reshape(shape)
+        return out
+
+    def _dense_experts(self, xf: torch.Tensor, top_i: torch.Tensor,
+                       gates: torch.Tensor) -> torch.Tensor:
+        """Same sum, sync-free: all experts on all tokens, combined with the
+        gate matrix G [N, E] (the top-k gates scattered into zeros).
+
+        Unselected experts are dropped with ``where`` rather than a 0 gate,
+        so a non-finite activation of an expert the token was NOT routed to
+        cannot leak in (0·inf = NaN) — exactly the sparse path's semantics.
+        Weight/activation dtypes mirror :meth:`_sparse_experts` op for op.
+        """
+        N, E = xf.shape[0], self.n_experts
+        sel = torch.zeros(N, E, dtype=torch.bool, device=xf.device).scatter_(1, top_i, True)
+        G = torch.zeros(N, E, dtype=gates.dtype, device=xf.device).scatter(1, top_i, gates)
+        h = torch.matmul(xf, self.w_gate_up.to(xf.dtype))                 # [E, N, 2I]
+        g, u = h.chunk(2, dim=-1)
+        y = torch.matmul(F.silu(g) * u, self.w_down.to(xf.dtype))          # [E, N, d]
+        y = y * G.t().unsqueeze(-1)
+        return torch.where(sel.t().unsqueeze(-1), y, 0.0).sum(0)
 
     @torch.no_grad()
     def update_balance(self, gamma: float) -> Optional[torch.Tensor]:
@@ -285,14 +334,25 @@ class RecurrentDepthCore(nn.Module):
             [CoreBlock(cfg, out_std, moe) for _ in range(cfg.rd_coda_layers)])
         self.final_norm = RMSNorm(d, eps=1e-6)
         self.state_std = math.sqrt(2.0 / 5.0)
-        self._fixed_state: Dict[Tuple[int, int, str], torch.Tensor] = {}
+        self._fixed_state: Dict[Tuple[int, int, str, torch.dtype], torch.Tensor] = {}
 
     def default_iters(self) -> int:
         return int(self.cfg.rd_eval_iters or self.cfg.rd_mean_iters)
 
+    def prepare_inference(self, S: int, device: torch.device,
+                          dtype: torch.dtype = torch.float32) -> None:
+        """Materialise the fixed inference state for S tokens on ``device``.
+
+        :meth:`fixed_state` builds it lazily on the CPU and copies it over on
+        first use — a host→device copy that cannot happen inside a CUDA
+        graph capture.  Call this (or run one warm-up step) before capture.
+        """
+        self.fixed_state(S, torch.empty(0, self.cfg.d_model, device=device, dtype=dtype))
+
     def fixed_state(self, S: int, like: torch.Tensor) -> torch.Tensor:
-        """One deterministic draw from the s_0 distribution, [S, d]."""
-        key = (S, like.shape[-1], str(like.device))
+        """One deterministic draw from the s_0 distribution, [S, d], cached
+        per (S, d, device, dtype) so the eval path is a pure lookup."""
+        key = (S, like.shape[-1], str(like.device), like.dtype)
         if key not in self._fixed_state:
             g = torch.Generator().manual_seed(self.STATE_SEED + 7919 * S)
             z = torch.empty(S, like.shape[-1])
@@ -304,8 +364,8 @@ class RecurrentDepthCore(nn.Module):
             # and Φ(2) − Φ(−2) = (hi − lo) / 2 in erf space
             z.mul_(self.state_std / math.sqrt(
                 1 - (4 * math.exp(-2) / math.sqrt(2 * math.pi)) / ((hi - lo) / 2)))
-            self._fixed_state[key] = z.to(like.device)
-        return self._fixed_state[key].to(like.dtype)
+            self._fixed_state[key] = z.to(like.device).to(like.dtype)
+        return self._fixed_state[key]
 
     def initial_state(self, e: torch.Tensor) -> torch.Tensor:
         if self.training:
