@@ -39,6 +39,83 @@ import torch
 from torch.utils.data import Dataset
 
 FORMAT_VERSION = 1
+GM_SHARD_FORMAT = "gm-shard.v1"   # directories written by the Rust converters (gmshard crate)
+
+
+class GmShard:
+    """One ``gm-shard.v1`` directory (``index.json`` + ``obs.*.npy`` / ``tgt.*.npy``).
+
+    Arrays are memory-mapped; a sample is a frame-range slice of every tensor, so
+    nothing is materialised until ``sample(j)`` is called.  Presents the same
+    ``{"format_version", "game", "converter_version", "meta", "samples"}``
+    surface as a ``.pt`` shard dict (``samples`` is lazy)."""
+
+    def __init__(self, path: str):
+        import json
+        with open(os.path.join(path, "index.json")) as fh:
+            self.index = json.load(fh)
+        if self.index.get("format") != GM_SHARD_FORMAT:
+            raise ValueError(f"{path}: not a {GM_SHARD_FORMAT} shard")
+        self.path = path
+        self._arrays: Optional[Dict] = None
+
+    @property
+    def game(self) -> str:
+        return self.index["game"]
+
+    def arrays(self) -> Dict:
+        if self._arrays is None:
+            import numpy as np
+            self._arrays = {name: np.load(os.path.join(self.path, info["file"]), mmap_mode="r")
+                            for name, info in self.index["tensors"].items()}
+        return self._arrays
+
+    def __len__(self) -> int:
+        return len(self.index["samples"])
+
+    def sample(self, j: int) -> Dict:
+        import numpy as np
+        info = self.index["samples"][j]
+        a, b = info["start"], info["start"] + info["length"]
+        out: Dict = {"obs": {}, "tgt": {}, "meta": info.get("meta") or {}}
+        for name, arr in self.arrays().items():
+            group, key = name.split(".", 1)
+            dtype = self.index["tensors"][name]["dtype"]
+            v = torch.from_numpy(np.ascontiguousarray(arr[a:b]))
+            if dtype == "bool":
+                v = v.bool()
+            out[group][key] = v
+        return out
+
+    def as_shard_dict(self) -> Dict:
+        return {"format_version": FORMAT_VERSION, "game": self.game,
+                "converter_version": self.index.get("converter_version", 1),
+                "meta": self.index.get("meta") or {},
+                "samples": [self.sample(j) for j in range(len(self))]}
+
+
+def find_gm_shards(data_dir: str) -> List[str]:
+    return sorted(os.path.dirname(p) for p in
+                  glob.glob(os.path.join(data_dir, "**", "index.json"), recursive=True)
+                  if _is_gm_shard(os.path.dirname(p)))
+
+
+def _is_gm_shard(path: str) -> bool:
+    import json
+    try:
+        with open(os.path.join(path, "index.json")) as fh:
+            return json.load(fh).get("format") == GM_SHARD_FORMAT
+    except (OSError, ValueError):
+        return False
+
+
+def load_gm_samples(data_dir: str) -> List[Dict]:
+    """Every sample of every gm-shard under ``data_dir`` (tests / small data)."""
+    out: List[Dict] = []
+    for d in find_gm_shards(data_dir):
+        sh = GmShard(d)
+        out.extend(sh.sample(j) for j in range(len(sh)))
+    return out
 
 
 def save_shard(path: str, game: str, samples: List[Dict],
@@ -82,10 +159,11 @@ class GameShardDataset(Dataset):
 
     def __init__(self, data_dir: str, game: Optional[str] = None,
                  max_len: Optional[int] = None):
+        # .pt shards (torch.save) and/or gm-shard.v1 directories (Rust converters)
         self.paths = sorted(glob.glob(os.path.join(data_dir, "**", "*.pt"),
-                                      recursive=True))
+                                      recursive=True)) + find_gm_shards(data_dir)
         if not self.paths:
-            raise FileNotFoundError(f"no .pt shards under {data_dir}")
+            raise FileNotFoundError(f"no .pt shards or gm-shard directories under {data_dir}")
         self.game = game
         self.max_len = max_len
 
@@ -97,11 +175,29 @@ class GameShardDataset(Dataset):
         self._obs_keys: Optional[frozenset] = None
         self._tgt_keys: Optional[frozenset] = None
         for si, p in enumerate(self.paths):
-            shard = torch.load(p, map_location="cpu", weights_only=False)
+            shard = self._open(p, header_only=True)
             self._check(shard, p)
-            self._index.extend((si, j) for j in range(len(shard["samples"])))
+            self._index.extend((si, j) for j in range(shard["n_samples"]))
         self._cache_idx: int = -1
         self._cache: Optional[Dict] = None
+
+    @staticmethod
+    def _open(path: str, header_only: bool = False) -> Dict:
+        """Shard dict for a .pt file or a gm-shard directory. ``header_only``
+        returns keys/meta/counts without materialising gm-shard samples."""
+        if os.path.isdir(path):
+            sh = GmShard(path)
+            head = {"format_version": FORMAT_VERSION, "game": sh.game,
+                    "converter_version": sh.index.get("converter_version", 1),
+                    "meta": sh.index.get("meta") or {}, "n_samples": len(sh), "_gm": sh}
+            if header_only:
+                names = list(sh.index["tensors"])
+                head["_keys"] = (frozenset(n.split(".", 1)[1] for n in names if n.startswith("obs.")),
+                                 frozenset(n.split(".", 1)[1] for n in names if n.startswith("tgt.")))
+            return head
+        shard = torch.load(path, map_location="cpu", weights_only=False)
+        shard["n_samples"] = len(shard["samples"])
+        return shard
 
     def _check(self, shard: Dict, path: str) -> None:
         if shard.get("format_version") != FORMAT_VERSION:
@@ -119,9 +215,12 @@ class GameShardDataset(Dataset):
         # the tensor level, so this is the only place mixing is caught.
         cv = shard.get("converter_version", 1)
         meta = shard.get("meta", {})
-        samples = shard["samples"]
-        obs_keys = frozenset(samples[0]["obs"]) if samples else None
-        tgt_keys = frozenset(samples[0]["tgt"]) if samples else None
+        if "_keys" in shard:
+            obs_keys, tgt_keys = shard["_keys"] if shard["n_samples"] else (None, None)
+        else:
+            samples = shard["samples"]
+            obs_keys = frozenset(samples[0]["obs"]) if samples else None
+            tgt_keys = frozenset(samples[0]["tgt"]) if samples else None
         if self.converter_version is None:
             self.converter_version = cv
             self.shard_meta = meta
@@ -155,11 +254,10 @@ class GameShardDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict:
         si, j = self._index[idx]
         if si != self._cache_idx:
-            self._cache = torch.load(
-                self.paths[si], map_location="cpu", weights_only=False,
-            )
+            self._cache = self._open(self.paths[si])
             self._cache_idx = si
-        sample = self._cache["samples"][j]
+        sample = (self._cache["_gm"].sample(j) if "_gm" in self._cache
+                  else self._cache["samples"][j])
         if self.max_len is not None:
             T = next(iter(sample["obs"].values())).shape[0]
             if T > self.max_len:
