@@ -622,6 +622,9 @@ def test_graph_replay_matches_eager_bf16_cuda():
 
     dev = torch.device("cuda")
     net = _net(moe=4, device=dev)
+    # greedy: with sampling, eager and replay draw different sources, and the
+    # direction/split logits are conditioned on the drawn source
+    net.action_decoder.greedy = True
     g = GraphedStep(net, _obs(1, dev), act_steps=2, autocast_dtype=torch.bfloat16)
     cache = None
     for t in range(4):
@@ -630,8 +633,16 @@ def test_graph_replay_matches_eager_bf16_cuda():
             e = GameNetwork.step(net, obs, st_cache=cache, step_idx=t, act_steps=2)
         cache = e["st_cache"]
         r = g(obs, t)
-        for key in LOGIT_KEYS:
-            torch.testing.assert_close(r[key].float(), e[key].float(), rtol=1e-2, atol=1e-2)
+        # unconditioned outputs: always comparable (bf16 tolerance; the graph
+        # re-casts weights on every use, eager caches the casts)
+        for key in ("source_logits", "pass_logits", "value"):
+            torch.testing.assert_close(r[key].float(), e[key].float(), rtol=2e-2, atol=2e-2)
+        # source-conditioned heads: only where both picked the same source
+        # (a bf16 near-tie may legitimately flip the greedy argmax)
+        same = r["action_source"] == e["action_source"]
+        for key in ("direction_logits", "split_logits"):
+            torch.testing.assert_close(r[key][same].float(), e[key][same].float(),
+                                       rtol=2e-2, atol=2e-2)
 
 
 @needs_cuda
