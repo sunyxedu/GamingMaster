@@ -85,6 +85,11 @@ pub struct WthorGame {
     pub moves: Vec<(i32, i32)>,
 }
 
+/// Game year recorded in a WTHOR header.
+pub fn wtb_year(data: &[u8]) -> Option<u16> {
+    (data.len() >= 12).then(|| u16::from_le_bytes([data[10], data[11]]))
+}
+
 pub fn parse_wtb(data: &[u8]) -> Result<Vec<WthorGame>> {
     if data.len() < 16 {
         bail!("file too short for WTHOR header: {} bytes", data.len());
@@ -218,6 +223,15 @@ pub enum Cmd {
         shard_size: usize,
         #[arg(long)]
         max_games: Option<usize>,
+        /// keep games whose recorded black score is within E discs of the theoretical
+        /// (perfect-play-from-depth) score: E bounds the total endgame error of both players
+        #[arg(long)]
+        max_endgame_error: Option<i64>,
+        #[arg(long)]
+        min_year: Option<u16>,
+        /// high-quality preset: endgame error <= 4 discs, games from 2000 on
+        #[arg(long)]
+        hq: bool,
     },
 }
 
@@ -256,18 +270,27 @@ pub fn fetch(out: &Path, first: u32, last: u32) -> Result<()> {
     Ok(())
 }
 
-pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<usize>) -> Result<serde_json::Value> {
+pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<usize>, max_err: Option<i64>, min_year: Option<u16>)
+    -> Result<serde_json::Value> {
     let files = common::find_files(input, &[".wtb"])?;
     anyhow::ensure!(!files.is_empty(), "no .wtb files under {}", input.display());
     let mut w = ShardWriter::new(out, "othello", 1, json!({}), shard_size)?;
     let (mut games, mut converted, mut illegal, mut mismatch, mut pass_frames) = (0usize, 0usize, 0usize, 0usize, 0i64);
+    let mut low_quality = 0usize;
     'outer: for path in files {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        for (i, g) in parse_wtb(&std::fs::read(&path)?).with_context(|| name.clone())?.iter().enumerate() {
+        let data = std::fs::read(&path)?;
+        let year_ok = min_year.map(|y| wtb_year(&data).map(|fy| fy >= y).unwrap_or(false)).unwrap_or(true);
+        for (i, g) in parse_wtb(&data).with_context(|| name.clone())?.iter().enumerate() {
             if max_games.map(|m| games >= m).unwrap_or(false) {
                 break 'outer;
             }
             games += 1;
+            let err_ok = max_err.map(|e| (g.black_real_score as i64 - g.black_theoretical_score as i64).abs() <= e).unwrap_or(true);
+            if !year_ok || !err_ok {
+                low_quality += 1;
+                continue;
+            }
             match game_to_sample(g, &name, i) {
                 Ok((s, ok, np)) => {
                     converted += 1;
@@ -283,15 +306,20 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<us
         }
     }
     w.flush()?;
-    Ok(json!({"games": games, "converted": converted, "illegal": illegal, "score_mismatch": mismatch,
+    Ok(json!({"games": games, "converted": converted, "illegal": illegal, "score_mismatch": mismatch, "low_quality": low_quality,
               "pass_frames": pass_frames, "shards": w.written_shards}))
 }
 
 pub fn run(cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Fetch { out, first_year, last_year } => fetch(&out, first_year, last_year.unwrap_or_else(current_year)),
-        Cmd::Convert { input, out, shard_size, max_games } => {
-            let s = convert(&input, &out, shard_size, max_games)?;
+        Cmd::Convert { input, out, shard_size, max_games, max_endgame_error, min_year, hq } => {
+            let (e, y) = if hq {
+                (Some(max_endgame_error.unwrap_or(4).min(4)), Some(min_year.unwrap_or(2000).max(2000)))
+            } else {
+                (max_endgame_error, min_year)
+            };
+            let s = convert(&input, &out, shard_size, max_games, e, y)?;
             println!("{s}");
             Ok(())
         }
