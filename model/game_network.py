@@ -28,6 +28,7 @@ from torch.utils.checkpoint import checkpoint
 
 from model.components.heads import HLGaussValueHead, ValueHead
 from model.components.transformer import SpatiotemporalBlock, _sinusoidal_pe
+from model.components.core import DeepCore, RecurrentDepthCore
 from model.components.trm import TRM
 from model.config import ModelConfig
 from model.games.base import ActionDecoder, ObservationEncoder
@@ -65,12 +66,23 @@ class GameNetwork(nn.Module):
             [SpatiotemporalBlock(cfg) for _ in range(cfg.n_st_layers)]
         )
 
-        # --- Stage 2: TRM ---
-        self.trm = TRM(cfg)
-        # q_halt is read from the HL decision token, which sits directly
-        # after the game tokens.  (For generals this equals the config
-        # default grid_h*grid_w; other games have other token counts.)
-        self.trm.q_token_idx = obs_encoder.n_tokens
+        # --- Stage 2: core (model/components/core.py; "trm" = legacy) ---
+        self.core_type = getattr(cfg, "core_type", "trm")
+        if self.core_type == "trm":
+            if getattr(cfg, "moe_experts", 0):
+                raise ValueError("MoE is implemented for the transformer / "
+                                 "recurrent_depth cores, not the legacy TRM")
+            self.trm = TRM(cfg)
+            # q_halt is read from the HL decision token, which sits directly
+            # after the game tokens (re-set per call: a shared core serves
+            # games with different token counts).
+            self.trm.q_token_idx = obs_encoder.n_tokens
+        elif self.core_type == "recurrent_depth":
+            self.core = RecurrentDepthCore(cfg)
+        elif self.core_type == "transformer":
+            self.core = DeepCore(cfg)
+        else:
+            raise ValueError(f"unknown core_type {self.core_type!r}")
 
         # --- Learnable decision tokens ---
         self.hl_token = nn.Parameter(torch.randn(1, 1, cfg.d_model) * 0.02)
@@ -101,7 +113,7 @@ class GameNetwork(nn.Module):
     def _init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                if m is self.trm.q_head:
+                if hasattr(self, "trm") and m is self.trm.q_head:
                     continue  # TRM q_head has custom init
                 nn.init.trunc_normal_(m.weight, std=0.02)
                 if m.bias is not None:
@@ -115,6 +127,27 @@ class GameNetwork(nn.Module):
     # ------------------------------------------------------------------
     # Shared building blocks
     # ------------------------------------------------------------------
+
+    @property
+    def supervision_steps(self) -> int:
+        """Deep-supervision steps per example (training.deep_supervision):
+        N_sup for the legacy TRM, 1 (plain training) for the other cores."""
+        return max(1, self.cfg.halt_max_steps) if self.core_type == "trm" else 1
+
+    @property
+    def default_depth(self) -> int:
+        """Inference depth when act_steps is None: TRM N_sup, recurrent-depth
+        r (rd_eval_iters or rd_mean_iters), 1 for the plain transformer."""
+        if self.core_type == "trm":
+            return max(1, self.cfg.halt_max_steps)
+        return self.core.default_iters()
+
+    def _core_pass(self, x: torch.Tensor, steps: Optional[int],
+                   valid: Optional[torch.Tensor] = None
+                   ) -> Tuple[torch.Tensor, torch.Tensor, int]:
+        """Non-TRM cores: (z [BT, S, d], q_halt zeros [BT], depth)."""
+        z, depth = self.core(x, steps, valid)
+        return z, x.new_zeros(x.shape[0]), depth
 
     def _build_pe(self) -> torch.Tensor:
         """Game-token PE (from the encoder) + decision-token PE: [1, S+2, d]."""
@@ -199,6 +232,10 @@ class GameNetwork(nn.Module):
 
         Returns (z_H, q_halt, act_depth[B]).
         """
+        if self.core_type != "trm":
+            z, q, r = self._core_pass(x, act_steps)
+            return z, q, torch.full((x.shape[0],), r, dtype=torch.long, device=x.device)
+        self.trm.q_token_idx = self.obs_encoder.n_tokens
         steps = max(1, act_steps if act_steps is not None
                     else self.cfg.halt_max_steps)
         z_H, q_halt, carry = self.trm(x)
@@ -271,9 +308,17 @@ class GameNetwork(nn.Module):
         x = tokens.reshape(BT, S, d)                  # input embeddings for TRM
         rows = (active.reshape(BT).nonzero().squeeze(1)
                 if active is not None else None)
-        z_H, q_halt, new_carry = self._trm_ponder(
-            x, act_steps, carry, rows,
-            reset.reshape(BT) if reset is not None else None)
+        if self.core_type == "trm":
+            self.trm.q_token_idx = self.obs_encoder.n_tokens
+            z_H, q_halt, new_carry = self._trm_ponder(
+                x, act_steps, carry, rows,
+                reset.reshape(BT) if reset is not None else None)
+        else:
+            # one pass per example (no carried latents); padded frames are
+            # excluded from the MoE load statistics
+            valid = frame_mask.reshape(BT) if frame_mask is not None else None
+            z_H, q_halt, _ = self._core_pass(x, act_steps, valid)
+            new_carry = None
         z_H = self.post_norm(z_H)
 
         # ── Decode ──

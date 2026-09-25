@@ -131,6 +131,12 @@ class ModelEMA:
             n: p.detach().clone() for n, p in model.named_parameters()
             if p.requires_grad
         }
+        # modules shared under several names (multi-game core): every alias
+        # of a shadowed parameter maps to its canonical (first) name
+        canon = {id(p): n for n, p in model.named_parameters() if n in self.shadow}
+        self.alias: Dict[str, str] = {
+            n: canon[id(p)] for n, p in model.named_parameters(remove_duplicate=False)
+            if id(p) in canon}
 
     @torch.no_grad()
     def update(self, model: nn.Module) -> None:
@@ -163,5 +169,6 @@ class ModelEMA:
         sd = model.state_dict()
         out = {}
         for k, v in sd.items():
-            out[k] = self.shadow[k].detach().clone() if k in self.shadow else v
+            c = self.alias.get(k)
+            out[k] = self.shadow[c].detach().clone() if c is not None else v
         return out

@@ -47,7 +47,7 @@ def cfg():
         d_ff=128,
         dropout=0.0,
         n_st_layers=1,
-        trm_H_cycles=2,
+        core_type="trm", trm_H_cycles=2,
         trm_L_cycles=2,
         trm_block_layers=1,
         encoder_channels=32,

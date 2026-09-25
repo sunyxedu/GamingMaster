@@ -61,7 +61,7 @@ def test_training_loop():
 
         cfg = ModelConfig(
             d_model=64, n_heads=4, d_ff=128,
-            trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
+            core_type="trm", trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
         )
         model = GeneralsNetwork(cfg)
         ImitationLoss(grid_w=cfg.grid_w)
@@ -179,7 +179,7 @@ def test_real_data_training():
 
         cfg = ModelConfig(
             d_model=64, n_heads=4, d_ff=128,
-            trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
+            core_type="trm", trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
         )
         model = GeneralsNetwork(cfg)
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -235,7 +235,7 @@ def test_checkpoint_save_load():
     """Test model checkpoint save/load."""
     print("\n=== Checkpoint Save/Load ===")
 
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, core_type="trm", trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
 
     B, T = 1, 3
@@ -283,7 +283,7 @@ def test_resume_training():
 
         cfg = ModelConfig(
             d_model=64, n_heads=4, d_ff=128,
-            trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
+            core_type="trm", trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32,
         )
 
         # --- Phase 1: train 3 epochs, save checkpoint ---

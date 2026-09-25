@@ -276,6 +276,21 @@ class GameShardDataset(Dataset):
     def __len__(self) -> int:
         return len(self._index)
 
+    def total_frames(self) -> int:
+        """Frames the dataset supervises (each sample capped at max_len).
+        Cheap for gm-shard directories (index only); .pt shards are loaded."""
+        total = 0
+        for p in self.paths:
+            if os.path.isdir(p):
+                lengths = [int(s["length"]) for s in GmShard(p).index["samples"]]
+            else:
+                lengths = [next(iter(s["obs"].values())).shape[0]
+                           for s in torch.load(p, map_location="cpu", weights_only=False)["samples"]]
+            if self.max_len is not None:
+                lengths = [min(L, self.max_len) for L in lengths]
+            total += sum(lengths)
+        return total
+
     def __getitem__(self, idx: int) -> Dict:
         si, j = self._index[idx]
         if si != self._cache_idx:

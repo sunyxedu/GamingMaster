@@ -41,6 +41,29 @@ class ModelConfig:
     # Stage 1: Spatiotemporal encoding (separate weights per layer)
     n_st_layers: int = 3
 
+    # Stage 2 core (model/components/core.py):
+    #   "recurrent_depth" — prelude → r × recurrent blocks → coda, Huginn-style
+    #                       (arXiv 2502.05171); the default
+    #   "transformer"     — core_layers untied blocks, one pass
+    #   "trm"             — Tiny Recursive Model (legacy; checkpoints saved
+    #                       before core_type existed load as "trm")
+    core_type: str = "recurrent_depth"
+    core_expansion: float = 4.0          # SwiGLU width of dense core FFNs
+    core_layers: int = 6                 # "transformer" core depth
+    rd_prelude_layers: int = 2           # l_P
+    rd_recurrent_layers: int = 2         # l_R (the looped block)
+    rd_coda_layers: int = 2              # l_C
+    rd_mean_iters: int = 8               # r̄ of the training log-normal Poisson
+    rd_backprop_iters: int = 4           # k: truncated BPTT depth
+    rd_max_iters: int = 32               # cap on the sampled r (0 = none)
+    rd_eval_iters: int = 0               # fixed inference r (0 = rd_mean_iters)
+    # Mixture of Experts in the core FFNs (0 = dense). DeepSeek-V3 routing:
+    # sigmoid affinities, top-k, shared experts, aux-loss-free balance bias.
+    moe_experts: int = 0
+    moe_top_k: int = 2
+    moe_shared_experts: int = 1
+    moe_expansion: float = 2.0           # per-expert SwiGLU width
+
     # Stage 2: TRM (Tiny Recursive Model, arXiv 2510.04871; defaults follow
     # the reference implementation SamsungSAILMontreal/TinyRecursiveModels,
     # config/arch/trm.yaml)
@@ -110,6 +133,7 @@ class ModelConfig:
 #: values a checkpoint config written before a field existed must get so the
 #: rebuilt network matches the saved weights (current defaults differ).
 LEGACY_CONFIG_DEFAULTS = {
+    "core_type": "trm",
     "trm_arch": "legacy",
     "halt_exploration_prob": 0.0,
 }

@@ -12,7 +12,7 @@ from model.network import GeneralsNetwork
 from model.optim import AdamATan2, ModelEMA, cosine_schedule_with_warmup_lr_lambda
 from training.deep_supervision import BatchCarry, halt_update, merge_rows, split_rows
 
-TINY = dict(d_model=64, n_heads=4, d_ff=128, n_st_layers=1, trm_H_cycles=2,
+TINY = dict(d_model=64, n_heads=4, d_ff=128, n_st_layers=1, core_type="trm", trm_H_cycles=2,
             trm_L_cycles=2, trm_block_layers=1, encoder_channels=16, dropout=0.0,
             temporal_mixer="recurrent")
 

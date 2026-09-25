@@ -527,7 +527,7 @@ def test_trm_h1_all_params_have_grad():
 
     cfg = ModelConfig(
         d_model=32, n_heads=4, d_ff=64,
-        trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1,
+        core_type="trm", trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1,
     )
     trm = TRM(cfg)
     x = torch.randn(1, 5, 32)
@@ -552,7 +552,7 @@ def test_trm_output_varies_with_input():
 
     cfg = ModelConfig(
         d_model=32, n_heads=4, d_ff=64,
-        trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, dropout=0.0,
+        core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, dropout=0.0,
     )
     trm = TRM(cfg)
     trm.eval()
@@ -736,7 +736,7 @@ def test_loss_gradient_flow():
 
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32,
     )
     model = GeneralsNetwork(cfg)
@@ -780,7 +780,7 @@ def test_network_st_shapes():
 
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        n_st_layers=2, core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, temporal_type="spatiotemporal",
     )
     model = GeneralsNetwork(cfg)
@@ -810,7 +810,7 @@ def test_network_st_step_cache_growth():
 
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        n_st_layers=2, core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
     )
     model = GeneralsNetwork(cfg)
@@ -839,7 +839,7 @@ def test_network_legal_mask_effect():
 
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, dropout=0.0,
     )
     model = GeneralsNetwork(cfg)
@@ -1002,7 +1002,7 @@ def test_e2e_converter_to_loss():
 
         cfg = ModelConfig(
             d_model=64, n_heads=4, d_ff=128,
-            trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+            core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
             encoder_channels=32,
         )
         model = GeneralsNetwork(cfg)
@@ -1048,7 +1048,7 @@ def test_e2e_training_step_reduces_loss():
 
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32,
     )
     model = GeneralsNetwork(cfg)

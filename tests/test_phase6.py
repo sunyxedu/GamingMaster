@@ -22,7 +22,7 @@ from env.generals_env import GeneralsEnv
 from training.train_rl import (anchor_weight, collect_selfplay_episode,
                       load_sparring_net, ppo_update, resolve_phase_start)
 
-TINY = dict(d_model=64, n_heads=4, trm_H_cycles=1, trm_L_cycles=2,
+TINY = dict(d_model=64, n_heads=4, core_type="trm", trm_H_cycles=1, trm_L_cycles=2,
             trm_block_layers=1)
 
 

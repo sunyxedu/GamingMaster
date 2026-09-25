@@ -34,6 +34,7 @@ from model.optim import (
     trm_lr_lambda,
 )
 from model.rl_utils import load_model_state, sync_gradients
+from model.components.core import update_moe_balance
 from training.deep_supervision import BatchCarry, split_rows
 
 
@@ -61,6 +62,9 @@ def parse_args():
     p.add_argument("--lr_min_ratio", type=float, default=TRM_LR_MIN_RATIO,
                    help="cosine floor after warmup; 1.0 = constant LR (reference)")
     p.add_argument("--optimizer", choices=["adam_atan2", "adamw"], default="adam_atan2")
+    p.add_argument("--moe_balance_rate", type=float, default=1e-3,
+                   help="γ of the MoE aux-loss-free balance-bias update "
+                        "(DeepSeek-V3), applied once per optimizer step")
     p.add_argument("--ema_rate", type=float, default=TRM_EMA_RATE,
                    help="EMA of the weights (evaluation + saved model_state); 0 = off")
     p.add_argument("--max_seq_len", type=int, default=1000, help="Max sequence length per sample")
@@ -219,6 +223,8 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
         optimizer.zero_grad(set_to_none=True)
         if ema is not None:
             ema.update(model)
+        # MoE aux-loss-free balancing over the whole step (all micro-batches)
+        update_moe_balance(model, args.moe_balance_rate)
 
     n_batches = len(loader)
     slot = 0
@@ -351,10 +357,8 @@ def main():
     if args.halt_max_steps > 0:
         cfg.halt_max_steps = args.halt_max_steps
     if rank0:
-        print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, "
-              f"TRM[{cfg.trm_arch}]={cfg.trm_H_cycles}H\u00d7{cfg.trm_L_cycles}L\u00d7{cfg.trm_block_layers}blk, "
-              f"deep supervision N_sup={cfg.halt_max_steps} "
-              f"(explore {cfg.halt_exploration_prob})")
+        print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, core={cfg.core_type}, "
+              f"moe_experts={cfg.moe_experts}")
 
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
@@ -370,7 +374,9 @@ def main():
     if rank0:
         print(f"Model parameters: {n_params:,}")
 
-    criterion = ImitationLoss(grid_w=cfg.grid_w, focal_gamma=args.focal_gamma)
+    # q_halt is a TRM-only head (other cores emit a constant 0)
+    criterion = ImitationLoss(grid_w=cfg.grid_w, focal_gamma=args.focal_gamma,
+                              q_halt_weight=0.5 if model.core_type == "trm" else 0.0)
     from model.rl_utils import optim_param_groups
     groups = optim_param_groups(model, args.weight_decay)
     if args.optimizer == "adam_atan2":
@@ -534,7 +540,7 @@ def main():
     # latents are parked on the host.
     store = (torch.device("cpu")
              if max(1, args.grad_accum) > 1 and device.type == "cuda" else None)
-    carries = [BatchCarry(cfg.halt_max_steps, cfg.halt_exploration_prob, store=store)
+    carries = [BatchCarry(model.supervision_steps, cfg.halt_exploration_prob, store=store)
                for _ in range(max(1, args.grad_accum))]
 
     for epoch in range(start_epoch, args.epochs + 1):

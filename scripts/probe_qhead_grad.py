@@ -113,7 +113,7 @@ def main():
           f"cuda={torch.version.cuda if torch.cuda.is_available() else '-'}",
           flush=True)
     torch.manual_seed(0)
-    cfg = ModelConfig(temporal_mixer="recurrent", predict_next_obs=True)
+    cfg = ModelConfig(temporal_mixer="recurrent", predict_next_obs=True, core_type="trm")
     net = GeneralsNetwork(cfg).to(DEVICE)
     net.train()
     crit = ImitationLoss(grid_w=cfg.grid_w, focal_gamma=1.5)

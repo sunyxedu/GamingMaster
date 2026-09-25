@@ -21,7 +21,7 @@ from training.train_il_game import (
 
 SMALL = dict(
     d_model=48, n_heads=4, d_ff=64, n_st_layers=1,
-    trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+    core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
     halt_max_steps=2, dropout=0.0, encoder_channels=16,
 )
 
@@ -141,15 +141,15 @@ def test_resume_arch_prefers_checkpoint_config(capsys):
     # fields newer than the checkpoint get their LEGACY values
     assert resume_arch_overrides(ckpt, {}) == {
         "d_model": 48, "board_h": 6,
-        "trm_arch": "legacy", "halt_exploration_prob": 0.0}
+        "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0}
     # explicit CLI override is the escape hatch and applies loudly
     arch = resume_arch_overrides(ckpt, {"d_model": 64})
     assert arch == {"d_model": 64, "board_h": 6,
-                    "trm_arch": "legacy", "halt_exploration_prob": 0.0}
+                    "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0}
     assert "replaces checkpoint arch values" in capsys.readouterr().out
     # legacy checkpoint without a full config falls back to overrides
     assert resume_arch_overrides({"config_overrides": {"d_ff": 32}}, {}) == {
-        "d_ff": 32, "trm_arch": "legacy", "halt_exploration_prob": 0.0}
+        "d_ff": 32, "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0}
 
 
 def test_resume_rebuilds_exact_arch_from_config():

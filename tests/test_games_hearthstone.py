@@ -32,7 +32,7 @@ def cfg():
     """Tiny config for fast tests."""
     return HearthstoneConfig(
         d_model=48, n_heads=4, d_ff=64, dropout=0.0,
-        n_st_layers=1, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        n_st_layers=1, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         halt_max_steps=2,
         hand_slots=5, board_slots=3, entity_feature_dim=10,
         n_entity_types=6, hs_global_features=8, n_action_types=4,

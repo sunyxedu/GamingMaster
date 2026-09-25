@@ -18,7 +18,7 @@ from model.network import GeneralsNetwork
 
 
 def _cfg(**kw):
-    return ModelConfig(d_model=64, n_heads=4, trm_H_cycles=1, trm_L_cycles=2,
+    return ModelConfig(d_model=64, n_heads=4, core_type="trm", trm_H_cycles=1, trm_L_cycles=2,
                        trm_block_layers=1, **kw)
 
 

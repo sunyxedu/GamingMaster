@@ -88,9 +88,9 @@ def parse_args():
     p.add_argument("--act_steps", type=int, default=0,
                    help="Fixed TRM depth used for BOTH rollout and PPO update "
                         "(the two must match for the PPO ratio to be valid). "
-                        "0 = the model's full depth cfg.halt_max_steps — the "
-                        "reference TRM always runs every supervision step at "
-                        "test time")
+                        "0 = the model's default inference depth (TRM: all "
+                        "halt_max_steps supervision steps; recurrent-depth "
+                        "core: rd_eval_iters or rd_mean_iters)")
     p.add_argument("--act_steps_dist", type=str, default="",
                    help="Depth-randomized rollout (TRM deep-supervision "
                         "analog): 'depth:prob,...' e.g. "
@@ -497,6 +497,9 @@ class CaptureHead(torch.nn.Module):
 def full_depth(net: torch.nn.Module) -> int:
     """The network's full TRM depth (cfg.halt_max_steps) — what a depth of
     ``None`` means: the reference runs every supervision step at test time."""
+    for m in (net, getattr(net, "net", None)):
+        if m is not None and hasattr(m, "default_depth"):
+            return int(m.default_depth)
     cfg = getattr(net, "cfg", None)
     if cfg is None:
         cfg = getattr(getattr(net, "net", None), "cfg", None)
@@ -1562,9 +1565,9 @@ def main():
         hl_gauss_migrated = True
     value_reinit = ("value_head",) if hl_gauss_migrated else ()
 
-    if args.act_steps <= 0:
-        args.act_steps = max(1, cfg.halt_max_steps)
     model = GeneralsNetwork(cfg).to(device)
+    if args.act_steps <= 0:
+        args.act_steps = model.default_depth   # TRM N_sup / recurrent-depth r
     if il_ckpt is not None:
         load_model_state(model, il_ckpt["model_state"], ctx="IL checkpoint",
                          reinit_prefixes=value_reinit)

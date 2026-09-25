@@ -13,7 +13,7 @@ from model.config import ModelConfig
 from model.network import GeneralsNetwork
 from training.train_rl import _select_cache_rows, collect_selfplay_episodes_vec
 
-TINY = dict(d_model=64, n_heads=4, trm_H_cycles=1, trm_L_cycles=2,
+TINY = dict(d_model=64, n_heads=4, core_type="trm", trm_H_cycles=1, trm_L_cycles=2,
             trm_block_layers=1)
 
 

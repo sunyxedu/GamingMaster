@@ -26,7 +26,7 @@ from model.rl_utils import compute_policy_kl_heads
 
 @pytest.fixture(scope="module")
 def cfg():
-    return ModelConfig(d_model=64, n_heads=4, trm_H_cycles=1, trm_L_cycles=2,
+    return ModelConfig(d_model=64, n_heads=4, core_type="trm", trm_H_cycles=1, trm_L_cycles=2,
                        trm_block_layers=1)
 
 

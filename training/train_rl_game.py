@@ -288,7 +288,7 @@ def main() -> None:
     net = net.to(device)
     cfg = net.cfg
     if args.act_steps <= 0:
-        args.act_steps = max(1, cfg.halt_max_steps)
+        args.act_steps = net.default_depth
     board_size = args.board_size or cfg.board_h
     if (cfg.board_h, cfg.board_w) != (board_size, board_size):
         raise ValueError(

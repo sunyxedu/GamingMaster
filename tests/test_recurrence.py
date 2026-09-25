@@ -211,7 +211,7 @@ def _small_recurrent_net():
 
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        n_st_layers=2, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
         temporal_mixer="recurrent",
     )
@@ -352,7 +352,7 @@ def test_next_obs_head_trains_memory():
     torch.manual_seed(9)
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        n_st_layers=1, core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
         temporal_mixer="recurrent", predict_next_obs=True,
     )

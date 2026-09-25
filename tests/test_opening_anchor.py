@@ -13,7 +13,7 @@ from model.network import GeneralsNetwork
 from model.rl_utils import RolloutBuffer
 from training.train_rl import ppo_update
 
-TINY = dict(d_model=64, n_heads=4, trm_H_cycles=1, trm_L_cycles=2,
+TINY = dict(d_model=64, n_heads=4, core_type="trm", trm_H_cycles=1, trm_L_cycles=2,
             trm_block_layers=1)
 
 

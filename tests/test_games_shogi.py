@@ -24,7 +24,7 @@ NH = 14  # 7 hand piece types × 2 players
 def make_cfg(**overrides) -> ShogiConfig:
     kw = dict(
         d_model=48, n_heads=4, d_ff=64, dropout=0.0,
-        n_st_layers=1, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        n_st_layers=1, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         halt_max_steps=2, encoder_channels=16,
         board_h=5, board_w=5, piece_channels=8,
     )

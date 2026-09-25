@@ -8,7 +8,7 @@ from model.games import GAME_REGISTRY, build_game_network
 
 SMALL = dict(
     d_model=48, n_heads=4, d_ff=64, n_st_layers=1,
-    trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+    core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
     halt_max_steps=2, dropout=0.0, encoder_channels=16,
 )
 

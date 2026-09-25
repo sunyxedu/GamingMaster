@@ -36,7 +36,7 @@ def cfg():
     """Tiny config for fast tests."""
     return MahjongConfig(
         d_model=48, n_heads=4, d_ff=64, dropout=0.0,
-        n_st_layers=1, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        n_st_layers=1, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         halt_max_steps=2,
     )
 

@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 SMALL_CFG = dict(
     d_model=32, n_heads=4, d_ff=64, encoder_channels=16, n_st_layers=1,
-    trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, dropout=0.0,
+    core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, dropout=0.0,
     temporal_mixer="recurrent", predict_next_obs=True,
 )
 

@@ -198,7 +198,7 @@ def test_trm_recursion_structure():
 
     cfg = ModelConfig(
         d_model=32, n_heads=4, d_ff=64, dropout=0.0,
-        trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
     )
     trm = TRM(cfg)
     trm.eval()
@@ -240,7 +240,7 @@ def test_trm_nograd_saves_memory():
 
     cfg = ModelConfig(
         d_model=32, n_heads=4, d_ff=64,
-        trm_H_cycles=3, trm_L_cycles=2, trm_block_layers=1,
+        core_type="trm", trm_H_cycles=3, trm_L_cycles=2, trm_block_layers=1,
     )
     trm = TRM(cfg)
 
@@ -355,7 +355,7 @@ def test_full_pipeline_real_data():
 
         cfg = ModelConfig(
             d_model=64, n_heads=4, d_ff=128,
-            n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+            n_st_layers=1, core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
             encoder_channels=32,
         )
         model = GeneralsNetwork(cfg)
@@ -401,7 +401,7 @@ def test_inference_empty_legal_mask():
 
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        n_st_layers=1, core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, temporal_type="spatiotemporal",
     )
     model = GeneralsNetwork(cfg)
@@ -429,7 +429,7 @@ def test_step_vs_full_consistency():
 
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        n_st_layers=1, core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
         halt_max_steps=1,
     )
@@ -507,7 +507,7 @@ def test_padded_frames_do_not_affect_batchnorm():
 
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        n_st_layers=1, core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
     )
     model = GeneralsNetwork(cfg)
@@ -545,7 +545,7 @@ def test_step_vs_full_consistency_act_steps():
     K = 3
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=1, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        n_st_layers=1, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
         halt_max_steps=5,
     )

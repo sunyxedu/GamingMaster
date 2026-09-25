@@ -30,7 +30,7 @@ def cfg():
     """Tiny config for fast tests."""
     return ClashRoyaleConfig(
         d_model=48, n_heads=4, d_ff=64, dropout=0.0,
-        n_st_layers=1, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        n_st_layers=1, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         halt_max_steps=2, encoder_channels=24,
         arena_h=8, arena_w=6, arena_channels=5,
         hand_size=4, n_cards=20, card_feature_dim=8, cr_global_features=6,

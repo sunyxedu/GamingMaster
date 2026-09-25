@@ -46,7 +46,7 @@ class TestEloLadderEndToEnd:
         from model.config import ModelConfig
         from model.network import GeneralsNetwork
 
-        cfg = ModelConfig(d_model=64, n_heads=4, trm_H_cycles=1,
+        cfg = ModelConfig(d_model=64, n_heads=4, core_type="trm", trm_H_cycles=1,
                           trm_L_cycles=2, trm_block_layers=1)
         refs = tmp_path / "refs"
         refs.mkdir()
@@ -59,7 +59,7 @@ class TestEloLadderEndToEnd:
         # Candidate is a PHASE-5-STYLE checkpoint (turn_globals, 7 globals,
         # derived army channels): the ladder must mix it with the 4-global
         # refs in the same games.
-        cfg5 = ModelConfig(d_model=64, n_heads=4, trm_H_cycles=1,
+        cfg5 = ModelConfig(d_model=64, n_heads=4, core_type="trm", trm_H_cycles=1,
                            trm_L_cycles=2, trm_block_layers=1,
                            turn_globals=True, global_features=7,
                            derive_army_channels=True)

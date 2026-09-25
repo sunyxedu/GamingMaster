@@ -190,7 +190,7 @@ def test_generals_network_forward():
     print("\n=== GeneralsNetwork Forward ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32, dropout=0.0,
+        core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32, dropout=0.0,
     )
     model = GeneralsNetwork(cfg)
     n_params = sum(p.numel() for p in model.parameters())
@@ -242,7 +242,7 @@ def test_trm_module():
     print("\n=== TRM Module ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=3, trm_L_cycles=2, trm_block_layers=2,
+        core_type="trm", trm_H_cycles=3, trm_L_cycles=2, trm_block_layers=2,
         dropout=0.0,
     )
     trm = TRM(cfg)
@@ -264,7 +264,7 @@ def test_spatiotemporal_forward():
     print("\n=== GeneralsNetwork Forward (spatiotemporal + TRM) ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        n_st_layers=2, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32, dropout=0.0,
         temporal_type="spatiotemporal",
     )
@@ -298,7 +298,7 @@ def test_spatiotemporal_causal():
     print("\n=== Spatiotemporal Causality ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=1, trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
+        n_st_layers=1, core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, dropout=0.0,
         temporal_type="spatiotemporal",
     )
@@ -323,7 +323,7 @@ def test_spatiotemporal_step():
     print("\n=== Spatiotemporal + TRM Single-step Inference ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        n_st_layers=2, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32, dropout=0.0,
         temporal_type="spatiotemporal",
     )
@@ -349,7 +349,7 @@ def test_spatiotemporal_backward():
     print("\n=== Spatiotemporal + TRM Backward ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1,
+        n_st_layers=2, core_type="trm", trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32,
         temporal_type="spatiotemporal",
     )
@@ -382,7 +382,7 @@ def test_trm_nograd_optimization():
     print("\n=== TRM No-grad Optimization ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=3, trm_L_cycles=2, trm_block_layers=1,
+        core_type="trm", trm_H_cycles=3, trm_L_cycles=2, trm_block_layers=1,
     )
     trm = TRM(cfg)
     x = torch.randn(1, 10, 64, requires_grad=True)
@@ -404,7 +404,7 @@ def test_trm_nograd_optimization():
 
 def test_generals_network_inference():
     print("\n=== GeneralsNetwork Inference (no source_y/x) ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -422,7 +422,7 @@ def test_generals_network_inference():
 
 def test_generals_network_step():
     print("\n=== GeneralsNetwork Single-step ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -453,7 +453,7 @@ def test_generals_network_step():
 
 def test_backward_pass():
     print("\n=== Backward Pass ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, core_type="trm", trm_H_cycles=1, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
 
     B, T = 2, 5
@@ -529,7 +529,7 @@ def test_imitation_loss():
 
 def test_imitation_loss_backward():
     print("\n=== ImitationLoss Backward ===")
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
     criterion = ImitationLoss(grid_w=25)
 
@@ -604,7 +604,7 @@ def test_dataset_integration():
     import json
     import tempfile
 
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -702,7 +702,7 @@ def test_real_replay_integration():
         gio["legal_source_mask_seq"][:max_t], dtype=torch.bool
     ).unsqueeze(0)
 
-    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
+    cfg = ModelConfig(d_model=64, n_heads=4, d_ff=128, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, encoder_channels=32)
     model = GeneralsNetwork(cfg)
     model.eval()
 
@@ -724,7 +724,7 @@ def test_gradient_flow():
     print("\n=== Gradient Flow (spatiotemporal + TRM) ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        n_st_layers=2, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        n_st_layers=2, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32,
         temporal_type="spatiotemporal",
     )
@@ -828,7 +828,7 @@ def test_imitation_loss_gradient():
     print("\n=== ImitationLoss gradient flow ===")
     cfg = ModelConfig(
         d_model=64, n_heads=4, d_ff=128,
-        trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
+        core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         encoder_channels=32,
     )
     model = GeneralsNetwork(cfg)

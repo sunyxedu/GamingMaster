@@ -49,6 +49,7 @@ from model.optim import (
     trm_lr_lambda,
 )
 from model.rl_utils import load_model_state, optim_param_groups
+from model.components.core import update_moe_balance
 from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry, split_rows
 
 # Teacher-forcing conditioning labels per game: the tgt keys the decoder
@@ -128,6 +129,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr_min_ratio", type=float, default=TRM_LR_MIN_RATIO,
                    help="cosine floor after warmup; 1.0 = constant LR (reference)")
     p.add_argument("--optimizer", choices=["adam_atan2", "adamw"], default="adam_atan2")
+    p.add_argument("--moe_balance_rate", type=float, default=1e-3,
+                   help="γ of the MoE aux-loss-free balance-bias update "
+                        "(DeepSeek-V3), applied once per optimizer step")
     p.add_argument("--ema_rate", type=float, default=TRM_EMA_RATE,
                    help="EMA of the weights (evaluation + saved model_state); 0 = off")
     p.add_argument("--max_len", type=int, default=None,
@@ -322,7 +326,9 @@ def batch_loss(
             losses["value_loss"] = v_loss.detach()
         correct = losses.pop("answer_correct", None)
         answer_mask = losses.pop("answer_mask", None)
-        if correct is not None and "q_halt" in pred:
+        # q_halt exists only for the legacy TRM core (its halting head);
+        # other cores emit a constant 0, which would only add a constant
+        if correct is not None and "q_halt" in pred and getattr(net, "core_type", "trm") == "trm":
             q_mask = (answer_mask if answer_mask is not None else mask) & mask
             q_f = q_mask.float()
             q_bce = F.binary_cross_entropy_with_logits(
@@ -354,7 +360,7 @@ def evaluate(net, game, loader, device, value_weight, q_halt_weight, bf16,
             mb = prepare_batch(game, batch, device, tf_prob=1.0)
             _, stats, _ = batch_loss(model, mb, device, value_weight,
                                      q_halt_weight, bf16,
-                                     act_steps=model.cfg.halt_max_steps)
+                                     act_steps=model.default_depth)
             for k, v in stats.items():
                 agg[k] = agg.get(k, 0.0) + v
             n += 1
@@ -445,8 +451,8 @@ def main() -> None:
 
     if args.halt_max_steps > 0:
         cfg.halt_max_steps = args.halt_max_steps
-    print(f"[init] TRM[{cfg.trm_arch}] {cfg.trm_H_cycles}H x {cfg.trm_L_cycles}L x "
-          f"{cfg.trm_block_layers} layers, deep supervision N_sup={cfg.halt_max_steps}")
+    print(f"[init] core={cfg.core_type} moe_experts={cfg.moe_experts} "
+          f"supervision_steps={net.supervision_steps} inference_depth={net.default_depth}")
 
     groups = optim_param_groups(net, args.weight_decay)
     if args.optimizer == "adam_atan2":
@@ -501,13 +507,15 @@ def main() -> None:
         optimizer.zero_grad(set_to_none=True)
         if ema is not None:
             ema.update(net)
+        # MoE aux-loss-free balancing over the whole step (all micro-batches)
+        update_moe_balance(net, args.moe_balance_rate)
         opt_step += 1
 
     # Reference train_state.carry: one per accumulation slot, persisting
     # across batches and epochs (training/deep_supervision.py).
     store = (torch.device("cpu")
              if args.grad_accum > 1 and device.type == "cuda" else None)
-    carries = [BatchCarry(cfg.halt_max_steps, cfg.halt_exploration_prob, store=store)
+    carries = [BatchCarry(net.supervision_steps, cfg.halt_exploration_prob, store=store)
                for _ in range(max(1, args.grad_accum))]
 
     for epoch in range(start_epoch, args.epochs):

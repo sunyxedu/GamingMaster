@@ -205,18 +205,21 @@ class BatchCarry:
         new_steps, new_active = halt_update(
             pred["q_halt"].detach(), steps, active, self.n_sup,
             self.exploration_prob, training=True)
-        z = pred["carry"]
-        S, d = z[0].shape[1:]
-        zH = z[0].reshape(B, T_max, S, d)
-        zL = z[1].reshape(B, T_max, S, d)
+        z = pred.get("carry")          # None: the core carries no latents
+        if z is not None:
+            S, d = z[0].shape[1:]
+            zH = z[0].reshape(B, T_max, S, d)
+            zL = z[1].reshape(B, T_max, S, d)
         halted_now = active & ~new_active
         for i, r in enumerate(live):
             T = r.data["T"]
-            c = (zH[i, :T], zL[i, :T])
-            if self.store is not None:
-                # blocking copy: a non_blocking device→host copy may still
-                # be in flight when the tensor is next read
-                c = (c[0].to(self.store), c[1].to(self.store))
+            c = None
+            if z is not None:
+                c = (zH[i, :T], zL[i, :T])
+                if self.store is not None:
+                    # blocking copy: a non_blocking device→host copy may
+                    # still be in flight when the tensor is next read
+                    c = (c[0].to(self.store), c[1].to(self.store))
             r.carry = c
             r.steps = new_steps[i, :T]
             r.active = new_active[i, :T]

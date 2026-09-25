@@ -111,7 +111,7 @@ class TestEMA:
         from model.network import GeneralsNetwork
         from training.train_rl import init_ema
 
-        cfg = ModelConfig(d_model=64, n_heads=4, trm_H_cycles=1,
+        cfg = ModelConfig(d_model=64, n_heads=4, core_type="trm", trm_H_cycles=1,
                           trm_L_cycles=2, trm_block_layers=1)
         m = GeneralsNetwork(cfg)
         ema = init_ema(m)
