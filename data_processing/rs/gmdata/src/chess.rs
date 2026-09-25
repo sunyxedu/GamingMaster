@@ -118,6 +118,37 @@ fn is_bullet(h: &HashMap<String, String>) -> bool {
     }
 }
 
+/// Extra quality filters (all off by default; `--hq` turns on a strong preset).
+#[derive(Clone, Copy, Default)]
+pub struct Quality {
+    /// only games whose Event starts with "Rated"
+    pub rated_only: bool,
+    /// only Termination "Normal" (drops time forfeits, abandoned games, rules infractions)
+    pub normal_termination: bool,
+    /// estimated duration base + 40·inc must be at least this many seconds
+    pub min_duration_s: i64,
+}
+
+fn duration_s(h: &HashMap<String, String>) -> Option<i64> {
+    let tc = h.get("TimeControl")?;
+    let (b, i) = tc.split_once('+')?;
+    Some(py_int(b)? + 40 * py_int(i)?)
+}
+
+fn passes_quality(g: &Game, q: &Quality) -> bool {
+    let h = &g.headers;
+    if q.rated_only && !h.get("Event").map(|e| e.starts_with("Rated")).unwrap_or(false) {
+        return false;
+    }
+    if q.normal_termination && h.get("Termination").map(|t| t.as_str()) != Some("Normal") {
+        return false;
+    }
+    if q.min_duration_s > 0 && duration_s(h).map(|d| d < q.min_duration_s).unwrap_or(true) {
+        return false;
+    }
+    true
+}
+
 fn passes(g: &Game, min_elo: i64, min_plies: usize, skip_bullet: bool) -> bool {
     let h = &g.headers;
     if h.get("Variant").map(|s| s.as_str()).unwrap_or("Standard") != "Standard" {
@@ -241,10 +272,14 @@ fn encode(g: &Game) -> Option<Sample> {
 
 #[derive(Subcommand)]
 pub enum Cmd {
-    /// Download a monthly Lichess standard-rated dump (YYYY-MM), kept compressed
+    /// Download a monthly Lichess standard-rated dump (YYYY-MM, kept compressed), or with
+    /// `--elite` the Lichess Elite Database month (2400+ vs 2200+, 2500+ vs 2300+ since 2021-12,
+    /// no bullet)
     Fetch {
         #[arg(long)]
         month: String,
+        #[arg(long)]
+        elite: bool,
         #[arg(long, default_value = "data/chess/raw")]
         out: PathBuf,
     },
@@ -264,11 +299,33 @@ pub enum Cmd {
         min_plies: usize,
         #[arg(long)]
         skip_bullet: bool,
+        #[arg(long)]
+        rated_only: bool,
+        #[arg(long)]
+        normal_termination: bool,
+        #[arg(long, default_value_t = 0)]
+        min_duration_s: i64,
+        /// high-quality preset: both Elo >= 2200, rated, normal termination, no bullet
+        /// (estimated duration >= 180 s), >= 20 plies
+        #[arg(long)]
+        hq: bool,
     },
 }
 
 fn open(path: &Path) -> Result<Box<dyn Read>> {
     let f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    if path.extension().map(|e| e == "zip").unwrap_or(false) {
+        // Elite-database months: one .pgn per zip
+        let mut z = zip::ZipArchive::new(f)?;
+        let mut buf = Vec::new();
+        for i in 0..z.len() {
+            let mut m = z.by_index(i)?;
+            if m.name().ends_with(".pgn") {
+                m.read_to_end(&mut buf)?;
+            }
+        }
+        return Ok(Box::new(std::io::Cursor::new(buf)));
+    }
     if path.extension().map(|e| e == "zst").unwrap_or(false) {
         let mut d = zstd::stream::read::Decoder::new(f)?;
         d.window_log_max(31)?;
@@ -278,8 +335,9 @@ fn open(path: &Path) -> Result<Box<dyn Read>> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn convert(input: &Path, out: &Path, shard_size: usize, min_elo: i64, max_games: Option<usize>, min_plies: usize,
-               skip_bullet: bool) -> Result<Value> {
+               skip_bullet: bool, q: Quality) -> Result<Value> {
     let mut w = ShardWriter::new(out, "chess", CONVERTER_VERSION, json!({}), shard_size)?;
     let mut reader = Reader::new(std::io::BufReader::with_capacity(1 << 20, open(input)?));
     let (mut seen, mut kept) = (0usize, 0usize);
@@ -288,7 +346,7 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_elo: i64, max_ga
             continue;
         }
         seen += 1;
-        if !passes(&g, min_elo, min_plies, skip_bullet) {
+        if !passes(&g, min_elo, min_plies, skip_bullet) || !passes_quality(&g, &q) {
             continue;
         }
         let Some(s) = encode(&g) else { continue };
@@ -304,14 +362,27 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_elo: i64, max_ga
 
 pub fn run(cmd: Cmd) -> Result<()> {
     match cmd {
-        Cmd::Fetch { month, out } => {
-            let name = format!("lichess_db_standard_rated_{month}.pgn.zst");
-            let url = format!("https://database.lichess.org/standard/{name}");
+        Cmd::Fetch { month, elite, out } => {
+            let (name, url) = if elite {
+                let n = format!("lichess_elite_{month}.zip");
+                (n.clone(), format!("https://database.nikonoel.fr/{n}"))
+            } else {
+                let n = format!("lichess_db_standard_rated_{month}.pgn.zst");
+                (n.clone(), format!("https://database.lichess.org/standard/{n}"))
+            };
             anyhow::ensure!(crate::common::download(&crate::common::http()?, &url, &out.join(&name))?, "404: {url}");
             Ok(())
         }
-        Cmd::Convert { input, out, shard_size, min_elo, max_games, min_plies, skip_bullet } => {
-            println!("{}", convert(&input, &out, shard_size, min_elo, max_games, min_plies, skip_bullet)?);
+        Cmd::Convert { input, out, shard_size, min_elo, max_games, min_plies, skip_bullet, rated_only, normal_termination, min_duration_s, hq } => {
+            let mut q = Quality { rated_only, normal_termination, min_duration_s };
+            let (mut min_elo, mut min_plies, mut skip_bullet) = (min_elo, min_plies, skip_bullet);
+            if hq {
+                q = Quality { rated_only: true, normal_termination: true, min_duration_s: q.min_duration_s.max(180) };
+                min_elo = min_elo.max(2200);
+                min_plies = min_plies.max(20);
+                skip_bullet = true;
+            }
+            println!("{}", convert(&input, &out, shard_size, min_elo, max_games, min_plies, skip_bullet, q)?);
             Ok(())
         }
     }
