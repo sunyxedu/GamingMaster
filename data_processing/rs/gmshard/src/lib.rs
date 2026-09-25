@@ -38,6 +38,7 @@ pub enum DType {
     U8,
     U16,
     Bool, // stored as u8
+    Bits, // logical float32 {0,1}, stored packed
 }
 
 impl DType {
@@ -50,6 +51,7 @@ impl DType {
             DType::U8 => "uint8",
             DType::U16 => "uint16",
             DType::Bool => "bool",
+            DType::Bits => "float32",
         }
     }
 }
@@ -63,6 +65,9 @@ pub enum Column {
     U8(Vec<u8>),
     U16(Vec<u16>),
     Bool(Vec<u8>),
+    /// {0,1}-valued float32 tensor stored bit-packed per frame (numpy `packbits`, big bit
+    /// order); `usize` = logical elements per frame. Loaded back as float32.
+    Bits(Vec<u8>, usize),
 }
 
 impl Column {
@@ -75,6 +80,7 @@ impl Column {
             DType::U8 => Column::U8(Vec::new()),
             DType::U16 => Column::U16(Vec::new()),
             DType::Bool => Column::Bool(Vec::new()),
+            DType::Bits => Column::Bits(Vec::new(), 0),
         }
     }
 
@@ -87,9 +93,11 @@ impl Column {
             Column::U8(_) => DType::U8,
             Column::U16(_) => DType::U16,
             Column::Bool(_) => DType::Bool,
+            Column::Bits(..) => DType::Bits,
         }
     }
 
+    /// Logical element count (Bits: frames × elements per frame).
     pub fn len(&self) -> usize {
         match self {
             Column::F32(v) => v.len(),
@@ -99,6 +107,7 @@ impl Column {
             Column::U8(v) => v.len(),
             Column::U16(v) => v.len(),
             Column::Bool(v) => v.len(),
+            Column::Bits(v, per) => if *per == 0 { 0 } else { v.len() / per.div_ceil(8) * per },
         }
     }
 
@@ -115,6 +124,15 @@ impl Column {
             (Column::U8(a), Column::U8(b)) => a.extend_from_slice(b),
             (Column::U16(a), Column::U16(b)) => a.extend_from_slice(b),
             (Column::Bool(a), Column::Bool(b)) => a.extend_from_slice(b),
+            (Column::Bits(a, pa), Column::Bits(b, pb)) => {
+                if *pa == 0 {
+                    *pa = *pb;
+                }
+                if pa != pb {
+                    bail!("bit column frame size mismatch");
+                }
+                a.extend_from_slice(b)
+            }
             _ => bail!("column dtype mismatch"),
         }
         Ok(())
@@ -128,6 +146,7 @@ impl Column {
             Column::I8(v) => npy::write(path, shape, v),
             Column::U8(v) | Column::Bool(v) => npy::write(path, shape, v),
             Column::U16(v) => npy::write(path, shape, v),
+            Column::Bits(v, per) => npy::write(path, &[shape[0], per.div_ceil(8)], v),
         }
     }
 }
@@ -181,6 +200,25 @@ impl Sample {
         self
     }
 
+    /// {0,1} float32 tensor stored bit-packed (32× smaller than f32 on disk).
+    /// Panics if a value is not exactly 0.0 or 1.0.
+    pub fn bits(mut self, name: &str, frame_shape: &[usize], data: &[f32]) -> Self {
+        let per = frame_shape.iter().product::<usize>().max(1);
+        assert!(data.len() % per == 0, "bits tensor {name}: length not a multiple of the frame size");
+        let nb = per.div_ceil(8);
+        let mut packed = vec![0u8; data.len() / per * nb];
+        for (f, frame) in data.chunks(per).enumerate() {
+            for (i, &x) in frame.iter().enumerate() {
+                assert!(x == 0.0 || x == 1.0, "bits tensor {name}: value {x} is not 0/1");
+                if x == 1.0 {
+                    packed[f * nb + i / 8] |= 0x80 >> (i % 8);
+                }
+            }
+        }
+        self.tensors.push(Tensor { name: name.into(), frame_shape: frame_shape.to_vec(), col: Column::Bits(packed, per) });
+        self
+    }
+
     pub fn u8(mut self, name: &str, frame_shape: &[usize], data: Vec<u8>) -> Self {
         self.tensors.push(Tensor { name: name.into(), frame_shape: frame_shape.to_vec(), col: Column::U8(data) });
         self
@@ -214,6 +252,8 @@ struct TensorInfo {
     file: String,
     dtype: &'static str,
     frame_shape: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -326,7 +366,8 @@ impl ShardWriter {
             let mut shape = vec![self.frames];
             shape.extend_from_slice(&t.frame_shape);
             t.col.write_npy(&tmp.join(&file), &shape)?;
-            tensors.insert(tname.clone(), TensorInfo { file, dtype: t.col.dtype().torch(), frame_shape: t.frame_shape.clone() });
+            let storage = matches!(t.col, Column::Bits(..)).then_some("packbits");
+            tensors.insert(tname.clone(), TensorInfo { file, dtype: t.col.dtype().torch(), frame_shape: t.frame_shape.clone(), storage });
         }
         let index = Index {
             format: "gm-shard.v1",
@@ -378,7 +419,8 @@ mod tests {
             let s = Sample::new(serde_json::json!({"i": i}))
                 .f32("obs.x", &[2, 2], vec![i as f32; t * 4])
                 .i64("tgt.y", &[], (0..t as i64).collect())
-                .bool("tgt.b", &[], vec![true; t]);
+                .bool("tgt.b", &[], vec![true; t])
+                .bits("obs.p", &[3, 3], &vec![1.0; t * 9]);
             w.push(s).unwrap();
         }
         w.flush().unwrap();
@@ -391,6 +433,8 @@ mod tests {
         assert_eq!(idx["samples"][1]["start"], 2);
         assert_eq!(idx["tensors"]["tgt.b"]["dtype"], "bool");
         assert!(dir.join("toy_00001").join("obs.x.npy").exists());
+        assert_eq!(idx["tensors"]["obs.p"]["storage"], "packbits");
+        assert_eq!(idx["tensors"]["obs.p"]["dtype"], "float32");
         // mismatched tensor set is rejected
         let bad = Sample::new(Value::Null).f32("obs.x", &[2, 2], vec![0.0; 4]);
         assert!(w.push(bad).is_err());

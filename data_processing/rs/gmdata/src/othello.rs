@@ -190,7 +190,7 @@ fn game_to_sample(g: &WthorGame, source: &str, index: usize) -> Result<(Sample, 
         "replayed_black": black, "replayed_white": white, "n_recorded_moves": g.moves.len(), "n_pass_frames": n_pass,
     });
     let s = Sample::new(meta)
-        .f32("obs.board_seq", &[3, 8, 8], pl)
+        .bits("obs.board_seq", &[3, 8, 8], &pl)
         .i64("tgt.place_idx", &[], idx)
         .bool("tgt.passed", &[], passed)
         .f32("tgt.value", &[], value);

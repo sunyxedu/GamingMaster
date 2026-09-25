@@ -432,7 +432,7 @@ fn game_to_sample(g: &SgfGame, size: i32, allow_handicap: bool, allow_no_result:
     });
     let s = size as usize;
     Ok(Sample::new(meta)
-        .f32("obs.board_seq", &[4, s, s], planes)
+        .bits("obs.board_seq", &[4, s, s], &planes)
         .i64("tgt.place_idx", &[], idx)
         .bool("tgt.passed", &[], passed)
         .f32("tgt.value", &[], value))

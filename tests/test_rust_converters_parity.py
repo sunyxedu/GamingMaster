@@ -80,3 +80,16 @@ def test_go(gmdata, tmp_path, flags):
     cmd += [f"--allow-{f.replace('_', '-')}" for f in flags]
     subprocess.run(cmd, check=True, capture_output=True)
     assert_same(tmp_path / "py", tmp_path / "rs", ("result", "komi", "handicap", "n_moves", "players"))
+
+
+@pytest.mark.parametrize("flags", [(), ("--min-elo", "1500", "--skip-bullet")])
+def test_chess(gmdata, tmp_path, flags):
+    pytest.importorskip("chess")
+    from data_processing.games.chess.convert import convert
+    pgn = os.path.join(FIX, "chess", "lichess_2013-01_head.pgn")
+    kw = {"min_elo": 1500, "skip_bullet": True} if flags else {}
+    convert(pgn, str(tmp_path / "py"), **kw)
+    subprocess.run([gmdata, "chess", "convert", "--input", pgn, "--out", tmp_path / "rs", *flags],
+                   check=True, capture_output=True)
+    assert_same(tmp_path / "py", tmp_path / "rs", ("white", "black", "result"))
+    assert GameShardDataset(str(tmp_path / "rs")).converter_version == 2

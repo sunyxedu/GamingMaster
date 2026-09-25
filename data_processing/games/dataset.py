@@ -80,7 +80,14 @@ class GmShard:
         out: Dict = {"obs": {}, "tgt": {}, "meta": info.get("meta") or {}}
         for name, arr in self.arrays().items():
             group, key = name.split(".", 1)
-            dtype = self.index["tensors"][name]["dtype"]
+            tinfo = self.index["tensors"][name]
+            dtype = tinfo["dtype"]
+            if tinfo.get("storage") == "packbits":
+                per = int(np.prod(tinfo["frame_shape"])) if tinfo["frame_shape"] else 1
+                bits = np.unpackbits(np.asarray(arr[a:b]), axis=1, count=per)
+                v = torch.from_numpy(bits.reshape((b - a, *tinfo["frame_shape"])).astype(np.float32))
+                out[group][key] = v
+                continue
             v = torch.from_numpy(np.array(arr[a:b]))  # copy: mmap slices are read-only
             if dtype == "bool":
                 v = v.bool()

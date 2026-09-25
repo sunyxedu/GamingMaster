@@ -145,7 +145,7 @@ fn game_to_sample(moves: &[(i32, i32)], n: i32, exact_five: bool, keep_undecided
     let value: Vec<f32> = movers.iter().map(|&m| if m == winner { 1.0 } else { -1.0 }).collect();
     let nn = n as usize;
     Ok(Sample::new(json!({"source": source, "plies": t, "winner": if winner == BLACK { "black" } else { "white" }}))
-        .f32("obs.board_seq", &[3, nn, nn], planes)
+        .bits("obs.board_seq", &[3, nn, nn], &planes)
         .i64("tgt.place_idx", &[], idx)
         .bool("tgt.passed", &[], vec![false; t])
         .f32("tgt.value", &[], value))
