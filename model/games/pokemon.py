@@ -529,8 +529,16 @@ class PokemonDecoder(ActionDecoder):
             move_acc = ((pred["move_logits"].argmax(-1) == safe_move).float() * w_move).sum() / n_move
             switch_acc = ((pred["switch_logits"].argmax(-1) == safe_switch).float() * w_switch).sum() / n_switch
             tera_acc = (((pred["tera_logit"] > 0).float() == tgt_tera).float() * w_tera).sum() / n_tera
+            u = uses.bool()
+            answer_ok = ((pred["action_type_logits"].argmax(-1) == tgt_type)
+                         & ((pred["move_logits"].argmax(-1) == safe_move)
+                            | ~u[..., 0] | (tgt["move_idx"] < 0))
+                         & ((pred["switch_logits"].argmax(-1) == safe_switch) | ~u[..., 1])
+                         & (((pred["tera_logit"] > 0).float() == tgt_tera) | ~u[..., 2]))
 
         return {
+            "answer_correct": answer_ok,
+            "answer_mask": seq_mask.bool(),
             "loss": loss,
             "type_loss": type_loss.detach(),
             "move_loss": move_loss.detach(),

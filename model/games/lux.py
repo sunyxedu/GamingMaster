@@ -303,7 +303,11 @@ class LuxDecoder(ActionDecoder):
 
         with torch.no_grad():
             ok = logits.argmax(-1) == tgt_action
+            present_b = pred["unit_present"].bool()
             metrics = {
+                # every present unit's action right (no units → trivially)
+                "answer_correct": (ok | ~present_b).all(-1),
+                "answer_mask": seq_mask.bool(),
                 "unit_action_loss": loss.detach(),
                 "unit_action_acc": (ok.float() * weight).sum() / n_units,
             }

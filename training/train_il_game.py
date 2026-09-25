@@ -35,8 +35,21 @@ from data_processing.games.dataset import (
     ShardLocalitySampler,
     collate_game_sequences,
 )
+from model.config import upgrade_config_dict
 from model.games import build_game_network
+from model.optim import (
+    TRM_BETAS,
+    TRM_EMA_RATE,
+    TRM_LR,
+    TRM_LR_MIN_RATIO,
+    TRM_WARMUP_STEPS,
+    TRM_WEIGHT_DECAY,
+    AdamATan2,
+    ModelEMA,
+    trm_lr_lambda,
+)
 from model.rl_utils import load_model_state, optim_param_groups
+from training.deep_supervision import Q_HALT_WEIGHT, run_deep_supervision
 
 # Teacher-forcing conditioning labels per game: the tgt keys the decoder
 # reads from ``labels`` in decode() (−1 → sample from its own policy).
@@ -106,13 +119,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--epochs", type=int, default=10)
     p.add_argument("--batch_size", type=int, default=8)
     p.add_argument("--grad_accum", type=int, default=1)
-    p.add_argument("--lr", type=float, default=3e-4)
-    p.add_argument("--weight_decay", type=float, default=1e-4)
-    p.add_argument("--warmup_steps", type=int, default=100)
+    # Optimisation defaults = reference TRM recipe (model/optim.py).
+    p.add_argument("--lr", type=float, default=TRM_LR)
+    p.add_argument("--weight_decay", type=float, default=TRM_WEIGHT_DECAY)
+    p.add_argument("--warmup_steps", type=int, default=TRM_WARMUP_STEPS)
+    p.add_argument("--beta1", type=float, default=TRM_BETAS[0])
+    p.add_argument("--beta2", type=float, default=TRM_BETAS[1])
+    p.add_argument("--lr_min_ratio", type=float, default=TRM_LR_MIN_RATIO,
+                   help="cosine floor after warmup; 1.0 = constant LR (reference)")
+    p.add_argument("--optimizer", choices=["adam_atan2", "adamw"], default="adam_atan2")
+    p.add_argument("--ema_rate", type=float, default=TRM_EMA_RATE,
+                   help="EMA of the weights (evaluation + saved model_state); 0 = off")
     p.add_argument("--max_len", type=int, default=None,
                    help="random-crop sequences longer than this")
-    p.add_argument("--max_act_steps", type=int, default=1,
-                   help="train at a random TRM ACT depth in [1, N] per batch")
+    p.add_argument("--halt_max_steps", type=int, default=0,
+                   help="N_sup: max deep-supervision steps per frame "
+                        "(0 = model config, reference 16); inference runs all")
+    p.add_argument("--q_halt_weight", type=float, default=Q_HALT_WEIGHT)
     p.add_argument("--value_weight", type=float, default=0.2)
     p.add_argument("--tf_start", type=float, default=1.0,
                    help="teacher-forcing prob at epoch 0 (conditioning labels)")
@@ -165,7 +188,9 @@ def resume_arch_overrides(resume_ckpt: Dict, cli_overrides: Dict) -> Dict:
         arch = resume_ckpt.get("config_overrides", {})
         print(f"[warn] checkpoint predates full-config saving; rebuilding "
               f"from saved overrides + current defaults: {arch}")
-    arch = dict(arch)
+    # Fields newer than the checkpoint take their legacy value (e.g. the
+    # TRM block layout), so the rebuilt net matches the saved weights.
+    arch = upgrade_config_dict(arch)
     if cli_overrides:
         changed = {k: v for k, v in cli_overrides.items() if arch.get(k) != v}
         if changed:
@@ -236,43 +261,78 @@ def build_labels(
     return labels
 
 
-def run_batch(
-    net, game: str, batch: Dict, device: torch.device,
-    value_weight: float, tf_prob: float, act_steps: int, bf16: bool,
-) -> Tuple[torch.Tensor, Dict[str, float]]:
+def prepare_batch(game: str, batch: Dict, device: torch.device,
+                  tf_prob: float) -> Dict:
+    """Move a batch to ``device`` and draw its teacher-forcing labels once
+    (kept for every supervision step of the batch)."""
     obs = {k: v.to(device) for k, v in batch["obs"].items()}
     tgt = {k: v.to(device) for k, v in batch["tgt"].items()}
     frame_mask = batch["meta"]["frame_mask"].to(device)
     labels = build_labels(game, tgt, tf_prob, frame_mask)
     legal_fn = LEGAL_FROM_OBS.get(game)
     legal = legal_fn(obs) if legal_fn is not None else None
+    return dict(obs=obs, tgt=tgt, frame_mask=frame_mask, labels=labels, legal=legal)
 
+
+def batch_loss(
+    net, mb: Dict, device: torch.device, value_weight: float,
+    q_halt_weight: float, bf16: bool,
+    carry=None, active: Optional[torch.Tensor] = None,
+    act_steps: Optional[int] = None,
+) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, torch.Tensor]]:
+    """One TRM supervision step: decoder IL loss + value MSE + q_halt BCE
+    (target = whole action exactly right, reference ACTLossHead), all on
+    the ``active`` frames.  Returns (loss, stats, pred)."""
+    mask = mb["frame_mask"] if active is None else active
     autocast = torch.autocast(device.type, dtype=torch.bfloat16, enabled=bf16)
     with autocast:
-        pred = net(obs, legal=legal, labels=labels, act_steps=act_steps,
-                   frame_mask=frame_mask)
-        losses = net.action_decoder.il_loss(pred, tgt, frame_mask)
+        pred = net(mb["obs"], legal=mb["legal"], labels=mb["labels"],
+                   act_steps=act_steps, frame_mask=mb["frame_mask"],
+                   carry=carry, active=active, return_carry=True)
+        losses = net.action_decoder.il_loss(pred, mb["tgt"], mask)
         loss = losses["loss"]
+        tgt = mb["tgt"]
         if "value" in tgt:
-            mask_f = frame_mask.float()
+            mask_f = mask.float()
             v_loss = (F.mse_loss(pred["value"].float(), tgt["value"].float(),
                                  reduction="none") * mask_f).sum() / mask_f.sum().clamp(min=1)
             loss = loss + value_weight * v_loss
             losses["value_loss"] = v_loss.detach()
+        correct = losses.pop("answer_correct", None)
+        answer_mask = losses.pop("answer_mask", None)
+        if correct is not None and "q_halt" in pred:
+            q_mask = (answer_mask if answer_mask is not None else mask) & mask
+            q_f = q_mask.float()
+            q_bce = F.binary_cross_entropy_with_logits(
+                pred["q_halt"].float(), correct.float(), reduction="none").nan_to_num(0.0)
+            q_loss = (q_bce * q_f).sum() / q_f.sum().clamp(min=1)
+            loss = loss + q_halt_weight * q_loss
+            losses["q_halt_loss"] = q_loss.detach()
+            with torch.no_grad():
+                n_q = q_f.sum().clamp(min=1)
+                losses["exact_acc"] = (correct.float() * q_f).sum() / n_q
+                losses["q_halt_acc"] = (((pred["q_halt"] > 0) == correct).float()
+                                        * q_f).sum() / n_q
 
     stats = {k: float(v) for k, v in losses.items() if k != "loss"}
     stats["loss"] = float(loss.detach())
-    return loss, stats
+    return loss, stats, pred
 
 
-def evaluate(net, game, loader, device, value_weight, bf16) -> Dict[str, float]:
-    net.eval()
+def evaluate(net, game, loader, device, value_weight, q_halt_weight, bf16,
+             ema: Optional[ModelEMA] = None) -> Dict[str, float]:
+    """Validation at full depth (all halt_max_steps supervision steps, as
+    the reference evaluates), on the EMA weights when enabled."""
+    model = ema.ema_copy(net) if ema is not None else net
+    model.eval()
     agg: Dict[str, float] = {}
     n = 0
     with torch.no_grad():
         for batch in loader:
-            _, stats = run_batch(net, game, batch, device, value_weight,
-                                 tf_prob=1.0, act_steps=1, bf16=bf16)
+            mb = prepare_batch(game, batch, device, tf_prob=1.0)
+            _, stats, _ = batch_loss(model, mb, device, value_weight,
+                                     q_halt_weight, bf16,
+                                     act_steps=model.cfg.halt_max_steps)
             for k, v in stats.items():
                 agg[k] = agg.get(k, 0.0) + v
             n += 1
@@ -361,24 +421,41 @@ def main() -> None:
         )
     print(f"[data] {len(dataset)} games, {len(loader)} batches/epoch")
 
-    optimizer = torch.optim.AdamW(
-        optim_param_groups(net, args.weight_decay), lr=args.lr,
-    )
-    total_steps = max(1, args.epochs * len(loader) // args.grad_accum)
+    if args.halt_max_steps > 0:
+        cfg.halt_max_steps = args.halt_max_steps
+    print(f"[init] TRM[{cfg.trm_arch}] {cfg.trm_H_cycles}H x {cfg.trm_L_cycles}L x "
+          f"{cfg.trm_block_layers} layers, deep supervision N_sup={cfg.halt_max_steps}")
 
-    def lr_lambda(step):
-        if step < args.warmup_steps:
-            return (step + 1) / max(1, args.warmup_steps)
-        left = max(1, total_steps - args.warmup_steps)
-        return max(0.05, 1.0 - (step - args.warmup_steps) / left)
+    groups = optim_param_groups(net, args.weight_decay)
+    if args.optimizer == "adam_atan2":
+        optimizer = AdamATan2(groups, lr=args.lr, betas=(args.beta1, args.beta2),
+                              weight_decay=args.weight_decay)
+    else:
+        optimizer = torch.optim.AdamW(groups, lr=args.lr, betas=(args.beta1, args.beta2))
+    # one optimizer step per supervision step (at most halt_max_steps per window)
+    total_steps = max(1, args.epochs * len(loader) // args.grad_accum
+                      * max(1, cfg.halt_max_steps))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer, trm_lr_lambda(args.warmup_steps, total_steps, args.lr_min_ratio))
 
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
+    ema = ModelEMA(net, mu=args.ema_rate) if args.ema_rate > 0 else None
     start_epoch = 0
     if resume_ckpt is not None:
-        load_model_state(net, resume_ckpt["model_state"], ctx=args.resume)
-        if "optimizer_state" in resume_ckpt:
+        # model_state holds the EMA weights; train_model_state the raw ones
+        load_model_state(net, resume_ckpt.get("train_model_state",
+                                              resume_ckpt["model_state"]), ctx=args.resume)
+        if ema is not None:
+            if "train_model_state" in resume_ckpt:
+                ema.load_state_dict({k: v.to(device)
+                                     for k, v in resume_ckpt["model_state"].items()})
+            else:
+                ema = ModelEMA(net, mu=args.ema_rate)
+        same_opt = resume_ckpt.get("optimizer_name", "adamw") == args.optimizer
+        if "optimizer_state" in resume_ckpt and same_opt:
             optimizer.load_state_dict(resume_ckpt["optimizer_state"])
+        elif "optimizer_state" in resume_ckpt:
+            print(f"[resume] optimizer state skipped (saved by "
+                  f"{resume_ckpt.get('optimizer_name', 'adamw')}, now {args.optimizer})")
         if "scheduler_state" in resume_ckpt:
             scheduler.load_state_dict(resume_ckpt["scheduler_state"])
         start_epoch = resume_ckpt.get("epoch", -1) + 1
@@ -388,45 +465,77 @@ def main() -> None:
     os.makedirs(args.save_dir, exist_ok=True)
     net.train()
     opt_step = 0
+
+    def optimizer_step():
+        nonlocal opt_step
+        torch.nn.utils.clip_grad_norm_(net.parameters(), args.clip_grad)
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad(set_to_none=True)
+        if ema is not None:
+            ema.update(net)
+        opt_step += 1
+
     for epoch in range(start_epoch, args.epochs):
         frac = epoch / max(1, args.epochs - 1)
         tf_prob = args.tf_start + (args.tf_end - args.tf_start) * frac
         t0 = time.time()
         optimizer.zero_grad(set_to_none=True)
+        pending: List[Dict] = []
         for i, batch in enumerate(loader):
-            act_steps = (random.randint(1, args.max_act_steps)
-                         if args.max_act_steps > 1 else 1)
-            loss, stats = run_batch(net, args.game, batch, device,
-                                    args.value_weight, tf_prob, act_steps,
-                                    args.bf16)
-            (loss / args.grad_accum).backward()
-            if (i + 1) % args.grad_accum == 0 or (i + 1) == len(loader):
-                torch.nn.utils.clip_grad_norm_(net.parameters(), args.clip_grad)
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
-                opt_step += 1
-            if i % args.log_every == 0:
+            pending.append(prepare_batch(args.game, batch, device, tf_prob))
+            if len(pending) < args.grad_accum and (i + 1) < len(loader):
+                continue
+            window, pending = pending, []
+            n_mb = len(window)
+
+            def forward_backward(j, carry, active, window=window, n_mb=n_mb):
+                loss, stats, pred = batch_loss(
+                    net, window[j], device, args.value_weight,
+                    args.q_halt_weight, args.bf16, carry=carry, active=active)
+                (loss / n_mb).backward()
+                return pred, stats
+
+            # Deep supervision (training/deep_supervision.py): up to
+            # halt_max_steps optimizer steps on this window, latents
+            # carried, frames halted by q_halt (+ exploration).
+            stats = run_deep_supervision(
+                n_micro=n_mb,
+                frame_masks=[mb["frame_mask"] for mb in window],
+                forward_backward=forward_backward,
+                optimizer_step=optimizer_step,
+                n_sup=cfg.halt_max_steps,
+                exploration_prob=cfg.halt_exploration_prob,
+                carry_store=(torch.device("cpu")
+                             if n_mb > 1 and device.type == "cuda" else None),
+            )
+            if (i // args.grad_accum) % args.log_every == 0:
                 head = " ".join(f"{k}={v:.4f}" for k, v in sorted(stats.items()))
                 print(f"[e{epoch} b{i}/{len(loader)}] tf={tf_prob:.2f} "
                       f"lr={scheduler.get_last_lr()[0]:.2e} {head}", flush=True)
 
         if val_loader is not None:
             val = evaluate(net, args.game, val_loader, device,
-                           args.value_weight, args.bf16)
+                           args.value_weight, args.q_halt_weight, args.bf16, ema=ema)
             print(f"[e{epoch} val] " + " ".join(
                 f"{k}={v:.4f}" for k, v in sorted(val.items())))
 
         ckpt_path = os.path.join(args.save_dir, f"{args.game}_epoch{epoch}.pt")
-        torch.save({
+        ckpt = {
             "game": args.game,
             "epoch": epoch,
-            "model_state": net.state_dict(),
+            # deployment weights = EMA (the reference saves the EMA copy)
+            "model_state": (ema.ema_model_state(net) if ema is not None
+                            else net.state_dict()),
             "optimizer_state": optimizer.state_dict(),
+            "optimizer_name": args.optimizer,
             "scheduler_state": scheduler.state_dict(),
             "config": cfg.__dict__,
             "config_overrides": overrides,
-        }, ckpt_path)
+        }
+        if ema is not None:
+            ckpt["train_model_state"] = net.state_dict()
+        torch.save(ckpt, ckpt_path)
         print(f"[e{epoch}] saved {ckpt_path} ({time.time() - t0:.1f}s)")
 
 

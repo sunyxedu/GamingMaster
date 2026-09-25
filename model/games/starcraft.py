@@ -447,7 +447,12 @@ class RTSDecoder(ActionDecoder):
             target_ok = pred["target_logits"].argmax(-1) == tgt_target
             loc_ok = pred["location_logits"].argmax(-1) == tgt_loc
             queued_ok = (pred["queued_logits"] > 0) == tgt["queued"].bool()
+            u = uses_gt.bool()
+            answer_ok = (type_ok & queued_ok & (actor_ok | ~u[..., 0])
+                         & (target_ok | ~u[..., 1]) & (loc_ok | ~u[..., 2]))
             metrics = {
+                "answer_correct": answer_ok,
+                "answer_mask": seq_mask.bool(),
                 "type_loss": type_loss.detach(),
                 "queued_loss": queued_loss.detach(),
                 "actor_loss": actor_loss.detach(),

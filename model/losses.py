@@ -107,7 +107,7 @@ class ImitationLoss(nn.Module):
         split_weight: float = 0.3,
         pass_weight: float = 1.0,
         value_weight: float = 0.2,
-        q_halt_weight: float = 0.2,
+        q_halt_weight: float = 0.5,   # reference ACTLossHead: lm + 0.5 * q_halt
         focal_gamma: float = 1.5,
         grid_w: int = 25,
     ):
@@ -127,7 +127,11 @@ class ImitationLoss(nn.Module):
         tgt: Dict[str, torch.Tensor],
         lengths: Optional[list] = None,
         tf_mask: Optional[torch.Tensor] = None,
+        frame_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
+        """``frame_mask`` [B, T] bool, when given, replaces the length-derived
+        sequence mask — deep supervision passes the frames still being
+        supervised (not yet halted)."""
         B, T, N = pred["source_logits"].shape
         device = pred["source_logits"].device
 
@@ -137,7 +141,9 @@ class ImitationLoss(nn.Module):
         # the server: no action label AND not a deliberate pass.
         label_valid = tgt["count"] >= 0
 
-        if lengths is not None:
+        if frame_mask is not None:
+            seq_mask = frame_mask.bool()
+        elif lengths is not None:
             seq_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
             for i, length in enumerate(lengths):
                 seq_mask[i, :length] = True

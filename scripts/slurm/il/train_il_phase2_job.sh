@@ -94,7 +94,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --tf_start 0.2 --tf_end 0.0 \
         --batch_size $MICRO --grad_accum $ACCUM \
         --epochs 30 \
-        --lr 3e-4 --warmup_steps 200 \
-        --weight_decay 1e-4 \
+        --lr 1e-4 --warmup_steps 2000 \
+        --weight_decay 0.1 \
         --num_workers 16 \
         --save_interval 1

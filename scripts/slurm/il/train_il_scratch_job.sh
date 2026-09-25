@@ -54,7 +54,7 @@ export TMPDIR=/tmp   # live logs (unbuffered stdout)
 GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 MICRO=${MICRO:-2}                 # per-GPU micro-batch (probe before raising)
 TARGET_EFF=${TARGET_EFF:-384}
-WARMUP=${WARMUP:-100}   # ~5% of total optimizer steps     # target effective batch (full games/step)
+WARMUP=${WARMUP:-2000}  # reference TRM warmup (optimizer steps)     # target effective batch (full games/step)
 WORLD=$(( SLURM_NNODES * GPUS_PER_NODE ))
 ACCUM=$(( TARGET_EFF / (MICRO * WORLD) ))
 [ "$ACCUM" -lt 1 ] && ACCUM=1
@@ -89,7 +89,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --tf_start 0.4 --tf_end 0.0 \
         --batch_size $MICRO --grad_accum $ACCUM \
         --epochs 150 \
-        --lr 1e-3 --warmup_steps $WARMUP \
-        --weight_decay 1e-4 \
+        --lr 1e-4 --warmup_steps $WARMUP \
+        --weight_decay 0.1 \
         --num_workers 16 \
         --save_interval 1 --save_steps 500

@@ -10,9 +10,7 @@ Usage:
 """
 
 import argparse
-import math
 import os
-import random
 import time
 
 import torch
@@ -21,10 +19,22 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
-from model.config import ModelConfig
+from model.config import ModelConfig, config_from_dict
 from model.losses import ImitationLoss, next_obs_loss
 from model.network import GeneralsNetwork
+from model.optim import (
+    TRM_BETAS,
+    TRM_EMA_RATE,
+    TRM_LR,
+    TRM_LR_MIN_RATIO,
+    TRM_WARMUP_STEPS,
+    TRM_WEIGHT_DECAY,
+    AdamATan2,
+    ModelEMA,
+    trm_lr_lambda,
+)
 from model.rl_utils import load_model_state, sync_gradients
+from training.deep_supervision import run_deep_supervision
 
 
 def parse_args():
@@ -39,15 +49,26 @@ def parse_args():
     p.add_argument("--grad_accum", type=int, default=1,
                    help="Gradient accumulation steps; effective batch = "
                         "batch_size x world_size x grad_accum")
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--warmup_steps", type=int, default=200, help="Linear LR warmup steps")
-    p.add_argument("--weight_decay", type=float, default=1e-4)
+    # Optimisation defaults = reference TRM recipe (model/optim.py):
+    # AdamATan2, lr 1e-4, betas (0.9, 0.95), wd 0.1, 2000 warmup steps,
+    # constant LR afterwards (lr_min_ratio 1.0), EMA 0.999.
+    p.add_argument("--lr", type=float, default=TRM_LR)
+    p.add_argument("--warmup_steps", type=int, default=TRM_WARMUP_STEPS,
+                   help="Linear LR warmup (optimizer steps)")
+    p.add_argument("--weight_decay", type=float, default=TRM_WEIGHT_DECAY)
+    p.add_argument("--beta1", type=float, default=TRM_BETAS[0])
+    p.add_argument("--beta2", type=float, default=TRM_BETAS[1])
+    p.add_argument("--lr_min_ratio", type=float, default=TRM_LR_MIN_RATIO,
+                   help="cosine floor after warmup; 1.0 = constant LR (reference)")
+    p.add_argument("--optimizer", choices=["adam_atan2", "adamw"], default="adam_atan2")
+    p.add_argument("--ema_rate", type=float, default=TRM_EMA_RATE,
+                   help="EMA of the weights (evaluation + saved model_state); 0 = off")
     p.add_argument("--max_seq_len", type=int, default=1000, help="Max sequence length per sample")
     p.add_argument("--d_model", type=int, default=384)
     p.add_argument("--n_heads", type=int, default=12)
     p.add_argument("--trm_H_cycles", type=int, default=3)
     p.add_argument("--trm_L_cycles", type=int, default=6)
-    p.add_argument("--trm_block_layers", type=int, default=3)
+    p.add_argument("--trm_block_layers", type=int, default=2)
     p.add_argument("--log_interval", type=int, default=10, help="Log every N steps")
     p.add_argument("--save_interval", type=int, default=1, help="Save every N epochs")
     p.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every N steps within epoch")
@@ -69,9 +90,9 @@ def parse_args():
                         "Use for phase-2 fine-tuning; distinct from --resume, "
                         "which continues an interrupted run.")
     p.add_argument(
-        "--max_act_steps", type=int, default=0,
-        help="Sample TRM ACT depth uniformly from [1, K] per batch so inference-time "
-             "pondering states are in-distribution (0 = use model halt_max_steps, 1 = off)",
+        "--halt_max_steps", type=int, default=0,
+        help="N_sup: max deep-supervision steps per frame (0 = model config, "
+             "reference 16). Inference runs all of them.",
     )
     p.add_argument(
         "--temporal_mixer", type=str, default="attention",
@@ -88,33 +109,41 @@ def parse_args():
     return p.parse_args()
 
 
+PART_KEYS = ["source", "direction", "split", "pass", "value", "q_halt", "wm"]
+ACC_KEYS = ["src_acc", "dir_acc", "full_acc", "complete_acc"]
+
+
 def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, args,
-                rank0=True, save_fn=None, start_step=0, tf_ratio=1.0, distributed=False):
+                rank0=True, save_fn=None, start_step=0, tf_ratio=1.0, distributed=False,
+                ema=None):
+    """One epoch of TRM deep supervision (training/deep_supervision.py).
+
+    Each optimizer window of ``grad_accum`` micro-batches is supervised for
+    up to ``halt_max_steps`` steps; every supervision step is one optimizer
+    step, the TRM latents are carried (detached) between steps, and frames
+    whose q_halt turns positive leave the loop (reference ACT halting with
+    exploration). ``loader`` steps count micro-batches as before.
+    """
     model.train()
     from collections import deque
     window = args.log_interval
     recent_loss = deque(maxlen=window)
-    recent_parts = {k: deque(maxlen=window) for k in
-                    ["source", "direction", "split", "pass", "value", "q_halt", "wm"]}
-    recent_acc = {k: deque(maxlen=window) for k in ["src_acc", "dir_acc", "full_acc", "complete_acc"]}
+    recent_parts = {k: deque(maxlen=window) for k in PART_KEYS}
+    recent_acc = {k: deque(maxlen=window) for k in ACC_KEYS}
+    recent_sup = deque(maxlen=window)
     epoch_loss_sum = 0.0
-    epoch_parts_sum = {k: 0.0 for k in
-                       ["source", "direction", "split", "pass", "value", "q_halt", "wm"]}
-    epoch_acc_sum = {k: 0.0 for k in ["src_acc", "dir_acc", "full_acc", "complete_acc"]}
+    epoch_parts_sum = {k: 0.0 for k in PART_KEYS}
+    epoch_acc_sum = {k: 0.0 for k in ACC_KEYS}
     epoch_steps = 0
     use_amp = device.type == "cuda"
     accum = max(1, getattr(args, "grad_accum", 1))
-    micro = 0  # micro-batches accumulated toward the next optimizer step
     optimizer.zero_grad(set_to_none=True)
+    cfg = model.cfg
 
-    for step, batch in enumerate(loader):
-        if step < start_step:
-            continue
-
+    def prepare(batch):
         grid_seq = batch["obs"]["grid_seq"].to(device)
         globals_seq = batch["obs"]["globals_seq"].to(device)
         legal_mask = batch["obs"]["legal_source_mask_seq"].to(device)
-
         tgt = {k: v.to(device) for k, v in batch["tgt"].items()}
         lengths = batch["meta"]["lengths"]
         # True for real frames — keeps zero-padded frames out of BatchNorm stats
@@ -122,128 +151,146 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
             torch.arange(grid_seq.shape[1], device=device)[None, :]
             < torch.as_tensor(lengths, device=device)[:, None]
         )
-
         source_y = tgt["src_y"][:, :, 0]
         source_x = tgt["src_x"][:, :, 0]
-
-        # Per-timestep teacher forcing: each timestep independently decides
-        # whether to use ground-truth source or let the model sample its own.
+        # Per-timestep teacher forcing, drawn once per batch and kept for
+        # all of its supervision steps (same example, same conditioning).
         move_mask = tgt["count"] > 0  # [B, T]
         if tf_ratio > 0:
-            tf_mask = torch.rand_like(source_y, dtype=torch.float32) < tf_ratio  # [B, T]
-            # Use GT source where both: (1) TF coin says yes, (2) there's a move
+            tf_mask = torch.rand_like(source_y, dtype=torch.float32) < tf_ratio
             use_gt = tf_mask & move_mask
             source_y = torch.where(use_gt, source_y, torch.full_like(source_y, -1))
             source_x = torch.where(use_gt, source_x, torch.full_like(source_x, -1))
         else:
-            use_gt = None
-            source_y = None
-            source_x = None
+            use_gt = source_y = source_x = None
+        return dict(grid_seq=grid_seq, globals_seq=globals_seq, legal_mask=legal_mask,
+                    tgt=tgt, frame_mask=frame_mask, source_y=source_y,
+                    source_x=source_x, use_gt=use_gt)
 
-        # Deep-supervision-style ACT: train at a random pondering depth so
-        # carry states reached by the inference ACT loop are in-distribution.
-        act_steps = random.randint(1, args.max_act_steps) if args.max_act_steps > 1 else 1
-
-        try:
-            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
-                pred = model(
-                    grid_seq, globals_seq,
-                    legal_mask=legal_mask,
-                    source_y=source_y,
-                    source_x=source_x,
-                    frame_mask=frame_mask,
-                    act_steps=act_steps,
-                )
-                losses = criterion(pred, tgt, lengths, tf_mask=use_gt)
-                if args.world_model_weight > 0 and "next_state_logits" in pred:
-                    wm = next_obs_loss(pred, grid_seq, frame_mask)
-                    wm_total = wm["state_loss"] + wm["army_loss"]
-                    losses["loss"] = losses["loss"] + args.world_model_weight * wm_total
-                    losses["wm_loss"] = wm_total.detach()
-                else:
-                    losses["wm_loss"] = losses["loss"].new_tensor(0.0)
-            loss = losses["loss"]
-
-            # A non-finite micro-batch poisons the whole accumulation
-            # window — drop it and restart before touching gradients. The
-            # decision must be COLLECTIVE: a rank-local skip would desync the
-            # per-rank micro counters and deadlock the gradient allreduce.
-            bad = (~torch.isfinite(loss.detach())).float()
-            if distributed:
-                dist.all_reduce(bad, op=dist.ReduceOp.MAX)
-            if bad.item() > 0:
-                optimizer.zero_grad(set_to_none=True)
-                micro = 0
-                if rank0:
-                    print(f"  [NaN] Skipped step {step+1} "
-                          f"(T={grid_seq.shape[1]}, loss={loss.item():.4f})")
-                continue
-
+    def forward_backward(mb, carry, active):
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+            pred = model(
+                mb["grid_seq"], mb["globals_seq"],
+                legal_mask=mb["legal_mask"],
+                source_y=mb["source_y"], source_x=mb["source_x"],
+                frame_mask=mb["frame_mask"],
+                carry=carry, active=active, return_carry=True,
+            )
+            losses = criterion(pred, mb["tgt"], tf_mask=mb["use_gt"], frame_mask=active)
+            if args.world_model_weight > 0 and "next_state_logits" in pred:
+                wm = next_obs_loss(pred, mb["grid_seq"], active)
+                wm_total = wm["state_loss"] + wm["army_loss"]
+                losses["loss"] = losses["loss"] + args.world_model_weight * wm_total
+                losses["wm_loss"] = wm_total.detach()
+            else:
+                losses["wm_loss"] = losses["loss"].new_tensor(0.0)
+        loss = losses["loss"]
+        # A non-finite micro-batch is dropped rank-locally (no collective:
+        # ranks may run different micro-batch counts per supervision step);
+        # the gradient sync below stays collective.
+        if torch.isfinite(loss.detach()):
             (loss / accum).backward()
-            micro += 1
+            stats = {"loss": loss.item()}
+            stats.update({f"{k}_loss": losses[f"{k}_loss"].item() for k in PART_KEYS})
+            stats.update({k: losses[k].item() for k in ACC_KEYS})
+        else:
+            stats = {}
+            if rank0:
+                print(f"  [NaN] dropped a micro-batch (T={mb['grid_seq'].shape[1]})")
+        return pred, stats
 
-            if micro == accum:
-                if distributed:
-                    # replaces DDP's bucketed allreduce; grads are averaged so
-                    # every rank steps identically (results are bitwise-equal
-                    # across ranks, keeping the NaN drop below collective).
-                    # sync_gradients keeps the collective schedule identical
-                    # on every rank even if autograd left a parameter without
-                    # a gradient on one of them — a bare `grad is not None`
-                    # loop desynced the NCCL stream and deadlocked a phase-2
-                    # run when one rank missed the q_head grads for a window.
-                    sync_gradients(model, dist.get_world_size())
-                if args.grad_clip > 0:
-                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                else:
-                    grad_norm = torch.tensor(0.0)
-                if not torch.isfinite(grad_norm):
-                    optimizer.zero_grad(set_to_none=True)
-                    micro = 0
-                    if rank0:
-                        print(f"  [NaN] Dropped accumulation window at step {step+1} "
-                              f"(grad_norm={grad_norm.item():.4f})")
-                    continue
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
-                micro = 0
+    def optimizer_step():
+        if distributed:
+            # replaces DDP's bucketed allreduce; grads are averaged so every
+            # rank steps identically. sync_gradients keeps the collective
+            # schedule identical even when a rank has no gradient for a
+            # parameter (e.g. all its frames already halted).
+            sync_gradients(model, dist.get_world_size())
+        if args.grad_clip > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+        else:
+            grad_norm = torch.tensor(0.0)
+        if not torch.isfinite(grad_norm):
+            # grads are bitwise-equal across ranks after the sync, so every
+            # rank takes this branch together
+            optimizer.zero_grad(set_to_none=True)
+            if rank0:
+                print(f"  [NaN] dropped a supervision step (grad_norm={grad_norm.item():.4f})")
+            return
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad(set_to_none=True)
+        if ema is not None:
+            ema.update(model)
+
+    def any_live(local: bool) -> bool:
+        if not distributed:
+            return local
+        flag = torch.tensor([1.0 if local else 0.0], device=device)
+        dist.all_reduce(flag, op=dist.ReduceOp.MAX)
+        return bool(flag.item() > 0)
+
+    pending = []
+    n_batches = len(loader)
+    for step, batch in enumerate(loader):
+        if step < start_step:
+            continue
+        pending.append(prepare(batch))
+        if len(pending) < accum and step + 1 < n_batches:
+            continue
+        window_mbs, pending = pending, []
+        T_cur = max(mb["grid_seq"].shape[1] for mb in window_mbs)
+        try:
+            stats = run_deep_supervision(
+                n_micro=len(window_mbs),
+                frame_masks=[mb["frame_mask"] for mb in window_mbs],
+                forward_backward=lambda i, c, a: forward_backward(window_mbs[i], c, a),
+                optimizer_step=optimizer_step,
+                n_sup=cfg.halt_max_steps,
+                exploration_prob=cfg.halt_exploration_prob,
+                any_live=any_live,
+                # with accumulation, park the other micro-batches' TRM
+                # latents on the host (each is [B*T, S, d] x 2)
+                carry_store=(torch.device("cpu")
+                             if len(window_mbs) > 1 and device.type == "cuda" else None),
+            )
         except torch.cuda.OutOfMemoryError:
             if distributed:
-                # A rank-local skip desynchronizes DDP's gradient allreduce —
-                # the surviving ranks block on this rank's buckets and every
-                # later step silently averages mismatched batches. Fail fast.
+                # A rank-local skip desynchronizes the gradient allreduce.
                 raise
             torch.cuda.empty_cache()
             optimizer.zero_grad(set_to_none=True)
-            micro = 0
             if rank0:
-                T_cur = grid_seq.shape[1]
-                print(f"  [OOM] Skipped step {step+1} (T={T_cur})")
+                print(f"  [OOM] Skipped window at step {step+1} (T={T_cur})")
+            continue
+        if "loss" not in stats:
             continue
 
-        T_cur = grid_seq.shape[1]
-        recent_loss.append(loss.item())
-        epoch_loss_sum += loss.item()
+        recent_loss.append(stats["loss"])
+        recent_sup.append((stats["sup_steps"], stats["halt_depth"]))
+        epoch_loss_sum += stats["loss"]
         epoch_steps += 1
         for k in recent_parts:
-            v = losses[f"{k}_loss"].item()
+            v = stats[f"{k}_loss"]
             recent_parts[k].append(v)
             epoch_parts_sum[k] += v
         for k in recent_acc:
-            v = losses[k].item()
+            v = stats[k]
             recent_acc[k].append(v)
             epoch_acc_sum[k] += v
 
-        if rank0 and (step + 1) % args.log_interval == 0:
+        if rank0 and epoch_steps % max(1, args.log_interval // accum) == 0:
             avg = sum(recent_loss) / len(recent_loss)
             parts = {k: sum(v) / len(v) for k, v in recent_parts.items()}
             acc = {k: sum(v) / len(v) for k, v in recent_acc.items()}
             ep_avg = epoch_loss_sum / epoch_steps
             ep_parts = {k: epoch_parts_sum[k] / epoch_steps for k in epoch_parts_sum}
             ep_acc = {k: epoch_acc_sum[k] / epoch_steps for k in epoch_acc_sum}
+            sup = sum(x for x, _ in recent_sup) / len(recent_sup)
+            depth = sum(y for _, y in recent_sup) / len(recent_sup)
             print(
-                f"  Epoch {epoch} Step {step+1}/{len(loader)}  T={T_cur}  loss={avg:.4f}[{ep_avg:.4f}]:\n"
+                f"  Epoch {epoch} Step {step+1}/{n_batches}  T={T_cur}  loss={avg:.4f}[{ep_avg:.4f}]  "
+                f"sup_steps={sup:.1f} halt_depth={depth:.2f}:\n"
                 f"    src={parts['source']:.4f}[{ep_parts['source']:.4f}]  "
                 f"dir={parts['direction']:.4f}[{ep_parts['direction']:.4f}]  split={parts['split']:.4f}[{ep_parts['split']:.4f}]  "
                 f"pass={parts['pass']:.4f}[{ep_parts['pass']:.4f}]  val={parts['value']:.4f}[{ep_parts['value']:.4f}]  "
@@ -254,13 +301,8 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
                 f"complete={acc['complete_acc']:.1%}[{ep_acc['complete_acc']:.1%}]"
             )
 
-        if save_fn and rank0 and (step + 1) % args.save_steps == 0:
+        if save_fn and rank0 and (step + 1) // args.save_steps != (step + 1 - len(window_mbs)) // args.save_steps:
             save_fn(epoch, step + 1)
-
-    # Drop a trailing partial accumulation window — carrying half-window
-    # gradients into the next epoch would skew the first step there.
-    if micro > 0:
-        optimizer.zero_grad(set_to_none=True)
 
     avg_loss = epoch_loss_sum / max(epoch_steps, 1)
     return avg_loss
@@ -299,8 +341,7 @@ def main():
         resume_ckpt = torch.load(arch_ckpt_path, map_location="cpu", weights_only=False)
 
     if resume_ckpt is not None and "config" in resume_ckpt:
-        cfg = ModelConfig(**{k: v for k, v in resume_ckpt["config"].items()
-                             if k in ModelConfig.__dataclass_fields__})
+        cfg = config_from_dict(resume_ckpt["config"])
         # Enabling the world-model loss on a lineage without the head fails
         # loudly at weight load (documented in --world_model_weight help).
         cfg.predict_next_obs = cfg.predict_next_obs or (args.world_model_weight > 0)
@@ -319,12 +360,13 @@ def main():
             temporal_mixer=args.temporal_mixer,
             predict_next_obs=(args.world_model_weight > 0),
         )
-    if args.max_act_steps == 0:
-        args.max_act_steps = cfg.halt_max_steps
+    if args.halt_max_steps > 0:
+        cfg.halt_max_steps = args.halt_max_steps
     if rank0:
         print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, "
-              f"TRM={cfg.trm_H_cycles}H\u00d7{cfg.trm_L_cycles}L\u00d7{cfg.trm_block_layers}blk, "
-              f"ACT depth 1..{args.max_act_steps}")
+              f"TRM[{cfg.trm_arch}]={cfg.trm_H_cycles}H\u00d7{cfg.trm_L_cycles}L\u00d7{cfg.trm_block_layers}blk, "
+              f"deep supervision N_sup={cfg.halt_max_steps} "
+              f"(explore {cfg.halt_exploration_prob})")
 
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())
@@ -342,10 +384,12 @@ def main():
 
     criterion = ImitationLoss(grid_w=cfg.grid_w, focal_gamma=args.focal_gamma)
     from model.rl_utils import optim_param_groups
-    optimizer = torch.optim.AdamW(
-        optim_param_groups(model, args.weight_decay),
-        lr=args.lr,
-    )
+    groups = optim_param_groups(model, args.weight_decay)
+    if args.optimizer == "adam_atan2":
+        optimizer = AdamATan2(groups, lr=args.lr, betas=(args.beta1, args.beta2),
+                              weight_decay=args.weight_decay)
+    else:
+        optimizer = torch.optim.AdamW(groups, lr=args.lr, betas=(args.beta1, args.beta2))
 
     if len(args.data_dir) == 1:
         dataset = SeqReplayDataset(args.data_dir[0], max_sequence_length=args.max_seq_len)
@@ -359,8 +403,10 @@ def main():
         print(f"Dataset: {len(dataset)} replays from {args.data_dir}")
 
     world_size = dist.get_world_size() if distributed else 1
-    # Scheduler horizon counts OPTIMIZER steps (one per accumulation window)
-    steps_per_epoch = len(dataset) // (args.batch_size * world_size * max(1, args.grad_accum))
+    # Scheduler horizon counts OPTIMIZER steps: one per supervision step of
+    # each accumulation window (at most halt_max_steps per window).
+    steps_per_epoch = (len(dataset) // (args.batch_size * world_size * max(1, args.grad_accum))
+                       * max(1, cfg.halt_max_steps))
     if rank0 and args.grad_accum > 1:
         print(f"Effective batch: {args.batch_size} x {world_size} GPUs x "
               f"{args.grad_accum} accum = {args.batch_size * world_size * args.grad_accum} sequences")
@@ -411,6 +457,9 @@ def main():
                 reason = "pre-refactor checkpoint (parameter order changed)"
             else:
                 reason = optim_state_mismatch(optimizer, saved)
+            if reason is None and ckpt.get("optimizer_name", "adamw") != args.optimizer:
+                reason = (f"saved by {ckpt.get('optimizer_name', 'adamw')}, "
+                          f"now --optimizer {args.optimizer}")
             if "epoch" in ckpt and reason is None:
                 optimizer.load_state_dict(saved)
             elif rank0:
@@ -433,6 +482,15 @@ def main():
                 it = ckpt.get("iteration", "?")
                 print(f"Loaded weights from RL checkpoint {args.resume} (iteration {it})")
 
+    # EMA of the weights (reference ema=True, rate 0.999): evaluation and the
+    # saved ``model_state`` use it; ``train_model_state`` keeps the raw
+    # weights so --resume continues the exact optimisation.
+    ema = ModelEMA(model, mu=args.ema_rate) if args.ema_rate > 0 else None
+    if args.resume and resume_ckpt is not None and "train_model_state" in resume_ckpt:
+        if ema is not None:
+            ema.load_state_dict({k: v.to(device) for k, v in resume_ckpt["model_state"].items()})
+        load_model_state(model, resume_ckpt["train_model_state"], ctx="resume (raw weights)")
+
     # Build LR scheduler after resume so we know start_epoch
     remaining_epochs = args.epochs - start_epoch + 1
     if args.reset_scheduler or not args.resume:
@@ -441,12 +499,9 @@ def main():
     else:
         total_steps = steps_per_epoch * args.epochs
     warmup_steps = args.warmup_steps
-
-    def lr_lambda(step):
-        if step < warmup_steps:
-            return step / max(1, warmup_steps)
-        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
+    # Reference schedule: linear warmup, then cosine towards lr_min_ratio
+    # (1.0 = constant, the reference default).
+    lr_lambda = trm_lr_lambda(warmup_steps, total_steps, args.lr_min_ratio)
 
     # Force optimizer to use the CLI lr (load_state_dict restores old initial_lr)
     if args.reset_scheduler:
@@ -469,12 +524,17 @@ def main():
         ckpt = {
             "epoch": epoch,
             "step": step,
-            "model_state": raw.state_dict(),
+            # deployment weights = EMA (reference saves the EMA copy)
+            "model_state": (ema.ema_model_state(raw) if ema is not None
+                            else raw.state_dict()),
             "optimizer_state": optimizer.state_dict(),
+            "optimizer_name": args.optimizer,
             "scheduler_state": scheduler.state_dict(),
             "config": cfg.__dict__,
             "loss": loss,
         }
+        if ema is not None:
+            ckpt["train_model_state"] = raw.state_dict()
         if step > 0:
             path = os.path.join(args.output_dir, f"checkpoint_epoch{epoch}_step{step}.pt")
         else:
@@ -492,7 +552,7 @@ def main():
         avg_loss = train_epoch(
             model, loader, criterion, optimizer, scheduler, device, epoch, args,
             rank0=rank0, save_fn=save_checkpoint, start_step=start_step,
-            tf_ratio=tf_ratio, distributed=distributed,
+            tf_ratio=tf_ratio, distributed=distributed, ema=ema,
         )
         start_step = 0  # only skip steps for the first epoch after resume
         elapsed = time.time() - t0

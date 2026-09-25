@@ -403,8 +403,15 @@ class CardPlacementDecoder(ActionDecoder):
             wait_acc = (((pred["wait_logits"] > 0) == waited).float() * seq_f).sum() / n_seq
             card_acc = ((pred["card_logits"].argmax(-1) == tgt_card).float() * play_f).sum() / n_play
             place_acc = ((pred["placement_logits"].argmax(-1) == tgt_place).float() * cond).sum() / n_cond
+            pred_wait = pred["wait_logits"] > 0
+            answer_ok = torch.where(
+                waited, pred_wait,
+                ~pred_wait & (pred["card_logits"].argmax(-1) == tgt_card)
+                & (pred["placement_logits"].argmax(-1) == tgt_place))
 
         return {
+            "answer_correct": answer_ok,
+            "answer_mask": seq_mask.bool(),
             "loss": loss,
             "wait_loss": wait_loss.detach(),
             "card_loss": card_loss.detach(),

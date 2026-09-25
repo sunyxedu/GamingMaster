@@ -516,7 +516,13 @@ class ShogiDecoder(ActionDecoder):
             promo_ok = (pred["promo_logits"] > 0) == tgt["promoted"].bool()
             piece_ok = pred["piece_logits"].argmax(-1) == tgt_piece
             drop_to_ok = pred["drop_to_logits"].argmax(-1) == tgt_drop_to
+            is_drop = d_lbl == 1
+            answer_ok = (mode_pred_drop == d_lbl) & torch.where(
+                is_drop, piece_ok & drop_to_ok, from_ok & to_ok & promo_ok)
             metrics = {
+                "answer_correct": answer_ok,
+                # frames with an unlabeled mode (−1) have no answer
+                "answer_mask": seq_mask.bool() & (d_lbl >= 0),
                 "mode_loss": mode_loss.detach(),
                 "from_loss": from_loss.detach(),
                 "to_loss": to_loss.detach(),

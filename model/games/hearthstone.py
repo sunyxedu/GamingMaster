@@ -441,8 +441,19 @@ class EntityActionDecoder(ActionDecoder):
             actor_acc = ((pred["actor_logits"].argmax(-1) == safe_actor).float() * w_actor).sum() / n_actor
             target_acc = ((pred["target_logits"].argmax(-1) == safe_target).float() * w_target).sum() / n_target
             pos_acc = ((pred["position_logits"].argmax(-1) == safe_pos).float() * w_pos).sum() / n_pos
+            type_ok = pred["action_type_logits"].argmax(-1) == tgt_type
+
+            def _arg_ok(logits, safe, tgt_raw, use):
+                return (logits.argmax(-1) == safe) | ~use | (tgt_raw < 0)
+
+            answer_ok = (type_ok
+                         & _arg_ok(pred["actor_logits"], safe_actor, tgt["actor_idx"], uses[..., 0])
+                         & _arg_ok(pred["target_logits"], safe_target, tgt["target_idx"], uses[..., 1])
+                         & _arg_ok(pred["position_logits"], safe_pos, tgt["position"], uses[..., 2]))
 
         return {
+            "answer_correct": answer_ok,
+            "answer_mask": seq_mask.bool(),
             "loss": loss,
             "type_loss": type_loss.detach(),
             "actor_loss": actor_loss.detach(),

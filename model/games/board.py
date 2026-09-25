@@ -392,6 +392,7 @@ class FromToDecoder(ActionDecoder):
                 "from_acc": (from_ok.float() * valid).sum() / n_valid,
                 "to_acc": (to_ok.float() * cond_from).sum() / n_cond_from,
             }
+            answer_ok = from_ok & to_ok
 
         if self.promotion_head is not None:
             P = self.cfg.n_promotions
@@ -408,7 +409,11 @@ class FromToDecoder(ActionDecoder):
                 promo_ok = pred["promotion_logits"].argmax(-1) == tgt_promo
                 out["promo_loss"] = promo_loss.detach()
                 out["promo_acc"] = (promo_ok.float() * cond_to).sum() / n_cond_to
+                answer_ok = answer_ok & promo_ok
 
+        # whole-move exact match per frame → the TRM q_halt target
+        out["answer_correct"] = answer_ok
+        out["answer_mask"] = seq_mask.bool()
         out["loss"] = loss
         return out
 
@@ -575,11 +580,17 @@ class PlacementDecoder(ActionDecoder):
                 "place_loss": place_loss.detach(),
                 "place_acc": (place_ok.float() * move_w).sum() / n_moves,
             }
+        metrics["answer_mask"] = seq_mask.bool()
         if self.pass_head is None:
+            metrics["answer_correct"] = place_ok
             return {"loss": place_loss, **metrics}
 
         with torch.no_grad():
             pass_ok = (pred["pass_logits"] > 0) == tgt["passed"].bool()
             metrics["pass_loss"] = pass_loss.detach()
             metrics["pass_acc"] = (pass_ok.float() * valid).sum() / n_valid
+            passed = tgt["passed"].bool()
+            pred_pass = pred["pass_logits"] > 0
+            metrics["answer_correct"] = torch.where(
+                passed, pred_pass, ~pred_pass & place_ok)
         return {"loss": pass_loss + place_loss, **metrics}

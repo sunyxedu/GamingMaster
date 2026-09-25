@@ -424,8 +424,12 @@ class MahjongDecoder(ActionDecoder):
                         * seq_f).sum() / n_seq
             tile_acc = ((pred["tile_logits"].argmax(-1) == safe_tile).float()
                         * w_tile).sum() / n_tile
+            answer_ok = ((pred["action_type_logits"].argmax(-1) == tgt_type)
+                         & ((pred["tile_logits"].argmax(-1) == safe_tile) | ~uses.bool()))
 
         return {
+            "answer_correct": answer_ok,
+            "answer_mask": seq_mask.bool(),
             "loss": loss,
             "type_loss": type_loss.detach(),
             "tile_loss": tile_loss.detach(),

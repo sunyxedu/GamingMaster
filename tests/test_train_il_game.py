@@ -11,7 +11,13 @@ from data_processing.games.dataset import (
     collate_game_sequences,
     save_shard,
 )
-from training.train_il_game import LABEL_KEYS, build_labels, parse_overrides, run_batch
+from training.train_il_game import (
+    LABEL_KEYS,
+    batch_loss,
+    build_labels,
+    parse_overrides,
+    prepare_batch,
+)
 
 SMALL = dict(
     d_model=48, n_heads=4, d_ff=64, n_st_layers=1,
@@ -96,11 +102,14 @@ def test_run_batch_trains_othello(tmp_path):
     torch.manual_seed(0)
     net = build_game_network("othello", **SMALL)
     batch = collate_game_sequences(_othello_samples(3))
-    loss, stats = run_batch(net, "othello", batch, torch.device("cpu"),
-                            value_weight=0.2, tf_prob=1.0, act_steps=2,
-                            bf16=False)
+    mb = prepare_batch("othello", batch, torch.device("cpu"), tf_prob=1.0)
+    loss, stats, pred = batch_loss(net, mb, torch.device("cpu"), value_weight=0.2,
+                                   q_halt_weight=0.5, bf16=False, act_steps=2)
     assert torch.isfinite(loss)
     assert "place_loss" in stats and "value_loss" in stats
+    # q_halt is trained on every game (target: whole action right)
+    assert "q_halt_loss" in stats and "exact_acc" in stats
+    assert pred["carry"][0].shape[0] == pred["q_halt"].numel()
     loss.backward()
     grads = [p.grad for p in net.parameters() if p.requires_grad]
     assert any(g is not None and g.abs().sum() > 0 for g in grads)
@@ -129,13 +138,18 @@ def test_resume_arch_prefers_checkpoint_config(capsys):
     from training.train_il_game import resume_arch_overrides
 
     ckpt = {"config": {"d_model": 48, "board_h": 6}, "config_overrides": {}}
-    assert resume_arch_overrides(ckpt, {}) == {"d_model": 48, "board_h": 6}
+    # fields newer than the checkpoint get their LEGACY values
+    assert resume_arch_overrides(ckpt, {}) == {
+        "d_model": 48, "board_h": 6,
+        "trm_arch": "legacy", "halt_exploration_prob": 0.0}
     # explicit CLI override is the escape hatch and applies loudly
     arch = resume_arch_overrides(ckpt, {"d_model": 64})
-    assert arch == {"d_model": 64, "board_h": 6}
+    assert arch == {"d_model": 64, "board_h": 6,
+                    "trm_arch": "legacy", "halt_exploration_prob": 0.0}
     assert "replaces checkpoint arch values" in capsys.readouterr().out
     # legacy checkpoint without a full config falls back to overrides
-    assert resume_arch_overrides({"config_overrides": {"d_ff": 32}}, {}) == {"d_ff": 32}
+    assert resume_arch_overrides({"config_overrides": {"d_ff": 32}}, {}) == {
+        "d_ff": 32, "trm_arch": "legacy", "halt_exploration_prob": 0.0}
 
 
 def test_resume_rebuilds_exact_arch_from_config():
@@ -282,6 +296,7 @@ def test_run_batch_teacher_forced_chess():
         "meta": {},
     } for _ in range(2)]
     batch = collate_game_sequences(samples)
-    loss, _ = run_batch(net, "chess", batch, torch.device("cpu"),
-                        value_weight=0.2, tf_prob=1.0, act_steps=1, bf16=False)
+    mb = prepare_batch("chess", batch, torch.device("cpu"), tf_prob=1.0)
+    loss, _, _ = batch_loss(net, mb, torch.device("cpu"), value_weight=0.2,
+                            q_halt_weight=0.5, bf16=False, act_steps=1)
     assert torch.isfinite(loss)

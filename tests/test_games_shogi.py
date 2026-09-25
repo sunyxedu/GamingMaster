@@ -440,7 +440,9 @@ def test_il_loss_single_mode_batch_denominators():
 
     for out in (all_move, all_drop):
         assert torch.isfinite(out["loss"])
-        for v in out.values():
+        for k, v in out.items():
+            if k.startswith("answer_"):   # per-frame q_halt target masks
+                continue
             assert torch.isfinite(v)
 
     # all-move batch: drop branch contributes exactly nothing …
