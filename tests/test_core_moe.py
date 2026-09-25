@@ -157,7 +157,8 @@ def test_balance_update_direction_and_valid_masking():
     assert m.load.sum().item() == 10.0                       # 2 rows × 5 tokens × k=1
     load = m.update_balance(0.1)
     assert load.tolist() == [10.0, 0.0, 0.0, 0.0]
-    assert torch.allclose(m.balance_bias, torch.tensor([9.9, 0.1, 0.1, 0.1]))
+    # [9.9, 0.1, 0.1, 0.1] re-centred (mean 2.55): routing-neutral
+    assert torch.allclose(m.balance_bias, torch.tensor([7.35, -2.45, -2.45, -2.45]))
     assert m.load.sum() == 0                                 # tally reset
 
 
@@ -284,3 +285,22 @@ def test_train_multi_game_joint_then_frozen_adaptation(tmp_path):
         if k.endswith("load"):
             continue
         assert torch.equal(ck2["core_state"][k], v), k     # frozen core unchanged
+
+
+def test_bias_centring_is_routing_neutral_and_clip_bounds():
+    torch.manual_seed(0)
+    m = MoEFFN(8, n_experts=4, top_k=2, n_shared=0, expansion=2.0, std=0.2, out_std=0.2)
+    m.train()
+    x = torch.randn(3, 5, 8)
+    with torch.no_grad():
+        m.balance_bias.copy_(torch.tensor([0.3, 1.1, 0.7, 0.9]))
+        y0 = m(x)
+        m.balance_bias -= m.balance_bias.mean()           # constant shift
+        y1 = m(x)
+    assert torch.allclose(y0, y1)                          # selection unchanged
+    m.bias_clip = 0.05
+    for _ in range(50):
+        m(torch.randn(3, 5, 8))
+        m.update_balance(0.01)
+    assert m.balance_bias.abs().max() <= 0.05 + 1e-7
+    assert abs(m.balance_bias.mean().item()) < 0.05

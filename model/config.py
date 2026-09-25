@@ -63,6 +63,7 @@ class ModelConfig:
     moe_top_k: int = 2
     moe_shared_experts: int = 1
     moe_expansion: float = 2.0           # per-expert SwiGLU width
+    moe_bias_clip: float = 0.0           # bound on |balance bias| (0 = unbounded)
 
     # Stage 2: TRM (Tiny Recursive Model, arXiv 2510.04871; defaults follow
     # the reference implementation SamsungSAILMontreal/TinyRecursiveModels,

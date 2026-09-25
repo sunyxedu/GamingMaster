@@ -121,8 +121,10 @@ class MoEFFN(nn.Module):
     """
 
     def __init__(self, d: int, n_experts: int, top_k: int, n_shared: int,
-                 expansion: float, std: float, out_std: float):
+                 expansion: float, std: float, out_std: float, bias_clip: float = 0.0):
         super().__init__()
+        #: |b_e| bound after centring (0 = unbounded, the DeepSeek-V3 rule)
+        self.bias_clip = float(bias_clip)
         if not 1 <= top_k <= n_experts:
             raise ValueError(f"moe_top_k={top_k} must be in [1, moe_experts={n_experts}]")
         self.n_experts, self.top_k = n_experts, top_k
@@ -173,7 +175,14 @@ class MoEFFN(nn.Module):
     @torch.no_grad()
     def update_balance(self, gamma: float) -> Optional[torch.Tensor]:
         """b_e += γ·sign(mean load − load_e) over the tallied step, then
-        reset the tally.  Returns the loads used (None if nothing routed)."""
+        reset the tally.  Returns the loads used (None if nothing routed).
+
+        Top-k selection is invariant to adding a constant to every b_e, but
+        Σ_e sign(mean − load_e) ≠ 0 in general, so the raw rule makes b drift
+        in common mode without bound.  b is therefore re-centred after each
+        update (routing-neutral).  With ``bias_clip`` > 0, b is also bounded to
+        [−clip, clip] so the bias can never swamp the sigmoid affinities
+        (range 0..1) and routing stays input-dependent."""
         load = self.load.clone()
         self.load.zero_()
         if load.sum() <= 0:
@@ -181,6 +190,9 @@ class MoEFFN(nn.Module):
         if not any(p.requires_grad for p in self.parameters()):
             return None     # a frozen layer (e.g. frozen core) keeps its routing
         self.balance_bias += gamma * torch.sign(load.mean() - load)
+        self.balance_bias -= self.balance_bias.mean()      # routing-neutral centring
+        if self.bias_clip > 0:
+            self.balance_bias.clamp_(-self.bias_clip, self.bias_clip)
         return load
 
 
@@ -201,7 +213,8 @@ class CoreBlock(nn.Module):
         self.o = CoreLinear(d, d, out_std)
         self.norms = nn.ModuleList([RMSNorm(d, eps=1e-6) for _ in range(4)])
         self.ffn = (MoEFFN(d, cfg.moe_experts, cfg.moe_top_k, cfg.moe_shared_experts,
-                           cfg.moe_expansion, std, out_std)
+                           cfg.moe_expansion, std, out_std,
+                           bias_clip=getattr(cfg, "moe_bias_clip", 0.0))
                     if moe else SwiGLUFFN(d, cfg.core_expansion, std, out_std))
 
     def forward(self, x: torch.Tensor, valid: Optional[torch.Tensor] = None) -> torch.Tensor:
