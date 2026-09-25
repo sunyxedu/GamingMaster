@@ -494,14 +494,17 @@ def test_eval_step_has_no_host_sync_cuda(qk_norm, bf16):
     net.prepare_inference(dev)
     cache = net.initial_st_cache(B)
     t = torch.tensor(3, device=dev)
+    # inputs are built BEFORE the sync-check window: host->device copies of
+    # the test's own inputs are syncs by definition and not the model's
+    obs, legal = _obs(B, dev), _legal(B, dev)
+    obs2, legal2 = _obs(B, dev), _legal(B, dev)
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=bf16):
-        GameNetwork.step(net, _obs(B, dev), _legal(B, dev), st_cache=cache, step_idx=t,
-                         act_steps=2)
+        GameNetwork.step(net, obs, legal, st_cache=cache, step_idx=t, act_steps=2)
         torch.cuda.synchronize()
         torch.cuda.set_sync_debug_mode("error")
         try:
-            out = GameNetwork.step(net, _obs(B, dev), _legal(B, dev), st_cache=cache,
-                                   step_idx=t, act_steps=2)
+            out = GameNetwork.step(net, obs2, legal2, st_cache=cache, step_idx=t,
+                                   act_steps=2)
         finally:
             torch.cuda.set_sync_debug_mode("default")
     assert torch.isfinite(out["action_log_prob"]).all()

@@ -68,25 +68,26 @@ fr = {x: GameShardDataset('$D/' + x + '/train', game=x,
                           max_len=None if x in UNCROPPABLE else 64).total_frames() for x in games}
 print(round($STEPS * len(games) * mixture_weights(fr, 0.5)['$g']))")
         echo "q2-$g: $S steps"
-        submit "q2-$g" "$(data_args "$g") $COMMON --steps $S --games_per_step 1 --override $BASE $RDMOE"
+        submit "${Q2_PREFIX:-q2}-$g" "$(data_args "$g") $COMMON --steps $S --games_per_step 1 --override $BASE ${CORE_ARGS:-$RDMOE}"
     done
     ;;
 q3)
     B=${BRAIN:?set BRAIN to the q1 brain checkpoint}
     AS=${ADAPT_STEPS:-4000}
-    # the scratch arm must match the brain's architecture: take qk_norm from
-    # its core_config exactly as --init_core does (legacy brains -> False)
-    QB=$(cd "$SNAP" && .venv/bin/python -c "
+    # the scratch arm must match the brain's architecture exactly: rebuild it
+    # from the brain checkpoint's full core config (the fields --init_core
+    # fixes), so the scratch and --init_core arms differ only in initialisation
+    QBASE=$(cd "$SNAP" && .venv/bin/python -c "
 from training.train_multi_game import load_core_checkpoint
-print(load_core_checkpoint('$B')[1]['qk_norm'])")
-    echo "q3: brain qk_norm=$QB"
-    QBASE="${BASE% qk_norm=*} qk_norm=$QB"    # BASE with its (last) qk_norm replaced
+cc = load_core_checkpoint('$B')[1]
+print(' '.join(f'{k}={v}' for k, v in sorted(cc.items())))")
+    echo "q3 scratch arm: $QBASE"
     for g in shogi pokemon; do
         A="$(data_args "$g") $COMMON --steps $AS --eval_every 500"
         submit "q3-$g-frozen"      "$A --init_core $B --freeze_core"
         submit "q3-$g-frozennorm"  "$A --init_core $B --freeze_core --train_core_norms"
         submit "q3-$g-finetune"    "$A --init_core $B"
-        submit "q3-$g-scratch"     "$A --override $QBASE $RDMOE"
+        submit "q3-$g-scratch"     "$A --override $QBASE"
     done
     ;;
 q4)
