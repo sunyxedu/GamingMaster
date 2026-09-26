@@ -36,10 +36,12 @@
 //!   (10 tricks) when won]) × base value; won = ≥ 61 points incl. skat (≥ 90 with
 //!   schneider announced, all tricks with schwarz announced); a lost game counts
 //!   −2×, with the announced schneider / schwarz levels, or else the declarer's own
-//!   schneider (≤ 30 points) and schwarz (no trick) once two tricks are complete;
+//!   schneider (≤ 30 points) and schwarz (no trick) once he has played two cards;
 //!   overbid (value < bid): −2 × the smallest multiple of the base value ≥ the bid.
-//!   (These lost-game details are the ISS SERVER's, pinned by its records; the GPL
-//!   client code counts neither announced level and penalises from the first trick.)
+//!   (These lost-game details are the ISS SERVER's, pinned by its records — every
+//!   one of the archive's lost games agrees; the GPL client code counts only the
+//!   announcement bonuses and penalises the own schneider / schwarz from the first
+//!   complete trick.)
 //!   Resignations / timeouts / leaving (ISS-only endings, not moves of this game) are
 //!   scored by [`Skat::iss_result`] for the converter.
 //!
@@ -676,7 +678,11 @@ impl Skat {
             timeout: end.timeout.map_or(-1, |s| s as i32),
             ..Default::default()
         };
-        let declared = matches!(self.phase, Phase::Play | Phase::Done) && self.contract.is_some();
+        // a game declared after the pickup counts as declared before its discards (ISS:
+        // the declaration may come as a half-move; a declarer leaving / timing out then
+        // is scored with the dealt skat as his only known cards)
+        let declared = self.contract.is_some()
+            && matches!(self.phase, Phase::Play | Phase::Done | Phase::Discard1 | Phase::Discard2);
         if !declared {
             if end.left.is_some() || end.timeout.is_some() {
                 gr.penalty = true;
@@ -736,7 +742,7 @@ impl Skat {
         };
         m += con.hand as u32 + con.schneider as u32 + con.schwarz as u32 + con.ouvert as u32;
         let bv = BASE_VALUE[con.ty as usize];
-        let all_tricks = self.tricks_done;
+        let decl_cards = self.played_by.iter().filter(|&&s| s == d as i8).count();
         if won {
             if points >= 90 {
                 m += 1;
@@ -755,11 +761,12 @@ impl Skat {
             // (the ISS server, pinned by its records — its GPL client code differs): a
             // lost game counts the announced schneider / schwarz levels too (without
             // flagging them); otherwise the declarer's own schneider (<= 30 points) and
-            // schwarz (no trick) count only once two tricks are complete (no penalty
-            // for resigning / timing out / leaving in the first two tricks)
+            // schwarz (no trick) count only once the declarer has played two cards (no
+            // penalty for resigning / timing out / leaving before that; all 12k lost
+            // games of the archive that ended early agree)
             if con.schneider {
                 m += 1 + con.schwarz as u32;
-            } else if all_tricks >= 2 && points <= 30 {
+            } else if decl_cards >= 2 && points <= 30 {
                 m += 1;
                 gr.schneider = true;
                 if tricks == 0 {
@@ -1611,8 +1618,9 @@ mod tests {
 
     #[test]
     fn scoring_rules() {
-        // a synthetic state: declarer 0 with the given 12 cards, the result from points
-        let st = |ty: u8, hand: bool, sa: bool, za: bool, ouvert: bool, h12: u32, pts: u32, tricks: u32, bid: u32, all: usize| {
+        // a synthetic state: declarer 0 with the given 12 cards, the result from points;
+        // `played`: cards the declarer has played (only their number matters here)
+        let st = |ty: u8, hand: bool, sa: bool, za: bool, ouvert: bool, h12: u32, pts: u32, tricks: u32, bid: u32, played: usize| {
             let mut g = Skat::new_game(&SkatConfig {});
             g.phase = Phase::Done;
             g.declarer = Some(0);
@@ -1621,7 +1629,9 @@ mod tests {
             g.decl_start = h12;
             g.points = [pts, 120 - pts, 0];
             g.tricks_won = [tricks, 10 - tricks, 0];
-            g.tricks_done = all;
+            for c in 0..played {
+                g.played_by[c] = 0;
+            }
             g.max_bid = bid;
             g.final_result()
         };
@@ -1650,12 +1660,15 @@ mod tests {
         assert_eq!((r.value, r.schneider, r.schwarz), (-528, false, false));
         // grand ouvert with 4 won: 11 x 24 = 264
         assert_eq!(st(GRAND, true, true, true, true, mask("CJ.SJ.HJ.DJ"), 120, 10, 264, 10).value, 264);
-        // no schneider / schwarz penalty before two tricks are complete (resigned /
-        // timed out early), then both
+        // no schneider / schwarz penalty before the declarer has played two cards
+        // (resigned / timed out early: ISS records 11328, 939), then both (ISS 90094,
+        // 62909: one trick complete, the declarer's second card played)
         assert_eq!(st(GRAND, false, false, false, false, with2, 0, 0, 18, 0).value, -144);
         assert_eq!(st(GRAND, false, false, false, false, with2, 0, 0, 18, 1).value, -144);
         let r = st(GRAND, false, false, false, false, with2, 0, 0, 18, 2);
         assert_eq!((r.value, r.schneider, r.schwarz), (-240, true, true));
+        let r = st(GRAND, false, false, false, false, with2, 25, 1, 18, 2);
+        assert_eq!((r.value, r.schneider, r.schwarz), (-192, true, false));
         // null values
         for (hand, ouvert, v) in [(false, false, 23), (true, false, 35), (false, true, 46), (true, true, 59)] {
             assert_eq!(st(NULL, hand, false, false, ouvert, 0, 0, 0, 18, 10).value, v);
@@ -1746,6 +1759,24 @@ mod tests {
         }
         let r = b.iss_result(&IssEnding { timeout: Some(2), ..Default::default() });
         assert_eq!(r.iss_string(), "d:-1 penalty v:0 m:0 bidok p:0 t:0 s:0 z:0 p0:0 p1:0 p2:1 l:-1 to:2 r:0");
+    }
+
+    /// ISS record 119716: the declarer picks up, declares diamonds as a half-move and
+    /// leaves before discarding — ISS scores the declared game with the dealt skat as the
+    /// declarer's only known cards (without 2, 3 x 9, lost -54, the skat's 2 points).
+    #[test]
+    fn declared_before_discards_scoring() {
+        let mut e = deal_events("DT.SQ.CT.HQ.H9.S9.DA.CJ.ST.C7.SK.D8.DJ.SA.D7.DQ.HA.D9.C8.CK.S7.DK.CQ.CA.HT.SJ.H8.HK.C9.H7.HJ.S8");
+        let mut acts = vec![(1, PASS)];
+        for v in [18, 20, 22, 23] {
+            acts.extend([(2, bid(v)), (0, YES)]);
+        }
+        acts.extend([(2, bid(24)), (0, PASS), (2, PICKUP), (2, DECLARE0 + DIAMONDS as u32)]);
+        e.extend(acts.iter().map(|&(s, a)| Event::Act(s, a)));
+        let g = replay::<Skat>(&SkatConfig {}, &e).unwrap().state;
+        assert_eq!(g.phase, Phase::Discard1);
+        let r = g.iss_result(&IssEnding { left: Some(2), ..Default::default() });
+        assert_eq!(r.iss_string(), "d:2 loss v:-54 m:-2 bidok p:2 t:0 s:0 z:0 p0:0 p1:0 p2:0 l:2 to:-1 r:0");
     }
 
     #[test]
