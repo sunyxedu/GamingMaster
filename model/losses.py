@@ -169,101 +169,17 @@ class ImitationLoss(nn.Module):
 
         Without a ``value`` target (or prediction) the value term is 0.
         """
-        B, T, N = pred["source_logits"].shape
-        device = pred["source_logits"].device
+        h = self._head_parts(pred, tgt, lengths, tf_mask, frame_mask)
+        move_mask, label_valid, seq_mask = h["move_mask"], h["label_valid"], h["seq_mask"]
+        valid, n_valid, n_seq = h["valid"], h["n_valid"], h["n_seq"]
+        tgt_src, tgt_dir, tgt_split = h["tgt_src"], h["tgt_dir"], h["tgt_split"]
+        cond_weight_valid, n_cond = h["cond_weight_valid"], h["n_cond"]
+        pass_mask, n_pass = h["pass_mask"], h["n_pass"]
 
-        # --- Build masks ------------------------------------------------
-        move_mask = tgt["count"] > 0   # [B, T]
-        # count == -1 marks frames where the player's move was dropped by
-        # the server: no action label AND not a deliberate pass.
-        label_valid = tgt["count"] >= 0
-
-        if frame_mask is not None:
-            seq_mask = frame_mask.bool()
-        elif lengths is not None:
-            seq_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
-            for i, length in enumerate(lengths):
-                seq_mask[i, :length] = True
-        else:
-            seq_mask = torch.ones(B, T, dtype=torch.bool, device=device)
-
-        valid = move_mask & seq_mask
-        n_valid = valid.sum().clamp(min=1).float()
-        n_seq = seq_mask.sum().clamp(min=1).float()
-
-        # --- Targets -----------------------------------------------------
-        tgt_src = (tgt["src_y"][:, :, 0] * self.grid_w + tgt["src_x"][:, :, 0]).long()
-        tgt_src = tgt_src.clamp(0, N - 1)
-        tgt_dir = tgt["dir_id"][:, :, 0].long()
-        tgt_split = tgt["ratio_id"][:, :, 0].long()
-        tgt_split = torch.where(valid, tgt_split, torch.zeros_like(tgt_split))
-
-        # --- Source loss: Focal CE ----------------------------------------
-        source_ce_all = F.cross_entropy(
-            pred["source_logits"].reshape(-1, N),
-            tgt_src.reshape(-1),
-            reduction="none",
-        ).reshape(B, T)
-        source_ce_all = torch.nan_to_num(source_ce_all, nan=0.0)
-
-        # Focal modulation: (1 - p_t)^gamma
-        with torch.no_grad():
-            p_t = torch.exp(-source_ce_all)  # prob assigned to correct class
-            focal_weight = (1.0 - p_t).pow(self.focal_gamma)
-        source_loss_all = focal_weight * source_ce_all
-        source_loss = (source_loss_all * valid).sum() / n_valid
-
-        # --- Dir/split weight -------------------------------------------
-        # The direction/split heads are conditioned on the embedding of the
-        # source the network actually used (GT on TF steps, model-sampled
-        # otherwise, reported in pred["src_idx"]).  Their labels only make
-        # sense when that conditioning source IS the ground-truth source, so
-        # weight each step by that indicator — not by the softmax confidence
-        # assigned to the GT source, which mismatches the sampled embedding.
-        with torch.no_grad():
-            if "src_idx" in pred:
-                cond_weight = (pred["src_idx"] == tgt_src).float()
-            else:
-                # Fallback (e.g. tests feeding raw logits): soft-conditional
-                src_prob = F.softmax(pred["source_logits"], dim=-1)
-                src_conf = src_prob.gather(-1, tgt_src.unsqueeze(-1)).squeeze(-1)
-                src_conf = torch.nan_to_num(src_conf, nan=0.0)
-                if tf_mask is not None:
-                    cond_weight = torch.where(tf_mask, torch.ones_like(src_conf), src_conf)
-                else:
-                    cond_weight = src_conf
-
-            cond_weight_valid = cond_weight * valid.float()
-            n_cond = cond_weight_valid.sum().clamp(min=1.0)
-
-        # --- Direction loss: conditional CE -------------------------------
-        dir_loss_all = F.cross_entropy(
-            pred["direction_logits"].reshape(-1, pred["direction_logits"].size(-1)),
-            tgt_dir.reshape(-1),
-            reduction="none",
-        ).reshape(B, T)
-        dir_loss_all = torch.nan_to_num(dir_loss_all, nan=0.0)
-        dir_loss = (dir_loss_all * cond_weight_valid).sum() / n_cond
-
-        # --- Split loss: conditional CE -----------------------------------
-        n_split = pred["split_logits"].size(-1)
-        split_loss_all = F.cross_entropy(
-            pred["split_logits"].reshape(-1, n_split),
-            tgt_split.reshape(-1),
-            reduction="none",
-        ).reshape(B, T)
-        split_loss_all = torch.nan_to_num(split_loss_all, nan=0.0)
-        split_loss = (split_loss_all * cond_weight_valid).sum() / n_cond
-
-        # --- Pass loss ----------------------------------------------------
-        tgt_pass = (~move_mask).float()
-        pass_loss_all = F.binary_cross_entropy_with_logits(
-            pred["pass_logits"], tgt_pass, reduction="none",
-        )
-        pass_loss_all = torch.nan_to_num(pass_loss_all, nan=0.0)
-        pass_mask = (seq_mask & label_valid).float()
-        n_pass = pass_mask.sum().clamp(min=1)
-        pass_loss = (pass_loss_all * pass_mask).sum() / n_pass
+        source_loss = (h["source_loss_all"] * valid).sum() / n_valid
+        dir_loss = (h["dir_loss_all"] * cond_weight_valid).sum() / n_cond
+        split_loss = (h["split_loss_all"] * cond_weight_valid).sum() / n_cond
+        pass_loss = (h["pass_loss_all"] * pass_mask).sum() / n_pass
 
         # --- Value loss ---------------------------------------------------
         if "value" in tgt and "value" in pred:
@@ -359,6 +275,150 @@ class ImitationLoss(nn.Module):
             "answer_correct": answer_ok,
             "answer_mask": q_supervised,
         }
+
+    def head_terms(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        frame_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, Dict]:
+        """The policy part of :meth:`compute` per head, in the
+        ``ActionDecoder.il_head_terms`` format (computed by the same code:
+        ``policy_loss == Σ_h scale · (ce · weight).sum() / norm``):
+
+          source     focal CE (``ce`` = focal weight · CE), move frames,
+                     scale ``source_weight``
+          direction  CE on move frames whose conditioning source is the GT
+                     source (``cond_weight``), scale ``direction_weight``
+          split      CE, same weights, scale ``split_weight``
+          pass       Bernoulli BCE on labelled frames, scale ``pass_weight``
+
+        No ``mask``: the source logits are raw, the direction logits carry
+        their hard legality mask (−1e9) in the logits themselves."""
+        h = self._head_parts(pred, tgt, None, None, frame_mask)
+        return {
+            "source": {"logits": pred["source_logits"], "ce": h["source_loss_all"],
+                       "weight": h["valid"].float(), "norm": h["n_valid"],
+                       "scale": float(self.source_weight)},
+            "direction": {"logits": pred["direction_logits"], "ce": h["dir_loss_all"],
+                          "weight": h["cond_weight_valid"], "norm": h["n_cond"],
+                          "scale": float(self.direction_weight)},
+            "split": {"logits": pred["split_logits"], "ce": h["split_loss_all"],
+                      "weight": h["cond_weight_valid"], "norm": h["n_cond"],
+                      "scale": float(self.split_weight)},
+            "pass": {"logits": pred["pass_logits"], "kind": "bernoulli",
+                     "ce": h["pass_loss_all"], "weight": h["pass_mask"], "norm": h["n_pass"],
+                     "scale": float(self.pass_weight)},
+        }
+
+    def _head_parts(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        lengths: Optional[list],
+        tf_mask: Optional[torch.Tensor],
+        frame_mask: Optional[torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
+        """Masks, targets, per-element head losses, weights and denominators
+        — shared by :meth:`compute` and :meth:`head_terms`."""
+        B, T, N = pred["source_logits"].shape
+        device = pred["source_logits"].device
+
+        # --- Build masks ------------------------------------------------
+        move_mask = tgt["count"] > 0   # [B, T]
+        # count == -1 marks frames where the player's move was dropped by
+        # the server: no action label AND not a deliberate pass.
+        label_valid = tgt["count"] >= 0
+
+        if frame_mask is not None:
+            seq_mask = frame_mask.bool()
+        elif lengths is not None:
+            seq_mask = torch.zeros(B, T, dtype=torch.bool, device=device)
+            for i, length in enumerate(lengths):
+                seq_mask[i, :length] = True
+        else:
+            seq_mask = torch.ones(B, T, dtype=torch.bool, device=device)
+
+        valid = move_mask & seq_mask
+        n_valid = valid.sum().clamp(min=1).float()
+        n_seq = seq_mask.sum().clamp(min=1).float()
+
+        # --- Targets -----------------------------------------------------
+        tgt_src = (tgt["src_y"][:, :, 0] * self.grid_w + tgt["src_x"][:, :, 0]).long()
+        tgt_src = tgt_src.clamp(0, N - 1)
+        tgt_dir = tgt["dir_id"][:, :, 0].long()
+        tgt_split = tgt["ratio_id"][:, :, 0].long()
+        tgt_split = torch.where(valid, tgt_split, torch.zeros_like(tgt_split))
+
+        # --- Source loss: Focal CE ----------------------------------------
+        source_ce_all = F.cross_entropy(
+            pred["source_logits"].reshape(-1, N),
+            tgt_src.reshape(-1),
+            reduction="none",
+        ).reshape(B, T)
+        source_ce_all = torch.nan_to_num(source_ce_all, nan=0.0)
+
+        # Focal modulation: (1 - p_t)^gamma
+        with torch.no_grad():
+            p_t = torch.exp(-source_ce_all)  # prob assigned to correct class
+            focal_weight = (1.0 - p_t).pow(self.focal_gamma)
+        source_loss_all = focal_weight * source_ce_all
+
+        # --- Dir/split weight -------------------------------------------
+        # The direction/split heads are conditioned on the embedding of the
+        # source the network actually used (GT on TF steps, model-sampled
+        # otherwise, reported in pred["src_idx"]).  Their labels only make
+        # sense when that conditioning source IS the ground-truth source, so
+        # weight each step by that indicator — not by the softmax confidence
+        # assigned to the GT source, which mismatches the sampled embedding.
+        with torch.no_grad():
+            if "src_idx" in pred:
+                cond_weight = (pred["src_idx"] == tgt_src).float()
+            else:
+                # Fallback (e.g. tests feeding raw logits): soft-conditional
+                src_prob = F.softmax(pred["source_logits"], dim=-1)
+                src_conf = src_prob.gather(-1, tgt_src.unsqueeze(-1)).squeeze(-1)
+                src_conf = torch.nan_to_num(src_conf, nan=0.0)
+                if tf_mask is not None:
+                    cond_weight = torch.where(tf_mask, torch.ones_like(src_conf), src_conf)
+                else:
+                    cond_weight = src_conf
+
+            cond_weight_valid = cond_weight * valid.float()
+            n_cond = cond_weight_valid.sum().clamp(min=1.0)
+
+        # --- Direction loss: conditional CE -------------------------------
+        dir_loss_all = F.cross_entropy(
+            pred["direction_logits"].reshape(-1, pred["direction_logits"].size(-1)),
+            tgt_dir.reshape(-1),
+            reduction="none",
+        ).reshape(B, T)
+        dir_loss_all = torch.nan_to_num(dir_loss_all, nan=0.0)
+
+        # --- Split loss: conditional CE -----------------------------------
+        n_split = pred["split_logits"].size(-1)
+        split_loss_all = F.cross_entropy(
+            pred["split_logits"].reshape(-1, n_split),
+            tgt_split.reshape(-1),
+            reduction="none",
+        ).reshape(B, T)
+        split_loss_all = torch.nan_to_num(split_loss_all, nan=0.0)
+
+        # --- Pass loss ----------------------------------------------------
+        tgt_pass = (~move_mask).float()
+        pass_loss_all = F.binary_cross_entropy_with_logits(
+            pred["pass_logits"], tgt_pass, reduction="none",
+        )
+        pass_loss_all = torch.nan_to_num(pass_loss_all, nan=0.0)
+        pass_mask = (seq_mask & label_valid).float()
+        n_pass = pass_mask.sum().clamp(min=1)
+
+        return dict(move_mask=move_mask, label_valid=label_valid, seq_mask=seq_mask,
+                    valid=valid, n_valid=n_valid, n_seq=n_seq, tgt_src=tgt_src,
+                    tgt_dir=tgt_dir, tgt_split=tgt_split, source_loss_all=source_loss_all,
+                    cond_weight_valid=cond_weight_valid, n_cond=n_cond,
+                    dir_loss_all=dir_loss_all, split_loss_all=split_loss_all,
+                    pass_loss_all=pass_loss_all, pass_mask=pass_mask, n_pass=n_pass)
 
 
 def next_obs_loss(

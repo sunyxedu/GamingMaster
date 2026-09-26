@@ -16,6 +16,14 @@ trainer (world-model objective, multi-node plumbing, legacy checkpoints).
 Single-process on purpose: the multi-node story (manual grad allreduce,
 NaN voting) stays in training/train_il.py until a non-generals game actually
 trains at that scale.
+
+Engine supervision is used wherever the shards carry it (tgt naming in
+data_processing/games/dataset.py): soft policy targets ``<head>_probs``
+(teacher KL through the decoder's ``il_head_terms``, --soft_target_weight)
+and ``engine_value`` targets (--engine_value_weight); --il_legal_mask feeds
+the shards' ``legal_<key>`` masks to the decoder.  Shards older than the
+frozen pre-training schema (SCHEMA_FREEZE_CONVERTER_VERSION) train with a
+warning, or not at all under --require_frozen_schema.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ from model.components.core import update_moe_balance
 from model.config import upgrade_config_dict
 from model.games import build_game_network
 from model.games import generals as generals_adapter
+from model.games.base import densify_soft_target, soft_cross_entropy
 from model.losses import hl_gauss_cross_entropy
 from model.optim import (
     TRM_BETAS,
@@ -134,7 +143,59 @@ META_ARCH_KEYS = {
     # the data (meta_arch_value), appended at batch time (OBS_HOOKS)
     "generals": {k: (k,) for k in (
         "grid_h", "grid_w", "grid_channels", "global_features")},
+    # frozen pre-training schema: the converters record the width of their
+    # obs.globals_seq (go: side-to-move / komi; chess: + repetition flags;
+    # shogi: + repetition counts; lux: + env params) and lux its sap range
+    # (the sap-offset head's (2r+1)² classes)
+    "go": {"global_features": ("board_global_features",),
+           "board_size": ("board_h", "board_w")},
+    "chess": {"global_features": ("board_global_features",)},
+    "shogi": {"global_features": ("shogi_global_features",)},
+    "lux": {"global_features": ("lux_global_features",),
+            "sap_range": ("lux_sap_range",)},
 }
+
+# The value a META_ARCH_KEYS meta key implies for shards written BEFORE the
+# converter recorded it (their meta lacks the key): check_meta_arch holds an
+# old-generation shard to the architecture it was made for, so a new-schema
+# checkpoint on old shards (or an old one on new shards) fails loudly.
+# These equal the config dataclass / registry defaults, so a fresh run on
+# old shards builds the legacy architecture without injecting anything
+# (apply_meta_arch_defaults only reads keys the meta actually has).
+META_LEGACY = {
+    "go": {"global_features": 0},
+    "chess": {"global_features": 8},
+    "shogi": {"global_features": 4},
+    "lux": {"global_features": 6, "sap_range": 0},
+}
+
+# First converter generation of the frozen pre-training schema per game:
+# older shards still train (their META_LEGACY architecture), but they lack
+# the frozen inputs / targets, so the trainers warn (or, with
+# --require_frozen_schema, refuse).
+SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 2, "lux": 2}
+_SCHEMA_FREEZE_CONTENT = {
+    "chess": "repetition flags + legal masks",
+    "go": "side-to-move/komi globals",
+    "shogi": "repetition + legal masks",
+    "mahjong": "legal masks",
+    "lux": "env-param globals + sap targets",
+}
+
+
+def schema_freeze_warning(game: str, dataset) -> Optional[str]:
+    """Why ``game``'s ``dataset`` predates the frozen pre-training schema
+    (SCHEMA_FREEZE_CONVERTER_VERSION), or None.  Games without an entry
+    (generals' GeneralsGioDataset included) are never flagged."""
+    need = SCHEMA_FREEZE_CONVERTER_VERSION.get(game)
+    if need is None:
+        return None
+    have = getattr(dataset, "converter_version", None) or 1
+    if have >= need:
+        return None
+    return (f"{game} shards have converter_version {have} < {need}: they predate the "
+            f"frozen pre-training schema ({game}: {_SCHEMA_FREEZE_CONTENT[game]}); "
+            f"re-convert with the current converter")
 
 # Teacher-forcing probability a game trains at unless the command line says
 # otherwise (train_il_game --tf_start/--tf_end, train_multi_game --tf_prob /
@@ -249,6 +310,20 @@ def parse_args() -> argparse.Namespace:
                    help="z-loss weight on every categorical action head's log-partition "
                         "(PaLM; prevents output-logit divergence, seen on go at lr 3e-4); "
                         "0 = off")
+    p.add_argument("--soft_target_weight", type=float, default=1.0,
+                   help="alpha of the engine soft targets (tgt <head>_probs, when the "
+                        "shards have them): 1 = train the teacher distribution instead "
+                        "of the one-hot label on teacher frames, 0 = hard labels only")
+    p.add_argument("--engine_value_weight", type=float, default=1.0,
+                   help="beta of the engine value targets (tgt engine_value, when the "
+                        "shards have them): value target = beta*engine + (1-beta)*outcome")
+    p.add_argument("--il_legal_mask", action="store_true",
+                   help="feed the shards' tgt legal_<key> masks to the decoder as "
+                        "legal[<key>] (legal-masked IL loss / metrics where the decoder "
+                        "supports them)")
+    p.add_argument("--require_frozen_schema", action="store_true",
+                   help="refuse shards older than the frozen pre-training schema "
+                        "(SCHEMA_FREEZE_CONVERTER_VERSION) instead of warning")
     p.add_argument("--tf_start", type=float, default=None,
                    help="teacher-forcing prob at epoch 0 (conditioning labels); "
                         "default: the game's DEFAULT_TF (generals 0 = train_il.py, "
@@ -323,18 +398,29 @@ def resume_arch_overrides(resume_ckpt: Dict, cli_overrides: Dict) -> Dict:
 
 def check_meta_arch(game: str, cfg, shard_meta: Dict) -> None:
     """Hard-fail when shard-level converter meta contradicts the model
-    config (e.g. 20×20 gomoku shards vs a 15×15 net)."""
+    config (e.g. 20×20 gomoku shards vs a 15×15 net).  A key the shard
+    meta lacks is held to its META_LEGACY value (the pre-key converter
+    output) when one is defined, else skipped; a config field the config
+    object does not have (a config class older than the field) is skipped."""
+    legacy = META_LEGACY.get(game, {})
     for meta_key, cfg_keys in META_ARCH_KEYS.get(game, {}).items():
-        if meta_key not in shard_meta:
+        if meta_key in shard_meta:
+            have, note = shard_meta[meta_key], ""
+        elif meta_key in legacy:
+            have = legacy[meta_key]
+            note = (f" (implied: the shard meta has no {meta_key!r}, i.e. the "
+                    f"converter predates it)")
+        else:
             continue
-        want = meta_arch_value(game, meta_key, shard_meta[meta_key],
+        want = meta_arch_value(game, meta_key, have,
                                lambda f, d=None: getattr(cfg, f, d))
         for ck in cfg_keys:
+            if not hasattr(cfg, ck):
+                continue
             if getattr(cfg, ck) != want:
                 raise ValueError(
-                    f"shards were converted with {meta_key}="
-                    f"{shard_meta[meta_key]} but the model has "
-                    f"{ck}={getattr(cfg, ck)}; re-convert the data or "
+                    f"shards were converted with {meta_key}={have}{note} but the "
+                    f"model has {ck}={getattr(cfg, ck)}; re-convert the data or "
                     f"use a matching checkpoint/--override"
                 )
 
@@ -393,11 +479,32 @@ def build_labels(
     return labels
 
 
+def legal_from_tgt(tgt: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """The converters' IL legality masks: ``tgt["legal_<key>"]`` (bool, or
+    packed-bits float {0, 1}) → ``{"<key>": bool mask}`` (the decoder's
+    ``legal`` keys; see ``ActionDecoder.il_head_terms``)."""
+    return {k[len("legal_"):]: v.bool() for k, v in tgt.items() if k.startswith("legal_")}
+
+
+def batch_legal(game: str, obs: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor],
+                il_legal_mask: bool = False) -> Optional[Dict[str, torch.Tensor]]:
+    """The decoder ``legal`` dict of an IL batch: LEGAL_FROM_OBS (always),
+    plus the shards' ``legal_*`` targets under ``il_legal_mask`` (they win
+    on a shared key); None when empty."""
+    legal_fn = LEGAL_FROM_OBS.get(game)
+    legal = dict((legal_fn(obs) if legal_fn is not None else None) or {})
+    if il_legal_mask:
+        legal.update(legal_from_tgt(tgt))
+    return legal or None
+
+
 def prepare_batch(game: str, batch: Dict, device: torch.device,
-                  tf_prob: float, cfg=None) -> Dict:
+                  tf_prob: float, cfg=None, il_legal_mask: bool = False) -> Dict:
     """Move a batch to ``device`` and draw its teacher-forcing labels once
     (kept for every supervision step of the batch).  ``cfg`` (the game
-    network's config) feeds the config-dependent OBS_HOOKS."""
+    network's config) feeds the config-dependent OBS_HOOKS;
+    ``il_legal_mask`` adds the shards' ``tgt["legal_*"]`` masks to the
+    decoder's ``legal`` (:func:`batch_legal`)."""
     obs = {k: v.to(device) for k, v in batch["obs"].items()}
     hook = OBS_HOOKS.get(game)
     if hook is not None:
@@ -405,30 +512,30 @@ def prepare_batch(game: str, batch: Dict, device: torch.device,
     tgt = {k: v.to(device) for k, v in batch["tgt"].items()}
     frame_mask = batch["meta"]["frame_mask"].to(device)
     labels = build_labels(game, tgt, tf_prob, frame_mask)
-    legal_fn = LEGAL_FROM_OBS.get(game)
-    legal = legal_fn(obs) if legal_fn is not None else None
+    legal = batch_legal(game, obs, tgt, il_legal_mask)
     return dict(obs=obs, tgt=tgt, frame_mask=frame_mask, labels=labels, legal=legal)
 
 
 def prepare_rows(game: str, batch: Dict, device: torch.device,
-                 tf_prob: float, cfg=None) -> List[Dict]:
+                 tf_prob: float, cfg=None, il_legal_mask: bool = False) -> List[Dict]:
     """Batch → per-row data for training.deep_supervision.BatchCarry; the
-    teacher-forcing draw belongs to the example (kept while it ponders)."""
-    mb = prepare_batch(game, batch, device, tf_prob, cfg=cfg)
+    teacher-forcing draw belongs to the example (kept while it ponders).
+    ``legal`` is not carried: :func:`mb_from_merged` rebuilds it from the
+    merged obs / tgt (the ``legal_*`` targets travel in ``tgt``)."""
+    mb = prepare_batch(game, batch, device, tf_prob, cfg=cfg, il_legal_mask=il_legal_mask)
     aux = {f"label:{k}": v for k, v in (mb["labels"] or {}).items()}
     return split_rows({"obs": mb["obs"], "tgt": mb["tgt"], "aux": aux,
                        "meta": {"lengths": batch["meta"]["lengths"]}})
 
 
-def mb_from_merged(game: str, merged: Dict) -> Dict:
+def mb_from_merged(game: str, merged: Dict, il_legal_mask: bool = False) -> Dict:
     """BatchCarry's merged batch → the ``mb`` dict batch_loss consumes."""
     aux = merged.get("aux", {})
     labels = {k[len("label:"):]: v for k, v in aux.items() if k.startswith("label:")}
     obs = merged["obs"]
-    legal_fn = LEGAL_FROM_OBS.get(game)
     return dict(obs=obs, tgt=merged["tgt"], frame_mask=merged["meta"]["frame_mask"],
                 labels=labels or None,
-                legal=legal_fn(obs) if legal_fn is not None else None)
+                legal=batch_legal(game, obs, merged["tgt"], il_legal_mask))
 
 
 def describe_value_head(cfg) -> str:
@@ -520,19 +627,181 @@ def logit_z_loss(pred: Dict[str, torch.Tensor], mask: torch.Tensor
     return total, lse_max
 
 
+def soft_target_heads(tgt: Dict[str, torch.Tensor]) -> List[str]:
+    """Sorted head names with a soft target in ``tgt`` (``<h>_probs`` dense
+    or ``<h>_probs_idx`` sparse; ``legal_*`` keys never count)."""
+    heads = set()
+    for k in tgt:
+        if k.startswith("legal_"):
+            continue
+        for suffix in ("_probs", "_probs_idx"):
+            if k.endswith(suffix) and len(k) > len(suffix):
+                heads.add(k[: -len(suffix)])
+    return sorted(heads)
+
+
+def _teacher_probs(h: str, term: Dict, tgt: Dict[str, torch.Tensor],
+                   kind: str) -> torch.Tensor:
+    """Head ``h``'s teacher target as float32 of the term logits' shape
+    (categorical [..., N] / bernoulli [...]); ValueError on a malformed one."""
+    logits = term["logits"]
+    dense, sparse = f"{h}_probs" in tgt, f"{h}_probs_idx" in tgt
+    if dense and sparse:
+        raise ValueError(f"soft target {h!r}: both {h}_probs and {h}_probs_idx given")
+    if sparse:
+        if kind != "categorical":
+            raise ValueError(f"soft target {h!r}: sparse {h}_probs_idx needs a categorical "
+                             f"head, {h!r} is {kind}")
+        if f"{h}_probs_val" not in tgt:
+            raise ValueError(f"soft target {h!r}: {h}_probs_idx without {h}_probs_val")
+        p = densify_soft_target(tgt[f"{h}_probs_idx"], tgt[f"{h}_probs_val"],
+                                logits.shape[-1])
+    else:
+        p = tgt[f"{h}_probs"].float()
+    if p.shape != logits.shape:
+        raise ValueError(f"soft target {h!r} has shape {tuple(p.shape)}, the {kind} head's "
+                         f"logits {tuple(logits.shape)}")
+    bad = ~(p >= 0)                                     # NaN compares False
+    if kind == "bernoulli":
+        bad = bad | ~(p <= 1)
+    if bool((bad | ~torch.isfinite(p)).any()):          # one host sync per head
+        raise ValueError(f"soft target {h!r} has non-finite or negative probabilities"
+                         + (" or probabilities > 1" if kind == "bernoulli" else ""))
+    return p
+
+
+def soft_target_losses(net, pred: Dict[str, torch.Tensor], tgt: Dict[str, torch.Tensor],
+                       mask: torch.Tensor, alpha: float,
+                       stats: Dict[str, torch.Tensor]) -> Optional[torch.Tensor]:
+    """The soft-target (teacher-distribution) correction to il_loss, or None
+    when ``tgt`` has no soft target (nothing computed).
+
+    Per head h of ``net.action_decoder.il_head_terms`` with a soft target
+    (naming in ``ActionDecoder.il_head_terms``), on the teacher elements
+    (presence × il_loss's own weight w):
+
+        + α · scale · Σ (soft_ce − ce) · w / norm   (ce given: the soft term
+                                                     replaces the hard one)
+        + α · scale · Σ soft_ce · w / norm          (ce None: additive)
+
+    — α = 1 trains the teacher distribution instead of the one-hot label
+    where a teacher exists, α ∈ (0, 1) blends the two, 0 only reports.
+    Categorical teacher rows are renormalised; with a term ``mask`` the
+    teacher's illegal mass is reported (``<h>_teacher_illegal_mass``) and
+    dropped first (a row with no legal mass left keeps its hard label).
+    Stats (detached, into ``stats``): ``<h>_teacher_kl`` = mean KL(p ‖ q)
+    over the teacher elements, ``<h>_teacher_frac`` = their share of the
+    head's supervised weight."""
+    heads = soft_target_heads(tgt)
+    if not heads:
+        return None
+    dec = net.action_decoder
+    terms = dec.il_head_terms(pred, tgt, mask)
+    total = None
+    for h in heads:
+        if h not in terms:
+            raise ValueError(
+                f"tgt has a soft target for head {h!r}, but {type(dec).__name__}."
+                f"il_head_terms exposes {sorted(terms)}")
+        term = terms[h]
+        kind = term.get("kind", "categorical")
+        if kind not in ("categorical", "bernoulli"):
+            raise ValueError(f"head {h!r}: unknown term kind {kind!r}")
+        logits = term["logits"]
+        weight = term["weight"].detach().float()
+        p = _teacher_probs(h, term, tgt, kind)
+        if f"{h}_probs_mask" in tgt:
+            has = tgt[f"{h}_probs_mask"].bool()
+        elif kind == "categorical":
+            has = p.sum(-1) > 0
+        else:
+            has = torch.ones_like(p, dtype=torch.bool)
+        if has.shape != weight.shape:
+            raise ValueError(f"soft target {h!r}: presence {tuple(has.shape)} vs head "
+                             f"weight {tuple(weight.shape)}")
+        tmask = term.get("mask")
+        if kind == "categorical":
+            with torch.no_grad():
+                if tmask is not None:
+                    tmask = tmask.bool()
+                    row = p.sum(-1)
+                    rows = has & (weight > 0) & (row > 0)
+                    frac = (p * ~tmask).sum(-1) / row.clamp_min(1e-12)
+                    stats[f"{h}_teacher_illegal_mass"] = (
+                        (frac * rows).sum() / rows.sum().clamp(min=1))
+                    p = p * tmask
+                row = p.sum(-1, keepdim=True)
+                p = torch.where(row > 0, p / row.clamp_min(1e-12), p)
+                has = has & (row.squeeze(-1) > 0)
+            soft_ce, ent = soft_cross_entropy(logits.float(), p, tmask)
+        else:
+            soft_ce = F.binary_cross_entropy_with_logits(logits.float(), p, reduction="none")
+            with torch.no_grad():
+                ent = -(torch.special.xlogy(p, p) + torch.special.xlogy(1 - p, 1 - p))
+        soft_ce = soft_ce.nan_to_num(0.0)
+        w = weight * has.float()
+        if alpha > 0:
+            scale = float(term.get("scale", 1.0))
+            ce = term.get("ce")
+            diff = soft_ce if ce is None else soft_ce - ce.float()
+            add = alpha * scale * (diff * w).sum() / term["norm"]
+            total = add if total is None else total + add
+        with torch.no_grad():
+            n_w = w.sum()
+            stats[f"{h}_teacher_kl"] = ((soft_ce - ent) * w).sum() / n_w.clamp(min=1)
+            stats[f"{h}_teacher_frac"] = n_w / weight.sum().clamp(min=1)
+    return total
+
+
+def value_target(tgt: Dict[str, torch.Tensor], mask: torch.Tensor, beta: float
+                 ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor],
+                            Optional[torch.Tensor]]:
+    """(target, supervised frames, engine value, engine mask) of the value
+    head when ``tgt`` has ``engine_value`` and/or ``value_mask``: frames
+    with both a valid outcome and an engine value train on
+    β · engine + (1 − β) · outcome, frames with one of them on that one."""
+    ones = torch.ones_like(mask, dtype=torch.bool)
+    if "value" in tgt:
+        val = tgt["value"].float()
+        val_m = tgt["value_mask"].bool() if "value_mask" in tgt else ones
+    else:
+        val, val_m = torch.zeros_like(mask, dtype=torch.float32), ~ones
+    eng = eng_m = None
+    if "engine_value" in tgt:
+        eng = tgt["engine_value"].float()
+        eng_m = tgt["engine_value_mask"].bool() if "engine_value_mask" in tgt else ones
+        target = torch.where(eng_m & val_m, beta * eng + (1.0 - beta) * val,
+                             torch.where(eng_m, eng, val))
+        sup = mask & (eng_m | val_m)
+    else:
+        target, sup = val, mask & val_m
+    # unsupervised frames may hold anything (NaN for a missing engine eval):
+    # keep them out of the loss arithmetic altogether
+    target = torch.where(sup, target, torch.zeros_like(target))
+    return target, sup, eng, eng_m
+
+
 def batch_loss(
     net, mb: Dict, device: torch.device, value_weight: float,
     q_halt_weight: float, bf16: bool,
     carry=None, active: Optional[torch.Tensor] = None,
     act_steps: Optional[int] = None, reset: Optional[torch.Tensor] = None,
     z_loss_weight: float = 0.0,
+    soft_target_weight: float = 1.0, engine_value_weight: float = 1.0,
 ) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, torch.Tensor]]:
     """One TRM supervision step: decoder IL loss + value loss (value_losses:
     MSE, or HL-Gauss CE for an HL-Gauss head) + q_halt BCE (target = whole
     action exactly right, reference ACTLossHead), all on the ``active``
     frames.  Stats report both ``value_loss`` (the value term's training
-    loss) and ``value_mse`` (comparable across head types).  Returns
-    (loss, stats, pred)."""
+    loss) and ``value_mse`` (comparable across head types).
+
+    Engine supervision, used only when the shards carry it (absent keys =
+    the plain objective above, bit for bit): soft policy targets
+    ``tgt["<head>_probs"]`` (:func:`soft_target_losses`, weight α =
+    ``soft_target_weight``) and engine values ``tgt["engine_value"]``
+    blended into the value target with β = ``engine_value_weight``
+    (:func:`value_target`; ``tgt["value_mask"]`` marks valid outcomes).
+    Returns (loss, stats, pred)."""
     mask = mb["frame_mask"] if active is None else active
     autocast = torch.autocast(device.type, dtype=torch.bfloat16, enabled=bf16)
     with autocast:
@@ -542,12 +811,32 @@ def batch_loss(
         losses = net.action_decoder.il_loss(pred, mb["tgt"], mask)
         loss = losses["loss"]
         tgt = mb["tgt"]
+        soft = soft_target_losses(net, pred, tgt, mask, soft_target_weight, losses)
+        if soft is not None:
+            loss = loss + soft
         z_loss, lse_max = logit_z_loss(pred, mask)
         losses["logit_lse_max"] = lse_max
         if z_loss_weight > 0:
             loss = loss + z_loss_weight * z_loss
             losses["z_loss"] = z_loss.detach()
-        if "value" in tgt:
+        if "engine_value" in tgt or "value_mask" in tgt:
+            v_tgt, v_mask, eng, eng_m = value_target(tgt, mask, engine_value_weight)
+            v_loss, v_mse = value_losses(net, pred, v_tgt, v_mask)
+            loss = loss + value_weight * v_loss
+            losses["value_loss"] = v_loss.detach()
+            losses["value_mse"] = v_mse.detach()
+            if eng is not None:
+                with torch.no_grad():
+                    m = (mask & eng_m).float()
+                    v = pred["value"].float()
+                    losses["engine_value_mse"] = (
+                        ((v - eng).square().nan_to_num(0.0) * m).sum() / m.sum().clamp(min=1))
+                    nz = m * (eng != 0).float()
+                    losses["engine_value_sign_acc"] = (
+                        ((torch.sign(v) == torch.sign(eng)).float() * nz).sum()
+                        / nz.sum().clamp(min=1))
+                    losses["engine_value_frac"] = m.sum() / mask.float().sum().clamp(min=1)
+        elif "value" in tgt:
             v_loss, v_mse = value_losses(net, pred, tgt["value"], mask)
             loss = loss + value_weight * v_loss
             losses["value_loss"] = v_loss.detach()
@@ -596,25 +885,31 @@ def greedy_decoding(net):
 
 def evaluate(net, game, loader, device, value_weight, q_halt_weight, bf16,
              ema: Optional[ModelEMA] = None,
-             diag: Optional[List[str]] = None) -> Dict[str, float]:
+             diag: Optional[List[str]] = None, il_legal_mask: bool = False,
+             soft_target_weight: float = 1.0,
+             engine_value_weight: float = 1.0) -> Dict[str, float]:
     """Validation at full depth (all halt_max_steps supervision steps, as
     the reference evaluates), on the EMA weights when enabled, with
     deterministic conditioning (greedy_decoding).  With ``diag`` (a list)
     the first batch also runs under training.diagnostics.attention_probe
-    and its line is appended."""
+    and its line is appended.  The remaining keywords are the training
+    batch_loss / prepare_batch settings."""
     model = ema.ema_copy(net) if ema is not None else net
     model.eval()
     agg: Dict[str, float] = {}
     n = 0
     with torch.no_grad(), greedy_decoding(model):
         for i, batch in enumerate(loader):
-            mb = prepare_batch(game, batch, device, tf_prob=1.0, cfg=model.cfg)
+            mb = prepare_batch(game, batch, device, tf_prob=1.0, cfg=model.cfg,
+                               il_legal_mask=il_legal_mask)
             probe = (attention_probe(model) if diag is not None and i == 0
                      else contextlib.nullcontext())
             with probe as attn:
                 _, stats, pred = batch_loss(model, mb, device, value_weight,
                                             q_halt_weight, bf16,
-                                            act_steps=model.default_depth)
+                                            act_steps=model.default_depth,
+                                            soft_target_weight=soft_target_weight,
+                                            engine_value_weight=engine_value_weight)
             if attn is not None:
                 diag.append(format_attention(attn, logit_lse_absmax(pred, mb["frame_mask"])))
             for k, v in stats.items():
@@ -670,6 +965,11 @@ def main() -> None:
               f"{dataset.converter_version} < {min_cv}: they predate a "
               f"semantic converter fix — re-convert with the current "
               f"converter, and never mix generations in one directory")
+    frozen = schema_freeze_warning(args.game, dataset)
+    if frozen is not None:
+        if args.require_frozen_schema:
+            raise SystemExit(f"--require_frozen_schema: {frozen}")
+        print(f"[WARN] {frozen}")
 
     # A resume checkpoint defines the architecture (same invariant as
     # train_il/train_rl): rebuilding from CLI overrides would silently
@@ -792,17 +1092,20 @@ def main() -> None:
             # carried batch; halted rows are replaced by this batch's rows
             def forward_backward(merged, carry, active, reset, weight):
                 loss, stats, pred = batch_loss(
-                    net, mb_from_merged(args.game, merged), device,
+                    net, mb_from_merged(args.game, merged, args.il_legal_mask), device,
                     args.value_weight, args.q_halt_weight, args.bf16,
                     carry=carry, active=active, reset=reset,
-                    z_loss_weight=args.logit_z_loss)
+                    z_loss_weight=args.logit_z_loss,
+                    soft_target_weight=args.soft_target_weight,
+                    engine_value_weight=args.engine_value_weight)
                 # weight = n_active / n_frames (reference fixed-batch
                 # normalisation)
                 (loss * (weight / n_slots)).backward()
                 return pred, stats
 
             stats = carries[slot].step(
-                prepare_rows(args.game, batch, device, tf_prob, cfg=cfg), forward_backward)
+                prepare_rows(args.game, batch, device, tf_prob, cfg=cfg,
+                             il_legal_mask=args.il_legal_mask), forward_backward)
             slot += 1
             if slot < n_slots and (i + 1) < len(loader):
                 continue
@@ -820,7 +1123,9 @@ def main() -> None:
             diag: List[str] = []
             val = evaluate(net, args.game, val_loader, device,
                            args.value_weight, args.q_halt_weight, args.bf16, ema=ema,
-                           diag=diag)
+                           diag=diag, il_legal_mask=args.il_legal_mask,
+                           soft_target_weight=args.soft_target_weight,
+                           engine_value_weight=args.engine_value_weight)
             print(f"[e{epoch} val] " + " ".join(
                 f"{k}={v:.4f}" for k, v in sorted(val.items())))
             for line in diag:

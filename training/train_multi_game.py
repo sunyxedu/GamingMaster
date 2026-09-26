@@ -58,6 +58,14 @@ final outcomes in [-1, 1], generals' an outcome / army-ratio blend in [-1, 1]).
 Logs report ``value_loss`` (the trained loss) and ``value_mse`` (MSE of the
 scalar prediction, comparable across heads).
 
+Engine supervision, per game wherever its shards carry it (train_il_game's
+batch_loss): soft policy targets ``tgt["<head>_probs"]`` replace the one-hot
+label on teacher frames (--soft_target_weight α; validation logs
+``<head>_teacher_kl``), ``tgt["engine_value"]`` blends into the value target
+(--engine_value_weight β); --il_legal_mask feeds the shards' ``legal_<key>``
+masks to the decoders.  Games whose shards predate the frozen pre-training
+schema are warned about (--require_frozen_schema: refused).
+
 Everything else is the IL recipe of training/train_il_game.py: AdamATan2,
 warmup then constant LR, EMA weights for evaluation/checkpoints, deep
 supervision only if the core is the legacy TRM.  With a MoE core the
@@ -164,6 +172,7 @@ from training.train_il_game import (
     pick_device,
     prepare_batch,
     prepare_rows,
+    schema_freeze_warning,
 )
 
 
@@ -213,6 +222,19 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="per-game loss multiplier λ_g (default 1; generals' weighted "
                         "ImitationLoss is ~2-3x the scale of the other decoders' losses)")
     p.add_argument("--value_weight", type=float, default=0.2)
+    p.add_argument("--soft_target_weight", type=float, default=1.0,
+                   help="alpha of the engine soft targets (tgt <head>_probs, where the "
+                        "shards have them): 1 = train the teacher distribution instead "
+                        "of the one-hot label on teacher frames, 0 = hard labels only")
+    p.add_argument("--engine_value_weight", type=float, default=1.0,
+                   help="beta of the engine value targets (tgt engine_value, where the "
+                        "shards have them): value target = beta*engine + (1-beta)*outcome")
+    p.add_argument("--il_legal_mask", action="store_true",
+                   help="feed the shards' tgt legal_<key> masks to the decoders as "
+                        "legal[<key>] (legal-masked IL loss / metrics where supported)")
+    p.add_argument("--require_frozen_schema", action="store_true",
+                   help="refuse shards older than the frozen pre-training schema "
+                        "(train_il_game.SCHEMA_FREEZE_CONVERTER_VERSION) instead of warning")
     p.add_argument("--logit_z_loss", type=float, default=1e-4,
                    help="z-loss weight on every categorical action head's log-partition "
                         "(PaLM; prevents output-logit divergence, seen on go at lr 3e-4); "
@@ -367,17 +389,24 @@ def game_checkpoint(ck: Dict, game: str) -> Dict:
 
 EvalSums = Dict[str, Tuple[Dict[str, float], int]]
 
+#: eval_sums' batch_loss / prepare_batch keyword defaults (= the CLI defaults)
+EVAL_LOSS_DEFAULTS = {"il_legal_mask": False, "soft_target_weight": 1.0,
+                      "engine_value_weight": 1.0}
+
 
 @torch.no_grad()
 def eval_sums(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
               value_weight: float, bf16: bool, max_batches: int = 0,
-              diag: Optional[Dict[str, str]] = None) -> EvalSums:
+              diag: Optional[Dict[str, str]] = None, il_legal_mask: bool = False,
+              soft_target_weight: float = 1.0,
+              engine_value_weight: float = 1.0) -> EvalSums:
     """Per game: (sum over batches of each batch-mean statistic, batch count)
     at the default inference depth, with deterministic conditioning
     (greedy_decoding; EMA weights are passed in by the caller).
     With ``diag`` (a dict) the first batch of each game also runs under
     training.diagnostics.attention_probe, and ``diag[g]`` gets its
-    format_attention line."""
+    format_attention line.  The remaining keywords are the training
+    batch_loss / prepare_batch settings."""
     model.eval()
     res = {}
     for g, loader in loaders.items():
@@ -387,12 +416,15 @@ def eval_sums(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
         for i, batch in enumerate(loader):
             if max_batches and i >= max_batches:
                 break
-            mb = prepare_batch(g, batch, device, tf_prob=1.0, cfg=net.cfg)
+            mb = prepare_batch(g, batch, device, tf_prob=1.0, cfg=net.cfg,
+                               il_legal_mask=il_legal_mask)
             probe = (attention_probe(net) if diag is not None and i == 0
                      else contextlib.nullcontext())
             with probe as attn, greedy_decoding(net):
                 _, stats, pred = batch_loss(net, mb, device, value_weight, Q_HALT_WEIGHT,
-                                            bf16, act_steps=net.default_depth)
+                                            bf16, act_steps=net.default_depth,
+                                            soft_target_weight=soft_target_weight,
+                                            engine_value_weight=engine_value_weight)
             if attn is not None:
                 diag[g] = format_attention(attn, logit_lse_absmax(pred, mb["frame_mask"]))
             for k, v in stats.items():
@@ -409,19 +441,27 @@ def _normalise(sums: EvalSums) -> Dict[str, Dict[str, float]]:
 
 def evaluate(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
              value_weight: float, bf16: bool, max_batches: int = 0,
-             diag: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, float]]:
+             diag: Optional[Dict[str, str]] = None, il_legal_mask: bool = False,
+             soft_target_weight: float = 1.0,
+             engine_value_weight: float = 1.0) -> Dict[str, Dict[str, float]]:
     """Per-game validation: the mean over batches of every statistic."""
     return _normalise(eval_sums(model, loaders, device, value_weight, bf16, max_batches,
-                                diag=diag))
+                                diag=diag, il_legal_mask=il_legal_mask,
+                                soft_target_weight=soft_target_weight,
+                                engine_value_weight=engine_value_weight))
 
 
 def evaluate_sharded(model: MultiGameNetwork, loaders: Dict[str, DataLoader], device,
-                     value_weight: float, bf16: bool) -> Dict[str, Dict[str, float]]:
+                     value_weight: float, bf16: bool, il_legal_mask: bool = False,
+                     soft_target_weight: float = 1.0,
+                     engine_value_weight: float = 1.0) -> Dict[str, Dict[str, float]]:
     """:func:`evaluate` with the batches split over the ranks (``loaders``
     from :func:`_sharded_val_loader`): every rank evaluates its share, the
     per-game (sums, count) are all-gathered (one small object collective,
     same on every rank), and every rank returns the global mean."""
-    local = eval_sums(model, loaders, device, value_weight, bf16)
+    local = eval_sums(model, loaders, device, value_weight, bf16,
+                      il_legal_mask=il_legal_mask, soft_target_weight=soft_target_weight,
+                      engine_value_weight=engine_value_weight)
     everyone: List[EvalSums] = [None] * dist.get_world_size()
     dist.all_gather_object(everyone, local)
     merged: EvalSums = {}
@@ -535,6 +575,13 @@ def main(argv=None) -> Dict[str, object]:
             advice = gio_dataset_advice(len(ds), args.num_workers)
             if advice:
                 log(f"[warn] {g}: {advice}")
+    for g, ds in datasets.items():
+        frozen = schema_freeze_warning(g, ds)
+        if frozen is not None:
+            if args.require_frozen_schema:
+                # every rank sees the same shards: all of them exit here
+                raise SystemExit(f"--require_frozen_schema: {frozen}")
+            log(f"[WARN] {frozen}")
     frames = {g: ds.total_frames() for g, ds in datasets.items()}
     weights = mixture_weights(frames, args.sample_alpha)
 
@@ -673,10 +720,13 @@ def main(argv=None) -> Dict[str, object]:
             net = model[g]
 
             def forward_backward(merged, carry, active, reset, weight, g=g, net=net):
-                loss, stats, pred = batch_loss(net, mb_from_merged(g, merged), device,
+                mb = mb_from_merged(g, merged, args.il_legal_mask)
+                loss, stats, pred = batch_loss(net, mb, device,
                                                args.value_weight, Q_HALT_WEIGHT, args.bf16,
                                                carry=carry, active=active, reset=reset,
-                                               z_loss_weight=args.logit_z_loss)
+                                               z_loss_weight=args.logit_z_loss,
+                                               soft_target_weight=args.soft_target_weight,
+                                               engine_value_weight=args.engine_value_weight)
                 if torch.isfinite(loss):
                     # logs report the unweighted loss; λ_g scales the gradient
                     (loss * (loss_weight.get(g, 1.0) * weight / k_div)).backward()
@@ -684,7 +734,7 @@ def main(argv=None) -> Dict[str, object]:
 
             st = carries[g].step(prepare_rows(g, next(loaders[g]), device,
                                               tf_at(game_tf[g], step, args.steps),
-                                              cfg=net.cfg),
+                                              cfg=net.cfg, il_legal_mask=args.il_legal_mask),
                                  forward_backward)
             if st is not None and "loss" in st:
                 window.setdefault(f"{g}/loss", []).append(st["loss"])
@@ -728,15 +778,21 @@ def main(argv=None) -> Dict[str, object]:
         if has_val and (step % args.eval_every == 0 or step == args.steps):
             ev_model = ema.ema_copy(model) if ema is not None else model
             diag: Dict[str, str] = {}
+            # only the flags that differ from eval_sums' defaults: an unused
+            # flag leaves the historical evaluate(...) call unchanged
+            loss_kw = {k: v for k, v in (("il_legal_mask", args.il_legal_mask),
+                                         ("soft_target_weight", args.soft_target_weight),
+                                         ("engine_value_weight", args.engine_value_weight))
+                       if v != EVAL_LOSS_DEFAULTS[k]}
             if dist_env.enabled:
                 res = evaluate_sharded(ev_model, val_loaders, device, args.value_weight,
-                                       args.bf16)
+                                       args.bf16, **loss_kw)
             else:
                 res = evaluate(ev_model, val_loaders, device, args.value_weight, args.bf16,
-                               args.eval_batches, diag=diag)
+                               args.eval_batches, diag=diag, **loss_kw)
             del ev_model
             for g, m in res.items():
-                keys = [k for k in sorted(m) if k.endswith(("loss", "acc", "mse"))]
+                keys = [k for k in sorted(m) if k.endswith(("loss", "acc", "mse", "kl"))]
                 log(f"[val {step}] {g}: " + " ".join(f"{k}={m[k]:.4f}" for k in keys),
                     flush=True)
                 if diag.get(g):

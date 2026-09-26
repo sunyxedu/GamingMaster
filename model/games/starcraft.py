@@ -386,18 +386,14 @@ class RTSDecoder(ActionDecoder):
 
     # ------------------------------------------------------------------
 
-    def il_loss(
+    def _il_parts(
         self,
         pred: Dict[str, torch.Tensor],
         tgt: Dict[str, torch.Tensor],
         seq_mask: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        """Masked CE / BCE per head.  Argument heads are (a) gated by
-        ARG_USES of the ground-truth type — an unused argument has no
-        target — and (b) condition-weighted by whether the conditioning
-        indices committed in decode matched the ground truth, because
-        logits computed under wrong conditioning are not supervisable."""
-        cfg = self.cfg
+        """Per-head targets, weights, denominators and per-element losses —
+        the one code path :meth:`il_loss` and :meth:`il_head_terms` share."""
         B, T, K = pred["type_logits"].shape
         U = pred["actor_logits"].shape[-1]
         M = pred["location_logits"].shape[-1]
@@ -409,19 +405,16 @@ class RTSDecoder(ActionDecoder):
         tgt_target = tgt["target_idx"].long().clamp(0, U - 1)
         tgt_loc = tgt["location_idx"].long().clamp(0, M - 1)
 
-        def _masked_ce(logits, target, weight, denom):
-            ce = F.cross_entropy(
+        def _ce(logits, target):
+            return F.cross_entropy(
                 logits.reshape(-1, logits.shape[-1]), target.reshape(-1),
                 reduction="none",
             ).reshape(B, T).nan_to_num(0.0)
-            return (ce * weight).sum() / denom
 
-        type_loss = _masked_ce(pred["type_logits"], tgt_type, valid, n_valid)
-
+        type_ce = _ce(pred["type_logits"], tgt_type)
         queued_bce = F.binary_cross_entropy_with_logits(
             pred["queued_logits"], tgt["queued"].float(), reduction="none",
         ).nan_to_num(0.0)
-        queued_loss = (queued_bce * valid).sum() / n_valid
 
         uses_gt = self.arg_uses[tgt_type].float()                # [B, T, 3]
         type_match = (pred["action_type_used"] == tgt_type).float()
@@ -429,15 +422,71 @@ class RTSDecoder(ActionDecoder):
 
         actor_w = valid * uses_gt[..., 0] * type_match
         n_actor = actor_w.sum().clamp(min=1.0)
-        actor_loss = _masked_ce(pred["actor_logits"], tgt_actor, actor_w, n_actor)
+        actor_ce = _ce(pred["actor_logits"], tgt_actor)
 
         target_w = valid * uses_gt[..., 1] * actor_match
         n_target = target_w.sum().clamp(min=1.0)
-        target_loss = _masked_ce(pred["target_logits"], tgt_target, target_w, n_target)
+        target_ce = _ce(pred["target_logits"], tgt_target)
 
         loc_w = valid * uses_gt[..., 2] * type_match * actor_match
         n_loc = loc_w.sum().clamp(min=1.0)
-        loc_loss = _masked_ce(pred["location_logits"], tgt_loc, loc_w, n_loc)
+        loc_ce = _ce(pred["location_logits"], tgt_loc)
+        return dict(valid=valid, n_valid=n_valid, tgt_type=tgt_type, tgt_actor=tgt_actor,
+                    tgt_target=tgt_target, tgt_loc=tgt_loc, uses_gt=uses_gt,
+                    type_ce=type_ce, queued_bce=queued_bce,
+                    actor_w=actor_w, n_actor=n_actor, actor_ce=actor_ce,
+                    target_w=target_w, n_target=n_target, target_ce=target_ce,
+                    loc_w=loc_w, n_loc=n_loc, loc_ce=loc_ce)
+
+    def il_head_terms(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, Dict]:
+        """:meth:`il_loss` per head (``ActionDecoder.il_head_terms``):
+        categorical ``type`` / ``actor`` / ``target`` / ``location`` and the
+        ``queued`` Bernoulli, with il_loss's ARG_USES gating and
+        conditioning-match weights (soft targets: ``tgt["location_probs"]``
+        etc.)."""
+        p = self._il_parts(pred, tgt, seq_mask)
+        return {
+            "type": {"logits": pred["type_logits"], "ce": p["type_ce"],
+                     "weight": p["valid"], "norm": p["n_valid"]},
+            "queued": {"logits": pred["queued_logits"], "kind": "bernoulli",
+                       "ce": p["queued_bce"], "weight": p["valid"], "norm": p["n_valid"]},
+            "actor": {"logits": pred["actor_logits"], "ce": p["actor_ce"],
+                      "weight": p["actor_w"], "norm": p["n_actor"]},
+            "target": {"logits": pred["target_logits"], "ce": p["target_ce"],
+                       "weight": p["target_w"], "norm": p["n_target"]},
+            "location": {"logits": pred["location_logits"], "ce": p["loc_ce"],
+                         "weight": p["loc_w"], "norm": p["n_loc"]},
+        }
+
+    def il_loss(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Masked CE / BCE per head.  Argument heads are (a) gated by
+        ARG_USES of the ground-truth type — an unused argument has no
+        target — and (b) condition-weighted by whether the conditioning
+        indices committed in decode matched the ground truth, because
+        logits computed under wrong conditioning are not supervisable."""
+        p = self._il_parts(pred, tgt, seq_mask)
+        valid, n_valid = p["valid"], p["n_valid"]
+        actor_w, n_actor = p["actor_w"], p["n_actor"]
+        target_w, n_target = p["target_w"], p["n_target"]
+        loc_w, n_loc = p["loc_w"], p["n_loc"]
+        tgt_type, tgt_actor = p["tgt_type"], p["tgt_actor"]
+        tgt_target, tgt_loc, uses_gt = p["tgt_target"], p["tgt_loc"], p["uses_gt"]
+
+        type_loss = (p["type_ce"] * valid).sum() / n_valid
+        queued_loss = (p["queued_bce"] * valid).sum() / n_valid
+        actor_loss = (p["actor_ce"] * actor_w).sum() / n_actor
+        target_loss = (p["target_ce"] * target_w).sum() / n_target
+        loc_loss = (p["loc_ce"] * loc_w).sum() / n_loc
 
         loss = type_loss + queued_loss + actor_loss + target_loss + loc_loss
 

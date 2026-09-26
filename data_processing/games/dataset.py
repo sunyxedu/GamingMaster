@@ -43,6 +43,32 @@ generals blend above).
 training/train_il_game.py rejects targets outside an HL-Gauss value head's
 support (check_value_support).
 
+Optional engine / legality targets (all [T, ...] like every tgt tensor; absent
+= the plain hard-label objective; consumed generically by
+training/train_il_game.py ``batch_loss``, contract in
+``model.games.base.ActionDecoder.il_head_terms``):
+
+    <h>_probs              soft policy target of decoder head h (the head names
+                           of the decoder's il_head_terms): categorical
+                           [T, ..., N] teacher distribution (engine multipv /
+                           MCTS visit counts; rows of zeros = no teacher),
+                           bernoulli [T, ...] = P(class 1)
+    <h>_probs_idx          sparse categorical alternative: long [T, ..., K]
+    <h>_probs_val          class ids (-1 = pad) + float [T, ..., K] probabilities
+    <h>_probs_mask         optional bool [T, ...] teacher presence (default:
+                           categorical rows with positive mass, bernoulli all)
+    engine_value           float [T] in [-1, 1]: the mover-POV engine expected
+                           score 2·(W + D/2) − 1 (blended into the value target,
+                           --engine_value_weight)
+    engine_value_mask      optional bool [T]: frames with an engine evaluation
+    value_mask             optional bool [T]: frames whose outcome ``value`` is valid
+    legal_<key>            IL legality mask (bool, or packbits-stored {0, 1}
+                           float) → the decoder's ``legal["<key>"]`` under the
+                           trainers' --il_legal_mask; never a soft target
+
+Collate pads all of them with zeros (False), i.e. "no teacher / no engine
+value / nothing legal" on padded frames, which the frame mask excludes anyway.
+
 Design notes:
   - One sample = one full game from one player's perspective (like the
     generals pipeline). Converters decide perspective/augmentation.

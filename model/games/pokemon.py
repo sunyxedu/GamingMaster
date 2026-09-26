@@ -459,26 +459,14 @@ class PokemonDecoder(ActionDecoder):
     # Imitation loss
     # ------------------------------------------------------------------
 
-    def il_loss(
+    def _il_parts(
         self,
         pred: Dict[str, torch.Tensor],
         tgt: Dict[str, torch.Tensor],
         seq_mask: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        """Masked CE per head, restricted to frames whose GT action type
-        actually uses the argument, and condition-weighted by whether
-        decode()'s sampled type matched the ground truth — the move and
-        switch heads condition on the type embedding, so logits computed
-        from the wrong type embedding are not a learning signal.  The
-        tera head conditions only on state (active embed + ll), so it
-        needs no condition weight; its BCE runs on all GT move frames.
-
-        tgt keys: action_type / move_idx / switch_idx / tera [B, T] long
-        (unused arguments may be −1; a −1 ``move_idx`` on a move frame
-        marks an expert move outside the 4 observed slots — 5th+ reveal —
-        and contributes no move loss; extra keys like value / active_idx
-        are ignored).
-        """
+        """Per-head targets, weights, denominators and per-element losses —
+        the one code path :meth:`il_loss` and :meth:`il_head_terms` share."""
         cfg = self.cfg
         B, T = pred["action_type_used"].shape
         seq_f = seq_mask.float()
@@ -508,19 +496,74 @@ class PokemonDecoder(ActionDecoder):
             ).reshape(B, T).nan_to_num(0.0), safe_tgt
 
         type_loss_all, _ = _ce(pred["action_type_logits"], tgt_type, cfg.n_action_types)
-        type_loss = (type_loss_all * seq_f).sum() / n_seq
-
         move_loss_all, safe_move = _ce(pred["move_logits"], tgt["move_idx"], cfg.n_move_slots)
-        move_loss = (move_loss_all * w_move).sum() / n_move
-
-        switch_loss_all, safe_switch = _ce(pred["switch_logits"], tgt["switch_idx"], cfg.team_slots)
-        switch_loss = (switch_loss_all * w_switch).sum() / n_switch
-
+        switch_loss_all, safe_switch = _ce(pred["switch_logits"], tgt["switch_idx"],
+                                           cfg.team_slots)
         tgt_tera = tgt["tera"].float().clamp(0.0, 1.0)
         tera_loss_all = F.binary_cross_entropy_with_logits(
             pred["tera_logit"], tgt_tera, reduction="none",
         ).nan_to_num(0.0)
-        tera_loss = (tera_loss_all * w_tera).sum() / n_tera
+        return dict(seq_f=seq_f, n_seq=n_seq, tgt_type=tgt_type, uses=uses,
+                    w_move=w_move, n_move=n_move, w_switch=w_switch, n_switch=n_switch,
+                    w_tera=w_tera, n_tera=n_tera, type_loss_all=type_loss_all,
+                    move_loss_all=move_loss_all, safe_move=safe_move,
+                    switch_loss_all=switch_loss_all, safe_switch=safe_switch,
+                    tgt_tera=tgt_tera, tera_loss_all=tera_loss_all)
+
+    def il_head_terms(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, Dict]:
+        """:meth:`il_loss` per head (``ActionDecoder.il_head_terms``):
+        ``action_type`` / ``move`` / ``switch`` categorical, ``tera``
+        Bernoulli; weights include il_loss's ARG_USES gating and type-match
+        condition weights (soft targets: ``tgt["move_probs"]`` etc.)."""
+        p = self._il_parts(pred, tgt, seq_mask)
+        return {
+            "action_type": {"logits": pred["action_type_logits"], "ce": p["type_loss_all"],
+                            "weight": p["seq_f"], "norm": p["n_seq"]},
+            "move": {"logits": pred["move_logits"], "ce": p["move_loss_all"],
+                     "weight": p["w_move"], "norm": p["n_move"]},
+            "switch": {"logits": pred["switch_logits"], "ce": p["switch_loss_all"],
+                       "weight": p["w_switch"], "norm": p["n_switch"]},
+            "tera": {"logits": pred["tera_logit"], "kind": "bernoulli",
+                     "ce": p["tera_loss_all"], "weight": p["w_tera"], "norm": p["n_tera"]},
+        }
+
+    def il_loss(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Masked CE per head, restricted to frames whose GT action type
+        actually uses the argument, and condition-weighted by whether
+        decode()'s sampled type matched the ground truth — the move and
+        switch heads condition on the type embedding, so logits computed
+        from the wrong type embedding are not a learning signal.  The
+        tera head conditions only on state (active embed + ll), so it
+        needs no condition weight; its BCE runs on all GT move frames.
+
+        tgt keys: action_type / move_idx / switch_idx / tera [B, T] long
+        (unused arguments may be −1; a −1 ``move_idx`` on a move frame
+        marks an expert move outside the 4 observed slots — 5th+ reveal —
+        and contributes no move loss; extra keys like value / active_idx
+        are ignored).
+        """
+        p = self._il_parts(pred, tgt, seq_mask)
+        seq_f, n_seq = p["seq_f"], p["n_seq"]
+        w_move, n_move = p["w_move"], p["n_move"]
+        w_switch, n_switch = p["w_switch"], p["n_switch"]
+        w_tera, n_tera = p["w_tera"], p["n_tera"]
+        tgt_type, uses = p["tgt_type"], p["uses"]
+        safe_move, safe_switch, tgt_tera = p["safe_move"], p["safe_switch"], p["tgt_tera"]
+
+        type_loss = (p["type_loss_all"] * seq_f).sum() / n_seq
+        move_loss = (p["move_loss_all"] * w_move).sum() / n_move
+        switch_loss = (p["switch_loss_all"] * w_switch).sum() / n_switch
+        tera_loss = (p["tera_loss_all"] * w_tera).sum() / n_tera
 
         loss = type_loss + move_loss + switch_loss + tera_loss
 
