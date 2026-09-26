@@ -192,11 +192,14 @@ class GmSimVecEnv(VecEnvBase):
 
     def random_actions(self, obs: VecObs,
                        generator: Optional[torch.Generator] = None) -> Dict[str, torch.Tensor]:
-        """A uniformly random legal action per acting row (action keys, [R] each;
-        drawn by the simulator from a seed of the torch generator)."""
+        """A uniformly random legal action per acting row of ``obs`` (action keys,
+        one entry per row of ``obs`` — every row, or the rows of a
+        ``VecObs.select`` subset, e.g. a policy's rows in the league; drawn by the
+        simulator from a seed of the torch generator)."""
         gen = self._generator(generator)
         seed = int(torch.randint(0, 2**62, (1,), generator=gen))
-        return {k: torch.from_numpy(v) for k, v in self._sim.random_actions(seed).items()}
+        rows = obs.stream_id.long()            # stream id = row index (observe())
+        return {k: torch.from_numpy(v)[rows] for k, v in self._sim.random_actions(seed).items()}
 
     # ------------------------------------------------------------------
 
