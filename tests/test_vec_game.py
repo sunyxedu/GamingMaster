@@ -465,6 +465,18 @@ def test_gomoku_illegal_placement_raises_and_pass_is_ignored():
     assert not info["acted"].any() and not done.any() and (rew == 0).all()
 
 
+def test_gomoku_action_shape_is_one_point_per_row():
+    """[N] or [N, 1] place_idx is one point per row; an [N, k>1] tensor (e.g.
+    a batched decode's [B, T] actions) is refused instead of silently
+    applying its first column."""
+    env = GomokuVecEnv(2, board_size=9)
+    env.step({"place_idx": torch.tensor([[40], [3]])})
+    assert env.board[0, 40] == 1 and env.board[1, 3] == 1
+    with pytest.raises(ValueError, match="place_idx must be"):
+        env.step({"place_idx": torch.tensor([[41, 7], [0, 5]])})
+    assert env.ply.tolist() == [1, 1] and (env.board != 0).sum() == 2    # nothing applied
+
+
 def test_gomoku_rectangular_board_and_rng_state():
     env = GomokuVecEnv(2, board_size=(6, 11), seed=4)
     obs = env.observe()

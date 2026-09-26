@@ -202,7 +202,16 @@ class GomokuVecEnv(VecEnvBase):
         n, P = self._n, self.n_points
         acts = self.replay_actions(actions)
         self._require(acts, ("place_idx",))
-        place = acts["place_idx"].reshape(n, -1)[:, 0].cpu().numpy().astype(np.int64)
+        place_t = acts["place_idx"]
+        if place_t.dim() == 2 and place_t.shape[1] == 1:
+            place_t = place_t[:, 0]
+        if place_t.dim() != 1:
+            # one point per row: an [N, k] tensor (a batched decode's [B, T]
+            # output, per-unit actions, ...) is a caller bug — never silently
+            # apply one of its columns
+            raise ValueError(f"gomoku: place_idx must be [N] (or [N, 1]), got shape "
+                             f"{tuple(place_t.shape)}")
+        place = place_t.cpu().numpy().astype(np.int64)
         active = ~self.done
         idx = np.flatnonzero(active)
         won = np.zeros(n, dtype=bool)
