@@ -6,9 +6,11 @@ tensor on any device needs no host copy) and updates them from per-game
 moments of the iteration's data.  Under torchrun the moments must be GLOBAL
 and the update identical on every rank, so :func:`per_game_moments` packs
 the (count, sum, sum of squares, #non-finite) of EVERY configured game into
-one [G, 4] float64 tensor and all-reduces it once: a rank that drew no data for a game
-contributes zeros, so every rank posts exactly one collective of the same
-shape no matter which games it rolled out.
+one [G + 1, 4] float64 tensor (the extra row flags a local input error) and
+all-reduces it once: a rank that drew no data for a game contributes zeros,
+so every rank posts exactly one collective of the same shape no matter
+which games it rolled out — and a rank whose input is bad still posts it,
+then every rank raises.
 """
 
 from __future__ import annotations
@@ -22,15 +24,15 @@ import torch.distributed as dist
 GameBatch = Mapping[str, object]
 
 
-def dist_active() -> bool:
-    """True inside a process group of more than one rank."""
-    return dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
+def dist_active(group=None) -> bool:
+    """True inside a process group (default: the world) of more than one rank."""
+    return dist.is_available() and dist.is_initialized() and dist.get_world_size(group) > 1
 
 
-def collective_device() -> torch.device:
-    """Device a collective's tensor must live on for the default group:
-    the current CUDA device under NCCL, the CPU otherwise (gloo)."""
-    if dist_active() and dist.get_backend() == "nccl":
+def collective_device(group=None) -> torch.device:
+    """Device a collective's tensor must live on for ``group``: the current
+    CUDA device under NCCL, the CPU otherwise (gloo)."""
+    if dist_active(group) and dist.get_backend(group) == "nccl":
         return torch.device("cuda", torch.cuda.current_device())
     return torch.device("cpu")
 
@@ -72,18 +74,7 @@ def _unpack(item) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     return x, mask
 
 
-@torch.no_grad()
-def per_game_moments(batches: GameBatch, games: Sequence[str], *, sync: bool = True
-                     ) -> Dict[str, Tuple[float, float, float]]:
-    """Per-game (count, mean, mean of squares) of ``batches`` over ``games``.
-
-    ``batches`` maps a game to a tensor or a ``(tensor, mask)`` pair; games
-    missing from it (or with no valid entry) count zero.  With ``sync`` and
-    an active process group the statistics are summed over all ranks with a
-    single all-reduce (call on EVERY rank with the same ``games``).  Games
-    with a zero global count map to ``(0.0, 0.0, 0.0)``.  A non-finite value
-    in any rank's batch raises ``ValueError`` on every rank.
-    """
+def _local_stats(batches: GameBatch, games: Sequence[str]) -> torch.Tensor:
     unknown = set(batches) - set(games)
     if unknown:
         raise KeyError(f"statistics for unknown games {sorted(unknown)}")
@@ -103,12 +94,43 @@ def per_game_moments(batches: GameBatch, games: Sequence[str], *, sync: bool = T
                 torch.tensor(float(v.numel()), dtype=v.dtype, device=v.device),
                 v.sum(), v.square().sum(),
                 (~fin).sum().to(v.dtype)]).cpu().double()
-    if sync and dist_active():
-        buf = stats.to(collective_device())
-        dist.all_reduce(buf, op=dist.ReduceOp.SUM)
-        stats = buf.cpu()
-    # raised AFTER the collective, so every rank raises (no rank is left
-    # waiting in a later collective)
+    return stats
+
+
+@torch.no_grad()
+def per_game_moments(batches: GameBatch, games: Sequence[str], *, sync: bool = True,
+                     group=None) -> Dict[str, Tuple[float, float, float]]:
+    """Per-game (count, mean, mean of squares) of ``batches`` over ``games``.
+
+    ``batches`` maps a game to a tensor or a ``(tensor, mask)`` pair; games
+    missing from it (or with no valid entry) count zero.  With ``sync`` and
+    an active process group (``group``, default the world) the statistics
+    are summed over its ranks with a single all-reduce (call on EVERY rank
+    of the group with the same ``games``).  Games with a zero global count
+    map to ``(0.0, 0.0, 0.0)``.  Every failure is raised AFTER the
+    collective and on every rank, so no rank is left blocked in it: a
+    non-finite value in any rank's batch raises ``ValueError``; a bad input
+    (unknown game, mask shape) re-raises its error on that rank and a
+    ``RuntimeError`` on the others.
+    """
+    G = len(games)
+    buf = torch.zeros(G + 1, 4, dtype=torch.float64)
+    err: Optional[BaseException] = None
+    try:
+        buf[:G] = _local_stats(batches, games)
+    except Exception as e:          # re-raised below, after the collective
+        err = e
+        buf.zero_()
+        buf[G, 0] = 1.0
+    if sync and dist_active(group):
+        dev_buf = buf.to(collective_device(group))
+        dist.all_reduce(dev_buf, op=dist.ReduceOp.SUM, group=group)
+        buf = dev_buf.cpu()
+    if err is not None:
+        raise err
+    if buf[G, 0] > 0:
+        raise RuntimeError(f"per_game_moments: bad input on {int(buf[G, 0])} other rank(s)")
+    stats = buf[:G]
     bad = [g for i, g in enumerate(games) if stats[i, 3] > 0]
     if bad:
         raise ValueError(f"non-finite values in the statistics batch of {bad}")

@@ -228,6 +228,17 @@ class TestTopQ:
         thresh = adv.abs().flatten().kthvalue(n - k + 1).values
         assert torch.equal(top_q_mask(adv, q=0.25, per_row=True), adv.abs() >= thresh)
 
+    def test_default_ranks_per_episode_row(self):
+        """The default is the generals per-episode rule: every row (episode)
+        keeps its own top-q, however extreme the other rows are."""
+        g = torch.Generator().manual_seed(1)
+        adv = torch.randn(3, 40, generator=g)
+        adv[0] *= 100.0                                   # one loud episode
+        keep = top_q_mask(adv, q=0.25)
+        assert keep.sum(-1).tolist() == [10, 10, 10]
+        assert torch.equal(keep, top_q_mask(adv, q=0.25, per_row=True))
+        assert top_q_mask(adv, q=0.25, per_row=False)[1:].sum() < 20
+
 
 # ======================================================================
 # token quotas
@@ -281,6 +292,19 @@ class TestTokenQuotaScheduler:
         no_debt = TokenQuotaScheduler({"a": 1, "b": 1}, carry_debt=False)
         no_debt.record({"a": 1000, "b": 200})
         assert no_debt.quotas(1000) == {"a": 500, "b": 500}
+
+    def test_debt_clears_in_one_iteration(self):
+        """With the actors delivering exactly the quota, one top-up brings
+        every game to its share of the (decayed) ledger — no sign-flipping
+        overshoot."""
+        sched = TokenQuotaScheduler({"a": 1, "b": 1}, debt_decay=0.9)
+        sched.record({"a": 100, "b": 0})
+        assert sched.debts() == pytest.approx({"a": -50.0, "b": 50.0})
+        for _ in range(3):
+            q = sched.quotas(100)
+            sched.record(q)
+            assert sched.debts() == pytest.approx({"a": 0.0, "b": 0.0}, abs=1.0)
+        assert sched.quotas(1000) == {"a": 500, "b": 500}
 
     def test_long_run_token_fractions_match_shares(self):
         shares = {"chess": 0.5, "generals": 0.3, "othello": 0.2}

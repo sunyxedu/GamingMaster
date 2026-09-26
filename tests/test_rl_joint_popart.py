@@ -76,7 +76,7 @@ class TestPreservesOutputs:
 
 class TestStatistics:
     def test_first_update_gives_exact_batch_moments(self):
-        pa = PopArt(_heads(), decay=0.99)
+        pa = PopArt(_heads(), decay=0.99, prior_weight=0.0)
         x = _targets(0, 7.0, 2.0)
         pa.update({"a": x}, sync=False)
         assert pa.mean("a") == pytest.approx(float(x.mean()), rel=1e-12)
@@ -91,7 +91,7 @@ class TestStatistics:
         assert pa.std("a") == pytest.approx(2.0, rel=0.1)
 
     def test_normalize_inverts_denormalize_and_std_floor(self):
-        pa = PopArt(_heads(), decay=0.5, std_min=0.1)
+        pa = PopArt(_heads(), decay=0.5, std_min=0.1, prior_weight=0.0)
         pa.update({"a": _targets(3, 5.0, -1.0), "b": torch.full((8,), 4.0)}, sync=False)
         x = torch.randn(10, dtype=torch.float64)
         torch.testing.assert_close(pa.normalize("a", pa.denormalize("a", x)), x)
@@ -104,7 +104,7 @@ class TestStatistics:
         losses = []
         for scale in (1.0, 1000.0):
             heads = _heads(seed=1)
-            pa = PopArt({"a": heads["a"]}, decay=0.5)
+            pa = PopArt({"a": heads["a"]}, decay=0.5, prior_weight=0.0)
             G = _targets(4, 3.0 * scale, scale)
             pa.update({"a": G}, sync=False)
             h = torch.randn(64, 16, dtype=torch.float64)
@@ -113,11 +113,27 @@ class TestStatistics:
             losses.append(float(value_loss(pred, pa.normalize("a", G))["loss"]))
         assert losses[1] == pytest.approx(losses[0], rel=0.05)
 
+    def test_default_prior_absorbs_a_degenerate_first_batch(self):
+        """Default prior (0, 1) worth one update: a batch of all-zero returns
+        (every game a 0-reward timeout) moves σ by 1 − decay of the way —
+        it does not snap to std_min and scale the head by 1/std_min."""
+        heads = _heads()
+        pa = PopArt(heads, decay=0.99)
+        w0 = final_linear(heads["a"]).weight.detach().clone()
+        pa.update({"a": torch.zeros(500, dtype=torch.float64)}, sync=False)
+        assert pa.mean("a") == 0.0
+        assert pa.std("a") == pytest.approx(0.99 ** 0.5)
+        ratio = final_linear(heads["a"]).weight / w0
+        torch.testing.assert_close(ratio, torch.full_like(ratio, 0.99 ** -0.5))
+        snap = PopArt(_heads(), decay=0.99, prior_weight=0.0)
+        snap.update({"a": torch.zeros(500, dtype=torch.float64)}, sync=False)
+        assert snap.std("a") == snap.moments.std_min                  # the failure mode
+
 
 class TestPassthrough:
     def test_hl_gauss_head_is_identity_and_untouched(self):
         heads = _heads()
-        pa = PopArt(heads)
+        pa = PopArt(heads, prior_weight=0.0)
         assert pa.mode("hl") == PASSTHROUGH and pa.mode("a") == POPART
         state = {k: v.clone() for k, v in heads["hl"].state_dict().items()}
         tfs = pa.update({"hl": _targets(0, 0.5, 0.2)}, sync=False)
@@ -165,6 +181,37 @@ class TestMirrors:
             torch.testing.assert_close(pa.denormalize("a", model["a"](h)), live0)
             torch.testing.assert_close(pa.denormalize("a", ema_model["a"](h)), shadow0)
 
+    def test_wrapped_model_and_missing_heads(self):
+        """Wrapper prefixes (DDP ``module.``, compile ``_orig_mod.``) on
+        either side still find the EMA entries; a trainable head missing from
+        the mapping raises instead of silently not being rescaled; a frozen
+        head (not shadowed by ModelEMA) is skipped."""
+        torch.manual_seed(0)
+        model = nn.ModuleDict({"a": ValueHead(8), "b": ValueHead(8)}).double()
+        ema = ModelEMA(model, mu=0.5)
+        pa = PopArt(model)
+
+        class Wrapper(nn.Module):
+            def __init__(self, m):
+                super().__init__()
+                self.module = m
+
+        wrapped = Wrapper(Wrapper(model))
+        assert set(pa.mirror_tensors(wrapped, ema.shadow)) == {"a", "b"}
+        prefixed = {f"_orig_mod.module.{k}": v for k, v in ema.shadow.items()}
+        mirror = pa.mirror_tensors(model, prefixed)
+        last = _last_linear_name(model["a"])
+        assert mirror["a"][0] is ema.shadow[f"a.{last}.weight"]
+        assert mirror["a"][1] is ema.shadow[f"a.{last}.bias"]
+        partial = {k: v for k, v in ema.shadow.items() if not k.startswith("b.")}
+        with pytest.raises(KeyError, match="'b'"):
+            pa.mirror_tensors(model, partial)
+        for p in model["b"].parameters():
+            p.requires_grad_(False)
+        assert set(pa.mirror_tensors(model, partial)) == {"a"}
+        with pytest.raises(KeyError, match="not part of the given model"):
+            pa.mirror_tensors(nn.Linear(2, 1), ema.shadow)
+
     def test_module_mirror_and_alias_guard(self):
         heads = _heads()
         copy = _heads()
@@ -195,6 +242,34 @@ class TestPersistence:
         state = torch.load(_roundtrip(state), weights_only=True)   # plain types only
         fresh.load_state_dict(state)
 
+    def test_retuned_bounds_on_resume_preserve_outputs(self):
+        """σ = clamp(std, std_min, std_max) is part of the transform: a
+        resume with a different floor, while σ sits on it, Pop-rescales the
+        head (and the EMA mirror) instead of silently changing V."""
+        torch.manual_seed(0)
+        model = nn.ModuleDict({"a": ValueHead(8), "b": ValueHead(8)}).double()
+        ema = ModelEMA(model, mu=0.5)
+        pa = PopArt(model, decay=0.5, std_min=1e-2, prior_weight=0.0)
+        pa.update({"a": 3.0 + 1e-4 * _targets(0, 1.0, 0.0), "b": _targets(1, 2.0, 0.0)},
+                  sync=False, mirrors=[pa.mirror_tensors(model, ema.shadow)])
+        assert pa.std("a") == 1e-2 and pa.std("b") > 1.0
+        h = torch.randn(6, 8, dtype=torch.float64)
+        ema_model = ema.ema_copy(model)
+        with torch.no_grad():
+            before = {g: pa.denormalize(g, model[g](h)) for g in ("a", "b")}
+            ema_before = pa.denormalize("a", ema_model["a"](h))
+        resumed = PopArt(model, decay=0.5, std_min=0.1, prior_weight=0.0)
+        tfs = resumed.load_state_dict(pa.state_dict(),
+                                      mirrors=[resumed.mirror_tensors(model, ema.shadow)])
+        assert set(tfs) == {"a"} and resumed.std("a") == 0.1       # b's σ is off the bound
+        ema.copy_to(ema_model)
+        with torch.no_grad():
+            for g in ("a", "b"):
+                torch.testing.assert_close(resumed.denormalize(g, model[g](h)), before[g])
+            torch.testing.assert_close(resumed.denormalize("a", ema_model["a"](h)), ema_before)
+        same = PopArt(model, decay=0.5, std_min=0.1, prior_weight=0.0)
+        assert same.load_state_dict(resumed.state_dict()) == {}    # same bounds: no-op
+
     def test_mismatches(self):
         pa = PopArt(_heads())
         state = pa.state_dict()
@@ -204,6 +279,65 @@ class TestPersistence:
         with pytest.raises(KeyError):
             sub.load_state_dict(state)
         sub.load_state_dict(state, strict=False)
+
+
+class TestExportAndStaleValues:
+    def test_denormalized_state_dict_folds_statistics(self):
+        torch.manual_seed(0)
+        mg = build_multi_game(["othello", "chess"], CORE, {"chess": {"hl_gauss_value": True}})
+        mg.eval()
+        ema = ModelEMA(mg, mu=0.9)
+        pa = PopArt.from_model(mg, decay=0.5)
+        for i in range(3):
+            pa.update({"othello": _targets(i, 20.0, 5.0).float()}, sync=False,
+                      mirrors=[pa.mirror_tensors(mg, ema.shadow)])
+        obs = {"board_seq": torch.rand(2, 3, 3, 8, 8)}
+        chess_obs = {"board_seq": torch.rand(2, 3, 14, 8, 8), "globals_seq": torch.rand(2, 3, 8)}
+        live = mg.state_dict()
+        export = build_multi_game(["othello", "chess"], CORE,
+                                  {"chess": {"hl_gauss_value": True}})
+        export.eval()
+        export.load_state_dict(pa.denormalized_state_dict(mg))
+        with torch.no_grad():
+            want = pa.denormalize("othello", mg["othello"](obs)["value"])
+            torch.testing.assert_close(export["othello"](obs)["value"], want,
+                                       rtol=1e-5, atol=1e-5)
+            torch.testing.assert_close(export["chess"](chess_obs)["value"],
+                                       mg["chess"](chess_obs)["value"], rtol=0, atol=0)
+        for k, v in mg.state_dict().items():                  # the live model is untouched
+            assert torch.equal(v, live[k]), k
+        # the EMA state folds the same way
+        ema_export = pa.denormalized_state_dict(mg, ema.ema_model_state(mg))
+        ema_model = ema.ema_copy(mg)
+        export.load_state_dict(ema_export)
+        with torch.no_grad():
+            torch.testing.assert_close(
+                export["othello"](obs)["value"],
+                pa.denormalize("othello", ema_model["othello"](obs)["value"]),
+                rtol=1e-5, atol=1e-5)
+        with pytest.raises(KeyError):
+            pa.denormalized_state_dict(mg, {})
+
+    def test_snapshot_converts_stale_actor_values(self):
+        heads = _heads()
+        pa = PopArt(heads, decay=0.5)
+        pa.update({"a": _targets(0, 6.0, 2.0)}, sync=False)
+        h = torch.randn(8, 16, dtype=torch.float64)
+        actor_head = _heads()
+        actor_head.load_state_dict(heads.state_dict())       # weights published to actors
+        snap = pa.snapshot()
+        with torch.no_grad():
+            stale_out = actor_head["a"](h)
+            reward_units = pa.denormalize("a", stale_out)
+        pa.update({"a": _targets(1, 30.0, -8.0)}, sync=False)   # learner moves on
+        with torch.no_grad():
+            torch.testing.assert_close(pa.denormalize("a", stale_out, stats=snap), reward_units)
+            assert not torch.allclose(pa.denormalize("a", stale_out), reward_units)
+        assert snap["hl"] == (0.0, 1.0)
+
+
+def _last_linear_name(head):
+    return [n for n, m in head.named_modules() if isinstance(m, nn.Linear)][-1]
 
 
 def _roundtrip(obj):

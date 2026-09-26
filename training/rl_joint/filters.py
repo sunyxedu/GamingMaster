@@ -22,7 +22,7 @@ def top_q_mask(
     mask: Optional[torch.Tensor] = None,
     *,
     q: float = 0.25,
-    per_row: bool = False,
+    per_row: bool = True,
     min_count: int = 8,
     key: str = "abs",
 ) -> torch.Tensor:
@@ -33,8 +33,10 @@ def top_q_mask(
         advantages: [...] (typically normalised)
         mask:       [...] bool valid tokens (default all)
         q:          kept fraction in (0, 1]; ``q >= 1`` keeps every valid token
-        per_row:    rank within each row (last dim = time, e.g. per episode,
-                    as the generals trainer does) instead of over all tokens
+        per_row:    rank within each row (last dim = time: one episode per
+                    row, the generals trainer's per-episode rule — on an
+                    interleaved board-game row that is the whole game, both
+                    seats) — the default; False ranks over all tokens
         min_count:  a group with fewer valid tokens keeps all of them
         key:        "abs" ranks by |A|, "signed" by A itself (largest first)
 

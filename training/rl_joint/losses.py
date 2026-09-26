@@ -9,8 +9,9 @@ tokens it averaged over, and detached diagnostics.
 
 Masked entries are SELECTED out (``torch.where``) before any exp / product /
 log-softmax, so garbage in padded slots (−inf log-probs, NaN advantages or
-logits) never reaches the loss or its gradient.  (:func:`categorical_kl` is
-unreduced: mask its rows yourself.)
+logits) never reaches the loss or its gradient.  (:func:`categorical_kl` and
+:func:`bernoulli_kl` are unreduced: mask their rows yourself;
+:func:`head_terms_kl` composes them with a decoder's IL head weights.)
 """
 
 from __future__ import annotations
@@ -25,8 +26,20 @@ from training.rl_joint.stats import as_mask, masked_mean, masked_sum
 
 Coef = Union[float, torch.Tensor]
 
-#: cap on log(π_ref/π) inside the k3 estimator's exp
+#: cap on log(π_ref/π) inside the k3 estimator's exp; beyond it k3 continues
+#: linearly (value and slope continuous), see :func:`_k3`
 _K3_LOG_RHO_MAX = 20.0
+
+
+def _k3(log_rho: torch.Tensor) -> torch.Tensor:
+    """k3 = (ρ − 1) − log ρ, overflow-safe.  Past ``log ρ = C`` the exp is
+    replaced by its tangent ``e^C·(1 + log ρ − C)``: value and slope stay
+    continuous and the slope in log ρ stays ``e^C − 1 > 0``, so the loss
+    keeps pulling π(a) back up toward the reference.  (Clamping inside the
+    exp alone would leave slope −1 there — the anchor would push a collapsed
+    action FURTHER below the reference.)"""
+    lc = log_rho.clamp(max=_K3_LOG_RHO_MAX)
+    return lc.exp() * (1.0 + (log_rho - lc)) - 1.0 - log_rho
 
 
 def _reduce(x: torch.Tensor, mask: torch.Tensor, reduction: str) -> Dict[str, torch.Tensor]:
@@ -40,6 +53,11 @@ def _reduce(x: torch.Tensor, mask: torch.Tensor, reduction: str) -> Dict[str, to
 
 def _zero_where(x: torch.Tensor, keep: torch.Tensor) -> torch.Tensor:
     return torch.where(keep, x, torch.zeros((), dtype=x.dtype, device=x.device))
+
+
+def _two_class(logit: torch.Tensor) -> torch.Tensor:
+    """Bernoulli logit l → 2-class logits [0, l]: softmax([0, l])[1] = σ(l)."""
+    return torch.stack([torch.zeros_like(logit), logit], dim=-1)
 
 
 # ======================================================================
@@ -261,15 +279,14 @@ def kl_penalty(logp: torch.Tensor, logp_ref: torch.Tensor,
     elif estimator == "k2":
         k = 0.5 * log_rho.square()
     elif estimator == "k3":
-        # ρ capped at e^20: beyond it the value (and gradient) only overflow
-        k = log_rho.clamp(max=_K3_LOG_RHO_MAX).exp() - 1.0 - log_rho
+        k = _k3(log_rho)
     else:
         raise ValueError(f"estimator must be 'k1', 'k2' or 'k3', got {estimator!r}")
     out = _reduce(beta * k, m, reduction)
     with torch.no_grad():
         lr = log_rho.detach()
         out["kl"] = masked_mean(k.detach(), m)
-        out["kl_k3"] = masked_mean(lr.clamp(max=_K3_LOG_RHO_MAX).exp() - 1.0 - lr, m)
+        out["kl_k3"] = masked_mean(_k3(lr), m)
     return out
 
 
@@ -310,6 +327,111 @@ def categorical_kl(logits: torch.Tensor, ref_logits: torch.Tensor,
     return (p * diff).sum(-1)
 
 
+def bernoulli_kl(logits: torch.Tensor, ref_logits: torch.Tensor, *,
+                 direction: str = "ref||pi") -> torch.Tensor:
+    """Exact element-wise KL between Bernoulli(σ(``logits``)) (current,
+    differentiable) and Bernoulli(σ(``ref_logits``)) (frozen) — e.g. a
+    pass / promote / drop head.  ``direction`` as in :func:`categorical_kl`.
+    Returns the input shape, ≥ fp32, via log-sigmoids (stable at large
+    |logit|)."""
+    ftype = torch.promote_types(logits.dtype, torch.float32)
+    return categorical_kl(_two_class(logits.to(ftype)),
+                          _two_class(ref_logits.detach().to(ftype)), direction=direction)
+
+
+def head_terms_kl(
+    cur_terms: Mapping[str, Mapping[str, object]],
+    ref_terms: Mapping[str, Mapping[str, object]],
+    *,
+    beta: Coef = 1.0,
+    direction: str = "ref||pi",
+    frame_dims: int = 2,
+    reduction: str = "mean",
+) -> Dict[str, torch.Tensor]:
+    """Full-distribution KL to the frozen reference over EVERY action head,
+    composed exactly like the decoders' IL loss (``ActionDecoder.il_head_terms``):
+
+        KL = Σ_h scale_h · Σ(kl_h · weight_h) / norm_h
+
+    — the multi-head generalisation of the generals trainer's anchor
+    (``model.rl_utils.compute_policy_kl_heads``: every head, the pass
+    Bernoulli included, averaged over the frames it is supervised on).
+    Exact per-state KLs, so unlike :func:`kl_penalty` it has no sampling
+    variance and is valid on the IL replay stream, whose actions do not come
+    from π.
+
+    ``cur_terms`` / ``ref_terms``: ``il_head_terms`` dicts of the current
+    policy and the reference, from forwards teacher-forced on the SAME
+    actions (conditional heads condition on the same choices).  Per head:
+    ``logits`` (categorical [..., N] / bernoulli [...]), ``kind``
+    (default "categorical"), ``weight`` (per-element, 0 = not supervised),
+    ``norm`` (the head's denominator), optional ``mask`` (legality, applied
+    to both sides; a bernoulli ``mask`` [..., 2] lists its legal classes
+    [0, 1]) and ``scale``.  The current side's weight / norm / mask / scale
+    are used.  Unweighted elements are zeroed BEFORE the softmaxes, so
+    garbage logits there reach neither the loss nor its gradient.
+
+    Returns ``loss`` (β·KL; ``reduction="sum"``: β·KL·count, for
+    :func:`combine_game_losses`), ``count`` = frames (the first
+    ``frame_dims`` dims) with any supervised head, ``kl`` (detached KL, the
+    beta controller's measurement) and ``kl_<head>`` (each head's weighted
+    mean KL)."""
+    if reduction not in ("mean", "sum"):
+        raise ValueError(f"reduction must be 'mean' or 'sum', got {reduction!r}")
+    missing = set(cur_terms) - set(ref_terms)
+    if missing:
+        raise KeyError(f"reference terms missing heads {sorted(missing)}")
+    if not cur_terms:
+        raise ValueError("no heads to take the KL of")
+    total = None
+    frames = None
+    diags: Dict[str, torch.Tensor] = {}
+    for h, term in cur_terms.items():
+        ref = ref_terms[h]
+        kind = term.get("kind", "categorical")
+        logits, ref_logits = term["logits"], ref["logits"]
+        weight = term["weight"].detach().float()
+        on = weight > 0
+        mask = term.get("mask")
+        if kind == "categorical":
+            if weight.shape != logits.shape[:-1]:
+                raise ValueError(f"{h!r}: weight {tuple(weight.shape)} != logits "
+                                 f"{tuple(logits.shape)}[:-1]")
+            sel = on.unsqueeze(-1)
+            cur = torch.where(sel, logits, torch.zeros((), dtype=logits.dtype,
+                                                       device=logits.device))
+            rl = torch.where(sel, ref_logits.detach(),
+                             torch.zeros((), dtype=ref_logits.dtype, device=ref_logits.device))
+            kl = categorical_kl(cur, rl, mask, direction=direction)
+        elif kind == "bernoulli":
+            if weight.shape != logits.shape:
+                raise ValueError(f"{h!r}: weight {tuple(weight.shape)} != logits "
+                                 f"{tuple(logits.shape)}")
+            zero = torch.zeros((), dtype=logits.dtype, device=logits.device)
+            cur = torch.where(on, logits, zero)
+            rl = torch.where(on, ref_logits.detach(), zero.to(ref_logits.dtype))
+            if mask is None:
+                kl = bernoulli_kl(cur, rl, direction=direction)
+            else:
+                kl = categorical_kl(_two_class(cur), _two_class(rl), mask, direction=direction)
+        else:
+            raise ValueError(f"{h!r}: unknown head kind {kind!r}")
+        kl = _zero_where(kl, on)
+        norm = torch.as_tensor(term["norm"], dtype=kl.dtype, device=kl.device)
+        part = float(term.get("scale", 1.0)) * (kl * weight.to(kl.dtype)).sum() / norm
+        total = part if total is None else total + part
+        with torch.no_grad():
+            diags[f"kl_{h}"] = (kl * weight).sum() / weight.sum().clamp(min=1e-12)
+            f = on.reshape(*on.shape[:frame_dims], -1).any(-1) if on.dim() > frame_dims else on
+            frames = f if frames is None else frames | f
+    count = frames.sum().to(total.dtype)
+    loss = beta * total
+    out = {"loss": loss * count if reduction == "sum" else loss, "count": count,
+           "kl": total.detach()}
+    out.update(diags)
+    return out
+
+
 # ======================================================================
 # Combining games
 # ======================================================================
@@ -331,26 +453,43 @@ def combine_game_losses(
       mode="game":  Σ_g w_g·(sum_g / n_g) / Σ_g w_g over games with n_g > 0 —
                     each game's own mean, games weighted explicitly.
 
-    ``counts`` overrides the per-game token counts n_g of the denominators.
-    Under data parallelism with gradient AVERAGING across ranks pass
-    ``all_reduce(n_g) / world_size``: every rank then divides by the same
-    per-rank-average count and the averaged gradient is exactly the global
-    token mean (local counts would weight every rank equally instead).
+    ``counts`` (game → n_g) replaces the local token counts, and its KEYS
+    define the games of the denominators: a game in ``counts`` but not in
+    ``terms`` contributes a zero numerator and still counts in the
+    denominator (token mode) / in the set of live games (game mode).  Under
+    data parallelism with gradient AVERAGING across ranks pass
+    ``{g: all_reduce(n_g) / world_size}`` over EVERY configured game (zeros
+    included) on every rank — also for games this rank drew no tokens of:
+    every rank then divides by the same denominators and the averaged
+    gradient is exactly the global token mean (game mode: the mean of the
+    global per-game means).  Local counts, or counts over only the local
+    games, would weight ranks rather than tokens.  A game in ``terms`` must
+    appear in ``counts``.
     """
     if not terms:
         raise ValueError("no loss terms to combine")
-    w = {g: float((weights or {}).get(g, 1.0)) for g in terms}
-    n = {g: (counts[g] if counts is not None else terms[g]["count"]) for g in terms}
-    n = {g: torch.as_tensor(v, dtype=torch.float32) for g, v in n.items()}
+    if mode not in ("token", "game"):
+        raise ValueError(f"mode must be 'token' or 'game', got {mode!r}")
+    if counts is not None:
+        missing = set(terms) - set(counts)
+        if missing:
+            raise KeyError(f"counts missing for games with loss terms {sorted(missing)}")
+        games = list(counts)
+        n = {g: torch.as_tensor(counts[g], dtype=torch.float32) for g in games}
+    else:
+        games = list(terms)
+        n = {g: torch.as_tensor(terms[g]["count"], dtype=torch.float32) for g in games}
+    w = {g: float((weights or {}).get(g, 1.0)) for g in games}
     losses = {g: t["loss"] for g, t in terms.items()}
+    # a graph-connected zero: a rank whose terms all drop out still backprops
+    zero = sum(0.0 * v for v in losses.values())
+    device = zero.device
     if mode == "token":
-        denom = sum(w[g] * n[g] for g in terms)
-        num = sum(w[g] * losses[g] for g in terms)
-        return num / torch.as_tensor(denom).to(num.device).clamp(min=1e-12)
-    if mode == "game":
-        live = [g for g in terms if float(n[g]) > 0]
-        if not live:
-            return sum(0.0 * losses[g] for g in terms)
-        num = sum(w[g] * losses[g] / n[g].to(losses[g].device) for g in live)
-        return num / sum(w[g] for g in live)
-    raise ValueError(f"mode must be 'token' or 'game', got {mode!r}")
+        denom = sum(w[g] * n[g].to(device) for g in games)
+        num = zero + sum(w[g] * losses[g] for g in terms)
+        return num / torch.as_tensor(denom, dtype=num.dtype, device=device).clamp(min=1e-12)
+    live = [g for g in games if float(n[g]) > 0]
+    if not live:
+        return zero
+    num = zero + sum(w[g] * losses[g] / n[g].to(device) for g in live if g in terms)
+    return num / sum(w[g] for g in live)

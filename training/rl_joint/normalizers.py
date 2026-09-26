@@ -29,17 +29,21 @@ def _check_games(own: Sequence[str], saved: Iterable[str], strict: bool, what: s
 class RunningMoments:
     """Per-game EMA of the mean and the mean of squares, bias-corrected.
 
-    Raw averages start at zero and are divided by their accumulated weight
-    ``1 − Π decay`` (Adam's bias correction), so the first update yields that
-    batch's exact moments instead of a blend with an arbitrary prior.  The
-    weight is tracked, not recomputed from a step count, so a resumed run
-    may change ``decay``.  Before any update a game reports mean 0 / std 1
-    (the identity transform).  ``decay`` may be a float or a per-game
-    mapping.  Statistics are Python floats (float64).
+    Raw averages are divided by their accumulated weight (Adam's bias
+    correction).  With ``prior_weight=0`` they start at zero and the first
+    update yields that batch's exact moments; ``prior_weight=w > 0`` starts
+    them at a (mean 0, std 1) prior worth ``w`` updates — ``w = 1`` is the
+    plain, uncorrected EMA started at (0, 1) (PopArt's default: one
+    degenerate batch cannot snap σ to its floor).  The weight is tracked,
+    not recomputed from a step count, so a resumed run may change
+    ``decay``.  Before any update a game reports mean 0 / std 1 (the
+    identity transform).  ``decay`` may be a float or a per-game mapping.
+    Statistics are Python floats (float64).
     """
 
     def __init__(self, games: Sequence[str], decay: object = 0.99,
-                 std_min: float = 1e-4, std_max: float = 1e6):
+                 std_min: float = 1e-4, std_max: float = 1e6, *,
+                 prior_weight: float = 0.0):
         if not games or len(set(games)) != len(games):
             raise ValueError(f"games must be a non-empty list of distinct names, got {games!r}")
         self.games = list(games)
@@ -49,10 +53,13 @@ class RunningMoments:
                 raise ValueError(f"decay for {g!r} must be in [0, 1), got {d}")
         if not 0.0 < std_min <= std_max:
             raise ValueError(f"need 0 < std_min <= std_max, got {std_min}, {std_max}")
+        if not prior_weight >= 0.0:
+            raise ValueError(f"prior_weight must be >= 0, got {prior_weight}")
         self.std_min, self.std_max = float(std_min), float(std_max)
+        self.prior_weight = float(prior_weight)
         self._m = {g: 0.0 for g in self.games}
-        self._sq = {g: 0.0 for g in self.games}
-        self._w = {g: 0.0 for g in self.games}
+        self._sq = {g: self.prior_weight for g in self.games}     # mean_sq prior 1
+        self._w = {g: self.prior_weight for g in self.games}
         self._t = {g: 0 for g in self.games}
 
     def _per_game(self, value: object, name: str) -> Dict[str, float]:
@@ -77,9 +84,14 @@ class RunningMoments:
         w = self._w[game]
         return self._sq[game] / w if w > 0 else 1.0
 
-    def std(self, game: str) -> float:
+    def std(self, game: str, std_min: Optional[float] = None,
+            std_max: Optional[float] = None) -> float:
+        """Running std clamped to [std_min, std_max] (default: this
+        instance's bounds)."""
+        lo = self.std_min if std_min is None else float(std_min)
+        hi = self.std_max if std_max is None else float(std_max)
         var = max(self.mean_sq(game) - self.mean(game) ** 2, 0.0)
-        return min(max(math.sqrt(var), self.std_min), self.std_max)
+        return min(max(math.sqrt(var), lo), hi)
 
     # ---- updates --------------------------------------------------------
 
@@ -101,10 +113,11 @@ class RunningMoments:
             done[g] = True
         return done
 
-    def update(self, batches: GameBatch, *, sync: bool = True) -> Dict[str, bool]:
+    def update(self, batches: GameBatch, *, sync: bool = True, group=None) -> Dict[str, bool]:
         """Update from per-game tensors (``game -> x`` or ``(x, mask)``);
-        under torchrun call on every rank (one all-reduce)."""
-        return self.update_from_moments(per_game_moments(batches, self.games, sync=sync))
+        under torchrun call on every rank of ``group`` (one all-reduce)."""
+        return self.update_from_moments(
+            per_game_moments(batches, self.games, sync=sync, group=group))
 
     # ---- persistence ----------------------------------------------------
 
@@ -151,8 +164,8 @@ class AdvantageNormalizer:
     def games(self):
         return self.moments.games
 
-    def update(self, batches: GameBatch, *, sync: bool = True) -> Dict[str, bool]:
-        return self.moments.update(batches, sync=sync)
+    def update(self, batches: GameBatch, *, sync: bool = True, group=None) -> Dict[str, bool]:
+        return self.moments.update(batches, sync=sync, group=group)
 
     def mean(self, game: str) -> float:
         return self.moments.mean(game)

@@ -8,10 +8,12 @@ import torch.nn.functional as F
 
 from model.losses import RLLoss, hl_gauss_cross_entropy
 from training.rl_joint import (
+    bernoulli_kl,
     categorical_kl,
     combine_game_losses,
     decoupled_ppo_loss,
     entropy_loss,
+    head_terms_kl,
     hl_gauss_value_loss,
     kl_penalty,
     value_loss,
@@ -255,6 +257,152 @@ class TestKL:
         with pytest.raises(ValueError):
             kl_penalty(logp, logp_ref, beta=1.0, estimator="k4")
 
+    def test_k3_keeps_pulling_toward_the_reference_past_the_cap(self):
+        """Past the overflow cap k3 continues linearly: continuous value, and
+        the gradient w.r.t. log π stays negative (descent RAISES π(a)), never
+        the +1 a clamp inside the exp alone would leave."""
+        log_rho = torch.tensor([5.0, 19.0, 19.999, 20.0, 20.001, 21.0, 30.0, 200.0],
+                               dtype=torch.float64)
+        logp = (-log_rho).clone().requires_grad_(True)      # log π_ref = 0
+        out = kl_penalty(logp, torch.zeros_like(logp), beta=1.0, reduction="sum")
+        (grad,) = torch.autograd.grad(out["loss"], logp)
+        assert (grad < 0).all()
+        exact = 1.0 - log_rho.exp()                           # dk3/dlogπ below the cap
+        torch.testing.assert_close(grad[:3], exact[:3])
+        torch.testing.assert_close(grad[4:], torch.full((4,), 1.0 - math.exp(20.0),
+                                                        dtype=torch.float64))
+        per = [float(kl_penalty(logp[i:i + 1].detach(), torch.zeros(1, dtype=torch.float64),
+                                beta=1.0)["loss"]) for i in range(len(log_rho))]
+        assert all(b > a for a, b in zip(per, per[1:]))      # still increasing in log ρ
+        slope = math.exp(20.0) - 1.0                          # continuous at the cap
+        assert per[3] - per[2] == pytest.approx(slope * 0.001, rel=1e-3)
+        assert per[4] - per[3] == pytest.approx(slope * 0.001, rel=1e-3)
+        k3 = kl_penalty(logp.detach(), torch.zeros_like(logp), beta=1.0)["kl_k3"]
+        assert float(k3) == pytest.approx(sum(per) / len(per), rel=1e-12)
+
+    def test_bernoulli_kl(self):
+        g = torch.Generator().manual_seed(5)
+        cur = (torch.randn(3, 4, generator=g, dtype=torch.float64) * 3).requires_grad_(True)
+        ref = torch.randn(3, 4, generator=g, dtype=torch.float64) * 3
+        p, q = torch.sigmoid(ref), torch.sigmoid(cur)
+        want = p * (p.log() - q.log()) + (1 - p) * ((1 - p).log() - (1 - q).log())
+        torch.testing.assert_close(bernoulli_kl(cur, ref), want)
+        torch.testing.assert_close(bernoulli_kl(cur, ref, direction="pi||ref"),
+                                   bernoulli_kl(ref, cur.detach()))
+        big = torch.tensor([60.0, -60.0], requires_grad=True)
+        kl = bernoulli_kl(big, torch.tensor([-60.0, 60.0]))
+        kl.sum().backward()
+        assert torch.isfinite(kl).all() and torch.isfinite(big.grad).all()
+
+
+def _two(logit):
+    """Bernoulli logit → 2-class logits [0, l] (a masked Bernoulli head)."""
+    return torch.stack([torch.zeros_like(logit), logit], -1)
+
+
+class TestHeadTermsKL:
+    @staticmethod
+    def _terms(seed, B=3, T=5, N=6, U=2, garbage=False):
+        """il_head_terms-shaped dicts: a masked categorical, a multi-unit
+        categorical [B, T, U, N], a bernoulli and a masked (2-class)
+        bernoulli, with conditional weights."""
+        g = torch.Generator().manual_seed(seed)
+        src = torch.randn(B, T, N, generator=g, dtype=torch.float64)
+        unit = torch.randn(B, T, U, N, generator=g, dtype=torch.float64)
+        pas = torch.randn(B, T, generator=g, dtype=torch.float64) * 2
+        promo = torch.randn(B, T, generator=g, dtype=torch.float64)
+        # weights / masks are shared by both sides (same teacher-forced actions)
+        g = torch.Generator().manual_seed(1234)
+        legal = torch.rand(B, T, N, generator=g) > 0.3
+        legal[..., 0] = True
+        w_src = (torch.rand(B, T, generator=g) > 0.2).double()
+        w_unit = (torch.rand(B, T, U, generator=g) > 0.4).double()
+        w_pass = torch.ones(B, T, dtype=torch.float64)
+        w_promo = (torch.rand(B, T, generator=g) > 0.5).double()
+        for w in (w_src, w_unit, w_pass, w_promo):
+            w[-1, -1] = 0.0                          # a padded frame
+        promo_mask = torch.ones(B, T, 2, dtype=torch.bool)
+        promo_mask[0, :, 1] = False                  # promotion illegal on row 0
+        if garbage:                                   # garbage where unsupervised
+            src = torch.where((w_src > 0).unsqueeze(-1), src, torch.tensor(float("nan")))
+            pas = torch.where(w_pass > 0, pas, torch.tensor(float("inf")))
+        return {
+            "src": {"logits": src, "weight": w_src, "norm": w_src.sum().clamp(min=1),
+                    "mask": legal},
+            "unit": {"logits": unit, "weight": w_unit, "norm": w_unit.sum().clamp(min=1),
+                     "scale": 0.5},
+            "pass": {"logits": pas, "kind": "bernoulli", "weight": w_pass,
+                     "norm": w_pass.sum().clamp(min=1)},
+            "promo": {"logits": promo, "kind": "bernoulli", "weight": w_promo,
+                      "norm": w_promo.sum().clamp(min=1), "mask": promo_mask},
+        }
+
+    def test_matches_manual_composition(self):
+        cur = self._terms(0)
+        for t in cur.values():
+            t["logits"].requires_grad_(True)
+        ref = self._terms(1)
+        out = head_terms_kl(cur, ref, beta=2.0)
+        want = 0.0
+        for h, t in cur.items():
+            if t.get("kind") == "bernoulli":
+                if "mask" in t:
+                    kl = categorical_kl(_two(t["logits"]), _two(ref[h]["logits"]), t["mask"])
+                else:
+                    kl = bernoulli_kl(t["logits"], ref[h]["logits"])
+            else:
+                kl = categorical_kl(t["logits"], ref[h]["logits"], t.get("mask"))
+            want = want + t.get("scale", 1.0) * (kl * t["weight"]).sum() / t["norm"]
+        torch.testing.assert_close(out["loss"], 2.0 * want)
+        torch.testing.assert_close(out["kl"], want.detach())
+        # frames with any supervised head: every frame but the padded one has pass weight
+        assert int(out["count"]) == 3 * 5 - 1
+        s = head_terms_kl(cur, ref, beta=2.0, reduction="sum")
+        torch.testing.assert_close(s["loss"], out["loss"] * out["count"])
+        assert set(out) >= {"kl_src", "kl_unit", "kl_pass", "kl_promo"}
+        # the promotion KL on the illegal-promotion row is exactly zero
+        zero_row = self._terms(0)
+        zero_row["promo"]["weight"] = torch.zeros(3, 5, dtype=torch.float64)
+        zero_row["promo"]["weight"][0] = 1.0
+        z = head_terms_kl({"promo": zero_row["promo"]}, {"promo": ref["promo"]})
+        assert float(z["kl"]) == pytest.approx(0.0, abs=1e-12)
+
+    def test_identical_policies_and_gradient(self):
+        cur = self._terms(0)
+        ref = self._terms(0)
+        for t in cur.values():
+            t["logits"].requires_grad_(True)
+        out = head_terms_kl(cur, ref)
+        assert float(out["kl"]) == pytest.approx(0.0, abs=1e-12)
+        grads = torch.autograd.grad(out["loss"], [t["logits"] for t in cur.values()])
+        for gr in grads:                              # KL minimum: zero gradient
+            assert gr.abs().max() < 1e-12
+
+    def test_garbage_in_unsupervised_slots_never_leaks(self):
+        cur = self._terms(0, garbage=True)
+        for t in cur.values():
+            t["logits"].requires_grad_(True)
+        ref = self._terms(1, garbage=True)
+        for direction in ("ref||pi", "pi||ref"):
+            out = head_terms_kl(cur, ref, direction=direction)
+            assert torch.isfinite(out["loss"])
+            grads = torch.autograd.grad(out["loss"], [t["logits"] for t in cur.values()])
+            assert all(torch.isfinite(gr).all() for gr in grads)
+            clean = self._terms(0)
+            torch.testing.assert_close(
+                out["loss"], head_terms_kl(clean, self._terms(1), direction=direction)["loss"])
+
+    def test_validation(self):
+        cur, ref = self._terms(0), self._terms(1)
+        with pytest.raises(KeyError):
+            head_terms_kl(cur, {"src": ref["src"]})
+        bad = dict(cur, src=dict(cur["src"], kind="gaussian"))
+        with pytest.raises(ValueError, match="kind"):
+            head_terms_kl(bad, ref)
+        bad = dict(cur, src=dict(cur["src"], weight=torch.ones(3, 4)))
+        with pytest.raises(ValueError, match="weight"):
+            head_terms_kl(bad, ref)
+
     def test_categorical_kl_formula_and_legal_mask(self):
         g = torch.Generator().manual_seed(3)
         cur = torch.randn(4, 6, generator=g).requires_grad_(True)
@@ -315,3 +463,41 @@ class TestCombine:
                                    torch.tensor(1.0))
         with pytest.raises(ValueError):
             combine_game_losses({})
+
+    @pytest.mark.parametrize("mode", ["token", "game"])
+    def test_ddp_ranks_with_disjoint_games(self, mode):
+        """Two ranks holding DIFFERENT game sets, gradients averaged (DDP):
+        with global counts over every game, the averaged gradient is that of
+        the global token mean (game mode: of the mean of global per-game
+        means) — also when one rank has no tokens of a game at all."""
+        g = torch.Generator().manual_seed(1)
+        theta = torch.zeros((), dtype=torch.float64, requires_grad=True)
+        xs = {("r0", "a"): torch.randn(10, generator=g, dtype=torch.float64),
+              ("r0", "b"): torch.randn(30, generator=g, dtype=torch.float64),
+              ("r1", "a"): torch.randn(10, generator=g, dtype=torch.float64),
+              ("r1", "c"): torch.randn(7, generator=g, dtype=torch.float64)}
+
+        def term(x):          # per-token loss (x + θ)², sum-reduced
+            return value_loss(x + theta, torch.zeros_like(x), reduction="sum")
+
+        world = 2
+        global_n = {"a": 20.0, "b": 30.0, "c": 7.0, "d": 0.0}   # "d": configured, no data
+        counts = {k: v / world for k, v in global_n.items()}
+        per_rank = []
+        for rank in ("r0", "r1"):
+            terms = {gm: term(x) for (r, gm), x in xs.items() if r == rank}
+            per_rank.append(combine_game_losses(terms, mode=mode, counts=counts))
+        ddp = sum(per_rank) / world
+        by_game = {gm: torch.cat([x for (r, k), x in xs.items() if k == gm])
+                   for gm in ("a", "b", "c")}
+        if mode == "token":
+            want = sum(((x + theta) ** 2).sum() for x in by_game.values()) / 57.0
+        else:
+            want = sum(((x + theta) ** 2).mean() for x in by_game.values()) / 3.0
+        torch.testing.assert_close(ddp, want)
+        (g_ddp,) = torch.autograd.grad(ddp, theta)
+        (g_want,) = torch.autograd.grad(want, theta)
+        torch.testing.assert_close(g_ddp, g_want)
+        # a game with loss terms must have a count
+        with pytest.raises(KeyError, match="counts missing"):
+            combine_game_losses({"a": term(xs[("r0", "a")])}, counts={"b": 1.0})

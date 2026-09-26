@@ -4,8 +4,9 @@ Rank 0 rolls out only chess, rank 1 chess and othello (go on neither): the
 per-game moments must equal the single-process moments of the concatenated
 data on BOTH ranks, the advantage normaliser and PopArt (statistics and the
 rescaled head weights) must end bit-identical across ranks, and a non-finite
-value on ONE rank must raise on both instead of leaving the other blocked in
-a collective.
+value — or a malformed input (unknown game, wrong mask shape) — on ONE rank
+must raise on both instead of leaving the other blocked in a collective.
+Statistics over an explicit process group equal the world's.
 """
 
 import os
@@ -63,9 +64,23 @@ def _worker(rank: int, port: int, root: str) -> None:
             per_game_moments(bad, GAMES)
         except ValueError:
             raised = True
+        # malformed input on rank 0 only: rank 0 re-raises its own error,
+        # rank 1 gets a RuntimeError — both after the (single) collective
+        input_error = None
+        try:
+            if rank == 0:
+                per_game_moments({"chess": (torch.zeros(3), torch.ones(4, dtype=torch.bool))},
+                                 GAMES)
+            else:
+                per_game_moments({"othello": torch.zeros(3)}, GAMES)
+        except (ValueError, RuntimeError) as e:
+            input_error = type(e).__name__
+        group = dist.new_group(list(range(WORLD)))
+        group_moments = per_game_moments(data, GAMES, group=group)
         dist.barrier()                             # both ranks still in step afterwards
         torch.save({"moments": moments, "norm": norm.state_dict(), "popart": pa.state_dict(),
-                    "heads": heads.state_dict(), "raised": raised},
+                    "heads": heads.state_dict(), "raised": raised,
+                    "input_error": input_error, "group_moments": group_moments},
                    os.path.join(root, f"rank{rank}.pt"))
     finally:
         dist.destroy_process_group()
@@ -105,6 +120,8 @@ def test_statistics_are_global_and_rank_identical(tmp_path):
         for g in GAMES:
             assert r["moments"][g] == pytest.approx(want[g], rel=1e-12, abs=1e-12), g
         assert r["raised"]
+        assert r["group_moments"] == r["moments"]
+    assert r0["input_error"] == "ValueError" and r1["input_error"] == "RuntimeError"
     assert r0["moments"]["go"] == (0.0, 0.0, 0.0)
     assert r0["norm"] == r1["norm"]
     assert r0["popart"] == r1["popart"]

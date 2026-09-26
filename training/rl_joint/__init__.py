@@ -6,27 +6,35 @@ on ONE game's tensors plus a validity mask, or keeps per-game state with
 
 per iteration (weights and MoE routing bias frozen through rollouts + epochs)
     quotas = sched.quotas(tokens)                  learner tokens per game
-    ... actors roll out; store behaviour log-probs μ and values ...
-    V      = popart.denormalize(g, head_out)       reward units
+    ... actors roll out; store behaviour log-probs μ ...
+    π_old, v = learner recompute (same weights, frozen routing), before epoch 1
+    V      = popart.denormalize(g, v)              reward units, CURRENT statistics
+                                                   (actor-stored values: stats=the
+                                                   snapshot of their weight version)
     A, G   = gae(r, V, terminated, gamma=γ_g, lam=λ_g, truncated=..., bootstrap=...)
+             seat_gae(...) for interleaved multi-seat streams (board games, mahjong)
     popart.update({g: (G, mask)},                  Pop: heads (+ EMA shadow) rescaled,
                   mirrors=[popart.mirror_tensors(model, ema.shadow)])   outputs kept
     advnorm.update({g: (A, mask)}); A = advnorm.normalize(g, A)
-    keep   = top_q_mask(A, mask, q=0.25)           optional
-    π_old  = learner recompute (same weights, frozen routing), before epoch 1
+    keep   = top_q_mask(A, mask, q=0.25)           optional; per row = per episode
     per minibatch, per game g:
         pol = decoupled_ppo_loss(logπ, logπ_old, logμ, A, mask, policy_mask=keep)
         val = value_loss(v, popart.normalize(g, G), mask)  (hl_gauss_value_loss
               for HL-Gauss heads)
         ent = entropy_loss(H, mask, coef=entcoef[g])
-        kl  = kl_penalty(logπ, logπ_ref, mask, beta=klbeta[g])
-    total = combine_game_losses(...)  (+ the IL replay stream)
+        kl  = head_terms_kl(decoder.il_head_terms(...) of π and of the frozen
+              reference, beta=klbeta[g])       (kl_penalty: cheap sampled fallback)
+    total = combine_game_losses(..., counts=global per-game counts / world)
+            (+ the IL replay stream; its value targets through popart.normalize)
     after the epochs: entcoef.update(H_g), klbeta.update(KL_g), sched.record(n_g)
+    exports / eval snapshots: popart.denormalized_state_dict(model[, ema state])
 
 Modules
     losses        decoupled_ppo_loss, value_loss, hl_gauss_value_loss,
-                  entropy_loss, kl_penalty, categorical_kl, combine_game_losses
-    gae           gae (per-game γ/λ, terminated vs truncated bootstrap, padding)
+                  entropy_loss, kl_penalty, categorical_kl, bernoulli_kl,
+                  head_terms_kl, combine_game_losses
+    gae           gae (per-game γ/λ, terminated vs truncated bootstrap, padding),
+                  seat_gae (interleaved multi-seat streams)
     normalizers   RunningMoments, AdvantageNormalizer (per-game EMA mean/std)
     popart        PopArt (multi-task, output-preserving; HL-Gauss passthrough)
     controllers   AdaptiveEntropyCoef, AdaptiveKLBeta
@@ -38,19 +46,21 @@ Modules
 
 Multi-GPU: statistics updates (normaliser, PopArt) all-reduce per-game
 moments of every configured game in one collective — call them on every
-rank.  Controllers and the scheduler are deterministic given their inputs:
+rank (of ``group``).  Controllers and the scheduler are deterministic given their inputs:
 feed them all-reduced measurements and they stay identical across ranks.
 """
 
 from training.rl_joint.controllers import AdaptiveEntropyCoef, AdaptiveKLBeta
 from training.rl_joint.diagnostics import expert_load_entropy, explained_variance
 from training.rl_joint.filters import top_q_mask
-from training.rl_joint.gae import gae
+from training.rl_joint.gae import gae, seat_gae
 from training.rl_joint.losses import (
+    bernoulli_kl,
     categorical_kl,
     combine_game_losses,
     decoupled_ppo_loss,
     entropy_loss,
+    head_terms_kl,
     hl_gauss_value_loss,
     kl_penalty,
     value_loss,
@@ -77,9 +87,9 @@ __all__ = [
     "AdaptiveEntropyCoef", "AdaptiveKLBeta",
     "expert_load_entropy", "explained_variance",
     "top_q_mask",
-    "gae",
-    "categorical_kl", "combine_game_losses", "decoupled_ppo_loss", "entropy_loss",
-    "hl_gauss_value_loss", "kl_penalty", "value_loss",
+    "gae", "seat_gae",
+    "bernoulli_kl", "categorical_kl", "combine_game_losses", "decoupled_ppo_loss",
+    "entropy_loss", "head_terms_kl", "hl_gauss_value_loss", "kl_penalty", "value_loss",
     "AdvantageNormalizer", "RunningMoments",
     "PASSTHROUGH", "POPART", "PopArt", "PopArtTransform", "final_linear", "popart_rescale_",
     "LearningProgressBandit", "ShareProvider", "TokenQuotaScheduler", "largest_remainder",

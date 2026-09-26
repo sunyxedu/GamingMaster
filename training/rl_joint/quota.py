@@ -262,9 +262,11 @@ class TokenQuotaScheduler:
         s = self.shares()
         if self.carry_debt and sum(self.ledger.values()) > 0:
             owed = self.debts()
-            # ideal allotment brings each game to its share after this
-            # iteration; the deficits sum to ``total`` exactly
-            want = {g: max(s[g] * total + owed[g], 0.0) for g in self.games}
+            # ideal allotment n_g = s_g·T + δ·d_g brings each game exactly to
+            # its share of the ledger after :meth:`record` (which decays the
+            # ledger by δ before adding n_g): δL_g + n_g = s_g·(δΣL + T).
+            # Σ_g d_g = 0, so the allotments sum to ``total``
+            want = {g: max(s[g] * total + self.debt_decay * owed[g], 0.0) for g in self.games}
             s = project_shares(want, self.floor, self.cap)
         return largest_remainder(s, int(total))
 
