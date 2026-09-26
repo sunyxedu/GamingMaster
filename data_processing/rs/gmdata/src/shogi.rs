@@ -753,19 +753,23 @@ pub(crate) fn board_from_obs(board: &[f32], hand: &[f32], glb: &[f32]) -> std::r
     if board.len() != OBS_BOARD || hand.len() != 56 || glb.len() < 2 {
         return Err(format!("frame sizes {} / {} / {} are not 28·81 / 14·4 / ≥2", board.len(), hand.len(), glb.len()));
     }
-    let mover = match glb[1] {
-        x if x == 1.0 => BLACK,
-        x if x == 0.0 => WHITE,
-        x => return Err(format!("globals[1] (mover is black) = {x}")),
+    let mover = if glb[1] == 1.0 {
+        BLACK
+    } else if glb[1] == 0.0 {
+        WHITE
+    } else {
+        return Err(format!("globals[1] (mover is black) = {}", glb[1]));
     };
     let mb = mover == BLACK;
     let mut b = Board { piece: [NONE; 81], color: [0; 81], hand: [[0; 9]; 2], turn: mover, king: [None, None], move_number: 1 };
     for plane in 0..28 {
         for p in 0..81 {
-            match board[plane * 81 + p] {
-                x if x == 0.0 => continue,
-                x if x == 1.0 => {}
-                x => return Err(format!("board plane {plane} square {p} = {x}")),
+            let x = board[plane * 81 + p];
+            if x == 0.0 {
+                continue;
+            }
+            if x != 1.0 {
+                return Err(format!("board plane {plane} square {p} = {x}"));
             }
             let sq = if mb { p } else { 80 - p };
             if b.piece[sq] != NONE {
@@ -790,7 +794,7 @@ pub(crate) fn board_from_obs(board: &[f32], hand: &[f32], glb: &[f32]) -> std::r
         b.hand[c][pt] = n as u32;
     }
     let g = glb[0] as f64 * 512.0;
-    if !(g.is_finite() && g >= 1.0 && g < 512.0) {
+    if !(1.0..512.0).contains(&g) {
         return Err(format!("globals[0] = {} is not a move number in [1, 512)", glb[0]));
     }
     b.move_number = g.round() as u32;
