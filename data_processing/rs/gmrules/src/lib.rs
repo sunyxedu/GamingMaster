@@ -37,11 +37,13 @@ pub mod games;
 pub mod invariance;
 pub mod registry;
 pub mod rng;
+pub mod schema;
 pub mod sim;
 pub mod trajectory;
 
-pub use frame::{encode_frame, Frame, FrameMut, ObsView};
-pub use game::{FrameSpec, Game, Layout, RulesError, Seat, SeatSet, Turn};
+pub use frame::{action_keys_of, decode_action, encode_frame, encode_target, new_target, Frame, FrameMut, ObsView};
+pub use game::{CandidateSpec, FrameSpec, Game, Layout, RulesError, Seat, SeatSet, Turn, CANDIDATE_SCHEMA};
 pub use rng::Rng;
+pub use schema::{Buf, BufMut, BufRef, DType, TensorSpec, TensorsMut};
 pub use sim::{SimOptions, StepInfo, VecSim};
 pub use trajectory::{replay, Decision, Event, Replay, ReplayError, Stream};

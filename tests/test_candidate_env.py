@@ -1,5 +1,5 @@
-"""gmrules simulators through gmsim and env/vec_candidate.py (the VecGameEnv of
-every candidate-action game): rows / streams / seats for per-seat alternating
+"""gmrules simulators through gmsim and env/vec_gmsim.py (the VecGameEnv of
+every gmrules game), on the candidate-action games: rows / streams / seats for per-seat alternating
 (kuhn_poker, 2-4 players) and simultaneous (goofspiel) games, the RL frames equal
 to the replay (= converter) frames of the envs' own trajectories, determinism,
 errors, and the league / policy plumbing with per-seat streams."""
@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from env.league import League, NetworkPolicy, RandomPolicy, play_episodes
-from env.vec_candidate import CandidateVecEnv
+from env.vec_gmsim import CandidateVecEnv
 from env.vec_game import VecGameEnv, has_simulator, make_vec_env
 from model.games import build_game_network
 
@@ -99,7 +99,7 @@ def test_frames_equal_the_replay_of_the_trajectory():
                 assert len(seen[row]) == len(idx)
                 for k in seen[row][0]:
                     ours = torch.stack([f[k] for f in seen[row]])
-                    theirs = torch.from_numpy(np.ascontiguousarray(r[k][idx]))
+                    theirs = torch.from_numpy(np.ascontiguousarray(r["obs"][k][idx]))
                     assert ours.dtype == theirs.dtype, (game, k)
                     assert torch.equal(ours, theirs), (game, e, seat, k)
 
@@ -192,7 +192,7 @@ def test_state_api_matches_replay():
     frame = st.frame(0)
     r = gmsim.replay("kuhn_poker", {"players": 2}, st.history())
     assert st.turn() == ("act", [0])
-    assert r["n"] == 2 and frame["legal"] == [0, 1]
+    assert r["n"] == 2 and frame["legal_ids"] == [0, 1]
     c = st.clone()
     c.apply_action(0, 1)
     assert c.turn() == ("terminal", []) and st.turn() == ("act", [0])

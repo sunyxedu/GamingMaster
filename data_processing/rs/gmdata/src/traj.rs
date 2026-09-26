@@ -1,45 +1,43 @@
-//! Candidate-action games (gmrules): trajectories → gm-shards. The generic half of
-//! every gmrules converter — a game module (e.g. `kuhn_poker.rs`) parses its source
-//! format into [`Record`]s (a gmrules trajectory + provenance) and calls [`convert`].
+//! gmrules games: trajectories → gm-shards. The generic half of every gmrules
+//! converter — a game module (e.g. `kuhn_poker.rs`) parses its source format into
+//! [`Record`]s (a gmrules trajectory + provenance) and calls [`convert`].
 //!
 //! Every record is REPLAYED by the game's rules (gmrules::replay: every chance
 //! outcome, seat and action verified; optional check of the recorded payoffs) and its
-//! frames are encoded by `gmrules::encode_frame`, the encoder the simulator (gmsim)
-//! uses — IL frames and RL frames are the same code.
+//! frames / targets are encoded by gmrules (`encode_frame` / `encode_target`), the
+//! encoders the simulator (gmsim) uses — IL frames and RL frames are the same code.
 //!
 //! One sample per stream (`gmrules::Replay::streams`): per-seat layout — one per seat
 //! (optionally only the seats in `Record::seats`), interleaved — one per record.
+//! Tensors, per the game's `FrameSpec` (T = frames of the stream):
 //!
 //! ```text
-//! obs.entities    [T, E, Fe] f32 (bits when spec.bits_entities)
-//! obs.entity_mask [T, E] bool
-//! obs.entity_type [T, E] i32          (only when spec.entity_types > 0)
-//! obs.globals     [T, G] f32 (bits when spec.bits_globals)
-//! obs.actions     [T, A, Fa] f32 (bits when spec.bits_actions)
-//! obs.action_mask [T, A] bool         the legal candidates (ascending canonical ids)
-//! tgt.action_idx  [T] i64             index of the taken action among the candidates
-//! tgt.value       [T] f32             outcome of the frame's seat (Game::outcome, [-1, 1])
-//! tgt.value_mask  [T] bool            only with allow_truncated (false on unfinished records)
-//! tgt.action_probs_idx [T, K] i64     only with soft_k = K > 0: teacher distributions
-//! tgt.action_probs_val [T, K] f32     (Record::soft_targets) over candidate indices
+//! obs.<name>      [T, ...]  every obs tensor (f32 tensors marked bits stored bit-packed)
+//! tgt.<name>      [T, ...]  every target tensor (candidate schema: tgt.action_idx, the
+//!                           index of the taken action among the candidates)
+//! tgt.value       [T] f32   outcome of the frame's seat (Game::outcome, [-1, 1])
+//! tgt.value_mask  [T] bool  only with allow_truncated (false on unfinished records)
+//! tgt.action_probs_idx [T, K] i64   candidate schema, soft_k = K > 0: teacher
+//! tgt.action_probs_val [T, K] f32   distributions (Record::soft_targets) over
+//!                                   candidate indices
 //! ```
 //!
-//! Shard meta: the frame spec (`FrameSpec::schema_meta`: the model's META_ARCH_KEYS),
-//! `schema: "candidate.v1"`, `rules_version`, the game `config`; converter_version =
-//! `Game::VERSION`. Sample meta: `record`, `seat` (−1 = interleaved), the per-seat
-//! `outcome` / `returns`, the record's own meta, and `events` (the trajectory as
-//! `[seat, id]` pairs, seat −1 = chance) with `store_events`.
+//! Legal tensors are not stored (the candidate mask is `obs.action_mask`; custom
+//! schemas put their IL legality into targets). Shard meta: `FrameSpec::schema_meta`
+//! (the schema name, layout, n_seats, the schema facts the model's META_ARCH_KEYS
+//! check), `rules_version`, the game `config`; converter_version = `Game::VERSION`.
+//! Sample meta: `record`, `seat` (−1 = interleaved), the per-seat `outcome` /
+//! `returns`, the record's own meta, and `events` (the trajectory as `[seat, id]`
+//! pairs, seat −1 = chance) with `store_events`.
 
 use anyhow::Result;
 use gmrules::registry::{self, DynReplay};
-use gmrules::{replay, Decision, Event, FrameSpec, Game, Layout, Seat};
+use gmrules::{replay, Buf, Decision, Event, FrameSpec, Game, Layout, Seat, TensorSpec};
 use gmshard::{Sample, ShardWriter};
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
-
-pub const SCHEMA: &str = "candidate.v1";
 
 /// One source record as a gmrules trajectory.
 #[derive(Clone, Debug, Default)]
@@ -55,8 +53,8 @@ pub struct Record {
     /// Payoffs the source reports: the record is rejected when the replayed
     /// `Game::returns` differ (a desynchronised or corrupt record).
     pub expected_returns: Option<Vec<f64>>,
-    /// Teacher distributions (engine / solver labels): `(event index of the Act,
-    /// [(canonical action id, probability)])`, written as the soft targets
+    /// Teacher distributions (engine / solver labels; candidate schema): `(event index
+    /// of the Act, [(canonical action id, probability)])`, written as the soft targets
     /// `tgt.action_probs_idx` / `action_probs_val` (candidate indices) when
     /// `ConvertOptions::soft_k > 0`; decisions without an entry get no teacher.
     pub soft_targets: Vec<(usize, Vec<(u32, f32)>)>,
@@ -70,9 +68,10 @@ pub struct ConvertOptions {
     pub store_events: bool,
     /// Keep records that stop before the end (value_mask false on their frames).
     pub allow_truncated: bool,
-    /// K > 0: write the records' teacher distributions as `tgt.action_probs_idx` [T, K]
-    /// i64 (candidate indices, −1 = pad) / `tgt.action_probs_val` [T, K] f32 — the
-    /// most probable K legal actions of each labelled decision.
+    /// K > 0 (candidate schema): write the records' teacher distributions as
+    /// `tgt.action_probs_idx` [T, K] i64 (candidate indices, −1 = pad) /
+    /// `tgt.action_probs_val` [T, K] f32 — the most probable K legal actions of each
+    /// labelled decision.
     pub soft_k: usize,
 }
 
@@ -113,11 +112,10 @@ enum Reject {
     Empty,
 }
 
-/// `index.json` meta of a gmrules game's shards: the frame spec, the schema, the
-/// rules version and the (normalised) game config.
+/// `index.json` meta of a gmrules game's shards: the schema meta, the rules version
+/// and the (normalised) game config.
 pub fn meta_of(spec: &FrameSpec, rules_version: u32, config: Value) -> Value {
     let mut m = spec.schema_meta();
-    m["schema"] = json!(SCHEMA);
     m["rules_version"] = json!(rules_version);
     m["config"] = config;
     m
@@ -156,38 +154,41 @@ struct Soft<'a> {
     by_event: std::collections::HashMap<usize, &'a [(u32, f32)]>,
 }
 
+/// Add tensor `name` (per-frame shape of `t`) holding `data` (every frame's values,
+/// concatenated) to a sample.
+fn push_tensor(s: Sample, name: &str, t: &TensorSpec, data: Buf) -> Sample {
+    match data {
+        Buf::F32(v) if t.bits => s.bits(name, &t.shape, &v),
+        Buf::F32(v) => s.f32(name, &t.shape, v),
+        Buf::Bool(v) => s.bool(name, &t.shape, v.into_iter().map(|b| b != 0).collect()),
+        Buf::I32(v) => s.i32(name, &t.shape, v),
+        Buf::I64(v) => s.i64(name, &t.shape, v),
+    }
+}
+
 fn stream_sample(spec: &FrameSpec, decisions: &[&Decision], outcome: Option<&[f32]>, meta: Value, allow_truncated: bool,
                  soft: Option<&Soft>, st: &mut (usize, f64)) -> Sample {
     let t = decisions.len();
-    let mut entities = Vec::with_capacity(t * spec.entities_len());
-    let mut entity_mask = Vec::with_capacity(t * spec.max_entities);
-    let mut entity_type = Vec::with_capacity(t * spec.max_entities);
-    let mut globals = Vec::with_capacity(t * spec.global_features);
-    let mut actions = Vec::with_capacity(t * spec.actions_len());
-    let mut action_mask = Vec::with_capacity(t * spec.max_actions);
-    let mut action_idx = Vec::with_capacity(t);
+    let mut obs = Buf::with_capacity(&spec.obs, t);
+    let mut target = Buf::with_capacity(&spec.target, t);
     let mut value = Vec::with_capacity(t);
     for d in decisions {
-        let f = &d.frame;
-        entities.extend_from_slice(&f.entities);
-        entity_mask.extend(f.entity_mask.iter().map(|&m| m != 0));
-        entity_type.extend_from_slice(&f.entity_type);
-        globals.extend_from_slice(&f.globals);
-        actions.extend_from_slice(&f.actions);
-        action_mask.extend(f.action_mask.iter().map(|&m| m != 0));
-        action_idx.push(d.action_idx as i64);
+        for (o, b) in obs.iter_mut().zip(&d.frame.obs) {
+            o.extend(b.view());
+        }
+        for (o, b) in target.iter_mut().zip(&d.target) {
+            o.extend(b.view());
+        }
         value.push(outcome.map_or(0.0, |o| o[d.seat]));
     }
-    let (e, fe, g, a, fa) = (spec.max_entities, spec.entity_features, spec.global_features, spec.max_actions, spec.action_features);
     let mut s = Sample::new(meta);
-    s = if spec.bits_entities { s.bits("obs.entities", &[e, fe], &entities) } else { s.f32("obs.entities", &[e, fe], entities) };
-    s = s.bool("obs.entity_mask", &[e], entity_mask);
-    if spec.entity_types > 0 {
-        s = s.i32("obs.entity_type", &[e], entity_type);
+    for (ts, data) in spec.obs.iter().zip(obs) {
+        s = push_tensor(s, &format!("obs.{}", ts.name), ts, data);
     }
-    s = if spec.bits_globals { s.bits("obs.globals", &[g], &globals) } else { s.f32("obs.globals", &[g], globals) };
-    s = if spec.bits_actions { s.bits("obs.actions", &[a, fa], &actions) } else { s.f32("obs.actions", &[a, fa], actions) };
-    s = s.bool("obs.action_mask", &[a], action_mask).i64("tgt.action_idx", &[], action_idx).f32("tgt.value", &[], value);
+    for (ts, data) in spec.target.iter().zip(target) {
+        s = push_tensor(s, &format!("tgt.{}", ts.name), ts, data);
+    }
+    s = s.f32("tgt.value", &[], value);
     if allow_truncated {
         s = s.bool("tgt.value_mask", &[], vec![outcome.is_some(); t]);
     }
@@ -263,7 +264,7 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
         }
         let decisions: Vec<&Decision> = st.decisions.iter().map(|&i| &r.decisions[i]).collect();
         frames += decisions.len();
-        forced += decisions.iter().filter(|d| d.frame.legal.len() == 1).count();
+        forced += decisions.iter().filter(|d| d.frame.legal_ids.len() == 1).count();
         let mut meta = json!({
             "record": rec.id,
             "seat": st.seat.map_or(-1, |s| s as i64),
@@ -287,6 +288,15 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
     Ok((out, frames, forced, soft_st))
 }
 
+fn check_options(spec: &FrameSpec, opts: &ConvertOptions) -> Result<()> {
+    spec.validate().map_err(anyhow::Error::msg)?;
+    if opts.soft_k > 0 && !spec.is_candidate() {
+        anyhow::bail!("soft targets (--soft-k) are candidate-index distributions; schema {:?} labels its heads through \
+                       its own target tensors (or gmdata label overlays)", spec.schema);
+    }
+    Ok(())
+}
+
 /// Replay, verify and write `records` as gm-shards of game `G` under `out` (converted
 /// in parallel chunks, written in input order — the output is deterministic). The
 /// records are consumed lazily (stream them: corpora of 1e8+ records never need to
@@ -295,6 +305,7 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
 pub fn convert<G: Game>(cfg: &G::Config, records: impl Iterator<Item = Result<Record>>, out: &Path,
                         opts: &ConvertOptions) -> Result<Stats> {
     G::check_config(cfg).map_err(|e| anyhow::anyhow!("{} config: {e}", G::NAME))?;
+    check_options(&G::spec(cfg), opts)?;
     let w = ShardWriter::new(out, G::NAME, G::VERSION, shard_meta::<G>(cfg), opts.shard_size)?;
     convert_with(w, records, opts, |ev| replay_typed::<G>(cfg, ev))
 }
@@ -305,6 +316,7 @@ pub fn convert_dyn(game: &str, config: &str, records: impl Iterator<Item = Resul
                    opts: &ConvertOptions) -> Result<Stats> {
     let g = registry::lookup(game).map_err(anyhow::Error::msg)?;
     let spec = g.spec(config).map_err(anyhow::Error::msg)?;
+    check_options(&spec, opts)?;
     let cfg: Value = serde_json::from_str(&g.normalize_config(config).map_err(anyhow::Error::msg)?)?;
     let w = ShardWriter::new(out, g.name(), g.version(), meta_of(&spec, g.version(), cfg), opts.shard_size)?;
     convert_with(w, records, opts, |ev| g.replay(config, ev))
@@ -384,7 +396,7 @@ mod tests {
 
     #[test]
     fn writes_candidate_shards() {
-        let dir = std::env::temp_dir().join(format!("gmdata-cand-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("gmdata-traj-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let cfg = KuhnConfig { players: 2 };
         let ev = |deal: [u32; 2], acts: &[u32]| {
@@ -405,6 +417,7 @@ mod tests {
         assert_eq!(st.samples, 3);
         let sh = ShardReader::open(&dir.join("kuhn_poker_00000")).unwrap();
         assert_eq!(sh.meta()["layout"], "per_seat");
+        assert_eq!(sh.meta()["schema"], "candidate.v1");
         assert_eq!(sh.meta()["max_actions"], 2);
         assert_eq!(sh.converter_version, 1);
         assert_eq!(sh.n_samples(), 3);
@@ -415,6 +428,7 @@ mod tests {
         assert_eq!(sh.samples[0].meta["events"][2], json!([0, 0]));
         assert_eq!(sh.samples[0].meta["x"], 1);
         assert_eq!(sh.index["tensors"]["obs.actions"]["storage"], "packbits");
+        assert!(sh.index["tensors"].get("obs.entity_type").is_some());
         // soft targets: record a's seat-1 bet (event 3) and seat-0 call (event 4); the
         // illegal id 7 is dropped and counted
         assert_eq!((st.soft_frames, st.soft_illegal_mass), (2, 0.5));

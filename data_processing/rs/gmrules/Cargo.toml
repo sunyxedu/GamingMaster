@@ -9,3 +9,4 @@ description = "GamingMaster game rules + observation / legal-action encoders, sh
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+rayon.workspace = true

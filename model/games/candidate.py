@@ -3,9 +3,9 @@ enumerated at each decision (card games, bidding, poker with discretised sizes,
 backgammon full moves, ...).  The per-decision legal actions are CANDIDATES: each
 is a token with its own features, and the decoder points at one of them.
 
-Observation (the gm-shard ``obs`` schema of gmrules games, written by
-data_processing/rs/gmdata/src/cand.rs and emitted by the gmsim simulators —
-the same Rust encoder, gmrules ``encode_frame``):
+Observation (the candidate schema of gmrules games, ``FrameSpec::candidate``:
+the gm-shard ``obs`` tensors written by data_processing/rs/gmdata/src/traj.rs and
+emitted by the gmsim simulators — the same Rust encoder, gmrules ``encode_frame``):
 
     entities     [B, T, E, Fe] float   entity_mask [B, T, E] bool
     entity_type  [B, T, E] int         (only when cand_entity_types > 0)
@@ -43,7 +43,7 @@ IL and RL use the same mask) ∧ ``legal["action"]`` when given.
                 "action" → soft targets ``tgt["action_probs_idx"/"action_probs_val"]``
                 over candidate indices (or dense ``action_probs`` [B, T, A])
 
-Each game registers its own entry (model/games/candidates/<game>.py: its config
+Each game registers its own entry (model/games/gmrules/<game>.py: its config
 defaults, optionally its own encoder / decoder subclasses) and reuses these
 classes; the frame dimensions of a fresh run come from the shard meta
 (train_il_game META_ARCH_KEYS = :data:`CANDIDATE_META_ARCH`).
@@ -67,7 +67,7 @@ from model.games.base import (
     masked_sample,
     safe_masked_logits,
 )
-from model.games.candidates import CANDIDATE_META_ARCH  # noqa: F401  (re-export)
+from model.games.gmrules import CANDIDATE_META_ARCH, resolve
 
 
 @dataclass
@@ -268,11 +268,13 @@ class CandidateDecoder(ActionDecoder):
 def build_candidate_network(game: Optional[str] = None, **overrides) -> nn.Module:
     """A GameNetwork with the candidate adapter; ``game`` picks the registered
     entry's config defaults and encoder / decoder classes
-    (model/games/candidates/<game>.py)."""
+    (model/games/gmrules/<game>.py)."""
     from model.game_network import GameNetwork
-    from model.games.candidates import candidate_games
+    from model.games.gmrules import rules_games
 
-    spec = candidate_games()[game] if game is not None else None
+    spec = rules_games()[game] if game is not None else None
+    if spec is not None and not spec.is_candidate:
+        raise ValueError(f"{game} is a custom-schema gmrules game (its own builder)")
     # precedence: explicit overrides (incl. the shard meta of a fresh IL run, see
     # train_il_game.apply_meta_arch_defaults) > the entry's config > the
     # simulator's frame spec for its sim_config
@@ -283,9 +285,9 @@ def build_candidate_network(game: Optional[str] = None, **overrides) -> nn.Modul
             base = spec.sim_dims()
         base.update(spec.config)
     kw = {**base, **overrides}
-    cfg_cls = (spec.config_class if spec is not None and spec.config_class is not None
+    cfg_cls = (resolve(spec.config_class) if spec is not None and spec.config_class is not None
                else CandidateConfig)
     cfg = cfg_cls(**kw)
-    enc = spec.encoder if spec is not None and spec.encoder is not None else CandidateEncoder
-    dec = spec.decoder if spec is not None and spec.decoder is not None else CandidateDecoder
+    enc = resolve(spec.encoder) if spec is not None and spec.encoder is not None else CandidateEncoder
+    dec = resolve(spec.decoder) if spec is not None and spec.decoder is not None else CandidateDecoder
     return GameNetwork(cfg, enc(cfg), dec(cfg))

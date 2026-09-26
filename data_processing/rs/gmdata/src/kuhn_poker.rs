@@ -1,7 +1,7 @@
 //! Kuhn poker (the toy reference game): hand logs → candidate-action gm-shards, and a
 //! synthetic log generator standing in for a download. The worked example of a
 //! gmrules converter: parse the source format into trajectories, hand them to
-//! [`cand::convert`] (replay + verification + frames), done. Rules and frames:
+//! [`traj::convert`] (replay + verification + frames), done. Rules and frames:
 //! `gmrules::games::kuhn_poker`.
 //!
 //! Log format (ACPC-style, one hand per line; `#` comments and blank lines skipped):
@@ -22,7 +22,7 @@
 //! gmdata kuhn-poker convert --input data/kuhn_poker/raw --out data/kuhn_poker/train --hq
 //! ```
 
-use crate::cand::{self, ConvertOptions, Record};
+use crate::traj::{self, ConvertOptions, Record};
 use crate::common;
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
@@ -261,7 +261,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
             let filter = Filter { players, keep_players: player, other_variant: Cell::new(0) };
             let recs = records(&input, &filter)?.take(max_records.unwrap_or(usize::MAX));
             let opts = ConvertOptions { shard_size, store_events, allow_truncated, ..Default::default() };
-            let st = cand::convert::<KuhnPoker>(&KuhnConfig { players }, recs, &out, &opts)?;
+            let st = traj::convert::<KuhnPoker>(&KuhnConfig { players }, recs, &out, &opts)?;
             let mut v = serde_json::to_value(&st)?;
             v["other_variant"] = json!(filter.other_variant.get());
             println!("{v}");
@@ -285,13 +285,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         generate(&dir.join("raw/h.log"), 200, 3, 5, 0.5).unwrap();
         let all = Filter { players: 3, keep_players: vec![], other_variant: Cell::new(0) };
-        let st = cand::convert::<KuhnPoker>(&KuhnConfig { players: 3 }, records(&dir.join("raw"), &all).unwrap(), &dir.join("out"), &ConvertOptions::default()).unwrap();
+        let st = traj::convert::<KuhnPoker>(&KuhnConfig { players: 3 }, records(&dir.join("raw"), &all).unwrap(), &dir.join("out"), &ConvertOptions::default()).unwrap();
         assert_eq!((st.records, st.converted, st.illegal, st.returns_mismatch, st.unparseable), (200, 200, 0, 0, 0));
         assert_eq!((st.samples, all.other_variant.get()), (600, 0));
         // --hq keeps only the expert seats; other variants are counted, broken lines skipped
         std::fs::write(dir.join("raw/x.log"), "STATE:1:pp:0|1:1|-1:expert|random\nSTATE:2:zz\n").unwrap();
         let hq = Filter { players: 3, keep_players: vec!["expert".into()], other_variant: Cell::new(0) };
-        let st = cand::convert::<KuhnPoker>(&KuhnConfig { players: 3 }, records(&dir.join("raw"), &hq).unwrap(), &dir.join("hq"), &ConvertOptions::default()).unwrap();
+        let st = traj::convert::<KuhnPoker>(&KuhnConfig { players: 3 }, records(&dir.join("raw"), &hq).unwrap(), &dir.join("hq"), &ConvertOptions::default()).unwrap();
         assert!(st.samples < 600 && st.samples > 150, "{st:?}");
         assert_eq!((st.unparseable, hq.other_variant.get()), (1, 1));
         std::fs::remove_dir_all(&dir).unwrap();

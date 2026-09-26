@@ -5,9 +5,9 @@ events, 2-4 players.  No converter; random-play shards come from
 ``gmdata rules random --game pig``.
 """
 
-from model.games.candidates import CandidateGame
+from model.games.gmrules import RulesGame
 
-GAME = CandidateGame(
+GAME = RulesGame(
     name="pig",
     sim_config={"players": 2, "winscore": 20, "diceoutcomes": 6, "horizon": 200},
     description="Pig (roll / stop dice game), 2-4 players",

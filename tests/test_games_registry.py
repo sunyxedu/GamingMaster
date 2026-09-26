@@ -5,7 +5,7 @@ import torch
 
 from model.game_network import GameNetwork
 from model.games import GAME_REGISTRY, build_game_network
-from model.games.candidates import candidate_games
+from model.games.gmrules import rules_games
 
 SMALL = dict(
     d_model=48, n_heads=4, d_ff=64, n_st_layers=1,
@@ -27,9 +27,9 @@ GAME_OVERRIDES = {
     "hearthstone": {},
     "starcraft": dict(minimap_h=16, minimap_w=16, max_units=8),
 }
-# candidate-action games register themselves (model/games/candidates/): every one
+# gmrules games register themselves (model/games/gmrules/): every one
 # must build with its simulator's frame dims
-GAME_OVERRIDES.update({g: {} for g in candidate_games()})
+GAME_OVERRIDES.update({g: {} for g in rules_games()})
 
 
 def test_registry_covers_all_games():

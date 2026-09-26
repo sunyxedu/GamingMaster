@@ -18,9 +18,11 @@ Two levels:
   ``key``).
 
 Frames compare bit-exactly (``torch.equal`` / ``np.array_equal``, dtype and shape
-included) over every ``obs`` tensor plus the ``tgt`` keys in ``TGT_KEYS`` (the
-label of a frame may not change under truncation / perturbation either; the value
-target of course does).
+included): the simulator level compares every obs / legal / target tensor, the legal
+ids and the seat; the converter level every ``obs`` tensor plus every ``tgt`` tensor
+but the outcome / teacher ones (:func:`frame_tgt_keys`: the label of a frame may
+not change under truncation / perturbation either; the value target of course
+does, and a teacher's distribution is a label source, not the seat's view).
 """
 
 from __future__ import annotations
@@ -31,8 +33,15 @@ import gmsim
 import numpy as np
 import torch
 
-#: tgt tensors that are part of a frame (compared); tgt.value is an outcome
-TGT_KEYS = ("action_idx",)
+#: tgt tensors that are outcomes of the game, not part of a frame (never compared)
+OUTCOME_TGT_KEYS = ("value", "value_mask")
+
+
+def frame_tgt_keys(tgt) -> List[str]:
+    """The tgt keys that belong to the frame (compared): everything but the outcome
+    and the teacher distributions (``*_probs*``, engine values)."""
+    return [k for k in tgt if k not in OUTCOME_TGT_KEYS and "_probs" not in k
+            and not k.startswith("engine_")]
 
 Sample = Dict[str, Any]
 
@@ -60,11 +69,16 @@ def assert_frames_prefix(full: Dict[str, Any], part: Dict[str, Any], n: int, wha
 # ---------------------------------------------------------------------------
 
 def _decision_frames(r: Dict[str, Any], idx: Sequence[int]) -> Dict[str, Any]:
+    """Decisions ``idx`` of a gmsim.replay result as ``{group.name: [n, ...]}`` +
+    seat / action index (the legal ids separately, under ``"legal_ids"``)."""
     idx = np.asarray(idx, dtype=np.int64)
-    out = {k: r[k][idx] for k in gmsim.FRAME_KEYS}
+    out: Dict[str, Any] = {}
+    for group in ("obs", "legal", "target"):
+        for k, v in r[group].items():
+            out[f"{group}.{k}"] = v[idx]
     out["action_idx"] = r["action_idx"][idx]
     out["seat"] = r["seat"][idx]
-    out["legal"] = [np.asarray(r["legal"][i], dtype=np.int64) for i in idx]
+    out["legal_ids"] = [np.asarray(r["legal_ids"][i], dtype=np.int64) for i in idx]
     return out
 
 
@@ -83,7 +97,7 @@ def check_sim_causality(game: str, config, events) -> int:
         part = gmsim.replay(game, config, events[:cut])
         assert part["n"] == t + 1, f"{game}: truncated after decision {t}: {part['n']} decisions"
         a, b = _decision_frames(full, range(t + 1)), _decision_frames(part, range(t + 1))
-        legal_a, legal_b = a.pop("legal"), b.pop("legal")
+        legal_a, legal_b = a.pop("legal_ids"), b.pop("legal_ids")
         assert _legal_equal(legal_a, legal_b), f"{game}: candidates change when truncated after {t}"
         assert_frames_prefix(a, b, t + 1, f"{game} causality (cut after decision {t})")
     return full["n"]
@@ -110,7 +124,8 @@ def check_sim_privacy(game: str, config, events, seats: Optional[Iterable[int]] 
             assert len(theirs) == len(mine), (
                 f"{game}: seat {seat} has {len(mine)} decisions, {len(theirs)} after perturbing")
             a, b = _decision_frames(full, mine), _decision_frames(other, theirs)
-            assert _legal_equal(a.pop("legal"), b.pop("legal")), f"{game}: seat {seat} candidates"
+            assert _legal_equal(a.pop("legal_ids"), b.pop("legal_ids")), \
+                f"{game}: seat {seat}'s legal actions change"
             assert_frames_prefix(a, b, len(mine),
                                  f"{game} privacy (seat {seat}'s frames under a perturbation "
                                  f"of hidden information, seed {seed})")
@@ -138,8 +153,8 @@ def check_sim_battery(game: str, config=None, n_games: int = 50, seed: int = 0) 
 # ---------------------------------------------------------------------------
 
 def _frames(s: Sample) -> Dict[str, Any]:
-    out = dict(s["obs"])
-    out.update({k: s["tgt"][k] for k in TGT_KEYS if k in s["tgt"]})
+    out = {f"obs.{k}": v for k, v in s["obs"].items()}
+    out.update({f"tgt.{k}": s["tgt"][k] for k in frame_tgt_keys(s["tgt"])})
     return out
 
 

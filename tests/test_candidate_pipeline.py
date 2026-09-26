@@ -33,7 +33,7 @@ import pytest
 import torch
 
 from data_processing.games.dataset import GameShardDataset, load_gm_samples
-from env.vec_candidate import CandidateVecEnv
+from env.vec_gmsim import CandidateVecEnv
 from tests import invariance
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,7 +98,7 @@ def test_shards_schema_and_meta(data):
     assert m["config"] == {"players": 2}
     for k in ("max_entities", "entity_features", "entity_types", "global_features",
               "max_actions", "action_features", "n_seats"):
-        assert m[k] == spec[k], k
+        assert m[k] == (spec["meta"][k] if k in spec["meta"] else spec[k]), k
     s = ds[0]
     T = s["obs"]["entities"].shape[0]
     assert set(s["obs"]) == {"entities", "entity_mask", "entity_type", "globals", "actions",
@@ -159,8 +159,8 @@ def test_converter_frames_are_the_rules_frames(data):
     for s in load_gm_samples(str(root / "train"))[:200]:
         r = gmsim.replay("kuhn_poker", {"players": 2}, s["meta"]["events"])
         idx = dict(r["streams"])[s["meta"]["seat"]]
-        for k in gmsim.FRAME_KEYS:
-            assert np.array_equal(s["obs"][k].numpy(), r[k][idx]), k
+        for k in r["obs"]:
+            assert np.array_equal(s["obs"][k].numpy(), r["obs"][k][idx]), k
         assert s["tgt"]["action_idx"].tolist() == r["action_idx"][idx].tolist()
         assert s["tgt"]["value"].tolist() == [r["outcome"][s["meta"]["seat"]]] * len(idx)
 
@@ -218,8 +218,9 @@ def test_privacy_check_catches_a_leak():
     a = gmsim.replay("kuhn_poker", {"players": 3}, ev)
     b = gmsim.replay("kuhn_poker", {"players": 3}, leak)
     with pytest.raises(AssertionError, match="entities"):
-        invariance.assert_frames_prefix({"entities": a["entities"][a["seat"] == 0]},
-                                        {"entities": b["entities"][b["seat"] == 0]}, 2, "leak")
+        invariance.assert_frames_prefix({"entities": a["obs"]["entities"][a["seat"] == 0]},
+                                        {"entities": b["obs"]["entities"][b["seat"] == 0]}, 2,
+                                        "leak")
 
 
 def _truncations(line: str) -> List[str]:

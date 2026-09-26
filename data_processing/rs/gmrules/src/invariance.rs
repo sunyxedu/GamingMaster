@@ -2,19 +2,23 @@
 //! [`check_game`] from the game's unit tests; the Python side has the same checks
 //! for converters in `tests/invariance.py`).
 //!
-//! - causality: truncating a trajectory right after decision t leaves the frames of
-//!   decisions 0..=t bit-identical (no encoder may look ahead);
+//! - causality: truncating a trajectory right after decision t leaves the frames and
+//!   targets of decisions 0..=t bit-identical (no encoder may look ahead);
 //! - privacy (hidden-information games): perturbing information hidden from seat s
-//!   ([`Game::perturb_hidden`]) leaves every frame of s bit-identical;
-//! - conformance: legal ids ascending and within `max_actions`, entity type ids below
-//!   `entity_types`, finite features, 0/1 values in bit-stored tensors, outcomes in
-//!   [-1, 1], replay of the simulator's own trajectories.
+//!   ([`Game::perturb_hidden`]) leaves every frame and target of s bit-identical;
+//! - conformance: the spec validates; finite f32 values, 0/1 in bit-stored and bool
+//!   tensors; candidate schema: legal ids within `max_actions`, the legality mask =
+//!   the first n slots, entity type ids below `entity_types`, absent entities zero;
+//!   every schema: the action keys of every legal action decode back to it (the
+//!   simulator's step inverts the IL targets); outcomes in [-1, 1]; the simulator's
+//!   own trajectories replay to exactly the frames it emitted.
 
-use crate::frame::Frame;
-use crate::game::{Game, Seat, Turn};
+use crate::frame::{action_keys_of, check_targets_equal, decode_action, encode_target, new_target, Frame};
+use crate::game::{FrameSpec, Game, Seat, Turn};
 use crate::rng::Rng;
+use crate::schema::{Buf, TensorSpec, TensorsMut};
 use crate::sim::{SimOptions, VecSim};
-use crate::trajectory::{replay, Event};
+use crate::trajectory::{replay, Decision, Event};
 
 /// A uniformly random playout: chance by its probabilities, actions uniform among the
 /// legal ones, until the end or `max_events` events.
@@ -35,13 +39,17 @@ pub fn random_trajectory<G: Game>(cfg: &G::Config, rng: &mut Rng, max_events: us
                 events.push(Event::Chance(o));
             }
             Turn::Act(seats) => {
+                // simultaneous seats choose on the same state
+                let mut acts = Vec::new();
                 for s in seats.iter() {
                     buf.clear();
                     g.legal_actions(s, &mut buf);
                     if buf.is_empty() {
                         return events; // reported by replay / check_game
                     }
-                    let a = buf[rng.below(buf.len() as u64) as usize];
+                    acts.push((s, buf[rng.below(buf.len() as u64) as usize]));
+                }
+                for (s, a) in acts {
                     g.apply_action(s, a).expect("action from legal_actions");
                     events.push(Event::Act(s, a));
                 }
@@ -51,9 +59,18 @@ pub fn random_trajectory<G: Game>(cfg: &G::Config, rng: &mut Rng, max_events: us
     events
 }
 
+fn same_decision(spec: &FrameSpec, a: &Decision, b: &Decision) -> Result<(), String> {
+    if (a.seat, a.action, a.action_idx) != (b.seat, b.action, b.action_idx) {
+        return Err(format!("seat / action ({}, {}) vs ({}, {})", a.seat, a.action, b.seat, b.action));
+    }
+    a.frame.check_equal(&b.frame, spec)?;
+    check_targets_equal(&a.target, &b.target, spec)
+}
+
 /// Causality: for every decision t, replaying the trajectory truncated right after
-/// t's action reproduces decisions 0..=t exactly (seat, action, candidate index, frame).
+/// t's action reproduces decisions 0..=t exactly (seat, action, frame, targets).
 pub fn check_causality<G: Game>(cfg: &G::Config, events: &[Event]) -> Result<(), String> {
+    let spec = G::spec(cfg);
     let full = replay::<G>(cfg, events).map_err(|e| format!("replay: {e}"))?;
     for (t, d) in full.decisions.iter().enumerate() {
         let part = replay::<G>(cfg, &events[..=d.event]).map_err(|e| format!("truncated replay (t={t}): {e}"))?;
@@ -61,23 +78,21 @@ pub fn check_causality<G: Game>(cfg: &G::Config, events: &[Event]) -> Result<(),
             return Err(format!("truncated after decision {t}: {} decisions, expected {}", part.decisions.len(), t + 1));
         }
         for (k, (a, b)) in full.decisions.iter().zip(&part.decisions).enumerate() {
-            if (a.seat, a.action, a.action_idx) != (b.seat, b.action, b.action_idx) {
-                return Err(format!("truncated after decision {t}: decision {k} changed"));
-            }
-            a.frame
-                .check_equal(&b.frame)
-                .map_err(|e| format!("causality: frame of decision {k} changes when the record is truncated after decision {t}: {e}"))?;
+            same_decision(&spec, a, b).map_err(|e| {
+                format!("causality: decision {k} changes when the record is truncated after decision {t}: {e}")
+            })?;
         }
     }
     Ok(())
 }
 
-/// Privacy: every frame of `seat` is bit-identical in `events` and `perturbed`
-/// (which must differ, and must give `seat` the same number of decisions).
+/// Privacy: every frame and target of `seat` is bit-identical in `events` and
+/// `perturbed` (which must differ, and must give `seat` the same number of decisions).
 pub fn check_privacy<G: Game>(cfg: &G::Config, events: &[Event], perturbed: &[Event], seat: Seat) -> Result<(), String> {
     if events == perturbed {
         return Err("privacy: the perturbed trajectory equals the original".into());
     }
+    let spec = G::spec(cfg);
     let a = replay::<G>(cfg, events).map_err(|e| format!("replay: {e}"))?;
     let b = replay::<G>(cfg, perturbed).map_err(|e| format!("perturbed replay: {e}"))?;
     let fa: Vec<_> = a.decisions.iter().filter(|d| d.seat == seat).collect();
@@ -86,12 +101,8 @@ pub fn check_privacy<G: Game>(cfg: &G::Config, events: &[Event], perturbed: &[Ev
         return Err(format!("privacy: seat {seat} has {} decisions, {} after the perturbation", fa.len(), fb.len()));
     }
     for (k, (x, y)) in fa.iter().zip(&fb).enumerate() {
-        x.frame
-            .check_equal(&y.frame)
-            .map_err(|e| format!("privacy: seat {seat}'s frame {k} depends on information hidden from it: {e}"))?;
-        if (x.action, x.action_idx) != (y.action, y.action_idx) {
-            return Err(format!("privacy: seat {seat}'s action {k} changed under the perturbation"));
-        }
+        same_decision(&spec, x, y)
+            .map_err(|e| format!("privacy: seat {seat}'s decision {k} depends on information hidden from it: {e}"))?;
     }
     Ok(())
 }
@@ -112,45 +123,88 @@ pub fn check_privacy_random<G: Game>(cfg: &G::Config, events: &[Event], rng: &mu
     Ok(n)
 }
 
-fn check_frame<G: Game>(cfg: &G::Config, f: &Frame, what: &str) -> Result<(), String> {
-    let s = G::spec(cfg);
-    let finite = |name: &str, v: &[f32]| match v.iter().position(|x| !x.is_finite()) {
-        Some(i) => Err(format!("{what}: {name}[{i}] = {} is not finite", v[i])),
-        None => Ok(()),
-    };
-    let binary = |name: &str, v: &[f32]| match v.iter().position(|&x| x != 0.0 && x != 1.0) {
-        Some(i) => Err(format!("{what}: {name}[{i}] = {} but the spec stores {name} as bits", v[i])),
-        None => Ok(()),
-    };
-    finite("entities", &f.entities)?;
-    finite("globals", &f.globals)?;
-    finite("actions", &f.actions)?;
-    if s.bits_entities {
-        binary("entities", &f.entities)?;
-    }
-    if s.bits_globals {
-        binary("globals", &f.globals)?;
-    }
-    if s.bits_actions {
-        binary("actions", &f.actions)?;
-    }
-    for (i, (&m, &t)) in f.entity_mask.iter().zip(&f.entity_type).enumerate() {
-        if m == 0 && t != 0 {
-            return Err(format!("{what}: absent entity {i} has type {t}"));
+/// Value checks of a group of tensors: finite f32, 0/1 in bit-stored f32 and in bool.
+fn check_values(group: &str, specs: &[TensorSpec], bufs: &[Buf], what: &str) -> Result<(), String> {
+    for (t, b) in specs.iter().zip(bufs) {
+        if b.dtype() != t.dtype || b.len() != t.numel() {
+            return Err(format!("{what}: {group}.{} holds {}[{}], the spec says {}{:?}", t.name, b.dtype().name(), b.len(),
+                               t.dtype.name(), t.shape));
         }
-        if t < 0 || (t as usize >= s.entity_types.max(1)) {
-            return Err(format!("{what}: entity {i} type {t} outside 0..{}", s.entity_types.max(1)));
+        match b {
+            Buf::F32(v) => {
+                if let Some(i) = v.iter().position(|x| !x.is_finite()) {
+                    return Err(format!("{what}: {group}.{}[{i}] = {} is not finite", t.name, v[i]));
+                }
+                if t.bits {
+                    if let Some(i) = v.iter().position(|&x| x != 0.0 && x != 1.0) {
+                        return Err(format!("{what}: {group}.{}[{i}] = {} but the tensor is stored as bits", t.name, v[i]));
+                    }
+                }
+            }
+            Buf::Bool(v) => {
+                if let Some(i) = v.iter().position(|&x| x > 1) {
+                    return Err(format!("{what}: {group}.{}[{i}] = {} is not a bool", t.name, v[i]));
+                }
+            }
+            _ => {}
         }
     }
-    let fe = s.entity_features;
-    for i in 0..s.max_entities {
-        if f.entity_mask[i] == 0 && f.entities[i * fe..(i + 1) * fe].iter().any(|&x| x != 0.0) {
-            return Err(format!("{what}: absent entity {i} has non-zero features"));
+    Ok(())
+}
+
+/// Frame conformance of one decision (see the module docs).
+fn check_decision<G: Game>(spec: &FrameSpec, g: &G, d: &Decision, what: &str) -> Result<(), String> {
+    let f = &d.frame;
+    check_values("obs", &spec.obs, &f.obs, what)?;
+    check_values("legal", &spec.legal, &f.legal, what)?;
+    check_values("target", &spec.target, &d.target, what)?;
+    if let Some(c) = &spec.candidate {
+        let get = |name: &str| f.obs_named(spec, name).expect("candidate tensor");
+        let mask = get("entity_mask").as_bool().unwrap();
+        let types = f.obs_named(spec, "entity_type").and_then(Buf::as_i32);
+        for i in 0..c.max_entities {
+            let t = types.map_or(0, |t| t[i]);
+            if mask[i] == 0 && t != 0 {
+                return Err(format!("{what}: absent entity {i} has type {t}"));
+            }
+            if t < 0 || t as usize >= c.entity_types.max(1) {
+                return Err(format!("{what}: entity {i} type {t} outside 0..{}", c.entity_types.max(1)));
+            }
+        }
+        let fe = c.entity_features;
+        let ents = get("entities").as_f32().unwrap();
+        for i in 0..c.max_entities {
+            if mask[i] == 0 && ents[i * fe..(i + 1) * fe].iter().any(|&x| x != 0.0) {
+                return Err(format!("{what}: absent entity {i} has non-zero features"));
+            }
+        }
+        let n = f.legal_ids.len();
+        let amask = get("action_mask").as_bool().unwrap();
+        if amask.iter().enumerate().any(|(i, &m)| (m == 1) != (i < n)) {
+            return Err(format!("{what}: action_mask is not the first {n} slots"));
+        }
+        if f.legal[0].as_bool().unwrap() != amask {
+            return Err(format!("{what}: legal.action differs from obs.action_mask"));
+        }
+        let fa = c.action_features;
+        let acts = get("actions").as_f32().unwrap();
+        if acts[n * fa..].iter().any(|&x| x != 0.0) {
+            return Err(format!("{what}: padded candidate slots have non-zero features"));
         }
     }
-    let n = f.legal.len();
-    if f.action_mask.iter().enumerate().any(|(i, &m)| (m == 1) != (i < n)) {
-        return Err(format!("{what}: action_mask is not the first {n} slots"));
+    // the action keys of every legal action decode back to it
+    let mut t = new_target(spec);
+    let mut seen = std::collections::HashSet::new();
+    for &a in &f.legal_ids {
+        encode_target(g, d.seat, spec, &f.legal_ids, a, &mut TensorsMut::of(&spec.target, &mut t)).map_err(|e| format!("{what}: {e}"))?;
+        let keys = action_keys_of(spec, &t);
+        let back = decode_action(g, d.seat, spec, &f.legal_ids, &keys).map_err(|e| format!("{what}: action {a}: {e}"))?;
+        if back != a {
+            return Err(format!("{what}: action {a} has action keys {keys:?}, which decode to action {back}"));
+        }
+        if !seen.insert(keys.clone()) {
+            return Err(format!("{what}: two legal actions share the action keys {keys:?}"));
+        }
     }
     Ok(())
 }
@@ -171,14 +225,9 @@ pub struct CheckReport {
 /// games) privacy; plus a batched [`VecSim`] run whose logged trajectories must
 /// replay to exactly the frames the simulator emitted.
 pub fn check_game<G: Game>(cfg: &G::Config, n_games: usize, seed: u64) -> Result<CheckReport, String> {
+    G::check_config(cfg).map_err(|e| format!("config: {e}"))?;
     let spec = G::spec(cfg);
-    // every tensor has at least one element per frame (gm-shard frame shapes)
-    if spec.n_seats == 0 || spec.n_seats > 32 || spec.max_actions == 0 || spec.max_entities == 0
-        || spec.entity_features == 0 || spec.global_features == 0 || spec.action_features == 0
-        || spec.max_decisions == 0
-    {
-        return Err(format!("bad spec (every size must be >= 1, n_seats <= 32): {spec:?}"));
-    }
+    spec.validate()?;
     let mut rng = Rng::new(seed);
     let mut rep = CheckReport::default();
     let max_events = 64 * spec.max_decisions.max(1) + 4096;
@@ -201,9 +250,28 @@ pub fn check_game<G: Game>(cfg: &G::Config, n_games: usize, seed: u64) -> Result
         } else {
             return Err(format!("game {gi}: random playout did not end within {max_events} events"));
         }
-        for (k, d) in r.decisions.iter().enumerate() {
-            rep.max_legal = rep.max_legal.max(d.frame.legal.len());
-            check_frame::<G>(cfg, &d.frame, &format!("game {gi} decision {k}"))?;
+        // re-walk the record to check each decision on the state it was taken in
+        let mut g = G::new_game(cfg);
+        let mut next = 0usize;
+        for (i, ev) in events.iter().enumerate() {
+            while next < r.decisions.len() && r.decisions[next].event == i {
+                let d = &r.decisions[next];
+                rep.max_legal = rep.max_legal.max(d.frame.legal_ids.len());
+                // simultaneous turns: every decision of the turn is on the pre-turn state
+                check_decision(&spec, &g, d, &format!("game {gi} decision {next}"))?;
+                next += 1;
+                // later seats of a simultaneous turn: skip ahead without applying
+                while next < r.decisions.len() && r.decisions[next].turn == d.turn {
+                    let d2 = &r.decisions[next];
+                    rep.max_legal = rep.max_legal.max(d2.frame.legal_ids.len());
+                    check_decision(&spec, &g, d2, &format!("game {gi} decision {next}"))?;
+                    next += 1;
+                }
+            }
+            match *ev {
+                Event::Chance(o) => g.apply_chance(o).map_err(|e| e.0)?,
+                Event::Act(s, a) => g.apply_action(s, a).map_err(|e| e.0)?,
+            }
         }
         check_causality::<G>(cfg, &events).map_err(|e| format!("game {gi}: {e}"))?;
         if spec.hidden_info {
@@ -213,44 +281,58 @@ pub fn check_game<G: Game>(cfg: &G::Config, n_games: usize, seed: u64) -> Result
     if spec.hidden_info && n_games >= 20 && rep.privacy_checks == 0 {
         return Err(format!("{}: hidden-information game, but perturb_hidden never produced a perturbation", G::NAME));
     }
-    check_sim_replays::<G>(cfg, 8.min(n_games.max(1)), seed ^ 0x5EED)?;
+    check_sim_replays::<G>(cfg, 8.min(n_games.max(1)), seed ^ 0x5EED, 1)?;
+    if n_games >= 2 {
+        check_sim_replays::<G>(cfg, 8.min(n_games), seed ^ 0x7EED, 3)?;
+    }
     Ok(rep)
 }
 
-/// Run a [`VecSim`] with random legal actions and check that every env's logged
-/// trajectory replays to exactly the frames the simulator emitted, in stream order.
-pub fn check_sim_replays<G: Game>(cfg: &G::Config, n_envs: usize, seed: u64) -> Result<(), String> {
+/// Run a [`VecSim`] (`threads` stepping threads) with random legal actions and check
+/// that every env's logged trajectory replays to exactly the frames the simulator
+/// emitted, in stream order, and that the applied action keys are the replay's targets.
+pub fn check_sim_replays<G: Game>(cfg: &G::Config, n_envs: usize, seed: u64, threads: usize) -> Result<(), String> {
     let spec = G::spec(cfg);
-    let mut sim = VecSim::<G>::new(cfg.clone(), n_envs, SimOptions::default())?;
+    let mut sim = VecSim::<G>::new(cfg.clone(), n_envs, SimOptions { threads, ..SimOptions::default() })?;
     let mut rng = Rng::new(seed);
     let seeds: Vec<u64> = (0..n_envs).map(|_| rng.next_u64()).collect();
     sim.reset(&(0..n_envs).collect::<Vec<_>>(), &seeds)?;
     let rpe = sim.rows_per_env();
-    // frames seen per row: (step_idx, frame)
-    let mut seen: Vec<Vec<Frame>> = vec![Vec::new(); sim.n_rows()];
+    let k = spec.action_keys.len();
+    // per row: (frame, applied action keys)
+    let mut seen: Vec<Vec<(Frame, Vec<i64>)>> = vec![Vec::new(); sim.n_rows()];
     let mut steps = 0;
     while (0..n_envs).any(|e| !sim.done(e)) {
-        let b = sim.buffers();
-        let mut acts = vec![0i64; sim.n_rows()];
-        for r in 0..sim.n_rows() {
-            if b.active[r] == 1 {
-                if b.step_idx[r] as usize != seen[r].len() {
-                    return Err(format!("sim row {r}: step_idx {} after {} frames", b.step_idx[r], seen[r].len()));
+        let acts = sim.random_actions(rng.next_u64())?;
+        let mut pending = Vec::new();
+        {
+            let b = sim.buffers();
+            for (r, row_seen) in seen.iter().enumerate() {
+                if b.active[r] == 1 {
+                    if b.step_idx[r] as usize != row_seen.len() {
+                        return Err(format!("sim row {r}: step_idx {} after {} frames", b.step_idx[r], row_seen.len()));
+                    }
+                    let mut f = Frame::new(&spec);
+                    for (i, t) in spec.obs.iter().enumerate() {
+                        let n = t.numel();
+                        f.obs[i].view_mut().copy_from(b.obs[i].range(r * n..(r + 1) * n));
+                    }
+                    for (i, t) in spec.legal.iter().enumerate() {
+                        let n = t.numel();
+                        f.legal[i].view_mut().copy_from(b.legal[i].range(r * n..(r + 1) * n));
+                    }
+                    f.legal_ids = sim.legal(r).to_vec();
+                    pending.push((r, f));
                 }
-                let mut f = Frame::new(&spec);
-                let (el, al) = (spec.entities_len(), spec.actions_len());
-                f.entities.copy_from_slice(&b.entities[r * el..(r + 1) * el]);
-                f.entity_mask.copy_from_slice(&b.entity_mask[r * spec.max_entities..(r + 1) * spec.max_entities]);
-                f.entity_type.copy_from_slice(&b.entity_type[r * spec.max_entities..(r + 1) * spec.max_entities]);
-                f.globals.copy_from_slice(&b.globals[r * spec.global_features..(r + 1) * spec.global_features]);
-                f.actions.copy_from_slice(&b.actions[r * al..(r + 1) * al]);
-                f.action_mask.copy_from_slice(&b.action_mask[r * spec.max_actions..(r + 1) * spec.max_actions]);
-                f.legal = sim.legal(r).to_vec();
-                seen[r].push(f);
-                acts[r] = rng.below(b.n_legal[r] as u64) as i64;
             }
         }
-        sim.step(&acts)?;
+        let info = sim.step(&acts)?;
+        for (r, f) in pending {
+            if info.acted[r] != 1 {
+                return Err(format!("sim row {r} was active but did not act"));
+            }
+            seen[r].push((f, info.applied[r * k..(r + 1) * k].to_vec()));
+        }
         steps += 1;
         if steps > 64 * spec.max_decisions + 64 {
             return Err("sim did not finish".into());
@@ -263,11 +345,15 @@ pub fn check_sim_replays<G: Game>(cfg: &G::Config, n_envs: usize, seed: u64) -> 
             if st.decisions.len() != seen[row].len() {
                 return Err(format!("sim env {e} row {row}: {} frames, the replay has {}", seen[row].len(), st.decisions.len()));
             }
-            for (k, &d) in st.decisions.iter().enumerate() {
-                r.decisions[d]
-                    .frame
-                    .check_equal(&seen[row][k])
-                    .map_err(|err| format!("sim env {e} row {row} frame {k} differs from its replay: {err}"))?;
+            for (j, &d) in st.decisions.iter().enumerate() {
+                let dec = &r.decisions[d];
+                dec.frame
+                    .check_equal(&seen[row][j].0, &spec)
+                    .map_err(|err| format!("sim env {e} row {row} frame {j} differs from its replay: {err}"))?;
+                if action_keys_of(&spec, &dec.target) != seen[row][j].1 {
+                    return Err(format!("sim env {e} row {row} frame {j}: applied action keys {:?}, the replay's targets say {:?}",
+                                       seen[row][j].1, action_keys_of(&spec, &dec.target)));
+                }
             }
         }
     }

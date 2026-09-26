@@ -31,7 +31,7 @@ env ends or changes hands; the learner's own streams are the caller's.
 
 Rollouts are meant to run in lockstep (see env/vec_game.py): then each
 network policy makes ONE batched ``step`` call per env step.  Per-seat streams of
-alternating candidate games (env/vec_candidate.py, ``lockstep = False``) are idle
+alternating gmrules games (env/vec_gmsim.py, ``lockstep = False``) are idle
 on the other seats' turns: a stream restarts on ``new_episode`` or at its first
 frame (``step_idx`` 0, :func:`restart_streams`) and is released when its ENV's
 episode ends, never merely because the row is inactive for a step.
@@ -79,7 +79,7 @@ def release(policy: Policy, streams: Sequence[int]) -> None:
 def restart_streams(obs: VecObs, rows: torch.Tensor) -> List[int]:
     """Streams of ``rows`` whose temporal state must restart: ``new_episode``, or
     the stream's first frame (``step_idx`` 0) — per-seat streams of alternating
-    candidate games get their first frame after the env's reset step."""
+    gmrules games get their first frame after the env's reset step."""
     ne = obs.new_episode[rows] | (obs.step_idx[rows] == 0)
     return obs.stream_id[rows][ne].tolist()
 

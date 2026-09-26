@@ -27,7 +27,7 @@
 //! Outcome (IL value target, RL reward): return / (2(N-1)), in [-1/(N-1), 1].
 
 use crate::frame::ObsView;
-use crate::game::{FrameSpec, Game, RulesError, Seat, SeatSet, Turn};
+use crate::game::{CandidateSpec, FrameSpec, Game, RulesError, Seat, SeatSet, Turn};
 use crate::rng::Rng;
 use crate::rules_bail;
 use crate::trajectory::Event;
@@ -91,7 +91,7 @@ impl Game for KuhnPoker {
 
     fn spec(cfg: &KuhnConfig) -> FrameSpec {
         assert!((2..=4).contains(&cfg.players), "kuhn_poker: players must be 2..=4, got {}", cfg.players);
-        FrameSpec {
+        FrameSpec::candidate(CandidateSpec {
             n_seats: cfg.players,
             max_entities: 5,
             entity_features: 8,
@@ -105,7 +105,7 @@ impl Game for KuhnPoker {
             bits_globals: false,
             bits_actions: true,
             max_decisions: 2 * cfg.players - 1,
-        }
+        })
     }
 
     fn new_game(cfg: &KuhnConfig) -> Self {

@@ -16,7 +16,7 @@
 //! reference implementation, a solver or a scripted
 //! bot writes; real sources get their own parser module (see `kuhn_poker.rs`).
 
-use crate::cand::{self, ConvertOptions, Record};
+use crate::traj::{self, ConvertOptions, Record};
 use crate::common;
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
@@ -153,7 +153,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 Ok(Record { id: format!("random:{seed}:{i}"), events: ev, ..Default::default() })
             });
             let opts = ConvertOptions { shard_size, store_events, ..Default::default() };
-            let st = cand::convert_dyn(&game, &config, recs, &out, &opts)?;
+            let st = traj::convert_dyn(&game, &config, recs, &out, &opts)?;
             println!("{}", serde_json::to_string(&st)?);
             Ok(())
         }
@@ -181,7 +181,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 }))
             });
             let opts = ConvertOptions { shard_size, store_events, allow_truncated, soft_k };
-            let st = cand::convert_dyn(&game, &config, recs, &out, &opts)?;
+            let st = traj::convert_dyn(&game, &config, recs, &out, &opts)?;
             println!("{}", serde_json::to_string(&st)?);
             Ok(())
         }
@@ -202,7 +202,7 @@ mod tests {
         assert!(parse_jsonl_record(r#"{"events":[[0]]}"#, "f").is_err());
         let dir = std::env::temp_dir().join(format!("gmdata-rules-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let st = cand::convert_dyn("kuhn_poker", "", vec![Ok(r)].into_iter(), &dir, &ConvertOptions::default()).unwrap();
+        let st = traj::convert_dyn("kuhn_poker", "", vec![Ok(r)].into_iter(), &dir, &ConvertOptions::default()).unwrap();
         assert_eq!((st.converted, st.samples, st.frames), (1, 2, 2));
         let sh = gmshard::ShardReader::open(&dir.join("kuhn_poker_00000")).unwrap();
         assert_eq!(sh.meta()["config"]["players"], 2);

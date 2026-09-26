@@ -24,7 +24,7 @@
 //! ```
 
 use crate::frame::ObsView;
-use crate::game::{FrameSpec, Game, RulesError, Seat, SeatSet, Turn};
+use crate::game::{CandidateSpec, FrameSpec, Game, RulesError, Seat, SeatSet, Turn};
 use crate::rules_bail;
 use serde::{Deserialize, Serialize};
 
@@ -143,7 +143,7 @@ impl Game for Goofspiel {
     fn spec(cfg: &GoofspielConfig) -> FrameSpec {
         assert!((3..=MAX_CARDS).contains(&cfg.num_cards), "goofspiel: num_cards must be 3..=13");
         assert!((2..=4).contains(&cfg.players), "goofspiel: players must be 2..=4");
-        FrameSpec {
+        FrameSpec::candidate(CandidateSpec {
             n_seats: cfg.players,
             max_entities: 6,
             entity_features: 4 + MAX_CARDS,
@@ -157,7 +157,7 @@ impl Game for Goofspiel {
             bits_globals: false,
             bits_actions: false,
             max_decisions: cfg.num_cards - 1,
-        }
+        })
     }
 
     fn new_game(cfg: &GoofspielConfig) -> Self {

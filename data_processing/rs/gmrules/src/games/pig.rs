@@ -22,7 +22,7 @@
 //! ```
 
 use crate::frame::ObsView;
-use crate::game::{FrameSpec, Game, RulesError, Seat, SeatSet, Turn};
+use crate::game::{CandidateSpec, FrameSpec, Game, RulesError, Seat, SeatSet, Turn};
 use crate::rules_bail;
 use serde::{Deserialize, Serialize};
 
@@ -87,7 +87,7 @@ impl Game for Pig {
     }
 
     fn spec(cfg: &PigConfig) -> FrameSpec {
-        FrameSpec {
+        FrameSpec::candidate(CandidateSpec {
             n_seats: cfg.players,
             max_entities: 4,
             entity_features: 4,
@@ -101,7 +101,7 @@ impl Game for Pig {
             bits_globals: false,
             bits_actions: true,
             max_decisions: cfg.horizon,
-        }
+        })
     }
 
     fn new_game(cfg: &PigConfig) -> Self {
@@ -240,7 +240,7 @@ mod tests {
         assert_eq!(r.state.scores, vec![10, 9]);
         assert_eq!(r.state.returns(), vec![1.0, -1.0]);
         // score + turn total >= winscore: stop is the only candidate
-        assert_eq!(r.decisions.last().unwrap().frame.legal, vec![STOP]);
+        assert_eq!(r.decisions.last().unwrap().frame.legal_ids, vec![STOP]);
         assert_eq!(Pig::spec(&cfg).layout(), Layout::Interleaved);
         // a 1 loses the turn total and passes the turn
         let r = replay::<Pig>(&cfg, &[Act(0, ROLL), Chance(3), Act(0, ROLL), Chance(0)]).unwrap();

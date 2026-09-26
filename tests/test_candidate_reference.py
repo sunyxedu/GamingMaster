@@ -50,7 +50,7 @@ def compare_trajectory(game: str, config, traj) -> int:
             for s in seats:
                 assert st.legal_actions(s) == ref["legal"][str(s)], (i, s)
                 # the candidates of the seat's frame ARE its legal actions
-                assert st.frame(s)["legal"] == ref["legal"][str(s)]
+                assert st.frame(s)["legal_ids"] == ref["legal"][str(s)]
         for ev in step["events"]:
             st.apply(ev)
     kind, _ = st.turn()

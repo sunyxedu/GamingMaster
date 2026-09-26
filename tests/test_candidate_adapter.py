@@ -12,7 +12,7 @@ import torch
 
 from model.games import build_game_network
 from model.games.candidate import CandidateConfig, CandidateDecoder, CandidateEncoder
-from model.games.candidates import CANDIDATE_META_ARCH, candidate_games
+from model.games.gmrules import CANDIDATE_META_ARCH, candidate_games
 from training.train_il_game import (
     LABEL_KEYS,
     META_ARCH_KEYS,
@@ -63,8 +63,8 @@ def test_dims_default_to_the_simulator_spec():
     net = build_game_network("goofspiel", **TINY)
     spec = gmsim.game_info("goofspiel")["spec"]
     for meta_key, (field,) in CANDIDATE_META_ARCH.items():
-        assert getattr(net.cfg, field) == spec[meta_key]
-    assert net.obs_encoder.n_tokens == spec["max_entities"] + 1 + spec["max_actions"]
+        assert getattr(net.cfg, field) == spec["meta"][meta_key]
+    assert net.obs_encoder.n_tokens == spec["meta"]["max_entities"] + 1 + spec["meta"]["max_actions"]
 
 
 def test_token_layout_and_masking():

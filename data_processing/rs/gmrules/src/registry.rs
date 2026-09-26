@@ -3,8 +3,9 @@
 //!
 //! Configs travel as JSON strings (`""` = the game's default config).
 
-use crate::frame::{encode_frame, Frame};
+use crate::frame::{decode_action, encode_frame, encode_target, new_target, Frame};
 use crate::game::{FrameSpec, Game, Layout, Seat, Turn};
+use crate::schema::{Buf, TensorsMut};
 use crate::games;
 use crate::invariance;
 use crate::rng::Rng;
@@ -36,6 +37,7 @@ pub fn parse_config<G: Game>(json: &str) -> Result<G::Config, String> {
     let j = if json.trim().is_empty() { "{}" } else { json };
     let cfg: G::Config = serde_json::from_str(j).map_err(|e| format!("{} config {json:?}: {e}", G::NAME))?;
     G::check_config(&cfg).map_err(|e| format!("{} config {json:?}: {e}", G::NAME))?;
+    G::spec(&cfg).validate().map_err(|e| format!("{}: {e}", G::NAME))?;
     Ok(cfg)
 }
 
@@ -139,6 +141,10 @@ pub trait DynState: Send + Sync {
     fn outcome(&self) -> Vec<f32>;
     fn returns(&self) -> Vec<f64>;
     fn frame(&self, seat: Seat) -> Result<Frame, String>;
+    /// Target tensors of `seat` taking the legal `action` now.
+    fn target(&self, seat: Seat, action: u32) -> Result<Vec<Buf>, String>;
+    /// The legal action of `seat` with these action keys.
+    fn decode(&self, seat: Seat, keys: &[i64]) -> Result<u32, String>;
     fn history(&self) -> &[Event];
     fn state_string(&self) -> String;
     fn action_string(&self, seat: Seat, action: u32) -> String;
@@ -203,9 +209,27 @@ impl<G: Game> DynState for State<G> {
     }
 
     fn frame(&self, seat: Seat) -> Result<Frame, String> {
+        if !matches!(self.g.turn(), Turn::Act(s) if s.contains(seat)) {
+            return Err(format!("{}: seat {seat} is not to act", G::NAME));
+        }
         let mut f = Frame::new(&self.spec);
-        encode_frame(&self.g, seat, &self.spec, &mut f.as_mut()).map_err(|e| e.0)?;
+        encode_frame(&self.g, seat, &self.spec, &mut f.as_mut(&self.spec)).map_err(|e| e.0)?;
         Ok(f)
+    }
+
+    fn target(&self, seat: Seat, action: u32) -> Result<Vec<Buf>, String> {
+        let legal = self.legal_actions(seat);
+        let mut t = new_target(&self.spec);
+        encode_target(&self.g, seat, &self.spec, &legal, action, &mut TensorsMut::of(&self.spec.target, &mut t)).map_err(|e| e.0)?;
+        Ok(t)
+    }
+
+    fn decode(&self, seat: Seat, keys: &[i64]) -> Result<u32, String> {
+        let legal = self.legal_actions(seat);
+        if legal.is_empty() {
+            return Err(format!("{}: seat {seat} is not to act", G::NAME));
+        }
+        decode_action(&self.g, seat, &self.spec, &legal, keys)
     }
 
     fn history(&self) -> &[Event] {
@@ -234,7 +258,10 @@ pub trait DynVecSim: Send + Sync {
     fn rows_per_env(&self) -> usize;
     fn resize(&mut self, n: usize);
     fn reset(&mut self, env_ids: &[usize], seeds: &[u64]) -> Result<(), String>;
-    fn step(&mut self, action_idx: &[i64]) -> Result<StepInfo, String>;
+    /// Action keys of every row, `[R * K]` row-major.
+    fn step(&mut self, keys: &[i64]) -> Result<StepInfo, String>;
+    /// Action keys `[R * K]` of uniformly random legal actions of the acting rows.
+    fn random_actions(&self, seed: u64) -> Result<Vec<i64>, String>;
     fn buffers(&self) -> &RowBuffers;
     fn legal(&self, row: usize) -> &[u32];
     fn done(&self, env: usize) -> bool;
@@ -264,8 +291,11 @@ impl<G: Game> DynVecSim for VecSim<G> {
     fn reset(&mut self, env_ids: &[usize], seeds: &[u64]) -> Result<(), String> {
         VecSim::reset(self, env_ids, seeds)
     }
-    fn step(&mut self, action_idx: &[i64]) -> Result<StepInfo, String> {
-        VecSim::step(self, action_idx)
+    fn step(&mut self, keys: &[i64]) -> Result<StepInfo, String> {
+        VecSim::step(self, keys)
+    }
+    fn random_actions(&self, seed: u64) -> Result<Vec<i64>, String> {
+        VecSim::random_actions(self, seed)
     }
     fn buffers(&self) -> &RowBuffers {
         VecSim::buffers(self)

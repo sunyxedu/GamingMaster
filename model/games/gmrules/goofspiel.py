@@ -4,9 +4,9 @@ acting on every turn.  No converter; random-play shards come from
 ``gmdata rules random --game goofspiel``.
 """
 
-from model.games.candidates import CandidateGame
+from model.games.gmrules import RulesGame
 
-GAME = CandidateGame(
+GAME = RulesGame(
     name="goofspiel",
     sim_config={"num_cards": 5, "players": 2},
     description="Goofspiel (simultaneous bids), 2-4 players, 3-13 cards",

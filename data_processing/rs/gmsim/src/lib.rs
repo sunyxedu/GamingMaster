@@ -1,15 +1,16 @@
 //! `gmsim._native` — batched simulators and replay of every gmrules game for Python
 //! (PyO3, abi3-py310). A thin wrapper: all logic lives in `gmrules` (tested there);
-//! arrays cross the boundary as native-endian `bytearray`s that the Python package
-//! (`python/gmsim/__init__.py`) views as numpy arrays. Events are int64 pairs
-//! `(seat, id)` with seat −1 for chance. Configs are JSON strings ("" = default).
-//! Rust errors and panics (e.g. an invalid config) raise ValueError.
+//! tensors cross the boundary as native-endian `bytearray`s keyed by tensor name,
+//! which the Python package (`python/gmsim/__init__.py`) views as numpy arrays using
+//! the game's spec (shapes, dtypes). Events are int64 pairs `(seat, id)` with seat −1
+//! for chance. Configs are JSON strings ("" = default). Rust errors and panics (e.g.
+//! an invalid config) raise ValueError. `Sim.reset` / `Sim.step` release the GIL.
 
 use gmrules::registry::{self, DynReplay, DynState, DynVecSim};
-use gmrules::{Event, Frame, FrameSpec, SimOptions, Turn};
+use gmrules::{Buf, Event, Frame, FrameSpec, SimOptions, TensorSpec, Turn};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyByteArray, PyBytes, PyDict};
+use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList};
 use std::any::Any;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -23,12 +24,17 @@ fn panic_msg(p: Box<dyn Any + Send>) -> String {
     }
 }
 
+/// Run `f`, turning its error or panic into a message.
+fn catch<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(p) => Err(panic_msg(p)),
+    }
+}
+
 /// Run `f`, turning its error or panic into ValueError.
 fn guard<T>(f: impl FnOnce() -> Result<T, String>) -> PyResult<T> {
-    match catch_unwind(AssertUnwindSafe(f)) {
-        Ok(r) => r.map_err(PyValueError::new_err),
-        Err(p) => Err(PyValueError::new_err(panic_msg(p))),
-    }
+    catch(f).map_err(PyValueError::new_err)
 }
 
 /// Plain-old-data element types that cross the boundary as raw bytes.
@@ -49,7 +55,7 @@ fn bytearray<'py, T: Pod>(py: Python<'py>, v: &[T]) -> Bound<'py, PyByteArray> {
 }
 
 fn parse_i64(b: &[u8], what: &str) -> PyResult<Vec<i64>> {
-    if !b.len().is_multiple_of(8) {
+    if b.len() % 8 != 0 {
         return Err(PyValueError::new_err(format!("{what}: {} bytes is not a whole number of int64", b.len())));
     }
     Ok(b.chunks_exact(8).map(|c| i64::from_ne_bytes(c.try_into().unwrap())).collect())
@@ -57,51 +63,97 @@ fn parse_i64(b: &[u8], what: &str) -> PyResult<Vec<i64>> {
 
 fn parse_events(b: &[u8]) -> PyResult<Vec<Event>> {
     let v = parse_i64(b, "events")?;
-    if !v.len().is_multiple_of(2) {
+    if v.len() % 2 != 0 {
         return Err(PyValueError::new_err("events: int64 pairs (seat, id) expected"));
     }
     v.chunks_exact(2).map(|p| Event::from_pair(p[0], p[1]).map_err(PyValueError::new_err)).collect()
 }
 
 fn events_bytes<'py>(py: Python<'py>, events: &[Event]) -> Bound<'py, PyBytes> {
-    let flat: Vec<i64> = events.iter().flat_map(|e| {
-        let (s, i) = e.to_pair();
-        [s, i]
-    }).collect();
+    let flat: Vec<i64> = events
+        .iter()
+        .flat_map(|e| {
+            let (s, i) = e.to_pair();
+            [s, i]
+        })
+        .collect();
     PyBytes::new(py, as_bytes(&flat))
+}
+
+fn tensor_list<'py>(py: Python<'py>, ts: &[TensorSpec]) -> PyResult<Bound<'py, PyList>> {
+    let l = PyList::empty(py);
+    for t in ts {
+        let d = PyDict::new(py);
+        d.set_item("name", &t.name)?;
+        d.set_item("shape", t.shape.clone())?;
+        d.set_item("dtype", t.dtype.name())?;
+        d.set_item("bits", t.bits)?;
+        l.append(d)?;
+    }
+    Ok(l)
+}
+
+fn json_to_py<'py>(py: Python<'py>, v: &serde_json::Value) -> PyResult<Bound<'py, PyAny>> {
+    // the meta is small: round-trip through Python's json module
+    let json = py.import("json")?;
+    json.call_method1("loads", (v.to_string(),))
 }
 
 fn spec_dict<'py>(py: Python<'py>, s: &FrameSpec) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("n_seats", s.n_seats)?;
-    d.set_item("max_entities", s.max_entities)?;
-    d.set_item("entity_features", s.entity_features)?;
-    d.set_item("entity_types", s.entity_types)?;
-    d.set_item("global_features", s.global_features)?;
-    d.set_item("max_actions", s.max_actions)?;
-    d.set_item("action_features", s.action_features)?;
     d.set_item("hidden_info", s.hidden_info)?;
     d.set_item("simultaneous", s.simultaneous)?;
-    d.set_item("bits_entities", s.bits_entities)?;
-    d.set_item("bits_globals", s.bits_globals)?;
-    d.set_item("bits_actions", s.bits_actions)?;
     d.set_item("max_decisions", s.max_decisions)?;
     d.set_item("layout", s.layout().name())?;
+    d.set_item("schema", &s.schema)?;
+    d.set_item("obs", tensor_list(py, &s.obs)?)?;
+    d.set_item("legal", tensor_list(py, &s.legal)?)?;
+    d.set_item("target", tensor_list(py, &s.target)?)?;
+    d.set_item("action_keys", s.action_keys.clone())?;
+    d.set_item("meta", json_to_py(py, &s.meta)?)?;
+    match &s.candidate {
+        Some(c) => d.set_item("candidate", json_to_py(py, &serde_json::to_value(c).map_err(|e| PyValueError::new_err(e.to_string()))?)?)?,
+        None => d.set_item("candidate", py.None())?,
+    }
     Ok(d)
 }
 
-fn frames_into<'py>(py: Python<'py>, d: &Bound<'py, PyDict>, frames: &[&Frame]) -> PyResult<()> {
-    let cat_f32 = |get: &dyn Fn(&Frame) -> &[f32]| frames.iter().flat_map(|f| get(f).iter().copied()).collect::<Vec<f32>>();
-    let cat_u8 = |get: &dyn Fn(&Frame) -> &[u8]| frames.iter().flat_map(|f| get(f).iter().copied()).collect::<Vec<u8>>();
-    d.set_item("entities", bytearray(py, &cat_f32(&|f| &f.entities)))?;
-    d.set_item("entity_mask", bytearray(py, &cat_u8(&|f| &f.entity_mask)))?;
-    let et: Vec<i32> = frames.iter().flat_map(|f| f.entity_type.iter().copied()).collect();
-    d.set_item("entity_type", bytearray(py, &et))?;
-    d.set_item("globals", bytearray(py, &cat_f32(&|f| &f.globals)))?;
-    d.set_item("actions", bytearray(py, &cat_f32(&|f| &f.actions)))?;
-    d.set_item("action_mask", bytearray(py, &cat_u8(&|f| &f.action_mask)))?;
-    let legal: Vec<Vec<u32>> = frames.iter().map(|f| f.legal.clone()).collect();
-    d.set_item("legal", legal)?;
+/// `{name: bytearray}` of `rows` frames of each tensor, concatenated in order.
+fn tensors_dict<'py>(py: Python<'py>, specs: &[TensorSpec], frames: &[&[Buf]]) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    for (i, t) in specs.iter().enumerate() {
+        let len: usize = frames.iter().map(|f| f[i].as_bytes().len()).sum();
+        let arr = PyByteArray::new_with(py, len, |out| {
+            let mut at = 0;
+            for f in frames {
+                let b = f[i].as_bytes();
+                out[at..at + b.len()].copy_from_slice(b);
+                at += b.len();
+            }
+            Ok(())
+        })?;
+        d.set_item(&t.name, arr)?;
+    }
+    Ok(d)
+}
+
+/// `{name: bytearray}` of whole batch buffers.
+fn batch_dict<'py>(py: Python<'py>, specs: &[TensorSpec], bufs: &[Buf]) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    for (t, b) in specs.iter().zip(bufs) {
+        d.set_item(&t.name, PyByteArray::new(py, b.as_bytes()))?;
+    }
+    Ok(d)
+}
+
+fn frames_into<'py>(py: Python<'py>, d: &Bound<'py, PyDict>, spec: &FrameSpec, frames: &[&Frame]) -> PyResult<()> {
+    let obs: Vec<&[Buf]> = frames.iter().map(|f| f.obs.as_slice()).collect();
+    let legal: Vec<&[Buf]> = frames.iter().map(|f| f.legal.as_slice()).collect();
+    d.set_item("obs", tensors_dict(py, &spec.obs, &obs)?)?;
+    d.set_item("legal", tensors_dict(py, &spec.legal, &legal)?)?;
+    let ids: Vec<Vec<u32>> = frames.iter().map(|f| f.legal_ids.clone()).collect();
+    d.set_item("legal_ids", ids)?;
     Ok(())
 }
 
@@ -136,7 +188,9 @@ fn replay_dict<'py>(py: Python<'py>, r: &DynReplay) -> PyResult<Bound<'py, PyDic
     d.set_item("action_idx", bytearray(py, &dec.iter().map(|x| x.action_idx as i64).collect::<Vec<_>>()))?;
     d.set_item("turn", bytearray(py, &dec.iter().map(|x| x.turn as i64).collect::<Vec<_>>()))?;
     d.set_item("event", bytearray(py, &dec.iter().map(|x| x.event as i64).collect::<Vec<_>>()))?;
-    frames_into(py, &d, &dec.iter().map(|x| &x.frame).collect::<Vec<_>>())?;
+    frames_into(py, &d, &r.spec, &dec.iter().map(|x| &x.frame).collect::<Vec<_>>())?;
+    let targets: Vec<&[Buf]> = dec.iter().map(|x| x.target.as_slice()).collect();
+    d.set_item("target", tensors_dict(py, &r.spec.target, &targets)?)?;
     d.set_item("terminal", r.terminal)?;
     d.set_item("outcome", r.outcome.clone())?;
     d.set_item("returns", r.returns.clone())?;
@@ -147,12 +201,13 @@ fn replay_dict<'py>(py: Python<'py>, r: &DynReplay) -> PyResult<Bound<'py, PyDic
     Ok(d)
 }
 
-/// Verified replay of `events` (int64 pairs) → decision frames (see gmrules::trajectory).
+/// Verified replay of `events` (int64 pairs) → decision frames + targets (see
+/// gmrules::trajectory).
 #[pyfunction]
 #[pyo3(signature = (game, config, events))]
 fn replay<'py>(py: Python<'py>, game: &str, config: &str, events: &[u8]) -> PyResult<Bound<'py, PyDict>> {
     let ev = parse_events(events)?;
-    let r = guard(|| registry::lookup(game)?.replay(config, &ev))?;
+    let r = py.detach(|| guard(|| registry::lookup(game)?.replay(config, &ev)))?;
     replay_dict(py, &r)
 }
 
@@ -172,12 +227,12 @@ fn random_trajectory<'py>(py: Python<'py>, game: &str, config: &str, seed: u64, 
     Ok(events_bytes(py, &ev))
 }
 
-/// The gmrules conformance battery (causality, privacy, frame checks, simulator
-/// replays); raises ValueError on a violation, returns the report.
+/// The gmrules conformance battery (causality, privacy, frame checks, action-key
+/// round trips, simulator replays); raises ValueError on a violation, returns the report.
 #[pyfunction]
 #[pyo3(signature = (game, config="", n_games=200, seed=0))]
-fn check_game(game: &str, config: &str, n_games: usize, seed: u64) -> PyResult<String> {
-    guard(|| registry::lookup(game)?.check(config, n_games, seed))
+fn check_game(py: Python<'_>, game: &str, config: &str, n_games: usize, seed: u64) -> PyResult<String> {
+    py.detach(|| guard(|| registry::lookup(game)?.check(config, n_games, seed)))
 }
 
 /// N envs of one game stepped together (gmrules::sim::VecSim).
@@ -190,9 +245,9 @@ struct Sim {
 #[pymethods]
 impl Sim {
     #[new]
-    #[pyo3(signature = (game, config="", n_envs=1, autoreset=false, max_turns=None))]
-    fn new(game: &str, config: &str, n_envs: usize, autoreset: bool, max_turns: Option<usize>) -> PyResult<Self> {
-        let inner = guard(|| registry::lookup(game)?.new_sim(config, n_envs, SimOptions { autoreset, max_turns }))?;
+    #[pyo3(signature = (game, config="", n_envs=1, autoreset=false, max_turns=None, threads=1))]
+    fn new(game: &str, config: &str, n_envs: usize, autoreset: bool, max_turns: Option<usize>, threads: usize) -> PyResult<Self> {
+        let inner = guard(|| registry::lookup(game)?.new_sim(config, n_envs, SimOptions { autoreset, max_turns, threads }))?;
         Ok(Sim { inner, game: game.to_string() })
     }
 
@@ -232,14 +287,17 @@ impl Sim {
     }
 
     /// Start new episodes in `env_ids` with per-episode `seeds`.
-    fn reset(&mut self, env_ids: Vec<usize>, seeds: Vec<u64>) -> PyResult<()> {
-        guard(|| self.inner.reset(&env_ids, &seeds))
+    fn reset(&mut self, py: Python<'_>, env_ids: Vec<usize>, seeds: Vec<u64>) -> PyResult<()> {
+        let inner = &mut self.inner;
+        py.detach(|| guard(|| inner.reset(&env_ids, &seeds)))
     }
 
-    /// Apply one candidate index per row (int64 bytes, [R]); returns the step info.
-    fn step<'py>(&mut self, py: Python<'py>, action_idx: &[u8]) -> PyResult<Bound<'py, PyDict>> {
-        let a = parse_i64(action_idx, "action_idx")?;
-        let info = guard(|| self.inner.step(&a))?;
+    /// Apply the action keys of every row (int64 bytes, [R, K] row-major); returns the
+    /// step info.
+    fn step<'py>(&mut self, py: Python<'py>, keys: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+        let a = parse_i64(keys, "action keys")?;
+        let inner = &mut self.inner;
+        let info = py.detach(|| guard(|| inner.step(&a)))?;
         let d = PyDict::new(py);
         d.set_item("rewards", bytearray(py, &info.rewards))?;
         d.set_item("returns", bytearray(py, &info.returns))?;
@@ -249,19 +307,24 @@ impl Sim {
         d.set_item("winner", bytearray(py, &info.winner))?;
         d.set_item("episode_len", bytearray(py, &info.episode_len))?;
         d.set_item("applied", bytearray(py, &info.applied))?;
+        d.set_item("acted", bytearray(py, &info.acted))?;
         Ok(d)
+    }
+
+    /// Action keys (int64 bytes, [R, K]) of uniformly random legal actions of the
+    /// acting rows (zeros elsewhere).
+    fn random_actions<'py>(&self, py: Python<'py>, seed: u64) -> PyResult<Bound<'py, PyByteArray>> {
+        let a = guard(|| self.inner.random_actions(seed))?;
+        Ok(bytearray(py, &a))
     }
 
     /// Every row's current frame + row metadata (fresh buffers each call).
     fn observe<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let b = self.inner.buffers();
+        let spec = self.inner.spec();
         let d = PyDict::new(py);
-        d.set_item("entities", bytearray(py, &b.entities))?;
-        d.set_item("entity_mask", bytearray(py, &b.entity_mask))?;
-        d.set_item("entity_type", bytearray(py, &b.entity_type))?;
-        d.set_item("globals", bytearray(py, &b.globals))?;
-        d.set_item("actions", bytearray(py, &b.actions))?;
-        d.set_item("action_mask", bytearray(py, &b.action_mask))?;
+        d.set_item("obs", batch_dict(py, &spec.obs, &b.obs)?)?;
+        d.set_item("legal", batch_dict(py, &spec.legal, &b.legal)?)?;
         d.set_item("n_legal", bytearray(py, &b.n_legal))?;
         d.set_item("to_play", bytearray(py, &b.to_play))?;
         d.set_item("step_idx", bytearray(py, &b.step_idx))?;
@@ -271,7 +334,7 @@ impl Sim {
         Ok(d)
     }
 
-    /// Canonical action ids of a row's candidates.
+    /// Canonical legal action ids of a row's current frame.
     fn legal_ids(&self, row: usize) -> PyResult<Vec<u32>> {
         if row >= self.inner.n_rows() {
             return Err(PyValueError::new_err(format!("row {row} out of range")));
@@ -287,12 +350,24 @@ impl Sim {
         Ok(events_bytes(py, self.inner.trajectory(env)))
     }
 
-    fn done(&self, env: usize) -> bool {
-        self.inner.done(env)
+    fn done(&self, env: usize) -> PyResult<bool> {
+        if env >= self.inner.n_envs() {
+            return Err(PyValueError::new_err(format!("env {env} out of range")));
+        }
+        Ok(self.inner.done(env))
     }
 
-    fn state_string(&self, env: usize) -> String {
-        self.inner.state_string(env)
+    /// Done flag of every env (bytes, uint8 [N]).
+    fn done_all<'py>(&self, py: Python<'py>) -> Bound<'py, PyByteArray> {
+        let d: Vec<u8> = (0..self.inner.n_envs()).map(|e| self.inner.done(e) as u8).collect();
+        bytearray(py, &d)
+    }
+
+    fn state_string(&self, env: usize) -> PyResult<String> {
+        if env >= self.inner.n_envs() {
+            return Err(PyValueError::new_err(format!("env {env} out of range")));
+        }
+        Ok(self.inner.state_string(env))
     }
 }
 
@@ -343,12 +418,23 @@ impl State {
         self.inner.returns()
     }
 
-    /// `seat`'s decision frame now (bytearrays + "legal").
+    /// `seat`'s decision frame now: {"obs": {name: bytearray}, "legal": {...}, "legal_ids"}.
     fn frame<'py>(&self, py: Python<'py>, seat: usize) -> PyResult<Bound<'py, PyDict>> {
         let f = guard(|| self.inner.frame(seat))?;
         let d = PyDict::new(py);
-        frames_into(py, &d, &[&f])?;
+        frames_into(py, &d, self.inner.spec(), &[&f])?;
         Ok(d)
+    }
+
+    /// Target tensors of `seat` taking the legal `action` now: {name: bytearray}.
+    fn target<'py>(&self, py: Python<'py>, seat: usize, action: u32) -> PyResult<Bound<'py, PyDict>> {
+        let t = guard(|| self.inner.target(seat, action))?;
+        tensors_dict(py, &self.inner.spec().target, &[t.as_slice()])
+    }
+
+    /// The legal action of `seat` whose action keys are `keys`.
+    fn decode(&self, seat: usize, keys: Vec<i64>) -> PyResult<u32> {
+        guard(|| self.inner.decode(seat, &keys))
     }
 
     fn history(&self) -> Vec<(i64, i64)> {

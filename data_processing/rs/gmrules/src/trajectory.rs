@@ -6,8 +6,9 @@
 //! Converters parse their source format into a trajectory; the simulator logs one
 //! per episode; the invariance tests truncate / perturb them.
 
-use crate::frame::{encode_frame, Frame};
+use crate::frame::{encode_frame, encode_target, new_target, Frame};
 use crate::game::{FrameSpec, Game, Layout, Seat, Turn};
+use crate::schema::{Buf, TensorsMut};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -37,8 +38,8 @@ impl Event {
     }
 }
 
-/// One decision of one seat: its frame (encoded before the turn's actions) and the
-/// action taken.
+/// One decision of one seat: its frame and the targets of the action taken (both
+/// encoded on the state before any of the turn's actions is applied).
 #[derive(Clone, Debug)]
 pub struct Decision {
     pub seat: Seat,
@@ -47,8 +48,10 @@ pub struct Decision {
     /// Index of the decision turn (simultaneous seats share one).
     pub turn: usize,
     pub frame: Frame,
+    /// Target tensors of the taken action (`FrameSpec::target` order).
+    pub target: Vec<Buf>,
     pub action: u32,
-    /// Candidate index of `action` in `frame` (the IL target).
+    /// Index of `action` among the frame's legal ids (candidate schema: the IL target).
     pub action_idx: usize,
 }
 
@@ -151,28 +154,38 @@ pub fn replay<G: Game>(cfg: &G::Config, events: &[Event]) -> Result<Replay<G>, R
                 if turns >= spec.max_decisions {
                     return Err(err(i, format!("more than max_decisions = {} decision turns", spec.max_decisions)));
                 }
-                // every acting seat decides on the same state
+                // every acting seat decides on the same state: frames first, then the
+                // recorded actions of the turn (validated, targets encoded) — only then
+                // are they applied, in seat order
                 let mut frames = Vec::with_capacity(seats.len());
                 for s in seats.iter() {
                     let mut f = Frame::new(&spec);
-                    encode_frame(&g, s, &spec, &mut f.as_mut()).map_err(|e| err(i, e.0))?;
+                    encode_frame(&g, s, &spec, &mut f.as_mut(&spec)).map_err(|e| err(i, e.0))?;
                     frames.push((s, f));
                 }
-                for (s, frame) in frames {
-                    if i >= events.len() {
+                let mut acts = Vec::with_capacity(frames.len());
+                for (k, (s, frame)) in frames.iter().enumerate() {
+                    let j = i + k;
+                    if j >= events.len() {
                         break; // truncated inside a simultaneous turn
                     }
-                    let Event::Act(es, a) = events[i] else {
-                        return Err(err(i, format!("seat {s} to act, got {:?}", events[i])));
+                    let Event::Act(es, a) = events[j] else {
+                        return Err(err(j, format!("seat {s} to act, got {:?}", events[j])));
                     };
-                    if es != s {
-                        return Err(err(i, format!("seat {s} to act, got an action of seat {es}")));
+                    if es != *s {
+                        return Err(err(j, format!("seat {s} to act, got an action of seat {es}")));
                     }
                     let Some(idx) = frame.index_of(a) else {
-                        return Err(err(i, format!("action {a} ({}) is illegal for seat {s}", g.action_string(s, a))));
+                        return Err(err(j, format!("action {a} ({}) is illegal for seat {s}", g.action_string(*s, a))));
                     };
+                    let mut target = new_target(&spec);
+                    encode_target(&g, *s, &spec, &frame.legal_ids, a, &mut TensorsMut::of(&spec.target, &mut target))
+                        .map_err(|e| err(j, e.0))?;
+                    acts.push((a, idx, target));
+                }
+                for ((a, idx, target), (s, frame)) in acts.into_iter().zip(frames) {
                     g.apply_action(s, a).map_err(|e| err(i, e.0))?;
-                    decisions.push(Decision { seat: s, event: i, turn: turns, frame, action: a, action_idx: idx });
+                    decisions.push(Decision { seat: s, event: i, turn: turns, frame, target, action: a, action_idx: idx });
                     i += 1;
                 }
                 turns += 1;

@@ -6,9 +6,9 @@
 //!
 //!     gmdata label chess --input data/chess --out data/chess_sf --engine ~/gm-engines/bin/stockfish
 //!
-//! Games whose rules live in `gmrules` (candidate-action games, e.g. `kuhn-poker`)
-//! parse their source into trajectories and convert through `cand.rs` (replay with
-//! the simulator's rules and encoders).
+//! Games whose rules live in `gmrules` (e.g. `kuhn-poker`) parse their source into
+//! trajectories and convert through `traj.rs` (replay with the simulator's rules and
+//! encoders); `gmdata rules ...` converts any registered gmrules game by name.
 //!
 //! Converters write `gm-shard.v1` directories (see the `gmshard` crate); `gmdata label`
 //! adds engine teacher columns to existing shards as overlay shards (see `label/mod.rs`);
@@ -17,7 +17,7 @@
 //! training records (read by `SeqReplayDataset`); `gmdata generals shard`
 //! turns them into gm-shards for the multi-game trainers.
 
-mod cand;
+mod traj;
 mod chess;
 mod common;
 mod generals;

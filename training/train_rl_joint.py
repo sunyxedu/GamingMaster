@@ -137,7 +137,7 @@ from model.components.core import (
 )
 from model.components.heads import HLGaussValueHead
 from model.games.base import categorical_entropy, masked_log_prob
-from model.games.candidates import candidate_games
+from model.games.gmrules import resolve, rules_games
 from model.multi_game import MultiGameNetwork, core_config_overrides, is_core_key
 from model.optim import TRM_BETAS, AdamATan2, ModelEMA
 from model.rl_utils import sync_gradients
@@ -587,7 +587,7 @@ class LuxSpec(RLGameSpec):
 
 
 class CandidateSpec(RLGameSpec):
-    """Candidate-action games (gmrules: env/vec_candidate.py +
+    """Candidate-action games (gmrules: env/vec_gmsim.py +
     model/games/candidate.py) — the GENERIC spec of every such game.  The action
     is one categorical over the frame's legal candidates: μ = ``sample()``'s
     ``action_log_prob`` and the policy ``log_prob_entropy``, both masked by the
@@ -601,13 +601,14 @@ class CandidateSpec(RLGameSpec):
     full_kl = True
 
     def check_env(self, env, net):
-        from model.games.candidates import CANDIDATE_META_ARCH
+        from model.games.gmrules import CANDIDATE_META_ARCH
 
         spec = getattr(env, "spec", None)
-        if spec is None:
-            raise SystemExit(f"{env.game}: not a candidate-action env (env/vec_candidate.py)")
-        bad = {k: (spec[k], getattr(net.cfg, f[0], None)) for k, f in CANDIDATE_META_ARCH.items()
-               if spec[k] != getattr(net.cfg, f[0], None)}
+        if spec is None or spec.get("candidate") is None:
+            raise SystemExit(f"{env.game}: not a candidate-action gmsim env (env/vec_gmsim.py)")
+        meta = spec["meta"]
+        bad = {k: (meta[k], getattr(net.cfg, f[0], None)) for k, f in CANDIDATE_META_ARCH.items()
+               if meta[k] != getattr(net.cfg, f[0], None)}
         if bad:
             raise SystemExit(f"{env.game} env {env.config} emits frames {{dim: (env, network)}} "
                              f"{bad}: the network was trained on another variant")
@@ -622,10 +623,13 @@ GAME_SPECS: Dict[str, RLGameSpec] = {
     "gomoku": GomokuSpec(),
     "lux": LuxSpec(),
 }
-# every candidate-action game (model/games/candidates/): its own spec or the generic one
-for _game, _entry in candidate_games().items():
-    GAME_SPECS.setdefault(_game, _entry.rl_spec() if _entry.rl_spec is not None
-                          else CandidateSpec())
+# every gmrules game (model/games/gmrules/): its own spec, else the generic
+# candidate spec (custom schemas without one fall back to game_spec's rules)
+for _game, _entry in rules_games().items():
+    if _entry.rl_spec is not None:
+        GAME_SPECS.setdefault(_game, resolve(_entry.rl_spec)())
+    elif _entry.is_candidate:
+        GAME_SPECS.setdefault(_game, CandidateSpec())
 
 
 def game_spec(game: str) -> RLGameSpec:
@@ -858,11 +862,11 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
                     "rewards": rew[env_rows].float(), "done": done[env_rows].bool()})
                 for pos, r in enumerate(rows.tolist()):
                     last[r] = (len(recs) - 1, pos)
-            # per-seat streams of alternating games (env/vec_candidate.py): a learner
+            # per-seat streams of alternating games (env/vec_gmsim.py): a learner
             # row idle on this step (another seat moved) still earns its seat's reward
             # and sees its episode end — credited to its latest frame.  A no-op for
             # layouts whose learner rows act on every step of their episode (skipped
-            # for lockstep envs: every env but those per-seat candidate games).
+            # for lockstep envs: every env but those per-seat gmrules games).
             if not getattr(env, "lockstep", True):
                 earned = ((rew != 0).any(-1) | done)[obs.env_id] & league.learner_streams(obs)
                 if rows.numel():

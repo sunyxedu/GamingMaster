@@ -26,8 +26,8 @@ the sequence of frames whose Stage-1 state carries over:
     ``(env, seat)`` is that seat's own fog-of-war view, one frame per turn.
     (Lux: one episode = one match — the IL sample — and ``reset`` continues
     the 5-match game; see env/vec_lux.py.)
-  * candidate-action games (gmrules, env/vec_candidate.py) with hidden
-    information or simultaneous turns: ``rows_per_env = n_seats``, row
+  * gmrules games (env/vec_gmsim.py) with hidden information or simultaneous
+    turns: ``rows_per_env = n_seats``, row
     ``(env, seat)`` holds only that seat's own decision frames; a row is
     ``active`` only on its seat's turns (alternating: one row per env and step),
     so rows advance at different frame indices (``lockstep = False``).
@@ -98,13 +98,13 @@ class VecObs:
     step_idx      [R] long   frame index of the current frame in its stream
                              (the ``step_idx`` / decoder ``t0`` of GameNetwork.step)
     new_episode   [R] bool   the row's env started a new episode on this step
-                             (reset temporal state).  Per-seat candidate streams
+                             (reset temporal state).  Per-seat gmrules streams
                              flag every row of the env, acting or not; a stream
                              whose first frame comes later starts at step_idx 0
                              — policies reset a stream on new_episode OR step_idx 0
     active        [R] bool   the row has a frame and needs an action (False: its
                              episode is over, no autoreset — or, per-seat streams of
-                             alternating candidate games, another seat is to act)
+                             alternating gmrules games, another seat is to act)
     forced        [R] bool   the rules leave no choice (othello pass frame,
                              generals with no movable army): the env applies
                              the forced action whatever is sent
@@ -334,25 +334,25 @@ VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
 }
 
 
-def _make_candidate(game: str, n_envs: int = 1, **kw) -> VecGameEnv:
-    """A gmrules candidate-action game (gmsim simulator, env/vec_candidate.py)."""
-    from env.vec_candidate import CandidateVecEnv
-    return CandidateVecEnv(game, n_envs, **kw)
+def _make_gmsim(game: str, n_envs: int = 1, **kw) -> VecGameEnv:
+    """A gmrules game (gmsim simulator, env/vec_gmsim.py)."""
+    from env.vec_gmsim import GmSimVecEnv
+    return GmSimVecEnv(game, n_envs, **kw)
 
 
-def _register_candidate_envs() -> None:
-    """Every simulated game of model/games/candidates/ (discovered: no edit here
-    per game)."""
-    from model.games.candidates import candidate_games
+def _register_gmsim_envs() -> None:
+    """Every simulated game of model/games/gmrules/ (discovered: no edit here per
+    game)."""
+    from model.games.gmrules import rules_games
 
-    for name, g in candidate_games().items():
+    for name, g in rules_games().items():
         if g.sim:
             if name in VEC_ENV_REGISTRY:
-                raise ValueError(f"candidate game {name!r} clashes with a registered env")
-            VEC_ENV_REGISTRY[name] = functools.partial(_make_candidate, name)
+                raise ValueError(f"gmrules game {name!r} clashes with a registered env")
+            VEC_ENV_REGISTRY[name] = functools.partial(_make_gmsim, name)
 
 
-_register_candidate_envs()
+_register_gmsim_envs()
 
 
 def register_vec_env(game: str, builder: Callable[..., VecGameEnv]) -> None:
@@ -388,9 +388,9 @@ def __getattr__(name: str):
     if name == "LuxVecEnv":
         from env.vec_lux import LuxVecEnv
         return LuxVecEnv
-    if name == "CandidateVecEnv":
-        from env.vec_candidate import CandidateVecEnv
-        return CandidateVecEnv
+    if name in ("GmSimVecEnv", "CandidateVecEnv"):
+        from env import vec_gmsim
+        return getattr(vec_gmsim, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
