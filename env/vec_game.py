@@ -24,7 +24,7 @@ the sequence of frames whose Stage-1 state carries over:
 
   * simultaneous games (generals): ``rows_per_env = n_seats``; row
     ``(env, seat)`` is that seat's own fog-of-war view, one frame per turn.
-  * alternating games (othello, ``interleaved = True``): ``rows_per_env = 1``;
+  * alternating games (othello, gomoku, ``interleaved = True``): ``rows_per_env = 1``;
     the row is ONE interleaved stream holding both movers' frames, each from
     the side-to-move perspective, forced pass frames included — exactly the
     IL sample of a whole game.  ``to_play`` says whose frame it is (the loss
@@ -300,10 +300,16 @@ def _make_othello(n_envs: int = 1, **kw) -> VecGameEnv:
     return OthelloVecEnv(n_envs, **kw)
 
 
+def _make_gomoku(n_envs: int = 1, **kw) -> VecGameEnv:
+    from env.vec_gomoku import GomokuVecEnv
+    return GomokuVecEnv(n_envs, **kw)
+
+
 #: games with a simulator (the others train on their IL replay stream only)
 VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
     "generals": _make_generals,
     "othello": _make_othello,
+    "gomoku": _make_gomoku,
 }
 
 
@@ -334,6 +340,9 @@ def __getattr__(name: str):
     if name == "OthelloVecEnv":
         from env.vec_othello import OthelloVecEnv
         return OthelloVecEnv
+    if name == "GomokuVecEnv":
+        from env.vec_gomoku import GomokuVecEnv
+        return GomokuVecEnv
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
