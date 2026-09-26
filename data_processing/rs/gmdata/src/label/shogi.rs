@@ -73,6 +73,31 @@
 //!   moves outside the 8): −1.80 at τ = 0.025, −1.81 at 0.02 / 0.03, −1.87 at 0.05 (uncapped:
 //!   −1.83 / −1.89) — the same optimum, a slightly better teacher. teacher_q /
 //!   teacher_raw keep the raw scores, so the policy can be re-derived with another τ.
+//! * `--tie-weight 2`: π ∝ exp(Q/τ + w·u), u = the secondary utility of `teacher_raw`
+//!   ([`secondary_of_raw`]; [`super::transform`] module docs). Mates have Q = 1 / 0
+//!   exactly and big advantages nearly so (Q ≥ 0.97 from 2085 cp), so `exp(Q/τ)` alone
+//!   weighs a mate in 1 like a mate in 15 and being mated at once like a long defence:
+//!
+//!   ```text
+//!   mate in p plies (|raw| > 90000, p = 100000 − |raw|): n = (p + 1)/2 moves for the
+//!       mover's mates, p/2 for mates against it (at least 1) — UCI's move count, so the
+//!       chess utility u = ±(0.5 + 0.5·5/(n + 4)): mate in 1 ply = +1, mated in 2 = −1
+//!   otherwise:  u = 0.5·tanh(cp / 3000)                                   |u| < 0.5
+//!   ```
+//!
+//!   Every mate ranks above every non-mate score, faster mates and slower defeats are
+//!   preferred, u is strictly increasing in teacher_raw over the mate distances a move
+//!   can have (the mover mates in odd, is mated in even plies). The cp scale 3000 fits
+//!   YaneuraOu + Háo's range, measured on the 12 real floodgate games above (11.2k
+//!   scored moves): 99% of the non-mate scores are below 2900 cp, won positions sit at
+//!   2000–2900 cp (above that only VALUE_MAX_EVAL = 35281 cp and mates), and 0.5·tanh(cp/s)
+//!   separates scores around 2500 cp best for s ≈ 3200 (its slope ∝ y·sech²y / cp peaks at
+//!   y = cp/s ≈ 0.77); the chess scale 1000 would be saturated there (u(2500) = 0.49).
+//!   Near equality u adds 2% (τ = 0.025) / 4% (τ = 0.05) to the slope of Q/τ. On those
+//!   frames at τ = 0.025 the mean top-move probability of won positions (best Q ≥ 0.97)
+//!   rises from 0.23 to 0.25 and of lost ones (best Q ≤ 0.03) from 0.22 to 0.26 — their
+//!   moves are often within a few hundred cp of each other. `--tie-weight 0` gives
+//!   π ∝ exp(Q/τ) exactly (the labeller-v2 teacher).
 //! * Q = logistic(cp / 600) — the usual shogi-engine win-rate model (the "Ponanza constant"
 //!   600 of YaneuraOu's learner); mate for the mover → 1, mated → 0 ([`CP_SCALE`]). Note that
 //!   YaneuraOu 9.x prints cp = 100·v/90 of its internal value v (PawnValue 90), so this is
@@ -152,7 +177,7 @@
 use super::engine::{Engine, EngineCommand, LineHandler};
 use super::fake::{FakeMove, UciFake};
 use super::game::{Analysis, EngineConfig, HeadKind, HeadRow, HeadSpec, Labeller, Limits, SampleView, ScoredMove};
-use super::transform::{conditional, marginal, q_from_cp, q_from_mate};
+use super::transform::{conditional, marginal, q_from_cp, q_from_mate, u_cp, u_mate};
 use super::uci::{Flavor, Info, Score, UciSession};
 use super::LabelArgs;
 use crate::shogi::{self as rules, Board, Mv, BLACK, NONE, OBS_BOARD, PAWN, ROOK, WHITE};
@@ -165,7 +190,8 @@ use std::sync::Arc;
 
 /// Labeller version (bump when a label's meaning changes; recorded in the teacher meta).
 /// 2: stale MultiPV lines capped ([`analysis`]); mates in teacher_raw at ±(100000 − n).
-pub const LABELLER_VERSION: u32 = 2;
+/// 3: the softmax teacher's secondary tie-break ([`secondary_of_raw`]).
+pub const LABELLER_VERSION: u32 = 3;
 /// Q = 1 / (1 + exp(−cp / CP_SCALE)).
 pub const CP_SCALE: f32 = 600.0;
 /// `--limit nodes` default.
@@ -180,6 +206,10 @@ pub const N_ACTIONS: i64 = N_BOARD_ACTIONS + 7 * 81;
 /// YaneuraOu prints (at most 100·VALUE_MAX_EVAL/90 = 35281).
 pub const MATE_RAW: f32 = 100_000.0;
 const MATE_PLY_CAP: i32 = 9999;
+/// |teacher_raw| above this is a mate (see [`MATE_RAW`]).
+pub const MATE_THRESHOLD: f32 = 90_000.0;
+/// cp scale of the secondary utility `0.5·tanh(cp / TIE_CP_SCALE)` (see the module docs).
+pub const TIE_CP_SCALE: f32 = 3000.0;
 
 /// USI options sent before `--engine-option` (which overrides them by name); see the
 /// module docs. MultiPV is always `--max-moves`.
@@ -627,6 +657,21 @@ pub fn raw_score(s: Score) -> f32 {
     }
 }
 
+/// Secondary utility u ∈ [−1, 1] of a `teacher_raw` (the softmax tie-break, see the module
+/// docs): a mate in p plies → the chess mate utility of n = (p + 1)/2 moves (the mover
+/// mates) or p/2 moves (it is mated), else 0.5·tanh(cp / 3000); `None` for a non-finite raw.
+pub fn secondary_of_raw(raw: f32) -> Option<f32> {
+    if !raw.is_finite() {
+        return None;
+    }
+    if raw.abs() > MATE_THRESHOLD {
+        let plies = MATE_RAW - raw.abs();
+        let moves = if raw > 0.0 { (plies + 1.0) / 2.0 } else { plies / 2.0 };
+        return Some(raw.signum() * u_mate(moves));
+    }
+    Some(u_cp(raw, TIE_CP_SCALE))
+}
+
 /// Mover-POV expected score of a score.
 pub fn q_score(s: Score) -> f32 {
     match s {
@@ -746,6 +791,18 @@ impl Labeller for ShogiLabeller {
 
     fn raw_unit(&self) -> Option<&'static str> {
         Some("cp")
+    }
+
+    fn secondary(&self, m: &ScoredMove) -> Option<f32> {
+        secondary_of_raw(m.raw)
+    }
+
+    fn secondary_meta(&self) -> Option<Value> {
+        Some(json!({
+            "of": "teacher_raw",
+            "mate": "|raw| > 90000: mate in p = 100000 - |raw| plies, n = (p + 1)/2 moves if raw > 0 else p/2 (at least 1), u = sign(raw) * (0.5 + 0.5*5/(n + 4))",
+            "cp": "u = 0.5 * tanh(raw / 3000)",
+        }))
     }
 
     fn default_max_moves(&self) -> usize {

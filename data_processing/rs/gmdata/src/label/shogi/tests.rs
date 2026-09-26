@@ -8,7 +8,8 @@ use super::*;
 use crate::label::driver::{find_shards, run, RunOpts};
 use crate::label::game::ShardData;
 use crate::label::testkit::{engine_path, overlay_tensor, tmpdir};
-use crate::label::transform::softmax_q;
+use crate::label::fake::FakeMove;
+use crate::label::transform::{softmax_q, softmax_q_tie, tie_scores, DEFAULT_TIE_WEIGHT};
 use gmshard::{Column, DType, ShardWriter, Tensor};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -204,11 +205,19 @@ fn corruption_is_detected() {
     }
 }
 
-/// Re-derive the head rows of a frame from the raw columns (the documented contract).
-fn expected_rows(idx: &[i64], q: &[f32], gt: [i64; 6], tau: f32) -> Vec<Vec<(i64, f32)>> {
+/// Re-derive the head rows of a frame from the raw columns (the documented contract:
+/// π ∝ exp(Q/τ + w·u), u = [`secondary_of_raw`] of teacher_raw).
+fn expected_rows(idx: &[i64], q: &[f32], raw: &[f32], gt: [i64; 6], tau: f32, w: f32) -> Vec<Vec<(i64, f32)>> {
     let n = idx.iter().take_while(|&&a| a >= 0).count();
-    let pi = softmax_q(&q[..n], tau);
-    let dist: Vec<(Action, f32)> = idx[..n].iter().zip(&pi).map(|(&a, &p)| (Action::decode(a).unwrap(), p)).collect();
+    let u: Vec<f32> = raw[..n].iter().map(|&r| secondary_of_raw(r).unwrap()).collect();
+    let pi = softmax_q_tie(&q[..n], &u, tau, w);
+    expected_rows_of(idx, &pi, gt)
+}
+
+/// The head rows of a frame from its policy π over the first `π.len()` teacher moves.
+fn expected_rows_of(idx: &[i64], pi: &[f32], gt: [i64; 6]) -> Vec<Vec<(i64, f32)>> {
+    let n = pi.len();
+    let dist: Vec<(Action, f32)> = idx[..n].iter().zip(pi).map(|(&a, &p)| (Action::decode(a).unwrap(), p)).collect();
     let [dropped, gf, gtt, _, gp, _] = gt;
     let mut rows = vec![Vec::new(); 6];
     let (mut tot_b, mut tot_d, mut tot_to, mut tot_pr, mut tot_dt) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
@@ -283,6 +292,9 @@ fn end_to_end_with_fake_engine() {
     assert_eq!(summary.teacher["game"]["usi_options"]["MultiPV"], "8");
     assert_eq!(summary.teacher["heads"]["from"], json!({"kind": "categorical", "n": 81, "k": 8, "storage": "sparse"}));
     assert_eq!(summary.teacher["heads"]["piece"]["storage"], "dense");
+    assert_eq!((summary.teacher["labeller_version"].as_u64(), summary.teacher["core_version"].as_u64()), (Some(3), Some(2)));
+    assert_eq!(summary.teacher["policy"]["tie_weight"], 2.0);
+    assert_eq!(summary.teacher["policy"]["secondary"], ShogiLabeller::default().secondary_meta().unwrap());
     let lab = ShogiLabeller::default();
     let k = 8;
     let (mut mates, mut drop_rows, mut promo_rows, mut both_modes) = (0, 0, 0, 0);
@@ -320,6 +332,8 @@ fn end_to_end_with_fake_engine() {
                 assert!(row[..n].iter().all(|&a| p.is_legal_action(a)), "teacher moves are legal");
                 assert!(row[n..].iter().all(|&a| a == -1) && qs[n..].iter().all(|x| x.is_nan()) && rs[n..].iter().all(|x| x.is_nan()));
                 assert!(qs[..n].windows(2).all(|w| w[0] >= w[1]), "sorted by Q");
+                let u: Vec<f32> = rs[..n].iter().map(|&r| secondary_of_raw(r).unwrap()).collect();
+                assert!(tie_scores(&qs[..n], &u, 0.05, 2.0).windows(2).all(|w| w[0] >= w[1]), "sorted by Q/τ + w·u");
                 assert!((ev[f] - (2.0 * qs[0] - 1.0)).abs() < 1e-6, "value = first MultiPV line = best here");
                 for j in 0..n {
                     if rs[j].abs() > 90000.0 {
@@ -329,7 +343,7 @@ fn end_to_end_with_fake_engine() {
                         assert!((qs[j] - q_from_cp(rs[j], CP_SCALE)).abs() < 1e-6);
                     }
                 }
-                let want = expected_rows(row, qs, tg[t], 0.05);
+                let want = expected_rows(row, qs, rs, tg[t], 0.05, DEFAULT_TIE_WEIGHT as f32);
                 for (h, (vals, ids)) in heads.iter().enumerate() {
                     let got = stored_row(vals, f, ids.as_ref());
                     assert_eq!(got.len(), want[h].len(), "head {h} sample {i} frame {t}: {got:?} vs {:?}", want[h]);
@@ -351,6 +365,128 @@ fn end_to_end_with_fake_engine() {
     let mut other = opts(&root, fake_engine_command());
     other.engine_options = vec![("USI_Hash".into(), "64".into())];
     assert!(run(ShogiLabeller::default(), &other).unwrap_err().to_string().contains("different settings"));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Secondary utility of a raw score, written out independently of the implementation:
+/// USI mate plies → UCI-style moves, the chess mate / cp shape with cp scale 3000.
+fn u_ref(raw: f32) -> f64 {
+    let r = raw as f64;
+    if r.abs() > 90_000.0 {
+        let p = 100_000.0 - r.abs();
+        let n = if r > 0.0 { (p + 1.0) / 2.0 } else { p / 2.0 };
+        r.signum() * (0.5 + 2.5 / (n.max(1.0) + 4.0))
+    } else {
+        0.5 * (r / 3000.0).tanh()
+    }
+}
+
+#[test]
+fn secondary_utility_of_raw_scores() {
+    let u = |s: Score| secondary_of_raw(raw_score(s)).unwrap();
+    // mate in 1 ply = +1, mated in 2 plies (the fastest defeat after a move) = −1; the
+    // chess utility of the same move count: mate in 3 plies = 2 moves, mated in 4 = 2 moves
+    assert_eq!((u(Score::Mate(1)), u(Score::Mate(-2))), (1.0, -1.0));
+    assert!((u(Score::Mate(3)) - (0.5 + 2.5 / 6.0)).abs() < 1e-7 && u(Score::Mate(-4)) == -u(Score::Mate(3)));
+    assert_eq!((u(Score::Mate(0)), u(Score::Mate(-1))), (-1.0, -1.0), "impossible distances clamp to 1 move");
+    assert_eq!(u(Score::Cp(0)), 0.0);
+    assert!((u(Score::Cp(3000)) - 0.5 * 1f32.tanh()).abs() < 1e-7);
+    // strictly increasing in teacher_raw over the distances a move can have (the mover
+    // mates in odd plies, is mated in even ones) and the cp range; mates above all cp
+    let mut scores: Vec<Score> = (1..=150).map(|n| Score::Mate(-2 * n)).collect();
+    scores.extend((-15_000..=15_000).step_by(3).map(Score::Cp));
+    scores.push(Score::Cp(35281)); // VALUE_MAX_EVAL
+    scores.extend((0..150).rev().map(|n| Score::Mate(2 * n + 1)));
+    let raws: Vec<f32> = scores.iter().map(|s| raw_score(*s)).collect();
+    assert!(raws.windows(2).all(|w| w[0] < w[1]));
+    let us: Vec<f32> = scores.iter().map(|s| u(*s)).collect();
+    assert!(us.windows(2).all(|w| w[0] < w[1]), "strictly increasing");
+    assert!(us.iter().all(|x| (-1.0..=1.0).contains(x)));
+    assert!(u(Score::Cp(35281)) < 0.5 && u(Score::Mate(crate::label::uci::MATE_UNKNOWN)) > 0.5, "mate + (unknown distance) above every cp");
+    for x in [-100_000.0, -99_997.0, -35_281.0, -1234.0, 0.0, 2500.0, 99_999.0, 90_001.0] {
+        assert!((secondary_of_raw(x).unwrap() as f64 - u_ref(x)).abs() < 1e-7, "{x}");
+    }
+    assert!(secondary_of_raw(f32::NAN).is_none());
+}
+
+/// A fake USI engine whose moves are all mates: in a "won" position (hash parity) every
+/// legal move mates in 1 … 29 plies (odd), in a "lost" one every move is mated in 2 … 30
+/// plies (even) — all Q equal (1 or 0), only the mate distance tells them apart.
+fn mating_engine() -> EngineCommand {
+    EngineCommand::in_process("fake-usi-mates", || {
+        FakeYaneuraOu(crate::label::fake::UciFake::new(|pos: &str| {
+            let b = parse_position(pos).ok()?;
+            let h0 = fnv(pos);
+            let won = h0 % 2 == 0;
+            Some(
+                b.legal_moves()
+                    .iter()
+                    .map(|m| {
+                        let u = usi_move(m);
+                        let h = ((h0 ^ fnv(&u)).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 20) % 15;
+                        FakeMove::mate(&u, if won { 1 + 2 * h as i32 } else { -2 - 2 * h as i32 })
+                    })
+                    .collect(),
+            )
+        }))
+    })
+}
+
+/// Saturated Q: every scored move mates (Q = 1) or is mated (Q = 0); π ∝ exp(w·u), best
+/// first by u — faster mates and slower defeats first.
+#[test]
+fn saturated_q_follows_the_secondary_utility_end_to_end() {
+    let root = tmpdir("shogi-tie");
+    fixture_shards(&root);
+    let mut o = opts(&root, mating_engine());
+    o.max_shards = Some(1);
+    o.max_samples = Some(4);
+    let s = run(ShogiLabeller::default(), &o).unwrap();
+    assert_eq!((s.stats.failed_samples(), s.stats.engine_errors, s.stats.bad_analysis), (0, 0, 0), "{:?}", s.stats.errors);
+    let (dir, rel) = find_shards(&root.join("base"), &root.join("out")).unwrap().remove(0);
+    let out = ShardReader::open(&root.join("out").join(&rel)).unwrap();
+    let data = ShardData::load(ShardReader::open(&dir).unwrap()).unwrap();
+    let (idx, q, raw, evm) =
+        (out.read_i64("tgt.teacher_idx").unwrap(), out.read_f32("tgt.teacher_q").unwrap(), out.read_f32("tgt.teacher_raw").unwrap(), out.read_bool("tgt.engine_value_mask").unwrap());
+    let heads = [
+        (overlay_tensor(&out, "tgt.mode_probs", DType::F32, &[2]), None),
+        (overlay_tensor(&out, "tgt.from_probs_val", DType::F32, &[8]), Some(overlay_tensor(&out, "tgt.from_probs_idx", DType::I64, &[8]))),
+        (overlay_tensor(&out, "tgt.to_probs_val", DType::F32, &[8]), Some(overlay_tensor(&out, "tgt.to_probs_idx", DType::I64, &[8]))),
+        (overlay_tensor(&out, "tgt.promo_probs", DType::F32, &[2]), None),
+        (overlay_tensor(&out, "tgt.piece_probs", DType::F32, &[14]), None),
+        (overlay_tensor(&out, "tgt.drop_to_probs_val", DType::F32, &[8]), Some(overlay_tensor(&out, "tgt.drop_to_probs_idx", DType::I64, &[8]))),
+    ];
+    let (mut won, mut lost, mut spread) = (0, 0, 0);
+    for i in 0..4 {
+        let v = data.view(i);
+        let tg = targets(&v).unwrap();
+        for t in 0..v.len {
+            let f = v.start + t;
+            if !evm[f] {
+                continue;
+            }
+            let n = idx[f * 8..f * 8 + 8].iter().filter(|&&a| a >= 0).count();
+            let (qs, rs) = (&q[f * 8..f * 8 + n], &raw[f * 8..f * 8 + n]);
+            assert!(qs.iter().all(|&x| x == qs[0]) && (qs[0] == 1.0 || qs[0] == 0.0), "all Q equal: {qs:?}");
+            assert!(rs.windows(2).all(|w| w[0] >= w[1]), "best first by the raw score (= by u): {rs:?}");
+            won += (qs[0] == 1.0) as usize;
+            lost += (qs[0] == 0.0) as usize;
+            // π ∝ exp(w·u), independently of the implementation
+            let e: Vec<f64> = rs.iter().map(|&r| (2.0 * u_ref(r)).exp()).collect();
+            let z: f64 = e.iter().sum();
+            let pi: Vec<f32> = e.iter().map(|x| (x / z) as f32).collect();
+            spread += (pi[0] > pi[n - 1] * 1.05) as usize;
+            let want = expected_rows_of(&idx[f * 8..f * 8 + 8], &pi, tg[t]);
+            for (h, (vals, ids)) in heads.iter().enumerate() {
+                let got = stored_row(vals, f, ids.as_ref());
+                assert_eq!(got.len(), want[h].len(), "head {h} frame {f}");
+                for ((gc, gp), (wc, wp)) in got.iter().zip(&want[h]) {
+                    assert!(gc == wc && (gp - wp).abs() < 1e-5, "head {h} frame {f}: {got:?} vs {:?}", want[h]);
+                }
+            }
+        }
+    }
+    assert!(won > 20 && lost > 20 && spread > 20, "{won} won, {lost} lost, {spread} frames with a spread teacher");
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -512,7 +648,8 @@ fn yaneuraou() -> Option<PathBuf> {
 }
 
 /// Real YaneuraOu (skipped when not installed): labels two games end to end at a small
-/// budget, deterministic across worker counts, every scored move legal.
+/// budget, deterministic across worker counts, every scored move legal, the teacher
+/// ordered by (Q, raw) with heads = the tie-broken softmax of the stored columns.
 #[test]
 fn real_yaneuraou_end_to_end() {
     let Some(exe) = yaneuraou() else {
@@ -543,9 +680,19 @@ fn real_yaneuraou_end_to_end() {
     let ev = out.read_f32("tgt.engine_value").unwrap();
     let data = ShardData::load(ShardReader::open(&dir).unwrap()).unwrap();
     let lab = ShogiLabeller::default();
-    let (mut scored, mut labelled, mut above_first) = (0, 0, 0);
+    let raw = out.read_f32("tgt.teacher_raw").unwrap();
+    let heads = [
+        (overlay_tensor(&out, "tgt.mode_probs", DType::F32, &[2]), None),
+        (overlay_tensor(&out, "tgt.from_probs_val", DType::F32, &[8]), Some(overlay_tensor(&out, "tgt.from_probs_idx", DType::I64, &[8]))),
+        (overlay_tensor(&out, "tgt.to_probs_val", DType::F32, &[8]), Some(overlay_tensor(&out, "tgt.to_probs_idx", DType::I64, &[8]))),
+        (overlay_tensor(&out, "tgt.promo_probs", DType::F32, &[2]), None),
+        (overlay_tensor(&out, "tgt.piece_probs", DType::F32, &[14]), None),
+        (overlay_tensor(&out, "tgt.drop_to_probs_val", DType::F32, &[8]), Some(overlay_tensor(&out, "tgt.drop_to_probs_idx", DType::I64, &[8]))),
+    ];
+    let (mut scored, mut labelled, mut above_first, mut tied) = (0, 0, 0, 0);
     for i in 0..2 {
         let v = data.view(i);
+        let tg = targets(&v).unwrap();
         for (t, p) in lab.replay(&v).unwrap().iter().enumerate() {
             let f = v.start + t;
             if !evm[f] {
@@ -555,15 +702,34 @@ fn real_yaneuraou_end_to_end() {
             let n = row.iter().filter(|&&a| a >= 0).count();
             assert!(n >= 1 && n <= p.legal.len().min(8));
             assert!(row[..n].iter().all(|&a| p.is_legal_action(a)));
-            assert!(q[f * 8..f * 8 + n].iter().all(|x| (0.0..=1.0).contains(x)));
+            let (qs, rs) = (&q[f * 8..f * 8 + n], &raw[f * 8..f * 8 + n]);
+            assert!(qs.iter().all(|x| (0.0..=1.0).contains(x)));
             scored += n;
             labelled += 1;
             // a move scored above the first MultiPV line (the value) = a stale line left uncapped
             above_first += (ev[f] < 2.0 * q[f * 8] - 1.0 - 1e-6) as usize;
+            // the tie-broken teacher on real scores: best first by (Q, raw), heads = π ∝
+            // exp(Q/τ + w·u) re-derived with the independent formula
+            for j in 1..n {
+                assert!(qs[j - 1] > qs[j] || (qs[j - 1] == qs[j] && rs[j - 1] >= rs[j]), "frame {f}: {qs:?} {rs:?}");
+            }
+            tied += (1..n).any(|j| qs[j] == qs[j - 1] && rs[j] != rs[j - 1]) as usize;
+            let e: Vec<f64> = qs.iter().zip(rs).map(|(&x, &r)| ((x as f64 - qs[0] as f64) / 0.05 + 2.0 * u_ref(r)).exp()).collect();
+            let z: f64 = e.iter().sum();
+            let pi: Vec<f32> = e.iter().map(|x| (x / z) as f32).collect();
+            let want = expected_rows_of(row, &pi, tg[t]);
+            for (h, (vals, ids)) in heads.iter().enumerate() {
+                let got = stored_row(vals, f, ids.as_ref());
+                assert_eq!(got.len(), want[h].len(), "head {h} frame {f}");
+                for ((gc, gp), (wc, wp)) in got.iter().zip(&want[h]) {
+                    assert!(gc == wc && (gp - wp).abs() < 1e-5, "head {h} frame {f}: {got:?} vs {:?}", want[h]);
+                }
+            }
         }
     }
     assert!(scored > 100);
-    eprintln!("{labelled} frames, {above_first} with a move above the first line");
+    eprintln!("{labelled} frames, {above_first} with a move above the first line, {tied} with a Q tie split by the raw score");
+    assert!(tied > 0, "the games' mating attacks give Q ties (mates) that the raw score splits");
     assert!(above_first * 100 <= labelled, "{above_first} of {labelled} frames rank a move above the engine's first line");
     std::fs::remove_dir_all(&root).unwrap();
 }
