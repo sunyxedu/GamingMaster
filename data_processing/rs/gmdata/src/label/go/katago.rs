@@ -308,6 +308,12 @@ impl KataSession {
         }
     }
 
+    /// Config keys KataGo reported as unused at startup (its stderr: "Unused key 'K' in …";
+    /// typos, or keys this KataGo version / backend does not know).
+    pub fn unused_config_keys(&self) -> Vec<String> {
+        unused_keys(&self.engine.stderr_tail())
+    }
+
     /// Fail unless winrates come from the side to move: an empty `n`×`n` board with komi
     /// 150 (white wins by any measure), black to move at turn 0 and — after black passes —
     /// white at turn 1. The side to move reads ≈0 then ≈1; black's view gives ≈0 twice and
@@ -330,6 +336,22 @@ impl KataSession {
         }
         Ok(())
     }
+}
+
+/// Keys of KataGo's "Unused key 'K' in …" startup warnings in `stderr` (deduplicated, in
+/// order).
+pub fn unused_keys(stderr: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in stderr.lines() {
+        if let Some(rest) = line.split("Unused key '").nth(1) {
+            if let Some((k, _)) = rest.split_once('\'') {
+                if !out.iter().any(|x| x == k) {
+                    out.push(k.to_string());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Settings of the generated analysis config (`--engine-option K=V` overrides them via
@@ -505,6 +527,20 @@ mod tests {
         }
         assert!(override_args(&base, &[kv("a,b", "1")]).is_err() && override_args(&base, &[kv("a", "1=2")]).is_err());
         assert!(override_args(&s(&["analysis", "-override-config"]), &[]).is_err());
+    }
+
+    #[test]
+    fn unused_config_keys_from_katago_stderr() {
+        // KataGo 1.18.2 startup (trimmed): each warning is logged twice
+        let err = "2026-09-26 12:29:50+0100: Running with following config:\n\
+                   wideRootNoize = 0.04\n\
+                   2026-09-26 12:29:51+0100: WARNING: Config had unused keys! You may have a typo, an option you specified is being unused from a.cfg and/or command-line and query overrides\n\
+                   2026-09-26 12:29:51+0100: WARNING: Unused key 'wideRootNoize' in a.cfg and/or command-line and query overrides\n\
+                   2026-09-26 12:29:51+0100: WARNING: Unused key 'cudaUseFP16' in a.cfg and/or command-line and query overrides\n\
+                   WARNING: Unused key 'wideRootNoize' in a.cfg and/or command-line and query overrides\n\
+                   2026-09-26 12:29:51+0100: Started, ready to begin handling requests\n";
+        assert_eq!(unused_keys(err), vec!["wideRootNoize".to_string(), "cudaUseFP16".to_string()]);
+        assert!(unused_keys("Started, ready to begin handling requests").is_empty());
     }
 
     #[test]

@@ -542,6 +542,28 @@ fn real_katago_black_perspective_config_is_overridden() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// A misspelt --engine-option is recorded in meta.teacher by the driver; KataGo ignores it
+/// ("Unused key" on its stderr), so the run must stop instead of labelling with a meta
+/// that claims a setting the teacher never had. A real key is accepted.
+#[test]
+fn real_katago_unused_engine_option_is_refused() {
+    let Some((exe, model)) = real_katago() else {
+        eprintln!("skipping: KataGo or its network not installed (scripts/engines/fetch_engines.sh katago)");
+        return;
+    };
+    let root = scenario_root("go-real-unused");
+    let (lab, args) = real_lab(9, &model);
+    let mut o = real_opts(&root, &exe, &args, 16);
+    o.engine_options = vec![("wideRootNoize".into(), "0.04".into())];
+    let err = format!("{:#}", driver::run(lab.clone(), &o).unwrap_err());
+    assert!(err.contains("ignores --engine-option") && err.contains("wideRootNoize"), "{err}");
+    assert!(!root.join("out").join("go_00000").exists());
+    o.engine_options = vec![("wideRootNoise".into(), "0.0".into())];
+    let s = driver::run(lab, &o).unwrap();
+    assert_eq!((s.stats.engine_errors, s.teacher["engine_options"].clone()), (0, json!({"wideRootNoise": "0.0"})));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// KataGo on a few games of a real shard: no engine errors, and its favourite move
 /// agrees with the strong human's move far above chance.
 #[test]

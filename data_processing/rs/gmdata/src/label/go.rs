@@ -497,6 +497,14 @@ impl Labeller for GoLabeller {
         };
         let mut session = KataSession::open(cmd, self.startup_timeout.max(cfg.timeout), cfg.timeout)?;
         session.check_side_to_move(self.n, cfg.timeout)?;
+        // an --engine-option KataGo does not use (a typo, or a key of another version /
+        // backend) would sit in meta.teacher without having changed anything
+        let unused: Vec<String> =
+            session.unused_config_keys().into_iter().filter(|k| cfg.options.iter().any(|(o, _)| o == k)).collect();
+        if !unused.is_empty() {
+            bail!("KataGo {} ignores --engine-option key(s) {unused:?} (\"Unused key\" at startup): a typo, or unknown to this version / backend",
+                  session.version);
+        }
         Ok(session)
     }
 
