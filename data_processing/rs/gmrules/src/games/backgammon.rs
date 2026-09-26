@@ -36,7 +36,12 @@
 //!   The game after a player first reaches `match_length − 1` points is the Crawford
 //!   game (no doubling); the games after it are post-Crawford (doubling allowed).
 //!   Doubling is legal whenever the cube is accessible, also when it is "dead" (the
-//!   doubler already wins the match with the current cube) — legal, never useful.
+//!   doubler already wins the match with the current cube) — legal, never useful
+//!   (gnubg never doubles there; its generator checks that gnubg's "cannot double"
+//!   positions are exactly the rules' dead-cube positions, [`Backgammon::cube_dead_for`]).
+//! - Not modelled: beavers / raccoons and automatic doubles (optional money-play house
+//!   rules, never part of match play), resignations (every game is played out: the
+//!   policy never needs to resign, and a resigned game's result is not a rules outcome).
 //!
 //! Decisions and canonical ids (strictly ascending = the candidate order):
 //! ```text
@@ -56,23 +61,36 @@
 //! otherwise), opening roll = 36 + 6·(d0−1) + (d1−1) (d0 = seat 0's die, p = 1/30).
 //!
 //! Frames (perfect information → one interleaved stream per episode, every frame from
-//! the acting seat's view; the taker acts on a take decision):
+//! the acting seat's view — "me" — the taker acting on a take decision; nothing about
+//! future dice is known to any frame):
 //! ```text
-//! entities [28, 13]  slots 0..23 = the actor's points 1..24 (type 0), 24 own bar,
-//!                    25 opponent's bar (type 1), 26 own borne-off, 27 opponent's
-//!                    borne-off (type 2): own count ≥1 ≥2 ≥3 ≥4 (n−4)/11, opponent
-//!                    count (same five), point/25, own home board, opponent's home board
-//! globals  [45]      decision kind (cube / take / move / split move), the roll (hi and
-//!                    lo one-hot, double), dice left, checker moves played, cube (log2 /
-//!                    12, owner me / centre / opponent, who can double, dead cube),
-//!                    actor on roll, money / Jacoby, match length, scores, away, 1-away,
-//!                    Crawford / post-Crawford, games played, pip counts, contact
-//! actions  [128, 119] (bits) kind (pass / full / split move / no double / double /
-//!                    take / drop), the actor's checkers per point AFTER the move
-//!                    (≥1 ≥2 ≥3), opposing blots hit per point, own bar after,
-//!                    checkers borne off, hits, dice left (split moves), wins the game,
-//!                    gammon saved
+//! entities [28, 34] (bits)  slots 0..23 = my points 1..24 (type 0), 24 my bar, 25 the
+//!                    opponent's bar (type 1), 26 my borne-off checkers, 27 the
+//!                    opponent's (type 2); features: my checkers there ≥1..≥15, the
+//!                    opponent's ≥1..≥15, region (my home / my outer / opponent's outer /
+//!                    opponent's home board; points only)
+//! globals  [68]      0-3 decision (cube / take / checker play / split-turn checker move),
+//!                    4-9 / 10-15 high / low die one-hot, 16 doubles, 17-18 high / low
+//!                    die still to play, 19-22 dice left ≥1..≥4, 23-25 checker moves
+//!                    played ≥1..≥3, 26 log2(cube) / 12, 27-29 cube owner me / centre /
+//!                    opponent, 30-31 I / the opponent may double, 32 I am on roll,
+//!                    33 money play, 34 Jacoby in effect, 35 match length / 25, 36-37 my /
+//!                    the opponent's away / 25, 38-48 / 49-59 my / the opponent's away
+//!                    one-hot (1..10, 11+), 60 Crawford game, 61 post-Crawford, 62-63 cube
+//!                    dead for me / the opponent, 64 games played / 16, 65-66 pip counts /
+//!                    167, 67 contact
+//! actions  [64, 192] (bits)  0-6 kind (pass / full move / split-turn checker move / no
+//!                    double / double / take / drop), 7-102 my checkers on each point
+//!                    AFTER the move ≥1..≥4, 103-126 opposing blot hit on point q,
+//!                    127-130 my checkers on the bar after ≥1..≥4, 131-134 borne off
+//!                    ≥1..≥4, 135-138 hits ≥1..≥4, 139-141 split move: dice left after
+//!                    ≥1..≥3, 142 wins the game, 143 at least one checker off (no gammon),
+//!                    144-191 my count on point q decreased / increased by the move
 //! ```
+//! Every count is a thermometer code and every entity / candidate feature a bit (the
+//! shards store both bit-packed, ~2.1 KB per frame). Two legal moves never share a
+//! feature row (distinct results differ in the counts or in which points change;
+//! `distinct_candidate_features` checks it on random play).
 //! Outcome (IL value target, RL reward): match play ±1 (match won / lost); money play
 //! clamp(points / money_scale, −1, 1).
 
@@ -96,15 +114,17 @@ pub const OPENING_BASE: u32 = 36;
 /// The bar as a "from" point.
 pub const BAR: usize = 25;
 pub const CHECKERS: u8 = 15;
-/// Candidate slots of a frame: the largest checker-play decision presented whole.
-pub const MAX_ACTIONS: usize = 128;
+/// Candidate slots of a frame: the largest checker-play decision presented whole (in
+/// gnubg's self-play 96% of checker plays have at most 64 distinct moves; larger ones —
+/// doubles in spread positions — are split, see the module docs).
+pub const MAX_ACTIONS: usize = 64;
 /// gnubg's MAX_CUBE.
 pub const MAX_CUBE: u32 = 4096;
 
 pub const ENTITIES: usize = 28;
-pub const ENTITY_FEATURES: usize = 13;
-pub const GLOBALS: usize = 45;
-pub const ACTION_FEATURES: usize = 119;
+pub const ENTITY_FEATURES: usize = 34;
+pub const GLOBALS: usize = 68;
+pub const ACTION_FEATURES: usize = 96 + 24 * RESULT_BITS;
 
 /// One seat's checkers in its own numbering: `[i]` = point i+1 (i < 24), `[24]` = bar;
 /// borne off = 15 − sum.
@@ -799,12 +819,39 @@ impl Backgammon {
     }
 }
 
-fn thermo(f: &mut [f32], n: u8) {
-    for (k, x) in f.iter_mut().enumerate().take(4) {
-        *x = (n as usize > k) as u8 as f32;
+/// Thermometer code: `f[k] = 1` for `n > k` (a count as bits; a linear layer on it can
+/// represent any function of the count).
+fn thermo(f: &mut [f32], n: usize) {
+    for (k, x) in f.iter_mut().enumerate() {
+        *x = (n > k) as u8 as f32;
     }
-    f[4] = (n.saturating_sub(4)) as f32 / 11.0;
 }
+
+fn one_hot(f: &mut [f32], i: usize) {
+    f[i.min(f.len() - 1)] = 1.0;
+}
+
+fn bit(b: bool) -> f32 {
+    b as u8 as f32
+}
+
+// entity features
+const E_OWN: usize = 0; // 15: my checkers ≥1..≥15
+const E_OPP: usize = 15; // 15: the opponent's checkers ≥1..≥15
+const E_REGION: usize = 30; // 4: my home / my outer / opponent's outer / opponent's home board
+// candidate features
+const RESULT_BITS: usize = 4;
+const A_KIND: usize = 0; // 7: pass, full move, split move, no double, double, take, drop
+const A_RESULT: usize = 7; // 24 × RESULT_BITS: my checkers on point q after the move ≥1..
+const A_HIT_AT: usize = A_RESULT + 24 * RESULT_BITS; // 24: an opposing blot on my point q is hit
+const A_BAR: usize = A_HIT_AT + 24; // 4: my checkers on the bar after the move ≥1..≥4
+const A_BORNE: usize = A_BAR + 4; // 4: checkers borne off by the move ≥1..≥4
+const A_HITS: usize = A_BORNE + 4; // 4: blots hit ≥1..≥4
+const A_DICE_LEFT: usize = A_HITS + 4; // 3: split move: dice left after it ≥1..≥3
+const A_WINS: usize = A_DICE_LEFT + 3;
+const A_OFF_SOME: usize = A_WINS + 1;
+const A_DELTA: usize = A_OFF_SOME + 1; // 24 × 2: my count on point q decreased / increased
+const _: () = assert!(A_DELTA + 48 == ACTION_FEATURES);
 
 impl Game for Backgammon {
     type Config = BackgammonConfig;
@@ -855,7 +902,7 @@ impl Game for Backgammon {
             action_features: ACTION_FEATURES,
             hidden_info: false,
             simultaneous: false,
-            bits_entities: false,
+            bits_entities: true,
             bits_globals: false,
             bits_actions: true,
             max_decisions: 2000 * games,
@@ -1035,23 +1082,16 @@ impl Game for Backgammon {
         for i in 0..24 {
             let q = i + 1;
             let f = obs.entity(i, 0);
-            thermo(&mut f[0..5], p.me[i]);
-            thermo(&mut f[5..10], p.opp[24 - q]);
-            f[10] = q as f32 / 25.0;
-            f[11] = (q <= 6) as u8 as f32;
-            f[12] = (q >= 19) as u8 as f32;
+            thermo(&mut f[E_OWN..E_OWN + 15], p.me[i] as usize);
+            thermo(&mut f[E_OPP..E_OPP + 15], p.opp[24 - q] as usize);
+            f[E_REGION + (q - 1) / 6] = 1.0;
         }
-        let f = obs.entity(24, 1);
-        thermo(&mut f[0..5], p.me[24]);
-        f[10] = 1.0;
-        let f = obs.entity(25, 1);
-        thermo(&mut f[5..10], p.opp[24]);
-        f[10] = 1.0;
-        thermo(&mut obs.entity(26, 2)[0..5], off(&p.me));
-        thermo(&mut obs.entity(27, 2)[5..10], off(&p.opp));
+        thermo(&mut obs.entity(24, 1)[E_OWN..E_OWN + 15], p.me[24] as usize);
+        thermo(&mut obs.entity(25, 1)[E_OPP..E_OPP + 15], p.opp[24] as usize);
+        thermo(&mut obs.entity(26, 2)[E_OWN..E_OWN + 15], off(&p.me) as usize);
+        thermo(&mut obs.entity(27, 2)[E_OPP..E_OPP + 15], off(&p.opp) as usize);
 
         let opp = 1 - seat;
-        let n = self.cfg.match_length;
         let g = obs.globals();
         match self.phase {
             Phase::Cube => g[0] = 1.0,
@@ -1064,83 +1104,78 @@ impl Game for Backgammon {
             let (hi, lo) = self.roll;
             g[4 + hi as usize - 1] = 1.0;
             g[10 + lo as usize - 1] = 1.0;
-            g[16] = (hi == lo) as u8 as f32;
+            g[16] = bit(hi == lo);
             if hi != lo {
-                g[17] = self.dice.index_of(hi).is_some() as u8 as f32;
-                g[18] = self.dice.index_of(lo).is_some() as u8 as f32;
+                g[17] = bit(self.dice.index_of(hi).is_some());
+                g[18] = bit(self.dice.index_of(lo).is_some());
             }
-            g[19] = self.dice.len() as f32 / 4.0;
-            g[20] = self.played as f32 / 4.0;
+            thermo(&mut g[19..23], self.dice.len());
+            thermo(&mut g[23..26], self.played as usize);
         }
-        g[21] = (self.cube as f32).log2() / 12.0;
+        g[26] = (self.cube as f32).log2() / 12.0;
         match self.owner {
-            -1 => g[23] = 1.0,
-            o if o as usize == seat => g[22] = 1.0,
-            _ => g[24] = 1.0,
+            -1 => g[28] = 1.0,
+            o if o as usize == seat => g[27] = 1.0,
+            _ => g[29] = 1.0,
         }
-        g[25] = self.may_double(seat) as u8 as f32;
-        g[26] = self.may_double(opp) as u8 as f32;
-        g[27] = (self.on_roll == seat) as u8 as f32;
+        g[30] = bit(self.may_double(seat));
+        g[31] = bit(self.may_double(opp));
+        g[32] = bit(self.on_roll == seat);
         if self.money() {
-            g[28] = 1.0;
-            g[29] = (self.cfg.jacoby && self.cube == 1) as u8 as f32;
+            g[33] = 1.0;
+            g[34] = bit(self.cfg.jacoby && self.cube == 1);
         } else {
-            let nf = n as f32;
-            g[30] = nf / 25.0;
-            g[31] = self.score[seat] as f32 / nf;
-            g[32] = self.score[opp] as f32 / nf;
-            g[33] = (n - self.score[seat]) as f32 / nf;
-            g[34] = (n - self.score[opp]) as f32 / nf;
-            g[35] = self.crawford_game as u8 as f32;
-            g[36] = self.post_crawford as u8 as f32;
-            g[37] = (n - self.score[seat] == 1) as u8 as f32;
-            g[38] = (n - self.score[opp] == 1) as u8 as f32;
-            g[39] = self.cube_dead_for(seat) as u8 as f32;
-            g[40] = self.cube_dead_for(opp) as u8 as f32;
+            let n = self.cfg.match_length;
+            let (away_me, away_opp) = ((n - self.score[seat]) as usize, (n - self.score[opp]) as usize);
+            g[35] = n as f32 / 25.0;
+            g[36] = away_me as f32 / 25.0;
+            g[37] = away_opp as f32 / 25.0;
+            one_hot(&mut g[38..49], away_me - 1);
+            one_hot(&mut g[49..60], away_opp - 1);
+            g[60] = bit(self.crawford_game);
+            g[61] = bit(self.post_crawford);
+            g[62] = bit(self.cube_dead_for(seat));
+            g[63] = bit(self.cube_dead_for(opp));
         }
-        g[41] = (self.results.len() as f32 / 16.0).min(1.0);
-        g[42] = pips(&p.me) as f32 / 167.0;
-        g[43] = pips(&p.opp) as f32 / 167.0;
-        g[44] = contact(&p) as u8 as f32;
+        g[64] = (self.results.len() as f32 / 16.0).min(1.0);
+        g[65] = pips(&p.me) as f32 / 167.0;
+        g[66] = pips(&p.opp) as f32 / 167.0;
+        g[67] = bit(contact(&p));
     }
 
     fn encode_action(&self, _seat: Seat, action: u32, feat: &mut [f32]) {
         match action {
-            NO_DOUBLE => feat[3] = 1.0,
-            DOUBLE => feat[4] = 1.0,
-            TAKE => feat[5] = 1.0,
-            DROP => feat[6] = 1.0,
+            NO_DOUBLE => feat[A_KIND + 3] = 1.0,
+            DOUBLE => feat[A_KIND + 4] = 1.0,
+            TAKE => feat[A_KIND + 5] = 1.0,
+            DROP => feat[A_KIND + 6] = 1.0,
             _ => {
                 let Ok(i) = self.cands.binary_search_by_key(&action, |c| c.id) else { return };
                 let c = &self.cands[i];
-                feat[match c.kind {
-                    Kind::Pass => 0,
-                    Kind::Full => 1,
-                    Kind::Sub => 2,
-                }] = 1.0;
+                feat[A_KIND
+                    + match c.kind {
+                        Kind::Pass => 0,
+                        Kind::Full => 1,
+                        Kind::Sub => 2,
+                    }] = 1.0;
                 let r = &c.result;
-                for i in 0..24 {
-                    for k in 0..3 {
-                        feat[7 + 3 * i + k] = (r.me[i] as usize > k) as u8 as f32;
-                    }
-                    feat[79 + i] = (c.hit_mask >> i & 1) as f32;
+                let now = &self.board[self.on_roll];
+                for q in 0..24 {
+                    let at = A_RESULT + RESULT_BITS * q;
+                    thermo(&mut feat[at..at + RESULT_BITS], r.me[q] as usize);
+                    feat[A_HIT_AT + q] = (c.hit_mask >> q & 1) as f32;
+                    feat[A_DELTA + 2 * q] = bit(r.me[q] < now[q]);
+                    feat[A_DELTA + 2 * q + 1] = bit(r.me[q] > now[q]);
                 }
-                for k in 0..3 {
-                    feat[103 + k] = (r.me[24] as usize > k) as u8 as f32;
-                }
-                for k in 0..4 {
-                    feat[106 + k] = (c.borne as usize > k) as u8 as f32;
-                    feat[110 + k] = (c.hits as usize > k) as u8 as f32;
-                }
+                thermo(&mut feat[A_BAR..A_BAR + 4], r.me[24] as usize);
+                thermo(&mut feat[A_BORNE..A_BORNE + 4], c.borne as usize);
+                thermo(&mut feat[A_HITS..A_HITS + 4], c.hits as usize);
                 if c.kind == Kind::Sub {
-                    let left = self.dice.len() - 1;
-                    for k in 0..3 {
-                        feat[114 + k] = (left > k) as u8 as f32;
-                    }
+                    thermo(&mut feat[A_DICE_LEFT..A_DICE_LEFT + 3], self.dice.len() - 1);
                 }
                 let o = off(&r.me);
-                feat[117] = (o == CHECKERS) as u8 as f32;
-                feat[118] = (o > 0) as u8 as f32;
+                feat[A_WINS] = bit(o == CHECKERS);
+                feat[A_OFF_SOME] = bit(o > 0);
             }
         }
     }
@@ -1500,15 +1535,16 @@ mod tests {
 
     #[test]
     fn replay_and_conformance() {
-        for cfg in [
-            BackgammonConfig { match_length: 0, ..Default::default() },
-            BackgammonConfig { match_length: 0, jacoby: false, max_cube: 8, ..Default::default() },
-            BackgammonConfig { match_length: 3, ..Default::default() },
-            BackgammonConfig { match_length: 1, ..Default::default() },
-            BackgammonConfig { match_length: 5, cube: false, ..Default::default() },
+        for (cfg, n) in [
+            (BackgammonConfig { match_length: 0, ..Default::default() }, 24),
+            (BackgammonConfig { match_length: 0, jacoby: false, max_cube: 8, ..Default::default() }, 24),
+            (BackgammonConfig { match_length: 3, ..Default::default() }, 12),
+            (BackgammonConfig { match_length: 1, ..Default::default() }, 12),
+            (BackgammonConfig { match_length: 5, score: [4, 2], post_crawford: true, ..Default::default() }, 8),
+            (BackgammonConfig { match_length: 2, cube: false, ..Default::default() }, 4),
         ] {
-            let rep = check_game::<Backgammon>(&cfg, 12, 7).unwrap();
-            assert_eq!(rep.terminal, 12, "{cfg:?}");
+            let rep = check_game::<Backgammon>(&cfg, n, 7).unwrap();
+            assert_eq!(rep.terminal, n, "{cfg:?}");
             assert!(rep.max_legal <= MAX_ACTIONS);
         }
         // a full random match replays from its events
@@ -1522,6 +1558,99 @@ mod tests {
         let mut g = Backgammon::new_game(&cfg);
         play(&mut g, &ev);
         assert_eq!(g.match_winner(), r.state.match_winner());
+    }
+
+    #[test]
+    fn frame_encoding() {
+        use crate::frame::{encode_frame, Frame};
+        let cfg = BackgammonConfig::default();
+        let spec = Backgammon::spec(&cfg);
+        let mut g = Backgammon::new_game(&cfg);
+        g.apply_chance(OPENING_BASE + 6 * 2).unwrap(); // seat 0 throws 3, seat 1 throws 1
+        let mut f = Frame::new(&spec);
+        encode_frame(&g, 0, &spec, &mut f.as_mut(&spec)).unwrap();
+        let get = |name: &str| f.obs_named(&spec, name).unwrap();
+        let ents = get("entities").as_f32().unwrap();
+        let ent = |slot: usize| &ents[slot * ENTITY_FEATURES..(slot + 1) * ENTITY_FEATURES];
+        let count = |row: &[f32], at: usize| row[at..at + 15].iter().sum::<f32>() as u8;
+        // my 6-point, my 19 (their 6), my 24 (my back checkers), my 1 (their back checkers)
+        assert_eq!((count(ent(5), E_OWN), count(ent(5), E_OPP)), (5, 0));
+        assert_eq!((count(ent(18), E_OWN), count(ent(18), E_OPP)), (0, 5));
+        assert_eq!((count(ent(23), E_OWN), count(ent(0), E_OPP), count(ent(11), E_OPP)), (2, 2, 5));
+        assert_eq!(ent(5)[E_REGION..E_REGION + 4], [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(ent(12)[E_REGION..E_REGION + 4], [0.0, 0.0, 1.0, 0.0]);
+        assert!((24..28).all(|s| ent(s).iter().all(|&x| x == 0.0)), "bars and trays are empty");
+        let types = get("entity_type").as_i32().unwrap();
+        assert_eq!((types[0], types[23], types[24], types[25], types[26], types[27]), (0, 0, 1, 1, 2, 2));
+        let gl = get("globals").as_f32().unwrap();
+        assert_eq!((gl[2], gl[4 + 2], gl[10], gl[16], gl[19..23].iter().sum::<f32>()), (1.0, 1.0, 1.0, 0.0, 2.0));
+        assert_eq!((gl[26], gl[28], gl[30], gl[31], gl[32]), (0.0, 1.0, 1.0, 1.0, 1.0));
+        assert_eq!((gl[33], gl[35], gl[38 + 6], gl[49 + 6], gl[65], gl[67]), (0.0, 7.0 / 25.0, 1.0, 1.0, 1.0, 1.0));
+        // every candidate row describes its own resulting position
+        let acts = get("actions").as_f32().unwrap();
+        let start = g.pos(0);
+        for (i, c) in g.candidates().iter().enumerate() {
+            let row = &acts[i * ACTION_FEATURES..(i + 1) * ACTION_FEATURES];
+            assert_eq!(row[A_KIND..A_KIND + 7], [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+            for q in 0..24 {
+                let n = row[A_RESULT + 4 * q..A_RESULT + 4 * q + 4].iter().sum::<f32>() as u8;
+                assert_eq!(n, c.result.me[q].min(4));
+                assert_eq!(row[A_DELTA + 2 * q] == 1.0, c.result.me[q] < start.me[q]);
+                assert_eq!(row[A_DELTA + 2 * q + 1] == 1.0, c.result.me[q] > start.me[q]);
+            }
+        }
+        // 8/5 6/5 (making the 5-point): 5-point 2, 8-point 2, 6-point 4
+        let made = apply_steps(&start, &[(8, 5), (6, 5)]).unwrap();
+        let i = g.candidates().iter().position(|c| c.result == made).unwrap();
+        let row = &acts[i * ACTION_FEATURES..(i + 1) * ACTION_FEATURES];
+        let n = |q: usize| row[A_RESULT + 4 * (q - 1)..A_RESULT + 4 * q].iter().sum::<f32>();
+        assert_eq!((n(5), n(6), n(8), n(13)), (2.0, 4.0, 2.0, 4.0));
+        // the taker's frame: a take decision, not on roll, two candidates
+        let a = g.candidates()[0].id;
+        g.apply_action(0, a).unwrap();
+        g.apply_action(1, DOUBLE).unwrap();
+        encode_frame(&g, 0, &spec, &mut f.as_mut(&spec)).unwrap();
+        let gl = f.obs_named(&spec, "globals").unwrap().as_f32().unwrap();
+        assert_eq!((gl[1], gl[32], gl[4..16].iter().sum::<f32>()), (1.0, 0.0, 0.0));
+        assert_eq!(f.legal_ids, vec![TAKE, DROP]);
+    }
+
+    /// Two legal moves never share a candidate feature row (random play; see the module
+    /// docs), so the pointer head can always tell them apart.
+    #[test]
+    fn distinct_candidate_features() {
+        let cfg = BackgammonConfig { match_length: 0, cube: false, ..Default::default() };
+        let mut rng = crate::rng::Rng::new(5);
+        let mut frames = 0usize;
+        for _ in 0..40 {
+            let mut g = Backgammon::new_game(&cfg);
+            let mut out = Vec::new();
+            while g.turn() != Turn::Terminal {
+                if g.turn() == Turn::Chance {
+                    out.clear();
+                    g.chance_outcomes(&mut out);
+                    let w: Vec<f64> = out.iter().map(|&(_, p)| p).collect();
+                    g.apply_chance(out[rng.weighted(&w)].0).unwrap();
+                    continue;
+                }
+                let seat = g.actor().unwrap();
+                let mut legal = Vec::new();
+                g.legal_actions(seat, &mut legal);
+                let rows: HashSet<Vec<u32>> = legal
+                    .iter()
+                    .map(|&a| {
+                        let mut f = vec![0.0f32; ACTION_FEATURES];
+                        g.encode_action(seat, a, &mut f);
+                        f.iter().map(|x| x.to_bits()).collect()
+                    })
+                    .collect();
+                assert_eq!(rows.len(), legal.len(), "two candidates share a feature row:\n{}", g.state_string());
+                frames += 1;
+                let a = legal[rng.below(legal.len() as u64) as usize];
+                g.apply_action(seat, a).unwrap();
+            }
+        }
+        assert!(frames > 2000, "{frames}");
     }
 }
 
