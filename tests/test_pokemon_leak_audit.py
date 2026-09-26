@@ -638,11 +638,13 @@ def test_without_team_preview_the_opponent_team_grows_only_by_switch_ins(
             if len(p) > 2 and p[1] == "turn" and p[2].strip().isdigit():
                 at_turn[int(p[2])] = {s: len(v) for s, v in seen.items()}
         meta[cid] = (r["id"], at_turn, before_switch)
-        # with preview: every frame knows every previewed species of both teams
+        # with preview: every frame knows every previewed species of both teams (formats
+        # without team preview — e.g. random battles in GM_AUDIT_POKEMON_REPLAYS — have no
+        # |poke| lines: their full conversion is already the no-preview case below)
         n_poke = [sum(1 for ln in lines if ln.startswith(f"|poke|p{s + 1}|")) for s in (0, 1)]
         for me, side in enumerate(("p1", "p2")):
             s = full.get((r["id"], side))
-            if s is not None:
+            if s is not None and min(n_poke) > 0:
                 m = s["obs"]["slot_mask"]
                 assert int(m[0, :6].sum()) == min(6, n_poke[me]) and int(m[0, 6:].sum()) == min(
                     6, n_poke[1 - me]
