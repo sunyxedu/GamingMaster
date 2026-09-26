@@ -29,6 +29,7 @@ mod kuhn_poker;
 mod label;
 mod othello;
 mod pokemon;
+mod rules;
 mod shogi;
 
 use anyhow::Result;
@@ -93,6 +94,11 @@ enum Game {
         #[command(subcommand)]
         cmd: kuhn_poker::Cmd,
     },
+    /// Generic tools for every gmrules game: list, check, random-play / JSONL → shards
+    Rules {
+        #[command(subcommand)]
+        cmd: rules::Cmd,
+    },
     /// Engine teacher labels for existing gm-shards (overlay shards; see label/mod.rs)
     Label {
         #[command(subcommand)]
@@ -112,6 +118,7 @@ fn main() -> Result<()> {
         Game::Pokemon { cmd } => pokemon::run(cmd),
         Game::Shogi { cmd } => shogi::run(cmd),
         Game::KuhnPoker { cmd } => kuhn_poker::run(cmd),
+        Game::Rules { cmd } => rules::run(cmd),
         Game::Label { cmd } => label::run(cmd),
     }
 }

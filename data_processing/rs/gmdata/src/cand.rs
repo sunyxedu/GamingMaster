@@ -29,6 +29,7 @@
 //! `[seat, id]` pairs, seat −1 = chance) with `store_events`.
 
 use anyhow::Result;
+use gmrules::registry::{self, DynReplay};
 use gmrules::{replay, Decision, Event, FrameSpec, Game, Layout, Seat};
 use gmshard::{Sample, ShardWriter};
 use rayon::prelude::*;
@@ -95,14 +96,18 @@ enum Reject {
     Empty,
 }
 
-/// `index.json` meta of a gmrules game's shards.
-pub fn shard_meta<G: Game>(cfg: &G::Config) -> Value {
-    let spec = G::spec(cfg);
+/// `index.json` meta of a gmrules game's shards: the frame spec, the schema, the
+/// rules version and the (normalised) game config.
+pub fn meta_of(spec: &FrameSpec, rules_version: u32, config: Value) -> Value {
     let mut m = spec.schema_meta();
     m["schema"] = json!(SCHEMA);
-    m["rules_version"] = json!(G::VERSION);
-    m["config"] = serde_json::to_value(cfg).unwrap_or(Value::Null);
+    m["rules_version"] = json!(rules_version);
+    m["config"] = config;
     m
+}
+
+pub fn shard_meta<G: Game>(cfg: &G::Config) -> Value {
+    meta_of(&G::spec(cfg), G::VERSION, serde_json::to_value(cfg).unwrap_or(Value::Null))
 }
 
 fn stream_sample(spec: &FrameSpec, decisions: &[&Decision], outcome: Option<&[f32]>, meta: Value, allow_truncated: bool)
@@ -143,28 +148,42 @@ fn stream_sample(spec: &FrameSpec, decisions: &[&Decision], outcome: Option<&[f3
     s
 }
 
-/// The samples of one record (replayed and verified), with its frame counts.
-fn record_samples<G: Game>(cfg: &G::Config, spec: &FrameSpec, rec: &Record, opts: &ConvertOptions)
-    -> std::result::Result<(Vec<Sample>, usize, usize), Reject> {
-    let r = replay::<G>(cfg, &rec.events).map_err(|e| Reject::Illegal(e.to_string()))?;
+/// The replay of a record with the typed rules (same result as the registry's).
+fn replay_typed<G: Game>(cfg: &G::Config, events: &[Event]) -> std::result::Result<DynReplay, String> {
+    let spec = G::spec(cfg);
+    let r = replay::<G>(cfg, events).map_err(|e| e.to_string())?;
     let terminal = r.terminal();
-    if !terminal && !opts.allow_truncated {
+    Ok(DynReplay {
+        streams: r.streams(&spec),
+        outcome: terminal.then(|| r.state.outcome()),
+        returns: terminal.then(|| r.state.returns()),
+        terminal,
+        turns: r.turns,
+        decisions: r.decisions,
+        spec,
+    })
+}
+
+/// The samples of one record (replayed and verified), with its frame counts.
+fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts: &ConvertOptions)
+    -> std::result::Result<(Vec<Sample>, usize, usize), Reject> {
+    let r = r.map_err(Reject::Illegal)?;
+    let spec = &r.spec;
+    if !r.terminal && !opts.allow_truncated {
         return Err(Reject::Truncated);
     }
-    let returns = terminal.then(|| r.state.returns());
-    if let (Some(want), Some(got)) = (&rec.expected_returns, &returns) {
+    if let (Some(want), Some(got)) = (&rec.expected_returns, &r.returns) {
         if want.len() != got.len() || want.iter().zip(got).any(|(a, b)| (a - b).abs() > 1e-6) {
             return Err(Reject::Returns(format!("recorded returns {want:?}, replayed {got:?}")));
         }
     }
-    let outcome = terminal.then(|| r.state.outcome());
     let events_meta = opts.store_events.then(|| Value::from(rec.events.iter().map(|e| {
         let (s, i) = e.to_pair();
         json!([s, i])
     }).collect::<Vec<_>>()));
     let mut out = Vec::new();
     let (mut frames, mut forced) = (0, 0);
-    for st in r.streams(spec) {
+    for st in &r.streams {
         if let (Layout::PerSeat, Some(keep), Some(seat)) = (spec.layout(), &rec.seats, st.seat) {
             if !keep.contains(&seat) {
                 continue;
@@ -176,8 +195,8 @@ fn record_samples<G: Game>(cfg: &G::Config, spec: &FrameSpec, rec: &Record, opts
         let mut meta = json!({
             "record": rec.id,
             "seat": st.seat.map_or(-1, |s| s as i64),
-            "outcome": outcome,
-            "returns": returns,
+            "outcome": r.outcome,
+            "returns": r.returns,
         });
         if let Value::Object(m) = &rec.meta {
             for (k, v) in m {
@@ -187,7 +206,7 @@ fn record_samples<G: Game>(cfg: &G::Config, spec: &FrameSpec, rec: &Record, opts
         if let Some(ev) = &events_meta {
             meta["events"] = ev.clone();
         }
-        out.push(stream_sample(spec, &decisions, outcome.as_deref(), meta, opts.allow_truncated));
+        out.push(stream_sample(spec, &decisions, r.outcome.as_deref(), meta, opts.allow_truncated));
     }
     if out.is_empty() {
         return Err(Reject::Empty);
@@ -195,19 +214,36 @@ fn record_samples<G: Game>(cfg: &G::Config, spec: &FrameSpec, rec: &Record, opts
     Ok((out, frames, forced))
 }
 
-/// Replay, verify and write `records` as gm-shards under `out` (converted in parallel
-/// chunks, written in input order — the output is deterministic).
+/// Replay, verify and write `records` as gm-shards of game `G` under `out` (converted
+/// in parallel chunks, written in input order — the output is deterministic).
 pub fn convert<G: Game>(cfg: &G::Config, records: impl Iterator<Item = Record>, out: &Path, opts: &ConvertOptions)
     -> Result<Stats> {
     G::check_config(cfg).map_err(|e| anyhow::anyhow!("{} config: {e}", G::NAME))?;
-    let spec = G::spec(cfg);
-    let mut w = ShardWriter::new(out, G::NAME, G::VERSION, shard_meta::<G>(cfg), opts.shard_size)?;
+    let w = ShardWriter::new(out, G::NAME, G::VERSION, shard_meta::<G>(cfg), opts.shard_size)?;
+    convert_with(w, records, opts, |ev| replay_typed::<G>(cfg, ev))
+}
+
+/// [`convert`] for a game picked by NAME from the gmrules registry (`config` = JSON,
+/// "" = default) — every registered game, no per-game code (`gmdata rules convert`).
+pub fn convert_dyn(game: &str, config: &str, records: impl Iterator<Item = Record>, out: &Path, opts: &ConvertOptions)
+    -> Result<Stats> {
+    let g = registry::lookup(game).map_err(anyhow::Error::msg)?;
+    let spec = g.spec(config).map_err(anyhow::Error::msg)?;
+    let cfg: Value = serde_json::from_str(&g.normalize_config(config).map_err(anyhow::Error::msg)?)?;
+    let w = ShardWriter::new(out, g.name(), g.version(), meta_of(&spec, g.version(), cfg), opts.shard_size)?;
+    convert_with(w, records, opts, |ev| g.replay(config, ev))
+}
+
+fn convert_with<F>(mut w: ShardWriter, records: impl Iterator<Item = Record>, opts: &ConvertOptions, replay_fn: F) -> Result<Stats>
+where
+    F: Fn(&[Event]) -> std::result::Result<DynReplay, String> + Sync,
+{
     let mut st = Stats::default();
     let mut records = records.peekable();
     const CHUNK: usize = 4096;
     while records.peek().is_some() {
         let chunk: Vec<Record> = records.by_ref().take(CHUNK).collect();
-        let results: Vec<_> = chunk.par_iter().map(|rec| record_samples::<G>(cfg, &spec, rec, opts)).collect();
+        let results: Vec<_> = chunk.par_iter().map(|rec| record_samples(replay_fn(&rec.events), rec, opts)).collect();
         for (rec, res) in chunk.iter().zip(results) {
             st.records += 1;
             let reason = match res {
