@@ -13,8 +13,11 @@ A tiny Stage-1 checkpoint is trained with the real train_multi_game (generals
 - PPO exactness: with μ = π_old the first minibatch's ratio is 1 within
   1e-5 (eval mode, frozen routing), and the actor's μ matches π_old — for
   the StreamStepper actor and the fixed-batch actor;
+- quotas: each game's realised RL loss weight is its quota share even when
+  a wave overshoots it, and the overshoot never starves a game next time;
 - resume: a run resumed from its iteration-1 checkpoint reproduces
-  iteration 2 bit for bit;
+  iteration 2 bit for bit; metrics.jsonl is cut back; a different --init is
+  refused; a file-backed pool survives a resume with opponents off;
 - data parallel: 2 gloo ranks with different rollouts keep parameters,
   buffers and EMA bit-identical.
 """
@@ -33,6 +36,7 @@ import torch
 
 from data_processing.games.dataset import save_shard
 from model.components.core import moe_layers, moe_load_counting
+from model.multi_game import is_core_key
 from tests.generals_gio import write_gio_dir
 from tests.test_core_moe import CORE, _board_samples
 
@@ -77,7 +81,7 @@ def _args(root: Path, save: str, *extra: str):
         "--init", str(root / "ck" / "multi_final.pt"), "--rl", "generals", "--rl", "othello",
         "--data", f"othello={root / 'othello'}", "--data", f"chess={root / 'chess'}",
         "--data", f"generals={root / 'generals'}", "--replay_max_len", "generals=8",
-        "--replay_batch_size", "2", "--tokens_per_iter", "60", "--share_floor", "0.3",
+        "--replay_batch_size", "2", "--tokens_per_iter", "60",
         "--envs", "generals=2", "--envs", "othello=2",
         "--env_kw", "generals:max_turns=10", "--env_kw", "generals:n_mountains=2",
         "--env_kw", "generals:n_cities=1",
@@ -142,14 +146,19 @@ def test_end_to_end_two_iterations(e2e):
             row = rec["games"][g]
             assert row["tokens"] >= 1 and row["episodes"] >= 2
             for k in ("entropy", "kl", "approx_kl", "value_loss", "canary_log_old_mu",
-                      "canary_log_ratio", "load_entropy", "il_loss", "il_drift"):
+                      "canary_log_ratio", "load_entropy", "il_loss", "il_drift",
+                      "core_gnorm_rl", "core_gnorm_replay"):
                 assert math.isfinite(row[k]), (g, k, row[k])
             assert row["canary_log_ratio"] < 1e-5              # exact replay
             assert row["canary_log_old_mu"] < 1e-4             # actor ≈ learner
             assert 0.0 < row["load_entropy"] <= 1.0
+            assert row["quota"] > 0 and row["core_gnorm_rl"] > 0
         chess = rec["games"]["chess"]                          # IL-only game
-        assert set(chess) >= {"il_loss", "il_drift", "replay_kl", "load_entropy"}
-        assert "tokens" not in chess
+        assert set(chess) >= {"il_loss", "il_drift", "replay_kl", "load_entropy",
+                              "core_gnorm_replay"}
+        assert "tokens" not in chess and chess["core_gnorm_replay"] > 0
+    # the replay stream's weights are split of --replay_weight_total (default 1)
+    assert sum(out["trainer"].replay_weight.values()) == pytest.approx(1.0)
     assert hist[0]["games"]["chess"]["il_drift"] == 0.0
     lines = (root / "rl_e2e" / "metrics.jsonl").read_text().splitlines()
     assert len(lines) == 2 and '"canary_log_ratio"' in lines[0]
@@ -177,8 +186,36 @@ def test_checkpoint_is_a_multi_game_checkpoint(e2e):
         assert torch.equal(ck["model_state"][k], v), k
     for g in ("generals", "othello"):
         assert trainer.popart.std(g) != 1.0 or trainer.popart.mean(g) != 0.0
+    # ... and so are the raw weights and the EMA shadow; rl_state keeps the
+    # normalised heads (exactly the live ones) for the RL resume
+    live = trainer.model.state_dict()
+    want = trainer.popart.denormalized_state_dict(trainer.model, live)
+    for k, v in want.items():
+        assert torch.equal(ck["train_model_state"][k], v), k
+    shadow = trainer.popart.denormalized_state_dict(trainer.model, trainer.ema.shadow)
+    for k, v in shadow.items():
+        assert torch.equal(ck["ema_state"][k], v), k
+    raw = ck["rl_state"]["raw_heads"]
+    assert raw["train"] and raw["ema"]
+    assert all(".value_head." in k for k in (*raw["train"], *raw["ema"]))
+    assert any(not torch.equal(ck["train_model_state"][k], v) for k, v in raw["train"].items())
+    for k, v in raw["train"].items():
+        assert torch.equal(v, live[k]), k
+    for k, v in raw["ema"].items():
+        assert torch.equal(v, trainer.ema.shadow[k]), k
     model = load_multi(str(root / "rl_e2e" / "rl_final.pt"), CPU)
     assert model["generals"].core is model["othello"].core
+    raw_model = load_multi(str(root / "rl_e2e" / "rl_final.pt"), CPU, raw=True)
+    assert raw_model["generals"].core is raw_model["othello"].core
+    # pool snapshots: every RL game's own modules, the shared core ONCE
+    snap = torch.load(root / "rl_e2e" / "snapshots" / "snapshot_000000.pt", weights_only=True)
+    core = {k for k in snap if k.startswith("core.")}
+    assert core and all(is_core_key(k[len("core."):]) for k in core)
+    assert not any(is_core_key(k.split(".", 2)[2]) for k in snap if k.startswith("nets."))
+    assert any(k.startswith("nets.othello.") for k in snap)
+    assert any(k.startswith("nets.generals.") for k in snap)
+    net = trainer._snapshot_loader("othello")(snap)
+    assert next(net.parameters()).device == CPU and not trainer.templates["othello"].training
 
 
 def test_reference_frozen_and_routing_moves_between_iterations(e2e):
@@ -335,6 +372,42 @@ def test_generic_spec_uses_the_decoder_contract(stage1, monkeypatch):
     assert math.isfinite(rec["kl"]) and rec["kl"] >= 0.0
 
 
+def test_generic_spec_refuses_autoregressive_decoders(stage1, monkeypatch):
+    """No dedicated spec + conditioning labels (LABEL_KEYS): the generic spec
+    would score stored actions under self-sampled conditioning — refused."""
+    from training import train_rl_joint as trj
+
+    monkeypatch.delitem(trj.GAME_SPECS, "generals")
+    with pytest.raises(SystemExit, match="teacher-force"):
+        trj.game_spec("generals")
+    assert type(trj.game_spec("go")) is trj.RLGameSpec          # no labels: generic is exact
+
+
+def test_quotas_set_the_loss_share_despite_wave_overshoot(stage1):
+    """Waves overshoot the tiny quotas (othello by ~3x), yet each game's
+    realised RL loss weight is its quota share, and the overshoot is not
+    booked as a lead: no game is starved (quota 0) the next iteration."""
+    tr = _trainer(stage1, "rl_quota", "--iterations", "3", "--minibatches", "1",
+                  "--share", "generals=2", "--snapshot_dir", "memory")
+    overshoot = False
+    for _ in range(3):
+        rec = tr.run_iteration()["games"]
+        q = {g: rec[g]["quota"] for g in ("generals", "othello")}
+        assert q == {"generals": 40, "othello": 20}               # 2 : 1 of 60, every time
+        for g in q:
+            assert rec[g]["loss_share"] == pytest.approx(q[g] / 60, abs=1e-9)
+        tok = {g: rec[g]["tokens"] for g in q}
+        overshoot |= abs(tok["othello"] / sum(tok.values()) - 1 / 3) > 0.1
+    assert overshoot                                            # the token share was off
+    # the per-token weights give each game w_g·min(q_g, n_g) in every term
+    counts = torch.tensor([[[5.0, 10.0, 20.0], [30.0, 60.0, 90.0]]], dtype=torch.float64)
+    w, eff = tr._loss_weights(counts, {"generals": 40, "othello": 20})
+    assert eff == {"generals": 20.0, "othello": 20.0}           # generals short of its quota
+    for j, kind in enumerate(("kept", "policy", "value")):
+        assert w[kind]["generals"] * counts[0, 0, j] == pytest.approx(20.0)
+        assert w[kind]["othello"] * counts[0, 1, j] == pytest.approx(20.0)
+
+
 # ----------------------------------------------------------------------
 # resume
 # ----------------------------------------------------------------------
@@ -367,6 +440,60 @@ def test_resume_reproduces_the_next_iteration(stage1):
     assert sa.keys() == sb.keys()
     for i in sa:
         assert torch.equal(sa[i]["exp_avg"], sb[i]["exp_avg"])
+
+
+def test_resume_truncates_metrics_and_checks_the_reference(stage1, tmp_path):
+    """A requeue in the same save dir re-runs the iterations after the
+    checkpoint: metrics.jsonl keeps one record per iteration.  A resume
+    against a different --init (other weights) is refused."""
+    import json
+    import shutil
+
+    from training import train_rl_joint
+
+    base = ["--snapshot_dir", "memory", "--save_every", "1"]
+    save = tmp_path / "requeue"
+    save.mkdir()
+    full = stage1 / "rl_full"
+    if not (full / "rl_iter1.pt").exists():
+        train_rl_joint.main(_args(stage1, "rl_full", "--iterations", "2", *base))
+    shutil.copy(full / "metrics.jsonl", save / "metrics.jsonl")
+    with open(save / "metrics.jsonl", "a") as f:
+        f.write('{"iteration": 3, "partial"')                  # cut short by the crash
+    train_rl_joint.main(_args(stage1, str(save), "--iterations", "2", *base,
+                              "--resume", str(full / "rl_iter1.pt")))
+    iters = [json.loads(line)["iteration"] for line in
+             (save / "metrics.jsonl").read_text().splitlines()]
+    assert iters == [1, 2]
+    # a different Stage-1 checkpoint (same games, other weights) as --init
+    ck = torch.load(stage1 / "ck" / "multi_final.pt", weights_only=False)
+    k = next(k for k, v in ck["model_state"].items()          # a per-game (unaliased) tensor
+             if ".value_head." in k and v.is_floating_point())
+    ck["model_state"][k] = ck["model_state"][k] + 1.0
+    other = tmp_path / "other_init.pt"
+    torch.save(ck, other)
+    args = _args(stage1, str(tmp_path / "bad"), "--iterations", "2", *base,
+                 "--resume", str(full / "rl_iter1.pt"))
+    args[args.index("--init") + 1] = str(other)
+    with pytest.raises(SystemExit, match="frozen reference"):
+        train_rl_joint.main(args)
+
+
+def test_resume_file_pool_with_opponents_off(e2e):
+    """A file-backed pool checkpoint resumed with pure mirror (no opponents)
+    loads (and carries the pool on) instead of crashing."""
+    from training.train_rl_joint import JointRLTrainer, parse_args
+
+    root, _ = e2e
+    args = _args(root, "rl_mirror_resume", "--iterations", "2",
+                 "--snapshot_dir", str(root / "rl_e2e" / "snapshots"),
+                 "--resume", str(root / "rl_e2e" / "rl_latest.pt"))
+    while "--mirror_prob" in args:
+        i = args.index("--mirror_prob")
+        del args[i:i + 2]
+    tr = JointRLTrainer(parse_args(args))
+    assert all(r.pool_policy is None for r in tr.rl.values())
+    assert len(tr.pool) == 3 and tr.iteration == 2
 
 
 # ----------------------------------------------------------------------

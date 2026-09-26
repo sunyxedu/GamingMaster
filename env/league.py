@@ -362,14 +362,21 @@ class SnapshotPool:
     what a snapshot holds (e.g. a per-game slice of the multi-game model).
 
     ``weights`` (optional: ``fn(ids, meta) -> weights``) turns uniform sampling
-    into e.g. prioritized fictitious self-play later."""
+    into e.g. prioritized fictitious self-play later.
+
+    ``defer_delete``: evicted snapshot files are NOT deleted on eviction but
+    queued until :meth:`flush_deletes` — call it after writing the
+    checkpoint a resume will start from, so that checkpoint never refers to
+    a file a later eviction removed (a requeue then restores the same pool)."""
 
     def __init__(self, max_size: int = 16, seed: int = 0,
                  weights: Optional[Callable[[List[int], List[Dict]], Sequence[float]]] = None,
-                 store_dir: Optional[str] = None):
+                 store_dir: Optional[str] = None, defer_delete: bool = False):
         self.max_size = int(max_size)
         self.weights = weights
         self.store_dir = store_dir
+        self.defer_delete = bool(defer_delete)
+        self._pending: List[str] = []
         if store_dir is not None:
             os.makedirs(store_dir, exist_ok=True)
         # sid → (state dict, or its file name under store_dir; meta)
@@ -409,9 +416,28 @@ class SnapshotPool:
         while len(self._states) > self.max_size:
             _, (old, _) = self._states.popitem(last=False)
             if isinstance(old, str):
-                with contextlib.suppress(FileNotFoundError):
-                    os.remove(self._path(old))
+                if self.defer_delete:
+                    self._pending.append(old)
+                else:
+                    self._remove(old)
         return sid
+
+    def _remove(self, name: str) -> None:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(self._path(name))
+
+    @property
+    def pending_deletes(self) -> List[str]:
+        """Evicted snapshot files still on disk (``defer_delete``)."""
+        return list(self._pending)
+
+    def flush_deletes(self) -> None:
+        """Delete the files of snapshots evicted since the last flush."""
+        live = {e for e, _ in self._states.values() if isinstance(e, str)}
+        for name in self._pending:
+            if name not in live:
+                self._remove(name)
+        self._pending = []
 
     def get(self, sid: int) -> Dict[str, torch.Tensor]:
         entry = self._states[sid][0]

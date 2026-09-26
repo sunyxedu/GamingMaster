@@ -21,7 +21,8 @@ rollout step to the last minibatch of the iteration):
                  --share, floor/cap, debt carrying; optional learning-progress
                  bandit via --bandit_mix).  Split over the ranks.
   2. rollouts    per game, lockstep waves of --envs VecGameEnv envs (reset
-                 together, played until all end) until the quota is met.  The
+                 together, played until all end — the batch thins out toward
+                 the longest episode) until the quota is met.  The
                  learner steps eval-mode, fixed depth, one batched
                  GameNetwork.step per env step (per-stream Stage-1 state;
                  --actor fixed: one fixed-shape batch, capturable with
@@ -44,16 +45,21 @@ rollout step to the last minibatch of the iteration):
   5. epochs      --epochs × --minibatches optimizer steps.  Every minibatch
                  holds a stratified slice of EVERY active game's streams plus an
                  IL/KL replay batch per configured game (train_multi_game data
-                 loading + train_il_game.batch_loss, per-game --replay_weight):
+                 loading + train_il_game.batch_loss; --replay_weight split of
+                 --replay_weight_total, the replay : RL ratio):
                    decoupled PPO   −min(1, π_old/μ)·min(rA, clip(r)A), r = π/π_old
                    value           PopArt-normalised MSE (or HL-Gauss CE)
                    entropy         per-game adaptive coefficient
                    KL              full-head KL to the frozen reference
                                    (every decoder head, il_head_terms), per-game
                                    adaptive beta toward --kl_budget
-                 Games are combined as a token mean with GLOBAL per-game counts
-                 (combine_game_losses), so every rank's averaged gradient is
-                 the global token mean.
+                 Games are combined as a weighted token mean with GLOBAL
+                 per-game counts (combine_game_losses), so every rank's
+                 averaged gradient is the global mean; each game's tokens
+                 share the weight min(quota, realised tokens) (_loss_weights),
+                 so the QUOTAS — not the overshoot of the last wave — set each
+                 game's pull on the shared core.  (The full-head KL term is a
+                 frame-weighted mean of per-chunk KLs, see _rl_chunk_loss.)
   6. between     MoE loads (tallied over every training forward of the
                  iteration — RL streams and replay batches, all epochs, all
                  ranks; the eval-mode forwards count through
@@ -64,8 +70,10 @@ rollout step to the last minibatch of the iteration):
 Canaries (logged every iteration, per game): first-minibatch |log π_old/μ|
 (actor/learner mismatch, ~0) and |log π/π_old| (0 up to float), KL to the
 reference, entropy, value explained variance, expert-load entropy, learner
-score vs the pool, and the replay IL loss with its drift since the first
-iteration (the forgetting canary of simulator-less games).
+score vs the pool, the realised RL loss share next to the quota, the
+first-minibatch shared-core gradient norm of each RL game and each replay
+batch (the replay : RL balance), and the replay IL loss with its drift since
+the first iteration (the forgetting canary of simulator-less games).
 
 Multi-GPU: torchrun, training.distributed (manual rank-invariant gradient
 sync, collective clipping).  Every collective is posted identically on every
@@ -74,13 +82,19 @@ statistics / diagnostics / MoE-load all-reduces.  Rollouts are rank-local.
 
 Resume: ``rl_latest.pt`` (every --ckpt_minutes minutes, every --ckpt_every
 iterations, and at the end) holds weights, EMA, optimizer, PopArt, advantage
-statistics, entropy / KL controllers, the quota ledger and the snapshot pool.
-Randomness is re-derived from (seed, rank, iteration) at every iteration start
-(rollouts, league, opponent draws, replay data order), so ``--resume``
-reproduces the next iteration exactly on the same world size.  The checkpoint
-is also a train_multi_game checkpoint: ``model_state`` = EMA weights with the
-PopArt statistics folded into the value heads (reward units), loadable by
-eval_multi_game / export_game_checkpoint / a next ``--init``.
+statistics, entropy / KL controllers, the quota ledger, the snapshot pool and
+a fingerprint of the frozen reference (a resume against a different --init is
+refused).  Randomness is re-derived from (seed, rank, iteration) at every
+iteration start (rollouts, league, opponent draws, replay data order), so
+``--resume rl_latest.pt`` reproduces the next iteration exactly on the same
+world size: evicted pool files are deleted only after the next rl_latest.pt is
+written (older rl_iter<N>.pt files may refer to deleted snapshots, which a
+resume from them drops with a warning), and metrics.jsonl is cut back to the
+resumed iteration.  The checkpoint is also a train_multi_game checkpoint:
+``model_state`` (EMA), ``train_model_state`` and ``ema_state`` hold the
+weights with the PopArt statistics folded into the value heads (reward
+units), loadable by eval_multi_game / export_game_checkpoint / a next
+``--init``; the normalised heads for the RL resume are in ``rl_state``.
 """
 
 from __future__ import annotations
@@ -88,6 +102,7 @@ from __future__ import annotations
 import argparse
 import ast
 import copy
+import hashlib
 import json
 import math
 import os
@@ -157,6 +172,8 @@ from training.train_multi_game import multi_game_param_groups
 
 CKPT_LATEST = "rl_latest.pt"
 CKPT_FINAL = "rl_final.pt"
+SNAPSHOT_CORE = "core."     # the shared core's key prefix in pool snapshots
+TERM_KINDS = ("kept", "policy", "value")   # token kinds of the loss terms' denominators
 
 
 # ======================================================================
@@ -188,7 +205,10 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="mix of the learning-progress bandit (signal: learner score vs the pool) into "
            "the static shares; 0 = static shares only")
     a("--envs", action="append", default=[], metavar="GAME=N",
-      help="lockstep envs per wave per rank (default 8)")
+      help="lockstep envs per wave per rank (default 8).  A wave runs until its LONGEST "
+           "episode ends (no autoreset inside a wave), so the actor batch shrinks as "
+           "episodes finish: size N for the tail of the episode-length distribution, "
+           "not its mean")
     a("--env_kw", action="append", default=[], metavar="GAME:KEY=VALUE",
       help="adapter option, e.g. generals:max_turns=500 (Python literal values)")
     a("--max_wave_steps", type=int, default=100000,
@@ -264,8 +284,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--bf16", action="store_true")
     # --- replay stream ---
     a("--replay_weight", action="append", default=[], metavar="GAME=W",
-      help="weight of a game's IL replay loss (default --replay_weight_default)")
-    a("--replay_weight_default", type=float, default=0.25)
+      help="relative weight of a game's IL replay loss (default --replay_weight_default); "
+           "normalised to sum to --replay_weight_total")
+    a("--replay_weight_default", type=float, default=1.0)
+    a("--replay_weight_total", type=float, default=1.0,
+      help="total weight of the replay stream, split over the --data games by their "
+           "--replay_weight; the RL loss of all --rl games together is one unit (a "
+           "token mean), so this is the replay : RL ratio whatever the number of games.  "
+           "0 = no normalisation (every --replay_weight is absolute)")
     a("--replay_games_per_mb", type=int, default=0,
       help="replay games drawn per minibatch by their weights (0 = every game every "
            "minibatch)")
@@ -344,12 +370,29 @@ def seed_all(seed: int) -> None:
     torch.manual_seed(seed)
 
 
+def module_fingerprint(module: torch.nn.Module) -> str:
+    """SHA-1 of a module's state (names and exact bytes; tensors shared
+    under several names — the multi-game core — hashed once)."""
+    h = hashlib.sha1()
+    seen = set()
+    for k, v in module.state_dict().items():
+        key = (v.data_ptr(), tuple(v.shape), v.dtype)
+        if v.numel() and key in seen:
+            continue
+        seen.add(key)
+        h.update(k.encode())
+        t = v.detach().to("cpu").contiguous().reshape(-1)
+        h.update(t.view(torch.uint8).numpy().tobytes())
+    return h.hexdigest()
+
+
 # ======================================================================
 # Per-game RL specs: how the trainer drives a simulator game's decoder
 # ======================================================================
 
 class RLGameSpec:
-    """Generic spec: the decoder's ``sample()`` log-prob is μ, its
+    """Generic spec (only for decoders without conditioning labels — see
+    :func:`game_spec`): the decoder's ``sample()`` log-prob is μ, its
     ``log_prob_entropy`` the policy, no teacher-forced conditioning, and the
     KL anchor is the sampled k3 estimate on the taken actions (games with a
     full-head spec override :meth:`kl_targets` / :meth:`kl_terms`)."""
@@ -459,7 +502,21 @@ GAME_SPECS: Dict[str, RLGameSpec] = {
 
 
 def game_spec(game: str) -> RLGameSpec:
-    return GAME_SPECS.get(game, RLGameSpec())
+    """The game's RL spec: a dedicated one from :data:`GAME_SPECS`, else the
+    generic :class:`RLGameSpec` — refused for autoregressive decoders (a
+    non-empty ``train_il_game.LABEL_KEYS`` entry: chess from→to, shogi, ...):
+    the generic spec passes no teacher-forcing labels, so the learner's
+    ``decode`` would condition the later heads on its OWN sampled choices
+    and ``log_prob_entropy`` would score the stored action under the wrong
+    conditioning (log π_old ≠ μ, a random ratio, a wrong KL)."""
+    spec = GAME_SPECS.get(game)
+    if spec is not None:
+        return spec
+    if LABEL_KEYS.get(game):
+        raise SystemExit(f"--rl {game}: no RL spec in GAME_SPECS, and its decoder conditions on "
+                         f"{list(LABEL_KEYS[game])} — the generic spec cannot teacher-force the "
+                         f"stored actions; add a dedicated spec (labels / kl_targets)")
+    return RLGameSpec()
 
 
 # ======================================================================
@@ -511,8 +568,15 @@ class LearnerActor:
         if self.cuda_graph:
             if self._graph is None or self._graph.batch != obs.n_rows:
                 from model.cuda_graph import GraphedStep
+                # the capture's eager warm-up samples actions: keep it off the RNG
+                # streams, so the rollout draws do not depend on the iteration in
+                # which the graph was built (a resumed run builds it later)
+                cpu_rng = torch.get_rng_state()
+                cuda_rng = torch.cuda.get_rng_state(self.device)
                 self._graph = GraphedStep(self.net, o, lg, act_steps=self.act_steps,
                                           autocast_dtype=torch.bfloat16 if self.bf16 else None)
+                torch.set_rng_state(cpu_rng)
+                torch.cuda.set_rng_state(cuda_rng, self.device)
             if self._t == 0:
                 self._graph.reset()
             out = dict(self._graph(o, self._t, lg))
@@ -769,6 +833,7 @@ DIAG_KEYS = (
     "canary_oldmu_sum", "canary_ratio_sum", "canary_n",
     "ev_n", "ev_g", "ev_g2", "ev_e", "ev_e2",
     "il_sum", "il_n", "rkl_sum", "rkl_n", "rvl_sum",
+    "gn_rl", "gn_rl_n", "gn_replay", "gn_replay_n",
 )
 
 
@@ -824,6 +889,32 @@ class Diag:
         return float(expert_load_entropy(x).nanmean())
 
 
+class _GradProbe:
+    """Norm of the gradient each loss component adds to ``params`` (the
+    shared core): :meth:`delta_norm` after each component's backward.  Keeps
+    one copy of the accumulated gradients (used on one minibatch per
+    iteration: the replay-vs-RL balance canary)."""
+
+    def __init__(self, params: Sequence[torch.nn.Parameter]):
+        self.params = list(params)
+        self.prev = [None if p.grad is None else p.grad.detach().clone() for p in self.params]
+
+    @torch.no_grad()
+    def delta_norm(self) -> float:
+        norms = []
+        for i, p in enumerate(self.params):
+            if p.grad is None:
+                continue
+            g = p.grad.detach()
+            if self.prev[i] is None:
+                norms.append(g.float().norm())
+                self.prev[i] = g.clone()
+            else:
+                norms.append((g - self.prev[i]).float().norm())
+                self.prev[i].copy_(g)
+        return float(torch.stack(norms).norm()) if norms else 0.0
+
+
 def _moe_load_vector(model: torch.nn.Module) -> Optional[torch.Tensor]:
     layers = moe_layers(model)
     if not layers:
@@ -876,6 +967,7 @@ class JointRLTrainer:
         self.model: MultiGameNetwork = model
         self.games = model.games
         self.ref = load_multi(a.init, device).requires_grad_(False).eval()
+        self.init_hash = module_fingerprint(self.ref)
         if self.dist_env.enabled:
             broadcast_module_state(self.model, src=0)
         self.rl_games = list(dict.fromkeys(a.rl))
@@ -896,6 +988,9 @@ class JointRLTrainer:
         self.depth = a.act_steps or first.default_depth
         self.moe = moe_layers(model)
         self.n_moe = (len(self.moe), self.moe[0].n_experts if self.moe else 0)
+        # the shared core's parameters (each once): the per-component gradient canary
+        self.core_params = [p for n, p in model.named_parameters()
+                            if p.requires_grad and is_core_key(n.split(".", 2)[2])]
 
         # --- per-game hyper-parameters -----------------------------------
         envs_n = _pairs(a.envs, int, "N")
@@ -916,8 +1011,14 @@ class JointRLTrainer:
             _check_games(flag, vals, self.rl_games, "an --rl game")
         store = a.snapshot_dir or os.path.join(a.save_dir, "snapshots")
         use_pool = any(mirror.get(g, 1.0) < 1.0 for g in self.rl_games)
-        self.pool = SnapshotPool(max_size=a.pool_size, seed=a.seed,
-                                 store_dir=None if store == "memory" or not use_pool else store)
+        # a resume keeps the store even with opponents off: its checkpoint's pool
+        # may be file-backed (and is carried on for a later resume that turns
+        # them back on).  Evicted files are deleted only once rl_latest.pt no
+        # longer refers to them (flushed in save), so a requeue restores the pool
+        self.pool = SnapshotPool(
+            max_size=a.pool_size, seed=a.seed,
+            store_dir=None if store == "memory" or not (use_pool or a.resume) else store,
+            defer_delete=a.ckpt_minutes > 0 or a.ckpt_every > 0)
         self.templates: Dict[str, torch.nn.Module] = {}
         self.rl: Dict[str, GameRL] = {}
         for gi, g in enumerate(self.rl_games):
@@ -934,7 +1035,9 @@ class JointRLTrainer:
             p_mirror = mirror.get(g, 1.0)
             pool_policy = None
             if p_mirror < 1.0:
-                self.templates[g] = copy.deepcopy(net).requires_grad_(False).eval()
+                # host-side template of the game's network (materialised on the
+                # device per loaded snapshot)
+                self.templates[g] = copy.deepcopy(net).cpu().requires_grad_(False).eval()
                 pool_policy = PoolPolicy(self.pool, self._snapshot_loader(g),
                                          act_steps=self.depth, device=device,
                                          max_nets=a.pool_max_nets)
@@ -960,13 +1063,21 @@ class JointRLTrainer:
         self.replay_tf: Dict[str, float] = {}
         self.replay_value_weight: Dict[str, float] = {}
         self.replay_kl_weight: Dict[str, float] = {}
+        rel = {g: rw.get(g, a.replay_weight_default) for g in replay_dirs}
+        if any(v < 0 for v in rel.values()) or a.replay_weight_total < 0:
+            raise SystemExit("replay weights must be >= 0")
+        rel_sum = sum(rel.values())
         for g, d in replay_dirs.items():
             if g == "generals" and g not in rml:
                 raise SystemExit("--data generals: bound its prefix crop with "
                                  "--replay_max_len generals=N (as train_multi_game)")
             self.replay[g] = ReplayStream(g, d, rb.get(g, a.replay_batch_size), rml.get(g),
                                           a.num_workers)
-            self.replay_weight[g] = rw.get(g, a.replay_weight_default)
+            if a.replay_weight_total > 0:
+                self.replay_weight[g] = (a.replay_weight_total * rel[g] / rel_sum
+                                         if rel_sum > 0 else 0.0)
+            else:
+                self.replay_weight[g] = rel[g]
             self.replay_tf[g] = rtf.get(g, default_tf(g))
             self.replay_value_weight[g] = rvw.get(g, 0.0 if g in self.rl else 0.2)
             self.replay_kl_weight[g] = rkw.get(g, 0.0)
@@ -1007,12 +1118,14 @@ class JointRLTrainer:
         self.history: List[Dict[str, Any]] = []
         if a.resume:
             self._load_resume(a.resume)
+        if self.rank0:
+            os.makedirs(a.save_dir, exist_ok=True)
+            if a.resume:
+                self._truncate_metrics()
         if any(g.pool_policy is not None for g in self.rl.values()) and len(self.pool) == 0:
             # the Stage-1 policy opens the pool (a resume that turns opponents
             # on for the first time starts it from the current policy)
             self._add_snapshot(tag="resume" if a.resume else "init")
-        if self.rank0:
-            os.makedirs(a.save_dir, exist_ok=True)
         n_total = sum(p.numel() for p in model.parameters())
         self.log(f"[init] games={self.games} rl={self.rl_games} replay={list(self.replay)} "
                  f"core={first.cfg.core_type} moe={first.cfg.moe_experts} depth={self.depth} "
@@ -1022,13 +1135,21 @@ class JointRLTrainer:
             self.log(f"[rl] {g}: envs={r.env.num_envs} gamma={r.gamma} lam={r.lam} "
                      f"mirror={r.mirror_prob} value={'hl_gauss' if r.hl_gauss else 'popart'} "
                      f"kl={'off' if self.kl_off[g] else ('full' if r.spec.full_kl else 'k3')}")
+        if self.replay:
+            ws = " ".join(f"{g}={w:.4g}" for g, w in self.replay_weight.items())
+            self.log(f"[replay] weights {ws} (total {sum(self.replay_weight.values()):.4g}; "
+                     f"the RL loss of all --rl games is 1)")
 
     def _snapshot_loader(self, g: str) -> Callable[[Dict[str, torch.Tensor]], torch.nn.Module]:
         pre = f"nets.{g}."
 
         def load(sd: Dict[str, torch.Tensor]) -> torch.nn.Module:
             net = copy.deepcopy(self.templates[g])
-            net.load_state_dict({k[len(pre):]: v for k, v in sd.items() if k.startswith(pre)})
+            own = {k[len(pre):]: v for k, v in sd.items() if k.startswith(pre)}
+            # the shared core is stored once per snapshot (_policy_state)
+            own.update({k[len(SNAPSHOT_CORE):]: v for k, v in sd.items()
+                        if k.startswith(SNAPSHOT_CORE)})
+            net.load_state_dict(own)
             return net.to(self.device).eval().requires_grad_(False)
         return load
 
@@ -1038,13 +1159,25 @@ class JointRLTrainer:
 
     def _policy_state(self) -> Dict[str, torch.Tensor]:
         """The weights published to the pool (--snapshot_weights: the live
-        policy or its EMA): every simulator game's network, shared core
-        included per game (so a resume may turn on opponents for any of
-        them)."""
-        use_ema = self.args.snapshot_weights == "ema" and self.ema is not None
-        sd = self.ema.ema_model_state(self.model) if use_ema else self.model.state_dict()
-        keep = tuple(f"nets.{g}." for g in self.rl_games)
-        return {k: v for k, v in sd.items() if k.startswith(keep)}
+        policy or its EMA): every simulator game's own modules under
+        ``nets.<game>.`` (so a resume may turn on opponents for any of them)
+        and the shared core ONCE under ``core.``.  Uncopied views: the pool
+        copies them to the host."""
+        ema = self.ema if self.args.snapshot_weights == "ema" else None
+        out: Dict[str, torch.Tensor] = {}
+        for k, v in self.model.state_dict().items():
+            if ema is not None and k in ema.alias:
+                v = ema.shadow[ema.alias[k]]
+            for g in self.rl_games:
+                pre = f"nets.{g}."
+                if k.startswith(pre):
+                    rest = k[len(pre):]
+                    if not is_core_key(rest):
+                        out[k] = v
+                    elif g == self.rl_games[0]:
+                        out[SNAPSHOT_CORE + rest] = v
+                    break
+        return out
 
     def _add_snapshot(self, tag: str) -> None:
         """Every rank's pool gets the same entry: in memory each rank adds the
@@ -1069,9 +1202,10 @@ class JointRLTrainer:
     def _rollouts(self, it: int, quotas: Dict[str, int], diag: Diag) -> Dict[str, WaveStats]:
         a = self.args
         stats: Dict[str, WaveStats] = {}
+        for r in self.rl.values():      # free the last iteration's buffers first
+            r.streams = []
         for gi, g in enumerate(self.rl_games):
             r = self.rl[g]
-            r.streams = []
             q = quotas.get(g, 0)
             if q <= 0:
                 continue
@@ -1199,9 +1333,46 @@ class JointRLTrainer:
             counts = dc.cpu() / self.world
         return plan, counts
 
+    def _loss_weights(self, counts: torch.Tensor, quotas: Mapping[str, int]
+                      ) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
+        """Per term kind (kept / policy / value): game → per-token weight
+        ``w_g · e_g / N_g``, with N_g the game's GLOBAL token count of that
+        kind this iteration (the plan's counts summed over the minibatches)
+        and e_g = min(q_g, N^value_g) its effective tokens.
+
+        Rollouts are whole lockstep waves, so a game's realised tokens
+        overshoot its quota by up to a wave; in a plain token mean that
+        overshoot — not the quota — would set its pull on the shared core.
+        With these weights every term gives game g the total weight
+        ``w_g · e_g`` (its quota under overshoot, its realised tokens under
+        a shortfall, which the scheduler's debt then tops up), spread
+        uniformly over its tokens.  Rank-identical (global counts).
+        Returns (weights, e)."""
+        tot = counts.sum(0) * self.world            # [G, 3] global per-iteration counts
+        weights: Dict[str, Dict[str, float]] = {k: {} for k in TERM_KINDS}
+        eff: Dict[str, float] = {}
+        for gi, g in enumerate(self.rl_games):
+            e = min(float(quotas.get(g, 0)), float(tot[gi, 2]))
+            eff[g] = e
+            base = self.game_weight.get(g, 1.0) * e
+            for j, kind in enumerate(TERM_KINDS):
+                n = float(tot[gi, j])
+                weights[kind][g] = base / n if n > 0 else 0.0
+        return weights, eff
+
     def _rl_chunk_loss(self, g: str, ss: List[Stream], counts: Dict[str, Dict[str, float]],
-                       diag: Diag, canary: bool) -> torch.Tensor:
+                       diag: Diag, canary: bool,
+                       weights: Optional[Mapping[str, Mapping[str, float]]] = None
+                       ) -> torch.Tensor:
+        """The RL loss of streams ``ss`` of game ``g``, one term of the
+        minibatch's combined loss: ``counts`` = the minibatch's global
+        per-game token counts / world per kind, ``weights`` = per-kind
+        per-token game weights (:meth:`_loss_weights`; default the plain
+        ``--game_weight`` token mean)."""
         a = self.args
+        if weights is None:
+            unit = {x: self.game_weight.get(x, 1.0) for x in self.rl_games}
+            weights = {k: unit for k in TERM_KINDS}
         r = self.rl[g]
         net = self.model[g]
         extra = ("mu", "lp_old", "adv", "ret", "keep", "old_pred", "vmask", "pmask", "forced")
@@ -1222,10 +1393,10 @@ class JointRLTrainer:
                              old_pred=b["old_pred"] if a.value_clip else None,
                              clip=a.value_clip, kind=a.value_loss, reduction="sum")
         ent_t = entropy_loss(ent, pm, coef=self.entc[g], reduction="sum")
-        w = {x: self.game_weight.get(x, 1.0) for x in self.rl_games}
-        loss = (combine_game_losses({g: pol}, w, counts=counts["kept"])
-                + a.value_coef * combine_game_losses({g: val}, w, counts=counts["value"])
-                + combine_game_losses({g: ent_t}, w, counts=counts["policy"]))
+        wk, wp, wv = weights["kept"], weights["policy"], weights["value"]
+        loss = (combine_game_losses({g: pol}, wk, counts=counts["kept"])
+                + a.value_coef * combine_game_losses({g: val}, wv, counts=counts["value"])
+                + combine_game_losses({g: ent_t}, wp, counts=counts["policy"]))
         n_p, n_v = float(pm.sum()), float(vm.sum())
         if not self.kl_off[g]:
             ref = self.ref[g]
@@ -1236,15 +1407,20 @@ class JointRLTrainer:
                 cur_t = r.spec.kl_terms(net, pred, tgt, vm, b["legal"])
                 with torch.no_grad():
                     ref_t = r.spec.kl_terms(ref, ref_pred, tgt, vm, b["legal"])
+                # sum reduction = β·(this chunk's head-normalised KL)·frames: the
+                # heads' denominators (valid / conditioned / pass frames) are the
+                # chunk's own, so across chunks this is a frame-weighted mean of
+                # per-chunk KLs, not an exact per-head global token mean (the
+                # policy / value / entropy terms are exact; measured < 1% apart)
                 kl = head_terms_kl(cur_t, ref_t, beta=self.klb[g], reduction="sum")
-                loss = loss + combine_game_losses({g: kl}, w, counts=counts["value"])
+                loss = loss + combine_game_losses({g: kl}, wv, counts=counts["value"])
                 diag.add(g, kl_sum=float(kl["kl"]) * n_v, kl_n=n_v)
             else:
                 with torch.no_grad():
                     ref_lp, _ = r.spec.logp_entropy(ref, ref_pred, b["actions"], b["legal"])
                 kl = kl_penalty(lp, ref_lp, pm, beta=self.klb[g], estimator="k3",
                                 reduction="sum")
-                loss = loss + combine_game_losses({g: kl}, w, counts=counts["policy"])
+                loss = loss + combine_game_losses({g: kl}, wp, counts=counts["policy"])
                 diag.add(g, kl_sum=float(kl["kl_k3"]) * n_p, kl_n=n_p)
         diag.add(g, ent_sum=float(ent_t["entropy"]) * n_p, ent_n=n_p, pol_n=n_p,
                  approx_kl_sum=float(pol["approx_kl"]) * n_p,
@@ -1325,29 +1501,45 @@ class JointRLTrainer:
             diag.add_loads(g, _moe_load_vector(self.model) - before)
         return out
 
-    def _epochs(self, it: int, diag: Diag) -> Dict[str, float]:
+    def _epochs(self, it: int, diag: Diag, quotas: Mapping[str, int]) -> Dict[str, Any]:
+        """--epochs × --minibatches optimizer steps.  Returns step statistics
+        and ``loss_share``: per RL game, the mean over the steps of its share
+        of the value term's total weight (the realised per-game RL loss
+        weight; rank-identical)."""
         a = self.args
         dropped, skipped, norms = 0, 0, []
         G = self.rl_games
+        share_sum = {g: 0.0 for g in G}
+        n_steps = 0
         with moe_load_counting(self.model):
             for epoch in range(a.epochs):
                 plan, counts = self._minibatch_plan(it, epoch)
+                weights, _ = self._loss_weights(counts, quotas)
                 for m in range(len(plan)):
                     cnt = {name: {g: float(counts[m, gi, j]) for gi, g in enumerate(G)}
-                           for j, name in enumerate(("kept", "policy", "value"))}
+                           for j, name in enumerate(TERM_KINDS)}
+                    wn = {g: weights["value"][g] * cnt["value"][g] for g in G}
+                    tot = sum(wn.values())
+                    for g in G:
+                        share_sum[g] += wn[g] / tot if tot > 0 else 0.0
+                    n_steps += 1
+                    canary = epoch == 0 and m == 0
+                    # first minibatch: each component's shared-core gradient norm
+                    probe = _GradProbe(self.core_params) if canary and self.core_params else None
                     for g in G:
                         idx = plan[m].get(g, [])
                         ss = self.rl[g].streams
                         for chunk in _chunks(idx, self.rl[g].rows_per_forward):
-                            canary = epoch == 0 and m == 0
                             loss = self._forward_tracked(
                                 g, diag, lambda chunk=chunk, g=g, canary=canary:
                                 self._rl_chunk_loss(g, [ss[i] for i in chunk], cnt, diag,
-                                                    canary))
+                                                    canary, weights))
                             if torch.isfinite(loss):
                                 loss.backward()
                             else:
                                 skipped += 1
+                        if probe is not None:
+                            diag.add(g, gn_rl=probe.delta_norm(), gn_rl_n=1)
                     for g, scale in self._replay_draws():
                         loss = self._forward_tracked(g, diag,
                                                      lambda g=g: self._replay_loss(g, diag))
@@ -1355,11 +1547,15 @@ class JointRLTrainer:
                             (loss * scale).backward()
                         else:
                             skipped += 1
+                        if probe is not None:
+                            diag.add(g, gn_replay=probe.delta_norm(), gn_replay_n=1)
+                    del probe
                     ok, norm = self._step()
                     dropped += int(not ok)
                     norms.append(norm)
         return {"dropped": dropped, "nonfinite": skipped,
-                "gnorm": float(np.mean(norms)) if norms else float("nan")}
+                "gnorm": float(np.mean(norms)) if norms else float("nan"),
+                "loss_share": {g: share_sum[g] / max(n_steps, 1) for g in G}}
 
     # ------------------------------------------------------------------
     # iteration
@@ -1389,7 +1585,7 @@ class JointRLTrainer:
             if self.rl[g].streams:
                 self._recompute(g)
         self._targets(diag)
-        epoch_stats = self._epochs(it, diag)
+        epoch_stats = self._epochs(it, diag, q_glob)
         for m, b in zip(self.moe, bias0):
             if not torch.equal(m.balance_bias, b):
                 raise RuntimeError("MoE balance bias moved inside the iteration")
@@ -1409,7 +1605,11 @@ class JointRLTrainer:
         if a.kl_adapt and upd_k:
             self.klb.update(upd_k)
         if self.rl_games:
-            self.sched.record({g: int(diag.v[g]["tokens_v"]) for g in self.rl_games})
+            # the tokens that carried loss weight (_loss_weights): the quota under
+            # overshoot, so a wave's overshoot is not booked as a lead that
+            # starves the game next iteration
+            self.sched.record({g: min(int(diag.v[g]["tokens_v"]), int(q_glob.get(g, 0)))
+                               for g in self.rl_games})
         if self.bandit is not None:
             sig = {g: diag.mean(g, "score_sum", "score_n") for g in self.rl_games}
             sig = {g: v for g, v in sig.items() if math.isfinite(v)}
@@ -1432,7 +1632,7 @@ class JointRLTrainer:
             self._log(rec)
         return rec
 
-    def _record(self, diag: Diag, ep: Dict[str, float], quotas: Dict[str, int],
+    def _record(self, diag: Diag, ep: Dict[str, Any], quotas: Dict[str, int],
                 rel: Optional[torch.Tensor], dt: float, t_roll: float) -> Dict[str, Any]:
         rec: Dict[str, Any] = {"iteration": self.iteration, "time": dt, "rollout_time": t_roll,
                                "gnorm": ep["gnorm"], "dropped": ep["dropped"],
@@ -1444,7 +1644,8 @@ class JointRLTrainer:
             row: Dict[str, float] = {}
             if g in self.rl:
                 row.update(
-                    quota=quotas.get(g, 0), tokens=d["tokens_v"], episodes=d["episodes"],
+                    quota=quotas.get(g, 0), tokens=d["tokens_v"],
+                    loss_share=ep["loss_share"].get(g, 0.0), episodes=d["episodes"],
                     ep_len=diag.mean(g, "ep_len_sum", "episodes"),
                     score=diag.mean(g, "score_sum", "score_n"),
                     ret=diag.mean(g, "ret_sum", "tokens_v"),
@@ -1461,9 +1662,13 @@ class JointRLTrainer:
                     ent_coef=self.entc[g], kl_beta=self.klb[g],
                     popart_mu=self.popart.mean(g), popart_sigma=self.popart.std(g),
                     adv_std=self.advnorm.std(g))
+            if g in self.rl:
+                row["core_gnorm_rl"] = diag.mean(g, "gn_rl", "gn_rl_n")
             if g in self.replay:
                 il = diag.mean(g, "il_sum", "il_n")
                 row.update(il_loss=il, il_drift=il - self.il_baseline.get(g, il))
+                if d["gn_replay_n"] > 0:
+                    row["core_gnorm_replay"] = diag.mean(g, "gn_replay", "gn_replay_n")
                 if self.replay_kl_weight[g] > 0:
                     row["replay_kl"] = diag.mean(g, "rkl_sum", "rkl_n")
             if self.n_moe[0]:
@@ -1492,16 +1697,40 @@ class JointRLTrainer:
                 "klb": self.klb.state_dict(), "sched": self.sched.state_dict(),
                 "pool": self.pool.state_dict(), "il_baseline": dict(self.il_baseline),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
-                "init": self.args.init}
+                "init": self.args.init, "init_hash": self.init_hash}
 
     def save(self, name: str) -> Optional[str]:
-        """rank 0 writes ``name`` atomically (every rank must call: barrier)."""
+        """rank 0 writes ``name`` atomically (every rank must call: barrier).
+
+        Every train_multi_game field is in reward units — ``model_state``
+        (EMA), ``train_model_state`` (live weights) and ``ema_state`` (the
+        shadow) all have the PopArt statistics folded into the value heads —
+        so eval_multi_game (``--raw`` too), game_checkpoint /
+        export_game_checkpoint and a train_multi_game / train_il resume read
+        the right value scale.  The normalised value-head tensors the RL
+        state needs are kept in ``rl_state["raw_heads"]`` (a few small
+        tensors) and restored by :meth:`_load_resume`, so a resume stays
+        bit-exact.  After ``rl_latest.pt`` the pool deletes the snapshot
+        files evicted since the last one (no checkpoint a resume starts
+        from refers to them any more)."""
         path = None
         if self.rank0:
-            ema_state = (self.ema.ema_model_state(self.model) if self.ema is not None
-                         else self.model.state_dict())
-            exported = (self.popart.denormalized_state_dict(self.model, ema_state)
-                        if self.rl_games else ema_state)
+            live = self.model.state_dict()
+            shadow = self.ema.state_dict() if self.ema is not None else None
+            ema_state = self.ema.ema_model_state(self.model) if self.ema is not None else live
+            raw_heads: Dict[str, Dict[str, torch.Tensor]] = {"train": {}, "ema": {}}
+            if self.rl_games:
+                fold = self.popart.denormalized_state_dict
+                exported = fold(self.model, ema_state)
+                live_f = fold(self.model, live)
+                raw_heads["train"] = {k: live[k] for k, v in live_f.items() if v is not live[k]}
+                if shadow is not None:
+                    shadow_f = fold(self.model, shadow)
+                    raw_heads["ema"] = {k: shadow[k] for k, v in shadow_f.items()
+                                        if v is not shadow[k]}
+                    shadow = shadow_f
+            else:
+                exported, live_f = ema_state, live
             g0 = self.games[0]
             pre = f"nets.{g0}."
             core = {k[len(pre):]: v for k, v in exported.items()
@@ -1512,19 +1741,21 @@ class JointRLTrainer:
                 "core_config": core_config_overrides(self.model[g0].cfg),
                 "core_state": core,
                 "model_state": exported,
-                "train_model_state": self.model.state_dict(),
+                "train_model_state": live_f,
                 "mixture": self.sched.shares() if self.rl_games else {},
                 "args": vars(self.args),
                 "world_size": self.world,
                 "step": self.iteration,
                 "stage": "rl_joint",
                 "optimizer_state": self.optimizer.state_dict(),
-                "ema_state": self.ema.state_dict() if self.ema is not None else None,
-                "rl_state": self._rl_state(),
+                "ema_state": shadow,
+                "rl_state": {**self._rl_state(), "raw_heads": raw_heads},
             }
             path = os.path.join(self.args.save_dir, name)
             torch.save(ck, f"{path}.tmp")
             os.replace(f"{path}.tmp", path)
+            if name == CKPT_LATEST:
+                self.pool.flush_deletes()
         self.dist_env.barrier()
         return path
 
@@ -1536,9 +1767,22 @@ class JointRLTrainer:
         if st["rl_games"] != self.rl_games or ck["games"] != self.games:
             raise SystemExit(f"{path}: games {ck['games']} / rl {st['rl_games']} differ from "
                              f"this run's {self.games} / {self.rl_games}")
-        self.model.load_state_dict(ck["train_model_state"])
+        saved_hash, saved_init = st.get("init_hash"), st.get("init")
+        if saved_hash is not None and saved_hash != self.init_hash:
+            raise SystemExit(f"{path}: trained against the frozen reference {saved_init} "
+                             f"(fingerprint {saved_hash[:12]}), but --init {self.args.init} has "
+                             f"different weights ({self.init_hash[:12]}) — the KL anchor and "
+                             f"--kl_budget would silently change; pass the original --init")
+        if saved_init != self.args.init:
+            self.log(f"[resume] note: --init {self.args.init} != the checkpoint's {saved_init}"
+                     + (" (same weights)" if saved_hash is not None else
+                        " (no fingerprint in this checkpoint: make sure it is the same file)"))
+        # the train_multi_game fields are PopArt-folded; the normalised value
+        # heads the RL state assumes are in rl_state["raw_heads"]
+        raw = st.get("raw_heads") or {}
+        self.model.load_state_dict({**ck["train_model_state"], **raw.get("train", {})})
         if self.ema is not None and ck.get("ema_state") is not None:
-            self.ema.load_state_dict(ck["ema_state"])
+            self.ema.load_state_dict({**ck["ema_state"], **raw.get("ema", {})})
         self.optimizer.load_state_dict(ck["optimizer_state"])
         mirrors = [self.popart.mirror_tensors(self.model, self.ema.shadow)] \
             if self.ema is not None else []
@@ -1552,6 +1796,26 @@ class JointRLTrainer:
         self.iteration = int(st["iteration"])
         self.log(f"[resume] {path}: iteration {self.iteration} (saved with world="
                  f"{ck.get('world_size', 1)}, pool={len(self.pool)})")
+
+    def _truncate_metrics(self) -> None:
+        """Drop the metrics.jsonl records of iterations past the resumed
+        checkpoint (run after it by the interrupted job; they are re-run
+        now), so a requeued run leaves one record per iteration."""
+        path = os.path.join(self.args.save_dir, "metrics.jsonl")
+        if not os.path.exists(path):
+            return
+        keep = []
+        with open(path) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:          # a record cut short by the crash
+                    continue
+                if int(rec.get("iteration", 0)) <= self.iteration:
+                    keep.append(line if line.endswith("\n") else line + "\n")
+        with open(f"{path}.tmp", "w") as f:
+            f.writelines(keep)
+        os.replace(f"{path}.tmp", path)
 
     def _want_checkpoint(self, last_save: float) -> bool:
         a = self.args

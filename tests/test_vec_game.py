@@ -935,6 +935,23 @@ def test_snapshot_pool_file_backed(tmp_path):
     assert pool3.ids() == [ids[2]]
 
 
+def test_snapshot_pool_deferred_delete(tmp_path):
+    """defer_delete: evicted files stay on disk (a checkpoint written before
+    the eviction still restores the full pool) until flush_deletes."""
+    d = tmp_path / "snaps"
+    pool = SnapshotPool(max_size=1, store_dir=str(d), defer_delete=True)
+    pool.add({"w": torch.zeros(2)})
+    st = pool.state_dict()                        # "checkpoint" before the eviction
+    pool.add({"w": torch.ones(2)})
+    assert pool.ids() == [1] and pool.pending_deletes == ["snapshot_000000.pt"]
+    assert sorted(os.listdir(d)) == ["snapshot_000000.pt", "snapshot_000001.pt"]
+    resumed = SnapshotPool(store_dir=str(d))
+    resumed.load_state_dict(st)                   # no "missing" warning: nothing dropped
+    assert resumed.ids() == [0] and torch.equal(resumed.get(0)["w"], torch.zeros(2))
+    pool.flush_deletes()
+    assert os.listdir(d) == ["snapshot_000001.pt"] and pool.pending_deletes == []
+
+
 class _MultiHeadNet(torch.nn.Module):
     """A stub step(): per-unit actions, a replay mask and logits under
     non-``action_*`` keys (Lux / mahjong / chess decoders)."""

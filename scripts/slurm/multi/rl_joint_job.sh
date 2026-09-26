@@ -35,9 +35,11 @@
 #
 # Checkpoints / resume: rank 0 writes $OUT/rl_latest.pt every CKPT_MINUTES
 # (default 30) minutes and at the end; the snapshot pool lives in
-# $OUT/snapshots.  If rl_latest.pt exists when the job starts (requeue after a
-# node failure, or the same RUN resubmitted after the 24 h wall), the run
-# continues from it (--resume, exact on the same NGPU); RESUME=0 starts from
+# $OUT/snapshots (evicted snapshot files are deleted only after the next
+# rl_latest.pt is written).  If rl_latest.pt exists when the job starts (requeue
+# after a node failure, or the same RUN resubmitted after the 24 h wall), the run
+# continues from it (--resume, exact on the same NGPU; metrics.jsonl is cut back
+# to the resumed iteration; a different INIT is refused); RESUME=0 starts from
 # scratch instead.
 #
 # Paths live under $GM_HOME (default ~/gm-core) — not /scratch.
