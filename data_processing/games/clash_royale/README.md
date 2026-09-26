@@ -120,7 +120,9 @@ rsync -aL "$GM_DATA/split_v3/clash_royale/" <cluster>:<DATA_ROOT>/clash_royale/ 
 Replace the cluster's version-2 `clash_royale/{train,val}` directories
 entirely: `GameShardDataset` refuses a directory that mixes converter versions.
 (`--hq` keeps the same samples as version 2: 8456 of 9392 player sequences per
-5000 replays.)
+5000 replays. Measured per 5000-replay part: 17 MB download, ~4 s conversion,
+1.0 GB of shards — so roughly 0.9 GB raw and 50 GB of shards for all 252,238
+replays.)
 
 Known limits: no unit state (an IL model trained here learns *when and where
 people deploy given plays and elixir*, not reactions to unit positions);
