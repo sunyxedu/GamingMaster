@@ -204,7 +204,9 @@ class Zero1:
         """Within the block ``model`` holds the full EMA weights (every rank);
         on exit the training weights and every buffer are restored bit for
         bit.  Extra memory: this rank's partition of the weights, a copy of
-        the buffers, one broadcast bucket.  An exception inside the block
+        the buffers, one broadcast bucket (no copy of the model; call it
+        after ``zero_grad(set_to_none=True)``, the gradients are not needed).
+        An exception inside the block
         leaves the EMA weights in place (the run is over anyway: the ranks
         are no longer in step)."""
         stash = {i: self.params[i].detach().clone() for i in self.owned}
@@ -328,6 +330,7 @@ class Zero1:
             if self.rank != r:
                 for p, v in zip(ps, _unflatten_dense_tensors(flat, ps)):
                     p.data.copy_(v)
+            del flat                    # one bucket alive at a time
 
     @torch.no_grad()
     def _gather(self, idxs: Iterable[int], get: Callable[[int], torch.Tensor],
@@ -354,4 +357,5 @@ class Zero1:
                 ps = [self.params[i] for i in bucket]
                 out.update((i, v.to("cpu", copy=True))
                            for i, v in zip(bucket, _unflatten_dense_tensors(flat, ps)))
+            del flat                    # one bucket alive at a time
         return out

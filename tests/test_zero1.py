@@ -674,20 +674,22 @@ def test_aligned_two_rank_runs_are_bit_identical_to_single_process(aligned):
 @pytest.fixture(scope="module")
 def cuda_base(root):
     kw = dict(kind="cuda", poison=True)
-    return {tag: _train(root, f"cuda_{tag}", 2, "--games_per_step", "1",
+    return {tag: _train(root, f"cuda_{tag}", int(tag[1]), "--games_per_step", "1",
                         *(["--shard_optimizer"] if tag[0] == "s" else []), **kw)
-            for tag in ("u2", "s2")}
+            for tag in ("u2", "s2", "u3", "s3")}
 
 
 @needs_cuda
-def test_cuda_tensors_over_gloo_sharded_run_is_bit_identical(cuda_base):
+@pytest.mark.parametrize("world", [2, 3])
+def test_cuda_tensors_over_gloo_sharded_run_is_bit_identical(cuda_base, world):
     """--device cuda --dist_backend gloo (the MIG-slice mode): the sharded
-    2-rank run equals the unsharded one bit for bit (deterministic kernels),
-    and its ranks hold disjoint partitions of the gathered state."""
-    for tag in ("u2", "s2"):
+    run equals the unsharded one bit for bit (deterministic kernels), and its
+    ranks hold disjoint partitions of the gathered state."""
+    u, s = f"u{world}", f"s{world}"
+    for tag in (u, s):
         assert all(r["device"].startswith("cuda") for r in cuda_base[tag][0])
-    _assert_runs_identical(cuda_base["u2"], cuda_base["s2"], "cuda")
-    ranks, latest, _ = cuda_base["s2"]
+    _assert_runs_identical(cuda_base[u], cuda_base[s], f"cuda world {world}")
+    ranks, latest, _ = cuda_base[s]
     seen = set()
     for r in ranks:
         assert set(r["opt_state"]) <= set(r["owned"]) and not seen & set(r["opt_state"])
