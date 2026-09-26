@@ -281,7 +281,7 @@ def stage1(gmdata, data, tmp_path_factory):
         "--data", f"pig={out / 'pig'}",
         "--val", f"kuhn_poker={root / 'train'}", "--eval_every", "2", "--eval_batches", "2",
         "--steps", "2", "--batch_size", "4", "--warmup_steps", "1", "--device", "cpu",
-        "--mixture_frame_cap", "300", "--game_weight", "goofspiel=0.5",
+        "--mixture_frame_cap", "3e2", "--game_weight", "goofspiel=0.5",
         "--save_dir", str(out / "ck"), "--override", *CORE])
     return out, root, res
 
@@ -318,6 +318,11 @@ def test_mixture_weights():
     assert w == pytest.approx({"big": 0.5, "mid": 0.5, "small": 0.0})
     with pytest.raises(SystemExit):
         mixture_weights(f, 0.5, game_weight={g: 0.0 for g in f})
+    from training.train_multi_game import frame_count
+    assert frame_count("1e8") == 10**8 and frame_count("300") == 300
+    for bad in ("1.5", "-1", "x"):
+        with pytest.raises(Exception):
+            frame_count(bad)
 
 
 def test_train_rl_joint_on_candidate_games(stage1):

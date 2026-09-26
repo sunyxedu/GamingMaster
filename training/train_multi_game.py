@@ -225,12 +225,12 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "exclusive with --games_per_step")
     p.add_argument("--sample_alpha", type=float, default=0.5,
                    help="mixture temperature: w_g ∝ frames_g^alpha")
-    p.add_argument("--mixture_frame_cap", type=int, default=None, metavar="N",
+    p.add_argument("--mixture_frame_cap", type=frame_count, default=None, metavar="N",
                    help="frames counted per game in the mixture weights: w_g ∝ "
                         "min(frames_g, N)^alpha, so a giant corpus (1e9-1e10 frames) cannot "
                         "dominate the mixture (default: no cap)")
     p.add_argument("--game_frame_cap", action="append", default=[], metavar="GAME=N",
-                   help="per-game --mixture_frame_cap")
+                   help="per-game --mixture_frame_cap (N may be written 1e8)")
     p.add_argument("--game_weight", action="append", default=[], metavar="GAME=W",
                    help="multiplier of a game's mixture weight (draw probability), "
                         "w_g ∝ W_g * min(frames_g, cap)^alpha (default 1); unlike "
@@ -356,6 +356,17 @@ def tf_at(sched: Tuple[float, float], step: int, steps: int) -> float:
     """Linear teacher-forcing schedule: start at step 1, end at ``steps``."""
     lo, hi = sched
     return lo + (hi - lo) * (step - 1) / max(1, steps - 1)
+
+
+def frame_count(s: str) -> int:
+    """A frame count on the command line; scientific notation allowed (``1e8``)."""
+    try:
+        v = float(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a frame count: {s!r}") from None
+    if not (v >= 0 and v == int(v)):
+        raise argparse.ArgumentTypeError(f"frame count must be a whole number >= 0: {s!r}")
+    return int(v)
 
 
 def mixture_weights(frames: Dict[str, int], alpha: float, *,
@@ -661,7 +672,10 @@ def main(argv=None) -> Dict[str, object]:
                 raise SystemExit(f"--require_frozen_schema: {frozen}")
             log(f"[WARN] {frozen}")
     frames = {g: ds.total_frames() for g, ds in datasets.items()}
-    game_frame_cap = {g: int(n) for g, n in _pairs(args.game_frame_cap, "N").items()}
+    try:
+        game_frame_cap = {g: frame_count(n) for g, n in _pairs(args.game_frame_cap, "N").items()}
+    except argparse.ArgumentTypeError as e:
+        raise SystemExit(f"--game_frame_cap: {e}") from None
     game_weight = {g: float(w) for g, w in _pairs(args.game_weight, "W").items()}
     for flag, vals in (("--game_frame_cap", game_frame_cap), ("--game_weight", game_weight)):
         unknown = sorted(set(vals) - set(games))
