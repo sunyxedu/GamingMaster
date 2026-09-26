@@ -254,8 +254,9 @@ pub fn build_side(r: &Replay, me: SideId, cat: &Catalog, tl: &Timeline, cfg: &Fr
         }
         match label.map(|e| e.kind) {
             Some(EventKind::Play { card, gx, gy, .. }) => {
-                // the deck token of the played card: a function of the play alone
-                let slot = tok_ids.iter().position(|&c| c == card).map(|s| s as i8).unwrap_or(-1);
+                // the deck token of the played card (the belief holds the plays before
+                // it: with repeated ids — unknown cards — the copy it can hold)
+                let slot = belief.attribute(card).map(|s| s as i8).unwrap_or(-1);
                 let (x, y) = to_own_frame(me, gx, gy);
                 cols.waited.push((slot < 0) as u8);
                 cols.card_slot.push(slot);
@@ -401,6 +402,37 @@ mod tests {
         let cfg = FrameConfig::default();
         assert!(build_side(&r, SideId::Team, &cat, &tl, &cfg).is_none());
         assert!(build_side(&r, SideId::Opp, &cat, &tl, &cfg).is_some());
+    }
+
+    #[test]
+    fn repeated_ids_label_a_token_the_belief_allows() {
+        // two cards the catalog does not know share its unknown id (deck tokens 6 and 7)
+        let (cat, tl) = load();
+        let team = ["hog-rider", "ice-spirit", "ice-golem", "skeletons", "zz-new-card-a", "zz-new-card-b", "fireball", "the-log"];
+        let opp = ["giant", "witch", "knight", "archers", "zap", "minions", "fireball", "tornado"];
+        // after the 4 known plays the hand is {fireball, the-log, new-a, new-b} exactly;
+        // then both new cards are played
+        let plays = [
+            ("team", "hog-rider", 20, 9, 14),
+            ("team", "ice-spirit", 60, 9, 14),
+            ("team", "ice-golem", 100, 9, 14),
+            ("team", "skeletons", 140, 9, 14),
+            ("team", "zz-new-card-a", 180, 9, 14),
+            ("team", "zz-new-card-b", 220, 9, 14),
+        ];
+        let r = parse_payload("t", &fixtures::payload(&team, &opp, &plays, 15.0), &cat).unwrap();
+        let s = build_side(&r, SideId::Team, &cat, &tl, &FrameConfig::default()).unwrap();
+        assert_eq!(&s.cols.deck_ids[6..DECK], &[cat.unknown_id, cat.unknown_id]);
+        let frames: Vec<usize> = (0..s.cols.len()).filter(|&f| s.cols.card_slot[f] >= 0).collect();
+        assert_eq!(frames, vec![2, 6, 10, 14, 18, 22]);
+        for &f in &frames {
+            let slot = s.cols.card_slot[f] as usize;
+            assert!(s.cols.deck_in_hand[f * DECK + slot] > 0.0, "frame {f}: label token {slot} is out of the hand");
+        }
+        // the second new card is the copy still in hand (token 7), not the first token
+        // with the id, which the belief put in the queue with the first play
+        assert_eq!((s.cols.card_slot[18], s.cols.card_slot[22]), (6, 7));
+        assert_eq!(&s.cols.deck_in_hand[22 * DECK + 6..23 * DECK], &[0.0, 1.0]);
     }
 }
 

@@ -151,6 +151,34 @@ impl CycleBelief {
         Observed::Cycled
     }
 
+    /// The deck index a play of `card` takes, judged from the plays before it: the
+    /// index holding the id or — with repeated ids (unknown cards) — the one most
+    /// probably played under [`Self::observe`]'s convention (the lowest in-hand
+    /// index holding the id), ties to the lower index. For a consistent play it is
+    /// never an index the belief rules out of the hand (the first index holding the
+    /// id can be: after both copies were in hand, a play moved it to the queue).
+    /// None when `card` is not in the deck.
+    pub fn attribute(&self, card: u16) -> Option<usize> {
+        let idx: Vec<usize> = (0..DECK).filter(|&i| self.deck[i] == card).collect();
+        if idx.len() <= 1 {
+            return idx.first().copied();
+        }
+        let mut w = [0u64; DECK];
+        for &(c, n) in &self.states {
+            if let Some(&i) = idx.iter().find(|&&i| c.hand & (1u8 << i) != 0) {
+                w[i] += n as u64;
+            }
+        }
+        // the first maximum (idx ascends); an inconsistent play (all zero) keeps idx[0]
+        let mut best = idx[0];
+        for &i in &idx[1..] {
+            if w[i] > w[best] {
+                best = i;
+            }
+        }
+        Some(best)
+    }
+
     fn refresh(&mut self) {
         let total: u64 = self.states.iter().map(|&(_, w)| w as u64).sum();
         let (mut hand, mut next) = ([0u64; DECK], [0u64; DECK]);
@@ -381,5 +409,43 @@ mod tests {
         // both copies are now in the queue
         assert_eq!((b.in_hand()[6], b.in_hand()[7]), (0.0, 0.0));
         assert_eq!(b.observe(99), Observed::Inconsistent);
+    }
+
+    #[test]
+    fn attribute_keeps_repeated_ids_inside_the_support() {
+        let deck: Vec<u16> = vec![1, 2, 3, 4, 5, 6, 99, 99];
+        let mut b = CycleBelief::new(&deck).unwrap();
+        assert_eq!((b.attribute(5), b.attribute(42)), (Some(4), None));
+        for c in [1, 2, 3, 4] {
+            b.observe(c);
+        }
+        // hand = {5, 6, 99, 99} exactly: a 99 play takes index 6 by convention ...
+        assert_eq!(b.attribute(99), Some(6));
+        b.observe(99);
+        // ... so index 6 is in the queue and the other copy is the one left to play
+        assert_eq!((b.in_hand()[6], b.in_hand()[7]), (0.0, 1.0));
+        assert_eq!(b.attribute(99), Some(7), "the first index holding 99 is out of the hand");
+        // property: every consistent play is attributed to an index the belief allows
+        let mut rnd = Rnd(0xA77E_1B07_E5EE_D5EE);
+        let mut n_dup = 0;
+        for _ in 0..300 {
+            let mut order: Vec<u16> = (0..8).collect();
+            for i in (1..8).rev() {
+                order.swap(i, rnd.below(i + 1));
+            }
+            // the true cycle over deck positions; the belief sees card ids only
+            let mut st = HandState::new([order[0], order[1], order[2], order[3]], [order[4], order[5], order[6], order[7]]);
+            let mut b = CycleBelief::new(&deck).unwrap();
+            for _ in 0..24 {
+                let pos = st.hand[rnd.below(4)];
+                st.play(pos);
+                let card = deck[pos as usize];
+                let i = b.attribute(card).unwrap();
+                assert!(deck[i] == card && b.in_hand()[i] > 0.0, "{card} attributed to index {i}: {:?}", b.in_hand());
+                n_dup += (card == 99) as usize;
+                assert_eq!(b.observe(card), Observed::Cycled);
+            }
+        }
+        assert!(n_dup > 100);
     }
 }
