@@ -6,8 +6,11 @@
 //! - [`pig`]: the perfect-information dice test game (interleaved layout, no converter).
 //! - [`breakthrough`]: the CUSTOM-schema reference game (a from-to board game for the
 //!   board adapter; the pattern for chess-like games).
+//! - [`doudizhu`]: Dou Dizhu (3 players, auction, landlord vs peasants; OpenSpiel's
+//!   `dou_dizhu` + four-with-two), candidate schema with factored kicker decisions.
 
 pub mod breakthrough;
+pub mod doudizhu;
 pub mod goofspiel;
 pub mod kuhn_poker;
 pub mod pig;
