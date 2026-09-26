@@ -85,7 +85,8 @@ def test_kuhn_per_seat_rows(players):
 def test_frames_equal_the_replay_of_the_trajectory():
     """RL frames = the converter's frames: every row's stream is the replay stream of
     its env's logged trajectory (same encoder, gmrules encode_frame)."""
-    for game, cfg in (("kuhn_poker", {"players": 3}), ("goofspiel", {"num_cards": 5, "players": 3})):
+    for game, cfg in (("kuhn_poker", {"players": 3}), ("goofspiel", {"num_cards": 5, "players": 3}),
+                      ("pig", {"players": 3, "winscore": 8, "diceoutcomes": 3, "horizon": 40})):
         env = CandidateVecEnv(game, 5, seed=0, **cfg)
         env.reset(seed=5)
         seen, _, rewards = _run_random(env, seed=1)
@@ -94,7 +95,7 @@ def test_frames_equal_the_replay_of_the_trajectory():
             assert r["terminal"]
             assert torch.allclose(torch.tensor(r["outcome"]), rewards[e])
             for seat, idx in r["streams"]:
-                row = e * env.rows_per_env + seat
+                row = e * env.rows_per_env + max(seat, 0)       # seat -1: interleaved
                 assert len(seen[row]) == len(idx)
                 for k in seen[row][0]:
                     ours = torch.stack([f[k] for f in seen[row]])
@@ -111,6 +112,33 @@ def test_goofspiel_simultaneous_rows():
     # 3 decision turns (the 4th is automatic), every seat each turn: lockstep in practice
     assert all(len(v) == 3 for v in seen.values())
     assert all(int(i["episode_len"].max()) in (0, 3) for i in infos)
+
+
+def test_pig_interleaved_stream():
+    """Perfect information: ONE stream per game holding every decision, each from the
+    mover's view (stream_seats all True), rows in lockstep; forced frames (stop is
+    the only candidate) apply their single candidate whatever is sent."""
+    env = CandidateVecEnv("pig", 4, seed=0, players=3, winscore=8, diceoutcomes=3, horizon=40)
+    obs = env.observe()
+    assert (env.layout, env.rows_per_env, env.interleaved, env.lockstep) == ("interleaved", 1, True, True)
+    assert bool(obs.stream_seats.all()) and bool(obs.active.all()) and obs.to_play.tolist() == [0] * 4
+    gen = torch.Generator().manual_seed(0)
+    movers, forced_seen = {e: [] for e in range(4)}, 0
+    while bool(obs.active.any()):
+        for e in obs.active.nonzero().squeeze(1).tolist():
+            movers[e].append(int(obs.to_play[e]))
+        # lockstep: every live row is at the same frame index
+        assert len(set(obs.step_idx[obs.active].tolist())) == 1
+        acts = env.random_actions(obs, generator=gen)["action_idx"]
+        if bool(obs.forced.any()):
+            forced_seen += 1
+            acts = torch.where(obs.forced, torch.full_like(acts, 1), acts)   # garbage on forced rows
+        obs, _, _, info = env.step({"action_idx": acts})
+    for e in range(4):
+        r = gmsim.replay("pig", env.config, env.trajectory(e))
+        (seat, idx), = r["streams"]
+        assert seat == -1 and r["seat"].tolist() == movers[e]
+    assert len({m for ms in movers.values() for m in ms}) == 3 and forced_seen > 0
 
 
 def test_determinism_and_seeds():

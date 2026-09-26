@@ -12,7 +12,8 @@ converter:
   tests/invariance.py, plus the simulator-level battery;
 - RL: per-seat streams get their terminal reward on the seat's last frame even
   when another seat ended the hand; --actor fixed refused for per-seat games;
-  goofspiel (simultaneous) from `gmdata rules random` shards, jointly with kuhn;
+  goofspiel (simultaneous) and pig (interleaved, perfect information) from
+  `gmdata rules random` shards, jointly with kuhn;
 - the mixture frame cap / game weights of train_multi_game.
 """
 
@@ -235,9 +236,12 @@ def stage1(gmdata, data, tmp_path_factory):
     out = tmp_path_factory.mktemp("stage1")
     _run(gmdata, "rules", "random", "--game", "goofspiel", "--config",
          '{"num_cards":4,"players":2}', "--episodes", "60", "--out", out / "goof")
+    _run(gmdata, "rules", "random", "--game", "pig", "--config",
+         json.dumps(PIG), "--episodes", "40", "--out", out / "pig")
     torch.manual_seed(0)
     res = train_multi_game.main([
         "--data", f"kuhn_poker={root / 'train'}", "--data", f"goofspiel={out / 'goof'}",
+        "--data", f"pig={out / 'pig'}",
         "--val", f"kuhn_poker={root / 'train'}", "--eval_every", "2", "--eval_batches", "2",
         "--steps", "2", "--batch_size", "4", "--warmup_steps", "1", "--device", "cpu",
         "--mixture_frame_cap", "300", "--game_weight", "goofspiel=0.5",
@@ -245,15 +249,21 @@ def stage1(gmdata, data, tmp_path_factory):
     return out, root, res
 
 
+PIG = {"players": 2, "winscore": 10, "diceoutcomes": 6, "horizon": 30}
+
+
 def test_train_multi_game_on_candidate_shards(stage1):
-    out, _, res = stage1
+    out, root, res = stage1
     ck = torch.load(out / "ck" / "multi_final.pt", map_location="cpu", weights_only=False)
-    assert ck["games"] == ["kuhn_poker", "goofspiel"]
+    assert ck["games"] == ["kuhn_poker", "goofspiel", "pig"]
     assert ck["configs"]["goofspiel"]["cand_max_actions"] == 13
-    # both corpora count at most 300 frames; goofspiel's weight is halved
-    frames = {"kuhn_poker": 300, "goofspiel": 300}
-    assert ck["mixture"]["goofspiel"] == pytest.approx(
-        0.5 * frames["goofspiel"] ** 0.5 / (frames["kuhn_poker"] ** 0.5 + 0.5 * 300 ** 0.5))
+    assert ck["configs"]["pig"]["cand_max_actions"] == 2
+    # every corpus counts at most 300 frames; goofspiel's weight is halved
+    dirs = {"kuhn_poker": root / "train", "goofspiel": out / "goof", "pig": out / "pig"}
+    raw = {g: min(GameShardDataset(str(d), game=g).total_frames(), 300) ** 0.5
+           * (0.5 if g == "goofspiel" else 1.0) for g, d in dirs.items()}
+    for g in dirs:
+        assert ck["mixture"][g] == pytest.approx(raw[g] / sum(raw.values()))
     for p in res["model"].parameters():
         assert torch.isfinite(p).all()
 
@@ -279,15 +289,17 @@ def test_train_rl_joint_on_candidate_games(stage1):
 
     out, root, _ = stage1
     args = ["--init", str(out / "ck" / "multi_final.pt"), "--rl", "kuhn_poker", "--rl", "goofspiel",
-            "--data", f"kuhn_poker={root / 'train'}", "--replay_batch_size", "4",
-            "--tokens_per_iter", "80", "--envs", "kuhn_poker=6", "--envs", "goofspiel=4",
-            "--env_kw", "kuhn_poker:players=3", "--env_kw", "goofspiel:num_cards=4",
-            "--mirror_prob", "kuhn_poker=0.5", "--snapshot_every", "1", "--epochs", "1",
-            "--minibatches", "2", "--snapshot_dir", "memory", "--device", "cpu", "--seed", "3"]
+            "--rl", "pig", "--data", f"kuhn_poker={root / 'train'}", "--replay_batch_size", "4",
+            "--tokens_per_iter", "120", "--envs", "kuhn_poker=6", "--envs", "goofspiel=4",
+            "--envs", "pig=3", "--env_kw", "kuhn_poker:players=3", "--env_kw", "goofspiel:num_cards=4",
+            *[x for k, v in PIG.items() for x in ("--env_kw", f"pig:{k}={v}")],
+            "--mirror_prob", "kuhn_poker=0.5", "--mirror_prob", "pig=0.5", "--snapshot_every", "1",
+            "--epochs", "1", "--minibatches", "2", "--snapshot_dir", "memory", "--device", "cpu",
+            "--seed", "3"]
     res = train_rl_joint.main(args + ["--iterations", "1", "--save_dir", str(out / "rl")])
     rec = res["history"][-1]
     assert rec["dropped"] == 0 and rec["nonfinite"] == 0
-    for g in ("kuhn_poker", "goofspiel"):
+    for g in ("kuhn_poker", "goofspiel", "pig"):
         row = rec["games"][g]
         assert row["tokens"] >= 1 and row["episodes"] > 0
         assert abs(row["canary_log_old_mu"]) < 1e-4 and abs(row["canary_log_ratio"]) < 1e-4
@@ -296,7 +308,7 @@ def test_train_rl_joint_on_candidate_games(stage1):
     assert (out / "rl" / "rl_final.pt").exists()
     tr = JointRLTrainer(parse_args(args + ["--save_dir", str(out / "rl2")]))
     diag = Diag(tr.games, tr.n_moe)
-    tr._rollouts(0, {"kuhn_poker": 60, "goofspiel": 40}, diag)
+    tr._rollouts(0, {"kuhn_poker": 60, "goofspiel": 40, "pig": 40}, diag)
     for s in tr.rl["kuhn_poker"].streams:
         # per-seat stream of a 3-player hand: its terminal reward and done arrive on the
         # seat's LAST frame, also when another seat's action ended the hand
@@ -306,6 +318,10 @@ def test_train_rl_joint_on_candidate_games(stage1):
         assert float(s.rewards[:, seat].sum()) != 0.0
     for s in tr.rl["goofspiel"].streams:
         assert s.length == 3 and bool(s.done[-1])
+    for s in tr.rl["pig"].streams:
+        # interleaved: one stream per game, both movers' frames, the outcome at its end
+        assert bool(s.done[-1]) and not bool(s.done[:-1].any())
+        assert s.rewards[:-1].abs().sum() == 0
     # a PPO step on these streams is exact: μ = π_old
     for g in tr.rl_games:
         tr._recompute(g)

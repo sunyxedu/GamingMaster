@@ -43,6 +43,10 @@ VARIANTS = {
     "goof4x4d": ("goofspiel(num_cards=4,players=4,points_order=descending,imp_info=False,"
                  "returns_type=win_loss)", "goofspiel",
                  {"num_cards": 4, "players": 4, "points_order": "descending"}),
+    "pig2": ("pig(players=2,winscore=10,diceoutcomes=6,horizon=40)", "pig",
+             {"players": 2, "winscore": 10, "diceoutcomes": 6, "horizon": 40}),
+    "pig3": ("pig(players=3,winscore=8,diceoutcomes=3,horizon=12)", "pig",
+             {"players": 3, "winscore": 8, "diceoutcomes": 3, "horizon": 12}),
 }
 
 

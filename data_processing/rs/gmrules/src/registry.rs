@@ -16,6 +16,7 @@ use std::marker::PhantomData;
 pub static GAMES: &[&dyn DynGame] = &[
     &Entry::<games::kuhn_poker::KuhnPoker>(PhantomData),
     &Entry::<games::goofspiel::Goofspiel>(PhantomData),
+    &Entry::<games::pig::Pig>(PhantomData),
 ];
 
 pub fn game_names() -> Vec<&'static str> {
