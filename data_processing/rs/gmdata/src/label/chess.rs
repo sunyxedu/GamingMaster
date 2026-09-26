@@ -1108,6 +1108,38 @@ mod tests {
         assert!((a.moves[0].q - 0.47).abs() < 1e-6 && a.value == Some(a.moves[0].q));
     }
 
+    fn triples(a: &Analysis) -> Vec<(i64, f32, f32)> {
+        a.moves.iter().map(|m| (m.action, m.q, m.raw)).collect()
+    }
+
+    /// The cache key's premise on the real engine (skipped when not installed): the same
+    /// reversible tail reached through a different history and move number gets the
+    /// identical answer, and so does a repeated query on a used session.
+    #[test]
+    fn real_stockfish_answer_depends_only_on_the_key() {
+        let Some(sf) = engine_path("STOCKFISH", "stockfish") else {
+            eprintln!("skipping: stockfish not found");
+            return;
+        };
+        let lab = ChessLabeller::default();
+        let mut c = cfg();
+        c.command = EngineCommand::process(sf, &[]);
+        c.limits = lab.resolve_limits(&Limits::parse(&["nodes=30000".into()]).unwrap()).unwrap();
+        let mut s = lab.open_session(&c).unwrap();
+        let x = replay_san("e4 e5 Nf3 Nc6 Bb5 a6");
+        let y = replay_san("e3 e6 e4 e5 Nf3 Nc6 Bb5 a6");
+        assert_eq!(x[5].key, y[7].key);
+        assert_ne!((x[5].command(), x[5].pos.fullmoves()), (y[7].command(), y[7].pos.fullmoves()));
+        let a = lab.query(&mut s, &x[5], &c).unwrap();
+        let other = lab.query(&mut s, &replay_san("d4 d5 c4")[2], &c).unwrap();
+        let b = lab.query(&mut s, &y[7], &c).unwrap();
+        let a2 = lab.query(&mut s, &x[5], &c).unwrap();
+        assert_eq!(a.moves.len(), 8);
+        assert_eq!((triples(&a), a.value), (triples(&b), b.value));
+        assert_eq!((triples(&a), a.value), (triples(&a2), a2.value));
+        assert_ne!(triples(&a), triples(&other));
+    }
+
     /// Real Stockfish on converted fixture games (skipped when not installed).
     #[test]
     fn real_stockfish_labels_fixture_games() {
