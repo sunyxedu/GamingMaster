@@ -17,9 +17,13 @@ training/train_multi_game.py --shard_optimizer).
   count) and a non-finite gradient norm on one rank (dropped everywhere); the
   evaluation swap restores the weights and buffers exactly; a full state dict
   loads back sharded; per-bucket, per-tensor and one-bucket broadcasts agree.
+  The same on a toy model with a weight tied inside the model, a module
+  registered twice, a non-contiguous and a float64 parameter.
 - Trainer level: sharded 2- and 3-rank runs are bit-identical to the
-  unsharded runs (weights, buffers, per-rank partitions against the gathered
-  state, both checkpoints); resumes across sharded <-> unsharded and world
+  unsharded runs (weights, buffers, validation metrics — the EMA swapped into
+  the live model vs the unsharded deep copy — per-rank partitions against the
+  gathered state, both checkpoints), also with a frozen core and without an
+  EMA; resumes across sharded <-> unsharded and world
   sizes (2 -> 3, 3 -> 2, 1 -> 2) are bit-identical to each other; and a
   2-rank run fed the single-process micro-batches (scripted game draws on
   single-record datasets) is bit-identical to single-process
@@ -27,8 +31,8 @@ training/train_multi_game.py --shard_optimizer).
   single process scales each micro-batch loss by 1/3, the data-parallel run
   divides the sum of 3 gradients by 3, which rounds differently — so
   3-rank equivalence to single-process is pinned at the optimizer level.)
-  Where CUDA is available the 2-rank sharded/unsharded comparison also runs
-  on CUDA tensors over gloo (deterministic kernels).
+  Where CUDA is available the 2- and 3-rank sharded/unsharded comparisons
+  also run on CUDA tensors over gloo (deterministic kernels).
 - --shard_optimizer is refused at world size 1; a partial EMA refuses the
   whole-model views.
 """
@@ -462,7 +466,15 @@ def _train_worker(rank, world, port, root, tag, argv, kind, lrs, poison, scripte
         if poison and rank == world - 1 and len(record) == NAN_STEP:
             next(p for p in model.parameters() if p.grad is not None).grad.fill_(math.nan)
 
+    vals = []           # every validation's global per-game metrics
+    evaluate_sharded = tmg.evaluate_sharded
+
+    def recording_eval(*a, **kw):
+        vals.append(evaluate_sharded(*a, **kw))
+        return vals[-1]
+
     tmg.build_net_tolerant, tmg.sync_gradients = build_with_probe, recording_sync
+    tmg.evaluate_sharded = recording_eval
     if scripted:
         tmg.random = _ScriptedRandom(rank if world > 1 else None)
     if poison and world == 1:
@@ -479,12 +491,13 @@ def _train_worker(rank, world, port, root, tag, argv, kind, lrs, poison, scripte
     out = tmg.main(argv)
     model, ema, opt, zero = out["model"], out["ema"], out["optimizer"], out["zero"]
     probe = model["chess"].zero_probe
+    shadows = ema.shadow if ema is not None else {}
     torch.save({
         "probe_index": next(i for i, p in enumerate(p for g in opt.param_groups
                                                     for p in g["params"]) if p is probe),
         "params": {n: p.detach().cpu().clone() for n, p in model.named_parameters()},
         "buffers": {n: b.detach().cpu().clone() for n, b in model.named_buffers()},
-        "ema": {n: v.detach().cpu().clone() for n, v in ema.shadow.items()},
+        "ema": {n: v.detach().cpu().clone() for n, v in shadows.items()},
         "opt_state": {i: {k: (v.detach().cpu().clone() if torch.is_tensor(v) else v)
                           for k, v in st.items()}
                       for i, st in opt.state_dict()["state"].items()},
@@ -493,8 +506,10 @@ def _train_worker(rank, world, port, root, tag, argv, kind, lrs, poison, scripte
         "state_bytes": (zero.local_state_bytes(ema) if zero is not None else
                         sum(t.numel() * t.element_size() for st in opt.state.values()
                             for t in st.values() if torch.is_tensor(t))
-                        + sum(t.numel() * t.element_size() for t in ema.shadow.values())),
+                        + sum(t.numel() * t.element_size() for t in shadows.values())),
         "record": record,
+        "vals": vals,
+        "trainable": sorted(n for n, p in model.named_parameters() if p.requires_grad),
         "device": str(next(model.parameters()).device),
     }, os.path.join(root, f"{tag}_rank{rank}.pt"))
 
@@ -552,12 +567,16 @@ def _assert_runs_identical(a, b, what):
     for r, (x, y) in enumerate(zip(ra, rb)):
         _assert_same(x["params"], y["params"], f"{what} rank {r} params")
         _assert_same(x["buffers"], y["buffers"], f"{what} rank {r} buffers")
+        # validation: the sharded run evaluates the live model with the
+        # gathered EMA swapped in, the unsharded one a deep copy (ema_copy)
+        _assert_same(x["vals"], y["vals"], f"{what} rank {r} validation")
 
 
 @pytest.mark.parametrize("world", [2, 3])
 def test_sharded_run_is_bit_identical_to_unsharded(base, world):
     _assert_runs_identical(base[f"u{world}"], base[f"s{world}"], f"world {world}")
     ranks, latest, _ = base[f"s{world}"]
+    assert len(ranks[0]["vals"]) == 3                # validation at steps 2, 4 and 5
     for r in ranks[1:]:                              # identical full weights everywhere
         _assert_same(ranks[0]["params"], r["params"], "rank params")
         _assert_same(ranks[0]["buffers"], r["buffers"], "rank buffers")
@@ -606,6 +625,101 @@ def test_skipped_parameters_and_dropped_steps_stay_exact(base, world):
     n_opt = sum(len(g["params"]) for g in latest["optimizer_state"]["param_groups"])
     assert len(latest["ema_state"]) == n_opt           # every trainable parameter
     assert ranks[0]["probe_index"] not in latest["optimizer_state"]["state"]
+
+
+@pytest.mark.parametrize("extra", [("--freeze_core", "--train_core_norms"), ("--ema_rate", "0")],
+                         ids=["frozen_core", "no_ema"])
+def test_sharded_variants_are_bit_identical_to_unsharded(root, extra):
+    """The paths the base runs do not take, on 3 ranks: a frozen core with
+    trainable norms (frozen tensors are in the model but outside the
+    optimizer, the partition and the EMA) and no EMA at all (validation on
+    the training weights, checkpoints without ema_state)."""
+    tag = "frozen" if "--freeze_core" in extra else "noema"
+    runs = [_train(root, f"{mode}_{tag}", 3, "--games_per_step", "1", *extra, *shard,
+                   poison=True)
+            for mode, shard in (("u", ()), ("s", ("--shard_optimizer",)))]
+    _assert_runs_identical(*runs, tag)
+    ranks, latest, _ = runs[1]
+    assert ranks[0]["vals"] and latest["args"]["shard_optimizer"]
+    if tag == "frozen":
+        trainable = set(ranks[0]["trainable"])
+        assert len(trainable) < len(ranks[0]["params"]), "nothing frozen"
+        assert set(latest["ema_state"]) == trainable == set(ranks[0]["ema_names"])
+    else:
+        assert latest["ema_state"] is None and not any(r["ema"] for r in ranks)
+
+
+def _toy_worker(rank, world, init_file, root, bucket_mb):
+    """Zero1 on a model with the parameter shapes the multi-game model lacks:
+    a weight tied inside the model, a module registered under two names, a
+    non-contiguous parameter, a float64 one (a second dtype bucket), one
+    stepped every other step and one never — against single-process
+    AdamATan2 + ModelEMA, bit for bit."""
+    import torch.distributed as dist
+
+    from model.optim import AdamATan2, ModelEMA
+    from training.zero import Zero1
+
+    torch.set_num_threads(1)
+    dist.init_process_group("gloo", init_method=f"file://{init_file}", rank=rank,
+                            world_size=world)
+    try:
+        torch.manual_seed(0)
+        model = nn.Module()
+        model.a, model.b = nn.Linear(8, 8), nn.Linear(8, 8)
+        model.b.weight = model.a.weight
+        model.sub = nn.Module()
+        model.sub.alias = model.a
+        model.t = nn.Parameter(torch.randn(6, 5).t())
+        model.h = nn.Parameter(torch.randn(7, dtype=torch.float64))
+        model.big = nn.Parameter(torch.randn(300))
+        model.unused = nn.Parameter(torch.randn(4))
+        model.bn = nn.BatchNorm1d(8)
+        assert not model.t.is_contiguous()
+        ref = copy.deepcopy(model)
+        opt, ref_opt = AdamATan2(model.parameters(), lr=1e-2), AdamATan2(ref.parameters(), lr=1e-2)
+        zero = Zero1(model, opt, rank, world, bucket_mb=bucket_mb)
+        ema, ref_ema = zero.make_ema(model, 0.8), ModelEMA(ref, 0.8)
+        for step in range(4):
+            gen = torch.Generator().manual_seed(step)
+            for (n, p), q in zip(model.named_parameters(), ref.parameters()):
+                if n == "unused" or (n == "h" and step % 2):
+                    continue
+                g = torch.randn(p.shape, generator=gen, dtype=torch.float64).to(p.dtype)
+                p.grad, q.grad = g.clone(), g.clone()
+            zero.step()
+            ema.update(model)
+            ref_opt.step()
+            ref_ema.update(ref)
+            opt.zero_grad(set_to_none=True)
+            ref_opt.zero_grad(set_to_none=True)
+            assert all(torch.equal(p, q) for p, q in zip(model.parameters(), ref.parameters()))
+        got_opt, got_ema = zero.gather_optimizer_state(), zero.gather_ema(ema)
+        if rank == 0:
+            want = ref_opt.state_dict()
+            _assert_same(got_opt["param_groups"], want["param_groups"])
+            _assert_same(dict(got_opt["state"]), dict(want["state"]))
+            assert list(got_ema) == list(ref_ema.state_dict())
+            _assert_same(got_ema, ref_ema.state_dict())
+            _assert_same(zero.ema_model_state(model, got_ema), ref_ema.ema_model_state(ref))
+        with zero.ema_weights(model, ema):
+            ema_ref = ref_ema.ema_copy(ref)
+            assert all(torch.equal(p, q) for p, q in zip(model.parameters(),
+                                                          ema_ref.parameters()))
+        assert all(torch.equal(p, q) for p, q in zip(model.parameters(), ref.parameters()))
+        assert model.t.stride() == ref.t.stride()
+        torch.save(True, os.path.join(root, f"toy{rank}.pt"))
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.parametrize("world, bucket_mb", [(2, 0.0), (3, 1e-3)])
+def test_tied_aliased_noncontiguous_and_mixed_dtype_parameters(tmp_path, world, bucket_mb):
+    ctx = torch.multiprocessing.get_context("spawn")
+    _run_procs([ctx.Process(target=_toy_worker,
+                            args=(r, world, str(tmp_path / "store"), str(tmp_path), bucket_mb))
+                for r in range(world)])
+    assert all(torch.load(tmp_path / f"toy{r}.pt") for r in range(world))
 
 
 @pytest.fixture(scope="module")
