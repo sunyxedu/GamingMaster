@@ -89,8 +89,9 @@
 //!   preferred, u is strictly increasing in teacher_raw over the mate distances a move
 //!   can have (the mover mates in odd, is mated in even plies). The cp scale 3000 fits
 //!   YaneuraOu + Háo's range, measured on the 12 real floodgate games above (11.2k
-//!   scored moves): 99% of the non-mate scores are below 2900 cp, won positions sit at
-//!   2000–2900 cp (above that only VALUE_MAX_EVAL = 35281 cp and mates), and 0.5·tanh(cp/s)
+//!   scored moves): 99% of the non-mate scores are below 2900 cp (above that mostly
+//!   VALUE_MAX_EVAL = 35281 cp), won positions (best Q ≥ 0.97, no mate) score their first
+//!   line 2220 / 2550 / 2830 cp at the 10th / 50th / 90th percentile, and 0.5·tanh(cp/s)
 //!   separates scores around 2500 cp best for s ≈ 3200 (its slope ∝ y·sech²y / cp peaks at
 //!   y = cp/s ≈ 0.77); the chess scale 1000 would be saturated there (u(2500) = 0.49).
 //!   Near equality u adds 2% (τ = 0.025) / 4% (τ = 0.05) to the slope of Q/τ. On those

@@ -24,14 +24,15 @@
 //!   τ = 0.05 a move 0.15 below the best in Q keeps e⁻³ ≈ 5% of the best move's
 //!   weight — but WDL-based Q saturates: on real 2200+ games (default settings) 40% of
 //!   the labelled frames have |engine value| > 0.9, where many moves are equally won
-//!   (or lost), and without the secondary tie-break (below) the 8th move keeps > 20% of
-//!   the best move's weight in 55% of the frames (median 0.3): π would be flat over the
-//!   8 scored moves, a move that allows mate as heavy as the best defence.
-//!   Measured on the same data: the human move is among the 8 scored moves in 90% of
-//!   the frames and is the engine's first choice in ≈ 40%. At most the engine's
-//!   announced MultiPV maximum (Stockfish: 256 ≥ 218, the most legal moves of any chess
-//!   position); a larger value is an error, since Stockfish would silently keep
-//!   MultiPV 1 ([`super::uci::check_option_values`]).
+//!   (or lost), and the 8th move keeps > 20% of the best move's weight in 55% of the
+//!   frames (median 0.3; the same with the tie-break below, which splits Q ties but
+//!   hardly separates moves a few hundred cp apart): there π is nearly flat over the 8
+//!   scored moves and moves beyond them get 0. Raise `--max-moves` or `--tie-weight`, or
+//!   lower `--tau`, if that matters. Measured on the same data: the human move is among
+//!   the 8 scored moves in 90% of the frames and is the engine's first choice in ≈ 40%.
+//!   At most the engine's announced MultiPV maximum (Stockfish: 256 ≥ 218, the most
+//!   legal moves of any chess position); a larger value is an error, since Stockfish
+//!   would silently keep MultiPV 1 ([`super::uci::check_option_values`]).
 //! * `--tau 0.05`, `--policy softmax`, `--tie-weight 2`: π(a) ∝ exp(Q(a)/τ + w·u(a)) over
 //!   the scored moves, u = the secondary utility of `tgt.teacher_raw` ([`secondary_of_raw`],
 //!   [`super::transform`] module docs), which orders the moves Q cannot tell apart:
@@ -48,9 +49,9 @@
 //!   ≈ 200–800 cp (a real Lichess shard labelled at the defaults, 256 games / 20k frames:
 //!   18% of the frames have Q = 1 on line 1; line 1's cp is 203 / 418 / 764 at the 10th /
 //!   50th / 90th percentile of the non-mate frames with Q ≥ 0.97, and 99% of all non-mate
-//!   scores are below 1100 cp), where u ∈ [0.1, 0.33], still
-//!   strictly increasing up to ±5000 cp (f32; tablebase wins, cp ±(20000 − plies) with a
-//!   `SyzygyPath`, are all ≈ ±0.5: Q and the mate scores still order them). Near
+//!   scores are below 1100 cp), where u ∈ [0.1, 0.33], still strictly increasing up to
+//!   ±5000 cp (f32; tablebase wins, cp ±(20000 − plies) with a `SyzygyPath`, are all
+//!   ≈ ±0.5: Q and the mate scores still order them). Near
 //!   equality u adds ≈ 2% to the slope of Q/τ (0.001 vs ≈ 0.05 per cp at τ = 0.05).
 //!   Re-derived from that shard's columns: 28% of its frames share Q = 0 or 1 among their
 //!   top moves; in lost frames (every Q = 0) with a move that allows mate within 2
