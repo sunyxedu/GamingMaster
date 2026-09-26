@@ -275,6 +275,13 @@ impl<L: Labeller> Worker<L> {
         }
         let selected = self.max_samples.map(|m| job.sample < m).unwrap_or(true);
         let phase = phase_of(job.phase_key, job.sample, self.every);
+        // frames that need an analysis, resolved from the cache where possible; the
+        // misses are queried below (a position repeated within the sample only once)
+        let mut analyses: Vec<Option<Analysis>> = vec![None; v.len];
+        let mut wanted: Vec<usize> = Vec::new();
+        let mut misses: Vec<(usize, L::Key)> = Vec::new();
+        let mut first_miss: std::collections::HashMap<L::Key, usize> = std::collections::HashMap::new();
+        let mut repeats: Vec<(usize, usize)> = Vec::new(); // (frame, frame it repeats)
         for (t, pos) in positions.iter().enumerate() {
             if !selected || !(t + phase).is_multiple_of(self.every) {
                 out.stats.sampled_out += 1;
@@ -284,21 +291,34 @@ impl<L: Labeller> Worker<L> {
                 *out.stats.skipped.entry(r.to_string()).or_default() += 1;
                 continue;
             }
+            wanted.push(t);
             let key = self.lab.key(pos);
-            let analysis = match self.cache.get(&key) {
-                Some(a) => {
-                    out.stats.cache_hits += 1;
-                    a
+            if let Some(a) = self.cache.get(&key) {
+                out.stats.cache_hits += 1;
+                analyses[t] = Some(a);
+            } else if let Some(&t0) = first_miss.get(&key) {
+                out.stats.cache_hits += 1;
+                repeats.push((t, t0));
+            } else {
+                first_miss.insert(key.clone(), t);
+                misses.push((t, key));
+            }
+        }
+        for chunk in misses.chunks(self.lab.batch_size().max(1)) {
+            let frames: Vec<(usize, &L::Position)> = chunk.iter().map(|(t, _)| (*t, &positions[*t])).collect();
+            if let Some(got) = self.query(&v, &frames, &mut out.stats) {
+                for ((t, key), a) in chunk.iter().zip(got) {
+                    self.cache.insert(key.clone(), a.clone());
+                    analyses[*t] = Some(a);
                 }
-                None => match self.query(pos, &mut out.stats, v.index, t) {
-                    Some(a) => {
-                        self.cache.insert(key, a.clone());
-                        a
-                    }
-                    None => continue,
-                },
-            };
-            match self.finish(&v, t, pos, analysis) {
+            }
+        }
+        for (t, t0) in repeats {
+            analyses[t] = analyses[t0].clone();
+        }
+        for t in wanted {
+            let Some(a) = analyses[t].take() else { continue }; // engine failure (counted)
+            match self.finish(&v, t, &positions[t], a) {
                 Ok(f) => {
                     out.stats.labelled += 1;
                     out.frames[t] = Some(f);
@@ -312,9 +332,10 @@ impl<L: Labeller> Worker<L> {
         out
     }
 
-    /// One position through the engine, with one restart-and-retry.
-    fn query(&mut self, pos: &L::Position, stats: &mut Stats, sample: usize, t: usize) -> Option<Analysis> {
-        stats.queries += 1;
+    /// One engine request (a single position, or a chunk for batching labellers) with
+    /// one restart-and-retry; `None` = failed twice (every frame counted as an error).
+    fn query(&mut self, v: &SampleView, frames: &[(usize, &L::Position)], stats: &mut Stats) -> Option<Vec<Analysis>> {
+        stats.queries += frames.len() as u64;
         let mut last = None;
         for _ in 0..2 {
             if self.session.is_none() {
@@ -326,8 +347,20 @@ impl<L: Labeller> Worker<L> {
                     }
                 }
             }
-            match self.lab.query(self.session.as_mut().unwrap(), pos, &self.cfg) {
-                Ok(a) => return Some(a),
+            let session = self.session.as_mut().unwrap();
+            let r = if frames.len() == 1 && self.lab.batch_size() <= 1 {
+                self.lab.query(session, frames[0].1, &self.cfg).map(|a| vec![a])
+            } else {
+                self.lab.query_batch(session, v, frames, &self.cfg)
+            };
+            match r {
+                Ok(got) if got.len() == frames.len() => return Some(got),
+                Ok(got) => {
+                    // a labeller bug, not an engine failure: no retry
+                    stats.engine_errors += frames.len() as u64;
+                    stats.note(format!("sample {}: query_batch returned {} analyses for {} frames", v.index, got.len(), frames.len()));
+                    return None;
+                }
                 Err(e) => {
                     self.session = None; // drop = kill; reopened on the next attempt
                     stats.retries += 1;
@@ -338,9 +371,10 @@ impl<L: Labeller> Worker<L> {
                 }
             }
         }
-        stats.engine_errors += 1;
+        stats.engine_errors += frames.len() as u64;
         if let Some(e) = last {
-            stats.note(format!("sample {sample} frame {t}: engine: {e:#}"));
+            let ts: Vec<usize> = frames.iter().map(|f| f.0).collect();
+            stats.note(format!("sample {} frame(s) {ts:?}: engine: {e:#}", v.index));
         }
         None
     }

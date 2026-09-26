@@ -12,8 +12,11 @@
 //!    compare bit-exactly ([`SampleView::check_f32`]). A failing sample is skipped
 //!    and counted; the run fails if more than `--max-verify-fail-frac` (0.1%) fail.
 //! 3. per selected frame: [`Labeller::skip_reason`] (forced move, terminal, pass
-//!    frame, …) → cache lookup by [`Labeller::key`] → [`Labeller::query`] (engine
-//!    search → [`Analysis`]: scored moves as flat action ids with mover-POV Q).
+//!    frame, …) → cache lookup by [`Labeller::key`] (a position repeated within the
+//!    sample is searched once) → [`Labeller::query`] (engine search → [`Analysis`]:
+//!    scored moves as flat action ids with mover-POV Q), or [`Labeller::query_batch`]
+//!    over chunks of [`Labeller::batch_size`] frames for engines that analyse many
+//!    positions per request.
 //! 4. the driver keeps the top `--max-moves` moves, computes the policy (softmax of
 //!    Q/τ, or normalised visits), and [`Labeller::head_rows`] turns that policy over
 //!    full actions into one row per decoder head, exactly as the decoder's
@@ -329,6 +332,27 @@ pub trait Labeller: Send + Sync + 'static {
     /// Ask the engine. Errors (timeouts, crashes, protocol violations) make the driver
     /// restart the session and retry once; a second failure leaves the frame unlabelled.
     fn query(&self, session: &mut Self::Session, pos: &Self::Position, cfg: &EngineConfig) -> Result<Analysis>;
+
+    /// Positions per engine request (default 1 = [`Labeller::query`] per position).
+    /// Engines that analyse many positions per request (KataGo `analyzeTurns` over a
+    /// whole game) return more and implement [`Labeller::query_batch`]; the driver then
+    /// sends a sample's uncached frames in chunks of this size, retrying a failed chunk
+    /// once on a fresh session.
+    fn batch_size(&self) -> usize {
+        1
+    }
+
+    /// Analyses of several frames `(t, position)` of one sample, one per frame, in order
+    /// (default: [`Labeller::query`] for each).
+    fn query_batch(
+        &self,
+        session: &mut Self::Session,
+        _s: &SampleView,
+        frames: &[(usize, &Self::Position)],
+        cfg: &EngineConfig,
+    ) -> Result<Vec<Analysis>> {
+        frames.iter().map(|(_, p)| self.query(session, p, cfg)).collect()
+    }
 
     /// One row per head (order of [`Labeller::heads`]) from the teacher `policy` over
     /// full actions (flat id, probability; sums to 1 over the kept moves).

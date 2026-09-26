@@ -190,13 +190,15 @@ pub struct ToyPos {
     pub legal: Vec<(i64, i64, i64)>,
 }
 
-/// The toy labeller. `visits` / `bernoulli` switch on test-only extras: visit counts
-/// derived from Q (exercises `--policy visits` and `tgt.teacher_visits`) and a
-/// bernoulli head `promo_any` = P(the move promotes).
+/// The toy labeller. `visits` / `bernoulli` / `batch` switch on test-only extras: visit
+/// counts derived from Q (exercises `--policy visits` and `tgt.teacher_visits`), a
+/// bernoulli head `promo_any` = P(the move promotes), and batched requests of `batch`
+/// positions (the default [`Labeller::query_batch`]; 0 / 1 = per position).
 #[derive(Default, Clone)]
 pub struct ToyLabeller {
     pub visits: bool,
     pub bernoulli: bool,
+    pub batch: usize,
 }
 
 impl Labeller for ToyLabeller {
@@ -240,6 +242,10 @@ impl Labeller for ToyLabeller {
 
     fn has_visits(&self) -> bool {
         self.visits
+    }
+
+    fn batch_size(&self) -> usize {
+        self.batch.max(1)
     }
 
     fn default_max_moves(&self) -> usize {
@@ -563,6 +569,28 @@ mod tests {
     }
 
     #[test]
+    fn batched_requests_match_per_position() {
+        let root = setup("toy-batch");
+        run(ToyLabeller::default(), &opts(&root, fake_engine_command())).unwrap();
+        // chunks of 3 positions per request, every engine process crashing on its 5th search
+        let cmd = EngineCommand::in_process("flaky", || fake_engine().crash_on(5));
+        let mut o = opts(&root, cmd);
+        o.out = root.join("batched");
+        let s = run(ToyLabeller { batch: 3, ..Default::default() }, &o).unwrap();
+        assert!(s.stats.retries > 0 && s.stats.engine_errors == 0, "{:?}", s.stats);
+        for shard in ["toy_00000", "toy_00001"] {
+            for f in std::fs::read_dir(root.join("out").join(shard)).unwrap() {
+                let name = f.unwrap().file_name();
+                if name != "index.json" {
+                    let a = std::fs::read(root.join("out").join(shard).join(&name)).unwrap();
+                    assert_eq!(a, std::fs::read(root.join("batched").join(shard).join(&name)).unwrap(), "{name:?}");
+                }
+            }
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn dead_engine_fails_fast() {
         let root = setup("toy-dead");
         // a working handshake, but every search crashes
@@ -616,7 +644,7 @@ mod tests {
         let mut o = opts(&root, fake_engine_command());
         o.policy = Some(crate::label::transform::PolicyKind::Visits);
         o.max_moves = Some(4);
-        let lab = ToyLabeller { visits: true, bernoulli: true };
+        let lab = ToyLabeller { visits: true, bernoulli: true, batch: 2 };
         let s = run(lab, &o).unwrap();
         assert_eq!(s.teacher["policy"], json!({"kind": "visits"}));
         let out = ShardReader::open(&root.join("out").join("toy_00000")).unwrap();
