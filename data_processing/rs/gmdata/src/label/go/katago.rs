@@ -367,6 +367,29 @@ pub const METAL_MUX: &[(&str, &str)] = &[
     ("metalDeviceToUseThread3", "100"),
 ];
 
+/// Whether KataGo config key `k` only affects speed, device placement or logging — the
+/// keys `--perf-option` accepts (kept out of the teacher meta). Search parameters
+/// (`cpuctExploration`, `rootSymmetryPruning`, `useEvalCache`, …) change the teacher and
+/// must go through `--engine-option`.
+pub fn is_perf_key(k: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "numNNServerThreadsPerModel",
+        "numAnalysisThreads",
+        "numSearchThreadsPerAnalysisThread",
+        "numEigenThreadsPerModel",
+        "nnMaxBatchSize",
+        "nnCacheSizePowerOfTwo",
+        "nnMutexPoolSizePowerOfTwo",
+        "analysisPVLen",
+        "homeDataDir",
+        "warnUnusedFields",
+    ];
+    // backend device / precision / tuning keys (cudaDeviceToUseThread0, openclUseFP16,
+    // metalDeviceToUseThread2, trtUseFP16, …) and logging (logDir, logToStderr, …)
+    const PREFIX: &[&str] = &["cuda", "trt", "opencl", "metal", "coreml", "rocm", "hip", "onnx", "openvino", "eigen", "log"];
+    EXACT.contains(&k) || PREFIX.iter().any(|p| k.starts_with(p))
+}
+
 /// Add / replace speed-only settings (never recorded in the teacher meta).
 pub fn apply_perf(settings: &mut Vec<(String, String, bool)>, perf: &[(String, String)]) {
     for (k, v) in perf {

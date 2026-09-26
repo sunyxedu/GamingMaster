@@ -392,6 +392,19 @@ fn cli_builds_the_katago_command() {
         command: fake_cmd(), options: vec![], limits: Limits::default(), timeout: Duration::from_secs(1), max_moves: 8,
     })["katago_config"], json!("from --engine-arg"));
     // bad values
+    // --perf-option takes speed / device / logging keys only (they are kept out of the
+    // teacher meta); search parameters must be --engine-option (recorded)
+    let perf = |kv: &str| {
+        GoLabeller::new(&Cli::try_parse_from(["go", "--input", "i", "--out", "o", "--engine", "/bin/sh", "--perf-option", kv]).unwrap().a)
+    };
+    for ok in ["numNNServerThreadsPerModel=1", "cudaUseFP16=true", "openclDeviceToUseThread0=1", "nnMaxBatchSize=64", "logToStderr=true"] {
+        let lab = perf(ok).unwrap_or_else(|e| panic!("{ok}: {e:#}"));
+        assert!(lab.config.unwrap().1.contains(&ok.replace('=', " = ")), "{ok}");
+    }
+    for bad in ["cpuctExploration=2", "rootSymmetryPruning=false", "useEvalCache=true", "wideRootNoise=0.04", "maxVisits=5",
+                "reportAnalysisWinratesAs=BLACK"] {
+        assert!(format!("{:#}", perf(bad).unwrap_err()).contains("--engine-option"), "{bad}");
+    }
     for bad in [&["--komi-area", "7.3"][..], &["--board-size", "30"], &["--territory-rules", "{oops"]] {
         let mut argv = vec!["go", "--input", "i", "--out", "o", "--engine", "/bin/sh"];
         argv.extend_from_slice(bad);

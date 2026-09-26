@@ -193,8 +193,9 @@ pub struct Args {
     /// nnCacheSizePowerOfTwo (network evaluations cached per process)
     #[arg(long, default_value_t = 18)]
     pub nn_cache_pow2: u32,
-    /// speed-only KataGo config KEY=VALUE (device placement, batching; repeatable): written
-    /// into the generated config, not recorded in the teacher meta. macOS arm64 default:
+    /// speed-only KataGo config KEY=VALUE (device placement, batching, logging; repeatable;
+    /// other keys are refused — they go through --engine-option): written into the
+    /// generated config, not recorded in the teacher meta. macOS arm64 default:
     /// KataGo's Metal "mux" layout (2 GPU + 2 Neural Engine server threads) unless
     /// numNNServerThreadsPerModel is given
     #[arg(long = "perf-option")]
@@ -327,8 +328,9 @@ impl GoLabeller {
         let mut perf: Vec<(String, String)> = Vec::new();
         for kv in &args.perf_options {
             let (k, v) = kv.split_once('=').with_context(|| format!("--perf-option {kv:?} is not KEY=VALUE"))?;
-            if settings.iter().any(|s| s.2 && s.0 == k.trim()) {
-                bail!("--perf-option {kv}: {} changes the teacher; pass it as --engine-option (recorded in the teacher meta)", k.trim());
+            if settings.iter().any(|s| s.2 && s.0 == k.trim()) || !katago::is_perf_key(k.trim()) {
+                bail!("--perf-option {kv}: {} is not a KataGo speed / device / logging setting and may change the teacher; \
+                       pass it as --engine-option (recorded in the teacher meta)", k.trim());
             }
             perf.push((k.trim().to_string(), v.trim().to_string()));
         }
