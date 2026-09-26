@@ -35,6 +35,10 @@ Two leak classes, each tested mathematically:
       The recorded observations themselves are fog-of-war views
       (data invariants on the fixture and, if present, raw replays).
 
+Known train-time channel (strict xfail, flips when fixed): in train mode the
+encoder's BatchNorm normalises frame t with batch statistics that include the
+sample's later frames (inference uses running stats and is causal).
+
 Data: tests/fixtures/lux_kaggle/episode-71896508.json.gz (a real Kaggle
 episode, always); with raw replays present (``LUX_RAW_DIR``, default
 ~/gm-data/v3/raw/lux) ``LUX_AUDIT_N`` (default 2) of them as well.  Converter
@@ -736,3 +740,28 @@ def test_network_frame_outputs_ignore_later_frames(mixer, core, head):
                             (t, k, name, float((a - b).abs().max()))
             assert not torch.allclose(out["unit_action_logits"][:, t + 1:],
                                       out2["unit_action_logits"][:, t + 1:])
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "known train-time channel: LuxEncoder.map_conv's BatchNorm2d normalises each frame with "
+    "statistics over all real frames of the batch, later frames of the same sample included "
+    "(eval mode uses running stats: clean, test above)"))
+def test_encoder_train_mode_ignores_later_frames():
+    """IL runs the encoder in train mode: frame t's map tokens then depend on
+    frames > t through the BatchNorm batch statistics (a weak, batch-pooled
+    future signal; B = 8 sequences by default).  Flips to XPASS — i.e.
+    fails — once the map conv uses a per-frame normaliser."""
+    torch.manual_seed(0)
+    cfg = LuxConfig(d_model=32, n_heads=4, d_ff=64, encoder_channels=16, map_h=8, map_w=8,
+                    map_channels=12, max_units=6, unit_feature_dim=16, lux_global_features=11)
+    enc = LuxEncoder(cfg).train()
+    g = torch.Generator().manual_seed(2)
+    obs = _frames(cfg, 4, 9, g)
+    t = 4
+    obs2 = {k: v.clone() for k, v in obs.items()}
+    other = _frames(cfg, 4, 9, g)
+    for k in obs2:
+        obs2[k][:, t + 1:] = other[k][:, t + 1:]
+    with torch.no_grad():
+        a, b = enc(obs)[:, : t + 1], enc(obs2)[:, : t + 1]
+    assert torch.allclose(a, b, atol=1e-5, rtol=0), float((a - b).abs().max())
