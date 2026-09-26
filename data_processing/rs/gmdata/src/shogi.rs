@@ -525,6 +525,11 @@ fn parse_position(lines: &[&str]) -> Option<([Option<(u8, usize)>; 81], [[u32; 9
                     let pt = csa_piece(&b.get(i + 2..i + 4)?.iter().collect::<String>())?;
                     i += 4;
                     if f == 0 && r == 0 {
+                        // only unpromoted P..R can be in hand (a king / promoted piece used to
+                        // index past the hand array and panic the whole conversion)
+                        if !(PAWN..=ROOK).contains(&pt) {
+                            return None;
+                        }
                         hand[color][pt as usize] += 1;
                     } else {
                         if r == 0 || f == 0 {
@@ -1188,6 +1193,13 @@ mod tests {
         let k0 = b.key();
         b.turn ^= 1;
         assert!(b.key() != k0);
+    }
+
+    #[test]
+    fn promoted_or_king_in_hand_is_a_parse_error() {
+        assert!(parse_csa("PI\nP+00TO\n+\n").is_err());
+        assert!(parse_csa("PI\nP-00OU\n+\n").is_err());
+        assert!(parse_csa("PI\nP+00KI\n+\n").is_ok());
     }
 
     #[test]
