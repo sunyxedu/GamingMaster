@@ -32,8 +32,10 @@
 //!   the frames and is the engine's first choice in ≈ 40%.
 //! * `--tau 0.05`, `--policy softmax`: π(a) ∝ exp(Q(a)/τ) over the scored moves.
 //! * Engine options: `Threads=1`, `Hash=16` (MB; plenty for ~10⁵ nodes, and cheap to
-//!   clear) unless overridden with `--engine-option NAME=VALUE`; `MultiPV = K` and
-//!   `UCI_ShowWDL = true` are always set last (the labels need them).
+//!   clear) unless overridden with `--engine-option NAME=VALUE` (`Threads` > 1 makes
+//!   the labels nondeterministic; `SyzygyPath=DIR` adds tablebases — the meta records
+//!   only the directory name); `MultiPV = K` and `UCI_ShowWDL = true` are always set
+//!   last (the labels need them).
 //! * `--workers` = all hardware threads. One single-threaded Stockfish per worker.
 //!
 //! Query per labelled frame: `ucinewgame`, `isready` (clears hash and history tables,
@@ -661,6 +663,11 @@ mod tests {
         (f, t, p)
     }
 
+    fn replay_san(sans: &str) -> Vec<ChessPos> {
+        let (f, t, p) = labels(sans);
+        replay_moves(&f, &t, &p).unwrap()
+    }
+
     #[test]
     fn action_ids_round_trip() {
         for f in 0..64 {
@@ -699,32 +706,24 @@ mod tests {
             assert_eq!(frames[0].command(), "position startpos");
         }
         // game B: castling long in UCI = king to c-file; en passant; promotion suffix
-        let (f, t, p) = labels(GAMES[1].1);
-        let b = replay_moves(&f, &t, &p).unwrap();
+        let b = replay_san(GAMES[1].1);
         let cmd = b.last().unwrap().command();
         assert!(cmd.starts_with("position startpos moves d2d4 d7d5 b1c3 b8c6 c1f4 c8f5 d1d2 d8d7 e1c1 e8c8 "), "{cmd}");
         assert!(cmd.ends_with(" h2h4 g4h3 g1f3 h3g2 f3e5"), "{cmd}");
         assert_eq!(b[27].legal[b[27].gt].0.to_uci(CastlingMode::Standard).to_string(), "g2h1q");
         assert_eq!(b[27].gt_target().2, 4);
         assert_eq!((b[10].prior, b[14].prior, b[18].prior), (0, 1, 2), "threefold repetition");
-        let (f, t, p) = labels(GAMES[0].1);
-        let a = replay_moves(&f, &t, &p).unwrap();
+        let a = replay_san(GAMES[0].1);
         assert_eq!(a[8].gt_target().2, 1, "cxb8=N is an under-promotion");
         assert!(matches!(a[4].legal[a[4].gt].0, Move::EnPassant { .. }));
         assert!(matches!(a[14].legal[a[14].gt].0, Move::Castle { .. }));
-        let (f, t, p) = labels(GAMES[2].1);
-        let c = replay_moves(&f, &t, &p).unwrap();
+        let c = replay_san(GAMES[2].1);
         let forced: Vec<usize> = c.iter().filter(|x| x.legal.len() == 1).map(|x| x.t).collect();
         assert_eq!(forced, vec![3, 5]);
         // an illegal label fails the replay
         let (mut f, t, p) = labels(GAMES[0].1);
         f[3] = 0;
         assert!(replay_moves(&f, &t, &p).unwrap_err().to_string().contains("frame 3"));
-    }
-
-    fn replay_san(sans: &str) -> Vec<ChessPos> {
-        let (f, t, p) = labels(sans);
-        replay_moves(&f, &t, &p).unwrap()
     }
 
     #[test]
