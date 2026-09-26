@@ -18,6 +18,10 @@
 //! and `depth` are kept for the labeller; a repeated first move is dropped (first,
 //! i.e. best-ranked, occurrence wins).
 //!
+//! [`UciSession::open`] rejects option values the engine would silently ignore
+//! ([`check_option_values`]: a `spin` outside its announced range, e.g. Stockfish's
+//! MultiPV > 256, or a `check` value other than `true` / `false`).
+//!
 //! Scores are from the side to move. Stockfish reports `wdl` only with
 //! `setoption name UCI_ShowWDL value true`; convert with
 //! [`super::transform::q_from_wdl`], or cp with [`super::transform::q_from_cp`].

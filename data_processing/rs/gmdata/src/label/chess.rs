@@ -29,7 +29,10 @@
 //!   them get 0. Raise `--max-moves`, lower `--tau`, or re-derive π from
 //!   `tgt.teacher_raw` (cp) for decided positions if that matters.
 //!   Measured on the same data: the human move is among the 8 scored moves in 90% of
-//!   the frames and is the engine's first choice in ≈ 40%.
+//!   the frames and is the engine's first choice in ≈ 40%. At most the engine's
+//!   announced MultiPV maximum (Stockfish: 256 ≥ 218, the most legal moves of any chess
+//!   position); a larger value is an error, since Stockfish would silently keep
+//!   MultiPV 1 ([`super::uci::check_option_values`]).
 //! * `--tau 0.05`, `--policy softmax`: π(a) ∝ exp(Q(a)/τ) over the scored moves.
 //! * Engine options: `Threads=1`, `Hash=16` (MB; plenty for ~10⁵ nodes, and cheap to
 //!   clear) unless overridden with `--engine-option NAME=VALUE` (`Threads` > 1 makes
