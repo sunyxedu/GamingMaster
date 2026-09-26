@@ -25,6 +25,9 @@
 //! (KataGo has no per-query switch, and its analysis_example.cfg reports BLACK, which would
 //! flip every white-to-move Q / score lead / engine value), and every new process must pass
 //! a perspective probe (komi 150: black to move ≈ 0, white to move ≈ 1) before it labels.
+//! An `--engine-option` key KataGo reports as unused at startup (a typo) stops the run
+//! (the driver records the options in `meta.teacher`); `--perf-option` takes only speed /
+//! device / logging keys (`katago::is_perf_key`), which stay out of the meta.
 //!
 //! # What is labelled
 //!
