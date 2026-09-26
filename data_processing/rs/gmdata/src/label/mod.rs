@@ -26,6 +26,8 @@
 //! tgt.teacher_raw        [T,K] f32   engine-native score (cp, discs, score lead), NaN pad —
 //!                                    games whose native unit is not Q (meta.teacher.raw_unit)
 //! tgt.teacher_visits     [T,K] f32   search visits, NaN pad — MCTS engines
+//! tgt.teacher_prior      [T,K] f32   the engine network's raw policy prior per move, NaN
+//!                                    pad — engines that report it (KataGo; meta.teacher.prior)
 //! tgt.engine_value       [T]   f32   2·Q(position) − 1 ∈ [−1,1] (0 where unlabelled)
 //! tgt.engine_value_mask  [T]   bool  frame has a teacher
 //! tgt.<h>_probs_idx/_val [T,k]       sparse soft target of categorical head h (k < n classes):
