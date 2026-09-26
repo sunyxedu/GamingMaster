@@ -6,6 +6,9 @@
 //! outcome, seat and action verified; optional check of the recorded payoffs) and its
 //! frames / targets are encoded by gmrules (`encode_frame` / `encode_target`), the
 //! encoders the simulator (gmsim) uses — IL frames and RL frames are the same code.
+//! A record may stop before the rules' terminal state by a concession the source
+//! reports (a resignation), scored by the game's own rules on the replayed state
+//! ([`Record::conceded`]): it then counts as finished with that result.
 //!
 //! One sample per stream (`gmrules::Replay::streams`): per-seat layout — one per seat
 //! (optionally only the seats in `Record::seats`), interleaved — one per record.
@@ -58,6 +61,22 @@ pub struct Record {
     /// `tgt.action_probs_idx` / `action_probs_val` (candidate indices) when
     /// `ConvertOptions::soft_k > 0`; decisions without an entry get no teacher.
     pub soft_targets: Vec<(usize, Vec<(u32, f32)>)>,
+    /// The record ends BEFORE the rules' terminal state by a concession the source
+    /// reports (a resignation, a claim), scored by the game's own rules (the parser
+    /// computes it on the replayed final state, e.g. skat's resignation scoring): the
+    /// record then counts as finished — its frames get this outcome as value target,
+    /// `returns` are checked against `expected_returns`. A conceded record that
+    /// replays to the terminal state is rejected.
+    pub conceded: Option<Concession>,
+}
+
+/// The result of a conceded record (see [`Record::conceded`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Concession {
+    /// Per-seat outcome in [-1, 1] (as `Game::outcome`).
+    pub outcome: Vec<f32>,
+    /// Per-seat raw payoffs (as `Game::returns`).
+    pub returns: Vec<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +111,8 @@ pub struct Stats {
     pub truncated: usize,
     pub returns_mismatch: usize,
     pub empty: usize,
+    /// converted records that ended by a concession (`Record::conceded`)
+    pub conceded: usize,
     pub samples: usize,
     pub frames: usize,
     pub forced_frames: usize,
@@ -235,7 +256,21 @@ type Converted = (Vec<Sample>, usize, usize, (usize, f64));
 
 fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts: &ConvertOptions)
     -> std::result::Result<Converted, Reject> {
-    let r = r.map_err(Reject::Illegal)?;
+    let mut r = r.map_err(Reject::Illegal)?;
+    if let Some(c) = &rec.conceded {
+        // a concession ends an unfinished game: its own scoring is the result
+        if r.terminal {
+            return Err(Reject::Illegal("conceded, but the record replays to the end of the game".into()));
+        }
+        let n = r.spec.n_seats;
+        if c.outcome.len() != n || c.returns.len() != n || c.outcome.iter().any(|v| !(-1.0..=1.0).contains(v)) {
+            return Err(Reject::Illegal(format!("concession outcome {:?} / returns {:?}: {n} entries, outcome in [-1, 1]",
+                                               c.outcome, c.returns)));
+        }
+        r.terminal = true;
+        r.outcome = Some(c.outcome.clone());
+        r.returns = Some(c.returns.clone());
+    }
     let spec = &r.spec;
     if !r.terminal && !opts.allow_truncated {
         return Err(Reject::Truncated);
@@ -353,6 +388,7 @@ where
             let reason = match res {
                 Ok((samples, frames, forced, (soft_n, soft_bad))) => {
                     st.converted += 1;
+                    st.conceded += rec.conceded.is_some() as usize;
                     st.frames += frames;
                     st.forced_frames += forced;
                     st.soft_frames += soft_n;
@@ -405,7 +441,7 @@ mod tests {
             e
         };
         let recs = vec![
-            Record { id: "a".into(), events: ev([1, 2], &[0, 1, 1]), meta: json!({"x": 1}), seats: None, expected_returns: Some(vec![-2.0, 2.0]), soft_targets: vec![(3, vec![(0, 0.25), (1, 0.75)]), (4, vec![(1, 1.0), (7, 0.5)])] },
+            Record { id: "a".into(), events: ev([1, 2], &[0, 1, 1]), meta: json!({"x": 1}), seats: None, expected_returns: Some(vec![-2.0, 2.0]), soft_targets: vec![(3, vec![(0, 0.25), (1, 0.75)]), (4, vec![(1, 1.0), (7, 0.5)])], ..Default::default() },
             Record { id: "b".into(), events: ev([1, 2], &[0, 1]), meta: Value::Null, seats: None, expected_returns: None, ..Default::default() },
             Record { id: "c".into(), events: ev([1, 1], &[]), meta: Value::Null, seats: None, expected_returns: None, ..Default::default() },
             Record { id: "d".into(), events: ev([2, 0], &[1, 0]), meta: Value::Null, seats: Some(vec![1]), expected_returns: Some(vec![9.0, -1.0]), ..Default::default() },
@@ -437,6 +473,41 @@ mod tests {
         // frames: [seat0 pass (event 2), seat0 call (event 4)], [seat1 bet (event 3)]
         assert_eq!(idx[..6], [-1, -1, 1, -1, 1, 0]);
         assert_eq!(val[..6], [0.0, 0.0, 1.0, 0.0, 0.75, 0.25]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A record ending by a concession before the terminal state is finished with the
+    /// concession's outcome; a "concession" of a finished game or a malformed one is
+    /// rejected; the recorded returns are checked against the concession's.
+    #[test]
+    fn conceded_records() {
+        let dir = std::env::temp_dir().join(format!("gmdata-traj-conceded-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = KuhnConfig { players: 2 };
+        let ev = |acts: &[u32]| {
+            let mut e = vec![Event::Chance(1), Event::Chance(2)];
+            e.extend(acts.iter().enumerate().map(|(i, &a)| Event::Act(i % 2, a)));
+            e
+        };
+        // seat 0 passed, seat 1 bet; seat 0 resigns instead of answering
+        let c = Concession { outcome: vec![-0.5, 0.5], returns: vec![-1.0, 1.0] };
+        let rec = |id: &str, acts: &[u32], c: Option<Concession>, want: Option<Vec<f64>>| Record {
+            id: id.into(), events: ev(acts), conceded: c, expected_returns: want, ..Default::default()
+        };
+        let recs = vec![
+            rec("ok", &[0, 1], Some(c.clone()), Some(vec![-1.0, 1.0])),
+            rec("finished", &[0, 1, 0], Some(c.clone()), None),
+            rec("short", &[0, 1], Some(Concession { outcome: vec![1.0], returns: vec![1.0] }), None),
+            rec("returns", &[0, 1], Some(c.clone()), Some(vec![-2.0, 2.0])),
+            rec("truncated", &[0, 1], None, None),
+        ];
+        let st = convert::<KuhnPoker>(&cfg, recs.into_iter().map(Ok), &dir, &ConvertOptions::default()).unwrap();
+        assert_eq!((st.records, st.converted, st.conceded, st.illegal, st.returns_mismatch, st.truncated), (5, 1, 1, 2, 1, 1));
+        let sh = ShardReader::open(&dir.join("kuhn_poker_00000")).unwrap();
+        assert_eq!(sh.n_samples(), 2);
+        assert_eq!(sh.read_f32("tgt.value").unwrap(), vec![-0.5, 0.5]);
+        assert_eq!(sh.samples[1].meta["returns"], json!([-1.0, 1.0]));
+        assert!(sh.index["tensors"].get("tgt.value_mask").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
