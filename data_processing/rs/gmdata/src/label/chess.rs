@@ -99,9 +99,10 @@
 //! Throughput: positions/s per process ≈ 1 / (nodes ÷ nodes-per-second + ≈ 3 ms fixed
 //! cost), ÷ (1 − cache hit rate). Measured end to end (`gmdata label chess`, default
 //! settings, real 2200+ shards, an Apple M4 Pro shared with other jobs): one worker
-//! 11.0 pos/s (≈ 0.09 s per position); 8 workers 68–76 pos/s (8.5–9.6 per worker), a
-//! whole 20k-frame shard in 298 s with no engine error or verification failure. One
-//! engine process needs ≈ 0.2–0.4 GB RSS (NNUE net + hash).
+//! 11.0 pos/s (≈ 0.09 s per position); 8 workers 58–76 pos/s (7–9.6 per worker, load
+//! average 30–57 from other jobs on 12 cores), a whole 20k-frame shard in 300–350 s
+//! with no engine error or verification failure. One engine process needs ≈ 0.2–0.4 GB
+//! RSS (NNUE net + hash).
 //! Expected on the cluster labelling nodes (AMD EPYC 9355, Zen 5, AVX-512 VNNI; the
 //! universal sf_19 binary selects its avx512 VNNI build at runtime): ≈ 1.0–1.3 M nodes/s
 //! per single-threaded process with every core busy, i.e. ≈ 8–11 pos/s per process,
