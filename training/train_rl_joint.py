@@ -1,0 +1,1589 @@
+"""Stage 2: joint mixed-game RL on the WHOLE MultiGameNetwork.
+
+One model, many games: the Stage-1 checkpoint (training/train_multi_game.py,
+its EMA weights) is both the initial policy and the FROZEN KL reference, and
+every optimizer step mixes the RL data of every simulator game with an IL/KL
+replay stream of every configured game (simulator-less games included) — there
+is no per-game post-training.
+
+    uv run python -m training.train_rl_joint --init checkpoints/multi/multi_final.pt \\
+        --rl generals --rl othello \\
+        --data generals=data/generals/shards --data othello=data/othello/train \\
+        --data chess=data/chess/train --tokens_per_iter 65536 --iterations 2000
+
+    # data parallel (NCCL; gloo on CPU)
+    uv run torchrun --standalone --nproc_per_node=4 -m training.train_rl_joint ...
+
+Iteration (synchronous; weights AND the MoE routing bias frozen from the first
+rollout step to the last minibatch of the iteration):
+
+  1. quotas      TokenQuotaScheduler: per-game learner-token quotas (static
+                 --share, floor/cap, debt carrying; optional learning-progress
+                 bandit via --bandit_mix).  Split over the ranks.
+  2. rollouts    per game, lockstep waves of --envs VecGameEnv envs (reset
+                 together, played until all end) until the quota is met.  The
+                 learner steps eval-mode, fixed depth, one batched
+                 GameNetwork.step per env step (per-stream Stage-1 state;
+                 --actor fixed: one fixed-shape batch, capturable with
+                 --cuda_graph); it stores the behaviour log-prob μ of its
+                 sampled action, the value, masks and rewards.  League: mirror
+                 self-play (--mirror_prob) or learner vs a snapshot-pool
+                 opponent (PoolPolicy; one snapshot every --snapshot_every
+                 iterations, the Stage-1 policy first).  Board games are ONE
+                 interleaved stream per game with both movers; the loss goes
+                 on learner seats (League.learner_policy_mask; forced frames
+                 keep only the value loss).
+  3. π_old       the learner recomputes log π_old and V on every stored frame
+                 with the SAME weights and frozen routing (sparse MoE path,
+                 exactly the training forward), before epoch 1.
+  4. targets     per-game γ/λ seat_gae (interleaved streams: every seat its own
+                 chain) on V = popart.denormalize(v); PopArt statistics update
+                 (heads + EMA shadow rescaled, outputs preserved) or HL-Gauss
+                 passthrough; per-game running advantage normalisation (never
+                 per mixed minibatch); optional top-q |A| filter per stream.
+  5. epochs      --epochs × --minibatches optimizer steps.  Every minibatch
+                 holds a stratified slice of EVERY active game's streams plus an
+                 IL/KL replay batch per configured game (train_multi_game data
+                 loading + train_il_game.batch_loss, per-game --replay_weight):
+                   decoupled PPO   −min(1, π_old/μ)·min(rA, clip(r)A), r = π/π_old
+                   value           PopArt-normalised MSE (or HL-Gauss CE)
+                   entropy         per-game adaptive coefficient
+                   KL              full-head KL to the frozen reference
+                                   (every decoder head, il_head_terms), per-game
+                                   adaptive beta toward --kl_budget
+                 Games are combined as a token mean with GLOBAL per-game counts
+                 (combine_game_losses), so every rank's averaged gradient is
+                 the global token mean.
+  6. between     MoE loads (tallied over every training forward of the
+                 iteration — RL streams and replay batches, all epochs, all
+                 ranks; the eval-mode forwards count through
+                 model.components.core.moe_load_counting) → ONE balance-bias
+                 update; EMA; entropy / KL controllers from the all-reduced
+                 measurements; quota ledger; snapshot pool; logs; checkpoint.
+
+Canaries (logged every iteration, per game): first-minibatch |log π_old/μ|
+(actor/learner mismatch, ~0) and |log π/π_old| (0 up to float), KL to the
+reference, entropy, value explained variance, expert-load entropy, learner
+score vs the pool, and the replay IL loss with its drift since the first
+iteration (the forgetting canary of simulator-less games).
+
+Multi-GPU: torchrun, training.distributed (manual rank-invariant gradient
+sync, collective clipping).  Every collective is posted identically on every
+rank: per-epoch count all-reduce, per-step gradient sync + norm, per-iteration
+statistics / diagnostics / MoE-load all-reduces.  Rollouts are rank-local.
+
+Resume: ``rl_latest.pt`` (every --ckpt_minutes minutes, every --ckpt_every
+iterations, and at the end) holds weights, EMA, optimizer, PopArt, advantage
+statistics, entropy / KL controllers, the quota ledger and the snapshot pool.
+Randomness is re-derived from (seed, rank, iteration) at every iteration start
+(rollouts, league, opponent draws, replay data order), so ``--resume``
+reproduces the next iteration exactly on the same world size.  The checkpoint
+is also a train_multi_game checkpoint: ``model_state`` = EMA weights with the
+PopArt statistics folded into the value heads (reward units), loadable by
+eval_multi_game / export_game_checkpoint / a next ``--init``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import copy
+import math
+import os
+import random
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+
+import numpy as np
+import torch
+import torch.distributed as dist
+from torch.utils.data import DataLoader
+
+from data_processing.games.dataset import collate_game_sequences, training_sampler
+from env.league import League, PoolPolicy, SnapshotPool, StreamStepper, scatter_rows
+from env.vec_game import VecGameEnv, VecObs, has_simulator, make_vec_env
+from model.components.core import (
+    MoEFFN,
+    allreduce_moe_loads,
+    moe_layers,
+    moe_load_counting,
+    update_moe_balance,
+)
+from model.components.heads import HLGaussValueHead
+from model.games.base import categorical_entropy, masked_log_prob
+from model.multi_game import MultiGameNetwork, core_config_overrides, is_core_key
+from model.optim import TRM_BETAS, AdamATan2, ModelEMA
+from model.rl_utils import sync_gradients
+from training.distributed import (
+    broadcast_module_state,
+    collective_clip_grad_norm_,
+    init_distributed,
+)
+from training.eval_multi_game import load_multi
+from training.rl_joint import (
+    PASSTHROUGH,
+    AdaptiveEntropyCoef,
+    AdaptiveKLBeta,
+    AdvantageNormalizer,
+    LearningProgressBandit,
+    PopArt,
+    TokenQuotaScheduler,
+    combine_game_losses,
+    decoupled_ppo_loss,
+    entropy_loss,
+    expert_load_entropy,
+    head_terms_kl,
+    hl_gauss_value_loss,
+    kl_penalty,
+    seat_gae,
+    top_q_mask,
+    value_loss,
+)
+from training.rl_joint.stats import collective_device, dist_active
+from training.train_il_game import (
+    LABEL_KEYS,
+    UNCROPPABLE,
+    batch_loss,
+    default_tf,
+    open_dataset,
+    pick_device,
+    prepare_batch,
+    value_losses,
+    value_target,
+)
+from training.train_multi_game import multi_game_param_groups
+
+CKPT_LATEST = "rl_latest.pt"
+CKPT_FINAL = "rl_final.pt"
+
+
+# ======================================================================
+# CLI
+# ======================================================================
+
+def parse_args(argv=None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    a = p.add_argument
+    # --- model / data ---
+    a("--init", required=True,
+      help="train_multi_game checkpoint: its EMA weights are the initial policy AND the "
+           "frozen KL reference (pass it again with --resume)")
+    a("--rl", action="append", default=[], metavar="GAME",
+      help="game trained by RL (needs a simulator, env/vec_game.py); repeat per game")
+    a("--data", action="append", default=[], metavar="GAME=DIR",
+      help="IL replay shards of a game of the checkpoint (repeat; simulator-less games "
+           "are kept from forgetting by this stream alone)")
+    a("--iterations", type=int, default=1000)
+    # --- quotas / rollouts ---
+    a("--tokens_per_iter", type=int, default=16384,
+      help="learner tokens per iteration over all games and ranks (quota budget)")
+    a("--share", action="append", default=[], metavar="GAME=W",
+      help="static learner-token share of an RL game (default equal)")
+    a("--share_floor", type=float, default=0.0)
+    a("--share_cap", type=float, default=1.0)
+    a("--debt_decay", type=float, default=0.9)
+    a("--bandit_mix", type=float, default=0.0,
+      help="mix of the learning-progress bandit (signal: learner score vs the pool) into "
+           "the static shares; 0 = static shares only")
+    a("--envs", action="append", default=[], metavar="GAME=N",
+      help="lockstep envs per wave per rank (default 8)")
+    a("--env_kw", action="append", default=[], metavar="GAME:KEY=VALUE",
+      help="adapter option, e.g. generals:max_turns=500 (Python literal values)")
+    a("--max_wave_steps", type=int, default=100000,
+      help="safety cap on env steps per lockstep wave")
+    a("--actor", choices=("stream", "fixed"), default="stream",
+      help="rollout stepping: 'stream' = StreamStepper (any temporal mixer); 'fixed' = "
+           "all rows in one fixed-shape batch (recurrent temporal mixer; --cuda_graph)")
+    a("--cuda_graph", action="store_true",
+      help="with --actor fixed on CUDA: replay the step from a CUDA graph (GraphedStep)")
+    # --- league ---
+    a("--mirror_prob", action="append", default=[], metavar="GAME=P",
+      help="probability of a mirror self-play episode (default 1.0 = pure mirror); "
+           "otherwise the learner plays a snapshot-pool opponent")
+    a("--learner_seat", type=int, default=None,
+      help="pin the learner's seat in non-mirror episodes (default uniform)")
+    a("--snapshot_every", type=int, default=10, help="iterations between pool snapshots")
+    a("--pool_size", type=int, default=16)
+    a("--pool_max_nets", type=int, default=2,
+      help="snapshot networks loaded per game and iteration (PoolPolicy active set)")
+    a("--snapshot_weights", choices=("policy", "ema"), default="policy",
+      help="weights a pool snapshot holds: the live policy (default) or its EMA")
+    a("--snapshot_dir", default=None,
+      help="file-backed snapshot pool directory (default <save_dir>/snapshots); 'memory' "
+           "keeps snapshots in host RAM and inline in checkpoints")
+    # --- advantage / value ---
+    a("--gamma", action="append", default=[], metavar="GAME=G", help="discount (default 1.0)")
+    a("--lam", action="append", default=[], metavar="GAME=L", help="GAE lambda (default 0.95)")
+    a("--popart_decay", type=float, default=0.99)
+    a("--no_popart", action="store_true", help="identity value normalisation")
+    a("--adv_decay", type=float, default=0.99, help="per-game advantage moment EMA decay")
+    a("--adv_filter_q", type=float, default=0.0,
+      help="top-q |advantage| filter per stream (e.g. 0.25); 0 = off")
+    # --- optimisation ---
+    a("--epochs", type=int, default=2)
+    a("--minibatches", type=int, default=4, help="optimizer steps per epoch")
+    a("--rows_per_forward", action="append", default=[], metavar="GAME=N",
+      help="streams per learner forward (gradient accumulation within a minibatch; "
+           "default 8)")
+    a("--clip", type=float, default=0.2)
+    a("--clip_high", type=float, default=None)
+    a("--is_clip", type=float, default=1.0, help="truncation of π_old/μ (0 = untruncated)")
+    a("--dual_clip", type=float, default=None)
+    a("--value_coef", type=float, default=0.5)
+    a("--value_clip", type=float, default=None)
+    a("--value_loss", choices=("mse", "huber"), default="mse")
+    a("--game_weight", action="append", default=[], metavar="GAME=W",
+      help="per-game multiplier of the RL loss terms (token-mean weights, default 1)")
+    a("--entropy_coef", action="append", default=[], metavar="GAME=C",
+      help="initial entropy coefficient (default 0.01)")
+    a("--entropy_target", action="append", default=[], metavar="GAME=H",
+      help="target policy entropy (nats); games without one keep a fixed coefficient")
+    a("--entropy_lr", type=float, default=0.05)
+    a("--entropy_mode", choices=("log", "linear"), default="log")
+    a("--entropy_min", type=float, default=1e-5)
+    a("--entropy_max", type=float, default=0.1)
+    a("--kl_beta", action="append", default=[], metavar="GAME=B",
+      help="initial KL beta (default 0.05; 0 = no KL anchor for the game)")
+    a("--kl_budget", action="append", default=[], metavar="GAME=K",
+      help="per-game KL budget the beta controller steers toward (default 0.03)")
+    a("--kl_rate", type=float, default=0.5)
+    a("--kl_adapt", type=int, default=1, help="0 = fixed betas")
+    a("--kl_min", type=float, default=1e-4)
+    a("--kl_max", type=float, default=10.0)
+    a("--lr", type=float, default=1e-5)
+    a("--weight_decay", type=float, default=0.0)
+    a("--beta1", type=float, default=TRM_BETAS[0])
+    a("--beta2", type=float, default=TRM_BETAS[1])
+    a("--clip_grad", type=float, default=1.0)
+    a("--ema_rate", type=float, default=0.998, help="EMA decay per iteration (0 = off)")
+    a("--moe_balance_rate", type=float, default=1e-3,
+      help="balance-bias step, ONCE per iteration (loads of the whole iteration)")
+    a("--act_steps", type=int, default=0, help="fixed core depth (0 = the model's default)")
+    a("--bf16", action="store_true")
+    # --- replay stream ---
+    a("--replay_weight", action="append", default=[], metavar="GAME=W",
+      help="weight of a game's IL replay loss (default --replay_weight_default)")
+    a("--replay_weight_default", type=float, default=0.25)
+    a("--replay_games_per_mb", type=int, default=0,
+      help="replay games drawn per minibatch by their weights (0 = every game every "
+           "minibatch)")
+    a("--replay_batch_size", type=int, default=4)
+    a("--replay_batch", action="append", default=[], metavar="GAME=N")
+    a("--replay_max_len", action="append", default=[], metavar="GAME=N",
+      help="crop replay sequences (generals: its first N frames, as in train_multi_game)")
+    a("--replay_tf", action="append", default=[], metavar="GAME=P",
+      help="teacher forcing of the replay batches (default train_il_game.default_tf)")
+    a("--replay_value_weight", action="append", default=[], metavar="GAME=W",
+      help="replay value-loss weight (PopArt-normalised targets; default 0.2 for "
+           "simulator-less games, 0 for RL games whose critic RL trains)")
+    a("--replay_kl_weight", action="append", default=[], metavar="GAME=W",
+      help="full-head KL to the frozen reference on the replay batches (default 0)")
+    a("--il_legal_mask", action="store_true")
+    a("--soft_target_weight", type=float, default=1.0)
+    a("--engine_value_weight", type=float, default=1.0)
+    a("--logit_z_loss", type=float, default=1e-4)
+    a("--num_workers", type=int, default=0)
+    # --- run ---
+    a("--save_dir", default="checkpoints/rl_joint")
+    a("--ckpt_minutes", type=float, default=30.0, help="write rl_latest.pt this often")
+    a("--ckpt_every", type=int, default=0, help="also every N iterations (0 = off)")
+    a("--save_every", type=int, default=0, help="keep rl_iter<N>.pt every N iterations")
+    a("--resume", default=None, help="rl_latest.pt to continue from (same arguments)")
+    a("--log_every", type=int, default=1)
+    a("--seed", type=int, default=0)
+    a("--device", default=None)
+    a("--bucket_mb", type=float, default=25.0)
+    a("--dist_timeout", type=float, default=30.0)
+    return p.parse_args(argv)
+
+
+def _pairs(items: Sequence[str], cast: Callable = str, what: str = "VALUE") -> Dict[str, Any]:
+    out = {}
+    for it in items:
+        g, sep, v = it.partition("=")
+        if not sep or not g:
+            raise SystemExit(f"expected GAME={what}, got {it!r}")
+        out[g] = cast(v)
+    return out
+
+
+def _check_games(flag: str, values: Mapping[str, Any], allowed: Sequence[str],
+                 what: str) -> None:
+    unknown = sorted(set(values) - set(allowed))
+    if unknown:
+        raise SystemExit(f"{flag} for {unknown}: not {what} ({list(allowed)})")
+
+
+def _env_kwargs(items: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for it in items:
+        g, sep, kv = it.partition(":")
+        k, sep2, v = kv.partition("=")
+        if not (sep and sep2 and g and k):
+            raise SystemExit(f"expected GAME:KEY=VALUE, got {it!r}")
+        try:
+            val = ast.literal_eval(v)
+        except (ValueError, SyntaxError):
+            val = v
+        out.setdefault(g, {})[k] = val
+    return out
+
+
+def derive_seed(*parts: int) -> int:
+    """A 32-bit seed from non-negative integer parts (seed, rank, iteration,
+    tags): independent streams for every combination."""
+    return int(np.random.SeedSequence([int(x) for x in parts]).generate_state(1)[0])
+
+
+def seed_all(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed % 2 ** 32)
+    torch.manual_seed(seed)
+
+
+# ======================================================================
+# Per-game RL specs: how the trainer drives a simulator game's decoder
+# ======================================================================
+
+class RLGameSpec:
+    """Generic spec: the decoder's ``sample()`` log-prob is μ, its
+    ``log_prob_entropy`` the policy, no teacher-forced conditioning, and the
+    KL anchor is the sampled k3 estimate on the taken actions (games with a
+    full-head spec override :meth:`kl_targets` / :meth:`kl_terms`)."""
+
+    full_kl = False
+
+    def env_kwargs(self, cfg) -> Dict[str, Any]:
+        return {}
+
+    def check_env(self, env: VecGameEnv, net) -> None:
+        pass
+
+    def behaviour_logp(self, out: Mapping[str, torch.Tensor],
+                       legal: Mapping[str, torch.Tensor]) -> torch.Tensor:
+        return out["action_log_prob"].float()
+
+    def labels(self, actions: Mapping[str, torch.Tensor], cfg) -> Optional[Dict[str, torch.Tensor]]:
+        return None
+
+    def logp_entropy(self, net, pred, actions, legal) -> Tuple[torch.Tensor, torch.Tensor]:
+        lp, ent, _ = net.action_decoder.log_prob_entropy(pred, actions, legal)
+        return lp.float(), ent.float()
+
+    def kl_targets(self, actions, forced, cfg) -> Dict[str, torch.Tensor]:
+        raise NotImplementedError
+
+    def kl_terms(self, net, pred, tgt, mask, legal) -> Dict[str, Dict]:
+        return net.action_decoder.il_head_terms(pred, tgt, mask)
+
+
+class ForcedPassPlacementSpec(RLGameSpec):
+    """Placement games whose passes are rules-forced (othello): the env
+    applies the pass itself on ``forced`` frames and ignores the decoder's
+    pass Bernoulli elsewhere, so the RL action is the placement alone — a
+    placement-only masked log-prob / entropy (train_rl_game.py's rule), the
+    pass head anchored by the KL only.  Forced frames carry no policy loss."""
+
+    full_kl = True
+
+    def behaviour_logp(self, out, legal):
+        return masked_log_prob(out["place_logits"].float(), out["action_place"],
+                               legal["place"].bool())
+
+    def logp_entropy(self, net, pred, actions, legal):
+        logits = pred["place_logits"].float()
+        mask = legal["place"].bool()
+        lp = masked_log_prob(logits, actions["place_idx"].long(), mask)
+        safe = mask | ~mask.any(-1, keepdim=True)     # forced rows: uniform, no NaN
+        ent = categorical_entropy(logits.masked_fill(~safe, float("-inf")))
+        return lp, ent
+
+    def kl_targets(self, actions, forced, cfg):
+        return {"place_idx": actions["place_idx"].long(), "passed": forced.bool()}
+
+    def kl_terms(self, net, pred, tgt, mask, legal):
+        terms = dict(net.action_decoder.il_head_terms(pred, tgt, mask))
+        terms["place"] = {**terms["place"], "mask": legal["place"].bool()}
+        return terms
+
+
+class GeneralsSpec(RLGameSpec):
+    """generals: the decoder's hierarchical log-prob (μ = ``action_log_prob``),
+    the replay teacher-forces the stored source (direction / split condition
+    on it exactly as in the rollout), and the KL covers every head
+    (ImitationLoss.head_terms weights; the source restricted to legal cells,
+    the direction logits carry their own hard mask)."""
+
+    full_kl = True
+
+    def env_kwargs(self, cfg):
+        return {"grid_h": cfg.grid_h, "grid_w": cfg.grid_w,
+                "turn_globals": bool(getattr(cfg, "turn_globals", False))}
+
+    def check_env(self, env, net):
+        schema = env.obs_schema()
+        cfg = net.cfg
+        g = schema["globals_seq"][0][0]
+        c = schema["grid_seq"][0][0]
+        if g != cfg.global_features or c != cfg.grid_channels:
+            raise SystemExit(f"generals env emits {c} grid channels / {g} globals, the network "
+                             f"expects {cfg.grid_channels} / {cfg.global_features} "
+                             f"(turn_globals={getattr(cfg, 'turn_globals', False)})")
+
+    def labels(self, actions, cfg):
+        src = actions["source_idx"].long()
+        return {"source_y": src // cfg.grid_w, "source_x": src % cfg.grid_w}
+
+    def kl_targets(self, actions, forced, cfg):
+        src = actions["source_idx"].long()
+        return {"count": (~forced.bool()).long(),
+                "src_y": (src // cfg.grid_w).unsqueeze(-1),
+                "src_x": (src % cfg.grid_w).unsqueeze(-1),
+                "dir_id": actions["direction"].long().unsqueeze(-1),
+                "ratio_id": actions["split"].long().unsqueeze(-1)}
+
+    def kl_terms(self, net, pred, tgt, mask, legal):
+        terms = dict(net.action_decoder.il_head_terms(pred, tgt, mask))
+        src = legal["source"].bool()
+        terms["source"] = {**terms["source"], "mask": src.reshape(*src.shape[:2], -1)}
+        return terms
+
+
+GAME_SPECS: Dict[str, RLGameSpec] = {
+    "generals": GeneralsSpec(),
+    "othello": ForcedPassPlacementSpec(),
+}
+
+
+def game_spec(game: str) -> RLGameSpec:
+    return GAME_SPECS.get(game, RLGameSpec())
+
+
+# ======================================================================
+# Rollouts
+# ======================================================================
+
+def _autocast(device: torch.device, bf16: bool):
+    return torch.autocast(device.type, dtype=torch.bfloat16, enabled=bf16)
+
+
+class LearnerActor:
+    """The learner network of one game as its rollout policy: eval mode,
+    fixed depth, no grad; per call it returns (on the CPU) the sampled
+    actions (decoder ``sample()`` keys), ``mu`` = the spec's behaviour
+    log-prob of them and the ``value`` (head units).
+
+    ``mode="stream"``: :class:`env.league.StreamStepper` — per-stream Stage-1
+    state, one batched call per distinct frame index (one per env step in
+    lockstep), any temporal mixer.  ``mode="fixed"``: every row of the env in
+    ONE fixed-shape batch from :meth:`GameNetwork.initial_st_cache` with a
+    tensor step index (recurrent temporal mixer; rows the learner does not
+    play are computed and discarded), optionally replayed from a CUDA graph
+    (``cuda_graph``, :class:`model.cuda_graph.GraphedStep`).  Must be called
+    once per env step of a wave in fixed mode (also with no rows)."""
+
+    def __init__(self, net, spec: RLGameSpec, act_steps: int, device: torch.device, *,
+                 bf16: bool = False, mode: str = "stream", cuda_graph: bool = False):
+        self.net, self.spec, self.act_steps, self.device = net, spec, act_steps, device
+        self.bf16, self.mode = bf16, mode
+        self.cuda_graph = bool(cuda_graph)
+        if mode not in ("stream", "fixed"):
+            raise ValueError(f"actor mode must be 'stream' or 'fixed', got {mode!r}")
+        if mode == "fixed" and net.cfg.temporal_mixer != "recurrent":
+            raise SystemExit("--actor fixed needs temporal_mixer='recurrent' (the attention "
+                             "mixer's KV cache grows every frame)")
+        if self.cuda_graph and (mode != "fixed" or device.type != "cuda"):
+            raise SystemExit("--cuda_graph needs --actor fixed on a CUDA device")
+        self._graph = None
+        self.begin_wave()
+
+    def begin_wave(self) -> None:
+        self.stepper = StreamStepper(self.net, act_steps=self.act_steps, device=self.device)
+        self._cache: Optional[List[torch.Tensor]] = None
+        self._t = 0
+
+    def _fixed_step(self, obs: VecObs) -> Dict[str, torch.Tensor]:
+        o = {k: v.to(self.device) for k, v in obs.obs.items()}
+        lg = {k: v.to(self.device) for k, v in obs.legal.items()}
+        if self.cuda_graph:
+            if self._graph is None or self._graph.batch != obs.n_rows:
+                from model.cuda_graph import GraphedStep
+                self._graph = GraphedStep(self.net, o, lg, act_steps=self.act_steps,
+                                          autocast_dtype=torch.bfloat16 if self.bf16 else None)
+            if self._t == 0:
+                self._graph.reset()
+            out = dict(self._graph(o, self._t, lg))
+        else:
+            if self._t == 0:
+                self._cache = self.net.initial_st_cache(obs.n_rows)
+            step_idx = torch.tensor([self._t], dtype=torch.long, device=self.device)
+            with _autocast(self.device, self.bf16):
+                out = self.net.step(o, legal=lg, st_cache=self._cache, step_idx=step_idx,
+                                    act_steps=self.act_steps)
+            self._cache = out.pop("st_cache")
+        self._t += 1
+        return out
+
+    @torch.no_grad()
+    def __call__(self, obs: VecObs, rows: torch.Tensor) -> Dict[str, torch.Tensor]:
+        rows = torch.as_tensor(rows, dtype=torch.long).reshape(-1)
+        was_training = self.net.training
+        self.net.eval()
+        try:
+            if self.mode == "fixed":
+                if rows.numel() and not bool((obs.step_idx[rows] == self._t).all()):
+                    raise RuntimeError("fixed actor: rows are not in lockstep "
+                                       f"(frame {self._t} vs {obs.step_idx[rows].tolist()[:4]})")
+                full = self._fixed_step(obs)
+                idx = rows.to(self.device)
+                out = {k: v.index_select(0, idx) for k, v in full.items()
+                       if torch.is_tensor(v) and v.dim() > 0 and v.shape[0] == obs.n_rows}
+            else:
+                if rows.numel() == 0:
+                    return {}
+                streams = obs.stream_id[rows].tolist()
+                restart = [s for s, ne in zip(streams, obs.new_episode[rows].tolist()) if ne]
+                if restart:
+                    self.stepper.reset(restart)
+                with _autocast(self.device, self.bf16):
+                    out = self.stepper.step({k: v[rows] for k, v in obs.obs.items()},
+                                            {k: v[rows] for k, v in obs.legal.items()},
+                                            streams, obs.step_idx[rows].tolist())
+            if rows.numel() == 0:
+                return {}
+            legal = {k: v[rows].to(self.device) for k, v in obs.legal.items()}
+            out["mu"] = self.spec.behaviour_logp(out, legal)
+            out["value"] = out["value"].float()
+        finally:
+            self.net.train(was_training)
+        return {k: v.detach().cpu() for k, v in out.items()}
+
+
+@dataclass
+class Stream:
+    """One learner stream of one wave: frames 0..T-1 of one episode row."""
+
+    obs: Dict[str, torch.Tensor]
+    legal: Dict[str, torch.Tensor]
+    actions: Dict[str, torch.Tensor]
+    mu: torch.Tensor          # [T] behaviour log-prob
+    value: torch.Tensor       # [T] actor value (head units)
+    seat: torch.Tensor        # [T] acting seat of the frame
+    vmask: torch.Tensor       # [T] learner acting (value / KL frames)
+    pmask: torch.Tensor       # [T] policy-loss frames (acting, not forced)
+    forced: torch.Tensor      # [T]
+    rewards: torch.Tensor     # [T, S] reward of every seat after the frame
+    done: torch.Tensor        # [T] episode ended after the frame
+    # learner-side, filled before the epochs
+    lp_old: Optional[torch.Tensor] = None
+    v_old: Optional[torch.Tensor] = None
+    adv: Optional[torch.Tensor] = None
+    ret: Optional[torch.Tensor] = None
+    keep: Optional[torch.Tensor] = None
+    old_pred: Optional[torch.Tensor] = None
+
+    @property
+    def length(self) -> int:
+        return int(self.mu.shape[0])
+
+
+@dataclass
+class WaveStats:
+    episodes: int = 0
+    steps: int = 0
+    tokens: int = 0
+    ep_len_sum: float = 0.0
+    score_sum: float = 0.0
+    score_n: int = 0
+    mirror: int = 0
+
+
+def _assemble_streams(recs: List[Dict[str, Any]]) -> List[Stream]:
+    """Per-step learner records → one Stream per row (records are in step
+    order; a stable sort by row keeps each row's frames in time order)."""
+    if not recs:
+        return []
+    rows = torch.cat([r["rows"] for r in recs])
+    order = torch.sort(rows, stable=True).indices
+    _, counts = torch.unique_consecutive(rows[order], return_counts=True)
+    counts = counts.tolist()
+
+    def cat(get) -> List[torch.Tensor]:
+        return list(torch.cat([get(r) for r in recs])[order].split(counts))
+
+    def cat_dict(key) -> List[Dict[str, torch.Tensor]]:
+        keys = list(recs[0][key])
+        parts = {k: cat(lambda r, k=k: r[key][k]) for k in keys}
+        return [{k: parts[k][i] for k in keys} for i in range(len(counts))]
+
+    obs, legal, actions = cat_dict("obs"), cat_dict("legal"), cat_dict("actions")
+    fields_ = {k: cat(lambda r, k=k: r[k]) for k in
+               ("mu", "value", "seat", "vmask", "pmask", "forced", "rewards", "done")}
+    return [Stream(obs=obs[i], legal=legal[i], actions=actions[i],
+                   **{k: fields_[k][i] for k in fields_}) for i in range(len(counts))]
+
+
+def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: int,
+                 max_steps: int) -> Tuple[List[Stream], WaveStats]:
+    """Reset every env and play one lockstep wave to the end: the learner on
+    its rows, the league's opponents on theirs.  Returns the learner's
+    streams (episode rows it plays on) and episode statistics."""
+    obs = env.reset(seed=seed)
+    league.update(obs)
+    actor.begin_wave()
+    R = obs.n_rows
+    recs: List[Dict[str, Any]] = []
+    st = WaveStats(mirror=int(league.is_mirror().sum()))
+    winner = torch.full((env.num_envs,), -1, dtype=torch.long)
+    ep_len = torch.zeros(env.num_envs, dtype=torch.long)
+    try:
+        while bool(obs.active.any()):
+            if st.steps >= max_steps:
+                raise RuntimeError(f"{env.game}: wave exceeded --max_wave_steps {max_steps}")
+            rows = league.learner_rows(obs).nonzero().squeeze(1)
+            out = actor(obs, rows)
+            if rows.numel():
+                acts = env.replay_actions(out)
+                la = scatter_rows(acts, rows, R)
+            else:
+                acts, la = {}, {}
+            acting = league.learner_acting(obs)[rows]
+            pmask = league.learner_policy_mask(obs)[rows]
+            nxt, rew, done, info = env.step(league.act(obs, la))
+            if rows.numel():
+                env_rows = obs.env_id[rows]
+                recs.append({
+                    "rows": rows.clone(),
+                    "obs": {k: v[rows] for k, v in obs.obs.items()},
+                    "legal": {k: v[rows] for k, v in obs.legal.items()},
+                    "actions": {k: v.cpu() for k, v in acts.items()},
+                    "mu": out["mu"], "value": out["value"],
+                    "seat": obs.to_play[rows].long(), "vmask": acting.bool(),
+                    "pmask": pmask.bool(), "forced": obs.forced[rows].bool(),
+                    "rewards": rew[env_rows].float(), "done": done[env_rows].bool()})
+            winner = torch.where(done, info["winner"].long(), winner)
+            ep_len = torch.where(done, info["episode_len"].long(), ep_len)
+            league.update(nxt)
+            obs = nxt
+            st.steps += 1
+    finally:
+        league.release_all()
+    streams = _assemble_streams(recs)
+    st.episodes = env.num_envs
+    st.ep_len_sum = float(ep_len.sum())
+    score = league.learner_score(winner)
+    ok = ~torch.isnan(score)
+    st.score_sum, st.score_n = float(score[ok].sum()), int(ok.sum())
+    st.tokens = int(sum(int(s.vmask.sum()) for s in streams))
+    return streams, st
+
+
+# ======================================================================
+# Learner batches
+# ======================================================================
+
+def _pad(ts: Sequence[torch.Tensor], T: int) -> torch.Tensor:
+    out = ts[0].new_zeros((len(ts), T) + tuple(ts[0].shape[1:]))
+    for i, t in enumerate(ts):
+        out[i, :t.shape[0]] = t
+    return out
+
+
+def build_batch(streams: Sequence[Stream], device: torch.device,
+                extra: Sequence[str] = ()) -> Dict[str, Any]:
+    """Tail-padded [B, T, ...] tensors of ``streams`` on ``device``: obs,
+    legal, actions, frame_mask and the per-frame fields in ``extra``."""
+    T = max(s.length for s in streams)
+
+    def stack(get) -> torch.Tensor:
+        return _pad([get(s) for s in streams], T).to(device)
+
+    b: Dict[str, Any] = {
+        "obs": {k: stack(lambda s, k=k: s.obs[k]) for k in streams[0].obs},
+        "legal": {k: stack(lambda s, k=k: s.legal[k]) for k in streams[0].legal},
+        "actions": {k: stack(lambda s, k=k: s.actions[k]) for k in streams[0].actions},
+        "frame_mask": stack(lambda s: torch.ones(s.length, dtype=torch.bool)),
+    }
+    for k in extra:
+        b[k] = stack(lambda s, k=k: getattr(s, k))
+    return b
+
+
+def _chunks(idx: Sequence[int], n: int) -> List[List[int]]:
+    idx = list(idx)
+    return [idx[i:i + n] for i in range(0, len(idx), max(1, n))]
+
+
+def learner_forward(net, spec: RLGameSpec, b: Dict[str, Any], depth: int,
+                    device: torch.device, bf16: bool) -> Dict[str, torch.Tensor]:
+    with _autocast(device, bf16):
+        return net(b["obs"], legal=b["legal"], labels=spec.labels(b["actions"], net.cfg),
+                   act_steps=depth, frame_mask=b["frame_mask"])
+
+
+# ======================================================================
+# IL / KL replay stream
+# ======================================================================
+
+class ReplayStream:
+    """One game's IL replay batches (train_multi_game's datasets, crops,
+    sampler and collate).  :meth:`restart` builds a fresh loader — called at
+    every iteration start after the per-iteration reseed, so the data order
+    is a function of (seed, rank, iteration) and a resume reproduces it."""
+
+    def __init__(self, game: str, data_dir: str, batch_size: int, max_len: Optional[int],
+                 num_workers: int):
+        self.game = game
+        self.dataset = open_dataset(game, data_dir, None if game in UNCROPPABLE else max_len)
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self._it = None
+
+    def restart(self) -> None:
+        self._loader = DataLoader(self.dataset, batch_size=self.batch_size,
+                                  sampler=training_sampler(self.dataset),
+                                  num_workers=self.num_workers,
+                                  collate_fn=collate_game_sequences)
+        self._it = iter(self._loader)
+
+    def next(self) -> Dict:
+        try:
+            return next(self._it)
+        except StopIteration:
+            self._it = iter(self._loader)
+            return next(self._it)
+
+
+# ======================================================================
+# Diagnostics: one fixed-size all-reduce per iteration
+# ======================================================================
+
+DIAG_KEYS = (
+    "tokens_v", "tokens_p", "streams", "episodes", "ep_len_sum", "score_sum", "score_n",
+    "mirror", "ret_sum",
+    "ent_sum", "ent_n", "kl_sum", "kl_n", "pol_n", "approx_kl_sum", "clip_frac_sum",
+    "is_weight_sum", "is_trunc_sum", "vloss_sum", "vloss_n",
+    "canary_oldmu_sum", "canary_ratio_sum", "canary_n",
+    "ev_n", "ev_g", "ev_g2", "ev_e", "ev_e2",
+    "il_sum", "il_n", "rkl_sum", "rkl_n", "rvl_sum",
+)
+
+
+class Diag:
+    def __init__(self, games: Sequence[str], n_moe: Tuple[int, int]):
+        self.games = list(games)
+        self.v = {g: {k: 0.0 for k in DIAG_KEYS} for g in self.games}
+        L, E = n_moe
+        self.loads = torch.zeros(len(self.games), L * E, dtype=torch.float64)
+        self.n_moe = n_moe
+
+    def add(self, g: str, **kw: float) -> None:
+        d = self.v[g]
+        for k, x in kw.items():
+            d[k] += float(x)
+
+    def add_loads(self, g: str, delta: torch.Tensor) -> None:
+        self.loads[self.games.index(g)] += delta.detach().double().cpu().reshape(-1)
+
+    def reduce(self) -> None:
+        t = torch.tensor([[self.v[g][k] for k in DIAG_KEYS] for g in self.games],
+                         dtype=torch.float64)
+        t = torch.cat([t, self.loads], dim=1)
+        if dist_active():
+            dt = t.to(collective_device())
+            dist.all_reduce(dt, op=dist.ReduceOp.SUM)
+            t = dt.cpu()
+        K = len(DIAG_KEYS)
+        for i, g in enumerate(self.games):
+            self.v[g] = {k: float(t[i, j]) for j, k in enumerate(DIAG_KEYS)}
+        self.loads = t[:, K:]
+
+    def mean(self, g: str, num: str, den: str) -> float:
+        d = self.v[g]
+        return d[num] / d[den] if d[den] > 0 else float("nan")
+
+    def explained_variance(self, g: str) -> float:
+        d = self.v[g]
+        n = d["ev_n"]
+        if n <= 1:
+            return float("nan")
+        var_g = d["ev_g2"] / n - (d["ev_g"] / n) ** 2
+        var_e = d["ev_e2"] / n - (d["ev_e"] / n) ** 2
+        return 1.0 - var_e / var_g if var_g > 1e-12 else float("nan")
+
+    def load_entropy(self, g: str) -> float:
+        L, E = self.n_moe
+        if L == 0:
+            return float("nan")
+        x = self.loads[self.games.index(g)].reshape(L, E)
+        if float(x.sum()) <= 0:
+            return float("nan")
+        return float(expert_load_entropy(x).nanmean())
+
+
+def _moe_load_vector(model: torch.nn.Module) -> Optional[torch.Tensor]:
+    layers = moe_layers(model)
+    if not layers:
+        return None
+    return torch.stack([m.load.detach().clone() for m in layers])
+
+
+# ======================================================================
+# Trainer
+# ======================================================================
+
+@dataclass
+class GameRL:
+    """Per simulator game: env, actor, league pieces, hyper-parameters."""
+
+    game: str
+    spec: RLGameSpec
+    env: VecGameEnv
+    actor: LearnerActor
+    pool_policy: Optional[PoolPolicy]
+    mirror_prob: float
+    gamma: float
+    lam: float
+    rows_per_forward: int
+    hl_gauss: bool
+    streams: List[Stream] = field(default_factory=list)
+
+
+class JointRLTrainer:
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+        device = torch.device(args.device) if args.device else pick_device()
+        self.dist_env, self.device = init_distributed(device, args.dist_timeout)
+        self.rank, self.world = self.dist_env.rank, self.dist_env.world
+        self.rank0 = self.dist_env.is_main
+        seed_all(derive_seed(args.seed, self.rank, 0, 0))
+        self._setup()
+
+    def log(self, *a, **kw) -> None:
+        if self.rank0:
+            print(*a, **kw, flush=True)
+
+    # ------------------------------------------------------------------
+    # setup
+    # ------------------------------------------------------------------
+
+    def _setup(self) -> None:
+        a, device = self.args, self.device
+        model = load_multi(a.init, device)
+        self.model: MultiGameNetwork = model
+        self.games = model.games
+        self.ref = load_multi(a.init, device).requires_grad_(False).eval()
+        if self.dist_env.enabled:
+            broadcast_module_state(self.model, src=0)
+        self.rl_games = list(dict.fromkeys(a.rl))
+        replay_dirs = _pairs(a.data, str, "DIR")
+        for g in self.rl_games:
+            if g not in self.games:
+                raise SystemExit(f"--rl {g}: not a game of {a.init} ({self.games})")
+            if not has_simulator(g):
+                raise SystemExit(f"--rl {g}: no simulator (env/vec_game.py VEC_ENV_REGISTRY)")
+        for g in replay_dirs:
+            if g not in self.games:
+                raise SystemExit(f"--data {g}: not a game of {a.init} ({self.games})")
+        if not self.rl_games and not replay_dirs:
+            raise SystemExit("nothing to train: give --rl games and/or --data replay shards")
+        if a.seed < 0 or a.epochs < 1 or a.minibatches < 1:
+            raise SystemExit("--seed must be >= 0, --epochs and --minibatches >= 1")
+        first = model[self.games[0]]
+        self.depth = a.act_steps or first.default_depth
+        self.moe = moe_layers(model)
+        self.n_moe = (len(self.moe), self.moe[0].n_experts if self.moe else 0)
+
+        # --- per-game hyper-parameters -----------------------------------
+        envs_n = _pairs(a.envs, int, "N")
+        env_kw = _env_kwargs(a.env_kw)
+        mirror = _pairs(a.mirror_prob, float, "P")
+        gamma = _pairs(a.gamma, float, "G")
+        lam = _pairs(a.lam, float, "L")
+        rpf = _pairs(a.rows_per_forward, int, "N")
+        self.game_weight = _pairs(a.game_weight, float, "W")
+        for flag, vals in (("--envs", envs_n), ("--env_kw", env_kw), ("--mirror_prob", mirror),
+                           ("--gamma", gamma), ("--lam", lam), ("--rows_per_forward", rpf),
+                           ("--game_weight", self.game_weight),
+                           ("--share", _pairs(a.share, float, "W")),
+                           ("--entropy_coef", _pairs(a.entropy_coef, float, "C")),
+                           ("--entropy_target", _pairs(a.entropy_target, float, "H")),
+                           ("--kl_beta", _pairs(a.kl_beta, float, "B")),
+                           ("--kl_budget", _pairs(a.kl_budget, float, "K"))):
+            _check_games(flag, vals, self.rl_games, "an --rl game")
+        store = a.snapshot_dir or os.path.join(a.save_dir, "snapshots")
+        use_pool = any(mirror.get(g, 1.0) < 1.0 for g in self.rl_games)
+        self.pool = SnapshotPool(max_size=a.pool_size, seed=a.seed,
+                                 store_dir=None if store == "memory" or not use_pool else store)
+        self.templates: Dict[str, torch.nn.Module] = {}
+        self.rl: Dict[str, GameRL] = {}
+        for gi, g in enumerate(self.rl_games):
+            net = model[g]
+            spec = game_spec(g)
+            kw = {**spec.env_kwargs(net.cfg), **env_kw.get(g, {})}
+            env = make_vec_env(g, envs_n.get(g, 8), seed=derive_seed(a.seed, self.rank, gi),
+                               **kw)
+            if env.autoreset:
+                raise SystemExit(f"{g}: the trainer's lockstep waves need autoreset off")
+            spec.check_env(env, net)
+            actor = LearnerActor(net, spec, self.depth, device, bf16=a.bf16, mode=a.actor,
+                                 cuda_graph=a.cuda_graph)
+            p_mirror = mirror.get(g, 1.0)
+            pool_policy = None
+            if p_mirror < 1.0:
+                self.templates[g] = copy.deepcopy(net).requires_grad_(False).eval()
+                pool_policy = PoolPolicy(self.pool, self._snapshot_loader(g),
+                                         act_steps=self.depth, device=device,
+                                         max_nets=a.pool_max_nets)
+            self.rl[g] = GameRL(
+                game=g, spec=spec, env=env, actor=actor, pool_policy=pool_policy,
+                mirror_prob=p_mirror, gamma=gamma.get(g, 1.0), lam=lam.get(g, 0.95),
+                rows_per_forward=rpf.get(g, 8),
+                hl_gauss=isinstance(net.value_head, HLGaussValueHead))
+
+        # --- replay stream ------------------------------------------------
+        rw = _pairs(a.replay_weight, float, "W")
+        rb = _pairs(a.replay_batch, int, "N")
+        rml = _pairs(a.replay_max_len, int, "N")
+        rtf = _pairs(a.replay_tf, float, "P")
+        rvw = _pairs(a.replay_value_weight, float, "W")
+        rkw = _pairs(a.replay_kl_weight, float, "W")
+        for flag, vals in (("--replay_weight", rw), ("--replay_batch", rb),
+                           ("--replay_max_len", rml), ("--replay_tf", rtf),
+                           ("--replay_value_weight", rvw), ("--replay_kl_weight", rkw)):
+            _check_games(flag, vals, list(replay_dirs), "a --data game")
+        self.replay: Dict[str, ReplayStream] = {}
+        self.replay_weight: Dict[str, float] = {}
+        self.replay_tf: Dict[str, float] = {}
+        self.replay_value_weight: Dict[str, float] = {}
+        self.replay_kl_weight: Dict[str, float] = {}
+        for g, d in replay_dirs.items():
+            if g == "generals" and g not in rml:
+                raise SystemExit("--data generals: bound its prefix crop with "
+                                 "--replay_max_len generals=N (as train_multi_game)")
+            self.replay[g] = ReplayStream(g, d, rb.get(g, a.replay_batch_size), rml.get(g),
+                                          a.num_workers)
+            self.replay_weight[g] = rw.get(g, a.replay_weight_default)
+            self.replay_tf[g] = rtf.get(g, default_tf(g))
+            self.replay_value_weight[g] = rvw.get(g, 0.0 if g in self.rl else 0.2)
+            self.replay_kl_weight[g] = rkw.get(g, 0.0)
+            if self.replay_kl_weight[g] > 0 and LABEL_KEYS.get(g) and self.replay_tf[g] < 1:
+                self.log(f"[warn] {g}: replay KL with teacher forcing {self.replay_tf[g]} < 1 — "
+                         f"self-sampled conditioning differs between policy and reference")
+
+        # --- algorithm state ---------------------------------------------
+        rl = self.rl_games or [self.games[0]]     # controllers need a non-empty game list
+        modes = {g: PASSTHROUGH for g in rl} if a.no_popart else None
+        self.popart = PopArt.from_model(model, games=rl, decay=a.popart_decay, modes=modes)
+        self.advnorm = AdvantageNormalizer(rl, decay=a.adv_decay)
+        ent_init = _pairs(a.entropy_coef, float, "C")
+        self.ent_target = _pairs(a.entropy_target, float, "H")
+        self.entc = AdaptiveEntropyCoef(
+            rl, target={g: self.ent_target.get(g, 0.0) for g in rl},
+            init={g: ent_init.get(g, 0.01) for g in rl}, lr=a.entropy_lr,
+            min_coef=a.entropy_min, max_coef=a.entropy_max, mode=a.entropy_mode)
+        kl_init = _pairs(a.kl_beta, float, "B")
+        self.kl_off = {g: kl_init.get(g, 0.05) <= 0 for g in rl}
+        budget = _pairs(a.kl_budget, float, "K")
+        self.klb = AdaptiveKLBeta(
+            rl, budget={g: budget.get(g, 0.03) for g in rl},
+            init={g: max(kl_init.get(g, 0.05), a.kl_min) for g in rl}, rate=a.kl_rate,
+            min_beta=a.kl_min, max_beta=a.kl_max)
+        shares = _pairs(a.share, float, "W")
+        self.bandit = LearningProgressBandit(rl) if a.bandit_mix > 0 else None
+        self.sched = TokenQuotaScheduler(
+            {g: shares.get(g, 1.0) for g in rl}, floor=a.share_floor, cap=a.share_cap,
+            bandit=self.bandit, bandit_mix=a.bandit_mix, debt_decay=a.debt_decay)
+
+        self.params = [p for p in model.parameters() if p.requires_grad]
+        self.optimizer = AdamATan2(multi_game_param_groups(model, a.weight_decay), lr=a.lr,
+                                   betas=(a.beta1, a.beta2), weight_decay=a.weight_decay)
+        self.ema = ModelEMA(model, mu=a.ema_rate) if a.ema_rate > 0 else None
+        self.iteration = 0
+        self.il_baseline: Dict[str, float] = {}
+        self.history: List[Dict[str, Any]] = []
+        if a.resume:
+            self._load_resume(a.resume)
+        elif any(g.pool_policy is not None for g in self.rl.values()):
+            self._add_snapshot(tag="init")      # the Stage-1 policy opens the pool
+        if self.rank0:
+            os.makedirs(a.save_dir, exist_ok=True)
+        n_total = sum(p.numel() for p in model.parameters())
+        self.log(f"[init] games={self.games} rl={self.rl_games} replay={list(self.replay)} "
+                 f"core={first.cfg.core_type} moe={first.cfg.moe_experts} depth={self.depth} "
+                 f"params={n_total:,} device={device.type} world={self.world} "
+                 f"actor={a.actor}{'+graph' if a.cuda_graph else ''}")
+        for g, r in self.rl.items():
+            self.log(f"[rl] {g}: envs={r.env.num_envs} gamma={r.gamma} lam={r.lam} "
+                     f"mirror={r.mirror_prob} value={'hl_gauss' if r.hl_gauss else 'popart'} "
+                     f"kl={'off' if self.kl_off[g] else ('full' if r.spec.full_kl else 'k3')}")
+
+    def _snapshot_loader(self, g: str) -> Callable[[Dict[str, torch.Tensor]], torch.nn.Module]:
+        pre = f"nets.{g}."
+
+        def load(sd: Dict[str, torch.Tensor]) -> torch.nn.Module:
+            net = copy.deepcopy(self.templates[g])
+            net.load_state_dict({k[len(pre):]: v for k, v in sd.items() if k.startswith(pre)})
+            return net.to(self.device).eval().requires_grad_(False)
+        return load
+
+    # ------------------------------------------------------------------
+    # snapshots
+    # ------------------------------------------------------------------
+
+    def _policy_state(self) -> Dict[str, torch.Tensor]:
+        """The weights published to the pool (--snapshot_weights: the live
+        policy or its EMA) of the simulator games' networks, shared core
+        included per game."""
+        use_ema = self.args.snapshot_weights == "ema" and self.ema is not None
+        sd = self.ema.ema_model_state(self.model) if use_ema else self.model.state_dict()
+        keep = tuple(f"nets.{g}." for g in self.rl if self.rl[g].pool_policy is not None)
+        return {k: v for k, v in sd.items() if k.startswith(keep)}
+
+    def _add_snapshot(self, tag: str) -> None:
+        """Every rank's pool gets the same entry: in memory each rank adds the
+        (rank-identical) weights; file-backed rank 0 writes the file and the
+        pool state is broadcast (one file per snapshot for all ranks)."""
+        meta = {"iteration": self.iteration, "tag": tag}
+        if self.pool.store_dir is None or not self.dist_env.enabled:
+            if self.pool.store_dir is None or self.rank0:
+                self.pool.add(self._policy_state(), meta)
+            return
+        if self.rank0:
+            self.pool.add(self._policy_state(), meta)
+        state = [self.pool.state_dict() if self.rank0 else None]
+        dist.broadcast_object_list(state, src=0)
+        if not self.rank0:
+            self.pool.load_state_dict(state[0])
+
+    # ------------------------------------------------------------------
+    # rollouts
+    # ------------------------------------------------------------------
+
+    def _rollouts(self, it: int, quotas: Dict[str, int], diag: Diag) -> Dict[str, WaveStats]:
+        a = self.args
+        stats: Dict[str, WaveStats] = {}
+        for gi, g in enumerate(self.rl_games):
+            r = self.rl[g]
+            r.streams = []
+            q = quotas.get(g, 0)
+            if q <= 0:
+                continue
+            if r.pool_policy is not None:
+                self.pool.reseed(derive_seed(a.seed, self.rank, it, gi, 1))
+                r.pool_policy.refresh()
+            total = WaveStats()
+            wave = 0
+            while total.tokens < q:
+                opps = {"pool": r.pool_policy} if r.pool_policy is not None else {}
+                league = League(r.env, opps, mirror_prob=r.mirror_prob,
+                                learner_seat=a.learner_seat,
+                                seed=derive_seed(a.seed, self.rank, it, gi, 2, wave))
+                streams, st = collect_wave(r.env, league, r.actor,
+                                           seed=derive_seed(a.seed, self.rank, it, gi, 3, wave),
+                                           max_steps=a.max_wave_steps)
+                r.streams.extend(streams)
+                for k in ("episodes", "steps", "tokens", "ep_len_sum", "score_sum", "score_n",
+                          "mirror"):
+                    setattr(total, k, getattr(total, k) + getattr(st, k))
+                wave += 1
+                if st.tokens == 0:
+                    raise RuntimeError(f"{g}: a wave of {r.env.num_envs} envs produced no "
+                                       f"learner tokens")
+            stats[g] = total
+            diag.add(g, episodes=total.episodes, ep_len_sum=total.ep_len_sum,
+                     score_sum=total.score_sum, score_n=total.score_n, mirror=total.mirror,
+                     streams=len(r.streams))
+        return stats
+
+    # ------------------------------------------------------------------
+    # π_old, targets, statistics
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def _recompute(self, g: str) -> None:
+        """log π_old and V of every stored frame: the iteration's weights and
+        routing bias, the same (sparse-MoE, eval) forward the epochs use."""
+        r = self.rl[g]
+        net = self.model[g]
+        with MoEFFN.inference_path("sparse"):
+            for chunk in _chunks(range(len(r.streams)), r.rows_per_forward):
+                ss = [r.streams[i] for i in chunk]
+                b = build_batch(ss, self.device)
+                pred = learner_forward(net, r.spec, b, self.depth, self.device, self.args.bf16)
+                lp, _ = r.spec.logp_entropy(net, pred, b["actions"], b["legal"])
+                v = pred["value"].float()
+                for j, s in enumerate(ss):
+                    s.lp_old = lp[j, :s.length].detach().cpu()
+                    s.v_old = v[j, :s.length].detach().cpu()
+
+    def _targets(self, diag: Diag) -> None:
+        """GAE per game (reward units), PopArt + advantage statistics (one
+        all-reduce each, every rank), normalised advantages, top-q filter."""
+        a = self.args
+        batches: Dict[str, Dict[str, torch.Tensor]] = {}
+        for g in self.rl_games:
+            r = self.rl[g]
+            if not r.streams:
+                continue
+            ss = r.streams
+            T = max(s.length for s in ss)
+            S = r.env.n_seats
+            valid = _pad([torch.ones(s.length, dtype=torch.bool) for s in ss], T)
+            V = self.popart.denormalize(g, _pad([s.v_old for s in ss], T))
+            adv, ret = seat_gae(_pad([s.rewards for s in ss], T), V, _pad([s.seat for s in ss], T),
+                                _pad([s.done for s in ss], T) & valid, gamma=r.gamma, lam=r.lam,
+                                n_seats=S, valid=valid)
+            vmask = _pad([s.vmask for s in ss], T) & valid
+            pmask = _pad([s.pmask for s in ss], T) & valid
+            batches[g] = dict(V=V, adv=adv, ret=ret, vmask=vmask, pmask=pmask, T=T)
+            e = (ret - V)[vmask].double()
+            gv = ret[vmask].double()
+            diag.add(g, tokens_v=int(vmask.sum()), tokens_p=int(pmask.sum()),
+                     ret_sum=float(gv.sum()), ev_n=gv.numel(), ev_g=float(gv.sum()),
+                     ev_g2=float(gv.square().sum()), ev_e=float(e.sum()),
+                     ev_e2=float(e.square().sum()))
+        mirrors = [self.popart.mirror_tensors(self.model, self.ema.shadow)] \
+            if self.ema is not None else []
+        self.popart.update({g: (b["ret"], b["vmask"]) for g, b in batches.items()},
+                           mirrors=mirrors)
+        self.advnorm.update({g: (b["adv"], b["pmask"]) for g, b in batches.items()})
+        for g, b in batches.items():
+            adv_n = self.advnorm.normalize(g, b["adv"], b["pmask"])
+            if 0.0 < a.adv_filter_q < 1.0:
+                keep = top_q_mask(adv_n, b["pmask"], q=a.adv_filter_q, per_row=True)
+            else:
+                keep = b["pmask"].clone()
+            old_pred = self.popart.normalize(g, b["V"])
+            for i, s in enumerate(self.rl[g].streams):
+                n = s.length
+                s.adv, s.ret = adv_n[i, :n].float(), b["ret"][i, :n].float()
+                s.keep, s.old_pred = keep[i, :n], old_pred[i, :n].float()
+
+    # ------------------------------------------------------------------
+    # epochs
+    # ------------------------------------------------------------------
+
+    def _minibatch_plan(self, it: int, epoch: int) -> Tuple[List[Dict[str, List[int]]],
+                                                              torch.Tensor]:
+        """Per minibatch, per game: the stream indices (a stratified random
+        slice of every game's streams), and the GLOBAL per-minibatch token
+        counts [M, G, 3] (policy-kept, policy, value) divided by the world
+        size — one all-reduce per epoch, the same on every rank."""
+        a = self.args
+        M = max(1, a.minibatches)
+        plan: List[Dict[str, List[int]]] = [{} for _ in range(M)]
+        G = len(self.rl_games)
+        counts = torch.zeros(M, max(G, 1), 3, dtype=torch.float64)
+        for gi, g in enumerate(self.rl_games):
+            ss = self.rl[g].streams
+            if not ss:
+                continue
+            gen = torch.Generator().manual_seed(derive_seed(a.seed, self.rank, it, gi, 4, epoch))
+            perm = torch.randperm(len(ss), generator=gen).tolist()
+            for m, part in enumerate(np.array_split(np.asarray(perm, dtype=np.int64), M)):
+                idx = part.tolist()
+                plan[m][g] = idx
+                counts[m, gi, 0] = sum(int((ss[i].keep & ss[i].pmask).sum()) for i in idx)
+                counts[m, gi, 1] = sum(int(ss[i].pmask.sum()) for i in idx)
+                counts[m, gi, 2] = sum(int(ss[i].vmask.sum()) for i in idx)
+        if dist_active():
+            dc = counts.to(collective_device())
+            dist.all_reduce(dc, op=dist.ReduceOp.SUM)
+            counts = dc.cpu() / self.world
+        return plan, counts
+
+    def _rl_chunk_loss(self, g: str, ss: List[Stream], counts: Dict[str, Dict[str, float]],
+                       diag: Diag, canary: bool) -> torch.Tensor:
+        a = self.args
+        r = self.rl[g]
+        net = self.model[g]
+        extra = ("mu", "lp_old", "adv", "ret", "keep", "old_pred", "vmask", "pmask", "forced")
+        b = build_batch(ss, self.device, extra)
+        pred = learner_forward(net, r.spec, b, self.depth, self.device, a.bf16)
+        lp, ent = r.spec.logp_entropy(net, pred, b["actions"], b["legal"])
+        pm, vm = b["pmask"], b["vmask"]
+        pol = decoupled_ppo_loss(lp, b["lp_old"], b["mu"], b["adv"], pm, policy_mask=b["keep"],
+                                 clip=a.clip, clip_high=a.clip_high,
+                                 is_clip=a.is_clip if a.is_clip > 0 else None,
+                                 dual_clip=a.dual_clip, reduction="sum")
+        if r.hl_gauss:
+            val = hl_gauss_value_loss(pred["value_logits"], b["ret"], vm,
+                                      vmax=float(net.value_head.vmax),
+                                      sigma=float(net.cfg.hl_gauss_sigma), reduction="sum")
+        else:
+            val = value_loss(pred["value"], self.popart.normalize(g, b["ret"]), vm,
+                             old_pred=b["old_pred"] if a.value_clip else None,
+                             clip=a.value_clip, kind=a.value_loss, reduction="sum")
+        ent_t = entropy_loss(ent, pm, coef=self.entc[g], reduction="sum")
+        w = {x: self.game_weight.get(x, 1.0) for x in self.rl_games}
+        loss = (combine_game_losses({g: pol}, w, counts=counts["kept"])
+                + a.value_coef * combine_game_losses({g: val}, w, counts=counts["value"])
+                + combine_game_losses({g: ent_t}, w, counts=counts["policy"]))
+        n_p, n_v = float(pm.sum()), float(vm.sum())
+        if not self.kl_off[g]:
+            ref = self.ref[g]
+            with torch.no_grad():
+                ref_pred = learner_forward(ref, r.spec, b, self.depth, self.device, a.bf16)
+            if r.spec.full_kl:
+                tgt = r.spec.kl_targets(b["actions"], b["forced"], net.cfg)
+                cur_t = r.spec.kl_terms(net, pred, tgt, vm, b["legal"])
+                with torch.no_grad():
+                    ref_t = r.spec.kl_terms(ref, ref_pred, tgt, vm, b["legal"])
+                kl = head_terms_kl(cur_t, ref_t, beta=self.klb[g], reduction="sum")
+                loss = loss + combine_game_losses({g: kl}, w, counts=counts["value"])
+                diag.add(g, kl_sum=float(kl["kl"]) * n_v, kl_n=n_v)
+            else:
+                with torch.no_grad():
+                    ref_lp, _ = r.spec.logp_entropy(ref, ref_pred, b["actions"], b["legal"])
+                kl = kl_penalty(lp, ref_lp, pm, beta=self.klb[g], estimator="k3",
+                                reduction="sum")
+                loss = loss + combine_game_losses({g: kl}, w, counts=counts["policy"])
+                diag.add(g, kl_sum=float(kl["kl_k3"]) * n_p, kl_n=n_p)
+        diag.add(g, ent_sum=float(ent_t["entropy"]) * n_p, ent_n=n_p, pol_n=n_p,
+                 approx_kl_sum=float(pol["approx_kl"]) * n_p,
+                 clip_frac_sum=float(pol["clip_frac"]) * n_p,
+                 is_weight_sum=float(pol["is_weight"]) * n_p,
+                 is_trunc_sum=float(pol["is_trunc_frac"]) * n_p,
+                 vloss_sum=float(val["loss"].detach()), vloss_n=n_v)
+        if canary:
+            diag.add(g, canary_oldmu_sum=float(pol["abs_log_old_mu"]) * n_p,
+                     canary_ratio_sum=float(pol["abs_log_ratio"]) * n_p, canary_n=n_p)
+        return loss
+
+    def _replay_loss(self, g: str, diag: Diag) -> torch.Tensor:
+        a = self.args
+        net = self.model[g]
+        mb = prepare_batch(g, self.replay[g].next(), self.device, self.replay_tf[g],
+                           cfg=net.cfg, il_legal_mask=a.il_legal_mask)
+        loss, stats, pred = batch_loss(net, mb, self.device, 0.0, 0.0, a.bf16,
+                                       act_steps=self.depth, z_loss_weight=a.logit_z_loss,
+                                       soft_target_weight=a.soft_target_weight,
+                                       engine_value_weight=a.engine_value_weight)
+        diag.add(g, il_sum=stats["loss"], il_n=1)
+        vw = self.replay_value_weight[g]
+        if vw > 0:
+            v_tgt, v_mask, _, _ = value_target(mb["tgt"], mb["frame_mask"], a.engine_value_weight)
+            if g in self.popart.games:
+                v_tgt = self.popart.normalize(g, v_tgt)
+            vl, _ = value_losses(net, pred, v_tgt, v_mask)
+            loss = loss + vw * vl
+            diag.add(g, rvl_sum=float(vl.detach()))
+        kw = self.replay_kl_weight[g]
+        if kw > 0:
+            ref = self.ref[g]
+            fm = mb["frame_mask"]
+            with torch.no_grad(), _autocast(self.device, a.bf16):
+                ref_pred = ref(mb["obs"], legal=mb["legal"], labels=mb["labels"],
+                               act_steps=self.depth, frame_mask=fm)
+                ref_t = ref.action_decoder.il_head_terms(ref_pred, mb["tgt"], fm)
+            kl = head_terms_kl(net.action_decoder.il_head_terms(pred, mb["tgt"], fm), ref_t,
+                               beta=kw)
+            loss = loss + kl["loss"]
+            diag.add(g, rkl_sum=float(kl["kl"]), rkl_n=1)
+        return loss
+
+    def _replay_draws(self) -> List[Tuple[str, float]]:
+        """(game, loss scale) of this minibatch's replay batches: every game
+        at its weight, or K i.i.d. draws ∝ weight at scale Σw / K (the same
+        expected objective)."""
+        games = [g for g in self.replay if self.replay_weight[g] > 0]
+        if not games:
+            return []
+        K = self.args.replay_games_per_mb
+        if K <= 0:
+            return [(g, self.replay_weight[g]) for g in games]
+        w = [self.replay_weight[g] for g in games]
+        total = sum(w)
+        return [(g, total / K) for g in random.choices(games, weights=w, k=K)]
+
+    def _step(self) -> Tuple[bool, float]:
+        a = self.args
+        max_norm = a.clip_grad if a.clip_grad > 0 else float("inf")
+        if self.dist_env.enabled:
+            sync_gradients(self.model, self.world, warn_partial=False, bucket_mb=a.bucket_mb)
+            norm = collective_clip_grad_norm_(self.params, max_norm, self.device)
+        else:
+            norm = torch.nn.utils.clip_grad_norm_(self.params, max_norm)
+        ok = bool(torch.isfinite(norm))
+        if ok:
+            self.optimizer.step()
+        self.optimizer.zero_grad(set_to_none=True)
+        return ok, float(norm)
+
+    def _forward_tracked(self, g: str, diag: Diag, fn: Callable[[], torch.Tensor]
+                         ) -> torch.Tensor:
+        before = _moe_load_vector(self.model)
+        out = fn()
+        if before is not None:
+            diag.add_loads(g, _moe_load_vector(self.model) - before)
+        return out
+
+    def _epochs(self, it: int, diag: Diag) -> Dict[str, float]:
+        a = self.args
+        dropped, skipped, norms = 0, 0, []
+        G = self.rl_games
+        with moe_load_counting(self.model):
+            for epoch in range(a.epochs):
+                plan, counts = self._minibatch_plan(it, epoch)
+                for m in range(len(plan)):
+                    cnt = {name: {g: float(counts[m, gi, j]) for gi, g in enumerate(G)}
+                           for j, name in enumerate(("kept", "policy", "value"))}
+                    for g in G:
+                        idx = plan[m].get(g, [])
+                        ss = self.rl[g].streams
+                        for chunk in _chunks(idx, self.rl[g].rows_per_forward):
+                            canary = epoch == 0 and m == 0
+                            loss = self._forward_tracked(
+                                g, diag, lambda chunk=chunk, g=g, canary=canary:
+                                self._rl_chunk_loss(g, [ss[i] for i in chunk], cnt, diag,
+                                                    canary))
+                            if torch.isfinite(loss):
+                                loss.backward()
+                            else:
+                                skipped += 1
+                    for g, scale in self._replay_draws():
+                        loss = self._forward_tracked(g, diag,
+                                                     lambda g=g: self._replay_loss(g, diag))
+                        if torch.isfinite(loss):
+                            (loss * scale).backward()
+                        else:
+                            skipped += 1
+                    ok, norm = self._step()
+                    dropped += int(not ok)
+                    norms.append(norm)
+        return {"dropped": dropped, "nonfinite": skipped,
+                "gnorm": float(np.mean(norms)) if norms else float("nan")}
+
+    # ------------------------------------------------------------------
+    # iteration
+    # ------------------------------------------------------------------
+
+    def _global_quotas(self) -> Tuple[Dict[str, int], Dict[str, int]]:
+        if not self.rl_games:
+            return {}, {}
+        q = self.sched.quotas(self.args.tokens_per_iter)
+        per_rank = {g: -(-v // self.world) for g, v in q.items()}
+        return q, per_rank
+
+    def run_iteration(self) -> Dict[str, Any]:
+        a = self.args
+        it = self.iteration
+        seed_all(derive_seed(a.seed, self.rank, it, 5))
+        for rs in self.replay.values():
+            rs.restart()
+        t0 = time.time()
+        diag = Diag(self.games, self.n_moe)
+        bias0 = [m.balance_bias.clone() for m in self.moe]
+        self.model.eval()
+        q_glob, q_rank = self._global_quotas()
+        self._rollouts(it, q_rank, diag)
+        t_roll = time.time() - t0
+        for g in self.rl_games:
+            if self.rl[g].streams:
+                self._recompute(g)
+        self._targets(diag)
+        epoch_stats = self._epochs(it, diag)
+        for m, b in zip(self.moe, bias0):
+            if not torch.equal(m.balance_bias, b):
+                raise RuntimeError("MoE balance bias moved inside the iteration")
+        diag.reduce()
+        # ---- between iterations ----------------------------------------
+        if self.dist_env.enabled:
+            allreduce_moe_loads(self.model)
+        rel = update_moe_balance(self.model, a.moe_balance_rate)
+        if self.ema is not None:
+            self.ema.update(self.model)
+        ent = {g: diag.mean(g, "ent_sum", "ent_n") for g in self.rl_games}
+        kl = {g: diag.mean(g, "kl_sum", "kl_n") for g in self.rl_games}
+        upd_e = {g: v for g, v in ent.items() if g in self.ent_target and math.isfinite(v)}
+        if upd_e:
+            self.entc.update(upd_e)
+        upd_k = {g: v for g, v in kl.items() if not self.kl_off[g] and math.isfinite(v)}
+        if a.kl_adapt and upd_k:
+            self.klb.update(upd_k)
+        if self.rl_games:
+            self.sched.record({g: int(diag.v[g]["tokens_v"]) for g in self.rl_games})
+        if self.bandit is not None:
+            sig = {g: diag.mean(g, "score_sum", "score_n") for g in self.rl_games}
+            sig = {g: v for g, v in sig.items() if math.isfinite(v)}
+            if sig:
+                self.bandit.update(sig)
+        for g in self.replay:
+            m_il = diag.mean(g, "il_sum", "il_n")
+            if g not in self.il_baseline and math.isfinite(m_il):
+                self.il_baseline[g] = m_il
+        self.iteration += 1
+        if (a.snapshot_every > 0 and self.iteration % a.snapshot_every == 0
+                and any(r.pool_policy is not None for r in self.rl.values())):
+            self._add_snapshot(tag="iter")
+        rec = self._record(diag, epoch_stats, q_glob, rel, time.time() - t0, t_roll)
+        self.history.append(rec)
+        if self.iteration % a.log_every == 0:
+            self._log(rec)
+        return rec
+
+    def _record(self, diag: Diag, ep: Dict[str, float], quotas: Dict[str, int],
+                rel: Optional[torch.Tensor], dt: float, t_roll: float) -> Dict[str, Any]:
+        rec: Dict[str, Any] = {"iteration": self.iteration, "time": dt, "rollout_time": t_roll,
+                               "gnorm": ep["gnorm"], "dropped": ep["dropped"],
+                               "nonfinite": ep["nonfinite"],
+                               "moe_load_cv": float(rel.std(-1).mean()) if rel is not None
+                               else float("nan"), "games": {}}
+        for g in self.games:
+            d = diag.v[g]
+            row: Dict[str, float] = {}
+            if g in self.rl:
+                row.update(
+                    quota=quotas.get(g, 0), tokens=d["tokens_v"], episodes=d["episodes"],
+                    ep_len=diag.mean(g, "ep_len_sum", "episodes"),
+                    score=diag.mean(g, "score_sum", "score_n"),
+                    ret=diag.mean(g, "ret_sum", "tokens_v"),
+                    entropy=diag.mean(g, "ent_sum", "ent_n"),
+                    kl=diag.mean(g, "kl_sum", "kl_n"),
+                    approx_kl=diag.mean(g, "approx_kl_sum", "pol_n"),
+                    clip_frac=diag.mean(g, "clip_frac_sum", "pol_n"),
+                    is_weight=diag.mean(g, "is_weight_sum", "pol_n"),
+                    is_trunc=diag.mean(g, "is_trunc_sum", "pol_n"),
+                    value_loss=diag.mean(g, "vloss_sum", "vloss_n"),
+                    ev=diag.explained_variance(g),
+                    canary_log_old_mu=diag.mean(g, "canary_oldmu_sum", "canary_n"),
+                    canary_log_ratio=diag.mean(g, "canary_ratio_sum", "canary_n"),
+                    ent_coef=self.entc[g], kl_beta=self.klb[g],
+                    popart_mu=self.popart.mean(g), popart_sigma=self.popart.std(g),
+                    adv_std=self.advnorm.std(g))
+            if g in self.replay:
+                il = diag.mean(g, "il_sum", "il_n")
+                row.update(il_loss=il, il_drift=il - self.il_baseline.get(g, il))
+                if self.replay_kl_weight[g] > 0:
+                    row["replay_kl"] = diag.mean(g, "rkl_sum", "rkl_n")
+            if self.n_moe[0]:
+                row["load_entropy"] = diag.load_entropy(g)
+            if row:
+                rec["games"][g] = row
+        return rec
+
+    def _log(self, rec: Dict[str, Any]) -> None:
+        def f(x) -> str:
+            return f"{x:.4g}" if isinstance(x, float) else str(x)
+        self.log(f"[it {rec['iteration']}/{self.args.iterations}] gnorm={f(rec['gnorm'])} "
+                 f"dropped={rec['dropped']} nonfinite={rec['nonfinite']} "
+                 f"moe_load_cv={f(rec['moe_load_cv'])} "
+                 f"({rec['time']:.1f}s, rollouts {rec['rollout_time']:.1f}s)")
+        for g, row in rec["games"].items():
+            self.log(f"  {g}: " + " ".join(f"{k}={f(v)}" for k, v in row.items()))
+
+    # ------------------------------------------------------------------
+    # checkpoints
+    # ------------------------------------------------------------------
+
+    def _rl_state(self) -> Dict[str, Any]:
+        return {"iteration": self.iteration, "popart": self.popart.state_dict(),
+                "advnorm": self.advnorm.state_dict(), "entc": self.entc.state_dict(),
+                "klb": self.klb.state_dict(), "sched": self.sched.state_dict(),
+                "pool": self.pool.state_dict(), "il_baseline": dict(self.il_baseline),
+                "rl_games": list(self.rl_games), "replay_games": list(self.replay),
+                "init": self.args.init}
+
+    def save(self, name: str) -> Optional[str]:
+        """rank 0 writes ``name`` atomically (every rank must call: barrier)."""
+        path = None
+        if self.rank0:
+            ema_state = (self.ema.ema_model_state(self.model) if self.ema is not None
+                         else self.model.state_dict())
+            exported = (self.popart.denormalized_state_dict(self.model, ema_state)
+                        if self.rl_games else ema_state)
+            g0 = self.games[0]
+            pre = f"nets.{g0}."
+            core = {k[len(pre):]: v for k, v in exported.items()
+                    if k.startswith(pre) and is_core_key(k[len(pre):])}
+            ck = {
+                "games": self.games,
+                "configs": {g: self.model[g].cfg.__dict__ for g in self.games},
+                "core_config": core_config_overrides(self.model[g0].cfg),
+                "core_state": core,
+                "model_state": exported,
+                "train_model_state": self.model.state_dict(),
+                "mixture": self.sched.shares() if self.rl_games else {},
+                "args": vars(self.args),
+                "world_size": self.world,
+                "step": self.iteration,
+                "stage": "rl_joint",
+                "optimizer_state": self.optimizer.state_dict(),
+                "ema_state": self.ema.state_dict() if self.ema is not None else None,
+                "rl_state": self._rl_state(),
+            }
+            path = os.path.join(self.args.save_dir, name)
+            torch.save(ck, f"{path}.tmp")
+            os.replace(f"{path}.tmp", path)
+        self.dist_env.barrier()
+        return path
+
+    def _load_resume(self, path: str) -> None:
+        ck = torch.load(path, map_location="cpu", weights_only=False)
+        if ck.get("stage") != "rl_joint" or "rl_state" not in ck:
+            raise SystemExit(f"{path} is not a train_rl_joint checkpoint")
+        st = ck["rl_state"]
+        if st["rl_games"] != self.rl_games or ck["games"] != self.games:
+            raise SystemExit(f"{path}: games {ck['games']} / rl {st['rl_games']} differ from "
+                             f"this run's {self.games} / {self.rl_games}")
+        self.model.load_state_dict(ck["train_model_state"])
+        if self.ema is not None and ck.get("ema_state") is not None:
+            self.ema.load_state_dict(ck["ema_state"])
+        self.optimizer.load_state_dict(ck["optimizer_state"])
+        mirrors = [self.popart.mirror_tensors(self.model, self.ema.shadow)] \
+            if self.ema is not None else []
+        self.popart.load_state_dict(st["popart"], mirrors=mirrors)
+        self.advnorm.load_state_dict(st["advnorm"])
+        self.entc.load_state_dict(st["entc"])
+        self.klb.load_state_dict(st["klb"])
+        self.sched.load_state_dict(st["sched"])
+        self.pool.load_state_dict(st["pool"])
+        self.il_baseline = dict(st.get("il_baseline", {}))
+        self.iteration = int(st["iteration"])
+        self.log(f"[resume] {path}: iteration {self.iteration} (saved with world="
+                 f"{ck.get('world_size', 1)}, pool={len(self.pool)})")
+
+    def _want_checkpoint(self, last_save: float) -> bool:
+        a = self.args
+        due = (self.iteration >= a.iterations
+               or (a.ckpt_every and self.iteration % a.ckpt_every == 0)
+               or (a.ckpt_minutes > 0 and time.time() - last_save >= 60.0 * a.ckpt_minutes))
+        if not self.dist_env.enabled:
+            return bool(due)
+        flag = torch.tensor([1.0 if due else 0.0], device=collective_device())
+        dist.broadcast(flag, src=0)          # rank 0's clock decides for everyone
+        return bool(flag.item() > 0)
+
+    # ------------------------------------------------------------------
+
+    def train(self) -> Dict[str, Any]:
+        a = self.args
+        last_save = time.time()
+        while self.iteration < a.iterations:
+            self.run_iteration()
+            if self._want_checkpoint(last_save):
+                self.save(CKPT_LATEST)
+                last_save = time.time()
+            if a.save_every and self.iteration % a.save_every == 0:
+                self.save(f"rl_iter{self.iteration}.pt")
+        final = self.save(CKPT_FINAL)
+        if final:
+            self.log(f"[done] saved {final}")
+        return {"model": self.model, "ema": self.ema, "optimizer": self.optimizer,
+                "history": self.history, "trainer": self}
+
+
+def main(argv=None) -> Dict[str, Any]:
+    """Train; returns the live objects (``model``, ``ema``, ``optimizer``,
+    ``history`` of per-iteration records, ``trainer``) for in-process callers."""
+    trainer = JointRLTrainer(parse_args(argv))
+    out = trainer.train()
+    trainer.dist_env.barrier()
+    trainer.dist_env.destroy()
+    return out
+
+
+if __name__ == "__main__":
+    main()

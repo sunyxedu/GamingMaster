@@ -387,6 +387,11 @@ class SnapshotPool:
     def ids(self) -> List[int]:
         return list(self._states)
 
+    def reseed(self, seed: int) -> None:
+        """Restart the sampling stream (e.g. from a per-iteration seed, so a
+        resumed run draws the same opponents without restoring RNG state)."""
+        self._gen.manual_seed(int(seed))
+
     def _path(self, name: str) -> str:
         if self.store_dir is None:
             raise RuntimeError("file-backed snapshot but the pool has no store_dir")
@@ -651,6 +656,12 @@ class League:
         snap = getattr(pol, "snapshot_of", None)
         if snap is not None and streams:
             self.opponent_snapshot[i] = snap(streams[0])
+
+    def release_all(self) -> None:
+        """Release every opponent stream still held (end of a lockstep wave,
+        or an aborted one)."""
+        for i in list(self._held):
+            self._release_env(i)
 
     def refresh(self) -> None:
         """Iteration boundary: opponents with an active set (PoolPolicy)

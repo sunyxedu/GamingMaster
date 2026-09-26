@@ -212,6 +212,12 @@ class MoEFFN(nn.Module):
     #: path; set it with :meth:`inference_path`, never directly.
     _INFERENCE_PATH = "auto"
 
+    #: tally the routed loads in eval mode too (instance flag, default off):
+    #: the Stage-2 RL learner runs its PPO forwards in eval mode (fixed depth,
+    #: exactly replayable) but still balances the routing between iterations.
+    #: Set it with :func:`moe_load_counting`.
+    count_eval_loads = False
+
     @classmethod
     @contextlib.contextmanager
     def inference_path(cls, path: str):
@@ -270,7 +276,7 @@ class MoEFFN(nn.Module):
         top_s = affinity.gather(-1, top_i)
         gates = (top_s / top_s.sum(-1, keepdim=True)).to(xf.dtype)       # [N, k]
 
-        if self.training and not _RECOMPUTING:
+        if (self.training or self.count_eval_loads) and not _RECOMPUTING:
             with torch.no_grad():
                 sel = top_i
                 if valid is not None:
@@ -517,6 +523,23 @@ class RecurrentDepthCore(nn.Module):
 
 def moe_layers(module: nn.Module):
     return [m for m in module.modules() if isinstance(m, MoEFFN)]
+
+
+@contextlib.contextmanager
+def moe_load_counting(module: nn.Module, enabled: bool = True):
+    """Within the block every MoE layer of ``module`` tallies its routed
+    loads also in eval mode (training mode always tallies).  Only this
+    module's layers: a frozen reference or opponent network forwarding in
+    the same block is untouched.  Checkpoint recomputes stay excluded."""
+    layers = moe_layers(module)
+    prev = [m.count_eval_loads for m in layers]
+    for m in layers:
+        m.count_eval_loads = bool(enabled)
+    try:
+        yield
+    finally:
+        for m, p in zip(layers, prev):
+            m.count_eval_loads = p
 
 
 @torch.no_grad()

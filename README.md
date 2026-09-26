@@ -129,6 +129,10 @@ uv run python -m training.train_rl \
 > observations in each game's gm-shard obs schema (pinned bit-for-bit to the IL data by
 > `tests/test_vec_game_golden.py`; adapters for generals and othello) — and `env/league.py` the seat / opponent
 > interface (mirror self-play, callables, network snapshots).
+> `training/train_rl_joint.py` is the Stage-2 trainer: PPO with decoupled ratios on the WHOLE multi-game model
+> (a `train_multi_game` checkpoint is the initial policy and the frozen KL reference), mixing every simulator
+> game's rollouts with an IL/KL replay stream of every configured game in each update (algorithm pieces in
+> `training/rl_joint/`; Slurm: `scripts/slurm/multi/rl_joint_job.sh`).
 > Model-side support: `model.step()` single-step inference with KV cache, `ValueHead`, `RLLoss` (PPO), `rl_utils.py` (GAE, RolloutBuffer, KL regularisation).
 
 ## Development and documentation
