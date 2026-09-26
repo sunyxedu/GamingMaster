@@ -795,3 +795,313 @@ def test_pokemon_network_is_causal_over_frames():
         )
         checked += 1
     assert checked >= 4, list(a)
+
+
+# ----------------------------------------------------------------------------------------------
+# Independent verification (second pass): refutations pinned as regressions, confirmed
+# deploy mismatches pinned as strict xfails (they XPASS, and so fail, once the converter is fixed)
+# ----------------------------------------------------------------------------------------------
+
+
+def _pieces(lines: List[str], i: int, p1: str):
+    """(log head through the ``|turn|t`` line i, p1 Splash line, p2 Splash line, p1 ident,
+    p2 ident)."""
+    cut = _synthetic_turn_cut(lines, i, p1).split("\n")[:-1]
+    head, m1, m2 = cut[:-2], cut[-2], cut[-1]
+    return head, m1, m2, m1.split("|")[2], m2.split("|")[2]
+
+
+def _labelled(s: Dict, f: int) -> bool:
+    """Frame f carries a supervised action label (−1 / ``action_known`` 0 mean unlabelled)."""
+    if int(s["tgt"]["action_type"][f]) < 0:
+        return False
+    known = s["tgt"].get("action_known")
+    return known is None or bool(known[f])
+
+
+def _fresh_p1(lines: List[str], i: int) -> List[str]:
+    """p1's previewed species not switched in before line i (no hidden-form ``*`` species)."""
+    preview = [ln.split("|")[3].split(",")[0].strip() for ln in lines if ln.startswith("|poke|p1|")]
+    seen = {
+        ln.split("|")[3].split(",")[0].strip()
+        for ln in lines[:i]
+        if ln.split("|")[1:2]
+        and ln.split("|")[1] in ("switch", "drag", "replace")
+        and _side(ln.split("|")[2]) == 0
+    }
+    return [sp for sp in preview if sp not in seen and "*" not in sp]
+
+
+def test_locked_and_recharge_turns_are_never_labelled(gmdata, replays, tmp_path):
+    """Turns on which the player has no choice carry no action label: the 2nd turn of Outrage
+    (``[from] lockedmove``), the release turn of a two-turn move (charge turn ``[still]`` +
+    ``-prepare`` is a real choice, the release turn is ``[from] lockedmove``), a Hyper Beam
+    recharge (``|cant|..|recharge``).  The turns around them (real choices) are labelled."""
+    jobs, meta = {}, {}
+    for r in replays[:8]:
+        lines = r["log"].split("\n")
+        p1 = _names(lines)[0]
+        for i, t in _turn_lines(lines)[2:6]:
+            if t + 2 >= TURN_CLIP:
+                continue
+            head, m1, m2, me, opp = _pieces(lines, i, p1)
+            up1 = ["|upkeep|", f"|turn|{t + 1}"]
+            tail = ["|upkeep|", f"|turn|{t + 2}", m1, m2, f"|win|{p1}"]
+            charge = [f"|move|{me}|Phantom Force||[still]", f"|-prepare|{me}|Phantom Force"]
+            cases = {
+                "outrage": [f"|move|{me}|Outrage|{opp}", m2]
+                + up1
+                + [f"|move|{me}|Outrage|{opp}|[from] lockedmove", m2],
+                "twoturn": charge
+                + [m2]
+                + up1
+                + [f"|move|{me}|Phantom Force|{opp}|[from] lockedmove", m2],
+                "recharge": [f"|move|{me}|Hyper Beam|{opp}", f"|-mustrecharge|{me}", m2]
+                + up1
+                + [f"|cant|{me}|recharge", m2],
+            }
+            for name, body in cases.items():
+                cid = f"{r['id']}~K{t}{name}"
+                jobs[cid] = _rec(cid, "\n".join(head + body + tail), r)
+                meta[cid] = t
+    assert len(meta) >= 3 * 20, len(meta)
+    got = _convert(gmdata, tmp_path, "locked", jobs)
+    for cid, t in meta.items():
+        s = got.get((cid, "p1"))
+        turns = _turns(s)
+        lab = {x: [_labelled(s, f) for f, y in enumerate(turns) if y == x] for x in range(t, t + 3)}
+        assert lab[t] == [True] and lab[t + 2] == [True], (cid, lab)
+        assert not any(lab[t + 1]), f"{cid}: a no-choice turn is labelled as a decision ({lab})"
+
+
+def test_natural_cure_on_switch_out_clears_the_benched_status(gmdata, replays, tmp_path):
+    """Natural Cure is public in singles (``|-curestatus|..|[from] ability: Natural Cure|[silent]``
+    right before the ``|switch|`` line): the benched mon's status is cleared in both sides' frames,
+    so the spectator view keeps no stale status (unlike a Regenerator heal, which is not logged)."""
+    jobs, meta = {}, {}
+    for r in replays[:8]:
+        lines = r["log"].split("\n")
+        p1 = _names(lines)[0]
+        for i, t in _turn_lines(lines)[1:5]:
+            fresh = _fresh_p1(lines, i)
+            if t + 2 >= TURN_CLIP or not fresh:
+                continue
+            head, m1, m2, me, opp = _pieces(lines, i, p1)
+            sp = fresh[0]
+            body = [
+                f"|-status|{me}|brn",
+                m1,
+                m2,
+                "|upkeep|",
+                f"|turn|{t + 1}",
+                f"|-curestatus|{me}|brn|[from] ability: Natural Cure|[silent]",
+                f"|switch|p1a: {sp}|{sp}|100/100",
+                m2,
+                "|upkeep|",
+                f"|turn|{t + 2}",
+                f"|move|p1a: {sp}|Splash|p1a: {sp}",
+                m2,
+                f"|win|{p1}",
+            ]
+            cid = f"{r['id']}~N{t}"
+            jobs[cid] = _rec(cid, "\n".join(head + body), r)
+            meta[cid] = t
+    assert len(meta) >= 10, len(meta)
+    got = _convert(gmdata, tmp_path, "natcure", jobs)
+    brn = 4  # POKE_FEAT_STATUS + 1
+    for cid, t in meta.items():
+        s1, s2 = got[(cid, "p1")], got[(cid, "p2")]
+        f1 = {x: f for f, x in enumerate(_turns(s1))}
+        f2 = {x: f for f, x in enumerate(_turns(s2))}
+        slot = int(s1["tgt"]["active_idx"][f1[t + 1]])
+        assert s1["obs"]["poke_feats"][f1[t + 1], slot, brn] == 1, cid
+        assert s1["obs"]["poke_feats"][f1[t + 2], slot, brn] == 0, f"{cid}: stale own status"
+        assert s2["obs"]["poke_feats"][f2[t + 1], 6 + slot, brn] == 1, cid
+        assert s2["obs"]["poke_feats"][f2[t + 2], 6 + slot, brn] == 0, f"{cid}: stale opp status"
+
+
+_HP_AT = {"switch": 4, "drag": 4, "replace": 4, "-damage": 3, "-heal": 3, "-sethp": 3}
+
+
+def _omniscient(lines: List[str], salt: int) -> List[str]:
+    """Rewrite a spectator log as an omniscient (``|split|``) log, the form a local Showdown server
+    or a self-play logger writes: every HP-carrying line becomes ``|split|pN``, the private exact-HP
+    copy (``E/M``, M = max HP), then the public percentage line (Showdown's addSplit order)."""
+    out = []
+    for ln in lines:
+        p = ln.split("|")
+        k = _HP_AT.get(p[1] if len(p) > 1 else "")
+        s = _side(p[2]) if k is not None and len(p) > k else None
+        m = re.match(r"^(\d+)/100(.*)$", p[k].strip()) if s is not None else None
+        if m is None:
+            out.append(ln)
+            continue
+        mx = 250 + 37 * salt + 11 * s
+        q = list(p)
+        q[k] = f"{(int(m.group(1)) * mx + 99 * salt) // 100}/{mx}{m.group(2)}"
+        out += [f"|split|p{s + 1}", "|".join(q), ln]
+    return out
+
+
+def test_private_exact_hp_of_an_omniscient_log_never_reaches_obs(gmdata, replays, full, tmp_path):
+    """PRIVACY on omniscient logs: the per-player secret half of a ``|split|`` block (exact HP of
+    either side, never shown to the opponent) must not change any obs or target; only the public
+    percentage line may.  Two different secret values give the frames of the spectator log."""
+    jobs = {}
+    for r in replays:
+        for salt in (1, 2):
+            cid = f"{r['id']}~H{salt}"
+            jobs[cid] = _rec(cid, "\n".join(_omniscient(r["log"].split("\n"), salt)), r)
+    got = _convert(gmdata, tmp_path, "split", jobs)
+    for cid in jobs:
+        rid = cid.rsplit("~", 1)[0]
+        for side in ("p1", "p2"):
+            whole, pert = full.get((rid, side)), got.get((cid, side))
+            assert _n(whole) == _n(pert), (cid, side)
+            _assert_prefix(whole, pert, _n(whole), f"{cid}/{side}")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="deploy mismatch: tgt.move_idx is a slot in the revealed-move order; about half of the "
+    "move labels point at an unrevealed (id-0) slot, i.e. the move's identity is not in obs and "
+    "every first use collapses onto the first empty slot",
+)
+def test_every_move_label_names_a_move_in_obs(full):
+    """A move label must identify WHICH move was used from what the policy sees (a live player
+    sees all 4 of its moves in the request): the labelled slot holds a real move id."""
+    bad = tot = 0
+    for s in full.values():
+        mv = (s["tgt"]["action_type"] == 0) & (s["tgt"]["move_idx"] >= 0)
+        idx = mv.nonzero().squeeze(1)
+        ids = s["obs"]["move_ids"][idx, s["tgt"]["move_idx"][idx]]
+        bad += int((ids == 0).sum())
+        tot += int(idx.numel())
+    assert tot > 500, tot
+    assert bad == 0, f"{bad}/{tot} move labels point at an unrevealed slot"
+
+
+def _switch_lines(log: str) -> Dict[int, List[Tuple[int, str]]]:
+    """side → [(turn, species)] of every ``|switch|`` line of that side.  Each one is a choice of
+    that side's player: the lead, a voluntary switch, a KO replacement, a pivot or an eject."""
+    out: Dict[int, List[Tuple[int, str]]] = {0: [], 1: []}
+    turn = 0
+    for ln in log.split("\n"):
+        p = ln.split("|")
+        if len(p) > 2 and p[1] == "turn" and p[2].strip().isdigit():
+            turn = int(p[2])
+        elif len(p) > 3 and p[1] == "switch" and _side(p[2]) is not None:
+            out[_side(p[2])].append((turn, p[3].split(",")[0].strip()))
+    return out
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="deploy mismatch: KO replacements and pivot / eject switches (U-turn, Volt Switch, "
+    "Flip Turn, Parting Shot, Chilly Reception, Teleport, Eject Button/Pack) get no frame; the "
+    "forceSwitch state (own active fainted) never occurs in training",
+)
+def test_every_in_battle_switch_decision_has_a_frame(replays, full):
+    """Every in-battle ``|switch|`` of a side answers a request its live bot must also answer (a
+    move/switch request or a forceSwitch request): one switch-labelled frame per such line."""
+    short = []
+    for r in replays:
+        sw = _switch_lines(r["log"])
+        for me, side in enumerate(("p1", "p2")):
+            s = full.get((r["id"], side))
+            if s is None:
+                continue
+            want = sum(1 for t, _ in sw[me] if t >= 1)
+            have = sum(
+                1
+                for f, t in enumerate(_turns(s))
+                if t >= 1 and int(s["tgt"]["action_type"][f]) == 1
+            )
+            if have != want:
+                short.append((r["id"], side, have, want))
+    assert not short, f"{len(short)} sides miss switch decisions, e.g. {short[:3]}"
+
+
+def _preview_slot(preview: List[str], species: str) -> Optional[int]:
+    for k, sp in enumerate(preview):
+        if sp == species:
+            return k
+    for k, sp in enumerate(preview):  # hidden forms at preview: "Urshifu-*"
+        if sp.endswith("-*") and species.startswith(sp[:-2]):
+            return k
+    return None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="deploy mismatch: the lead (the team-preview choice) is never labelled, is_choice "
+    "requires turn > 0",
+)
+def test_the_lead_choice_has_a_frame(replays, full):
+    """The lead is chosen at team preview: each side has a turn-0 frame labelled with a switch to
+    the lead's team-preview slot."""
+    checked = 0
+    for r in replays:
+        lines = r["log"].split("\n")
+        sw = _switch_lines(r["log"])
+        for me, side in enumerate(("p1", "p2")):
+            s = full.get((r["id"], side))
+            preview = [
+                ln.split("|")[3].split(",")[0].strip()
+                for ln in lines
+                if ln.startswith(f"|poke|p{me + 1}|")
+            ]
+            if s is None or not preview or not sw[me] or sw[me][0][0] != 0:
+                continue
+            slot = _preview_slot(preview, sw[me][0][1])
+            f0 = [f for f, t in enumerate(_turns(s)) if t == 0]
+            assert f0, f"{r['id']}/{side}: no turn-0 (lead) frame"
+            assert int(s["tgt"]["action_type"][f0[0]]) == 1, (r["id"], side)
+            assert int(s["tgt"]["switch_idx"][f0[0]]) == slot, (r["id"], side, preview)
+            checked += 1
+    assert checked, "no replay with team preview and a turn-0 lead"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="gmdata pokemon ignores |-swapsideconditions| (Court Change): hazards and screens stay "
+    "on the wrong side for the rest of the battle",
+)
+def test_court_change_swaps_the_side_conditions(gmdata, replays, tmp_path):
+    """Court Change swaps every side condition: after p2's Stealth Rock lands on p1's side and p1
+    uses Court Change, p1's frame shows the rock on the opponent's side and p2's on its own."""
+    jobs, meta = {}, {}
+    for r in replays[:6]:
+        lines = r["log"].split("\n")
+        names = _names(lines)
+        for i, t in _turn_lines(lines)[1:4]:
+            if t + 2 >= TURN_CLIP:
+                continue
+            head, m1, m2, me, opp = _pieces(lines, i, names[0])
+            body = [
+                f"|move|{opp}|Stealth Rock|{me}",
+                f"|-sidestart|p1: {names[0]}|move: Stealth Rock",
+                m1,
+                "|upkeep|",
+                f"|turn|{t + 1}",
+                f"|move|{me}|Court Change|{me}",
+                "|-swapsideconditions",
+                f"|-activate|{me}|move: Court Change",
+                m2,
+                "|upkeep|",
+                f"|turn|{t + 2}",
+                m1,
+                m2,
+                f"|win|{names[0]}",
+            ]
+            cid = f"{r['id']}~C{t}"
+            jobs[cid] = _rec(cid, "\n".join(head + body), r)
+            meta[cid] = t
+    assert meta
+    got = _convert(gmdata, tmp_path, "court", jobs)
+    sr_own, sr_opp = 12, 17  # obs.field_seq stealth-rock flags (own side / opponent side)
+    for cid, t in meta.items():
+        for side, want in (("p1", (0.0, 1.0)), ("p2", (1.0, 0.0))):
+            s = got[(cid, side)]
+            fs = s["obs"]["field_seq"][_turns(s).index(t + 2)]
+            assert (float(fs[sr_own]), float(fs[sr_opp])) == want, (cid, side, fs[10:20].tolist())
