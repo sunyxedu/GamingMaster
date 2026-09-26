@@ -194,11 +194,10 @@ pub fn deal_record(d: Deal) -> Result<Record> {
         let Event::Chance(o) = *e else { unreachable!() };
         g.apply_chance(o).map_err(|e| anyhow::anyhow!("{e}"))?;
     }
+    // a call after the end of the auction is an illegal action like any other (the
+    // replay rejects the record)
     let mut legal = true;
     for &a in &d.calls {
-        if !g.in_auction() {
-            bail!("{} calls, but the auction ended after {}", d.calls.len(), g.auction().len());
-        }
         if !push_action(&mut g, &mut events, a)? {
             legal = false;
             break;
@@ -378,11 +377,13 @@ pub fn jack_deal(lines: &[String], id: &str) -> Result<Deal> {
             let b = br::parse_call(head.trim_end_matches(['X', '*'])).and_then(br::bid_of).with_context(|| format!("contract {cr:?}"))?;
             d.contract = Some(Some(b));
             if let Some(res) = f.get(1) {
-                let r: i32 = match *res {
-                    "=" | "0" => 0,
-                    x => x.trim_start_matches('+').parse().with_context(|| format!("result {x:?}"))?,
+                // relative to the contract (=, +k, -k); a bare number (18 of the 1.9M
+                // boards) is the declarer's trick count
+                let t: i32 = match *res {
+                    "=" => 6 + b.0 as i32,
+                    x if x.starts_with(['+', '-']) => 6 + b.0 as i32 + x.parse::<i32>().with_context(|| format!("result {x:?}"))?,
+                    x => x.parse().with_context(|| format!("result {x:?}"))?,
                 };
-                let t = 6 + b.0 as i32 + r;
                 ensure!((0..=13).contains(&t), "result {res:?} of {cr:?}");
                 d.tricks = Some(t as u8);
             }
@@ -821,6 +822,23 @@ pub enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Replay and verify every record without writing shards (a whole corpus in
+    /// minutes): counts of legal / illegal / truncated / result-mismatch records
+    Check {
+        #[arg(long, value_enum)]
+        format: Format,
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, value_enum, default_value = "all")]
+        split: Split,
+        #[arg(long, default_value_t = 100)]
+        val_mod: u64,
+        #[arg(long)]
+        max_records: Option<usize>,
+        /// list at most this many failing records in "errors"
+        #[arg(long, default_value_t = 10)]
+        max_errors: usize,
+    },
     /// Convert deal records to candidate-action gm-shards (every record replayed and
     /// verified by the rules)
     Convert {
@@ -855,6 +873,76 @@ pub enum Cmd {
     },
 }
 
+/// Counters of [`check`].
+#[derive(Debug, Default, serde::Serialize)]
+pub struct CheckStats {
+    pub records: usize,
+    pub complete: usize,
+    pub truncated: usize,
+    pub illegal: usize,
+    pub returns_mismatch: usize,
+    pub unparseable: usize,
+    pub frames: usize,
+    pub errors: Vec<String>,
+}
+
+/// Replay every record (in parallel chunks) with the rules, as the converter does,
+/// without encoding shards to disk.
+pub fn check(recs: impl Iterator<Item = Result<Record>>, max_errors: usize) -> CheckStats {
+    use rayon::prelude::*;
+    let cfg = BridgeConfig::default();
+    let mut st = CheckStats::default();
+    let mut recs = recs.peekable();
+    while recs.peek().is_some() {
+        let chunk: Vec<Result<Record>> = recs.by_ref().take(4096).collect();
+        let res: Vec<(String, std::result::Result<(bool, bool, usize), String>)> = chunk
+            .par_iter()
+            .filter_map(|r| r.as_ref().ok())
+            .map(|rec| {
+                let out = gmrules::replay::<Bridge>(&cfg, &rec.events).map_err(|e| e.to_string()).map(|r| {
+                    let mismatch = match (&rec.expected_returns, r.terminal()) {
+                        (Some(want), true) => want.iter().zip(r.state.returns()).any(|(a, b)| (a - b).abs() > 1e-6),
+                        _ => false,
+                    };
+                    (r.terminal(), mismatch, r.decisions.len())
+                });
+                (rec.id.clone(), out)
+            })
+            .collect();
+        for r in &chunk {
+            if let Err(e) = r {
+                st.records += 1;
+                st.unparseable += 1;
+                if st.errors.len() < max_errors {
+                    st.errors.push(format!("unparseable: {e:#}"));
+                }
+            }
+        }
+        for (id, r) in res {
+            st.records += 1;
+            let note = match r {
+                Ok((_, true, _)) => {
+                    st.returns_mismatch += 1;
+                    format!("{id}: recorded result differs from the replay")
+                }
+                Ok((terminal, false, frames)) => {
+                    st.frames += frames;
+                    if terminal { st.complete += 1 } else { st.truncated += 1 }
+                    continue;
+                }
+                Err(e) => {
+                    st.illegal += 1;
+                    format!("{id}: illegal: {e}")
+                }
+            };
+            if st.errors.len() < max_errors {
+                st.errors.push(note);
+            }
+        }
+    }
+    st
+}
+
 fn client() -> Result<reqwest::blocking::Client> {
     Ok(reqwest::blocking::Client::builder()
         .user_agent("GamingMaster-research/0.1 (imitation-learning data pipeline)")
@@ -877,6 +965,15 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 ensure!(common::download(&c, url, dest)?, "{url}: not found");
             }
             println!("{}", json!({"source": format!("{source:?}").to_lowercase(), "files": files.iter().map(|f| f.1.clone()).collect::<Vec<_>>()}));
+            Ok(())
+        }
+        Cmd::Check { format, input, split, val_mod, max_records, max_errors } => {
+            let sel = Selection::default();
+            let recs = records(format, &input, split, val_mod, &sel)?.take(max_records.unwrap_or(usize::MAX));
+            let mut v = serde_json::to_value(check(recs, max_errors))?;
+            v["format"] = json!(format.name());
+            v["other_split"] = json!(sel.other_split.load(std::sync::atomic::Ordering::Relaxed));
+            println!("{v}");
             Ok(())
         }
         Cmd::Convert { format, input, out, split, val_mod, skip, max_records, shard_size, store_events, complete_only, config } => {
