@@ -402,9 +402,13 @@ impl<L: Labeller> Worker<L> {
             }),
         }
         moves.truncate(self.cfg.max_moves);
-        let probs = match self.policy {
-            PolicyKind::Softmax => softmax_q(&moves.iter().map(|m| m.q).collect::<Vec<_>>(), self.tau),
-            PolicyKind::Visits => normalise(&moves.iter().map(|m| m.visits).collect::<Vec<_>>()).context("no move has visits")?,
+        let probs = match self.lab.custom_policy(&moves) {
+            Some(w) if w.len() != moves.len() => bail!("custom policy gave {} weights for {} moves", w.len(), moves.len()),
+            Some(w) => normalise(&w).context("custom policy has no positive weight")?,
+            None => match self.policy {
+                PolicyKind::Softmax => softmax_q(&moves.iter().map(|m| m.q).collect::<Vec<_>>(), self.tau),
+                PolicyKind::Visits => normalise(&moves.iter().map(|m| m.visits).collect::<Vec<_>>()).context("no move has visits")?,
+            },
         };
         let value = a.value.unwrap_or_else(|| moves.iter().map(|m| m.q).fold(0.0, f32::max));
         if !(value.is_finite() && (0.0..=1.0).contains(&value)) {
@@ -703,10 +707,10 @@ pub fn run<L: Labeller>(lab: L, opts: &RunOpts) -> Result<Summary> {
             (h.name.to_string(), m)
         })
         .collect();
-    let policy_meta = match policy {
+    let policy_meta = lab.custom_policy_meta().unwrap_or_else(|| match policy {
         PolicyKind::Softmax => json!({"kind": "softmax", "tau": opts.tau}),
         PolicyKind::Visits => json!({"kind": "visits"}),
-    };
+    });
     let teacher = json!({
         "labeller": format!("gmdata label {game}"),
         "labeller_version": lab.version(),
@@ -755,7 +759,7 @@ pub fn run<L: Labeller>(lab: L, opts: &RunOpts) -> Result<Summary> {
         total_found,
         pool.workers(),
         limits.0,
-        policy.as_str()
+        teacher["policy"]
     ));
 
     let t0 = Instant::now();

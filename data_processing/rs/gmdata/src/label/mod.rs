@@ -264,6 +264,11 @@ pub enum FakeKind {
         #[arg(long)]
         script: PathBuf,
     },
+    /// an Egaroucid-console look-alike for othello (label/othello.rs; engine flags ignored)
+    Othello {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        engine_flags: Vec<String>,
+    },
 }
 
 pub fn run(cmd: Cmd) -> Result<()> {
@@ -297,6 +302,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 let text = std::fs::read_to_string(&script).with_context(|| format!("read {}", script.display()))?;
                 fake::run_stdio(&mut fake::Canned::parse(&text)?)
             }
+            FakeKind::Othello { .. } => fake::run_stdio(&mut othello::FakeEgaroucid::new()),
         },
     }
 }
