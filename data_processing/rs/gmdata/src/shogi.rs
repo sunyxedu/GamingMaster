@@ -1,4 +1,4 @@
-//! Shogi: floodgate CSA records → shards for the shogi adapter.
+//! Shogi: floodgate CSA records → shards for the shogi adapter (converter_version 2).
 //!
 //! Frame t = position BEFORE move t from the side to move (board rotated 180°
 //! for white). Square index = row-major 9×9 with square 0 = 9a (gote's back rank);
@@ -6,22 +6,51 @@
 //!
 //!   obs.board_seq   [T,28,9,9] f32  own P L N S G B R K +P +L +N +S +B +R, then opponent
 //!   obs.hand_seq    [T,14,4] f32    own P..R then opponent: [count, count>0, min(count/4,1), 1]
-//!   obs.globals_seq [T,4] f32       [min(move_number/512,1), mover is black, in check, 1]
+//!   obs.globals_seq [T,7] f32       [min(move_number/512,1), mover is black, in check, 1,
+//!                                    rep≥1, rep≥2, rep≥3] — rep = how often this exact position
+//!                                    (pieces, hands, side to move) occurred earlier in the game
+//!                                    (sennichite = the 4th occurrence)
 //!   tgt.dropped [T] i64, tgt.from_idx, tgt.to_idx, tgt.piece_idx, tgt.drop_to_idx [T] i64,
 //!   tgt.promoted [T] bool, tgt.value [T] f32 (result for the mover)
+//!
+//! Legality masks (bit-packed, float32 {0,1} when loaded; POV indices, true shogi rules):
+//!
+//!   tgt.legal_mode       [T,2]   [any legal board move, any legal drop]
+//!   tgt.legal_from       [T,81]  from-squares of legal board moves
+//!   tgt.legal_to_of      [T,81]  destinations of legal board moves from tgt.from_idx
+//!   tgt.legal_promo_of   [T,2]   [non-promotion legal, promotion legal] for (tgt.from_idx, tgt.to_idx)
+//!   tgt.legal_drop_piece [T,14]  own hand slot i (piece type P L N S G B R) has a legal drop;
+//!                                slots 7..13 (opponent's hand) are always 0
+//!   tgt.legal_drop_to_of [T,81]  legal drop squares for hand slot tgt.piece_idx
+//!
+//! The `_of` rows are computed for the stored indices on every frame, also on frames of the
+//! other mode (from/to = 0 on drop frames, piece_idx = 0 on move frames), where the decoder
+//! gives those heads no weight. A game whose recorded move falls outside its masks is skipped
+//! (`mask_mismatch`).
+//!
+//! Shard meta: {"global_features": 7}. converter_version 1 shards had globals [T,4] and no masks.
 //!
 //! The rules engine reproduces the reference (python-shogi) semantics exactly,
 //! including its legality test: pseudo-legal ∧ ¬(own king attacked after the move)
 //! ∧ ¬(pawn-drop mate as approximated there: the king has no unattacked escape
 //! square — occupancy unchanged — and no non-king piece attacks the pawn).
+//! The move generator ([`Board::legal_moves`]) applies that test to every candidate move;
+//! drops go onto empty squares only (the reference `is_pseudo_legal` also accepts a drop onto
+//! an opponent piece, which its own generator never produces and real records never contain).
 
 use crate::common;
 use anyhow::Result;
 use clap::Subcommand;
 use gmshard::{Sample, ShardWriter};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use rayon::prelude::*;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+
+/// Shard converter_version: 2 = repetition globals [T,7] + legality masks.
+const CONVERTER_VERSION: u32 = 2;
+/// obs.globals_seq width (shard meta `global_features`).
+const GLOBAL_FEATURES: usize = 7;
 
 const BLACK: usize = 0;
 const WHITE: usize = 1;
@@ -66,6 +95,31 @@ fn sq_of(r: i32, c: i32) -> Option<usize> {
     ((0..9).contains(&r) && (0..9).contains(&c)).then(|| (r * 9 + c) as usize)
 }
 
+/// Fixed-capacity square list: no heap allocation in the attack / legality hot path (the move
+/// generator runs the legality test on every candidate of every frame). The longest attack
+/// set is a horse/dragon in the open: 8 king steps + 16 slides.
+#[derive(Clone, Copy)]
+struct Sqs {
+    buf: [u8; 32],
+    n: usize,
+}
+
+impl Sqs {
+    fn new() -> Self {
+        Sqs { buf: [0; 32], n: 0 }
+    }
+    fn push(&mut self, s: usize) {
+        self.buf[self.n] = s as u8;
+        self.n += 1;
+    }
+    fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        self.buf[..self.n].iter().map(|&s| s as usize)
+    }
+    fn contains(&self, s: usize) -> bool {
+        self.buf[..self.n].contains(&(s as u8))
+    }
+}
+
 #[derive(Clone)]
 struct Board {
     piece: [u8; 81],
@@ -76,12 +130,22 @@ struct Board {
     move_number: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Mv {
     from: Option<usize>,
     to: usize,
     promotion: bool,
     drop: u8,
+}
+
+/// Position identity for the repetition counts: pieces with owners (owner 0 on empty
+/// squares), hands (P..R) and the side to move.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct PosKey {
+    piece: [u8; 81],
+    color: [u8; 81],
+    hand: [[u32; 7]; 2],
+    turn: u8,
 }
 
 impl Board {
@@ -92,13 +156,35 @@ impl Board {
         self.piece[sq] != NONE && self.color[sq] as usize == c
     }
 
-    /// Squares attacked by a `pt` on `sq` moving as `mover` (reference `attacks_from`).
-    fn attacks_from(&self, pt: u8, sq: usize, mover: usize) -> Vec<usize> {
+    /// Repetition identity (sennichite compares pieces with owners, both hands and the side
+    /// to move; the move number is not part of it).
+    fn key(&self) -> PosKey {
+        let mut color = [0u8; 81];
+        for (sq, c) in color.iter_mut().enumerate() {
+            if self.occupied(sq) {
+                *c = self.color[sq];
+            }
+        }
+        let mut hand = [[0u32; 7]; 2];
+        for (h, full) in hand.iter_mut().zip(self.hand.iter()) {
+            h.copy_from_slice(&full[1..8]);
+        }
+        PosKey { piece: self.piece, color, hand, turn: self.turn as u8 }
+    }
+
+    /// Squares attacked by a `pt` on `sq` moving as `mover` (reference `attacks_from`;
+    /// a horse/dragon lists its diagonal/orthogonal neighbours twice, as there).
+    fn attacks_from(&self, pt: u8, sq: usize, mover: usize) -> Sqs {
         let fwd = if mover == BLACK { -1 } else { 1 };
         let (r, c) = (rank(sq), col(sq));
-        let steps = |ds: &[(i32, i32)]| -> Vec<usize> { ds.iter().filter_map(|&(dr, dc)| sq_of(r + dr, c + dc)).collect() };
-        let slide = |ds: &[(i32, i32)]| -> Vec<usize> {
-            let mut out = Vec::new();
+        let steps = |out: &mut Sqs, ds: &[(i32, i32)]| {
+            for &(dr, dc) in ds {
+                if let Some(s) = sq_of(r + dr, c + dc) {
+                    out.push(s);
+                }
+            }
+        };
+        let slide = |out: &mut Sqs, ds: &[(i32, i32)]| {
             for &(dr, dc) in ds {
                 let (mut rr, mut cc) = (r + dr, c + dc);
                 while let Some(s) = sq_of(rr, cc) {
@@ -110,33 +196,32 @@ impl Board {
                     cc += dc;
                 }
             }
-            out
         };
         let gold = [(fwd, -1), (fwd, 0), (fwd, 1), (0, -1), (0, 1), (-fwd, 0)];
         let king8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)];
         let diag = [(-1, -1), (-1, 1), (1, -1), (1, 1)];
         let orth = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+        let mut out = Sqs::new();
         match pt {
-            PAWN => steps(&[(fwd, 0)]),
-            LANCE => slide(&[(fwd, 0)]),
-            KNIGHT => steps(&[(2 * fwd, -1), (2 * fwd, 1)]),
-            SILVER => steps(&[(fwd, -1), (fwd, 0), (fwd, 1), (-fwd, -1), (-fwd, 1)]),
-            GOLD | 9..=12 => steps(&gold),
-            BISHOP => slide(&diag),
-            ROOK => slide(&orth),
-            KING => steps(&king8),
+            PAWN => steps(&mut out, &[(fwd, 0)]),
+            LANCE => slide(&mut out, &[(fwd, 0)]),
+            KNIGHT => steps(&mut out, &[(2 * fwd, -1), (2 * fwd, 1)]),
+            SILVER => steps(&mut out, &[(fwd, -1), (fwd, 0), (fwd, 1), (-fwd, -1), (-fwd, 1)]),
+            GOLD | 9..=12 => steps(&mut out, &gold),
+            BISHOP => slide(&mut out, &diag),
+            ROOK => slide(&mut out, &orth),
+            KING => steps(&mut out, &king8),
             PROM_BISHOP => {
-                let mut v = steps(&king8);
-                v.extend(slide(&diag));
-                v
+                steps(&mut out, &king8);
+                slide(&mut out, &diag);
             }
             PROM_ROOK => {
-                let mut v = steps(&king8);
-                v.extend(slide(&orth));
-                v
+                steps(&mut out, &king8);
+                slide(&mut out, &orth);
             }
-            _ => Vec::new(),
+            _ => {}
         }
+        out
     }
 
     fn is_attacked_by(&self, color: usize, sq: Option<usize>, skip_king: bool) -> bool {
@@ -145,7 +230,7 @@ impl Board {
             if skip_king && pt == KING {
                 continue;
             }
-            for s in self.attacks_from(pt, sq, color ^ 1) {
+            for s in self.attacks_from(pt, sq, color ^ 1).iter() {
                 if self.piece[s] == pt && self.color[s] as usize == color {
                     return true;
                 }
@@ -197,7 +282,7 @@ impl Board {
             if !m.promotion && !Self::can_move_without_promotion(m.to, pt, self.turn) {
                 return false;
             }
-            self.attacks_from(pt, from, self.turn).contains(&m.to)
+            self.attacks_from(pt, from, self.turn).contains(m.to)
         } else if m.drop != NONE {
             if m.promotion || self.hand[self.turn][m.drop as usize] == 0 {
                 return false;
@@ -247,12 +332,11 @@ impl Board {
         let pawn_sq = m.to;
         let Some(ksq) = self.king[self.turn] else { return false };
         // pawn (dropper = turn^1) attacks the king square, and that square is not dropper-occupied
-        let pawn_attacks: Vec<usize> =
-            self.attacks_from(PAWN, pawn_sq, self.turn ^ 1).into_iter().filter(|&s| !self.owned_by(s, self.turn ^ 1)).collect();
-        if !pawn_attacks.contains(&ksq) {
+        let pawn_checks = self.attacks_from(PAWN, pawn_sq, self.turn ^ 1).iter().any(|s| s == ksq && !self.owned_by(s, self.turn ^ 1));
+        if !pawn_checks {
             return false;
         }
-        for s in self.attacks_from(KING, ksq, self.turn) {
+        for s in self.attacks_from(KING, ksq, self.turn).iter() {
             if self.owned_by(s, self.turn) {
                 continue;
             }
@@ -275,6 +359,112 @@ impl Board {
         let suicide = b.is_attacked_by(b.turn, b.king[b.turn ^ 1], false);
         !(suicide || b.was_check_by_dropping_pawn(m))
     }
+
+    /// Every legal move of the side to move: board moves (each own piece to each attacked
+    /// square not held by an own piece, with and without promotion — `is_pseudo_legal` owns
+    /// the promotion-zone and forced-promotion rules) and drops of each hand piece onto each
+    /// EMPTY square, all filtered by [`Board::is_legal`] (self-check, nifu, dead drops,
+    /// pawn-drop mate). Deterministic order, no duplicates.
+    fn legal_moves(&self) -> Vec<Mv> {
+        let t = self.turn;
+        let mut out = Vec::new();
+        for from in 0..81 {
+            if !self.owned_by(from, t) {
+                continue;
+            }
+            let mut seen = [false; 81];
+            for to in self.attacks_from(self.piece[from], from, t).iter() {
+                if seen[to] || self.owned_by(to, t) {
+                    continue;
+                }
+                seen[to] = true;
+                for promotion in [false, true] {
+                    let m = Mv { from: Some(from), to, promotion, drop: NONE };
+                    if self.is_legal(&m) {
+                        out.push(m);
+                    }
+                }
+            }
+        }
+        for pt in PAWN..=ROOK {
+            if self.hand[t][pt as usize] == 0 {
+                continue;
+            }
+            for to in 0..81 {
+                if self.occupied(to) {
+                    continue;
+                }
+                let m = Mv { from: None, to, promotion: false, drop: pt };
+                if self.is_legal(&m) {
+                    out.push(m);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Per-frame legality masks in POV indices (see the module doc); the `_of` rows are the
+/// ones selected by the stored target indices of the frame.
+#[derive(Debug)]
+struct FrameMasks {
+    mode: [bool; 2],
+    from: [bool; 81],
+    to_of: [bool; 81],
+    promo_of: [bool; 2],
+    drop_piece: [bool; 14],
+    drop_to_of: [bool; 81],
+}
+
+fn frame_masks(moves: &[Mv], mover_black: bool, from_idx: i64, to_idx: i64, piece_idx: i64) -> FrameMasks {
+    let mut f = FrameMasks {
+        mode: [false; 2],
+        from: [false; 81],
+        to_of: [false; 81],
+        promo_of: [false; 2],
+        drop_piece: [false; 14],
+        drop_to_of: [false; 81],
+    };
+    for m in moves {
+        let to = pov(m.to, mover_black);
+        match m.from {
+            Some(sq) => {
+                let from = pov(sq, mover_black);
+                f.mode[0] = true;
+                f.from[from as usize] = true;
+                if from == from_idx {
+                    f.to_of[to as usize] = true;
+                    if to == to_idx {
+                        f.promo_of[m.promotion as usize] = true;
+                    }
+                }
+            }
+            None => {
+                let slot = m.drop as i64 - 1;
+                f.mode[1] = true;
+                f.drop_piece[slot as usize] = true;
+                if slot == piece_idx {
+                    f.drop_to_of[to as usize] = true;
+                }
+            }
+        }
+    }
+    f
+}
+
+/// Repetition counts: for each frame, how often the position before that move occurred
+/// earlier in the game (the start position included).
+fn repetition_counts(start: &Board, moves: &[Mv]) -> Vec<u32> {
+    let mut seen: HashMap<PosKey, u32> = HashMap::new();
+    let mut b = start.clone();
+    let mut out = Vec::with_capacity(moves.len());
+    for m in moves {
+        let c = seen.entry(b.key()).or_insert(0);
+        out.push(*c);
+        *c += 1;
+        b.push(m);
+    }
+    out
 }
 
 // ---------------------------------------------------------------- CSA
@@ -517,11 +707,19 @@ fn convert_game(text: &str, min_moves: usize, allow_no_result: bool) -> std::res
         return Err("no_result");
     }
     let t = p.moves.len();
+    let reps = repetition_counts(&p.start, &p.moves);
     let mut board = vec![0f32; t * 28 * 81];
     let mut hand = Vec::with_capacity(t * 56);
-    let mut glb = Vec::with_capacity(t * 4);
+    let mut glb = Vec::with_capacity(t * GLOBAL_FEATURES);
     let (mut dropped, mut from, mut to, mut promo, mut piece_idx, mut drop_to, mut value) =
         (vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+    let mut lm = Vec::with_capacity(t * 2);
+    let mut lf = Vec::with_capacity(t * 81);
+    let mut lto = Vec::with_capacity(t * 81);
+    let mut lpr = Vec::with_capacity(t * 2);
+    let mut ldp = Vec::with_capacity(t * 14);
+    let mut ldt = Vec::with_capacity(t * 81);
+    let bit = |v: &[bool], out: &mut Vec<f32>| out.extend(v.iter().map(|&x| x as u8 as f32));
     for (k, m) in p.moves.iter().enumerate() {
         if !b.is_legal(m) {
             return Err("illegal_move");
@@ -543,22 +741,43 @@ fn convert_game(text: &str, min_moves: usize, allow_no_result: bool) -> std::res
                 hand.extend_from_slice(&[n, (n > 0.0) as u8 as f32, (n as f64 / 4.0).min(1.0) as f32, 1.0]);
             }
         }
-        glb.extend_from_slice(&[(b.move_number as f64 / 512.0).min(1.0) as f32, mb as u8 as f32, b.is_check() as u8 as f32, 1.0]);
-        if m.drop != NONE {
-            dropped.push(1);
-            from.push(0);
-            to.push(0);
-            promo.push(false);
-            piece_idx.push(m.drop as i64 - 1);
-            drop_to.push(pov(m.to, mb));
+        let rep = reps[k];
+        glb.extend_from_slice(&[
+            (b.move_number as f64 / 512.0).min(1.0) as f32,
+            mb as u8 as f32,
+            b.is_check() as u8 as f32,
+            1.0,
+            (rep >= 1) as u8 as f32,
+            (rep >= 2) as u8 as f32,
+            (rep >= 3) as u8 as f32,
+        ]);
+        // (dropped, from, to, promoted, piece, drop_to) in POV indices
+        let (d, fi, ti, pr, pi, dt) = if m.drop != NONE {
+            (1, 0, 0, false, m.drop as i64 - 1, pov(m.to, mb))
         } else {
-            dropped.push(0);
-            from.push(pov(m.from.unwrap(), mb));
-            to.push(pov(m.to, mb));
-            promo.push(m.promotion);
-            piece_idx.push(0);
-            drop_to.push(0);
+            (0, pov(m.from.unwrap(), mb), pov(m.to, mb), m.promotion, 0, 0)
+        };
+        let f = frame_masks(&b.legal_moves(), mb, fi, ti, pi);
+        let inside = if d == 1 {
+            f.mode[1] && f.drop_piece[pi as usize] && f.drop_to_of[dt as usize]
+        } else {
+            f.mode[0] && f.from[fi as usize] && f.to_of[ti as usize] && f.promo_of[pr as usize]
+        };
+        if !inside {
+            return Err("mask_mismatch");
         }
+        bit(&f.mode, &mut lm);
+        bit(&f.from, &mut lf);
+        bit(&f.to_of, &mut lto);
+        bit(&f.promo_of, &mut lpr);
+        bit(&f.drop_piece, &mut ldp);
+        bit(&f.drop_to_of, &mut ldt);
+        dropped.push(d);
+        from.push(fi);
+        to.push(ti);
+        promo.push(pr);
+        piece_idx.push(pi);
+        drop_to.push(dt);
         value.push(result_value(result, mb));
         b.push(m);
     }
@@ -566,14 +785,20 @@ fn convert_game(text: &str, min_moves: usize, allow_no_result: bool) -> std::res
     Ok(Sample::new(json!({"players": names, "result": result, "plies": t}))
         .bits("obs.board_seq", &[28, 9, 9], &board)
         .f32("obs.hand_seq", &[14, 4], hand)
-        .f32("obs.globals_seq", &[4], glb)
+        .f32("obs.globals_seq", &[GLOBAL_FEATURES], glb)
         .i64("tgt.dropped", &[], dropped)
         .i64("tgt.from_idx", &[], from)
         .i64("tgt.to_idx", &[], to)
         .bool("tgt.promoted", &[], promo)
         .i64("tgt.piece_idx", &[], piece_idx)
         .i64("tgt.drop_to_idx", &[], drop_to)
-        .f32("tgt.value", &[], value))
+        .f32("tgt.value", &[], value)
+        .bits("tgt.legal_mode", &[2], &lm)
+        .bits("tgt.legal_from", &[81], &lf)
+        .bits("tgt.legal_to_of", &[81], &lto)
+        .bits("tgt.legal_promo_of", &[2], &lpr)
+        .bits("tgt.legal_drop_piece", &[14], &ldp)
+        .bits("tgt.legal_drop_to_of", &[81], &ldt))
 }
 
 #[derive(Subcommand)]
@@ -714,24 +939,44 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<us
                q: &Quality) -> Result<Value> {
     let files: Vec<PathBuf> = common::find_files(input, &[".csa"])?.into_iter().filter(|p| p.extension().map(|e| e == "csa").unwrap_or(false)).collect();
     anyhow::ensure!(!files.is_empty(), "no .csa files under {}", input.display());
-    let mut w = ShardWriter::new(out, "shogi", 1, json!({}), shard_size)?;
-    let mut stats: BTreeMap<&str, usize> = ["converted", "parse_error", "too_short", "no_result", "illegal_move", "low_quality"].into_iter().map(|k| (k, 0)).collect();
-    for path in files {
-        if max_games.map(|m| stats["converted"] >= m).unwrap_or(false) {
+    let mut w = ShardWriter::new(out, "shogi", CONVERTER_VERSION, json!({"global_features": GLOBAL_FEATURES}), shard_size)?;
+    let mut stats: BTreeMap<&str, usize> =
+        ["converted", "parse_error", "too_short", "no_result", "illegal_move", "mask_mismatch", "low_quality"].into_iter().map(|k| (k, 0)).collect();
+    // Files are converted in parallel chunks and written in input order, so the output (and
+    // the stats, max_games included) is identical to a sequential pass.
+    const CHUNK: usize = 512;
+    let mut i = 0;
+    while i < files.len() {
+        let left = max_games.map(|m| m.saturating_sub(stats["converted"]));
+        if left == Some(0) {
             break;
         }
-        let text = String::from_utf8_lossy(&std::fs::read(&path)?).to_string();
-        if !passes_quality(&text, &path.file_name().unwrap().to_string_lossy(), q) {
-            *stats.get_mut("low_quality").unwrap() += 1;
-            continue;
-        }
-        match convert_game(&text, min_moves, allow_no_result) {
-            Ok(mut s) => {
-                s.meta["source"] = json!(path.file_name().unwrap().to_string_lossy());
-                w.push(s)?;
-                *stats.get_mut("converted").unwrap() += 1;
+        let n = left.unwrap_or(CHUNK).clamp(1, CHUNK).min(files.len() - i);
+        let chunk = &files[i..i + n];
+        i += n;
+        let results: Vec<Result<Option<std::result::Result<Sample, &'static str>>>> = chunk
+            .par_iter()
+            .map(|path| {
+                let text = String::from_utf8_lossy(&std::fs::read(path)?).to_string();
+                if !passes_quality(&text, &path.file_name().unwrap().to_string_lossy(), q) {
+                    return Ok(None);
+                }
+                Ok(Some(convert_game(&text, min_moves, allow_no_result)))
+            })
+            .collect();
+        for (path, r) in chunk.iter().zip(results) {
+            if max_games.map(|m| stats["converted"] >= m).unwrap_or(false) {
+                break;
             }
-            Err(r) => *stats.get_mut(r).unwrap() += 1,
+            match r? {
+                None => *stats.get_mut("low_quality").unwrap() += 1,
+                Some(Ok(mut s)) => {
+                    s.meta["source"] = json!(path.file_name().unwrap().to_string_lossy());
+                    w.push(s)?;
+                    *stats.get_mut("converted").unwrap() += 1;
+                }
+                Some(Err(r)) => *stats.get_mut(r).unwrap() += 1,
+            }
         }
     }
     w.flush()?;
@@ -781,5 +1026,178 @@ mod tests {
         assert!(!b.is_legal(&bad));
         assert!(!b.is_check());
         assert_eq!(game_result("%TORYO", BLACK, 1), "b"); // black moved last, white resigns
+    }
+
+    fn sq(s: &str) -> usize {
+        csa_square(s).unwrap()
+    }
+
+    /// Board from (CSA square, piece, colour) triples, hand entries (colour, piece, count).
+    fn board(pieces: &[(&str, u8, usize)], hands: &[(usize, u8, u32)], turn: usize) -> Board {
+        let mut b = Board { piece: [NONE; 81], color: [0; 81], hand: [[0; 9]; 2], turn, king: [None, None], move_number: 1 };
+        for &(s, pt, c) in pieces {
+            b.piece[sq(s)] = pt;
+            b.color[sq(s)] = c as u8;
+            if pt == KING {
+                b.king[c] = Some(sq(s));
+            }
+        }
+        for &(c, pt, n) in hands {
+            b.hand[c][pt as usize] = n;
+        }
+        b
+    }
+
+    fn drop_squares(moves: &[Mv], pt: u8) -> Vec<usize> {
+        moves.iter().filter(|m| m.drop == pt).map(|m| m.to).collect()
+    }
+
+    fn mv(from: &str, to: &str) -> Mv {
+        Mv { from: Some(sq(from)), to: sq(to), promotion: false, drop: NONE }
+    }
+
+    #[test]
+    fn start_position_has_30_moves_and_no_drops() {
+        let b = start();
+        let moves = b.legal_moves();
+        assert_eq!(moves.len(), 30);
+        assert!(moves.iter().all(|m| b.is_legal(m) && m.drop == NONE && !m.promotion));
+        let f = frame_masks(&moves, true, sq("77") as i64, sq("76") as i64, 0);
+        assert_eq!(f.mode, [true, false]);
+        assert_eq!(f.drop_piece, [false; 14]);
+        assert_eq!(f.drop_to_of, [false; 81]);
+        // movable: 9 pawns, 2 lances, 2 silvers, 2 golds, the king and the rook
+        assert_eq!(f.from.iter().filter(|&&x| x).count(), 17);
+        // the 7g pawn has exactly one destination (7f), without promotion
+        let to: Vec<usize> = (0..81).filter(|&i| f.to_of[i]).collect();
+        assert_eq!(to, vec![sq("76")]);
+        assert_eq!(f.promo_of, [true, false]);
+    }
+
+    #[test]
+    fn white_masks_are_in_white_pov() {
+        // after 7g7f white's position is the rotated start position: same POV masks
+        let mut b = start();
+        let black = frame_masks(&b.legal_moves(), true, 0, 0, 0);
+        b.push(&mv("77", "76"));
+        let moves = b.legal_moves();
+        assert_eq!(moves.len(), 30);
+        let white = frame_masks(&moves, false, 0, 0, 0);
+        assert_eq!(white.from, black.from);
+        // POV 56 (= 3c for white) → POV 47
+        let f = frame_masks(&moves, false, 56, 47, 0);
+        assert!(f.to_of[47] && f.to_of.iter().filter(|&&x| x).count() == 1);
+    }
+
+    #[test]
+    fn nifu_and_dead_drops() {
+        let b = board(&[("51", KING, WHITE), ("59", KING, BLACK), ("77", PAWN, BLACK)],
+                      &[(BLACK, PAWN, 1), (BLACK, LANCE, 1), (BLACK, KNIGHT, 1)], BLACK);
+        let moves = b.legal_moves();
+        let pawn = drop_squares(&moves, PAWN);
+        assert!(pawn.iter().all(|&s| col(s) != col(sq("77"))), "nifu: no pawn drop on file 7");
+        assert!(pawn.iter().all(|&s| rank(s) > 0), "no pawn drop on the last rank");
+        assert!(pawn.contains(&sq("65")));
+        // 81 − last rank (9, incl. the white king) − file 7 below it (8, incl. the pawn) − black king
+        assert_eq!(pawn.len(), 81 - 9 - 8 - 1);
+        let lance = drop_squares(&moves, LANCE);
+        assert!(lance.iter().all(|&s| rank(s) > 0));
+        assert_eq!(lance.len(), 81 - 9 - 2);
+        let knight = drop_squares(&moves, KNIGHT);
+        assert!(knight.iter().all(|&s| rank(s) > 1));
+        assert_eq!(knight.len(), 81 - 18 - 2);
+        // a promoted pawn on the file does not count for nifu
+        let mut b2 = b.clone();
+        b2.piece[sq("77")] = PROM_PAWN;
+        assert!(drop_squares(&b2.legal_moves(), PAWN).contains(&sq("75")));
+        // white: last ranks are 8/9 from black's view (rows 8 / 7..8)
+        let w = board(&[("51", KING, WHITE), ("59", KING, BLACK)], &[(WHITE, PAWN, 1), (WHITE, KNIGHT, 1)], WHITE);
+        let wm = w.legal_moves();
+        assert!(drop_squares(&wm, PAWN).iter().all(|&s| rank(s) < 8));
+        assert!(drop_squares(&wm, KNIGHT).iter().all(|&s| rank(s) < 7));
+        let f = frame_masks(&wm, false, 0, 0, KNIGHT as i64 - 1);
+        assert_eq!(f.mode, [true, true]);
+        assert!(f.drop_piece[0] && f.drop_piece[2] && !f.drop_piece[1]);
+        assert!(f.drop_piece[7..].iter().all(|&x| !x));
+        // POV: white's knight drop rows are its own ranks 3..9 → POV rows 2..8
+        assert!((0..81).filter(|&i| f.drop_to_of[i]).all(|i| i / 9 >= 2));
+    }
+
+    #[test]
+    fn pawn_drop_mate_is_excluded() {
+        // white king in the corner, own lance/pawn block 2a/2b, black gold on 1c guards 1b
+        let pieces = [("11", KING, WHITE), ("21", LANCE, WHITE), ("22", PAWN, WHITE), ("13", GOLD, BLACK), ("59", KING, BLACK)];
+        let b = board(&pieces, &[(BLACK, PAWN, 1), (BLACK, GOLD, 1)], BLACK);
+        let moves = b.legal_moves();
+        assert!(!drop_squares(&moves, PAWN).contains(&sq("12")), "uchifuzume");
+        assert!(drop_squares(&moves, GOLD).contains(&sq("12")), "a gold-drop mate is legal");
+        // without the guard the king can take the pawn: legal
+        let b2 = board(&[pieces[0], pieces[1], pieces[2], pieces[4]], &[(BLACK, PAWN, 1)], BLACK);
+        assert!(drop_squares(&b2.legal_moves(), PAWN).contains(&sq("12")));
+    }
+
+    #[test]
+    fn forced_and_optional_promotion() {
+        let pieces = [
+            ("91", KING, WHITE),
+            ("19", KING, BLACK),
+            ("52", PAWN, BLACK),
+            ("32", LANCE, BLACK),
+            ("43", KNIGHT, BLACK),
+            ("74", KNIGHT, BLACK),
+            ("75", KNIGHT, BLACK),
+            ("55", SILVER, BLACK),
+            ("56", PAWN, BLACK),
+        ];
+        let b = board(&pieces, &[], BLACK);
+        let moves = b.legal_moves();
+        let promo = |from: &str, to: &str| frame_masks(&moves, true, sq(from) as i64, sq(to) as i64, 0).promo_of;
+        assert_eq!(promo("52", "51"), [false, true]); // pawn to the last rank
+        assert_eq!(promo("32", "31"), [false, true]); // lance to the last rank
+        assert_eq!(promo("43", "51"), [false, true]); // knight to the last rank
+        assert_eq!(promo("74", "82"), [false, true]); // knight to the second-last rank
+        assert_eq!(promo("75", "83"), [true, true]); // knight into the zone: optional
+        assert_eq!(promo("55", "54"), [true, false]); // outside the zone
+        assert_eq!(promo("56", "55"), [false, false]); // own piece on the target: no move
+        let f = frame_masks(&moves, true, sq("32") as i64, 0, 0);
+        let lance_to: Vec<usize> = (0..81).filter(|&i| f.to_of[i]).collect();
+        assert_eq!(lance_to, vec![sq("31")]);
+        // the black king in the corner: all 3 neighbours are free and unattacked
+        let k = frame_masks(&moves, true, sq("19") as i64, 0, 0);
+        assert_eq!(k.to_of.iter().filter(|&&x| x).count(), 3);
+    }
+
+    #[test]
+    fn self_check_is_excluded() {
+        // black silver pinned on the file by a white rook: it may not leave the file
+        let b = board(&[("59", KING, BLACK), ("58", SILVER, BLACK), ("51", ROOK, WHITE), ("91", KING, WHITE)], &[], BLACK);
+        let moves = b.legal_moves();
+        let f = frame_masks(&moves, true, sq("58") as i64, 0, 0);
+        let to: Vec<usize> = (0..81).filter(|&i| f.to_of[i]).collect();
+        assert_eq!(to, vec![sq("57")]);
+    }
+
+    #[test]
+    fn repetition_counts_after_king_shuffle() {
+        let shuffle = [mv("59", "58"), mv("51", "52"), mv("58", "59"), mv("52", "51")];
+        let moves: Vec<Mv> = shuffle.iter().cycle().take(13).copied().collect();
+        let reps = repetition_counts(&start(), &moves);
+        assert_eq!(reps, vec![0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3]);
+        // same pieces, other side to move: a different position
+        let mut b = start();
+        let k0 = b.key();
+        b.turn ^= 1;
+        assert!(b.key() != k0);
+    }
+
+    #[test]
+    fn convert_game_writes_globals_and_masks() {
+        let text = "PI\n+\n+5958OU\n-5152OU\n+5859OU\n-5251OU\n+7776FU\n%TORYO\n";
+        let s = convert_game(text, 0, false).unwrap();
+        let g = s.tensors.iter().find(|t| t.name == "obs.globals_seq").unwrap();
+        assert_eq!(g.frame_shape, vec![GLOBAL_FEATURES]);
+        for name in ["tgt.legal_mode", "tgt.legal_from", "tgt.legal_to_of", "tgt.legal_promo_of", "tgt.legal_drop_piece", "tgt.legal_drop_to_of"] {
+            assert!(s.tensors.iter().any(|t| t.name == name), "{name}");
+        }
     }
 }
