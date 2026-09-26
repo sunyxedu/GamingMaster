@@ -495,9 +495,55 @@ class GeneralsSpec(RLGameSpec):
         return terms
 
 
+class LuxSpec(RLGameSpec):
+    """lux (env/vec_lux.py): the factored per-unit decoder conditions on
+    nothing (``LABEL_KEYS["lux"] == ()``), so μ is ``sample()``'s
+    ``action_log_prob`` and the policy its ``log_prob_entropy`` — the sum over
+    the ``legal["unit"]`` units of the action log-prob plus, for sapping
+    units, the sap target's — as in the generic spec.  The KL covers every
+    head: each unit's action distribution (legal-masked) and the sap target
+    distribution of the sapping units.  The env's sap window is the
+    decoder's ``lux_sap_range``."""
+
+    full_kl = True
+
+    def env_kwargs(self, cfg):
+        return {"sap_window": int(getattr(cfg, "lux_sap_range", 0))}
+
+    def check_env(self, env, net):
+        cfg = net.cfg
+        got = {k: tuple(v[0]) for k, v in env.obs_schema().items()}
+        want = {"map_seq": (cfg.map_channels, cfg.map_h, cfg.map_w),
+                "units_seq": (cfg.max_units, cfg.unit_feature_dim),
+                "unit_mask": (cfg.max_units,), "globals_seq": (cfg.lux_global_features,)}
+        if got != want:
+            raise SystemExit(f"lux env emits {got}, the network expects {want} (the env "
+                             f"speaks the converter-v2 schema: lux_global_features=11)")
+        R = int(getattr(cfg, "lux_sap_range", 0))
+        if getattr(env, "sap_window", R) != R or cfg.n_unit_actions != 6:
+            raise SystemExit(f"lux env sap window {getattr(env, 'sap_window', None)} / 6 unit "
+                             f"actions vs the network's lux_sap_range={R} / "
+                             f"n_unit_actions={cfg.n_unit_actions}")
+
+    def kl_targets(self, actions, forced, cfg):
+        ua = actions["unit_actions"].long()
+        tgt = {"unit_actions": ua}
+        if "sap_offsets" in actions:
+            sap = ua == int(getattr(cfg, "lux_sap_action", 5))
+            tgt["sap_offset"] = torch.where(sap, actions["sap_offsets"].long(),
+                                            torch.full_like(ua, -1))
+        return tgt
+
+    def kl_terms(self, net, pred, tgt, mask, legal):
+        terms = dict(net.action_decoder.il_head_terms(pred, tgt, mask))
+        terms["unit_action"] = {**terms["unit_action"], "mask": legal["unit_action"].bool()}
+        return terms
+
+
 GAME_SPECS: Dict[str, RLGameSpec] = {
     "generals": GeneralsSpec(),
     "othello": ForcedPassPlacementSpec(),
+    "lux": LuxSpec(),
 }
 
 
