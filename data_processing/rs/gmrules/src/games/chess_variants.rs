@@ -8,27 +8,40 @@
 //!
 //! Rules: shakmaty's variant positions (`shakmaty::variant`, the move generator of
 //! lichess' analysis stack) for moves, captures, explosions, drops, promotions,
-//! checks, variant ends, stalemates and insufficient material; on top, lichess'
-//! AUTOMATIC game ends (scalachess `Situation.status`: mate > variant end > stalemate >
-//! auto draw), which real records confirm (no record continues past one):
+//! checks and the variant ends; on top, lichess' AUTOMATIC game ends as scalachess
+//! (lichess' rules library) defines them — `Position.status`: checkmate > variant end
+//! > stalemate > automatic draw ([`rules_outcome`]):
 //!
+//! - racing kings: after White reaches the 8th rank Black may still draw by reaching
+//!   it with a LEGAL move (scalachess `specialEnd`; shakmaty only asks for an
+//!   unattacked square);
+//! - insufficient material / dead positions, per variant ([`lichess_insufficient_material`],
+//!   ports of scalachess `isInsufficientMaterial`): chess960 the standard rule, three-check
+//!   bare kings, atomic its winning-material table + closed pawn structures (kings,
+//!   blocked pawns, "pawnitized" bishops), antichess opposite-colour bishops with
+//!   unattackable blocked pawns, horde a stalemated horde (after every black move), never
+//!   in crazyhouse / king of the hill / racing kings;
 //! - fifty-move rule: a draw once the halfmove clock reaches 100 (automatic on lichess,
 //!   not a claim), in every variant but crazyhouse (which has none);
 //! - fivefold repetition: a draw;
 //! - threefold repetition is a CLAIM on lichess (auto-claimed by a user preference),
 //!   so records continue past it: a draw only with `auto_threefold` (the RL env's
-//!   default, the converter's is off);
+//!   setting, model/games/gmrules/chess_variants.py; the converter's is off — in rational
+//!   play the side that profits claims, so an automatic draw is the same game);
 //! - `max_plies` (default 1024): a draw — the one deviation from lichess, a hard bound
 //!   the framework needs (`max_decisions`); longer real games are rejected anyway.
 //!
 //! Games that end OFF the rules (resignation, time forfeit, agreed / claimed draws)
 //! stop before a terminal state; the converter takes their result from the PGN
-//! (`traj::Record::final_outcome`). Differential tests: Fairy-Stockfish
-//! (tests/test_chess_variants_reference.py) on random playouts both ways and on real
-//! lichess games.
+//! (`traj::Record::final_outcome`). Parity: every lichess record replays (the gmdata
+//! converter verifies every move and every rules end against the PGN result; 0
+//! illegal / 0 mismatches on 333k games of 2026-08); differential tests against
+//! Fairy-Stockfish (tests/test_chess_variants_reference.py) on random playouts both
+//! ways and on real lichess games.
 //!
 //! Trajectory: `Chance(variant)` (the configured variants, `weights`), for chess960
-//! `Chance(start position)` (Scharnagl 0..960, uniform), then the moves — seat 0 =
+//! `Chance(start position)` (Scharnagl 0..960, uniform over `chess960_positions`, default
+//! all), then the moves — seat 0 =
 //! White (the horde), seat 1 = Black, alternating. Action ids (absolute squares, the
 //! UCI of Fairy-Stockfish with `UCI_Chess960`):
 //!
@@ -82,8 +95,8 @@ use shakmaty::fen::Fen;
 use shakmaty::variant::{Variant as ShakmatyVariant, VariantPosition};
 use shakmaty::zobrist::Zobrist64;
 use shakmaty::{
-    Bitboard, Board, CastlingMode, CastlingSide, Color, EnPassantMode, KnownOutcome, Move, Outcome, Position, Rank,
-    Role, Setup, Square,
+    attacks, Bitboard, Board, CastlingMode, CastlingSide, Color, EnPassantMode, KnownOutcome, Move, MoveList, Outcome,
+    Position, Rank, Role, Setup, Square,
 };
 
 /// Board squares.
@@ -337,13 +350,237 @@ pub fn action_keys(id: u32, flip: bool) -> (usize, usize, usize) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum End {
-    /// checkmate, a variant win / draw (explosion, hill, third check, race, horde,
-    /// antichess), stalemate, insufficient material
+    /// checkmate, stalemate, a variant win / draw (explosion, hill, third check, race,
+    /// horde captured, antichess)
     Rules,
+    /// lichess' insufficient-material / dead-position draw of the variant
+    /// ([`lichess_insufficient_material`])
+    InsufficientMaterial,
     FiftyMoves,
     Fivefold,
     Threefold,
     PlyCap,
+}
+
+// ---- lichess' automatic game ends ------------------------------------------------
+//
+// Ports of scalachess (lichess' rules library, `chess.variant.*`): shakmaty generates
+// the moves, these decide the automatic ends where the two libraries differ — the
+// per-variant insufficient-material / dead-position draws and the racing-kings
+// catch-up rule. The citations name the scalachess definitions.
+
+fn bishops_on_opposite_colors(b: &Board) -> bool {
+    (b.bishops() & Bitboard::LIGHT_SQUARES).any() && (b.bishops() & Bitboard::DARK_SQUARES).any()
+}
+
+/// `InsufficientMatingMaterial(board)`: only kings and minor pieces, and at most one
+/// minor or only bishops on one square colour (standard chess / chess960).
+fn standard_insufficient(b: &Board) -> bool {
+    let occ = b.occupied();
+    occ == b.kings() | b.knights() | b.bishops()
+        && (occ.count() <= 3 || (occ == b.kings() | b.bishops() && !bishops_on_opposite_colors(b)))
+}
+
+/// `Atomic.insufficientAtomicWinningMaterial`.
+fn atomic_insufficient_material(b: &Board) -> bool {
+    let occ = b.occupied();
+    let n = occ.count();
+    if b.white().count() >= 2 && b.black().count() >= 2 {
+        // opposite-colour bishops (one each) can never explode each other
+        occ == b.kings() | b.bishops() && n <= 4 && bishops_on_opposite_colors(b)
+    } else if occ == b.kings() | b.knights() {
+        n <= 4
+    } else {
+        occ == b.kings() | b.rooks() | b.knights() | b.bishops() && !bishops_on_opposite_colors(b) && n <= 3
+    }
+}
+
+/// `InsufficientMatingMaterial.pawnBlockedByPawn`: a pawn whose square ahead holds a
+/// pawn and that has no legal move (`has_move(square, color)`: its only candidates
+/// are captures, the square ahead being taken).
+fn pawn_blocked_by_pawn(b: &Board, sq: Square, has_move: &impl Fn(Square, Color) -> bool) -> bool {
+    let Some(p) = b.piece_at(sq).filter(|p| p.role == Role::Pawn) else {
+        return false;
+    };
+    let ahead = sq.offset(if p.color == Color::White { 8 } else { -8 });
+    ahead.is_some_and(|a| b.pawns().contains(a)) && !has_move(sq, p.color)
+}
+
+/// `Atomic.kingSafety` of the capture `from` × `to` by `color` (explosions included):
+/// never explode the own king, always allowed to explode the opponent's, else the own
+/// king must not be attacked afterwards (kings next to each other cannot check).
+fn atomic_capture_is_legal(b: &Board, color: Color, from: Square, to: Square) -> bool {
+    let blast = attacks::king_attacks(to);
+    if b.king_of(color).is_some_and(|k| blast.contains(k)) {
+        return false;
+    }
+    if b.king_of(!color).is_some_and(|k| blast.contains(k)) {
+        return true;
+    }
+    let mut after = b.clone();
+    after.discard_piece_at(from);
+    after.discard_piece_at(to); // the victim; the capturer explodes on `to`
+    for s in blast & after.occupied() & !after.pawns() {
+        after.discard_piece_at(s);
+    }
+    let Some(k) = after.king_of(color) else { return true };
+    if (attacks::king_attacks(k) & after.kings() & after.by_color(!color)).any() {
+        return true;
+    }
+    let occ = after.occupied();
+    let attackers = (attacks::rook_attacks(k, occ) & (after.rooks() | after.queens()))
+        | (attacks::bishop_attacks(k, occ) & (after.bishops() | after.queens()))
+        | (attacks::knight_attacks(k) & after.knights())
+        | (attacks::pawn_attacks(color, k) & after.pawns());
+    (attackers & after.by_color(!color)).is_empty()
+}
+
+/// `Atomic.atomicClosedPosition`: every piece is a king, a bishop or a pawn blocked by
+/// a pawn, and the bishops (if any) are "pawnitized" — all of one side and one square
+/// colour, every enemy pawn on the other colour.
+fn atomic_closed_position(pos: &VariantPosition, moves: &MoveList) -> bool {
+    let b = pos.board();
+    let turn = pos.turn();
+    // the side to move: its legal moves; the other side (scalachess `withColor`, no en
+    // passant): its pawns' captures that pass the king-safety rule
+    let has_move = |sq: Square, color: Color| {
+        if color == turn {
+            moves.iter().any(|m| m.from() == Some(sq))
+        } else {
+            (attacks::pawn_attacks(color, sq) & b.by_color(!color)).into_iter().any(|t| atomic_capture_is_legal(b, color, sq, t))
+        }
+    };
+    let closed = b.iter().all(|(sq, p)| matches!(p.role, Role::King | Role::Bishop) || pawn_blocked_by_pawn(b, sq, &has_move));
+    if !closed {
+        return false;
+    }
+    match b.bishops().first() {
+        None => true,
+        Some(bs) => {
+            let side = b.color_at(bs).expect("bishop");
+            let light = bs.is_light();
+            b.iter().all(|(sq, p)| match p.role {
+                Role::Pawn => p.color == side || sq.is_light() != light,
+                Role::Bishop => p.color == side && sq.is_light() == light,
+                Role::King => true,
+                _ => false,
+            })
+        }
+    }
+}
+
+/// `Antichess.isInsufficientMaterial`: only bishops (each side's on one square colour,
+/// the two sides' on different colours) and pawns blocked by pawns that can never
+/// attack or be attacked by the opposing bishops.
+fn antichess_insufficient_material(pos: &VariantPosition, moves: &MoveList) -> bool {
+    let b = pos.board();
+    if b.bishops() | b.pawns() != b.occupied() {
+        return false;
+    }
+    let one_colour = |x: Bitboard| x.any() && ((x & Bitboard::LIGHT_SQUARES).is_empty() || (x & Bitboard::DARK_SQUARES).is_empty());
+    let (wb, bb) = (b.bishops() & b.white(), b.bishops() & b.black());
+    if !one_colour(wb) || !one_colour(bb) {
+        return false;
+    }
+    let (w_light, b_light) = ((wb & Bitboard::LIGHT_SQUARES).any(), (bb & Bitboard::LIGHT_SQUARES).any());
+    if w_light == b_light {
+        return false;
+    }
+    let turn = pos.turn();
+    // antichess has no king safety: the other side's pawn moves are its captures
+    let has_move = |sq: Square, color: Color| {
+        if color == turn {
+            moves.iter().any(|m| m.from() == Some(sq))
+        } else {
+            (attacks::pawn_attacks(color, sq) & b.by_color(!color)).any()
+        }
+    };
+    let safe = |color: Color, opposing_light: bool| {
+        (b.pawns() & b.by_color(color)).into_iter().all(|p| pawn_blocked_by_pawn(b, p, &has_move) && p.is_light() != opposing_light)
+    };
+    safe(Color::White, b_light) && safe(Color::Black, w_light)
+}
+
+/// `Horde.hordeClosedPosition`: the horde is (or, after every black move, will be)
+/// stalemated — unless its last piece can be captured at once.
+fn horde_closed_position(pos: &VariantPosition, moves: &MoveList) -> bool {
+    let b = pos.board();
+    let horde = b.white();
+    if horde.count() == 1 && horde.first().is_some_and(|s| b.attacks_to(s, Color::Black, b.occupied()).any()) {
+        return false;
+    }
+    if pos.turn() == Color::White {
+        moves.is_empty()
+    } else {
+        moves.iter().all(|m| {
+            let mut after = pos.clone();
+            after.play_unchecked(*m);
+            after.legal_moves().is_empty()
+        })
+    }
+}
+
+/// Lichess' automatic draw by insufficient material / dead position of `variant`
+/// (scalachess `Variant.isInsufficientMaterial`), given the side to move's legal
+/// `moves`: standard rules in chess960, kings only in three-check, the atomic /
+/// antichess / horde rules above, never in crazyhouse, king of the hill and racing
+/// kings.
+pub fn lichess_insufficient_material(variant: ChessVariant, pos: &VariantPosition, moves: &MoveList) -> bool {
+    let b = pos.board();
+    match variant {
+        ChessVariant::Chess960 => standard_insufficient(b),
+        ChessVariant::ThreeCheck => b.occupied() == b.kings(),
+        ChessVariant::Atomic => atomic_insufficient_material(b) || atomic_closed_position(pos, moves),
+        ChessVariant::Antichess => antichess_insufficient_material(pos, moves),
+        ChessVariant::Horde => horde_closed_position(pos, moves),
+        ChessVariant::Crazyhouse | ChessVariant::KingOfTheHill | ChessVariant::RacingKings => false,
+    }
+}
+
+/// Racing kings' end (scalachess `RacingKings.specialEnd` / `specialDraw`): White to
+/// move — exactly one king on the 8th rank wins, both draw; Black to move after White
+/// reached it — White wins unless a LEGAL black move reaches the 8th rank too.
+fn racing_kings_end(pos: &VariantPosition, moves: &MoveList) -> Option<KnownOutcome> {
+    let b = pos.board();
+    let goal = Bitboard::from_rank(Rank::Eighth);
+    let reached = |c: Color| (b.kings() & b.by_color(c) & goal).any();
+    let (w, bl) = (reached(Color::White), reached(Color::Black));
+    match pos.turn() {
+        Color::White if w && bl => Some(KnownOutcome::Draw),
+        Color::White if w || bl => Some(KnownOutcome::Decisive { winner: if w { Color::White } else { Color::Black } }),
+        Color::White => None,
+        Color::Black => {
+            let king = b.king_of(Color::Black);
+            let reaches_goal = |m: &Move| match m {
+                Move::Normal { role: Role::King, to, .. } => goal.contains(*to),
+                _ => king.is_some_and(|k| goal.contains(k)),
+            };
+            (w && !moves.iter().any(reaches_goal)).then_some(KnownOutcome::Decisive { winner: Color::White })
+        }
+    }
+}
+
+/// The rules' result of `pos` (the side to move's legal `moves`) in lichess' order
+/// (scalachess `Position.status`: checkmate, variant end, stalemate, automatic
+/// draws); the automatic draws that depend on the history (fifty moves, repetitions)
+/// are the caller's.
+pub fn rules_outcome(variant: ChessVariant, pos: &VariantPosition, moves: &MoveList) -> Option<(KnownOutcome, End)> {
+    let end = match variant {
+        ChessVariant::RacingKings => racing_kings_end(pos, moves),
+        _ => match pos.variant_outcome() {
+            Outcome::Known(o) => Some(o),
+            Outcome::Unknown => None,
+        },
+    };
+    if let Some(o) = end {
+        return Some((o, End::Rules));
+    }
+    if moves.is_empty() {
+        // checkmate or stalemate (antichess / racing kings: no checks exist)
+        let o = if pos.is_check() { KnownOutcome::Decisive { winner: !pos.turn() } } else { KnownOutcome::Draw };
+        return Some((o, End::Rules));
+    }
+    lichess_insufficient_material(variant, pos, moves).then_some((KnownOutcome::Draw, End::InsufficientMaterial))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -355,6 +592,9 @@ pub struct ChessVariantsConfig {
     pub variants: Vec<String>,
     /// Draw weights of `variants` (empty = uniform).
     pub weights: Vec<f64>,
+    /// The chess960 start positions the second chance event draws from, uniformly
+    /// (Scharnagl numbers; empty = all 960) — RL curricula, replaying a given game.
+    pub chess960_positions: Vec<u32>,
     /// Threefold repetition ends the game (a draw). Lichess: a claim, auto-claimed by a
     /// user preference — records may continue past it, so converters keep it off.
     pub auto_threefold: bool,
@@ -367,6 +607,7 @@ impl Default for ChessVariantsConfig {
         ChessVariantsConfig {
             variants: ChessVariant::ALL.iter().map(|v| v.name().to_string()).collect(),
             weights: Vec::new(),
+            chess960_positions: Vec::new(),
             auto_threefold: false,
             max_plies: DEFAULT_MAX_PLIES,
         }
@@ -417,6 +658,8 @@ const PLANE_ONES: usize = 16;
 pub struct ChessVariants {
     /// variant chance outcomes (index, probability)
     choices: Vec<(u32, f64)>,
+    /// chess960 start positions (empty = all 960)
+    starts: Vec<u32>,
     auto_threefold: bool,
     max_plies: usize,
     variant: Option<ChessVariant>,
@@ -475,23 +718,13 @@ impl ChessVariants {
     }
 
     /// Legal moves and the game status of the current position (lichess' order:
-    /// the rules' outcome — variant end, mate / stalemate, insufficient material — then
-    /// the automatic draws).
+    /// the rules' outcome — mate / variant end / stalemate / insufficient material,
+    /// [`rules_outcome`] — then the automatic draws of the history).
     fn refresh(&mut self) {
         let variant = self.variant.expect("started");
         let moves = self.pos.legal_moves();
-        let rules = match self.pos.variant_outcome() {
-            Outcome::Known(o) => Some(o),
-            Outcome::Unknown if moves.is_empty() => Some(if self.pos.is_check() {
-                KnownOutcome::Decisive { winner: !self.pos.turn() }
-            } else {
-                KnownOutcome::Draw
-            }),
-            Outcome::Unknown if self.pos.is_insufficient_material() => Some(KnownOutcome::Draw),
-            Outcome::Unknown => None,
-        };
-        self.over = match rules {
-            Some(o) => Some((o, End::Rules)),
+        self.over = match rules_outcome(variant, &self.pos, &moves) {
+            Some(r) => Some(r),
             None if variant.fifty_move_rule() && self.pos.halfmoves() >= 100 => Some((KnownOutcome::Draw, End::FiftyMoves)),
             None if self.prior + 1 >= 5 => Some((KnownOutcome::Draw, End::Fivefold)),
             None if self.auto_threefold && self.prior + 1 >= 3 => Some((KnownOutcome::Draw, End::Threefold)),
@@ -529,11 +762,15 @@ impl ChessVariants {
     }
 
     /// [`from_position`](Self::from_position) from a FEN (chess960 FENs use chess960
-    /// castling).
+    /// castling). Tolerates contrived material (rule tests: five bishops, ...) and
+    /// impossible checks, not rule violations (missing kings, pawns on the back rank).
     pub fn from_fen(variant: ChessVariant, fen: &str, cfg: &ChessVariantsConfig) -> Result<Self, String> {
         let setup: Setup = Fen::from_ascii(fen.as_bytes()).map_err(|e| format!("{fen}: {e}"))?.into_setup();
         let mode = if variant == ChessVariant::Chess960 { CastlingMode::Chess960 } else { CastlingMode::Standard };
-        let pos = VariantPosition::from_setup(variant.shakmaty(), setup, mode).map_err(|e| format!("{fen}: {e}"))?;
+        let pos = VariantPosition::from_setup(variant.shakmaty(), setup, mode)
+            .or_else(shakmaty::PositionError::ignore_too_much_material)
+            .or_else(shakmaty::PositionError::ignore_impossible_check)
+            .map_err(|e| format!("{fen}: {e}"))?;
         Ok(Self::from_position(variant, pos, cfg))
     }
 
@@ -583,6 +820,13 @@ impl Game for ChessVariants {
         if !(1..=100_000).contains(&cfg.max_plies) {
             rules_bail!("chess_variants: max_plies must be 1..=100000, got {}", cfg.max_plies);
         }
+        let mut starts = std::collections::HashSet::new();
+        for &sp in &cfg.chess960_positions {
+            if sp >= N_START_960 || !starts.insert(sp) {
+                rules_bail!("chess_variants: chess960_positions must be distinct Scharnagl numbers < 960, got {:?}",
+                            cfg.chess960_positions);
+            }
+        }
         Ok(())
     }
 
@@ -624,8 +868,11 @@ impl Game for ChessVariants {
     }
 
     fn new_game(cfg: &ChessVariantsConfig) -> Self {
+        let mut starts = cfg.chess960_positions.clone();
+        starts.sort_unstable();
         ChessVariants {
             choices: cfg.choices(),
+            starts,
             auto_threefold: cfg.auto_threefold,
             max_plies: cfg.max_plies,
             variant: None,
@@ -653,8 +900,13 @@ impl Game for ChessVariants {
         if self.variant.is_none() {
             out.extend_from_slice(&self.choices);
         } else if self.pending_start {
-            let p = 1.0 / N_START_960 as f64;
-            out.extend((0..N_START_960).map(|sp| (sp, p)));
+            if self.starts.is_empty() {
+                let p = 1.0 / N_START_960 as f64;
+                out.extend((0..N_START_960).map(|sp| (sp, p)));
+            } else {
+                let p = 1.0 / self.starts.len() as f64;
+                out.extend(self.starts.iter().map(|&sp| (sp, p)));
+            }
         }
     }
 
@@ -672,8 +924,8 @@ impl Game for ChessVariants {
             }
             Ok(())
         } else if self.pending_start {
-            if outcome >= N_START_960 {
-                rules_bail!("chess_variants: chess960 start position {outcome} >= 960");
+            if outcome >= N_START_960 || !(self.starts.is_empty() || self.starts.binary_search(&outcome).is_ok()) {
+                rules_bail!("chess_variants: chess960 start position {outcome} is not configured");
             }
             self.start(ChessVariant::Chess960, outcome);
             Ok(())
@@ -1102,6 +1354,107 @@ mod tests {
         let mut g = ChessVariants::from_position(ChessVariant::RacingKings, start_position(ChessVariant::RacingKings, 0), &capped);
         play(&mut g, &["h2h3", "a2a3", "h3h4", "a3a4"]);
         assert_eq!(g.end(), Some((KnownOutcome::Draw, End::PlyCap)));
+    }
+
+    /// The rule vectors of scalachess' own tests (test-kit AtomicVariantTest,
+    /// AntichessVariantTest, HordeVariantTest, RacingKingsVariantTest): lichess'
+    /// automatic ends, move by move.
+    #[test]
+    fn lichess_automatic_ends_match_scalachess() {
+        let draw = Some((KnownOutcome::Draw, End::InsufficientMaterial));
+        let after = |v: ChessVariant, fen: &str, moves: &[&str]| {
+            let mut g = game(v, fen);
+            play(&mut g, moves);
+            g
+        };
+        // atomic: winning material (K+B vs K+B on opposite colours, bare kings, K+minor);
+        // scalachess' K+B vs K+B position has White in check with Black to move (c6), here e6
+        assert_eq!(game(ChessVariant::Atomic, "4K3/8/4b3/8/8/8/5B2/3k4 b - -").end(), draw);
+        for (fen, m) in [("8/1n6/8/8/8/8/k7/2K1b2R w - -", "h1e1"), ("8/1b6/8/8/8/8/k7/2K1n2R w - -", "h1e1"),
+                         ("8/8/8/8/8/8/N4r2/5k1K b - -", "f2a2"), ("6r1/8/8/1k6/8/8/2K5/6R1 w - -", "g1g8")] {
+            assert_eq!(after(ChessVariant::Atomic, fen, &[m]).end(), draw, "{fen} {m}");
+        }
+        // ... not with helpmate material
+        for (fen, m) in [("B2BBBB1/7P/8/8/8/8/3kb3/4K3 w - - 1 53", "h7h8b"), ("8/5k2/8/8/8/8/4pK2/5b2 b - - 1 44", "e2e1b"),
+                         ("8/5k2/8/8/8/8/4pK2/5b2 b - - 1 44", "e2e1n"), ("8/5k2/8/8/8/8/4pKB1/5B2 b - - 1 44", "e2e1b"),
+                         ("8/5k2/8/8/8/8/4pKB1/6B1 b - - 1 44", "e2e1b"), ("8/5k2/8/8/8/8/4pKB1/6N1 b - - 1 44", "e2e1b"),
+                         ("8/5k2/8/8/8/8/4pKN1/6B1 b - - 1 44", "e2e1b"), ("8/5k2/8/8/8/8/4pKN1/6N1 b - - 1 44", "e2e1b"),
+                         ("8/5k2/8/8/8/8/4pKN1/6N1 b - - 1 44", "e2e1n"), ("8/5k2/8/8/8/8/4pKN1/6n1 b - - 1 44", "e2e1n"),
+                         ("8/5k2/8/8/8/8/4pKn1/6n1 b - - 1 44", "e2e1n"), ("3Q4/2b2k2/5P2/8/8/8/6K1/8 b - - 0 57", "c7d8")] {
+            assert_eq!(after(ChessVariant::Atomic, fen, &[m]).end(), None, "{fen} {m}");
+        }
+        // atomic closed positions: kings + immobile pawns, a pawnitized bishop
+        assert_eq!(after(ChessVariant::Atomic, "8/8/6p1/3K4/6P1/2k5/8/8 w - -", &["g4g5"]).end(), draw);
+        assert_eq!(after(ChessVariant::Atomic, "8/8/2k1p3/5p2/4PP2/1b6/4K3/8 w - - 0 1", &["e4e5"]).end(), draw);
+        assert_eq!(after(ChessVariant::Atomic, "8/8/2k5/5p2/8/2b2P2/8/3K4 w - - 0 1", &["f3f4"]).end(), None);
+        assert_eq!(after(ChessVariant::Atomic, "6bk/4B2p/8/7P/4K3/8/8/8 w - - 0 1", &["h5h6"]).end(), None);
+        // checkmate overrides a closed position (the mating pawn could "capture" the king)
+        assert_eq!(after(ChessVariant::Atomic, "8/8/b1p5/kpP5/p3K3/PP6/8/8 w - - 0 1", &["b3b4"]).end(),
+                   Some((KnownOutcome::Decisive { winner: Color::White }, End::Rules)));
+        // the closed pawn structure of a real game lichess drew (lichess.org/risWjxVl)
+        assert_eq!(game(ChessVariant::Atomic, "8/7p/7P/8/1p6/pP6/P7/1kK5 w - - 0 49").end(), draw);
+        // antichess: opposite-colour bishops, with unattackable blocked pawns
+        let anti = ChessVariant::Antichess;
+        assert_eq!(after(anti, "8/2b5/8/8/8/6Q1/4B3/8 b - -", &["c7g3"]).end(), draw);
+        assert_eq!(after(anti, "8/6P1/8/8/1b6/8/8/5B2 w - -", &["g7g8b"]).end(), draw);
+        assert_eq!(after(anti, "8/6p1/4B1P1/4p3/4P3/8/2p5/8 b - - 1 28", &["c2c1b"]).end(), draw);
+        assert_eq!(after(anti, "7b/8/1p6/8/8/8/5B2/8 w - -", &["f2b6"]).end(), None);
+        assert_eq!(after(anti, "8/6p1/1B4P1/4p3/4P3/8/3p4/8 b - -", &["d2d1b"]).end(), None);
+        assert_eq!(after(anti, "5b2/1P4p1/4B1P1/4p3/4P3/8/8/8 w - -", &["b7b8b"]).end(), None);
+        assert_eq!(after(anti, "8/8/4BbP1/4p3/4P3/8/8/8 b - -", &["f6g7"]).end(), None);
+        assert_eq!(game(anti, "4K3/8/1b6/8/8/8/5B2/3k4 b - -").end(), None, "antichess kings are ordinary pieces");
+        // horde: a stalemated horde (now, or after every black move)
+        for fen in ["8/p7/pk6/P7/P7/8/8/8 b - -", "QNBRRBNQ/PPpPPpPP/P1P2PkP/8/8/8/8/8 b - -", "b7/pk6/P7/P7/8/8/8/8 b - - 0 1",
+                    "8/p7/P7/P7/8/2q5/8/7k b - - 0 1", "krb5/pb1p4/P2Pp3/P3Pp2/5Pp1/6Pp/7P/8 b - - 0 1"] {
+            assert_eq!(game(ChessVariant::Horde, fen).end(), draw, "{fen}");
+        }
+        for fen in ["k7/p2p4/P2Pp1p1/P3PpPp/5PpP/6Pp/7P/7n b - - 0 1", "8/1b5r/1P6/1Pk3q1/1PP5/r1P5/P1P5/2P5 b - - 0 52",
+                    "8/8/8/7k/7P/7P/8/8 b - - 0 58", "8/p7/P7/P7/8/8/8/6qk b - - 0 1", "7B/6k1/8/8/8/8/8/8 b - -",
+                    "7B/7k/8/8/8/8/8/8 w - - 0 1", "r7/2Bb4/q3k3/8/8/3q4/8/5qqr b - -"] {
+            assert_eq!(game(ChessVariant::Horde, fen).end(), None, "{fen}");
+        }
+        // racing kings
+        let rk = |fen: &str| game(ChessVariant::RacingKings, fen).end();
+        for fen in ["4krn1/K2b4/8/8/8/8/8/8 w - - 4 3", "4brk1/8/5n2/K7/8/8/8/8 w - - 6 4", "3kbrn1/8/8/K7/8/8/8/8 w - - 4 3",
+                    "4brk1/4n3/8/K7/8/8/8/8 w - - 4 3"] {
+            assert_eq!(rk(fen), Some((KnownOutcome::Decisive { winner: Color::Black }, End::Rules)), "{fen}");
+        }
+        for fen in ["K3br2/5k2/8/8/6n1/8/8/8 w - - 4 3", "K3b2r/5k2/5n2/8/8/8/8/8 w - - 4 3"] {
+            assert_eq!(rk(fen), Some((KnownOutcome::Decisive { winner: Color::White }, End::Rules)), "{fen}");
+        }
+        assert_eq!(rk("K3brk1/8/5n2/8/8/8/8/8 w - - 4 3"), Some((KnownOutcome::Draw, End::Rules)));
+        assert_eq!(rk("1K2br2/5k2/5n2/8/8/8/8/8 b - - 3 2"), None);
+        // chess960: the standard rule (kings + one minor, or same-coloured bishops only)
+        let std = |fen: &str| game(ChessVariant::Chess960, fen).end();
+        // (dark squares: c1, e3, d6; light: c6)
+        for fen in ["8/8/8/4k3/8/8/8/4K3 w - - 0 1", "8/8/8/4k3/8/8/8/2B1K3 w - - 0 1", "8/8/8/4k3/8/8/8/1N2K3 w - - 0 1",
+                    "8/8/3b4/4k3/8/8/8/2B1K3 w - - 0 1", "8/8/3b4/4k3/8/4B3/8/2B1K3 w - - 0 1"] {
+            assert_eq!(std(fen), draw, "{fen}");
+        }
+        for fen in ["8/8/2b5/4k3/8/8/8/2B1K3 w - - 0 1", "8/8/8/4k3/8/8/8/NN2K3 w - - 0 1", "8/8/2n5/4k3/8/8/8/2B1K3 w - - 0 1",
+                    "8/8/8/4k3/8/8/4P3/4K3 w - - 0 1"] {
+            assert_eq!(std(fen), None, "{fen}");
+        }
+        // three-check: bare kings only; crazyhouse / king of the hill: never
+        assert_eq!(game(ChessVariant::ThreeCheck, "8/8/8/4k3/8/8/8/4K3 w - - 0 1").end(), draw);
+        assert_eq!(game(ChessVariant::ThreeCheck, "8/8/8/4k3/8/8/8/2B1K3 w - - 0 1").end(), None);
+        assert_eq!(game(ChessVariant::KingOfTheHill, "8/8/8/8/8/8/8/k3K3 w - - 0 1").end(), None);
+    }
+
+    #[test]
+    fn chess960_start_positions_can_be_restricted() {
+        let c = ChessVariantsConfig { variants: vec!["chess960".into()], chess960_positions: vec![7, 518], ..cfg() };
+        ChessVariants::check_config(&c).unwrap();
+        let mut g = ChessVariants::new_game(&c);
+        g.apply_chance(ChessVariant::Chess960 as u32).unwrap();
+        let mut out = Vec::new();
+        g.chance_outcomes(&mut out);
+        assert_eq!(out, vec![(7, 0.5), (518, 0.5)]);
+        assert!(g.clone().apply_chance(8).is_err());
+        g.apply_chance(518).unwrap();
+        for bad in [vec![960], vec![3, 3]] {
+            assert!(ChessVariants::check_config(&ChessVariantsConfig { chess960_positions: bad, ..cfg() }).is_err());
+        }
     }
 
     #[test]
