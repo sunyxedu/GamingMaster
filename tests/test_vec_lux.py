@@ -222,8 +222,11 @@ def test_state_dict_continues_exactly():
         frames.append((obs.obs["map_seq"].clone(), rew.clone(), done.clone()))
         if done.all():
             obs = env.reset()
-    fresh = LuxVecEnv(2, env_params=SHORT, seed=77)
+    fresh = LuxVecEnv(3, env_params=SHORT, seed=77)          # resized by the load
     fresh.load_state_dict(st)
+    assert fresh.num_envs == 2
+    assert fresh._rng.bit_generator.state == st["rng"]
+    assert torch.equal(fresh._torch_rng.get_state(), st["torch_rng"])
     obs = fresh.observe()
     for a, (m, r, d) in zip(acts, frames):
         obs, rew, done, info = fresh.step(a)

@@ -557,7 +557,8 @@ class LuxVecEnv(VecEnvBase):
         self._live = np.zeros(n, dtype=bool)          # current match in progress
         self._game_over = np.zeros(n, dtype=bool)
         self._new = np.zeros(n, dtype=bool)
-        self._wins = np.zeros((n, 2), dtype=np.int64)
+        self._wins = np.zeros((n, 2), dtype=np.int64)       # wins as of the last step
+        self._wins_now = np.zeros((n, 2), dtype=np.int64)   # wins of the current frame
         self._ms = np.zeros(n, dtype=np.int64)
         self._steps = np.zeros(n, dtype=np.int64)
         self._frame: Dict[str, torch.Tensor] = {}
@@ -858,16 +859,18 @@ class LuxVecEnv(VecEnvBase):
         return st
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        super().load_state_dict(state)
         g = state.get("games")
-        if g is None:
-            return
+        if g is not None:
+            self._load_games(g)
+        super().load_state_dict(state)          # last: the resize below draws no RNG after it
+
+    def _load_games(self, g: Mapping[str, Any]) -> None:
         lux = _lux()
         jax, jnp = lux.jax, lux.jnp
         n = int(g["keys"].shape[0])
-        if n != self._n:
+        if n != self._n:                        # the batched structures for n envs
             self._alloc(n)
-            self.reset()
+            self.reset(seed=0)
         treedef = jax.tree_util.tree_structure(self._state)
         self._state = jax.tree_util.tree_unflatten(treedef, [jnp.asarray(x) for x in g["state"]])
         self._keys = jnp.asarray(g["keys"])
