@@ -37,7 +37,10 @@ Two leak classes, each tested mathematically:
 
 Known train-time channel (strict xfail, flips when fixed): in train mode the
 encoder's BatchNorm normalises frame t with batch statistics that include the
-sample's later frames (inference uses running stats and is causal).
+sample's later frames (inference uses running stats and is causal).  It is the
+only one: with BatchNorm on running stats the whole network is causal in train
+mode too (dropout, sampled depth, MoE), and the MoE core is causal at inference
+on both expert paths.
 
 Data: tests/fixtures/lux_kaggle/episode-71896508.json.gz (a real Kaggle
 episode, always); with raw replays present (``LUX_RAW_DIR``, default
@@ -740,6 +743,95 @@ def test_network_frame_outputs_ignore_later_frames(mixer, core, head):
                             (t, k, name, float((a - b).abs().max()))
             assert not torch.allclose(out["unit_action_logits"][:, t + 1:],
                                       out2["unit_action_logits"][:, t + 1:])
+
+
+def _lux_net_cfg(mixer: str, core: str, head: str, moe: int = 0, dropout: float = 0.0) -> LuxConfig:
+    return LuxConfig(
+        d_model=32, n_heads=4, d_ff=64, dropout=dropout, n_st_layers=2, temporal_mixer=mixer,
+        core_type=core, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, halt_max_steps=2,
+        rd_prelude_layers=1, rd_recurrent_layers=1, rd_coda_layers=1, rd_mean_iters=2,
+        rd_backprop_iters=1, core_layers=1, encoder_channels=16, moe_experts=moe, moe_top_k=2,
+        map_h=8, map_w=8, map_channels=12, max_units=6, unit_feature_dim=16,
+        lux_global_features=11, lux_sap_range=7, lux_sap_head=head)
+
+
+def _assert_prefix_outputs_equal(a: dict, b: dict, t: int, what: str) -> None:
+    for k in OUT_KEYS:
+        x, y = a[k][:, : t + 1], b[k][:, : t + 1]
+        if x.dtype == torch.bool:
+            assert torch.equal(x, y), (what, t, k)
+        else:
+            assert torch.allclose(x, y, atol=1e-5, rtol=0), (what, t, k, float((x - y).abs().max()))
+
+
+def _future_replaced(cfg, obs: dict, t: int, g: torch.Generator) -> dict:
+    other = _frames(cfg, *obs["unit_mask"].shape[:2], g)
+    out = {k: v.clone() for k, v in obs.items()}
+    for k in out:
+        out[k][:, t + 1:] = other[k][:, t + 1:]
+    return out
+
+
+@pytest.mark.parametrize("path", ["sparse", "dense"])
+def test_network_moe_frame_outputs_ignore_later_frames(path):
+    """The shared core's MoE FFN (moe_experts > 0; the test above runs dense
+    FFNs) routes each token on its own: frame t's outputs ignore later frames
+    on both inference expert paths (per-expert gather / dense all-experts)."""
+    from model.components.core import MoEFFN
+
+    torch.manual_seed(0)
+    cfg = _lux_net_cfg("attention", "recurrent_depth", "pointer", moe=4)
+    net = GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg)).eval()
+    assert any(isinstance(m, MoEFFN) for m in net.modules())
+    g = torch.Generator().manual_seed(3)
+    obs = _frames(cfg, 2, 9, g)
+    with torch.no_grad(), MoEFFN.inference_path(path):
+        out = net(obs, legal=lux_legal_from_obs(obs))
+        for t in (0, 4, 7):
+            obs2 = _future_replaced(cfg, obs, t, g)
+            out2 = net(obs2, legal=lux_legal_from_obs(obs2))
+            _assert_prefix_outputs_equal(out, out2, t, f"moe {path}")
+            assert not torch.allclose(out["unit_action_logits"][:, t + 1:],
+                                      out2["unit_action_logits"][:, t + 1:])
+
+
+def _freeze_batchnorm(net: torch.nn.Module) -> torch.nn.Module:
+    for m in net.modules():
+        if isinstance(m, torch.nn.modules.batchnorm._BatchNorm):
+            m.eval()
+    return net
+
+
+@pytest.mark.parametrize("mixer,core,head,moe", [
+    ("attention", "trm", "pointer", 0),
+    ("recurrent", "recurrent_depth", "mlp", 0),
+    ("attention", "recurrent_depth", "pointer", 4),
+])
+def test_network_train_mode_is_causal_apart_from_batchnorm(mixer, core, head, moe):
+    """IL forwards run in TRAIN mode (dropout, a sampled recurrence depth, a
+    random initial recurrent state, MoE load tallies).  With the BatchNorm
+    layers on running statistics — the one known train-time channel (strict
+    xfail below) — frame t's outputs ignore later frames under the same RNG
+    stream, so no OTHER train-only op couples frames (a capacity-limited MoE,
+    a batch-level halting / depth rule or a sequence-wide normaliser would
+    fail here)."""
+    torch.manual_seed(0)
+    cfg = _lux_net_cfg(mixer, core, head, moe=moe, dropout=0.1)
+    net = _freeze_batchnorm(GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg)).train())
+    g = torch.Generator().manual_seed(4)
+    B, T = 3, 9
+    obs = _frames(cfg, B, T, g)
+    fm = torch.ones(B, T, dtype=torch.bool)
+    for t in (0, 4, 7):
+        obs2 = _future_replaced(cfg, obs, t, g)
+        with torch.no_grad():
+            torch.manual_seed(123)
+            out = net(obs, legal=lux_legal_from_obs(obs), frame_mask=fm)
+            torch.manual_seed(123)
+            out2 = net(obs2, legal=lux_legal_from_obs(obs2), frame_mask=fm)
+        _assert_prefix_outputs_equal(out, out2, t, f"train mode {mixer}/{core}/{head}/moe{moe}")
+        assert not torch.allclose(out["unit_action_logits"][:, t + 1:],
+                                  out2["unit_action_logits"][:, t + 1:])
 
 
 @pytest.mark.xfail(strict=True, reason=(
