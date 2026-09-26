@@ -26,7 +26,7 @@ from tests.test_rust_converters_parity import FIX, gmdata  # noqa: F401  (fixtur
 
 K = 32              # --max-moves default of the othello labeller
 TAU = 0.05          # --tau default
-DISC_SCALE = 8.8    # --disc-scale default
+DISC_SCALE = 2.3    # --disc-scale default
 FAKE_EXACT = 20     # the fake engine reports exact results at <= 20 empties
 
 

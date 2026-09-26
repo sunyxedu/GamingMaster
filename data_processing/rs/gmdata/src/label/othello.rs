@@ -5,7 +5,7 @@
 //! scripts/engines/fetch_engines.sh egaroucid
 //! gmdata label othello --input data/othello/train --out data/othello_ega/train \
 //!     --engine ~/gm-engines/bin/egaroucid --workers 64
-//! #   defaults: --limit level=15 --limit exact_empties=20 --tau 0.05 --disc-scale 8.8
+//! #   defaults: --limit level=15 --limit exact_empties=20 --tau 0.05 --disc-scale 2.3
 //! #             --max-moves 32 --engine-option hash=20 (threads=1, book=off)
 //! python -m training.train_il_game --game othello --data_dir data/othello_ega/train \
 //!     --soft_target_weight 1.0 --engine_value_weight 0.5 ...
@@ -70,20 +70,28 @@
 //!
 //! # Defaults and why
 //!
-//! * `--policy softmax --tau 0.05`: π ∝ exp(Q/τ), as for the other games. In decided
-//!   positions Q saturates, so the teacher spreads over all moves that keep the win
-//!   (exact: uniform over the winning moves) instead of chasing disc margin; near
-//!   Q = 0.5 the disc temperature is 4·s·τ ≈ 1.8 discs (a move two discs worse gets
-//!   e^−1.1 ≈ 1/3 of the weight). `--disc-tau T` instead uses π ∝ exp(discs / T) in every
-//!   position — margin-maximising, like the WTHOR "theoretical score" — recorded as policy
-//!   `{"kind": "softmax_discs", "disc_tau": T}`. Q (and engine_value) are unchanged.
-//! * `--disc-scale 8.8` (provisional, until the `--fit-disc-scale` run below): the
-//!   maximum-likelihood s of P(the side to move wins the Egaroucid self-play game from
-//!   here) = σ(discs / s); the report with a calibration table and per-phase fits is
-//!   written to `<out>/disc_scale_fit.json`. Egaroucid exposes no win-rate model of its
-//!   own, and this is how Stockfish's WDL model is built (self-play outcomes vs eval).
-//!   The fit depends on the search depth: refit (or keep teacher_raw and refit later)
-//!   when you change `level`.
+//! * `--policy softmax --tau 0.05`: π ∝ exp(Q/τ), as for the other games (the default
+//!   because Q is the unit shared across games and the value target, and because it
+//!   plays for the win: in decided positions — |discs| ≳ 8, Q > 0.97 — Q saturates, so
+//!   the teacher spreads over all moves that keep the win, exactly: uniform over the
+//!   winning moves, instead of chasing disc margin). Near Q = 0.5 the disc temperature is
+//!   4·s·τ ≈ 0.46 discs (a move one disc worse gets e^−2.2 ≈ 0.11 of the weight); mean
+//!   teacher entropy on WTHOR frames is 1.2 nats. Softer: a larger `--tau`, or
+//!   `--disc-tau T`: π ∝ exp(discs / T) in every position — margin-maximising, like the
+//!   WTHOR "theoretical score" — recorded as policy `{"kind": "softmax_discs",
+//!   "disc_tau": T}`; Q and engine_value are the same either way.
+//! * `--disc-scale 2.3`: fitted with `--fit-disc-scale 1000` at the defaults (level 15,
+//!   exact ≤ 20 empties) on 1000 distinct positions with 21–60 empties from two
+//!   2000+ WTHOR shards: the maximum-likelihood s of P(the side to move wins the
+//!   Egaroucid self-play game from here) = σ(discs / s) is 2.29 (mean log-likelihood
+//!   −0.281, Brier 0.072, 7% draws; per phase 1.9 at 21–30 empties, 2.1 at 31–40, 3.0 at
+//!   41–50). Calibration, discs → observed / model win rate: −4…−3 0.12 / 0.18,
+//!   −2…−1 0.25 / 0.34, 0 0.47 / 0.50, 1…2 0.61 / 0.65, 3…4 0.79 / 0.81, 5…6 0.92 / 0.91,
+//!   7…10 0.97 / 0.97. Egaroucid exposes no win-rate model of its own; this is how
+//!   Stockfish's WDL model is built (self-play outcomes vs eval). Human players convert
+//!   advantages less reliably: the same fit against the WTHOR outcomes of 64 games gives
+//!   s ≈ 5.7 (`--disc-scale 5.7` for Q = the expected score of a human game). Refit when
+//!   you change `level` (teacher_raw lets you refit Q later without relabelling).
 //! * `--limit level=15`: measured on 180 WTHOR positions stratified by empties (Apple
 //!   M4 Pro, Egaroucid 7.8 generic ARM build, 1 thread, per CPU-second incl. process start;
 //!   the machine was shared, so read ratios, not absolutes):
@@ -99,32 +107,40 @@
 //!   (level 21 as Egaroucid plays it: exact ≤ 24, selective endgame ≤ 30 empties: ~0.3 pos/s)
 //!   ```
 //!
-//!   Level 15 is the knee: twice the cost of level 11–13 for a clearly better endgame
-//!   transition, a quarter of the cost of level 19. It is far above WTHOR human play
-//!   (the data being imitated) and keeps a full WTHOR relabel within hours per node.
+//!   (126 positions above 18 empties, so the agreement columns are ±0.03.) Level 15 is the
+//!   compromise: about twice the cost of level 11 and slightly closer to level 21, a
+//!   quarter of the cost of level 19, and it keeps a full WTHOR relabel within a few
+//!   socket-hours. The WTHOR players being imitated play a maximum-probability teacher
+//!   move on 71% of the labelled frames (64 games from 2000 on, default settings).
 //! * `--limit exact_empties=20`: solving all moves exactly costs ~0.1 s per position at
-//!   18 empties and ~0.7 s at 20 (Mac, generic build), about one midgame search at level
-//!   15; at 22 it is ~3 s. Exact endgame labels are where human games have most errors.
+//!   16–18 empties and ~0.45 s at 19–20 (Mac, generic build), about as much as a level-15
+//!   midgame position; `exact_empties=22` costs ~15% more overall (~1.3 s per position at
+//!   21–22 empties). Exact endgame labels are where human games have most errors.
 //! * `--max-moves 32`: every legal move is scored (positions with more than 32 legal moves
 //!   are unknown in practice); `hint 8` would save only ~12%.
 //! * `--engine-option hash=20` (32 MB transposition table; 16–23 measured within 5%),
 //!   `threads=1`, `book=off` (the bundled opening book would replace searched scores by
 //!   book values): one single-threaded process per worker. Other options: `eval=FILE`
-//!   (→ `-eval`). A process needs ~0.55 GB resident (evaluation tables) + the hash when
-//!   built by fetch_engines.sh (which switches the transposition table from a fixed
-//!   2^25-entry static array to the heap: ~1.5 GB per process otherwise).
+//!   (→ `-eval`). A process built by fetch_engines.sh is ~0.8 GB resident on macOS
+//!   (~0.55 GB live evaluation tables, the rest freed load buffers; + the hash) — the
+//!   script moves the transposition table from a fixed 2^25-entry static array to the
+//!   heap (1.5 GB per process otherwise), so 64 workers need ~35–50 GB.
 //! * `clearcache` per position costs ~5% throughput and makes every answer independent of
 //!   the worker's history (two processes gave identical rows on 180 positions).
 //!
 //! # Expected cluster throughput
 //!
-//! On the Mac above: ~4.3 positions per CPU-second per worker at the defaults (one full
-//! Egaroucid hint per position; ~5% of WTHOR frames are skipped as forced / pass and the
-//! repeated openings hit the per-worker cache). A cluster node (AMD EPYC 9355, AVX-512
-//! build of Egaroucid — its SIMD evaluation is typically 1.5–2× the generic build) should
-//! give roughly 4–6 positions/s per worker, i.e. ~250–400 positions/s with 64 workers per
-//! node (SMT pairs share a core): the 2.1M frames of the 2000+ WTHOR set in ~2 node-hours.
-//! Measure first with `--max-shards 1` (the progress line reports positions/s).
+//! Measured on the Mac above: ~4.3 positions per CPU-second per worker at the defaults
+//! (one full hint per position). On real WTHOR games ~8% of the frames are skipped (5%
+//! forced, 3% pass) and ~7% of the positions hit the per-worker cache (repeated
+//! openings). Not measured on the cluster; estimate for an AMD EPYC 9355 node with the
+//! AVX-512 build: Egaroucid's docs put its SIMD build at ~1.5× the generic one, a Zen 5
+//! core at server clocks is somewhat slower per thread than an M4 P-core, and two SMT
+//! workers per core share it, so ~5–6.5 positions/s per physical core, i.e. ~160–210
+//! positions/s per 32-core socket with 64 workers: the 2.1M frames of the 2000+ WTHOR
+//! set (~1.85M engine queries) in ~2.5–3.2 socket-hours. Measure first with
+//! `--max-shards 1` (the progress line reports positions/s and searches/s). A full run of
+//! 64 games on the Mac (8 workers, the machine oversubscribed ~8×) gave 13 positions/s.
 //!
 //! # `--fit-disc-scale N` (calibration; writes no shards)
 //!
@@ -160,7 +176,7 @@ pub const DEFAULT_EXACT_EMPTIES: u64 = 20;
 pub const DEFAULT_HASH: u32 = 20;
 pub const DEFAULT_MAX_MOVES: usize = 32;
 /// Logistic scale (discs) of Q for non-exact scores (see the module docs).
-pub const DISC_SCALE: f64 = 8.8;
+pub const DISC_SCALE: f64 = 2.3;
 /// The pass action id (documented; never emitted — pass frames are not labelled).
 pub const PASS_ID: i64 = 64;
 
@@ -657,21 +673,20 @@ impl Labeller for OthelloLabeller {
         let mut pos = OthPos::start();
         let mut out = Vec::with_capacity(s.len);
         for t in 0..s.len {
-            let next_board;
-            if passed[t] {
+            let next_board = if passed[t] {
                 if pos.legal != 0 {
                     bail!("frame {t}: pass recorded with {} legal moves", pos.n_legal());
                 }
                 if legal_mask(&pos.board, rules::opponent(pos.mover)) == 0 {
                     bail!("frame {t}: pass recorded after the game ended");
                 }
-                next_board = pos.board;
+                pos.board
             } else {
                 if !pos.is_legal(place[t]) {
                     bail!("frame {t}: recorded move {} is illegal", square_name(place[t]));
                 }
-                next_board = play(&pos.board, pos.mover, place[t] as usize);
-            }
+                play(&pos.board, pos.mover, place[t] as usize)
+            };
             let next = OthPos::new(next_board, rules::opponent(pos.mover));
             out.push(std::mem::replace(&mut pos, next));
         }
@@ -957,7 +972,7 @@ pub fn fit_disc_scale(lab: &OthelloLabeller, opts: &RunOpts, n: usize) -> Result
                         }
                     }
                     let d = done.fetch_add(1, Ordering::Relaxed) + 1;
-                    if w == 0 && !opts.quiet && (d % 50 == 0 || d == total) {
+                    if !opts.quiet && (d.is_multiple_of(50) || d == total) {
                         eprintln!("[fit-disc-scale] {d}/{total} playouts, {:.0}s", t0.elapsed().as_secs_f64());
                     }
                 }
