@@ -305,3 +305,23 @@ def test_run_batch_teacher_forced_chess():
     loss, _, _ = batch_loss(net, mb, torch.device("cpu"), value_weight=0.2,
                             q_halt_weight=0.5, bf16=False, act_steps=1)
     assert torch.isfinite(loss)
+
+
+def test_logit_z_loss_masks_and_bounds():
+    from training.train_il_game import logit_z_loss
+
+    B, T, N = 2, 3, 5
+    logits = torch.zeros(B, T, N)
+    logits[0, 0] = 100.0                                   # log Z = 100 + log 5
+    logits[1, 2] = float("-inf")                           # fully masked row: excluded
+    pred = {"place_logits": logits, "pass_logits": torch.zeros(B, T)}   # rank-2: ignored
+    mask = torch.tensor([[True, True, False], [True, True, True]])
+    z, lse_max = logit_z_loss(pred, mask)
+    lz = torch.logsumexp(logits.float(), -1)
+    expect = (lz[0, 0] ** 2 + lz[0, 1] ** 2 + lz[1, 0] ** 2 + lz[1, 1] ** 2) / 4
+    assert torch.allclose(z, expect)
+    assert abs(lse_max.item() - lz[0, 0].item()) < 1e-4
+    # gradient pushes the log-partition down
+    x = torch.randn(B, T, N, requires_grad=True)
+    logit_z_loss({"a_logits": x * 10}, mask)[0].backward()
+    assert torch.isfinite(x.grad).all()

@@ -213,6 +213,10 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="per-game loss multiplier λ_g (default 1; generals' weighted "
                         "ImitationLoss is ~2-3x the scale of the other decoders' losses)")
     p.add_argument("--value_weight", type=float, default=0.2)
+    p.add_argument("--logit_z_loss", type=float, default=1e-4,
+                   help="z-loss weight on every categorical action head's log-partition "
+                        "(PaLM; prevents output-logit divergence, seen on go at lr 3e-4); "
+                        "0 = off")
     p.add_argument("--lr", type=float, default=TRM_LR)
     p.add_argument("--weight_decay", type=float, default=TRM_WEIGHT_DECAY)
     p.add_argument("--warmup_steps", type=int, default=TRM_WARMUP_STEPS)
@@ -671,7 +675,8 @@ def main(argv=None) -> Dict[str, object]:
             def forward_backward(merged, carry, active, reset, weight, g=g, net=net):
                 loss, stats, pred = batch_loss(net, mb_from_merged(g, merged), device,
                                                args.value_weight, Q_HALT_WEIGHT, args.bf16,
-                                               carry=carry, active=active, reset=reset)
+                                               carry=carry, active=active, reset=reset,
+                                               z_loss_weight=args.logit_z_loss)
                 if torch.isfinite(loss):
                     # logs report the unweighted loss; λ_g scales the gradient
                     (loss * (loss_weight.get(g, 1.0) * weight / k_div)).backward()

@@ -245,6 +245,10 @@ def parse_args() -> argparse.Namespace:
                         "(0 = model config, reference 16); inference runs all")
     p.add_argument("--q_halt_weight", type=float, default=Q_HALT_WEIGHT)
     p.add_argument("--value_weight", type=float, default=0.2)
+    p.add_argument("--logit_z_loss", type=float, default=1e-4,
+                   help="z-loss weight on every categorical action head's log-partition "
+                        "(PaLM; prevents output-logit divergence, seen on go at lr 3e-4); "
+                        "0 = off")
     p.add_argument("--tf_start", type=float, default=None,
                    help="teacher-forcing prob at epoch 0 (conditioning labels); "
                         "default: the game's DEFAULT_TF (generals 0 = train_il.py, "
@@ -491,11 +495,37 @@ def value_losses(net, pred: Dict[str, torch.Tensor], target: torch.Tensor,
     return v_loss, mse
 
 
+def logit_z_loss(pred: Dict[str, torch.Tensor], mask: torch.Tensor
+                 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """z-loss (PaLM; Wortsman et al. 2023 'output logit divergence'):
+    Σ_heads mean_frames (log Z)² over every categorical action head
+    (``*_logits`` tensors of rank ≥ 3, softmax over the last dim), on the
+    ``mask`` [B, T] frames.  Rows that are entirely −inf (fully masked) are
+    excluded; extra per-frame dims (e.g. per-unit heads) are averaged.
+    Returns (z_loss, max |log Z| for monitoring)."""
+    total = mask.new_zeros((), dtype=torch.float32)
+    lse_max = mask.new_zeros((), dtype=torch.float32)
+    m = mask.float()
+    for k, v in pred.items():
+        if not (k.endswith("_logits") and torch.is_tensor(v) and v.dim() >= 3
+                and v.shape[:2] == mask.shape and v.shape[-1] > 1):
+            continue
+        lse = torch.logsumexp(v.float(), dim=-1)                  # [B, T, ...]
+        ok = torch.isfinite(lse)
+        lse = torch.where(ok, lse, torch.zeros_like(lse))
+        w = ok.float() * m.view(*m.shape, *([1] * (lse.dim() - 2)))
+        total = total + (lse.square() * w).sum() / w.sum().clamp(min=1)
+        with torch.no_grad():
+            lse_max = torch.maximum(lse_max, (lse.abs() * w).max())
+    return total, lse_max
+
+
 def batch_loss(
     net, mb: Dict, device: torch.device, value_weight: float,
     q_halt_weight: float, bf16: bool,
     carry=None, active: Optional[torch.Tensor] = None,
     act_steps: Optional[int] = None, reset: Optional[torch.Tensor] = None,
+    z_loss_weight: float = 0.0,
 ) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, torch.Tensor]]:
     """One TRM supervision step: decoder IL loss + value loss (value_losses:
     MSE, or HL-Gauss CE for an HL-Gauss head) + q_halt BCE (target = whole
@@ -512,6 +542,11 @@ def batch_loss(
         losses = net.action_decoder.il_loss(pred, mb["tgt"], mask)
         loss = losses["loss"]
         tgt = mb["tgt"]
+        z_loss, lse_max = logit_z_loss(pred, mask)
+        losses["logit_lse_max"] = lse_max
+        if z_loss_weight > 0:
+            loss = loss + z_loss_weight * z_loss
+            losses["z_loss"] = z_loss.detach()
         if "value" in tgt:
             v_loss, v_mse = value_losses(net, pred, tgt["value"], mask)
             loss = loss + value_weight * v_loss
@@ -759,7 +794,8 @@ def main() -> None:
                 loss, stats, pred = batch_loss(
                     net, mb_from_merged(args.game, merged), device,
                     args.value_weight, args.q_halt_weight, args.bf16,
-                    carry=carry, active=active, reset=reset)
+                    carry=carry, active=active, reset=reset,
+                    z_loss_weight=args.logit_z_loss)
                 # weight = n_active / n_frames (reference fixed-batch
                 # normalisation)
                 (loss * (weight / n_slots)).backward()
