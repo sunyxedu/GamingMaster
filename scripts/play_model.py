@@ -27,7 +27,8 @@ import torch.nn.functional as F
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data_processing.processing.simulator import ReplaySimulator
-from model.config import ModelConfig, config_from_dict
+from model.config import ModelConfig, checkpoint_config
+from model.games.generals import FOG_OBSTACLE_CHANNEL, MOUNTAIN_CHANNEL
 from model.network import GeneralsNetwork
 from model.rl_utils import load_model_state
 
@@ -42,8 +43,7 @@ DIR_DC = [0, 1, 0, -1]
 
 def load_model(checkpoint_path, device):
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    cfg_dict = ckpt["config"]
-    cfg = config_from_dict(cfg_dict)
+    cfg = checkpoint_config(ckpt)
     model = GeneralsNetwork(cfg)
     state_key = "model_state" if "model_state" in ckpt else "model_state_dict"
     load_model_state(model, ckpt[state_key], ctx=checkpoint_path)
@@ -182,6 +182,10 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None,
     frames = []
     pending_model_move = None
     winner = None
+    # the checkpoint's sighted-mountain memory (cfg.memory_vision): every
+    # mountain this player has had in vision so far
+    seen_mtn = (np.zeros((25, 25), dtype=bool)
+                if getattr(model.cfg, "memory_vision", False) else None)
 
     for turn in range(0, max_turn + 2):
         # ── 1. Collect opponent's move for execution ──
@@ -208,6 +212,12 @@ def play_on_replay(model, cfg, device, replay_path, player_name, max_steps=None,
 
         # ── 6. Feed to model ──
         grid = state_to_grid(state, army)
+        if seen_mtn is not None:
+            # (model.games.generals.apply_memory_vision, one frame at a time)
+            seen_mtn |= grid[MOUNTAIN_CHANNEL] > 0
+            remembered = seen_mtn & (grid[FOG_OBSTACLE_CHANNEL] > 0)
+            grid[FOG_OBSTACLE_CHANNEL][remembered] = 0.0
+            grid[MOUNTAIN_CHANNEL][remembered] = 1.0
         globals_vec = compute_globals(
             sim, player_id,
             turn_globals=getattr(model.cfg, "turn_globals", False), turn=turn)

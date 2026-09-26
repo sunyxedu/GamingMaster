@@ -39,11 +39,10 @@ PRIVACY (fog of war)
 
 Fixed findings of this audit (formerly strict xfails): the direction mask
 used to be the full-map table at every cell, so off a seat's own tiles it told
-never-seen mountains from never-seen cities.
-
-Known issues pinned as strict xfails (they flip to XPASS, i.e. fail, once
-fixed; drop the marker then): memory_vision is not one recorded setting
-across the IL data, GeneralsEnv (train_rl.py) and GeneralsVecEnv (rl_joint).
+never-seen mountains from never-seen cities; and memory_vision was not one
+recorded setting across the IL data, GeneralsEnv (train_rl.py) and
+GeneralsVecEnv (rl_joint) — it is now cfg.memory_vision, off by default like
+the IL records.
 
 Data: the committed .gior fixture always; the Rust tests need cargo (skipped
 otherwise); the real-replay variants read a few ladder replays from
@@ -815,15 +814,14 @@ def test_env_direction_mask_invariant_to_opponent_private_terrain():
                 f"variant {v} frame {t}: seat 0 direction mask reads fogged terrain"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "confirmed deploy mismatch (audit): GeneralsEnv defaults memory_vision=True "
-    "(training/train_rl.py never sets it), GeneralsVecEnv / rl_joint default False, "
-    "the IL records have no memory and ModelConfig does not record the setting"))
 def test_memory_vision_is_one_recorded_setting():
     """Which observation a generals checkpoint expects (pure fog as in the IL
     records, or fog + sighted-mountain memory) must be one setting: the same
     default in both env entry points and recorded in the model config (like
-    turn_globals), so a live client can reproduce it."""
+    turn_globals), so a live client can reproduce it.  (GeneralsEnv used to
+    default to the memory and training/train_rl.py never set it, while
+    GeneralsVecEnv / rl_joint and the IL records had none; the env builders
+    now follow cfg.memory_vision — tests/test_memory_vision_setting.py.)"""
     from env.generals_env import GeneralsEnv
     from env.vec_generals import GeneralsVecEnv
     from model.config import ModelConfig

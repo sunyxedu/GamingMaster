@@ -35,8 +35,9 @@ def reference_observation(self, player_id):
                     vision[nr][nc] = 2  # visible
 
     grid = torch.zeros(12, H, W, dtype=torch.float32)
+    mv = self.memory_vision          # one bool, or a (seat 0, seat 1) pair
     memory = (self.seen_mountains[player_id]
-              if getattr(self, "memory_vision", True) else None)
+              if (mv[player_id] if isinstance(mv, (tuple, list)) else mv) else None)
     for r in range(rH):
         for c in range(rW):
             tile = self.map[r][c]
@@ -159,6 +160,7 @@ def test_random_full_maps(memory, turn_globals):
 
 def test_non_square_grid():
     env = GeneralsEnv(grid_h=12, grid_w=17, n_mountains=25, n_cities=6)
+    env.memory_vision = True
     _play(env, 150, seed=2)
 
 
@@ -167,6 +169,7 @@ def test_crowded_small_map_covers_contact_captures_and_memory():
     and remembered mountains all occur (asserted, so the oracle comparison is
     not vacuous)."""
     env = GeneralsEnv(grid_h=8, grid_w=8, n_mountains=6, n_cities=3)
+    env.memory_vision = True
     rng = random.Random(1)
     obs = env.reset(seed=1)
     seen = {"enemy": 0, "own_city": 0, "cap_label": 0, "remembered": 0}
@@ -192,6 +195,7 @@ def test_replay_map_smaller_than_the_grid_and_injected_memory():
     with open(fixture, "rb") as fh:
         replay = deserialize_replay(fh.read())
     env = GeneralsEnv()
+    env.memory_vision = True
     map_data = {"map_w": replay["mapWidth"], "map_h": replay["mapHeight"],
                 "generals": replay["generals"], "cities": replay["cities"],
                 "city_armies": replay["cityArmies"], "mountains": replay["mountains"]}
@@ -205,6 +209,7 @@ def test_replay_map_smaller_than_the_grid_and_injected_memory():
 
 def test_after_a_general_capture():
     env = GeneralsEnv(n_mountains=10, n_cities=5)
+    env.memory_vision = (True, False)        # per seat
     _play(env, 120, seed=4)
     g1 = env.generals[1]
     r, c = divmod(g1, env.grid_w)

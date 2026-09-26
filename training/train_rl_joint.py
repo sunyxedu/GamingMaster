@@ -502,7 +502,8 @@ class GeneralsSpec(RLGameSpec):
 
     def env_kwargs(self, cfg):
         return {"grid_h": cfg.grid_h, "grid_w": cfg.grid_w,
-                "turn_globals": bool(getattr(cfg, "turn_globals", False))}
+                "turn_globals": bool(getattr(cfg, "turn_globals", False)),
+                "memory_vision": bool(getattr(cfg, "memory_vision", False))}
 
     def check_env(self, env, net):
         schema = env.obs_schema()
@@ -513,6 +514,14 @@ class GeneralsSpec(RLGameSpec):
             raise SystemExit(f"generals env emits {c} grid channels / {g} globals, the network "
                              f"expects {cfg.grid_channels} / {cfg.global_features} "
                              f"(turn_globals={getattr(cfg, 'turn_globals', False)})")
+        # same shapes either way, so the schema check cannot see it: the
+        # sighted-mountain memory must be the one the network trained with
+        mv = bool(getattr(cfg, "memory_vision", False))
+        if bool(getattr(env, "memory_vision", False)) != mv:
+            raise SystemExit(f"generals env memory_vision={getattr(env, 'memory_vision', None)}, "
+                             f"but the network was trained with memory_vision={mv} (its "
+                             f"cfg.memory_vision, the observation it expects); drop the "
+                             f"--env_kw generals:memory_vision override")
 
     def labels(self, actions, cfg):
         src = actions["source_idx"].long()

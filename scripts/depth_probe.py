@@ -50,6 +50,8 @@ def main() -> None:
                       max_turns=args.rollout_steps)
     # turn_globals nets expect 7 global features; bare env emits 4
     env.turn_globals = bool(getattr(_cfg, "turn_globals", False))
+    # the observation the checkpoint was trained on (sighted-mountain memory)
+    env.memory_vision = bool(getattr(_cfg, "memory_vision", False))
     if args.replay_dir and args.filtered_file:
         n = env.load_map_pool(args.replay_dir, args.filtered_file)
         print(f"Loaded {n} maps")

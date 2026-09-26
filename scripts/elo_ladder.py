@@ -22,6 +22,13 @@ Usage:
 References: name each file refs/<name>.pt; the EMA deployment artifacts
 (rl_ema_iterN.pt) are ideal refs. Everything strict-loads through
 load_model_state.
+
+Every net plays on the observation it was trained on: the globals width
+per net (WidthAdapter) and the sighted-mountain memory per seat (its
+cfg.memory_vision, legacy checkpoints resolved by
+model.config.checkpoint_config).  h2h records cached before 2026-09-26
+were played with the memory ON for every net (GeneralsEnv's old default):
+delete the cache to replay them under the per-net rule.
 """
 
 from __future__ import annotations
@@ -39,7 +46,7 @@ import torch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from env.generals_env import GeneralsEnv                     # noqa: E402
-from model.config import config_from_dict                    # noqa: E402
+from model.config import checkpoint_config                   # noqa: E402
 from model.network import GeneralsNetwork                    # noqa: E402
 from model.rl_utils import load_model_state                  # noqa: E402
 from training.train_rl import collect_selfplay_episode                # noqa: E402
@@ -110,7 +117,9 @@ class WidthAdapter:
     The ladder mixes checkpoints across phases: turn_globals nets expect 7
     globals, older nets 4. The env emits the 7-feature SUPERSET (the first
     4 are a prefix) and this shim slices per net, so a 4-global phase-4 ref
-    and a 7-global phase-5 candidate can play the same game.
+    and a 7-global phase-5 candidate can play the same game.  The grid's
+    sighted-mountain memory is per seat in the env itself: the collector
+    gives each seat its own net's cfg.memory_vision (exposed via ``cfg``).
     """
 
     def __init__(self, net):
@@ -138,7 +147,7 @@ class WidthAdapter:
 
 def load_net(path, device):
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    cfg = config_from_dict(ckpt["config"])
+    cfg = checkpoint_config(ckpt)
     net = GeneralsNetwork(cfg).to(device)
     state_key = "model_state" if "model_state" in ckpt else "model_state_dict"
     load_model_state(net, ckpt[state_key], ctx=path)
@@ -228,6 +237,8 @@ def main():
             env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w,
                               max_turns=args.rollout_steps)
             # Emit the 7-feature superset; WidthAdapter slices per net.
+            # (memory_vision: collect_selfplay_episode sets it per seat
+            # from each net's cfg.memory_vision.)
             env.turn_globals = True
             if args.replay_dir and args.filtered_file:
                 n_maps = env.load_map_pool(args.replay_dir,

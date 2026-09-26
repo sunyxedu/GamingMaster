@@ -13,6 +13,9 @@ fog-of-war view and nothing it could not know:
     dir_mask   [4, H, W]     legal directions at the player's own tiles
                              (destination in bounds, not a mountain), False
                              elsewhere — see _get_observation
+With ``memory_vision`` (off by default, the IL records' encoding) a
+mountain the player has seen stays a mountain after vision moves on;
+which of the two a network expects is its ``cfg.memory_vision``.
 
 Reward design (per step; discounted returns are NOT bounded to [-1, 1] —
 the value head is deliberately unbounded):
@@ -135,10 +138,16 @@ class GeneralsEnv:
         self.turn: int = 0
         self.done: bool = True
         self.winner: Optional[int] = None
-        # Per-player sighted-mountain memory (see reset / _get_observation);
-        # memory_vision=False restores pure instantaneous fog encoding.
+        # Per-player sighted-mountain memory (see reset / _get_observation).
+        # memory_vision=False (the default) is pure instantaneous fog — the
+        # IL records' encoding; True keeps sighted mountains encoded as
+        # mountains.  Which of the two a network was trained on is its
+        # cfg.memory_vision (model/config.py): env builders set this from
+        # the checkpoint.  A (seat 0, seat 1) pair sets it per seat — two
+        # networks trained with different settings in one game
+        # (training.train_rl.collect_selfplay_episode).
         self.seen_mountains: List[set] = [set(), set()]
-        self.memory_vision: bool = True
+        self.memory_vision: bool = False
 
         # Heuristic tracking for dense reward
         self.prev_heuristic: Dict[int, float] = {0: 0.0, 1: 0.0}
@@ -533,6 +542,14 @@ class GeneralsEnv:
         self.obs_state_arrays = arrays
         return {0: self._get_observation(0, arrays), 1: self._get_observation(1, arrays)}
 
+    def memory_vision_for(self, player_id: int) -> bool:
+        """Whether ``player_id``'s observation keeps sighted mountains
+        (``memory_vision``: one bool for both seats, or a per-seat pair)."""
+        mv = getattr(self, "memory_vision", False)
+        if isinstance(mv, (tuple, list)):
+            return bool(mv[player_id])
+        return bool(mv)
+
     def _get_observation(
         self, player_id: int,
         arrays: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
@@ -579,7 +596,7 @@ class GeneralsEnv:
                          np.where(visible, seen_state,
                                   np.where(unseen, np.where(blank | gen, 0, 1), -1)))
         memory = (self.seen_mountains[player_id]
-                  if getattr(self, "memory_vision", True) else None)
+                  if self.memory_vision_for(player_id) else None)
         if memory is not None:
             sighted = (own | visible) & inb & mtn
             if sighted.any():
