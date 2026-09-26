@@ -146,7 +146,9 @@ pub struct Deal {
     pub meta: Value,
 }
 
-/// FNV-1a over the holder of every card: the deal's identity for the splits.
+/// The deal's identity for the splits: FNV-1a over the holder of every card, then the
+/// splitmix64 finaliser — FNV's low bits alone are useless here (a deal XORs 26 odd
+/// seat bytes, so the raw hash is always odd and `% 100` never 0).
 pub fn deal_hash(hands: &[Vec<u8>; 4]) -> u64 {
     let mut holder = [0u8; 52];
     for (p, h) in hands.iter().enumerate() {
@@ -156,7 +158,10 @@ pub fn deal_hash(hands: &[Vec<u8>; 4]) -> u64 {
             }
         }
     }
-    holder.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
+    let h = holder.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+    let z = (h ^ (h >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    let z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
 }
 
 fn check_hands(hands: &[Vec<u8>; 4]) -> Result<()> {
@@ -1080,8 +1085,23 @@ mod tests {
         let mut bad = h.clone();
         bad[0][0] = bad[1][0];
         assert!(check_hands(&bad).is_err());
-        // the split never separates a deal from itself
+        // the split never separates a deal from itself, and routes ~1 in val_mod deals
+        // to val (any val_mod: the hash's low bits are mixed)
         assert_eq!(deal_hash(&h), deal_hash(&h.clone()));
+        let mut rng = gmrules::Rng::new(5);
+        let (mut val100, mut val2, n) = (0, 0, 20_000);
+        for _ in 0..n {
+            let mut cards: Vec<u8> = (0..52).collect();
+            rng.shuffle(&mut cards);
+            let mut d: [Vec<u8>; 4] = Default::default();
+            for (k, &c) in cards.iter().enumerate() {
+                d[k % 4].push(c);
+            }
+            val100 += (deal_hash(&d) % 100 == 0) as usize;
+            val2 += (deal_hash(&d) % 2 == 0) as usize;
+        }
+        assert!((140..=260).contains(&val100), "{val100} of {n} deals in val (1 in 100)");
+        assert!((9_600..=10_400).contains(&val2), "{val2} of {n} deals in val (1 in 2)");
     }
 
     #[test]
