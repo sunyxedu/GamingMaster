@@ -66,3 +66,14 @@ def test_old_x86_and_macos_picks(tmp_path):
     assert mac == ["stockfish-macos-universal.tar.gz", "stockfish-macos-m1-apple-silicon.tar", "APPLEM1"]
     forced = _host("STOCKFISH_ARCH=x86-64-avx2; stockfish_x86_arches", tmp_path, flags=EPYC_9355)
     assert forced == ["avx2"]
+
+
+def test_egaroucid_build_flags(tmp_path):
+    """AVX-512 + AMD tuning on the EPYC 9355 nodes; generic builds on ARM and pre-AVX2 CPUs."""
+    assert _host("VENDOR=AuthenticAMD; egaroucid_defs", tmp_path, flags=EPYC_9355) == ["-DHAS_AVX512", "-DHAS_AMD_PROCESSOR"]
+    assert _host("VENDOR=GenuineIntel; egaroucid_defs", tmp_path, flags=EPYC_9355) == ["-DHAS_AVX512"]
+    assert _host("VENDOR=GenuineIntel; egaroucid_defs", tmp_path, flags="sse4_2 popcnt avx avx2 bmi2") == []
+    assert _host("VENDOR=; egaroucid_defs", tmp_path, flags=OLD_X86) == ["-DHAS_NO_AVX2"]
+    assert _host("egaroucid_defs; egaroucid_cpu_flags", tmp_path, os_="Darwin", arch="arm64") == [
+        "-DHAS_NO_AVX2", "-DHAS_ARM_PROCESSOR", "-mcpu=native"]
+    assert _host("egaroucid_cpu_flags", tmp_path, flags=EPYC_9355) == ["-march=native", "-mtune=native"]
