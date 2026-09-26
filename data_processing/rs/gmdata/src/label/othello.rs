@@ -44,7 +44,14 @@
 //! the side to move (`tgt.teacher_raw`, unit "discs": exact results, or the evaluation's
 //! estimate of the final difference). The engine identity recorded in the teacher meta
 //! is "Egaroucid for Console <version>" without the build flavour (OS / SIMD / compiler),
-//! so shards labelled on different machines can be mixed (the search is the same).
+//! so shards labelled on different machines can be mixed (the search is the same). The
+//! release tag fetch_engines.sh pins (v7.8.3, a GUI release) reports its console engine as
+//! "7.8.0": build every labelling node from the same `EGAROUCID_REF`.
+//!
+//! Conventions checked against real data: at ≤ 7 empties every per-move score equals an
+//! independent negamax (both colours to move), and the exact solve of the WTHOR position
+//! with 24 empties reproduces the database's recorded perfect-play ("theoretical") black
+//! score (tests/fixtures/othello/WTH_2021.wtb; empties count for the winner).
 //!
 //! # Labels
 //!
@@ -142,8 +149,12 @@
 //! workers per core share it, so ~5–6.5 positions/s per physical core, i.e. ~160–210
 //! positions/s per 32-core socket with 64 workers: the 2.1M frames of the 2000+ WTHOR
 //! set (~1.9M engine queries) in ~2.5–3.3 socket-hours. Measure first with
-//! `--max-shards 1` (the progress line reports positions/s and searches/s). A full run of
-//! 64 games on the Mac (8 workers, the machine oversubscribed ~8×) gave 13 positions/s.
+//! `--max-shards 1` (the progress line reports positions/s and searches/s). Real runs on
+//! the Mac at the defaults, the machine shared with other jobs: 64 games with 8 workers
+//! (oversubscribed ~8×) 13 positions/s; 24 games of a WTH_2021 shard with 4 workers (load
+//! ~20 on 12 cores) 14.5 positions/s, 1409 frames labelled, 3.8 engine queries per engine
+//! CPU-second, 0 verification failures, 0 engine errors. The x86 builds (AVX-512 + AMD,
+//! AVX2, generic) compile with clang; the g++ 13 AVX-512 build itself is unverified here.
 //!
 //! # `--fit-disc-scale N` (calibration; writes no shards)
 //!
@@ -192,7 +203,7 @@ pub struct Args {
     #[arg(long, default_value_t = DISC_SCALE)]
     pub disc_scale: f64,
     /// teacher policy ∝ exp(discs / T) over the raw disc scores instead of exp(Q / --tau)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "tau")]
     pub disc_tau: Option<f64>,
     /// calibration mode: fit --disc-scale from N self-play playouts of input positions
     /// (writes <out>/disc_scale_fit.json, no shards)

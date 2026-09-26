@@ -625,6 +625,41 @@ fn real_egaroucid_matches_an_exact_solver() {
     assert!(checked >= 20 && white > 0, "{checked} positions checked, {white} with white to move");
 }
 
+/// Real games × real engine: Egaroucid's exact solve of the position with D empties (D =
+/// the WTHOR header's theoretical-score depth, 24 for WTH_2021) reproduces the database's
+/// perfect-play ("theoretical") black score, for the first games of the committed fixture.
+#[test]
+fn real_egaroucid_reproduces_wthor_theoretical_scores() {
+    let Some(engine) = real_engine() else { return };
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/othello/WTH_2021.wtb");
+    let data = std::fs::read(&path).unwrap();
+    let depth = data[14] as u32;
+    assert_eq!(depth, 24, "WTHOR header byte 14: depth of the theoretical score");
+    let games = crate::othello::parse_wtb(&data).unwrap();
+    let lab = OthelloLabeller::default();
+    let cfg = real_cfg(&engine, &["level=5", &format!("exact_empties={depth}")]);
+    let mut s = lab.open_session(&cfg).unwrap();
+    let (mut checked, mut white) = (0, 0);
+    for (i, g) in games.iter().enumerate().take(6) {
+        // the first position with D empties (after() skips the passes: its mover can move)
+        let mut pos = Some(OthPos::start());
+        for &(r, c) in &g.moves {
+            match &pos {
+                Some(p) if p.empties() > depth => pos = p.after((r * 8 + c) as i64),
+                _ => break,
+            }
+        }
+        let Some(p) = pos.filter(|p| p.empties() == depth) else { continue };
+        let row = s.hint(&p, 1, cfg.timeout).unwrap().remove(0);
+        assert!(row.exact(depth), "game {i}: {row:?}");
+        let black_diff = if p.mover == BLACK { row.discs } else { -row.discs };
+        assert_eq!((64 + black_diff) / 2, g.black_theoretical_score as i32, "game {i}: {}", p.to_egaroucid());
+        checked += 1;
+        white += (p.mover == WHITE) as usize;
+    }
+    assert!(checked >= 5, "{checked} games checked ({white} with white to move)");
+}
+
 /// The full pipeline with the real engine on converter shards (fast search settings):
 /// labels are well formed, exact frames have W/D/L Q, and two worker layouts agree.
 #[test]
