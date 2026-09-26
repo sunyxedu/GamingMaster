@@ -107,7 +107,9 @@
 //!   ≈ 700 visits/s: the machine's network throughput (`katago benchmark`: ~550
 //!   evaluations/s mux, ~200 GPU only; KataGo's evaluation cache serves the rest,
 //!   neighbouring turns sharing subtrees). A 256-game shard takes ~2 h; the whole KGS
-//!   corpus (~31k games, ~6.5M positions) ~11 days.
+//!   corpus (~31k games, ~6.5M positions) ~11 days. With `--every-nth-frame 8` a whole
+//!   shard ran at 5 positions/s (fewer turns per query: less cache reuse and a larger
+//!   idle tail per query; `--workers 2` overlaps queries, untested for this case).
 //! * Expected on the cluster (not measured here): an EPYC 9355 node without a GPU
 //!   (32 Zen 5 cores, Eigen AVX2 build; b18c384nbt ≈ 10 GFLOP per evaluation, ~4–5
 //!   evaluations/s per core) ≈ 150 evaluations/s ≈ 1.5–2 positions/s at 100 visits —
