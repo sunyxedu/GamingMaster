@@ -212,9 +212,32 @@ def default_tf(game: str) -> float:
     return DEFAULT_TF.get(game, 1.0)
 
 
-# Games whose sequences must not be random-cropped: the clash_royale wait
-# head derives absolute time from t0=0 (model/games/clash_royale.py decode).
+# Games the GLOBAL --max_len never crops (their full sequences are the
+# default); an explicit per-game max_len (train_multi_game --game_max_len,
+# eval_multi_game --game_max_len, train_il_game --max_len) still crops them
+# when the network is crop-safe — :func:`check_crop_policy`.
 UNCROPPABLE = frozenset({"clash_royale"})
+
+# Networks that read ABSOLUTE frame time and so must see sequences from
+# their first frame: game → predicate on the config.  A legacy clash_royale
+# wait head (cr_wait_time="frame") encodes the frame index t0 .. t0+T-1 with
+# t0 = 0 in GameNetwork.forward; a random window would feed late-game
+# frames early-game time.  cr_wait_time="match" reads the match clock from
+# the observation instead and is crop-safe.
+CROP_UNSAFE = {
+    "clash_royale": lambda cfg: getattr(cfg, "cr_wait_time", "frame") == "frame",
+}
+
+
+def check_crop_policy(game: str, cfg, max_len: Optional[int]) -> None:
+    """Refuse a random-cropped dataset (``max_len`` not None) for a network
+    whose decoder reads absolute frame time (:data:`CROP_UNSAFE`)."""
+    unsafe = CROP_UNSAFE.get(game)
+    if max_len is not None and game not in PREFIX_CROP and unsafe is not None and unsafe(cfg):
+        raise SystemExit(f"{game}: this network reads absolute frame time (e.g. a legacy "
+                         f"cr_wait_time='frame' clash_royale wait head) and cannot train "
+                         f"or evaluate on random {max_len}-frame windows — drop the crop "
+                         f"or use a crop-safe config (cr_wait_time='match')")
 
 # Games whose ``max_len`` keeps the FIRST frames instead of a random window:
 # the generals pass head reads the absolute frame index (decoded at t0=0),
@@ -986,6 +1009,7 @@ def main() -> None:
               f"ignored: {dropped}")
     net = net.to(device)
     cfg = net.cfg
+    check_crop_policy(args.game, cfg, args.max_len)
     check_meta_arch(args.game, cfg, dataset.shard_meta)
     overrides = arch
     n_params = sum(p.numel() for p in net.parameters())

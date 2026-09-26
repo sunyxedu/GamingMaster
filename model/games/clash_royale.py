@@ -24,7 +24,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from model.components.encoder import ResBlock
-from model.components.transformer import sinusoidal_pe_rows
+from model.components.transformer import _pe_from_positions, sinusoidal_pe_rows
 from model.config import ModelConfig
 from model.games.base import (
     ActionDecoder,
@@ -55,6 +55,19 @@ class ClashRoyaleConfig(ModelConfig):
     card_feature_dim: int = 8
     #: own/enemy elixir, match time, tower counts, ...
     cr_global_features: int = 6
+    #: time feature of the wait head's sinusoidal PE: "match" = the match
+    #: clock in seconds read from the observation (globals_seq column
+    #: CR_GLOBAL_TIME = time/300 s; the decode context), so any window of a
+    #: game sees its true phase and clash_royale can be cropped like the other
+    #: games; "frame" (legacy checkpoints) = the absolute frame index
+    #: t0 .. t0+T-1, only correct for sequences decoded from their first frame
+    cr_wait_time: str = "match"
+
+
+#: globals_seq column holding the match clock / CR_TIME_SCALE seconds
+#: (data_processing/games/clash_royale/expand.py: time/300 s)
+CR_GLOBAL_TIME = 2
+CR_TIME_SCALE = 300.0
 
 
 def _mask_logits(logits: torch.Tensor, mask: Optional[torch.Tensor]) -> torch.Tensor:
@@ -170,6 +183,14 @@ class ClashRoyaleEncoder(ObservationEncoder):
 
         return torch.cat([arena_tokens, hand], dim=2)                 # [B,T,S,d]
 
+    def decode_context(self, obs: Dict[str, torch.Tensor]) -> Optional[Dict[str, torch.Tensor]]:
+        """``{"match_time": float [B, T]}`` — the match clock in seconds
+        (``cr_wait_time="match"``, :class:`CardPlacementDecoder`'s wait PE);
+        None for legacy ``"frame"`` configs, whose decoder takes no context."""
+        if getattr(self.cfg, "cr_wait_time", "frame") != "match":
+            return None
+        return {"match_time": obs["globals_seq"][..., CR_GLOBAL_TIME].float() * CR_TIME_SCALE}
+
     def positional_embedding(self) -> torch.Tensor:
         arena_pe = (self.row_embed + self.col_embed).reshape(1, -1, self.cfg.d_model)
         return torch.cat([arena_pe, self.hand_slot_embed], dim=1)
@@ -196,6 +217,9 @@ class CardPlacementDecoder(ActionDecoder):
         # Wait uses a sinusoidal time PE like generals' PassHead: whether
         # to hold elixir depends on match phase, not just the board.
         self.time_pe_dim = 32
+        self.wait_time = getattr(cfg, "cr_wait_time", "frame")
+        if self.wait_time not in ("match", "frame"):
+            raise ValueError(f"cr_wait_time must be 'match' or 'frame', got {self.wait_time!r}")
         self.wait_head = MLPHead(cfg.d_model + self.time_pe_dim, 1, hidden=cfg.d_model)
         self.card_head = PointerHead(cfg.d_model, n_queries=1)       # hand ⊗ ll
         self.place_head = PointerHead(cfg.d_model, n_queries=2)      # arena ⊗ (card, ll)
@@ -214,6 +238,7 @@ class CardPlacementDecoder(ActionDecoder):
         t0: int = 0,
         legal: Optional[Dict[str, torch.Tensor]] = None,
         labels: Optional[Dict[str, torch.Tensor]] = None,
+        ctx: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
         cfg = self.cfg
         BT = B * T
@@ -244,15 +269,21 @@ class CardPlacementDecoder(ActionDecoder):
         card_embed = hand_tok[torch.arange(BT, device=device), card_slot]
         placement_logits = self.place_head(arena_tok, card_embed, ll)  # [BT, A]
 
-        # Absolute-time PE (indices t0 .. t0+T-1) so step() at frame t and
-        # forward() at position t see the same wait feature.
-        # CAVEAT: GameNetwork.forward always decodes at t0=0, so training
-        # with GameShardDataset's max_len random crop feeds late-game
-        # frames early-game time features.  Train clash_royale WITHOUT
-        # --max_len (or source match time from globals_seq instead) until
-        # a converter lands and this is settled.
-        pe = sinusoidal_pe_rows(t0, T, self.time_pe_dim, device)
-        pe = pe.unsqueeze(0).expand(B, T, self.time_pe_dim).reshape(BT, self.time_pe_dim)
+        # Wait PE of the match phase.  "match": the sinusoidal code of the
+        # match clock (seconds) from the observation — identical in step()
+        # and forward() and for any crop window.  "frame" (legacy): absolute
+        # frame indices t0 .. t0+T-1; GameNetwork.forward decodes at t0=0,
+        # so such a net must never be trained on random crops (the trainers
+        # refuse it, see training/train_il_game.check_crop_policy).
+        if self.wait_time == "match":
+            if ctx is None or "match_time" not in ctx:
+                raise KeyError("cr_wait_time='match' needs the decode context "
+                               "ctx['match_time'] (ClashRoyaleEncoder.decode_context)")
+            pos = ctx["match_time"].reshape(BT, 1).float()
+            pe = _pe_from_positions(pos, self.time_pe_dim)
+        else:
+            pe = sinusoidal_pe_rows(t0, T, self.time_pe_dim, device)
+            pe = pe.unsqueeze(0).expand(B, T, self.time_pe_dim).reshape(BT, self.time_pe_dim)
         wait_logits = self.wait_head(torch.cat([ll, pe], dim=-1)).squeeze(-1)
 
         return {

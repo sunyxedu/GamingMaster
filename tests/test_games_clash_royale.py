@@ -320,3 +320,117 @@ def test_il_loss_degenerate_masks(cfg, model):
         tgt_wait, torch.ones(B, T, dtype=torch.bool),
     )
     assert torch.isfinite(out["loss"])
+
+
+# ======================================================================
+# Wait-head time feature: match clock (crop-safe) vs legacy frame index
+# ======================================================================
+
+def test_wait_pe_reads_the_match_clock_not_the_frame_index(cfg):
+    """cr_wait_time='match' (the default): the wait feature is the match
+    clock from the observation, so the absolute frame offset t0 of a window
+    changes nothing and the clock does; legacy 'frame' is the reverse."""
+    torch.manual_seed(0)
+    dec = CardPlacementDecoder(cfg).eval()
+    B, T, d = 2, 3, cfg.d_model
+    tokens = torch.randn(B * T, cfg.arena_h * cfg.arena_w + cfg.hand_size, d)
+    hl, ll = torch.randn(B * T, d), torch.randn(B * T, d)
+    clock = torch.tensor([[10.0, 11.0, 12.0], [100.0, 101.0, 102.0]])
+    with torch.no_grad():
+        a = dec.decode(tokens, hl, ll, B, T, t0=0, ctx={"match_time": clock})["wait_logits"]
+        b = dec.decode(tokens, hl, ll, B, T, t0=37, ctx={"match_time": clock})["wait_logits"]
+        c = dec.decode(tokens, hl, ll, B, T, t0=0, ctx={"match_time": clock + 60})["wait_logits"]
+    assert torch.equal(a, b) and not torch.allclose(a, c)
+    with pytest.raises(KeyError, match="match_time"):
+        dec.decode(tokens, hl, ll, B, T)
+
+    legacy = ClashRoyaleConfig(**{**cfg.__dict__, "cr_wait_time": "frame"})
+    dec_f = CardPlacementDecoder(legacy).eval()
+    dec_f.load_state_dict(dec.state_dict())         # same parameters, other time feature
+    with torch.no_grad():
+        f0 = dec_f.decode(tokens, hl, ll, B, T, t0=0)["wait_logits"]
+        f1 = dec_f.decode(tokens, hl, ll, B, T, t0=37)["wait_logits"]
+    assert not torch.allclose(f0, f1)
+
+
+def test_decode_context_is_the_clock_in_seconds(cfg):
+    from model.games.clash_royale import CR_GLOBAL_TIME, CR_TIME_SCALE
+
+    obs = _make_obs(cfg, B=2, T=3)
+    ctx = ClashRoyaleEncoder(cfg).decode_context(obs)
+    assert torch.equal(ctx["match_time"], obs["globals_seq"][..., CR_GLOBAL_TIME] * CR_TIME_SCALE)
+    legacy = ClashRoyaleConfig(**{**cfg.__dict__, "cr_wait_time": "frame"})
+    assert ClashRoyaleEncoder(legacy).decode_context(obs) is None
+
+
+def test_legacy_configs_keep_the_frame_wait_pe():
+    from model.config import upgrade_config_dict
+
+    old = {"d_model": 48, "cr_global_features": 6}            # a pre-field CR config
+    assert upgrade_config_dict(old)["cr_wait_time"] == "frame"
+    assert "cr_wait_time" not in upgrade_config_dict({"d_model": 48})   # other games
+    assert ClashRoyaleConfig().cr_wait_time == "match"
+
+
+def test_crop_policy_refuses_frame_time_nets_on_windows(cfg):
+    from training.train_il_game import check_crop_policy
+
+    legacy = ClashRoyaleConfig(**{**cfg.__dict__, "cr_wait_time": "frame"})
+    check_crop_policy("clash_royale", legacy, None)             # full sequences: fine
+    check_crop_policy("clash_royale", cfg, 64)                  # match clock: crop-safe
+    with pytest.raises(SystemExit, match="absolute frame time"):
+        check_crop_policy("clash_royale", legacy, 64)
+    check_crop_policy("chess", legacy, 64)                      # no rule for other games
+
+
+def _cr_pt_samples(n=2, T=12, seed=0):
+    g = torch.Generator().manual_seed(seed)
+    c = ClashRoyaleConfig()
+    out = []
+    for _ in range(n):
+        glob = torch.rand(T, c.cr_global_features, generator=g)
+        glob[:, 2] = torch.arange(T) / 300.0                    # match clock
+        out.append({
+            "obs": {"arena_seq": torch.rand(T, c.arena_channels, c.arena_h, c.arena_w, generator=g),
+                    "hand_ids": torch.randint(1, c.n_cards, (T, c.hand_size), generator=g),
+                    "hand_feats": torch.rand(T, c.hand_size, c.card_feature_dim, generator=g),
+                    "hand_mask": torch.ones(T, c.hand_size, dtype=torch.bool),
+                    "globals_seq": glob},
+            "tgt": {"waited": torch.rand(T, generator=g) < 0.5,
+                    "card_slot": torch.randint(0, c.hand_size, (T,), generator=g),
+                    "place_idx": torch.randint(0, c.arena_h * c.arena_w, (T,), generator=g),
+                    "value": torch.ones(T)},
+            "meta": {}})
+    return out
+
+
+def test_train_multi_game_crops_clash_royale_only_when_asked_and_safe(tmp_path):
+    """--game_max_len clash_royale=N crops (the global --max_len does not);
+    a legacy frame-time wait head refuses the crop."""
+    from data_processing.games.dataset import save_shard
+    from training import train_multi_game
+
+    save_shard(str(tmp_path / "cr" / "a.pt"), "clash_royale", _cr_pt_samples())
+    base = ["--data", f"clash_royale={tmp_path / 'cr'}", "--steps", "1", "--batch_size", "1",
+            "--warmup_steps", "1", "--ema_rate", "0", "--device", "cpu", "--eval_every", "100",
+            "--save_dir", str(tmp_path / "ck"), "--max_len", "4", "--override",
+            "d_model=32", "n_heads=4", "d_ff=64", "n_st_layers=1", "dropout=0.0",
+            "encoder_channels=8", "core_type=transformer", "core_layers=1"]
+    seen = {}
+    orig = train_multi_game.open_dataset
+
+    def spy(game, d, max_len=None):
+        seen[game] = max_len
+        return orig(game, d, max_len)
+
+    train_multi_game.open_dataset = spy
+    try:
+        train_multi_game.main(base)
+        assert seen["clash_royale"] is None                     # global --max_len ignored
+        train_multi_game.main(base[:-9] + ["--game_max_len", "clash_royale=5"] + base[-9:])
+        assert seen["clash_royale"] == 5
+        with pytest.raises(SystemExit, match="absolute frame time"):
+            train_multi_game.main(base[:-9] + ["--game_max_len", "clash_royale=5"] + base[-9:]
+                                  + ["cr_wait_time=frame"])
+    finally:
+        train_multi_game.open_dataset = orig

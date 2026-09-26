@@ -21,6 +21,7 @@ from model.multi_game import MultiGameNetwork
 from training.deep_supervision import Q_HALT_WEIGHT
 from training.train_il_game import (
     UNCROPPABLE,
+    check_crop_policy,
     batch_loss,
     build_net_tolerant,
     greedy_decoding,
@@ -102,7 +103,9 @@ def main(argv: Optional[List[str]] = None) -> None:
             continue
         # the trainer's crop policy: generals keeps the first max_len frames,
         # clash_royale is never cropped, the others take random windows
-        ds = open_dataset(g, d, None if g in UNCROPPABLE else gml.get(g, a.max_len))
+        ml = gml.get(g) if g in UNCROPPABLE else gml.get(g, a.max_len)
+        check_crop_policy(g, model[g].cfg, ml)
+        ds = open_dataset(g, d, ml)
         loader = DataLoader(ds, batch_size=gb.get(g, a.batch_size),
                             collate_fn=collate_game_sequences)
         for depth in depths:

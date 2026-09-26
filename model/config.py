@@ -167,6 +167,8 @@ LEGACY_CONFIG_DEFAULTS = {
     # Lux adapter (model/games/lux.py): no unit-cell PE, the MLP sap head
     "lux_unit_cell_pe": False,
     "lux_sap_head": "mlp",
+    # Clash Royale adapter (model/games/clash_royale.py): frame-index wait PE
+    "cr_wait_time": "frame",
 }
 
 #: LEGACY_CONFIG_DEFAULTS keys of ONE game's config class → a marker field
@@ -176,6 +178,7 @@ LEGACY_CONFIG_DEFAULTS = {
 LEGACY_CONFIG_SCOPE = {
     "lux_unit_cell_pe": "n_unit_actions",
     "lux_sap_head": "n_unit_actions",
+    "cr_wait_time": "cr_global_features",
 }
 
 

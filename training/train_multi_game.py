@@ -161,6 +161,7 @@ from training.train_il_game import (
     LABEL_KEYS,
     PREFIX_CROP,
     UNCROPPABLE,
+    check_crop_policy,
     apply_meta_arch_defaults,
     batch_loss,
     build_net_tolerant,
@@ -551,7 +552,9 @@ def main(argv=None) -> Dict[str, object]:
                              f"this run has {games} (same --data order required)")
 
     def crop(g: str, max_len, per_game: Dict[str, int]):
-        return None if g in UNCROPPABLE else per_game.get(g, max_len)
+        # UNCROPPABLE games ignore the global max_len; only an explicit
+        # per-game value crops them (checked against the net, below)
+        return per_game.get(g) if g in UNCROPPABLE else per_game.get(g, max_len)
 
     def val_crop(g: str):
         if g in PREFIX_CROP:
@@ -615,6 +618,9 @@ def main(argv=None) -> Dict[str, object]:
         if dropped:
             log(f"[warn] {g}: config fields unknown to {g}'s config, ignored: {dropped}")
         check_meta_arch(g, net.cfg, datasets[g].shard_meta)
+        check_crop_policy(g, net.cfg, crop(g, args.max_len, game_max_len))
+        if g in val_dirs:
+            check_crop_policy(g, net.cfg, val_crop(g))
         nets[g] = net
     model = MultiGameNetwork(nets).to(device)
     first = model[games[0]]
