@@ -13,13 +13,12 @@ import subprocess
 from collections import Counter
 
 import pytest
+import shogi  # python-shogi (project dependency): the rules reference
+import shogi.CSA
 import torch
 
 from data_processing.games.dataset import GameShardDataset, load_gm_samples
 from tests.test_rust_converters_parity import FIX, gmdata  # noqa: F401  (gmdata: pytest fixture)
-
-shogi = pytest.importorskip("shogi")
-import shogi.CSA  # noqa: E402
 
 MASK_KEYS = ("legal_mode", "legal_from", "legal_to_of", "legal_promo_of",
              "legal_drop_piece", "legal_drop_to_of")
@@ -144,3 +143,40 @@ def test_masks_and_repetitions_match_python_shogi(converted):
     # the fixtures exercise both modes on one frame, optional promotions and repetitions
     assert seen["frames"] > 1000
     assert seen["move_and_drop"] > 0 and seen["optional_promo"] > 0 and seen["repeated"] > 0, seen
+
+
+def test_decoder_consumes_converter_masks(converted):
+    """The shard contract end to end: a 9×9 shogi net (7 globals) teacher-
+    forced on converted games with legal = the tgt.legal_* rows resolves
+    every mask (the `_of` rows apply at the labels), finds no ground truth
+    outside them, and its il_head_terms add up to il_loss."""
+    from data_processing.games.dataset import collate_game_sequences
+    from model.games.registry import build_game_network
+
+    _, samples = converted
+    torch.manual_seed(0)
+    net = build_game_network("shogi", d_model=32, n_heads=4, d_ff=64, n_st_layers=1,
+                             core_type="trm", trm_H_cycles=1, trm_L_cycles=1,
+                             trm_block_layers=1, halt_max_steps=1, encoder_channels=8,
+                             shogi_global_features=7)
+    net.eval()
+    batch = collate_game_sequences(samples[:3])
+    tgt, mask = batch["tgt"], batch["meta"]["frame_mask"]
+    legal = {"mode": tgt["legal_mode"], "from": tgt["legal_from"], "to_of": tgt["legal_to_of"],
+             "promo_of": tgt["legal_promo_of"], "drop_piece": tgt["legal_drop_piece"],
+             "drop_to_of": tgt["legal_drop_to_of"]}
+    labels = {k: tgt[k] for k in ("dropped", "from_idx", "to_idx", "piece_idx")}
+    with torch.no_grad():
+        pred = net(batch["obs"], legal=legal, labels=labels, frame_mask=mask)
+    dec = net.action_decoder
+    for k in ("mode_mask", "from_mask", "to_mask", "promo_mask", "piece_mask", "drop_to_mask"):
+        assert pred[k].dtype == torch.bool
+    # teacher forcing: every `_of` row applied, so the echoes are the shard rows
+    assert torch.equal(pred["to_mask"], tgt["legal_to_of"].bool())
+    assert torch.equal(pred["promo_mask"], tgt["legal_promo_of"].bool())
+    assert torch.equal(pred["drop_to_mask"], tgt["legal_drop_to_of"].bool())
+    out = dec.il_loss(pred, tgt, mask)
+    assert torch.isfinite(out["loss"]) and out["illegal_target_frac"].item() == 0.0
+    terms = dec.il_head_terms(pred, tgt, mask)
+    total = sum((t["ce"] * t["weight"]).sum() / t["norm"] for t in terms.values())
+    assert torch.allclose(total, out["loss"], atol=1e-5)
