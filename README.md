@@ -61,10 +61,11 @@ uv sync --extra lux   # optional: the Lux AI S3 simulator (official luxai-s3 env
 # (Node.js is NOT required — .gior decompression is pure Python)
 ```
 
-New games (card games, bidding, poker, dice games, ...) are implemented once in
-Rust (`data_processing/rs/gmrules`) and shared by their converter and their RL
-simulator; the model plays them through one candidate-action adapter
-(`model/games/candidate.py`). See "Adding a game" in
+New games (card games, bidding, poker, dice games, board games, ...) are
+implemented once in Rust (`data_processing/rs/gmrules`) and shared by their
+converter and their RL simulator (`gmsim`); card-like games play through one
+candidate-action adapter (`model/games/candidate.py`), board games through the
+board adapter on a custom tensor schema. See "Adding a game" in
 [data_processing/README.md](data_processing/README.md).
 
 ### Foundation-model agents (tiers 1 and 2)

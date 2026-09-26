@@ -79,7 +79,7 @@ pub struct StepInfo {
     pub episode_len: Vec<i64>,
     /// [R * K] action keys of the action applied on each row (−1 = the row did not act).
     pub applied: Vec<i64>,
-    /// [R] the row acted on this step.
+    /// `[R]` the row acted on this step.
     pub acted: Vec<u8>,
 }
 

@@ -1,30 +1,36 @@
-//! `gmrules` — game rules and observation / legal-action encoders, implemented ONCE
-//! and shared by the converters (`gmdata`: replay + verification of every record → IL
-//! frames) and the simulators (`gmsim`: the RL environment). IL observations and RL
-//! observations are therefore identical by construction. No I/O in this crate.
+//! `gmrules` — game rules and frame encoders, implemented ONCE and shared by the
+//! converters (`gmdata`: replay + verification of every record → IL frames) and the
+//! simulators (`gmsim`: the RL environment). IL observations and RL observations are
+//! therefore identical by construction. No I/O in this crate.
 //!
 //! ```text
 //! record (any source format) ──parse (gmdata/<game>.rs)──► Trajectory ─┐
-//!                                                                      ├─ replay ─► Decision frames ─► gm-shards
-//! VecSim (RL env, gmsim) ── chance from a seeded Rng, actions ─────────┘   (encode_frame, the same code)
+//!                                                                      ├─ replay ─► frames + targets ─► gm-shards
+//! VecSim (RL env, gmsim) ── chance from a seeded Rng, actions ─────────┘   (encode_frame / encode_target)
 //! ```
 //!
 //! Pieces:
 //! - [`game::Game`]: the trait a rule engine implements (turns, chance, canonical
-//!   action ids, outcome, `encode_obs` / `encode_action`, `perturb_hidden`), plus
-//!   [`game::FrameSpec`] (fixed frame shapes = the candidate-action gm-shard schema).
-//! - [`frame`]: frame buffers and [`frame::encode_frame`], the single encoding routine.
+//!   action ids, outcome, the encoders, `perturb_hidden`), and [`game::FrameSpec`]:
+//!   the frame schema — named obs / legal / target tensors ([`schema`]) plus the
+//!   action keys; [`game::FrameSpec::candidate`] builds the candidate-action schema
+//!   (`encode_obs` / `encode_action`), custom schemas use `encode_custom` /
+//!   `target_custom` / `decode_custom`.
+//! - [`frame`]: frame buffers and the single encoding path: [`frame::encode_frame`],
+//!   [`frame::encode_target`], [`frame::decode_action`].
 //! - [`trajectory`]: [`trajectory::Event`] sequences (the universal record format)
 //!   and the verifying [`trajectory::replay`].
-//! - [`sim::VecSim`]: N episodes stepped together (rows / streams / seats).
+//! - [`sim::VecSim`]: N episodes stepped together (rows / streams / seats; parallel
+//!   across envs with `SimOptions::threads`).
 //! - [`invariance`]: causality / privacy / conformance checks every game ships
 //!   ([`invariance::check_game`]).
 //! - [`registry`]: type-erased access by game name (gmsim, the Python side).
 //! - [`rng::Rng`]: the deterministic RNG.
 //!
 //! Games: `kuhn_poker` (the toy reference game: hidden cards, chance, 2-4 players,
-//! implemented through every layer), `goofspiel` (simultaneous moves) and `pig`
-//! (perfect information + dice: the interleaved layout) — all pinned to OpenSpiel.
+//! implemented through every layer), `goofspiel` (simultaneous moves), `pig`
+//! (perfect information + dice: the interleaved layout) and `breakthrough` (the
+//! custom-schema board game on the from-to decoder) — all pinned to OpenSpiel.
 //!
 //! Adding a game: `src/games/<game>.rs` implementing [`game::Game`] (+ its unit test
 //! calling `invariance::check_game`), `pub mod <game>;` in `games/mod.rs`, one line in
