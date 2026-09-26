@@ -165,6 +165,15 @@ class GeneralsEnv:
         # won't have on the real server), so the breakdown must follow it.
         self.breakdown_pid: int = 0
 
+        # Seat whose move executes first when the two moves of a tick tie on
+        # every priority key (the last one is the move order).  0 is this
+        # env's rule; replaying a recorded game sets the seat the replay
+        # lists first, which is what the replay simulator (and so the IL
+        # data) uses — see env.vec_generals.replay_tiebreak_by_step.
+        self.tiebreak_first: int = 0
+        # (terrain, army, occupied) arrays of the last observed state
+        self.obs_state_arrays: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
+
         # Neutral-city reward budget for the WHOLE map: the per-city unit is
         # budget / n_cities (capped at 0.25). A flat per-city bonus let
         # city-dense replay maps pay out 2-3× the terminal reward per game,
@@ -512,8 +521,10 @@ class GeneralsEnv:
         return terrain, army, occ
 
     def _observations(self) -> Dict[int, Dict[str, torch.Tensor]]:
-        """Both players' observations (the map read once)."""
+        """Both players' observations (the map read once; the arrays are
+        kept as ``obs_state_arrays`` — the state these observations show)."""
         arrays = self._state_arrays()
+        self.obs_state_arrays = arrays
         return {0: self._get_observation(0, arrays), 1: self._get_observation(1, arrays)}
 
     def _get_observation(
@@ -857,8 +868,9 @@ class GeneralsEnv:
 
         # Two moves — determine priority (from simulator)
         m0, m1 = moves[0][0], moves[1][0]
-        p0 = self._move_priority(m0, m1, 0)
-        p1 = self._move_priority(m1, m0, 1)
+        i0 = 0 if self.tiebreak_first == 0 else 1
+        p0 = self._move_priority(m0, m1, i0)
+        p1 = self._move_priority(m1, m0, 1 - i0)
 
         if p0 <= p1:
             first, second = m0, m1

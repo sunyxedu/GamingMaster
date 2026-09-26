@@ -5,6 +5,7 @@ Rust converters lives in test_vec_game_golden.py."""
 
 from __future__ import annotations
 
+import os
 import random
 
 import pytest
@@ -31,7 +32,7 @@ from env.vec_game import (
     make_vec_env,
     register_vec_env,
 )
-from env.vec_generals import GeneralsVecEnv, full_state_grids
+from env.vec_generals import GeneralsVecEnv, full_state_grids, replay_tiebreak_by_step
 from env.vec_othello import OthelloVecEnv
 from model.games import build_game_network
 
@@ -121,6 +122,45 @@ def test_env_rng_state_roundtrip():
     b = env.reset().obs["grid_seq"]
     assert torch.equal(a, b)
     assert not torch.equal(a, env.reset().obs["grid_seq"])
+
+
+@pytest.mark.parametrize("game", ["othello", "generals"])
+def test_random_actions_without_generator_follow_the_env_seed(game):
+    """random_actions(generator=None) draws from the env's own torch RNG:
+    seeded by the env seed, restored by load_state_dict, and independent of
+    torch's global RNG."""
+    noise = iter(range(10**6, 10**6 + 1000, 7))
+
+    def draws(env, k=5):
+        obs = env.observe() if game == "generals" else env.reset()
+        out = []
+        for _ in range(k):
+            a = env.random_actions(obs)
+            key = "place_idx" if game == "othello" else "source_idx"
+            out.append(a[key].clone())
+            torch.manual_seed(next(noise))          # a different global RNG every call
+            obs, *_ = env.step(a)
+        return torch.stack(out)
+
+    kw = {"max_turns": 40} if game == "generals" else {}
+    a = draws(make_vec_env(game, 4, seed=5, **kw))
+    b = draws(make_vec_env(game, 4, seed=5, **kw))
+    assert torch.equal(a, b)
+    env = make_vec_env(game, 4, seed=5, **kw)
+    st = env.state_dict()
+    first = draws(env)
+    env.load_state_dict(st)
+    if game == "othello":
+        assert torch.equal(draws(env), first)
+    else:       # the restored episode RNG deals the fresh env's second episodes
+        env.reset()
+        fresh = make_vec_env(game, 4, seed=5, **kw)
+        fresh.reset()
+        assert torch.equal(draws(env), draws(fresh))
+    if game == "othello":                      # reset(seed) reseeds it too
+        e = OthelloVecEnv(4, seed=1)
+        e.reset(seed=5)
+        assert torch.equal(draws(e), a)
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +375,39 @@ def test_generals_sparse_reward_truncation_and_autoreset():
     assert obs.new_episode.all() and (obs.step_idx == 0).all() and obs.active.all()
 
 
+def _full_state_grids_per_tile(env) -> torch.Tensor:
+    """The original per-tile privileged view (oracle for full_state_grids)."""
+    import math
+
+    import numpy as np
+    H, W = env.grid_h, env.grid_w
+    st = np.full((2, H, W), -1, dtype=np.int64)
+    army = np.zeros((H, W), dtype=np.float32)
+    for r in range(env.real_h):
+        for c in range(env.real_w):
+            t = env.map[r][c]
+            for pid in (0, 1):
+                st[pid, r, c] = env._tile_to_state(t, 1 if t.occupied == pid else 2, pid)
+            if t.terrain != _MOUNTAIN:
+                army[r, c] = math.log1p(t.army) / 10.0
+    onehot = (st[:, None] == np.arange(11).reshape(1, -1, 1, 1)).astype(np.float32)
+    return torch.from_numpy(np.concatenate([onehot, np.broadcast_to(army, (2, 1, H, W))], 1))
+
+
+def test_generals_privileged_view_matches_per_tile_reference():
+    env = GeneralsVecEnv(4, privileged=True, seed=5, max_turns=400, autoreset=True)
+    gen = torch.Generator().manual_seed(3)
+    obs = env.observe()
+    kinds = set()
+    for t in range(400):
+        if t % 20 == 0:
+            ref = torch.cat([_full_state_grids_per_tile(e) for e in env.envs])
+            assert torch.equal(obs.privileged["grid_full"], ref), t
+            kinds |= set(torch.nonzero(ref[:, :11].sum((2, 3))).flatten().tolist()[1::2])
+        obs, *_ = env.step(env.random_actions(obs, generator=gen))
+    assert {2, 3, 4, 5, 7, 8, 10} <= kinds    # neutral land + cities, mountains, own, enemy
+
+
 def test_generals_memory_vision_and_privileged_view():
     env = GeneralsVecEnv(1, privileged=True, seed=2)
     assert not env.envs[0].memory_vision
@@ -346,6 +419,7 @@ def test_generals_memory_vision_and_privileged_view():
     full = obs.privileged["grid_full"]
     assert full.shape == (2, 12, 25, 25)
     assert torch.equal(full, full_state_grids(env.envs[0]))
+    assert torch.equal(full, _full_state_grids_per_tile(env.envs[0]))
     # the fog view agrees with the full view wherever the seat sees
     for p in (0, 1):
         fog, fv = obs.obs["grid_seq"][p], full[p]
@@ -356,6 +430,57 @@ def test_generals_memory_vision_and_privileged_view():
     assert torch.equal(full[1], full[0][swap])
     # capture-feasibility labels ride along as aux labels
     assert obs.aux["capture_label"].shape == (2, 4, 25, 25)
+
+
+def test_generals_defaults_follow_the_stage2_recipe():
+    env = GeneralsVecEnv(1, trunc_penalty=0.15)
+    e = env.envs[0]
+    assert e.city_reward_scale == 0.0 and e.dense_reward_scale == 0.0     # sparse ±1
+    assert e.max_turns == 2048 and e.trunc_penalty == 0.15
+    dense = GeneralsVecEnv(1, sparse_reward=False).envs[0]
+    assert dense.city_reward_scale == 1.0 and dense.dense_reward_scale == 1.0
+
+
+def _head_on_swap_env():
+    """Both generals adjacent with equal armies: seat 0 moves right onto
+    seat 1's general, seat 1 left onto seat 0's — a full priority tie."""
+    env = GeneralsVecEnv(1, seed=0)
+    m = {"map_w": 6, "map_h": 5, "generals": [0, 1], "cities": [], "city_armies": [],
+         "mountains": []}
+    env.reset(maps=[m])
+    for _ in range(12):
+        env.step(_pass_all(2))
+    e = env.envs[0]
+    assert e.map[0][0].army == e.map[0][1].army > 2
+    right, left = 1, 3
+    acts = {"source_idx": torch.tensor([0, 1]), "direction": torch.tensor([right, left]),
+            "split": torch.tensor([0, 0]), "passed": torch.tensor([False, False])}
+    return env, acts
+
+
+def test_generals_tiebreak_seat_for_replays():
+    """Full priority ties go to seat 0 by default; ``tiebreak_first`` (the
+    replay's move order) flips which seat is executed and which dropped."""
+    for tb, want in ((None, [1, -1]), ([0], [1, -1]), ([1], [-1, 1])):
+        env, acts = _head_on_swap_env()
+        a = env.envs[0].map[0][0].army
+        _, _, done, info = env.step(acts, tiebreak_first=tb)
+        assert info["count"].tolist() == want and not done.any()
+        e = env.envs[0]
+        assert e.tiebreak_first == 0                         # restored after the step
+        # the board is the same either way: both generals end at army 1 + growth
+        assert e.map[0][0].occupied == 0 and e.map[0][1].occupied == 1
+        assert {e.map[0][0].army, e.map[0][1].army} <= {1, 2} and a > 2
+    env, acts = _head_on_swap_env()
+    with pytest.raises(ValueError, match="tiebreak_first"):
+        env.step(acts, tiebreak_first=[2])
+    replay = {"mapWidth": 6, "moves": [
+        {"turn": 3, "index": 1, "start": 1, "end": 0, "is50": False},
+        {"turn": 3, "index": 0, "start": 0, "end": 1, "is50": False},
+        {"turn": 5, "index": 0, "start": 0, "end": 1, "is50": False},
+        {"turn": 6, "index": 0, "start": 0, "end": 1, "is50": False},
+        {"turn": 6, "index": 1, "start": 1, "end": 0, "is50": False}]}
+    assert replay_tiebreak_by_step(replay) == {4: 1, 7: 0}
 
 
 def test_generals_pinned_map_keeps_seats():
@@ -533,17 +658,94 @@ def test_stream_stepper_regrouping_equals_per_stream_stepping(mixer):
     assert st.frames_seen(0) == 1
 
 
+def _count_frames(stepper):
+    """Wrap ``stepper.step`` to record the last frame fed per stream."""
+    fed = {}
+    step = stepper.step
+
+    def counting(obs, legal, streams, step_idx):
+        for s, t in zip(streams, step_idx):
+            fed[int(s)] = int(t) + 1
+        return step(obs, legal, streams, step_idx)
+
+    stepper.step = counting
+    return fed
+
+
 def test_network_opponent_sees_every_frame_of_its_stream():
     env = OthelloVecEnv(3, seed=0)
     net = _othello_net("recurrent")
     opp = NetworkPolicy(net)
+    fed = _count_frames(opp.stepper)
     league = League(env, {"net": opp}, mirror_prob=0.0, learner_seat=1)
     res = play_episodes(env, league, RandomPolicy(env, seed=0))
     # the interleaved stream was fed to the opponent at every frame, both movers
     for s in range(3):
-        assert opp.stepper.frames_seen(s) == int(res["episode_len"][s])
+        assert fed[s] == int(res["episode_len"][s])
     assert set(res["score"].tolist()) <= {0.0, 0.5, 1.0}
+    assert res["opponent"] == ["net"] * 3 and res["opponent_snapshot"] == [None] * 3
     assert not net.training
+    # lockstep: one batched call per env step; finished streams were released
+    assert opp.stepper.n_calls == int(res["steps"]) and opp.stepper.n_rows == sum(fed.values())
+    assert opp.stepper.live_streams() == [] and opp.stepper.cache_numel() == 0
+
+
+def _own_state_numel(st: StreamStepper) -> int:
+    """Elements the live streams' own states need (their rows of the blocks)."""
+    own = 0
+    for s in st.live_streams():
+        blk = st._blocks[st._where[s][0]]
+        own += sum(c.numel() // len(blk.streams) for c in blk.cache)
+    return own
+
+
+@pytest.mark.parametrize("mixer", ["attention", "recurrent"])
+def test_stream_stepper_memory_stays_with_live_streams(mixer):
+    """Streams that stop being fed (envs ending at different turns) must not
+    pin the batched blocks they were last stepped in: the held cache stays
+    within 2x the live streams' own state, and release frees it."""
+    net = _othello_net(mixer)
+    N = 16
+    obs = OthelloVecEnv(N, seed=0).reset()
+    st = StreamStepper(net)
+    live = list(range(N))
+    for t in range(N - 1):
+        st.step({"board_seq": obs.obs["board_seq"][live]}, None, live, [t] * len(live))
+        live = live[:-1]                        # one env ends after every step
+    assert len(st.live_streams()) == N
+    assert st.frames_seen(0) == N - 1 and st.frames_seen(N - 1) == 1
+    assert st.cache_numel() <= 2 * _own_state_numel(st)
+    assert st.n_calls == N - 1
+    st.reset(range(N))
+    assert st.cache_numel() == 0 and st.live_streams() == [] and not st._blocks
+
+
+def test_stream_stepper_compaction_keeps_outputs_exact():
+    """Compacted blocks give the same outputs as stepping each stream alone."""
+    net = _othello_net("attention")
+    env = OthelloVecEnv(6, seed=1)
+    gen = torch.Generator().manual_seed(0)
+    frames = []
+    obs = env.reset()
+    for _ in range(5):
+        frames.append(obs)
+        obs, *_ = env.step(env.random_actions(obs, generator=gen))
+    st, solo = StreamStepper(net), StreamStepper(net)
+    # t0: all six together; then stream groups shrink so the first block is
+    # compacted (rows 0-3 leave, 4-5 stay behind), then released streams
+    plan = [[0, 1, 2, 3, 4, 5], [0, 1, 2, 3], [0, 1, 2, 3], [4, 5], [4, 5]]
+    seen = {s: 0 for s in range(6)}
+    for k, order in enumerate(plan):
+        if k == 3:
+            st.reset([0, 1])                          # two envs end
+        board = torch.stack([frames[seen[s]].obs["board_seq"][s] for s in order])
+        out = st.step({"board_seq": board}, None, order, [seen[s] for s in order])
+        for j, s in enumerate(order):
+            o = solo.step({"board_seq": board[j:j + 1]}, None, [s], [seen[s]])
+            assert torch.allclose(out["place_logits"][j], o["place_logits"][0], atol=1e-5)
+            seen[s] += 1
+    assert set(st.live_streams()) == {2, 3, 4, 5}
+    assert st.cache_numel() <= 2 * _own_state_numel(st)
 
 
 def test_network_policy_generals_and_greedy_restores_state():
@@ -588,10 +790,191 @@ def test_snapshot_pool_and_pool_policy():
     league = League(env, {"pool": pp}, mirror_prob=0.0)
     res = play_episodes(env, league, RandomPolicy(env))
     assert set(res["score"].tolist()) <= {0.0, 0.5, 1.0}
-    sids = {pp.snapshot_of(s) for s in range(6)}
+    sids = set(res["opponent_snapshot"])
     assert sids <= set(pool.ids()) and 1 <= len(built) <= 2
+    # every stream was released when its env ended
+    assert all(pp.snapshot_of(s) is None for s in range(6))
+    assert all(p.stepper.cache_numel() == 0 for p in pp._nets.values())
     with pytest.raises(RuntimeError, match="empty"):
         PoolPolicy(SnapshotPool(), load_net).reset_streams([0])
+
+
+def _pool_of(n, **kw):
+    pool = SnapshotPool(max_size=16, seed=0, **kw)
+    for s in range(n):
+        pool.add(_othello_net("recurrent", seed=s).state_dict(), {"iter": s})
+    return pool
+
+
+def _loader(built):
+    def load_net(state):
+        n = build_game_network("othello", **TINY, temporal_mixer="recurrent")
+        n.load_state_dict(state)
+        built.append(n)
+        return n.eval()
+    return load_net
+
+
+def test_pool_policy_caps_networks_and_calls_per_iteration():
+    """8 snapshots, max_nets=2: each play_episodes iteration draws an active
+    set of 2, so at most 2 networks are loaded and each env step makes at
+    most 2 batched opponent calls; the next iteration redraws the set."""
+    pool = _pool_of(8)
+    built = []
+    pp = PoolPolicy(pool, _loader(built), max_nets=2)
+    env = OthelloVecEnv(32, seed=0)
+    league = League(env, {"pool": pp}, mirror_prob=0.0, seed=1)
+    seen_sets = []
+    for _ in range(3):
+        res = play_episodes(env, league, RandomPolicy(env))
+        used = set(res["opponent_snapshot"])
+        assert used <= set(pp.active) and len(pp.active) == 2
+        assert len(pp.loaded()) <= 2
+        calls = sum(p.stepper.n_calls for p in pp._nets.values())
+        assert calls <= 2 * int(res["steps"])
+        seen_sets.append(tuple(sorted(pp.active)))
+        for p in pp._nets.values():
+            p.stepper.n_calls = 0
+        assert pp._sid == {}
+    assert len(set(seen_sets)) > 1                 # redrawn per iteration
+    assert len(built) <= 2 * 3
+    # the pool fits the active set: episodes follow the pool's weights (PFSP hook)
+    small = _pool_of(3)
+    small.weights = lambda ids, meta: [float(m["iter"] == 1) for m in meta]
+    pp = PoolPolicy(small, _loader([]), max_nets=4)
+    res = play_episodes(env, League(env, {"pool": pp}, mirror_prob=0.0), RandomPolicy(env))
+    assert sorted(pp.active) == small.ids() and set(res["opponent_snapshot"]) == {1}
+
+
+def test_league_releases_reassigned_opponent_streams():
+    """An env handed from a network opponent to mirror / another opponent
+    releases the old opponent's streams (autoreset)."""
+    env = OthelloVecEnv(8, autoreset=True, seed=0)
+    net = NetworkPolicy(_othello_net("recurrent"))
+    league = League(env, {"net": net, "rand": RandomPolicy(env)}, mirror_prob=0.3, seed=0)
+    gen = torch.Generator().manual_seed(0)
+    obs = env.reset()
+    league.update(obs)
+    for _ in range(300):
+        obs, _, done, info = env.step(league.act(obs, env.random_actions(obs, generator=gen)))
+        league.update(obs)
+        held = {s for i, ss in league._held.items() if league.opponent_of[i] == "net" for s in ss}
+        assert set(net.stepper.live_streams()) <= held
+    assert net.stepper.cache_numel() <= 2 * _own_state_numel(net.stepper)
+
+
+def test_league_autoreset_keeps_finished_episode_assignment():
+    """With autoreset, update() reassigns an env on the step it ended; the
+    finished episode's assignment stays readable (ended / prev_learner_seats)."""
+    env = OthelloVecEnv(32, autoreset=True, seed=0)
+    league = League(env, {"a": RandomPolicy(env), "b": RandomPolicy(env, seed=1)},
+                    mirror_prob=0.2, seed=0)
+    gen = torch.Generator().manual_seed(0)
+    obs = env.reset()
+    league.update(obs)
+    n_ended = n_changed = 0
+    for _ in range(140):
+        before_seats = league.learner_seats.clone()
+        before_opp = list(league.opponent_of)
+        obs, _, done, info = env.step(league.act(obs, env.random_actions(obs, generator=gen)))
+        want = league.learner_score(info["winner"])          # before update
+        league.update(obs)
+        got = league.learner_score(info["winner"], league.prev_learner_seats)
+        assert torch.equal(league.prev_learner_seats, before_seats)
+        d = done.nonzero().squeeze(1).tolist()
+        assert set(league.ended) == set(d)
+        for i in d:
+            n_ended += 1
+            rec = league.ended[i]
+            assert torch.equal(rec["learner_seats"], before_seats[i])
+            assert rec["opponent"] == before_opp[i]
+            n_changed += int(not torch.equal(before_seats[i], league.learner_seats[i]))
+            assert torch.equal(want[i], got[i]) or (want[i].isnan() and got[i].isnan())
+    assert n_ended >= 32 and n_changed > 0
+
+
+def test_league_policy_mask_drops_forced_frames():
+    env = OthelloVecEnv(64, seed=0)
+    league = League(env)
+    gen = torch.Generator().manual_seed(0)
+    obs = env.reset()
+    league.update(obs)
+    n_forced = 0
+    while bool(obs.active.any()):
+        mask = league.learner_policy_mask(obs)
+        assert torch.equal(mask, league.learner_acting(obs) & ~obs.forced)
+        n_forced += int((league.learner_acting(obs) & obs.forced).sum())
+        obs, *_ = env.step(env.random_actions(obs, generator=gen))
+        league.update(obs)
+    assert n_forced > 0
+
+
+def test_snapshot_pool_file_backed(tmp_path):
+    """store_dir: one file per snapshot, state_dict keeps names + meta only,
+    eviction deletes the file, a resume may point store_dir elsewhere."""
+    nets = [_othello_net("recurrent", seed=s) for s in range(3)]
+    d = tmp_path / "snaps"
+    pool = SnapshotPool(max_size=2, store_dir=str(d))
+    ids = [pool.add(n.state_dict(), {"iter": k}) for k, n in enumerate(nets)]
+    assert sorted(os.listdir(d)) == ["snapshot_000001.pt", "snapshot_000002.pt"]
+    st = pool.state_dict()
+    assert all(isinstance(e, str) for _, e, _ in st["snapshots"])
+    got = pool.get(ids[2])
+    ref = nets[2].state_dict()
+    assert set(got) == set(ref) and all(torch.equal(got[k], ref[k]) for k in ref)
+    moved = tmp_path / "moved"
+    os.rename(d, moved)
+    pool2 = SnapshotPool(store_dir=str(moved))
+    pool2.load_state_dict(st)
+    assert pool2.ids() == ids[1:] and pool2.meta(ids[1]) == {"iter": 1}
+    assert torch.equal(pool2.get(ids[1])[next(iter(ref))], nets[1].state_dict()[next(iter(ref))])
+    os.remove(moved / "snapshot_000001.pt")
+    pool3 = SnapshotPool(store_dir=str(moved))
+    with pytest.warns(UserWarning, match="missing"):
+        pool3.load_state_dict(st)
+    assert pool3.ids() == [ids[2]]
+
+
+class _MultiHeadNet(torch.nn.Module):
+    """A stub step(): per-unit actions, a replay mask and logits under
+    non-``action_*`` keys (Lux / mahjong / chess decoders)."""
+
+    def __init__(self):
+        super().__init__()
+        self.w = torch.nn.Parameter(torch.zeros(1))
+
+    def step(self, obs, legal=None, st_cache=None, step_idx=0, act_steps=None):
+        B = obs["board_seq"].shape[0]
+        return {"unit_actions": torch.arange(B * 3).view(B, 3),
+                "legal_tile": torch.ones(B, 5).bool(),
+                "tile_logits": torch.zeros(B, 5), "tera_logit": torch.zeros(B),
+                "action_log_prob": torch.zeros(B), "value": torch.ones(B),
+                "q_halt": torch.zeros(()), "st_cache": [torch.zeros(B, 2)]}
+
+
+def test_network_policy_keeps_every_decoder_output_but_logits():
+    env = OthelloVecEnv(3, seed=0)
+    obs = env.reset()
+    out = NetworkPolicy(_MultiHeadNet())(obs, torch.tensor([0, 2]))
+    assert set(out) == {"unit_actions", "legal_tile", "action_log_prob", "value"}
+    assert out["unit_actions"].shape == (2, 3)
+    out = NetworkPolicy(_MultiHeadNet(), output_keys=("tile_logits",))(obs, torch.tensor([1]))
+    assert "tile_logits" in out and "tera_logit" not in out
+
+
+def test_replay_actions_keep_per_row_shapes():
+    from env.vec_game import VecEnvBase
+
+    class _Units(VecEnvBase):
+        game = "units"
+        ACTION_KEYS = {"unit_actions": "unit_actions"}
+
+    e = _Units(2, autoreset=False, seed=0)
+    a = e.replay_actions({"unit_actions": torch.arange(6).view(2, 3), "value": torch.zeros(2)})
+    assert a["unit_actions"].shape == (2, 3)
+    e._require(a, ("unit_actions",))
+    full = scatter_rows({"unit_actions": torch.ones(1, 3, dtype=torch.long)}, torch.tensor([1]), 2)
+    assert full["unit_actions"].tolist() == [[0, 0, 0], [1, 1, 1]]
 
 
 def test_scatter_rows():

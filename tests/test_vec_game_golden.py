@@ -12,7 +12,11 @@ othello   the WTHOR fixture replayed as ONE interleaved stream per game (both
 generals  the .gior fixture replayed on its own map, one stream per seat, vs
           the gio records → SeqReplayDataset decoding of the Python reference
           simulator / converter (always) and vs ``gmdata generals
-          decode | convert | shard`` gm-shards (cargo).
+          decode | convert | shard`` gm-shards (cargo).  Full move-priority
+          ties follow the replay's move order (``tiebreak_first``) as in the
+          simulator; the env's own rule (seat 0 first) gives the same boards
+          but flips executed / dropped on those ticks (a head-on swap of
+          equal armies: about one game in ten of real 1v1 replays).
 """
 
 from __future__ import annotations
@@ -29,7 +33,12 @@ import torch
 
 from data_processing.games.dataset import GameShardDataset, load_gm_samples
 from data_processing.games.generals import SAMPLE_OBS_KEYS, SAMPLE_TGT_KEYS, GeneralsGioDataset
-from env.vec_generals import GeneralsVecEnv, map_from_replay, replay_actions_by_step
+from env.vec_generals import (
+    GeneralsVecEnv,
+    map_from_replay,
+    replay_actions_by_step,
+    replay_tiebreak_by_step,
+)
 from env.vec_othello import OthelloVecEnv
 from model.games.generals import append_turn_globals
 
@@ -166,9 +175,11 @@ def replay_generals(replay: Dict, T: int, **env_kw) -> Dict:
     i = usernames[i]) for the IL record's ``T`` frames: per seat the frames'
     obs and the applied actions as IL targets (count / src / dir / ratio in
     slot 0 of K = 4), plus the winner if the game ended right after."""
+    env_kw.setdefault("max_turns", 10**6)          # a recorded game is never truncated
     env = GeneralsVecEnv(1, **env_kw)
     obs = env.reset(maps=[map_from_replay(replay)])
     by_step = replay_actions_by_step(replay, env.grid_w)
+    tiebreak = replay_tiebreak_by_step(replay)
     seats = {p: {"obs": {k: [] for k in obs.obs}, "tgt": {k: [] for k in SAMPLE_TGT_KEYS
                                                           if k != "value"}}
              for p in (0, 1)}
@@ -187,7 +198,7 @@ def replay_generals(replay: Dict, T: int, **env_kw) -> Dict:
         for p in (0, 1):
             for k in obs.obs:
                 seats[p]["obs"][k].append(obs.obs[k][p])
-        obs, _, done, info = env.step(acts)
+        obs, _, done, info = env.step(acts, tiebreak_first=[tiebreak.get(t + 1, 0)])
         for p in (0, 1):
             c = int(info["count"][p])
             move = c == 1

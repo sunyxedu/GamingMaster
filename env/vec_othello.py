@@ -159,9 +159,9 @@ class OthelloVecEnv(VecEnvBase):
     def reset(self, n: Optional[int] = None, *, seed: Optional[int] = None,
               env_ids: Optional[Sequence[int]] = None) -> VecObs:
         """Othello starts from one position, so ``seed`` only reseeds the env
-        RNG (used by ``random_actions`` without a generator)."""
+        RNGs (the torch one drives ``random_actions`` without a generator)."""
         if seed is not None:
-            self._rng = np.random.default_rng(seed)
+            self._seed_rngs(seed)
         if n is not None and n != self._n:
             if env_ids is not None:
                 raise ValueError("resize (n) and env_ids are exclusive")
@@ -199,7 +199,7 @@ class OthelloVecEnv(VecEnvBase):
         n = self._n
         acts = self.replay_actions(actions)
         self._require(acts, ("place_idx",))
-        place = acts["place_idx"].numpy().astype(np.int64)
+        place = acts["place_idx"].cpu().numpy().astype(np.int64)
         active = ~self.done
         forced = active & (self._legal == _ZERO)
         move = active & ~forced
@@ -281,8 +281,5 @@ class OthelloVecEnv(VecEnvBase):
         legal = obs.legal["place"]
         w = legal.float()
         w[~legal.any(-1)] = 1.0                          # forced / inactive rows
-        place = torch.multinomial(w, 1, generator=generator).squeeze(-1)
+        place = torch.multinomial(w, 1, generator=self._generator(generator)).squeeze(-1)
         return {"place_idx": place, "passed": obs.forced.clone()}
-
-    def state_dict(self) -> Dict[str, Any]:
-        return super().state_dict()

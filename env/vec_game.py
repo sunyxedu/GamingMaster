@@ -40,6 +40,18 @@ episodes that ended on the step (``info["terminated"]`` / ``["truncated"]``;
 truncation is a soft terminal the env scores itself — do not bootstrap).
 With ``autoreset`` an ended env restarts immediately (its rows come back with
 ``new_episode``); without it its rows go inactive until ``reset``.
+
+Rollout contract (Stage-2 trainer): step the envs in LOCKSTEP — autoreset off,
+reset all envs at the iteration start, play until every env is done, with a
+bounded episode length (generals ``max_turns``).  All rows then share one frame
+index per step, which is what ``GameNetwork.step`` takes (one ``step_idx`` per
+call): env/league.py's :class:`~env.league.StreamStepper` runs them as ONE
+batched call per step.  With ``autoreset`` the rows drift apart in frame index
+and a stateful policy splits into one call per distinct index (fine for
+evaluation / smoke runs, not for throughput).
+
+Devices: the adapters simulate on the CPU and return CPU tensors; actions may
+come on any device (``step`` moves what it needs to the host).
 """
 
 from __future__ import annotations
@@ -168,11 +180,15 @@ class VecGameEnv(Protocol):
 
     def random_actions(self, obs: VecObs,
                        generator: Optional[torch.Generator] = None) -> Dict[str, torch.Tensor]:
-        """A uniformly random legal action for every row (replay format)."""
+        """A uniformly random legal action for every row (replay format);
+        ``generator=None`` draws from the env's own torch RNG (seeded from the
+        env seed, part of ``state_dict``)."""
 
 
 class VecEnvBase:
-    """Shared plumbing: row layout, action-key normalisation, the env RNG."""
+    """Shared plumbing: row layout, action-key normalisation, the env RNGs
+    (numpy ``_rng`` for episode seeds, torch ``_torch_rng`` for
+    ``random_actions`` without a generator)."""
 
     game: str = ""
     n_seats: int = 2
@@ -185,8 +201,17 @@ class VecEnvBase:
         if n_envs < 1:
             raise ValueError(f"n_envs must be >= 1, got {n_envs}")
         self.autoreset = bool(autoreset)
-        self._rng = np.random.default_rng(seed)
+        self._seed_rngs(seed)
         self._n = int(n_envs)
+
+    def _seed_rngs(self, seed: Optional[int]) -> None:
+        self._rng = np.random.default_rng(seed)
+        # an independent stream (drawing it never shifts the episode seeds)
+        ss = np.random.default_rng(None if seed is None else [int(seed), 0x7E5])
+        self._torch_rng = torch.Generator().manual_seed(int(ss.integers(0, 2**62)))
+
+    def _generator(self, generator: Optional[torch.Generator]) -> torch.Generator:
+        return self._torch_rng if generator is None else generator
 
     # -- layout ------------------------------------------------------------
 
@@ -219,7 +244,8 @@ class VecEnvBase:
 
     def replay_actions(self, actions: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Map ``action_*`` sample keys to the replay keys; replay-format keys
-        pass through (a key given both ways must agree)."""
+        pass through (a key given both ways must agree).  Per-row shapes and
+        devices are kept (``[R]`` scalars, ``[R, U]`` per-unit actions, ...)."""
         out: Dict[str, torch.Tensor] = {}
         replay_keys = set(self.ACTION_KEYS.values())
         for k, v in actions.items():
@@ -229,8 +255,11 @@ class VecEnvBase:
                 rk = k
             else:
                 continue            # log-probs, values, ... are not actions
-            v = torch.as_tensor(v).detach().reshape(-1).cpu()
-            if rk in out and not torch.equal(out[rk], v):
+            v = torch.as_tensor(v).detach()
+            if v.dim() == 0:
+                v = v.reshape(1)
+            if rk in out and not (out[rk].shape == v.shape
+                                  and torch.equal(out[rk], v.to(out[rk].device))):
                 raise ValueError(f"action {rk!r} given twice with different values")
             out[rk] = v
         return out
@@ -247,12 +276,14 @@ class VecEnvBase:
     # -- checkpointing ---------------------------------------------------------
 
     def state_dict(self) -> Dict[str, Any]:
-        """The env RNG (episodes restart at iteration boundaries, so the RNG
-        is the only state a full-state resume needs)."""
-        return {"rng": self._rng.bit_generator.state}
+        """The env RNGs (episodes restart at iteration boundaries, so the
+        RNGs are the only state a full-state resume needs)."""
+        return {"rng": self._rng.bit_generator.state, "torch_rng": self._torch_rng.get_state()}
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         self._rng.bit_generator.state = state["rng"]
+        if "torch_rng" in state:
+            self._torch_rng.set_state(state["torch_rng"])
 
 
 # ---------------------------------------------------------------------------
