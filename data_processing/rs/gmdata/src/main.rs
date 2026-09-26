@@ -18,6 +18,7 @@
 //! turns them into gm-shards for the multi-game trainers.
 
 mod traj;
+mod backgammon;
 mod chess;
 mod common;
 mod generals;
@@ -94,6 +95,11 @@ enum Game {
         #[command(subcommand)]
         cmd: kuhn_poker::Cmd,
     },
+    /// Backgammon (gnubg self-play records; gmrules rules)
+    Backgammon {
+        #[command(subcommand)]
+        cmd: backgammon::Cmd,
+    },
     /// Generic tools for every gmrules game: list, check, random-play / JSONL → shards
     Rules {
         #[command(subcommand)]
@@ -118,6 +124,7 @@ fn main() -> Result<()> {
         Game::Pokemon { cmd } => pokemon::run(cmd),
         Game::Shogi { cmd } => shogi::run(cmd),
         Game::KuhnPoker { cmd } => kuhn_poker::run(cmd),
+        Game::Backgammon { cmd } => backgammon::run(cmd),
         Game::Rules { cmd } => rules::run(cmd),
         Game::Label { cmd } => label::run(cmd),
     }
