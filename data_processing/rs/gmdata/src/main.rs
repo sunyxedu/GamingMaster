@@ -7,7 +7,8 @@
 //! Converters write `gm-shard.v1` directories (see the `gmshard` crate);
 //! `python -m data_processing.games.rs_shards` turns them into `.pt` shards
 //! for `GameShardDataset`. generals keeps its historical per-replay JSON
-//! training records (read by `SeqReplayDataset`).
+//! training records (read by `SeqReplayDataset`); `gmdata generals shard`
+//! turns them into gm-shards for the multi-game trainers.
 
 mod chess;
 mod common;

@@ -31,10 +31,15 @@ for lux) from the perspective of the player acting in that frame, in
     mahjong              final placement 1st..4th → +1, +1/3, −1/3, −1 (seat)
     pokemon              ±1 for the recorded side
     clash_royale         +1 victory / 0 draw / −1 defeat for the side (crdata)
+    generals             NOT a pure outcome: the gio record's blend
+                         w_t·outcome + (1 − w_t)·tanh(army/city ratio − 1),
+                         w_t = (t / (T − 1))², outcome ±1 for the recorded
+                         player (the training/train_il.py target) — in [-1, 1]
 
 The board-game samples (chess, shogi, go, othello, gomoku) hold both players'
 moves, so the sign alternates with the mover; the other games' samples hold
-one player's view, so their value is constant over the sample.
+one player's view, so their value is constant over the sample (except the
+generals blend above).
 training/train_il_game.py rejects targets outside an HL-Gauss value head's
 support (check_value_support).
 
@@ -46,6 +51,11 @@ Design notes:
   - Collate pads every sequence at the TAIL to the batch max length and
     returns ``lengths`` + ``frame_mask`` — tail padding is what the core's
     masked-BatchNorm / causal-mixer guarantees assume.
+  - ``max_len`` crops a longer sample to a random window (``crop="random"``)
+    or to its first frames (``crop="prefix"``, for adapters that read the
+    absolute frame index, e.g. generals).
+  - generals also trains from its gio JSON record directories:
+    :func:`open_game_dataset` (see data_processing/games/generals.py).
 """
 
 from __future__ import annotations
@@ -133,6 +143,9 @@ def _expander(game: str):
     if game == "clash_royale":
         from data_processing.games.clash_royale import expand
         return expand.expand, frozenset(expand.OBS_KEYS)
+    if game == "generals":
+        from data_processing.games import generals
+        return generals.expand, frozenset(generals.OBS_KEYS)
     return None
 
 
@@ -197,10 +210,18 @@ class GameShardDataset(Dataset):
     shard for almost every sample.  Use :class:`ShardLocalitySampler`
     (shuffles shard order, then sample order within each shard) to get
     shuffling with cache hits.
+
+    ``max_len`` crops longer samples: a random window (``crop="random"``,
+    re-drawn per access) or the first ``max_len`` frames (``"prefix"``).
     """
 
+    CROPS = ("random", "prefix")
+
     def __init__(self, data_dir: str, game: Optional[str] = None,
-                 max_len: Optional[int] = None):
+                 max_len: Optional[int] = None, crop: str = "random"):
+        if crop not in self.CROPS:
+            raise ValueError(f"crop must be one of {self.CROPS}, got {crop!r}")
+        self.crop = crop
         # .pt shards (torch.save) and/or gm-shard.v1 directories (Rust converters)
         self.paths = sorted(glob.glob(os.path.join(data_dir, "**", "*.pt"),
                                       recursive=True)) + find_gm_shards(data_dir)
@@ -322,13 +343,49 @@ class GameShardDataset(Dataset):
             T = next(iter(sample["obs"].values())).shape[0]
             if T > self.max_len:
                 # Random crop keeps late-game frames reachable across epochs.
-                t0 = int(torch.randint(0, T - self.max_len + 1, ()).item())
+                t0 = (0 if self.crop == "prefix"
+                      else int(torch.randint(0, T - self.max_len + 1, ()).item()))
                 sample = {
                     "obs": {k: v[t0: t0 + self.max_len] for k, v in sample["obs"].items()},
                     "tgt": {k: v[t0: t0 + self.max_len] for k, v in sample["tgt"].items()},
                     "meta": sample.get("meta", {}),
                 }
         return sample
+
+
+def has_shards(data_dir: str) -> bool:
+    """Whether ``data_dir`` holds any .pt shard or gm-shard directory."""
+    return bool(glob.glob(os.path.join(data_dir, "**", "*.pt"), recursive=True)
+                or find_gm_shards(data_dir))
+
+
+def open_game_dataset(data_dir: str, game: str, max_len: Optional[int] = None,
+                      crop: str = "random") -> Dataset:
+    """The training dataset of ``game`` under ``data_dir``.
+
+    A :class:`GameShardDataset` over the .pt shards / gm-shard directories —
+    or, for generals when there are none, a
+    :class:`~data_processing.games.generals.GeneralsGioDataset` over the gio
+    JSON records (``crop`` must then be ``"prefix"``: gio records are only
+    ever truncated at the tail).  Both expose ``total_frames()``,
+    ``shard_meta`` and ``converter_version``."""
+    if game == "generals" and os.path.isdir(data_dir) and not has_shards(data_dir):
+        from data_processing.games.generals import GeneralsGioDataset
+        if max_len is not None and crop != "prefix":
+            raise ValueError("generals gio records keep their first max_len frames: "
+                             "crop must be 'prefix'")
+        return GeneralsGioDataset(data_dir, max_len=max_len)
+    return GameShardDataset(data_dir, game=game, max_len=max_len, crop=crop)
+
+
+def training_sampler(dataset: Dataset) -> torch.utils.data.Sampler:
+    """Shuffling sampler for training: :class:`ShardLocalitySampler` for a
+    GameShardDataset (keeps its one-shard cache hot), a plain random
+    permutation for per-record datasets (GeneralsGioDataset).  Both draw
+    from the global torch RNG."""
+    if isinstance(dataset, GameShardDataset):
+        return ShardLocalitySampler(dataset)
+    return torch.utils.data.RandomSampler(dataset)
 
 
 class ShardLocalitySampler(torch.utils.data.Sampler):

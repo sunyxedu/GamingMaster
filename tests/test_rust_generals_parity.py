@@ -1,7 +1,8 @@
 """The Rust generals pipeline (`gmdata generals`) must reproduce the Python
 reference bit-for-bit: .gior decoding, the fog-of-war simulator and the gio
-training record. Uses one real 1v1 replay committed as a fixture; skipped
-when cargo is unavailable."""
+training record — and `gmdata generals shard` must hold exactly the tensors
+SeqReplayDataset decodes from those records. Uses one real 1v1 replay
+committed as a fixture; skipped when cargo is unavailable."""
 from __future__ import annotations
 
 import json
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 
 import pytest
+import torch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WS = os.path.join(ROOT, "data_processing")
@@ -86,3 +88,70 @@ def test_rust_rejects_unsupported_replays(gmdata, tmp_path):
     res = subprocess.run([gmdata, "generals", "convert", "--replay", rp, "--player", replay["usernames"][0],
                           "--out", tmp_path / "x.json"], capture_output=True, text=True)
     assert res.returncode != 0 and "unsupported modifiers" in res.stderr
+
+
+def _assert_same_samples(a, b):
+    assert a["meta"]["file"] == b["meta"]["file"]
+    for grp in ("obs", "tgt"):
+        assert a[grp].keys() == b[grp].keys(), grp
+        for k in a[grp]:
+            x, y = a[grp][k], b[grp][k]
+            assert x.dtype == y.dtype and x.shape == y.shape, (k, x.dtype, y.dtype)
+            assert torch.equal(x, y), k
+
+
+def test_shard_matches_seq_replay_dataset(gmdata, tmp_path):
+    """`gmdata generals shard` gm-shards hold exactly the tensors SeqReplayDataset
+    decodes from the gio records (the multi-game trainers' two generals sources)."""
+    from data_processing.dataset_seq import SeqReplayDataset
+    from data_processing.download.deserializer import deserialize_replay
+    from data_processing.games.dataset import GameShardDataset, open_game_dataset
+    from data_processing.games.generals import GeneralsGioDataset
+
+    replay = deserialize_replay(open(FIXTURE, "rb").read())
+    rp = tmp_path / "replay.json"
+    json.dump(replay, open(rp, "w"))
+    gio_dir = tmp_path / "gio"
+    gio_dir.mkdir()
+    for i, player in enumerate(replay["usernames"]):
+        subprocess.run([gmdata, "generals", "convert", "--replay", rp, "--player", player,
+                        "--out", gio_dir / f"r{i}.json"], check=True)
+    res = subprocess.run([gmdata, "generals", "shard", "--input", gio_dir, "--out",
+                          tmp_path / "shards", "--shard-size", "1"],
+                         check=True, capture_output=True, text=True)
+    summary = json.loads(res.stdout)
+    assert summary["converted"] == 2 and summary["failed"] == 0 and summary["shards"] == 2
+
+    shards = open_game_dataset(str(tmp_path / "shards"), "generals")
+    gio = open_game_dataset(str(gio_dir), "generals")
+    assert isinstance(shards, GameShardDataset) and isinstance(gio, GeneralsGioDataset)
+    assert len(shards) == len(gio) == 2
+    assert shards.shard_meta == gio.shard_meta == {
+        "grid_h": 25, "grid_w": 25, "grid_channels": 12, "global_features": 4,
+        "max_actions_per_tick": 4}
+    assert shards.total_frames() == gio.total_frames() == summary["frames"]
+    assert summary["shuffle_seed"] == 0          # records are shuffled by default
+    seq = SeqReplayDataset(str(gio_dir))
+    by_file = {shards[i]["meta"]["file"]: i for i in range(2)}
+    for i in range(2):
+        a = shards[by_file[gio[i]["meta"]["file"]]]
+        _assert_same_samples(a, gio[i])
+        item = seq[i]                           # the train_il.py decoding itself
+        for grp, keys in (("obs", ("grid_seq", "globals_seq", "legal_source_mask_seq")),
+                          ("tgt", ("count", "src_y", "src_x", "dir_id", "ratio_id", "value"))):
+            for k in keys:
+                assert torch.equal(a[grp][k], item[grp][k][0]), k
+    # prefix truncation agrees too
+    s8 = GameShardDataset(str(tmp_path / "shards"), game="generals", max_len=8, crop="prefix")
+    g8 = GeneralsGioDataset(str(gio_dir), max_len=8)
+    for i in range(2):
+        _assert_same_samples(s8[by_file[g8[i]["meta"]["file"]]], g8[i])
+    assert s8.total_frames() == g8.total_frames() == 16
+    # --keep-order writes path order (GeneralsGioDataset's)
+    res = subprocess.run([gmdata, "generals", "shard", "--input", gio_dir, "--out",
+                          tmp_path / "ordered", "--keep-order"],
+                         check=True, capture_output=True, text=True)
+    assert json.loads(res.stdout)["shuffle_seed"] is None
+    ordered = open_game_dataset(str(tmp_path / "ordered"), "generals")
+    for i in range(2):
+        _assert_same_samples(ordered[i], gio[i])

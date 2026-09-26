@@ -36,6 +36,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
 from env.generals_env import GeneralsEnv
+from model.components.core import allreduce_moe_loads, moe_layers, update_moe_balance
 from model.config import ModelConfig, config_from_dict
 from model.losses import ImitationLoss, RLLoss
 from model.magnet import expander_magnet_heads
@@ -51,6 +52,20 @@ from model.rl_utils import (
     sync_gradients,
     unfreeze_all,
 )
+
+
+def moe_balance_step(model: torch.nn.Module, rate: float) -> None:
+    """After an optimizer step: the MoE balance-bias update from the load
+    tallied since the last one, summed over the ranks first so the bias
+    moves identically everywhere (training/train_il_game.py,
+    train_multi_game.py).  ``rate`` 0 only clears the tally.  No-op
+    without MoE layers."""
+    if rate > 0:
+        allreduce_moe_loads(model)
+        update_moe_balance(model, rate)
+    else:
+        for m in moe_layers(model):
+            m.load.zero_()
 
 
 # ======================================================================
@@ -341,6 +356,10 @@ def parse_args():
                    help="Per-iteration multiplicative LR decay")
     p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--grad_clip", type=float, default=1.0)
+    p.add_argument("--moe_balance_rate", type=float, default=1e-3,
+                   help="γ of the MoE aux-loss-free balance-bias update (DeepSeek-V3), "
+                        "once per optimizer step on the load summed over ranks — as the "
+                        "IL trainers do; 0 freezes the routing bias (MoE cores only)")
 
     # Model (used when no checkpoint is provided)
     p.add_argument("--d_model", type=int, default=384)
@@ -1072,6 +1091,7 @@ def ppo_update(
     halt_weight: float = 0.0,
     halt_ref_depth: int = 8,
     halt_frac: float = 0.25,
+    moe_balance_rate: float = 0.0,
 ) -> Dict[str, float]:
     """Run one PPO update epoch with gradient accumulation over multiple
     trajectories.
@@ -1122,6 +1142,7 @@ def ppo_update(
                     capture_head.parameters(), grad_clip)
         optimizer.step()
         optimizer.zero_grad()
+        moe_balance_step(model, moe_balance_rate)
         if use_capture:
             capture_optimizer.step()
             capture_optimizer.zero_grad()
@@ -1431,6 +1452,7 @@ def il_auxiliary_update(
     world_size: int = 1,
     grad_clip: float = 1.0,
     act_steps: int = 1,
+    moe_balance_rate: float = 0.0,
 ) -> Dict[str, float]:
     """One gradient step on IL expert data (auxiliary regularisation).
 
@@ -1447,11 +1469,8 @@ def il_auxiliary_update(
     # truncates tail-only, so frame i IS turn i.
     if (model.cfg.turn_globals
             and globals_seq.shape[-1] < model.cfg.global_features):
-        B_il, T_il, _ = globals_seq.shape
-        t = torch.arange(T_il, device=device, dtype=torch.float32)
-        t = t.view(1, T_il, 1).expand(B_il, -1, -1)
-        extra = torch.cat([(t % 50) / 50.0, t % 2, t / 500.0], dim=-1)
-        globals_seq = torch.cat([globals_seq, extra], dim=-1)
+        from model.games.generals import append_turn_globals
+        globals_seq = append_turn_globals(globals_seq)
     legal_mask = il_batch["obs"]["legal_source_mask_seq"].to(device)
     tgt = {k: v.to(device) for k, v in il_batch["tgt"].items()}
     lengths = il_batch["meta"]["lengths"]
@@ -1474,6 +1493,7 @@ def il_auxiliary_update(
     if grad_clip > 0:
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
     optimizer.step()
+    moe_balance_step(model, moe_balance_rate)
 
     return {
         "il_loss": il_losses["loss"].item(),
@@ -2269,6 +2289,7 @@ def main():
                     halt_weight=args.halt_consistency_weight,
                     halt_ref_depth=args.halt_ref_depth,
                     halt_frac=args.halt_frac,
+                    moe_balance_rate=args.moe_balance_rate,
                 )
                 epochs_run += 1
                 for k, v in metrics.items():
@@ -2313,6 +2334,7 @@ def main():
                 world_size=world_size,
                 grad_clip=args.grad_clip,
                 act_steps=args.act_steps,
+                moe_balance_rate=args.moe_balance_rate,
             )
             il_weight = max(il_weight * args.il_decay, args.il_weight_min)
 

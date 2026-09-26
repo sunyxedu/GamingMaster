@@ -34,7 +34,7 @@ from model.optim import (
     trm_lr_lambda,
 )
 from model.rl_utils import load_model_state, sync_gradients
-from model.components.core import update_moe_balance
+from model.components.core import allreduce_moe_loads, update_moe_balance
 from training.deep_supervision import BatchCarry, split_rows
 
 
@@ -224,6 +224,10 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
         if ema is not None:
             ema.update(model)
         # MoE aux-loss-free balancing over the whole step (all micro-batches)
+        # on the load summed over the ranks: buffers are broadcast only at
+        # startup, so rank-local loads would let balance_bias drift apart
+        # (no-op single-process / without MoE layers)
+        allreduce_moe_loads(model)
         update_moe_balance(model, args.moe_balance_rate)
 
     n_batches = len(loader)

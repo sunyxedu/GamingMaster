@@ -81,8 +81,14 @@ def test_build_labels_tf_masking():
     full = build_labels("chess", tgt, tf_prob=1.0, frame_mask=fm)
     assert torch.equal(full["from_idx"], tgt["from_idx"])
     torch.manual_seed(0)
-    none = build_labels("chess", tgt, tf_prob=0.0, frame_mask=fm)
-    assert (none["from_idx"] == -1).all()
+    half = build_labels("chess", tgt, tf_prob=0.5, frame_mask=fm)
+    dropped = half["from_idx"] == -1
+    assert dropped.any() and not dropped.all()
+    assert torch.equal(half["from_idx"][~dropped], tgt["from_idx"][~dropped])
+    assert torch.equal(half["to_idx"] == -1, dropped)        # one draw per frame
+    # tf 0 = no labels at all (train_il.py's convention; decoders treat None
+    # exactly like all-−1 labels: sample from their own policy)
+    assert build_labels("chess", tgt, tf_prob=0.0, frame_mask=fm) is None
     assert build_labels("othello", {"place_idx": tgt["from_idx"]}, 0.5, fm) is None
 
 

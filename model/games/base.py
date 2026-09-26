@@ -351,6 +351,14 @@ class ActionDecoder(nn.Module, ABC):
         tgt: Dict[str, torch.Tensor],
         seq_mask: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        """Optional per-game imitation loss (generals keeps its own
-        ``ImitationLoss`` for training-script compatibility)."""
+        """Per-game imitation loss used by the generic trainers
+        (training/train_il_game.py ``batch_loss``).
+
+        Returns ``loss`` (differentiable policy loss, per-frame mean over
+        ``seq_mask``), detached per-head losses / accuracies, and
+        ``answer_correct`` / ``answer_mask`` [B, T] bool (whole action
+        exactly right / frames that carry an answer) for ``exact_acc`` and
+        the TRM q_halt target.  The value term is added by the trainer.
+        generals delegates to ``model.losses.ImitationLoss``
+        (``model.games.generals.generals_il_loss``)."""
         raise NotImplementedError

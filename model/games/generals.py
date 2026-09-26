@@ -7,6 +7,13 @@ the autoregressive Source → Direction / Split / Pass action decoder.
 
 The numeric behavior is a faithful port — rollout sampling, PPO log-prob
 replay and IL teacher forcing all match the original implementation.
+
+The module also holds the generals pieces of the generic IL contract used
+by the multi-game trainers (training/train_il_game.py, train_multi_game.py):
+:func:`generals_il_loss` (both decoders' ``il_loss``), the teacher-forcing
+labels derived from the stored targets (:func:`source_labels`), the legality
+dict read from the observation (:func:`legal_from_obs`) and the
+``turn_globals`` features for recorded games (:func:`append_turn_globals`).
 """
 
 from __future__ import annotations
@@ -28,6 +35,80 @@ from model.games.base import (
     masked_sample,
     safe_masked_logits,
 )
+from model.losses import ImitationLoss
+
+
+#: globals cfg.turn_globals appends to the 4 recorded ones (global_features 4 → 7)
+TURN_GLOBAL_FEATURES = 3
+
+
+def append_turn_globals(globals_seq: torch.Tensor) -> torch.Tensor:
+    """[B, T, G] → [B, T, G + 3]: the env's ``turn_globals`` features
+    ((turn % 50) / 50, turn % 2, turn / 500) for a recorded sequence.
+
+    IL records carry only the 4 base globals and frame t IS turn t — they
+    are only ever truncated at the tail (see data_processing/games/generals.py).
+    """
+    B, T, _ = globals_seq.shape
+    t = torch.arange(T, device=globals_seq.device, dtype=torch.float32)
+    t = t.view(1, T, 1).expand(B, -1, -1)
+    extra = torch.cat([(t % 50) / 50.0, t % 2, t / 500.0], dim=-1)
+    return torch.cat([globals_seq, extra.to(globals_seq.dtype)], dim=-1)
+
+
+def source_labels(tgt: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """Teacher-forcing labels from the stored targets: the ground-truth
+    source cell on move frames (count > 0), −1 elsewhere, where the decoder
+    samples its own source — training/train_il.py's ``use_gt`` rule."""
+    move = tgt["count"] > 0
+    sy, sx = tgt["src_y"][..., 0], tgt["src_x"][..., 0]
+    return {"source_y": torch.where(move, sy, torch.full_like(sy, -1)),
+            "source_x": torch.where(move, sx, torch.full_like(sx, -1))}
+
+
+def legal_from_obs(obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """Decoder ``legal`` dict from a recorded observation: the source mask,
+    plus the per-cell direction mask when the data carries one."""
+    legal = {"source": obs["legal_source_mask_seq"].bool()}
+    if "direction_mask_seq" in obs:
+        legal["direction"] = obs["direction_mask_seq"].bool()
+    return legal
+
+
+#: il_loss statistics taken over from ImitationLoss (besides loss / answer_*);
+#: its value / q_halt terms are the generic trainer's (batch_loss)
+_IL_STAT_KEYS = ("source_loss", "direction_loss", "split_loss", "pass_loss",
+                 "src_acc", "dir_acc", "full_acc", "complete_acc")
+
+
+def generals_il_loss(
+    cfg: ModelConfig,
+    pred: Dict[str, torch.Tensor],
+    tgt: Dict[str, torch.Tensor],
+    seq_mask: torch.Tensor,
+) -> Dict[str, torch.Tensor]:
+    """``ActionDecoder.il_loss`` for generals, delegated to
+    :class:`model.losses.ImitationLoss` — the training/train_il.py objective.
+
+    ``loss`` is its policy part: focal source CE + conditional direction /
+    split CE + pass BCE (default weights 3.0 / 1.5 / 0.3 / 1.0, focal γ 1.5)
+    on the ``seq_mask`` frames.  training.train_il_game.batch_loss adds the
+    value term (MSE, or HL-Gauss CE for an HL-Gauss head; weight
+    --value_weight, default 0.2 = ImitationLoss's) and, for the TRM core
+    only, the q_halt BCE against ``answer_correct`` on ``answer_mask``
+    (weight Q_HALT_WEIGHT 0.5 = ImitationLoss's; train_il.py also zeroes it
+    for the other cores) — so the summed objective is exactly
+    ImitationLoss's.  Needs tgt count / src_y / src_x / dir_id / ratio_id
+    and pred's factorized logits (+ ``src_idx``), which the joint decoder
+    also provides as views.
+    """
+    out = ImitationLoss(grid_w=cfg.grid_w).compute(pred, tgt, frame_mask=seq_mask)
+    res = {"loss": out["policy_loss"]}
+    res.update({k: out[k] for k in _IL_STAT_KEYS})
+    # whole move (or pass) exactly right → exact_acc and the TRM q_halt target
+    res["answer_correct"] = out["answer_correct"]
+    res["answer_mask"] = out["answer_mask"]
+    return res
 
 
 class GeneralsEncoder(ObservationEncoder):
@@ -458,6 +539,19 @@ class GeneralsDecoder(ActionDecoder):
 
         return total_lp, total_ent, head_entropy
 
+    # ------------------------------------------------------------------
+    # Imitation loss (generic trainers)
+    # ------------------------------------------------------------------
+
+    def il_loss(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """See :func:`generals_il_loss` (ImitationLoss, frame-mask aware)."""
+        return generals_il_loss(self.cfg, pred, tgt, seq_mask)
+
 
 class JointGeneralsDecoder(ActionDecoder):
     """AverageJoe-style flat joint-action decoder.
@@ -605,6 +699,30 @@ class JointGeneralsDecoder(ActionDecoder):
 
     # ------------------------------------------------------------------
 
+    @torch.no_grad()
+    def _draw_joint(self, joint: torch.Tensor, move_lse: torch.Tensor) -> torch.Tensor:
+        """[BT] joint action index drawn from the (masked) joint policy;
+        ``2DN`` = pass."""
+        cfg = self.cfg
+        pass_idx = 2 * cfg.n_directions * cfg.grid_h * cfg.grid_w
+        if self.greedy:
+            # Hierarchical greedy. Pass is a single ATOM of the joint but
+            # carries the whole "don't move" intent: raw argmax would play
+            # pass whenever the move mass is spread over many arrows
+            # (p_pass > p_best_arrow even at p_pass ≈ 1%) — a systematic
+            # hesitation bias under greedy eval. Decide pass-vs-move by
+            # MASS, then take the best arrow.
+            best_arrow = joint[..., :-1].argmax(-1)
+            return torch.where(joint[..., -1] > move_lse,
+                               torch.full_like(best_arrow, pass_idx), best_arrow)
+        return categorical_sample(F.softmax(joint.float(), dim=-1))
+
+    def _joint_source(self, j_idx: torch.Tensor) -> torch.Tensor:
+        """Source cell of joint indices (cell 0 for pass)."""
+        N = self.cfg.grid_h * self.cfg.grid_w
+        return torch.where(j_idx >= 2 * self.cfg.n_directions * N,
+                           torch.zeros_like(j_idx), j_idx % N)
+
     def decode(
         self,
         tokens: torch.Tensor,
@@ -621,7 +739,6 @@ class JointGeneralsDecoder(ActionDecoder):
         D = cfg.n_directions
         N = cfg.grid_h * cfg.grid_w
         W = cfg.grid_w
-        device = tokens.device
 
         joint, arr, pass_logit = self._joint_and_views(
             tokens, hl, ll, BT, legal)
@@ -633,34 +750,26 @@ class JointGeneralsDecoder(ActionDecoder):
         source_x = labels.get("source_x") if labels else None
         j_idx = None
         if source_y is not None and source_x is not None:
-            # Replay path: the action tuple is re-encoded by
-            # log_prob_entropy; here only the source index is needed to
+            # Replay / teacher-forcing path: the action tuple is re-encoded
+            # by log_prob_entropy; here only the source index is needed to
             # anchor the factorized views.
             sy = source_y.reshape(BT)
             sx = source_x.reshape(BT)
             src_idx = (sy * W + sx).long().clamp(0, N - 1)
+            # Unlabelled frames (sy < 0: teacher forcing dropped the label,
+            # or a pass / dropped-move frame) anchor the views on the
+            # policy's OWN draw, exactly as without labels — like
+            # GeneralsDecoder.  Clamping −1 to cell 0 would supervise the
+            # conditional direction / split views only on frames whose
+            # ground-truth source happens to be cell 0.
+            needs_sample = sy < 0
+            if needs_sample.any():
+                drawn = self._draw_joint(joint, move_lse)
+                src_idx = torch.where(needs_sample, self._joint_source(drawn), src_idx)
         else:
             # Rollout: draw the arrow from the joint categorical.
-            with torch.no_grad():
-                if self.greedy:
-                    # Hierarchical greedy. Pass is a single ATOM of the
-                    # joint but carries the whole "don't move" intent:
-                    # raw argmax would play pass whenever the move mass
-                    # is spread over many arrows (p_pass > p_best_arrow
-                    # even at p_pass ≈ 1%) — a systematic hesitation
-                    # bias under greedy eval. Decide pass-vs-move by
-                    # MASS, then take the best arrow.
-                    best_arrow = joint[..., :-1].argmax(-1)
-                    j_idx = torch.where(
-                        joint[..., -1] > move_lse,
-                        torch.full_like(best_arrow, 2 * D * N),
-                        best_arrow)
-                else:
-                    probs = F.softmax(joint.float(), dim=-1)
-                    j_idx = categorical_sample(probs)
-            src_idx = torch.where(
-                j_idx >= 2 * D * N,
-                torch.zeros_like(j_idx), j_idx % N)
+            j_idx = self._draw_joint(joint, move_lse)
+            src_idx = self._joint_source(j_idx)
 
         src_logits, dir_logits, spl_logits, pass_view = self._views(
             arr, pass_logit, src_idx, BT, legal, move_lse)
@@ -758,3 +867,15 @@ class JointGeneralsDecoder(ActionDecoder):
                 "ent_spl": (spl_ent.detach() * mask_f).sum() / n_moves,
             }
         return total_lp, total_ent, head_entropy
+
+    # ------------------------------------------------------------------
+
+    def il_loss(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """ImitationLoss on the factorized views (:func:`generals_il_loss`) —
+        what training/train_il.py optimises for a joint_decoder config."""
+        return generals_il_loss(self.cfg, pred, tgt, seq_mask)

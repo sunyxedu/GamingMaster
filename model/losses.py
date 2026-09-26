@@ -98,6 +98,14 @@ class ImitationLoss(nn.Module):
       - src_acc:  source top-1 accuracy on valid timesteps
       - dir_acc:  direction accuracy (only where source is correct)
       - full_acc: full move match (src + dir + split + pass all correct)
+
+    :meth:`forward` is the historical interface (``training/train_il.py``,
+    ``training/train_rl.py``).  :meth:`compute` also returns the
+    differentiable policy part of the loss and the per-frame exact-answer
+    tensors; ``GeneralsDecoder.il_loss`` builds the generic
+    ``ActionDecoder.il_loss`` contract from them, and
+    ``training.train_il_game.batch_loss`` adds the value and q_halt terms
+    with the same weights, so both paths optimise the same objective.
     """
 
     def __init__(
@@ -121,6 +129,9 @@ class ImitationLoss(nn.Module):
         self.focal_gamma = focal_gamma
         self.grid_w = grid_w
 
+    #: keys :meth:`compute` returns on top of :meth:`forward`'s
+    EXTRA_KEYS = ("policy_loss", "answer_correct", "answer_mask")
+
     def forward(
         self,
         pred: Dict[str, torch.Tensor],
@@ -132,6 +143,32 @@ class ImitationLoss(nn.Module):
         """``frame_mask`` [B, T] bool, when given, replaces the length-derived
         sequence mask — deep supervision passes the frames still being
         supervised (not yet halted)."""
+        out = self.compute(pred, tgt, lengths, tf_mask, frame_mask)
+        for k in self.EXTRA_KEYS:
+            del out[k]
+        return out
+
+    def compute(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        lengths: Optional[list] = None,
+        tf_mask: Optional[torch.Tensor] = None,
+        frame_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """:meth:`forward`'s dict plus
+
+          policy_loss     differentiable weighted source + direction + split
+                          + pass terms; ``loss`` = policy_loss + value term
+                          + q_halt term, summed in exactly that order
+          answer_correct  [B, T] bool: the whole answer is right — source,
+                          direction, split and no pass on a move frame, a
+                          pass on a pass frame (the q_halt target)
+          answer_mask     [B, T] bool: frames that carry an answer — in the
+                          sequence and not a dropped move (count == -1)
+
+        Without a ``value`` target (or prediction) the value term is 0.
+        """
         B, T, N = pred["source_logits"].shape
         device = pred["source_logits"].device
 
@@ -229,11 +266,14 @@ class ImitationLoss(nn.Module):
         pass_loss = (pass_loss_all * pass_mask).sum() / n_pass
 
         # --- Value loss ---------------------------------------------------
-        value_loss_all = F.mse_loss(
-            pred["value"], tgt["value"], reduction="none",
-        )
-        value_loss_all = torch.nan_to_num(value_loss_all, nan=0.0)
-        value_loss = (value_loss_all * seq_mask.float()).sum() / n_seq
+        if "value" in tgt and "value" in pred:
+            value_loss_all = F.mse_loss(
+                pred["value"], tgt["value"], reduction="none",
+            )
+            value_loss_all = torch.nan_to_num(value_loss_all, nan=0.0)
+            value_loss = (value_loss_all * seq_mask.float()).sum() / n_seq
+        else:
+            value_loss = source_loss.new_tensor(0.0)
 
         # --- Q-halt loss --------------------------------------------------
         # Paper-faithful target: halt when the CURRENT answer is fully
@@ -243,14 +283,15 @@ class ImitationLoss(nn.Module):
         # pass. Dropped-move frames (count=-1) carry no answer. This matters
         # here because inference actually gates pondering depth on q_halt.
         q_supervised = seq_mask & label_valid
+        with torch.no_grad():
+            q_src_ok = pred["source_logits"].argmax(dim=-1) == tgt_src
+            q_dir_ok = pred["direction_logits"].argmax(dim=-1) == tgt_dir
+            q_spl_ok = pred["split_logits"].argmax(dim=-1) == tgt_split
+            q_passed = pred["pass_logits"] > 0
+            move_ok = q_src_ok & q_dir_ok & q_spl_ok & ~q_passed
+            answer_ok = torch.where(move_mask, move_ok, q_passed & ~move_mask)
         if "q_halt" in pred and q_supervised.any():
-            with torch.no_grad():
-                q_src_ok = pred["source_logits"].argmax(dim=-1) == tgt_src
-                q_dir_ok = pred["direction_logits"].argmax(dim=-1) == tgt_dir
-                q_spl_ok = pred["split_logits"].argmax(dim=-1) == tgt_split
-                q_passed = pred["pass_logits"] > 0
-                move_ok = q_src_ok & q_dir_ok & q_spl_ok & ~q_passed
-                correct = torch.where(move_mask, move_ok, q_passed & ~move_mask).float()
+            correct = answer_ok.float()
             q_halt_loss = F.binary_cross_entropy_with_logits(
                 pred["q_halt"], correct, reduction="none",
             )
@@ -267,14 +308,15 @@ class ImitationLoss(nn.Module):
             q_halt_loss = source_loss.new_tensor(0.0)
 
         # --- Total --------------------------------------------------------
-        total = (
+        # (policy + value) + q_halt: the left-to-right order of the
+        # historical single sum, so ``loss`` is bit-identical to it.
+        policy = (
             self.source_weight * source_loss
             + self.direction_weight * dir_loss
             + self.split_weight * split_loss
             + self.pass_weight * pass_loss
-            + self.value_weight * value_loss
-            + self.q_halt_weight * q_halt_loss
         )
+        total = policy + self.value_weight * value_loss + self.q_halt_weight * q_halt_loss
 
         # --- Accuracy metrics (detached) ----------------------------------
         with torch.no_grad():
@@ -313,6 +355,9 @@ class ImitationLoss(nn.Module):
             "dir_acc": dir_acc,
             "full_acc": full_acc,
             "complete_acc": complete_acc,
+            "policy_loss": policy,
+            "answer_correct": answer_ok,
+            "answer_mask": q_supervised,
         }
 
 
