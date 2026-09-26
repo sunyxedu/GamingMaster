@@ -416,3 +416,38 @@ def test_frame_group_norm_keeps_input_dtype_under_autocast(device):
         exact = b(conv(x))
     assert torch.allclose(y.float(), exact, atol=0.05, rtol=0.02)
     assert ref.dtype == torch.float32
+
+
+# ---------------------------------------------------------------------------
+# trainers
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("override,label,kind", [((), "group/1", FrameGroupNorm),
+                                                  (("encoder_norm=batch",), "batch",
+                                                   nn.BatchNorm2d)])
+def test_train_multi_game_logs_saves_and_reloads_encoder_norm(tmp_path, capsys, override,
+                                                              label, kind):
+    """train_multi_game logs the encoder norm, writes it into the checkpoint
+    config and eval_multi_game.load_multi rebuilds the same layers."""
+    from data_processing.games.dataset import save_shard
+    from tests.test_core_moe import _board_samples
+    from training import train_multi_game
+    from training.eval_multi_game import load_multi
+
+    d = tmp_path / "othello"
+    d.mkdir()
+    save_shard(str(d / "a.pt"), "othello", _board_samples("othello", 4, 6))
+    core = dict(BASE, **CORES["rd_moe"], temporal_mixer="recurrent")
+    train_multi_game.main([
+        "--data", f"othello={d}", "--steps", "2", "--batch_size", "2", "--warmup_steps", "1",
+        "--log_every", "1", "--save_dir", str(tmp_path / "ck"), "--device", "cpu",
+        "--override", *[f"{k}={v}" for k, v in core.items()], *override])
+    init = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("[init]")]
+    assert len(init) == 1 and f"encoder_norm={label} " in init[0]
+    path = tmp_path / "ck" / "multi_final.pt"
+    ck = torch.load(path, map_location="cpu", weights_only=False)
+    assert ck["configs"]["othello"]["encoder_norm"] == ("batch" if override else "group")
+    assert ck["configs"]["othello"]["encoder_norm_groups"] == 1
+    net = load_multi(str(path), torch.device("cpu"))["othello"]
+    assert {type(m) for m in net.obs_encoder.modules()
+            if isinstance(m, (nn.GroupNorm, nn.BatchNorm2d))} == {kind}

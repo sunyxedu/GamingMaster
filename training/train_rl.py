@@ -37,6 +37,7 @@ from torch.utils.data.distributed import DistributedSampler
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
 from env.generals_env import GeneralsEnv
 from model.components.core import allreduce_moe_loads, moe_layers, update_moe_balance
+from model.components.encoder import describe_encoder_norm
 from model.config import ModelConfig, config_from_dict
 from model.losses import ImitationLoss, RLLoss
 from model.magnet import expander_magnet_heads
@@ -371,6 +372,13 @@ def parse_args():
                    choices=["attention", "recurrent"],
                    help="Temporal mixer for from-scratch models (checkpoints "
                         "carry their own setting in the saved config)")
+    p.add_argument("--encoder_norm", type=str, default="group", choices=["group", "batch"],
+                   help="Conv encoder normalisation for from-scratch models: "
+                        "per-frame GroupNorm or the legacy BatchNorm (checkpoints "
+                        "carry their own setting in the saved config)")
+    p.add_argument("--encoder_norm_groups", type=int, default=1,
+                   help="GroupNorm groups of --encoder_norm group for from-scratch "
+                        "models (1 = LayerNorm over C, H, W)")
 
     # EMA policy weights — smoother snapshots for evaluation, the opponent
     # pool and deployment (AverageJoe's #1 ladder agent IS its EMA copy).
@@ -1557,6 +1565,8 @@ def main():
             trm_L_cycles=args.trm_L_cycles,
             trm_block_layers=args.trm_block_layers,
             temporal_mixer=args.temporal_mixer,
+            encoder_norm=args.encoder_norm,
+            encoder_norm_groups=args.encoder_norm_groups,
         )
         src_msg = "No IL checkpoint — training from scratch"
 
@@ -1611,7 +1621,7 @@ def main():
     n_params = sum(p.numel() for p in model.parameters())
     if rank0:
         print(f"Model parameters: {n_params:,} (core={cfg.core_type}, "
-              f"qk_norm={cfg.qk_norm})")
+              f"qk_norm={cfg.qk_norm}, encoder_norm={describe_encoder_norm(cfg)})")
 
     # ---- Resume: load weights & counters FIRST -------------------------
     # Must happen before the KL reference model and opponent pool are

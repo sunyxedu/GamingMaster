@@ -35,6 +35,7 @@ from model.optim import (
 )
 from model.rl_utils import load_model_state, sync_gradients
 from model.components.core import allreduce_moe_loads, update_moe_balance
+from model.components.encoder import describe_encoder_norm
 from training.deep_supervision import BatchCarry, split_rows
 
 
@@ -105,6 +106,17 @@ def parse_args():
         choices=["attention", "recurrent"],
         help="Temporal mixer: full-history causal attention (KV cache) or "
              "gated linear recurrence (fixed-size neural memory, full BPTT)",
+    )
+    p.add_argument(
+        "--encoder_norm", type=str, default="group", choices=["group", "batch"],
+        help="Conv encoder normalisation of a from-scratch model: per-frame "
+             "GroupNorm (causal in train mode) or the legacy BatchNorm "
+             "(model.config.ModelConfig.encoder_norm); checkpoints carry their own",
+    )
+    p.add_argument(
+        "--encoder_norm_groups", type=int, default=1,
+        help="GroupNorm groups of --encoder_norm group (1 = LayerNorm over C, H, W; "
+             "must divide the encoder widths)",
     )
     p.add_argument(
         "--world_model_weight", type=float, default=0.0,
@@ -356,13 +368,16 @@ def main():
             trm_L_cycles=args.trm_L_cycles,
             trm_block_layers=args.trm_block_layers,
             temporal_mixer=args.temporal_mixer,
+            encoder_norm=args.encoder_norm,
+            encoder_norm_groups=args.encoder_norm_groups,
             predict_next_obs=(args.world_model_weight > 0),
         )
     if args.halt_max_steps > 0:
         cfg.halt_max_steps = args.halt_max_steps
     if rank0:
         print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, core={cfg.core_type}, "
-              f"moe_experts={cfg.moe_experts}, qk_norm={cfg.qk_norm}")
+              f"moe_experts={cfg.moe_experts}, qk_norm={cfg.qk_norm}, "
+              f"encoder_norm={describe_encoder_norm(cfg)}")
 
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())

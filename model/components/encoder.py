@@ -146,6 +146,12 @@ def uses_batch_stats(cfg) -> bool:
     return encoder_norm_of(cfg).batch_stats
 
 
+def describe_encoder_norm(cfg) -> str:
+    """Log label of cfg's encoder norm: "batch", or "group/G" (G groups)."""
+    norm = encoder_norm_of(cfg)
+    return norm.kind if norm.batch_stats else f"{norm.kind}/{norm.groups}"
+
+
 NormSpec = Union[str, EncoderNorm]
 
 
