@@ -151,6 +151,8 @@ def test_end_to_end_two_iterations(e2e):
         assert set(chess) >= {"il_loss", "il_drift", "replay_kl", "load_entropy"}
         assert "tokens" not in chess
     assert hist[0]["games"]["chess"]["il_drift"] == 0.0
+    lines = (root / "rl_e2e" / "metrics.jsonl").read_text().splitlines()
+    assert len(lines) == 2 and '"canary_log_ratio"' in lines[0]
     # adaptive controllers moved: othello's entropy coefficient (target 2.0) and
     # generals' KL beta (budget 0.01)
     assert hist[-1]["games"]["othello"]["ent_coef"] != 0.01

@@ -88,6 +88,7 @@ from __future__ import annotations
 import argparse
 import ast
 import copy
+import json
 import math
 import os
 import random
@@ -290,7 +291,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--ckpt_every", type=int, default=0, help="also every N iterations (0 = off)")
     a("--save_every", type=int, default=0, help="keep rl_iter<N>.pt every N iterations")
     a("--resume", default=None, help="rl_latest.pt to continue from (same arguments)")
-    a("--log_every", type=int, default=1)
+    a("--log_every", type=int, default=1,
+      help="print every N iterations (rank 0 appends every record to <save_dir>/metrics.jsonl)")
     a("--seed", type=int, default=0)
     a("--device", default=None)
     a("--bucket_mb", type=float, default=25.0)
@@ -1005,8 +1007,10 @@ class JointRLTrainer:
         self.history: List[Dict[str, Any]] = []
         if a.resume:
             self._load_resume(a.resume)
-        elif any(g.pool_policy is not None for g in self.rl.values()):
-            self._add_snapshot(tag="init")      # the Stage-1 policy opens the pool
+        if any(g.pool_policy is not None for g in self.rl.values()) and len(self.pool) == 0:
+            # the Stage-1 policy opens the pool (a resume that turns opponents
+            # on for the first time starts it from the current policy)
+            self._add_snapshot(tag="resume" if a.resume else "init")
         if self.rank0:
             os.makedirs(a.save_dir, exist_ok=True)
         n_total = sum(p.numel() for p in model.parameters())
@@ -1034,11 +1038,12 @@ class JointRLTrainer:
 
     def _policy_state(self) -> Dict[str, torch.Tensor]:
         """The weights published to the pool (--snapshot_weights: the live
-        policy or its EMA) of the simulator games' networks, shared core
-        included per game."""
+        policy or its EMA): every simulator game's network, shared core
+        included per game (so a resume may turn on opponents for any of
+        them)."""
         use_ema = self.args.snapshot_weights == "ema" and self.ema is not None
         sd = self.ema.ema_model_state(self.model) if use_ema else self.model.state_dict()
-        keep = tuple(f"nets.{g}." for g in self.rl if self.rl[g].pool_policy is not None)
+        keep = tuple(f"nets.{g}." for g in self.rl_games)
         return {k: v for k, v in sd.items() if k.startswith(keep)}
 
     def _add_snapshot(self, tag: str) -> None:
@@ -1420,6 +1425,9 @@ class JointRLTrainer:
             self._add_snapshot(tag="iter")
         rec = self._record(diag, epoch_stats, q_glob, rel, time.time() - t0, t_roll)
         self.history.append(rec)
+        if self.rank0:
+            with open(os.path.join(a.save_dir, "metrics.jsonl"), "a") as f:
+                f.write(json.dumps(rec) + "\n")
         if self.iteration % a.log_every == 0:
             self._log(rec)
         return rec
