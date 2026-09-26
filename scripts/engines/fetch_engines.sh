@@ -46,8 +46,9 @@
 #   YANEURAOU_REF          git tag / branch (default: latest release tag)
 #   YANEURAOU_TARGET_CPU   Makefile TARGET_CPU (default: from the CPU flags)
 #   YANEURAOU_EVAL_URL     .7z / .zip archive containing nn.bin (default: Háo)
-#   KATAGO_TAG             release tag (default: v1.18.1 for the CPU / OpenCL / TensorRT /
-#                          ROCm builds — v1.18.2 ships CUDA builds only — and latest for CUDA)
+#   KATAGO_TAG             release tag (default: v1.18.1 for every Linux backend — the newest
+#                          tag with CPU / OpenCL / TensorRT / ROCm assets; pinned so that labels
+#                          from GPU and CPU nodes share one engine version in meta.teacher)
 #   KATAGO_BACKEND         eigenavx2 | eigen | opencl | cuda12.8-cudnn9.8.0 | trt10.9.0-cuda12.8 |
 #                          onnx-openvino | ... (the part between the tag and "-linux-x64" in the
 #                          release asset name). Default, all without root: CUDA when an NVIDIA
@@ -367,10 +368,24 @@ install_yaneuraou() {
 
 # ------------------------------------------------------------------ KataGo
 
+# The ldconfig cache listing (empty when unavailable). ldconfig lives in /sbin on
+# Debian-like systems, which is not on a normal user's PATH ($LDCONFIG overrides).
+ldconfig_cache() {
+    if [ -n "${LDCONFIG:-}" ]; then "$LDCONFIG" -p 2>/dev/null || true; return 0; fi
+    local c
+    for c in "$(command -v ldconfig 2>/dev/null || true)" /sbin/ldconfig /usr/sbin/ldconfig; do
+        if [ -n "$c" ] && [ -x "$c" ]; then "$c" -p 2>/dev/null || true; return 0; fi
+    done
+}
+
 # Whether shared library $1 (e.g. libcudnn.so.9) is loadable: known to ldconfig or in a
-# directory of LD_LIBRARY_PATH (module systems / pip wheels, no root needed).
+# directory of LD_LIBRARY_PATH (module systems / pip wheels, no root needed). The cache
+# is captured first: `ldconfig -p | grep -q` under `set -o pipefail` fails whenever grep
+# exits before ldconfig has written everything (SIGPIPE), i.e. on an early match.
 have_lib() {
-    if ldconfig -p 2>/dev/null | grep -q "$1"; then return 0; fi
+    local cache
+    cache="$(ldconfig_cache)"
+    case "$cache" in *"$1"*) return 0 ;; esac
     local d
     local IFS=:
     for d in ${LD_LIBRARY_PATH:-}; do
@@ -391,13 +406,15 @@ katago_backend() {
     if has_flag avx2; then echo eigenavx2; else echo eigen; fi
 }
 
-# Release tag for backend $1 (KATAGO_TAG overrides).
+# Release tag for backend $1 (KATAGO_TAG overrides). One pinned tag for every Linux
+# backend: the KataGo version is part of meta.teacher (`gmdata label go`), and the loader
+# refuses to mix shards labelled by different versions — GPU- and CPU-node labels (or two
+# installs made months apart) must come from the same release. v1.18.1 is the newest tag
+# with CPU / OpenCL / TensorRT / ROCm assets (v1.18.2 ships CUDA builds only).
+KATAGO_LINUX_TAG=v1.18.1
 katago_tag() {
     if [ -n "${KATAGO_TAG:-}" ]; then echo "$KATAGO_TAG"; return; fi
-    case "$1" in
-        eigen* | opencl | onnx* | rocm* | trt*) echo v1.18.1 ;;
-        *) latest_tag lightvector/KataGo || echo v1.18.2 ;;
-    esac
+    echo "$KATAGO_LINUX_TAG"
 }
 
 install_katago() {
