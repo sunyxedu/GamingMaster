@@ -93,3 +93,37 @@ def test_v2_shards_train_the_sap_head(converted, head):
     out["loss"].backward()
     assert all(p.grad is not None and p.grad.abs().sum() > 0
                for p in net.action_decoder.sap_head.parameters())
+
+
+def test_unit_cells_align_with_the_map_planes(converted):
+    """The converter's unit features (x/W, y/H) and its [y][x] planes agree
+    with the model's row-major cell y·W + x (LuxEncoder.unit_cells: the
+    unit-cell PE and the pointer head's sap window centre): every present
+    own unit stands on a cell with own-unit count > 0 (plane 6), and its sap
+    target class o = (dy+R)(2R+1) + (dx+R) gathers the cell (x+dx, y+dy).
+    Off-diagonal units make an x/y transposition fail the check."""
+    from model.games.lux import LuxEncoder, lux_sap_window
+
+    cfg = LuxConfig(lux_global_features=11, lux_sap_range=SAP_R)
+    enc = LuxEncoder(cfg)
+    H, W = cfg.map_h, cfg.map_w
+    off_diagonal = n_sap = 0
+    for s in load_gm_samples(converted[0]):
+        u, m = s["obs"]["units_seq"], s["obs"]["unit_mask"].bool()
+        cell = enc.unit_cells(u, m)                                    # [T, U]
+        own = s["obs"]["map_seq"][:, 6].reshape(len(cell), H * W)
+        assert (own.gather(1, cell) > 0)[m].all()
+        x, y = cell % W, cell // W
+        off_diagonal += int((x != y)[m].sum())
+        so = s["tgt"]["sap_offset"]
+        sel = m & (so >= 0)
+        idx, in_map = lux_sap_window(cell, H, W, SAP_R)
+        dx, dy = lux_sap_delta(so.clamp(min=0), SAP_R)
+        tx, ty = x + dx, y + dy
+        on_map = (tx >= 0) & (tx < W) & (ty >= 0) & (ty < H)
+        target = idx.gather(-1, so.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+        hit = in_map.gather(-1, so.clamp(min=0).unsqueeze(-1)).squeeze(-1)
+        assert torch.equal(hit[sel], on_map[sel])
+        assert torch.equal(target[sel & on_map], (ty * W + tx)[sel & on_map])
+        n_sap += int(sel.sum())
+    assert off_diagonal > 0 and n_sap > 0
