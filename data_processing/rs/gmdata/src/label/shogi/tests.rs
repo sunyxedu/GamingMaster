@@ -102,9 +102,9 @@ fn effective_options_merge() {
     assert_eq!(o.len(), DEFAULT_OPTIONS.len() + 2);
     assert_eq!(meta_value("/x/eval"), "eval");
     // scores
-    assert_eq!((raw_score(Score::Cp(-35)), raw_score(Score::Mate(5)), raw_score(Score::Mate(-4))), (-35.0, 31995.0, -31996.0));
-    assert_eq!(raw_score(Score::Mate(crate::label::uci::MATE_UNKNOWN)), 30001.0);
-    assert_eq!(raw_score(Score::Mate(-crate::label::uci::MATE_UNKNOWN)), -30001.0);
+    assert_eq!((raw_score(Score::Cp(-35)), raw_score(Score::Mate(5)), raw_score(Score::Mate(-4))), (-35.0, 99995.0, -99996.0));
+    assert_eq!(raw_score(Score::Mate(crate::label::uci::MATE_UNKNOWN)), 90001.0);
+    assert_eq!(raw_score(Score::Mate(-crate::label::uci::MATE_UNKNOWN)), -90001.0);
     assert_eq!((q_score(Score::Mate(3)), q_score(Score::Mate(-1)), q_score(Score::Cp(0))), (1.0, 0.0, 0.5));
     assert!((q_score(Score::Cp(600)) - 1.0 / (1.0 + (-1.0f32).exp())).abs() < 1e-6);
 }
@@ -322,7 +322,7 @@ fn end_to_end_with_fake_engine() {
                 assert!(qs[..n].windows(2).all(|w| w[0] >= w[1]), "sorted by Q");
                 assert!((ev[f] - (2.0 * qs[0] - 1.0)).abs() < 1e-6, "value = first MultiPV line = best here");
                 for j in 0..n {
-                    if rs[j].abs() > 30000.0 {
+                    if rs[j].abs() > 90000.0 {
                         mates += 1;
                         assert_eq!(qs[j], if rs[j] > 0.0 { 1.0 } else { 0.0 });
                     } else {
@@ -503,9 +503,10 @@ fn real_yaneuraou_end_to_end() {
     }
     let out = ShardReader::open(&root.join("out").join(&rel)).unwrap();
     let (idx, q, evm) = (out.read_i64("tgt.teacher_idx").unwrap(), out.read_f32("tgt.teacher_q").unwrap(), out.read_bool("tgt.engine_value_mask").unwrap());
+    let ev = out.read_f32("tgt.engine_value").unwrap();
     let data = ShardData::load(ShardReader::open(&dir).unwrap()).unwrap();
     let lab = ShogiLabeller::default();
-    let mut scored = 0;
+    let (mut scored, mut labelled, mut above_first) = (0, 0, 0);
     for i in 0..2 {
         let v = data.view(i);
         for (t, p) in lab.replay(&v).unwrap().iter().enumerate() {
@@ -519,9 +520,14 @@ fn real_yaneuraou_end_to_end() {
             assert!(row[..n].iter().all(|&a| p.is_legal_action(a)));
             assert!(q[f * 8..f * 8 + n].iter().all(|x| (0.0..=1.0).contains(x)));
             scored += n;
+            labelled += 1;
+            // a move scored above the first MultiPV line (the value) = a stale line left uncapped
+            above_first += (ev[f] < 2.0 * q[f * 8] - 1.0 - 1e-6) as usize;
         }
     }
     assert!(scored > 100);
+    eprintln!("{labelled} frames, {above_first} with a move above the first line");
+    assert!(above_first * 100 <= labelled, "{above_first} of {labelled} frames rank a move above the engine's first line");
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -669,4 +675,94 @@ fn real_yaneuraou_budget_agreement() {
             m / secs[b]
         );
     }
+}
+
+/// A frame of a `position startpos moves …` line (recorded move: a placeholder).
+fn pos_from_line(line: &str) -> ShogiPos {
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    assert_eq!((toks[0], toks[1], toks[2]), ("position", "startpos", "moves"));
+    let usi: Vec<String> = toks[3..].iter().map(|s| s.to_string()).collect();
+    let board = parse_position(line).unwrap();
+    let legal = board.legal_moves();
+    let mb = board.turn == BLACK;
+    let mut legal_ids: Vec<i64> = legal.iter().map(|m| Action::of(m, mb).id()).collect();
+    legal_ids.sort_unstable();
+    let ply = usi.len();
+    ShogiPos { game: Arc::new(GameLine { start: "startpos".into(), usi }), ply, board, mv: legal[0], legal, legal_ids, key: 0 }
+}
+
+/// A real floodgate frame (white to move) where YaneuraOu 9.40 + Háo stopped at 1M nodes
+/// inside iteration 10: its first line failed low there, the other seven still carry their
+/// iteration-9 scores. An 8M-node search scores the stale leader 3h3d+ at ≤ −1235 cp.
+const STALE_FRAME: &str = "position startpos moves 7g7f 8c8d 2g2f 8d8e 8h7g 3c3d 7i8h 2b7g+ 8h7g 3a2b 6i7h 4a3b \
+    9g9f 9c9d 1g1f 1c1d 3g3f 2b3c 3i3h 6c6d 4g4f 5a4b 2i3g 7a7b 3h4g 7c7d 4i4h 8a7c 5i6h 7d7e 7f7e 7c6e 7g8h 8e8f 8g8f \
+    8b8f P*8g 8f7f 2h2i 3d3e 3g4e 3e3f 8i7g 3f3g+ 4h3g B*4h 7g6e 4h3g+ 6e5c+ 4b3a 4e3c+ 2a3c N*3d 3g4g S*2b 3a4a 7h7g \
+    4g2i 7g7f R*3h 6h7g";
+/// Its final block (YaneuraOu prints it twice; the second, with the completed depth, wins).
+const STALE_OUTPUT: &[&str] = &[
+    "info depth 10 seldepth 26 multipv 1 score cp -1270 upperbound nodes 1000734 nps 1235474 hashfull 409 time 810 pv G*7h 7g8f",
+    "info depth 9 seldepth 14 multipv 2 score cp 346 nodes 1000734 nps 1235474 hashfull 409 time 810 pv 3h3d+ R*2a P*3a",
+    "info depth 9 seldepth 26 multipv 1 score cp -1270 upperbound nodes 1000734 nps 1235474 hashfull 409 time 810 pv G*7h 7g8f",
+    "info depth 8 seldepth 14 multipv 2 score cp 346 nodes 1000734 nps 1235474 hashfull 409 time 810 pv 3h3d+ R*2a P*3a 2a1a+",
+    "info depth 8 seldepth 18 multipv 3 score cp 168 nodes 1000734 nps 1235474 hashfull 409 time 810 pv S*6h 7g8f 3h3d+",
+    "info depth 8 seldepth 24 multipv 4 score cp -335 nodes 1000734 nps 1235474 hashfull 409 time 810 pv N*6e 7g8f 3h3d+",
+    "info depth 8 seldepth 15 multipv 5 score cp -367 nodes 1000734 nps 1235474 hashfull 409 time 810 pv N*8e 7f8e G*7h",
+    "info depth 8 seldepth 16 multipv 6 score cp -400 nodes 1000734 nps 1235474 hashfull 409 time 810 pv 3h3d R*2a P*3a",
+    "info depth 8 seldepth 12 multipv 7 score cp -794 nodes 1000734 nps 1235474 hashfull 409 time 810 pv G*5b 2b3c 3h3d+",
+    "info depth 8 seldepth 12 multipv 8 score cp -1366 nodes 1000734 nps 1235474 hashfull 409 time 810 pv 6a5b 2b3c+ N*6e",
+    "bestmove G*7h ponder 7g8f",
+];
+
+/// Lines the node limit left stale (shallower than the deepest) are capped at the lowest
+/// deepest line: the engine's best move keeps the top of the teacher instead of the refuted
+/// stale leader getting nearly all of the mass.
+#[test]
+fn stale_lines_are_capped() {
+    let pos = pos_from_line(STALE_FRAME);
+    assert!(!pos.mover_black());
+    let lines: Vec<String> = STALE_OUTPUT.iter().map(|s| s.to_string()).collect();
+    let r = crate::label::uci::collect(&lines).unwrap();
+    let a = analysis(&pos, &r.lines).unwrap();
+    let id = |u: &str| Action::of(&parse_usi_move(u).unwrap(), false).id();
+    let q = |cp| q_score(Score::Cp(cp));
+    let got: HashMap<i64, (f32, f32)> = a.moves.iter().map(|m| (m.action, (m.q, m.raw))).collect();
+    assert_eq!(got.len(), 8, "all eight lines are legal moves");
+    assert_eq!(a.value, Some(q(-1270)), "value = the first line");
+    assert_eq!(got[&id("G*7h")], (q(-1270), -1270.0));
+    for u in ["3h3d+", "S*6h", "N*6e", "N*8e", "3h3d", "G*5b"] {
+        assert_eq!(got[&id(u)], (q(-1270), -1270.0), "{u}: stale score capped");
+    }
+    assert_eq!(got[&id("6a5b")], (q(-1366), -1366.0), "already below the cap");
+    // the policy: without the cap the stale 3h3d+ / S*6h would take > 95% of the mass and the
+    // engine's choice G*7h almost none
+    let raw_q: Vec<f32> = [-1270, 346, 168, -335, -367, -400, -794, -1366].iter().map(|&c| q(c)).collect();
+    let uncapped = softmax_q(&raw_q, 0.05);
+    assert!(uncapped[1] + uncapped[2] > 0.95 && uncapped[0] < 1e-4, "{uncapped:?}");
+    let capped: Vec<f32> = a.moves.iter().map(|m| m.q).collect();
+    let p = softmax_q(&capped, 0.05);
+    let best = a.moves.iter().position(|m| m.action == id("G*7h")).unwrap();
+    assert!(p.iter().all(|&x| x <= p[best] + 1e-7), "no line above the engine's choice: {p:?}");
+    // lines of one depth are left alone
+    let same: Vec<String> = ["info depth 5 multipv 1 score cp 20 pv 3h3d+", "info depth 5 multipv 2 score cp 90 pv S*6h", "bestmove 3h3d+"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let b = analysis(&pos, &crate::label::uci::collect(&same).unwrap().lines).unwrap();
+    assert_eq!(b.moves.iter().map(|m| m.raw).collect::<Vec<_>>(), vec![20.0, 90.0]);
+    assert_eq!(b.value, Some(q(20)));
+}
+
+/// teacher_raw: mates lie beyond every cp YaneuraOu prints (its evaluations saturate at
+/// VALUE_MAX_EVAL = 31753 → 35281 cp, seen on real games), so |raw| > 90000 ⇔ mate.
+#[test]
+fn raw_mates_do_not_overlap_cp() {
+    let max_cp = 100 * (32000 - 246 - 1) / 90;
+    assert_eq!(max_cp, 35281);
+    for n in [1, 17, 245, crate::label::uci::MATE_UNKNOWN] {
+        assert!(raw_score(Score::Mate(n)) > 90000.0 && raw_score(Score::Mate(-n)) < -90000.0, "{n}");
+        assert!(raw_score(Score::Mate(n)) >= raw_score(Score::Mate(n + 1)), "faster mates rank higher");
+        assert!(n >= MATE_PLY_CAP || raw_score(Score::Mate(n)) > raw_score(Score::Mate(n + 1)));
+    }
+    assert_eq!(raw_score(Score::Mate(0)), -MATE_RAW, "mate -0 (mated now)");
+    assert_eq!((raw_score(Score::Cp(max_cp)), raw_score(Score::Cp(-max_cp))), (35281.0, -35281.0));
 }

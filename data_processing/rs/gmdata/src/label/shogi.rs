@@ -73,8 +73,18 @@
 //!   logistic(v / 540) in internal units; the scale is recorded in
 //!   `meta.teacher.game.cp_scale` and `teacher_raw` keeps the cp, so Q (and the policy) can be
 //!   re-derived with another scale without relabelling. `tgt.engine_value` = 2·Q − 1 of the
-//!   engine's first MultiPV line (its root score; with a node limit the lines can come from
-//!   different iterations, so another line may show a higher score).
+//!   engine's first MultiPV line (its root score).
+//! * Stale lines ([`analysis`]): the node limit stops the search inside an iteration, and
+//!   YaneuraOu (like Stockfish) then prints the lines it has not re-searched in that
+//!   iteration with their score from the previous, shallower one (depth − 1 in the final
+//!   block). Such a score can be far too high: the unfinished iteration's first line already
+//!   searched every move and found them no better than its own score. On 12 real floodgate
+//!   games at 1M nodes 9% of the labelled frames had a stale line above the first line,
+//!   e.g. `multipv 1 depth 10 cp −1270 upperbound G*7h` with `multipv 2 depth 9 cp +346
+//!   3h3d+` (an 8M-node search scores 3h3d+ ≤ −1235), which would give the refuted move
+//!   nearly all of the policy mass. So the Q and raw score of every line shallower than the
+//!   deepest one are capped at the lowest Q / raw score among the deepest lines (the chess
+//!   labeller does the same): the teacher keeps the engine's own ranking.
 //!
 //! Expected throughput on the labelling nodes (AMD EPYC 9355, Zen 5 with AVX-512 VNNI;
 //! fetch_engines.sh builds TARGET_CPU=AVX512VNNI with g++) — an estimate, not measured
@@ -119,7 +129,9 @@
 //! (the converter stores dummy zeros for the other mode, and the decoder gives those heads
 //! no weight there); a conditioning event without teacher mass is an all-zero row (no
 //! teacher). Raw columns: `teacher_q` (Q per scored move) and `teacher_raw` in the
-//! engine's centipawns, a mate in n plies as ±(32000 − min(n, 1999)) ([`MATE_RAW`]).
+//! engine's centipawns, a mate in n plies as ±(100000 − min(n, 9999)) ([`MATE_RAW`]; outside
+//! the cp range: YaneuraOu's evaluations reach ±35281 cp = its VALUE_MAX_EVAL, e.g. for
+//! inferior-position detections, so |raw| > 90000 ⇔ mate).
 //! Engine moves outside the converter's move generator (e.g. a pawn-drop the reference
 //! rules call mate) are dropped from the analysis. Forced frames (one legal move) get no
 //! teacher (skip reason `forced`).
@@ -132,7 +144,7 @@ use super::engine::{Engine, EngineCommand};
 use super::fake::{FakeMove, UciFake};
 use super::game::{Analysis, EngineConfig, HeadKind, HeadRow, HeadSpec, Labeller, Limits, SampleView, ScoredMove};
 use super::transform::{conditional, marginal, q_from_cp, q_from_mate};
-use super::uci::{Flavor, Score, UciSession};
+use super::uci::{Flavor, Info, Score, UciSession};
 use super::LabelArgs;
 use crate::shogi::{self as rules, Board, Mv, BLACK, NONE, OBS_BOARD, PAWN, ROOK, WHITE};
 use anyhow::{bail, ensure, Context, Result};
@@ -143,7 +155,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Labeller version (bump when a label's meaning changes; recorded in the teacher meta).
-pub const LABELLER_VERSION: u32 = 1;
+/// 2: stale MultiPV lines capped ([`analysis`]); mates in teacher_raw at ±(100000 − n).
+pub const LABELLER_VERSION: u32 = 2;
 /// Q = 1 / (1 + exp(−cp / CP_SCALE)).
 pub const CP_SCALE: f32 = 600.0;
 /// `--limit nodes` default.
@@ -154,9 +167,10 @@ pub const DEFAULT_MAX_MOVES: usize = 8;
 pub const N_BOARD_ACTIONS: i64 = 81 * 81 * 2;
 /// All action ids (board moves, then drops).
 pub const N_ACTIONS: i64 = N_BOARD_ACTIONS + 7 * 81;
-/// `teacher_raw` of a mate in n plies: ±(MATE_RAW − min(n, 1999)).
-pub const MATE_RAW: f32 = 32000.0;
-const MATE_PLY_CAP: i32 = 1999;
+/// `teacher_raw` of a mate in n plies: ±(MATE_RAW − min(n, 9999)) — beyond every cp score
+/// YaneuraOu prints (at most 100·VALUE_MAX_EVAL/90 = 35281).
+pub const MATE_RAW: f32 = 100_000.0;
+const MATE_PLY_CAP: i32 = 9999;
 
 /// USI options sent before `--engine-option` (which overrides them by name); see the
 /// module docs. MultiPV is always `--max-moves`.
@@ -579,7 +593,7 @@ fn meta_value(v: &str) -> String {
     }
 }
 
-/// `teacher_raw` of a score (cp as is; mates ±(MATE_RAW − min(n, 1999))).
+/// `teacher_raw` of a score (cp as is; mates ±(MATE_RAW − min(n, 9999))).
 pub fn raw_score(s: Score) -> f32 {
     match s {
         Score::Cp(cp) => cp as f32,
@@ -594,6 +608,51 @@ pub fn q_score(s: Score) -> f32 {
         Score::Cp(cp) => q_from_cp(cp as f32, CP_SCALE),
         Score::Mate(n) => q_from_mate(n),
     }
+}
+
+/// The final MultiPV lines of a search → scored moves (flat ids of the converter's legal
+/// moves; others dropped) and the value (Q of line 1, when its move is kept).
+///
+/// Stale lines: a search stopped by the node limit ends inside an iteration, and the lines
+/// not yet re-searched in it are printed with their score from the previous, shallower
+/// iteration (a lower `depth` than the lines of the unfinished one). Such a score can be far
+/// too high — the unfinished iteration already searched those moves and found none better
+/// than its own lines — and would dominate the softmax, so the Q and raw score of every line
+/// shallower than the deepest one are capped at the lowest Q / raw score among the deepest
+/// lines (dropped lines included: the bound comes from the search, not from our move list).
+pub fn analysis(pos: &ShogiPos, lines: &[Info]) -> Result<Analysis> {
+    let mb = pos.mover_black();
+    // (multipv, depth, action id if the converter's rules allow the move, Q, raw)
+    let mut scored = Vec::with_capacity(lines.len());
+    for line in lines {
+        let (Some(score), Some(first)) = (line.score, line.pv.first()) else { continue };
+        let Some(m) = parse_usi_move(first) else {
+            if first == "win" || first == "resign" {
+                continue;
+            }
+            bail!("engine move {first:?} is not USI");
+        };
+        let id = Action::of(&m, mb).id();
+        // outside the converter's move generator → dropped (see the module docs)
+        scored.push((line.multipv, line.depth.unwrap_or(0), pos.is_legal_action(id).then_some(id), q_score(score), raw_score(score)));
+    }
+    let deepest = scored.iter().map(|s| s.1).max().unwrap_or(0);
+    let (q_cap, raw_cap) =
+        scored.iter().filter(|s| s.1 == deepest).fold((f32::INFINITY, f32::INFINITY), |(q, r), s| (q.min(s.3), r.min(s.4)));
+    let mut moves = Vec::with_capacity(scored.len());
+    let mut value = None;
+    for (multipv, depth, id, mut q, mut raw) in scored {
+        if depth < deepest {
+            q = q.min(q_cap);
+            raw = raw.min(raw_cap);
+        }
+        let Some(id) = id else { continue };
+        if multipv == 1 {
+            value = Some(q);
+        }
+        moves.push(ScoredMove::new(id, q).raw(raw));
+    }
+    Ok(Analysis { moves, value })
 }
 
 // ------------------------------------------------------------------ labeller
@@ -707,8 +766,9 @@ impl Labeller for ShogiLabeller {
             "action_id": "board move (from*81 + to)*2 + promote; drop 13122 + slot*81 + to; mover-POV squares (tgt.from_idx convention), slot P L N S G B R",
             "q": "logistic(cp / cp_scale); mate for the mover 1, mated 0",
             "cp_scale": CP_SCALE,
-            "raw": "engine cp; mate in n plies +-(32000 - min(n, 1999))",
+            "raw": "engine cp; mate in n plies +-(100000 - min(n, 9999))",
             "value": "Q of the first MultiPV line",
+            "stale_lines": "lines shallower than the deepest capped at the lowest Q / raw of the deepest lines",
             "position": "position startpos|sfen <start> moves <game so far>",
             "usi_options": opts,
         })
@@ -812,31 +872,11 @@ impl Labeller for ShogiLabeller {
         s.uci.new_game()?;
         let nodes = cfg.limits.u64_or("nodes", DEFAULT_NODES)?;
         let r = s.uci.search(&pos.position_line(), &format!("go nodes {nodes}"), cfg.timeout)?;
-        let mb = pos.mover_black();
-        let mut moves = Vec::with_capacity(r.lines.len());
-        let mut value = None;
-        for (j, line) in r.lines.iter().enumerate() {
-            let (Some(score), Some(first)) = (line.score, line.pv.first()) else { continue };
-            let Some(m) = parse_usi_move(first) else {
-                if first == "win" || first == "resign" {
-                    continue;
-                }
-                bail!("engine move {first:?} is not USI");
-            };
-            let id = Action::of(&m, mb).id();
-            if !pos.is_legal_action(id) {
-                continue; // outside the converter's move generator (see the module docs)
-            }
-            let q = q_score(score);
-            if j == 0 {
-                value = Some(q);
-            }
-            moves.push(ScoredMove::new(id, q).raw(raw_score(score)));
-        }
-        if moves.is_empty() && r.bestmove == "win" {
+        let a = analysis(pos, &r.lines)?;
+        if a.moves.is_empty() && r.bestmove == "win" {
             bail!("the engine declares a win (entering-king rule) instead of scoring moves");
         }
-        Ok(Analysis { moves, value })
+        Ok(a)
     }
 
     fn head_rows(&self, s: &SampleView, t: usize, _pos: &ShogiPos, policy: &[(i64, f32)]) -> Result<Vec<HeadRow>> {
