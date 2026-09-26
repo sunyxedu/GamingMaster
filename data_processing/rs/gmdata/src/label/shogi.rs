@@ -32,7 +32,9 @@
 //! mostly shared opening lines —, never a transposition.
 //!
 //! Default USI options ([`DEFAULT_OPTIONS`]; any can be overridden by `--engine-option
-//! NAME=VALUE`, and all effective values are recorded in `meta.teacher.game.usi_options`):
+//! NAME=VALUE`, and all effective values are recorded in `meta.teacher.game.usi_options`;
+//! an option the engine does not announce in its `usi` answer is an error — YaneuraOu itself
+//! would only print `No such option` and search with its default):
 //! `Threads=1` and `USI_Hash=16` (one process per core; a 1M-node MultiPV-8 search fills
 //! about a third of a 16 MB table, hashfull ≈ 370/1000), no opening book
 //! (`USI_OwnBook=false`, `BookFile=no_book`), `FV_SCALE=20` (the value the Háo authors
@@ -140,7 +142,7 @@
 //! via the hidden `gmdata label shogi fake-usi` — whose moves come from the converter's
 //! move generator with hashed scores.
 
-use super::engine::{Engine, EngineCommand};
+use super::engine::{Engine, EngineCommand, LineHandler};
 use super::fake::{FakeMove, UciFake};
 use super::game::{Analysis, EngineConfig, HeadKind, HeadRow, HeadSpec, Labeller, Limits, SampleView, ScoredMove};
 use super::transform::{conditional, marginal, q_from_cp, q_from_mate};
@@ -571,6 +573,22 @@ pub fn effective_options(user: &[(String, String)], max_moves: usize) -> Vec<(St
     out
 }
 
+/// The option name of a `usi` handshake line `option name <NAME> type …`.
+fn usi_option_name(line: &str) -> Option<&str> {
+    let rest = line.trim().strip_prefix("option name ")?;
+    Some(rest.split(" type ").next().unwrap_or(rest).trim())
+}
+
+/// Options of `opts` the engine did not announce in its `usi` answer (case-insensitive).
+/// An engine that announces no options at all (the fake engines) is not checked.
+pub fn unknown_options<'a>(hello: &[String], opts: &'a [(String, String)]) -> Vec<&'a str> {
+    let known: Vec<&str> = hello.iter().filter_map(|l| usi_option_name(l)).collect();
+    if known.is_empty() {
+        return Vec::new();
+    }
+    opts.iter().map(|(k, _)| k.as_str()).filter(|k| !known.iter().any(|n| n.eq_ignore_ascii_case(k))).collect()
+}
+
 /// A content fingerprint of an eval file (size + a 64-bit hash), machine independent.
 fn file_fingerprint(p: &Path) -> Result<String> {
     let data = std::fs::read(p).with_context(|| format!("read {}", p.display()))?;
@@ -738,8 +756,17 @@ impl Labeller for ShogiLabeller {
         let mut uci = UciSession { engine, flavor: Flavor::Usi, id_name: String::new(), timeout: cfg.timeout };
         let hello = uci.engine.request("usi", cfg.timeout, |l| l.trim() == "usiok")?;
         uci.id_name = hello.iter().find_map(|l| l.strip_prefix("id name ")).unwrap_or("unknown engine").trim().to_string();
-        for (k, v) in effective_options(&cfg.options, cfg.max_moves) {
-            uci.setoption(&k, &v)?;
+        let opts = effective_options(&cfg.options, cfg.max_moves);
+        // YaneuraOu only prints "No such option: X" and carries on — a typo in --engine-option
+        // or a build without e.g. FV_SCALE would label with other settings than the meta records
+        let unknown = unknown_options(&hello, &opts);
+        ensure!(
+            unknown.is_empty(),
+            "{} has no USI option(s) {unknown:?} (misspelt --engine-option, or another YaneuraOu build than scripts/engines/fetch_engines.sh installs?)",
+            uci.id_name
+        );
+        for (k, v) in &opts {
+            uci.setoption(k, v)?;
         }
         let ready = uci.engine.request("isready", cfg.timeout, |l| l.trim() == "readyok")?;
         let eval_file = ready
@@ -916,11 +943,40 @@ fn fnv(s: &str) -> u64 {
     s.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
 }
 
+/// A [`UciFake`] that announces YaneuraOu's option names ([`DEFAULT_OPTIONS`]) in its `usi`
+/// answer, like the real engine — so sessions pass the option check of `open_session`.
+pub struct FakeYaneuraOu<S>(pub UciFake<S>);
+
+impl<S: FnMut(&str) -> Option<Vec<FakeMove>> + Send> FakeYaneuraOu<S> {
+    /// Crash (exit) on the `n`-th search ([`UciFake::crash_on`]).
+    pub fn crash_on(self, n: usize) -> Self {
+        FakeYaneuraOu(self.0.crash_on(n))
+    }
+
+    /// Sleep `d` before answering the `n`-th search ([`UciFake::hang_on`]).
+    pub fn hang_on(self, n: usize, d: std::time::Duration) -> Self {
+        FakeYaneuraOu(self.0.hang_on(n, d))
+    }
+}
+
+impl<S: FnMut(&str) -> Option<Vec<FakeMove>> + Send> LineHandler for FakeYaneuraOu<S> {
+    fn handle(&mut self, line: &str) -> Option<Vec<String>> {
+        let mut out = self.0.handle(line)?;
+        if line.trim() == "usi" {
+            let at = out.len().saturating_sub(1); // before usiok
+            for (k, _) in DEFAULT_OPTIONS.iter().rev() {
+                out.insert(at, format!("option name {k} type string default <empty>"));
+            }
+        }
+        Some(out)
+    }
+}
+
 /// The fake USI engine: every legal move of the position line (the converter's move
 /// generator) scored by a hash — `cp ∈ [−600, 600]`, ~2% of the moves a mate for the
 /// mover and ~2% a mate against it; an unparsable or illegal position line crashes it.
-pub fn fake_engine() -> UciFake<impl FnMut(&str) -> Option<Vec<FakeMove>> + Send> {
-    UciFake::new(|pos: &str| {
+pub fn fake_engine() -> FakeYaneuraOu<impl FnMut(&str) -> Option<Vec<FakeMove>> + Send> {
+    FakeYaneuraOu(UciFake::new(|pos: &str| {
         let b = parse_position(pos).ok()?;
         let h0 = fnv(pos);
         Some(
@@ -938,7 +994,7 @@ pub fn fake_engine() -> UciFake<impl FnMut(&str) -> Option<Vec<FakeMove>> + Send
                 })
                 .collect(),
         )
-    })
+    }))
 }
 
 /// [`fake_engine`] as an in-process engine command.

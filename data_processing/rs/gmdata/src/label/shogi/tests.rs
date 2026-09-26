@@ -446,6 +446,43 @@ fn declared_win_and_illegal_engine_moves() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// Options the engine does not announce fail the session (YaneuraOu would only print
+/// "No such option" and search with its default, while the meta records the setting).
+#[test]
+fn unannounced_options_are_refused() {
+    let lab = ShogiLabeller::new(Some(4));
+    // a YaneuraOu-like engine announcing every default option except FV_SCALE
+    let engine = |name: &'static str| {
+        EngineCommand::in_process(name, || {
+            let mut hello: Vec<String> = vec!["id name Partial 1.0".into()];
+            hello.extend(DEFAULT_OPTIONS.iter().filter(|(k, _)| *k != "FV_SCALE").map(|(k, _)| format!("option name {k} type string default x")));
+            hello.push("option name MultiPV type spin default 1 min 1 max 600".into());
+            hello.push("option name EvalDir type string default eval".into());
+            hello.push("usiok".into());
+            let hello: Vec<&str> = hello.iter().map(String::as_str).collect();
+            crate::label::fake::Canned::new().rule("usi", &hello).rule("isready", &["readyok"])
+        })
+    };
+    let cfg = |options: Vec<(String, String)>| EngineConfig {
+        command: engine("partial"),
+        options,
+        limits: lab.resolve_limits(&Limits::default()).unwrap(),
+        timeout: Duration::from_secs(5),
+        max_moves: 4,
+    };
+    let err = format!("{:#}", lab.open_session(&cfg(vec![])).err().unwrap());
+    assert!(err.contains("FV_SCALE") && err.contains("Partial 1.0"), "{err}");
+    // FV_SCALE is a default: overriding it does not help; a typo is refused too
+    assert!(lab.open_session(&cfg(vec![("fv_scale".into(), "16".into())])).is_err());
+    let hello: Vec<String> = ["id name X", "option name Threads type spin default 4 min 1 max 1024", "option name Clear Hash type button", "usiok"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let opts = |ks: &[&str]| ks.iter().map(|k| (k.to_string(), "1".to_string())).collect::<Vec<_>>();
+    assert_eq!(unknown_options(&hello, &opts(&["threads", "Clear Hash", "Hash"])), vec!["Hash"]);
+    assert!(unknown_options(&hello[..1], &opts(&["Anything"])).is_empty(), "no options announced: not checked");
+}
+
 /// Shards under `$GM_SHOGI_SHARDS` (e.g. converter output scp'd from the cluster) replay
 /// and verify completely.
 #[test]
