@@ -7,8 +7,9 @@ else is needed at conversion time. Training reads the output from Python.
 ```
 data_processing/
 ├── Cargo.toml                 workspace
-├── rs/gmshard/                gm-shard.v1 writer (columnar .npy + index.json)
-├── rs/gmdata/                 `gmdata <game> fetch|convert|…` for every game below
+├── rs/gmshard/                gm-shard.v1 writer / reader / overlay writer (.npy + index.json)
+├── rs/gmdata/                 `gmdata <game> fetch|convert|…` for every game below,
+│                              `gmdata label <game>` engine teacher labels (src/label/)
 ├── games/clash_royale/crdata/ `crdata` (Clash Royale replays)
 ├── games/dataset.py           GameShardDataset: reads gm-shard directories (and .pt)
 ├── games/clash_royale/        card catalog + load-time observation expansion
@@ -69,13 +70,35 @@ go KGS 2019-04 202 / 1255; shogi 2025-06-01 158 / 447; othello 2019–21
 1502 / 3559; gomoku Freestyle1 2023 658 / 2880; Clash Royale 5000 replays
 8456 / 9392 player sequences (4186 with `--winner-only`).
 
+## Engine teacher labels
+
+`gmdata label <game>` adds engine soft targets (teacher move distributions per
+decoder head) and engine values to existing gm-shards, as overlay shards that
+hard-link the base tensors (the base is never modified) and that the trainers
+read unchanged (`--soft_target_weight`, `--engine_value_weight`). Engines are
+external processes installed outside the repo by
+`scripts/engines/fetch_engines.sh` (Stockfish, Egaroucid, YaneuraOu, KataGo;
+licences in its header). Columns, options and the per-game extension point are
+documented in `rs/gmdata/src/label/mod.rs`; `gmdata label selftest --out DIR`
+exercises the whole pipeline with a built-in fake engine.
+
+```sh
+scripts/engines/fetch_engines.sh stockfish
+$G label chess --input data/chess/train --out data/chess_sf/train \
+   --engine ~/gm-engines/bin/stockfish --workers 32 --limit nodes=1000000
+```
+
 ## Tests
 
 ```sh
 cargo test --release                                   # Rust unit tests
 uv run pytest tests/test_rust_converters_parity.py \
-              tests/test_rust_generals_parity.py tests/test_clash_royale_data.py
+              tests/test_rust_generals_parity.py tests/test_clash_royale_data.py \
+              tests/test_label_overlay.py tests/test_fetch_engines.py
 ```
+
+Real-engine tests run only when the engine is installed (e.g. `STOCKFISH=path`
+or `~/gm-engines/bin/stockfish`); the label tests otherwise use fake engines.
 
 The parity tests pin every converter to golden SHA-256 digests of the retired
 Python reference outputs on committed real-data fixtures (tests/fixtures/).

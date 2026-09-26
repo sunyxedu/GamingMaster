@@ -50,7 +50,8 @@
 #                          tags so far ship CUDA builds only — and latest for CUDA)
 #   KATAGO_BACKEND         eigenavx2 | eigen | opencl | onnx-openvino | cuda12.8-cudnn9.8.0 | ...
 #                          (default: CUDA if an NVIDIA GPU + cuDNN 9 are present, OpenCL if a
-#                          GPU OpenCL ICD is present, else eigenavx2 / eigen)
+#                          GPU OpenCL ICD is present, else eigenavx2 / eigen — the CPU builds
+#                          are static-pie executables, so they need no extra system libraries)
 #   KATAGO_NET_URL         network URL (default: kata1 b18c384nbt, the fast choice on CPUs)
 set -euo pipefail
 
