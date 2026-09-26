@@ -27,6 +27,10 @@ drop the marker and the matching exclusion in :func:`_known_leak`.
   * test_minkan_dora_is_revealed_after_the_rinshan_decision: the rinshan-draw frame after a
     daiminkan / kakan shows that kan's new dora, which Tenhou flips only with the following
     discard (test_minkan_dora_follows_the_rinshan_response pins that from the logs).
+  * test_declaration_tile_claims_do_not_reveal_a_ron / test_rinshan_frame_does_not_reveal_the_response
+    re-check the last two by comparing two futures of one decision point (the real response and a
+    counterfactual one) instead of a cut log.
+test_legal_masks_never_fall_back_to_all_true guards the label-dependent all-true mask fallback.
 
 Data: tests/fixtures/mahjong (the golden set) and tests/fixtures/mahjong_audit, four Tenhou Houou
 games of the same public HF mirror (hhim8826/tenhou-houou-mjai) chosen for rinshan kaihou after a
@@ -515,6 +519,121 @@ def test_minkan_dora_is_revealed_after_the_rinshan_decision(gmdata, games, tmp_p
         if why:
             problems.append(f"{key} seat {a}: {why}")
     _fail(problems, "rinshan-draw frames show the open kan's dora before the discard")
+
+
+# ---------------------------------------------------------------------------
+# two futures of one decision point (independent re-check of the known leaks)
+# ---------------------------------------------------------------------------
+#
+# The cut-log tests above compare a frame with the decision-time state.  These compare two
+# possible continuations of the same decision point instead: a frame that differs between them
+# tells the network which future happened, whatever the decision-time state is.
+
+def _same_obs(x: Optional[dict], y: Optional[dict], tgt_keys: Tuple[str, ...] = ()) -> Optional[str]:
+    """Why two samples of one seat differ in frame count, obs or the ``tgt_keys`` targets.  Never
+    tgt.value: the final placement is a hindsight target and legitimately depends on the future."""
+    if _n(x) != _n(y):
+        return f"{_n(x)} vs {_n(y)} frames"
+    if x is None:
+        return None
+    for group, keys in (("obs", OBS_KEYS), ("tgt", tgt_keys)):
+        for k in keys:
+            if not torch.equal(x[group][k], y[group][k]):
+                return f"{group}." + _first_diff(x[group][k], y[group][k], k)
+    return None
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "LEAK (same as test_riichi_declaration_claims_precede_the_stick): a third seat's claim frame on"
+    " a riichi declaration tile shows the stick only in the future where nobody rons"))
+def test_declaration_tile_claims_do_not_reveal_a_ron(gmdata, games, tmp_path):  # noqa: F811
+    """A riichi declaration tile somebody really ronned, against the counterfactual where nobody
+    rons (the log's reach_accepted instead of the hora events): the seats that are neither the
+    declarer nor a ronner decide on the same tile with the same information, so their samples
+    (frame count, obs, labels, masks; not the hindsight value) must be bit-identical."""
+    records, cases = {}, []
+    for g, evs in games.items():
+        for k, ky in enumerate(_kyokus(evs)):
+            for kind, i in _decision_points(ky):
+                if kind != "discard" or not _is_riichi_declaration(ky, i):
+                    continue
+                end, ron, _ = _claim_response(ky, i)
+                if not ron:
+                    continue
+                a = ky[i]["actor"]
+                ronners = {e["actor"] for e in ky[i + 1:end] if e["type"] == "hora"}
+                key = f"{g}~k{k}~discard{i}"
+                records[key + "~ron"] = ky[:end]
+                records[key + "~noron"] = ky[:i + 1] + [{"type": "reach_accepted", "actor": a}]
+                records[key + "~pre"] = ky[:i]      # before the declaration tile
+                cases.append((key, [s for s in range(4) if s != a and s not in ronners]))
+    if not cases:
+        pytest.skip("no ronned riichi declaration tile in the data")
+    conv = _convert(gmdata, records, tmp_path)
+    problems, claims = [], 0
+    for key, third in cases:
+        for s in third:
+            ron, noron = conv[key + "~ron"].get(s), conv[key + "~noron"].get(s)
+            claims += _n(ron) > _n(conv[key + "~pre"].get(s))    # a claim frame on this tile
+            why = _same_obs(ron, noron, LABEL_KEYS + ("legal_action_type", "legal_tile_of"))
+            if why:
+                problems.append(f"{key} seat {s}: {why}")
+    if not claims:
+        pytest.skip("no third-seat claim frame on a ronned riichi declaration tile")
+    _fail(problems, "third-seat claim frames on a declaration tile tell whether somebody rons")
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "LEAK (same as test_minkan_dora_is_revealed_after_the_rinshan_decision): the rinshan-draw frame"
+    " after an open kan shows the kan's dora when the drawer then discards, not when it wins"))
+def test_rinshan_frame_does_not_reveal_the_response(gmdata, games, tmp_path):  # noqa: F811
+    """A rinshan draw after a daiminkan / kakan whose drawer really discarded (the log flips the
+    kan's dora in between), against the counterfactual rinshan kaihou (a tsumo hora right after
+    the draw: no dora flipped, as in every real rinshan kaihou of the logs): the drawer's frames
+    must carry the same obs — only the last label may differ."""
+    records, cases = {}, []
+    for g, evs in games.items():
+        for k, ky in enumerate(_kyokus(evs)):
+            for kind, i in _decision_points(ky):
+                if kind != "draw" or not _is_minkan_rinshan_with_dora(ky, i):
+                    continue
+                j = i + 1
+                while j < len(ky) and ky[j]["type"] == "dora":
+                    j += 1
+                if j >= len(ky) or ky[j]["type"] != "dahai":
+                    continue
+                a = ky[i]["actor"]
+                key = f"{g}~k{k}~draw{i}"
+                records[key + "~dahai"] = ky[:j + 1]
+                records[key + "~hora"] = ky[:i + 1] + [{"type": "hora", "actor": a, "target": a}]
+                cases.append((key, a))
+    if not cases:
+        pytest.skip("no discard after an open kan's rinshan draw in the data")
+    conv = _convert(gmdata, records, tmp_path)
+    problems = []
+    for key, a in cases:
+        why = _same_obs(conv[key + "~dahai"].get(a), conv[key + "~hora"].get(a))
+        if why:
+            problems.append(f"{key} seat {a}: {why}")
+    _fail(problems, "rinshan-draw frames tell a discard from a rinshan kaihou")
+
+
+def test_legal_masks_never_fall_back_to_all_true(gmdata, games, tmp_path):  # noqa: F811
+    """A frame whose ground truth falls outside its computed masks gets all-true masks
+    (`mask_mismatch`).  That fallback is a function of the label, and the decoder reads the type
+    mask at decision time under --il_legal_mask, so it must never trigger on real logs (the
+    production conversion of 16000 games reported 0)."""
+    src, out = tmp_path / "in", tmp_path / "out"
+    src.mkdir()
+    for g, evs in games.items():
+        (src / f"{g}.mjson").write_text("\n".join(json.dumps(e) for e in evs) + "\n")
+    r = subprocess.run([gmdata, "mahjong", "convert", "--input", str(src), "--out", str(out),
+                        "--min-frames", "1", "--shard-size", "1000000"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-2000:]
+    stats = json.loads(r.stdout)
+    assert stats["skipped"] == 0 and stats["games"] == len(games), stats
+    assert stats["mask_mismatch"] == 0, stats
 
 
 # ---------------------------------------------------------------------------
