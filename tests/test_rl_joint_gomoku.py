@@ -101,6 +101,28 @@ def test_env_follows_the_network_board(stage1):
         _trainer9(stage1, "rl_board_bad", "ck9", "--env_kw", "gomoku:board_size=15")
 
 
+def test_spec_checks_the_env_against_the_network():
+    from types import SimpleNamespace
+
+    from env.vec_gomoku import GomokuVecEnv
+    from training.train_rl_joint import GAME_SPECS
+
+    spec = GAME_SPECS["gomoku"]
+
+    def net(**kw):
+        cfg = dict(piece_channels=3, board_h=9, board_w=9, board_global_features=0)
+        return SimpleNamespace(cfg=SimpleNamespace(**{**cfg, **kw}))
+
+    assert spec.env_kwargs(net().cfg) == {"board_size": (9, 9)}
+    env = GomokuVecEnv(1, **spec.env_kwargs(net(board_w=11).cfg))
+    assert (env.board_h, env.board_w) == (9, 11)
+    spec.check_env(env, net(board_w=11))
+    for bad in (dict(board_w=9), dict(board_w=11, piece_channels=4),
+                dict(board_w=11, board_global_features=6)):
+        with pytest.raises(SystemExit, match="network expects"):
+            spec.check_env(env, net(**bad))
+
+
 def test_end_to_end_gomoku_and_othello_two_iterations(stage1):
     from training import train_rl_joint
     from training.eval_multi_game import load_multi

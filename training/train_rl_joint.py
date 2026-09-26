@@ -476,6 +476,9 @@ class GomokuSpec(ForcedPassPlacementSpec):
         if have != want:
             raise SystemExit(f"gomoku env emits board_seq {have}, the network expects {want} "
                              f"(piece_channels, board_h, board_w)")
+        if getattr(cfg, "board_global_features", 0):
+            raise SystemExit(f"gomoku env emits no globals_seq, the network expects "
+                             f"{cfg.board_global_features} board_global_features")
 
 
 class GeneralsSpec(RLGameSpec):

@@ -127,7 +127,7 @@ uv run python -m training.train_rl \
 > Environment: `env/generals_env.py` provides a two-player simultaneous-move Gym-like environment with fog of war.
 > Stage-2 (mixed multi-game) RL: `env/vec_game.py` defines the `VecGameEnv` protocol — N games stepped at once,
 > observations in each game's gm-shard obs schema (pinned bit-for-bit to the IL data by
-> `tests/test_vec_game_golden.py`; adapters for generals and othello) — and `env/league.py` the seat / opponent
+> `tests/test_vec_game_golden.py`; adapters for generals, othello and gomoku) — and `env/league.py` the seat / opponent
 > interface (mirror self-play, callables, network snapshots).
 > `training/train_rl_joint.py` is the Stage-2 trainer: PPO with decoupled ratios on the WHOLE multi-game model
 > (a `train_multi_game` checkpoint is the initial policy and the frozen KL reference), mixing every simulator
