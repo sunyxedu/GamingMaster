@@ -918,3 +918,70 @@ def test_legacy_sap_config_round_trip():
     assert not any(k.startswith("lux_") for k in chess)
     assert upgrade_config_dict({})["qk_norm"] is False
     assert "lux_sap_head" not in upgrade_config_dict({})
+
+
+# ======================================================================
+# 10. Trainers: a multi-game build with lux, resume of a pre-field checkpoint
+# ======================================================================
+
+def _lux_samples(n=3, T=4, seed=0):
+    g = torch.Generator().manual_seed(seed)
+    out = []
+    for _ in range(n):
+        mask = torch.rand(T, 5, generator=g) < 0.7
+        mask[:, 0] = True
+        xy = torch.randint(0, 6, (T, 5, 2), generator=g)
+        units = torch.randn(T, 5, 6, generator=g)
+        units[..., 0], units[..., 1] = xy[..., 0] / 6, xy[..., 1] / 6
+        ua = torch.randint(0, 6, (T, 5), generator=g)
+        ua[:, 0] = SAP
+        so = lux_sap_offset(torch.randint(-1, 2, (T, 5), generator=g),
+                            torch.randint(-1, 2, (T, 5), generator=g), R)
+        out.append({"obs": {"map_seq": torch.randn(T, 4, 6, 6, generator=g),
+                            "units_seq": units, "unit_mask": mask,
+                            "globals_seq": torch.randn(T, 3, generator=g)},
+                    "tgt": {"unit_actions": ua,
+                            "sap_offset": torch.where(ua == SAP, so, torch.full_like(so, -1)),
+                            "unit_mask": mask, "value": torch.zeros(T)},
+                    "meta": {}})
+    return out
+
+
+def test_multi_game_resume_keeps_the_checkpoint_architecture(tmp_path):
+    """train_multi_game rebuilds each game from the config saved in the
+    resume checkpoint: a lux checkpoint written before lux_sap_head /
+    lux_unit_cell_pe existed resumes with the MLP head and no cell PE (the
+    new defaults would not even load its weights)."""
+    from data_processing.games.dataset import save_shard
+    from model.games.base import MLPHead
+    from training import train_multi_game
+
+    save_shard(str(tmp_path / "lux" / "a.pt"), "lux", _lux_samples(), converter_version=2,
+               meta={"global_features": 3, "sap_range": R})
+    core = ["d_model=32", "n_heads=4", "d_ff=64", "n_st_layers=1", "dropout=0.0",
+            "encoder_channels=16", "core_type=transformer", "core_layers=1",
+            "map_h=6", "map_w=6", "map_channels=4", "max_units=5", "unit_feature_dim=6"]
+    common = ["--data", f"lux={tmp_path / 'lux'}", "--batch_size", "2", "--warmup_steps", "1",
+              "--ema_rate", "0", "--device", "cpu", "--eval_every", "100",
+              "--save_dir", str(tmp_path / "ck")]
+    first = train_multi_game.main([*common, "--steps", "2", "--ckpt_every", "2", "--override",
+                                   *core, "lux_sap_head=mlp", "lux_unit_cell_pe=false"])
+    assert isinstance(first["model"]["lux"].action_decoder.sap_head, MLPHead)
+    path = tmp_path / "ck" / "multi_latest.pt"
+    ck = torch.load(path, map_location="cpu", weights_only=False)
+    for k in ("lux_sap_head", "lux_unit_cell_pe"):       # as written by the old code
+        del ck["configs"]["lux"][k]
+    torch.save(ck, path)
+
+    out = train_multi_game.main([*common, "--steps", "3", "--resume", str(path),
+                                 "--override", *core])
+    lux = out["model"]["lux"]
+    assert isinstance(lux.action_decoder.sap_head, MLPHead)
+    assert lux.cfg.lux_sap_head == "mlp" and lux.cfg.lux_unit_cell_pe is False
+    assert all(torch.isfinite(p).all() for p in out["model"].parameters())
+
+    # a fresh run builds the new defaults
+    fresh = train_multi_game.main([*common, "--steps", "1", "--save_dir", str(tmp_path / "ck2"),
+                                   "--override", *core])
+    assert isinstance(fresh["model"]["lux"].action_decoder.sap_head, LuxSapPointerHead)
+    assert fresh["model"]["lux"].cfg.lux_unit_cell_pe is True
