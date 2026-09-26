@@ -53,6 +53,7 @@ from model.games import build_game_network
 from model.games import generals as generals_adapter
 from model.games import lux as lux_adapter
 from model.games.base import densify_soft_target, soft_cross_entropy
+from model.games.candidates import CANDIDATE_META_ARCH, candidate_games
 from model.losses import hl_gauss_cross_entropy
 from model.optim import (
     TRM_BETAS,
@@ -156,6 +157,13 @@ META_ARCH_KEYS = {
     "lux": {"global_features": ("lux_global_features",),
             "sap_range": ("lux_sap_range",)},
 }
+
+# Candidate-action games (gmrules; one module each in model/games/candidates/):
+# one categorical over the frame's candidates (nothing to teacher-force), frame
+# dimensions from the shard meta (written by gmdata cand.rs from the FrameSpec).
+for _game in candidate_games():
+    LABEL_KEYS.setdefault(_game, ())
+    META_ARCH_KEYS.setdefault(_game, dict(CANDIDATE_META_ARCH))
 
 # The value a META_ARCH_KEYS meta key implies for shards written BEFORE the
 # converter recorded it (their meta lacks the key): check_meta_arch holds an

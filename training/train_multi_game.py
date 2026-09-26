@@ -41,13 +41,19 @@ clash_royale is never cropped.
 Objective.  Every optimizer step averages K micro-batches (``--games_per_step``),
 each from a game drawn i.i.d. from the mixture
 
-    w_g ∝ N_g^α          (N_g = frames of game g, α = --sample_alpha)
+    w_g ∝ m_g · min(N_g, C_g)^α     (N_g = frames of game g, α = --sample_alpha)
 
 so the expected step gradient is ∇ Σ_g w_g λ_g L_g, where L_g is game g's
 mean per-frame loss (decoder IL loss + value loss) and λ_g its
 ``--game_loss_weight`` (default 1).  α = 1 weighs every frame equally
 (concatenated data), α = 0 weighs games equally, α ≈ 0.5 is the usual
-temperature compromise (HPT uses √N, π0 N^0.43).  The decoders' losses are not
+temperature compromise (HPT uses √N, π0 N^0.43).  New games bring corpora of
+1e8-1e10 frames: C_g (``--mixture_frame_cap N``, per game ``--game_frame_cap
+GAME=N``; default none) caps the frames a game counts with, so one giant corpus
+cannot dominate however large it grows (e.g. cap 1e8 with α = 0.5: a 1e10-frame
+game weighs like a 1e8 one, 10x a 1e6-frame game), and m_g (``--game_weight
+GAME=W``, default 1) multiplies a game's draw probability explicitly.  The
+chosen weights are logged ("[mixture]") and saved in the checkpoint.  The decoders' losses are not
 on one scale: generals' is train_il.py's weighted ImitationLoss (source 3.0
 focal, direction 1.5, split 0.3, pass 1.0), the others sum unit-weight
 cross-entropies, so a generals micro-batch pulls the shared core ~2-3x harder
@@ -219,6 +225,17 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "exclusive with --games_per_step")
     p.add_argument("--sample_alpha", type=float, default=0.5,
                    help="mixture temperature: w_g ∝ frames_g^alpha")
+    p.add_argument("--mixture_frame_cap", type=int, default=None, metavar="N",
+                   help="frames counted per game in the mixture weights: w_g ∝ "
+                        "min(frames_g, N)^alpha, so a giant corpus (1e9-1e10 frames) cannot "
+                        "dominate the mixture (default: no cap)")
+    p.add_argument("--game_frame_cap", action="append", default=[], metavar="GAME=N",
+                   help="per-game --mixture_frame_cap")
+    p.add_argument("--game_weight", action="append", default=[], metavar="GAME=W",
+                   help="multiplier of a game's mixture weight (draw probability), "
+                        "w_g ∝ W_g * min(frames_g, cap)^alpha (default 1); unlike "
+                        "--game_loss_weight it changes how often the game is drawn, not the "
+                        "scale of its gradient")
     p.add_argument("--max_len", type=int, default=None,
                    help="crop training sequences to a random window (not generals: "
                         "with generals in the run, bound it via --game_max_len)")
@@ -341,10 +358,27 @@ def tf_at(sched: Tuple[float, float], step: int, steps: int) -> float:
     return lo + (hi - lo) * (step - 1) / max(1, steps - 1)
 
 
-def mixture_weights(frames: Dict[str, int], alpha: float) -> Dict[str, float]:
-    """w_g ∝ N_g^α, normalised."""
-    raw = {g: float(max(n, 1)) ** alpha for g, n in frames.items()}
+def mixture_weights(frames: Dict[str, int], alpha: float, *,
+                    frame_cap: Optional[int] = None,
+                    game_frame_cap: Optional[Dict[str, int]] = None,
+                    game_weight: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+    """w_g ∝ m_g · min(N_g, C_g)^α, normalised.
+
+    ``N_g`` = frames of game g; ``C_g`` = its cap (``game_frame_cap[g]``, else
+    ``frame_cap``, else none): a corpus of 1e10 frames counts as C_g, so it cannot
+    swamp the mixture however large it grows.  ``m_g`` = ``game_weight[g]``
+    (default 1): an explicit multiplier of the game's draw probability.  Without
+    caps / multipliers this is the plain temperature mixture w_g ∝ N_g^α."""
+    caps = dict(game_frame_cap or {})
+    mult = dict(game_weight or {})
+    raw = {}
+    for g, n in frames.items():
+        cap = caps.get(g, frame_cap)
+        eff = n if cap is None else min(n, cap)
+        raw[g] = float(mult.get(g, 1.0)) * float(max(eff, 1)) ** alpha
     z = sum(raw.values())
+    if not z > 0:
+        raise SystemExit(f"mixture weights sum to {z}: every --game_weight is 0?")
     return {g: v / z for g, v in raw.items()}
 
 
@@ -627,7 +661,16 @@ def main(argv=None) -> Dict[str, object]:
                 raise SystemExit(f"--require_frozen_schema: {frozen}")
             log(f"[WARN] {frozen}")
     frames = {g: ds.total_frames() for g, ds in datasets.items()}
-    weights = mixture_weights(frames, args.sample_alpha)
+    game_frame_cap = {g: int(n) for g, n in _pairs(args.game_frame_cap, "N").items()}
+    game_weight = {g: float(w) for g, w in _pairs(args.game_weight, "W").items()}
+    for flag, vals in (("--game_frame_cap", game_frame_cap), ("--game_weight", game_weight)):
+        unknown = sorted(set(vals) - set(games))
+        if unknown:
+            raise SystemExit(f"{flag} for games without --data: {unknown}")
+        if any(v < 0 for v in vals.values()):
+            raise SystemExit(f"{flag} values must be >= 0")
+    weights = mixture_weights(frames, args.sample_alpha, frame_cap=args.mixture_frame_cap,
+                              game_frame_cap=game_frame_cap, game_weight=game_weight)
 
     core_kw = parse_overrides(args.override)
     core_state = None
@@ -684,7 +727,13 @@ def main(argv=None) -> Dict[str, object]:
     if args.init_core and not first.cfg.qk_norm:
         log(f"[note] qk_norm=False comes from the --init_core checkpoint "
             f"({args.init_core}): a pre-QK-norm core cannot switch it on")
-    log("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,} w={weights[g]:.3f}" for g in games))
+    def _mix_note(g: str) -> str:
+        cap = game_frame_cap.get(g, args.mixture_frame_cap)
+        note = f" (capped {cap:,})" if cap is not None and frames[g] > cap else ""
+        return note + (f" x{game_weight[g]:g}" if g in game_weight else "")
+
+    log("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,}{_mix_note(g)} w={weights[g]:.3f}"
+                                 for g in games))
     for g in games:
         if g in PREFIX_CROP:
             ml = crop(g, args.max_len, game_max_len)

@@ -13,7 +13,8 @@
 //!
 //! betting = one character per action in turn order, `p` (Pass / fold) or `b` (Bet /
 //! call); cards = ranks 0..=N (N players); returns = chips won (checked against the
-//! replayed payoffs). High-quality recipe (`--hq` = `--player expert`): learn only from
+//! replayed payoffs; an empty field = unknown). Unfinished hands are rejected unless
+//! `--allow-truncated`. High-quality recipe (`--hq` = `--player expert`): learn only from
 //! the seats a strong player played (per-seat samples of the other seats are dropped).
 //!
 //! ```sh
@@ -42,11 +43,16 @@ pub fn parse_line(line: &str, id: &str) -> Result<Option<Record>> {
         bail!("expected STATE:<id>:<betting>:<cards>:<returns>:<names>, got {line:?}");
     }
     let cards: Vec<u32> = parts[3].split('|').map(|c| c.parse().with_context(|| format!("card {c:?}"))).collect::<Result<_>>()?;
-    let returns: Vec<f64> = parts[4].split('|').map(|r| r.parse().with_context(|| format!("return {r:?}"))).collect::<Result<_>>()?;
+    // an empty returns field = unknown (an unfinished hand, a hand edited in a test)
+    let returns: Option<Vec<f64>> = if parts[4].is_empty() {
+        None
+    } else {
+        Some(parts[4].split('|').map(|r| r.parse().with_context(|| format!("return {r:?}"))).collect::<Result<_>>()?)
+    };
     let names: Vec<String> = parts[5].split('|').map(String::from).collect();
     let n = cards.len();
-    if returns.len() != n || names.len() != n {
-        bail!("{n} cards but {} returns / {} names", returns.len(), names.len());
+    if returns.as_ref().is_some_and(|r| r.len() != n) || names.len() != n {
+        bail!("{n} cards but {:?} returns / {} names", returns.as_ref().map(Vec::len), names.len());
     }
     let mut events: Vec<Event> = cards.iter().map(|&c| Event::Chance(c)).collect();
     for (i, ch) in parts[2].chars().enumerate() {
@@ -62,7 +68,7 @@ pub fn parse_line(line: &str, id: &str) -> Result<Option<Record>> {
         events,
         meta: json!({"hand": parts[1], "players": names}),
         seats: None,
-        expected_returns: Some(returns),
+        expected_returns: returns,
     }))
 }
 
@@ -206,6 +212,10 @@ pub enum Cmd {
         /// store each sample's trajectory in its meta (golden tests)
         #[arg(long)]
         store_events: bool,
+        /// keep unfinished hands (tgt.value_mask false on their frames; the causality
+        /// invariance test converts truncated records)
+        #[arg(long)]
+        allow_truncated: bool,
     },
 }
 
@@ -216,13 +226,13 @@ pub fn run(cmd: Cmd) -> Result<()> {
             println!("{}", json!({"hands": n, "out": out}));
             Ok(())
         }
-        Cmd::Convert { input, out, players, mut player, hq, shard_size, max_records, store_events } => {
+        Cmd::Convert { input, out, players, mut player, hq, shard_size, max_records, store_events, allow_truncated } => {
             if hq && !player.iter().any(|p| p == "expert") {
                 player.push("expert".into());
             }
             let mut other = 0;
             let recs = read_records(&input, players, &player, max_records, &mut other)?;
-            let opts = ConvertOptions { shard_size, store_events, ..Default::default() };
+            let opts = ConvertOptions { shard_size, store_events, allow_truncated };
             let st = cand::convert::<KuhnPoker>(&KuhnConfig { players }, recs.into_iter(), &out, &opts)?;
             let mut v = serde_json::to_value(&st)?;
             v["other_variant"] = json!(other);

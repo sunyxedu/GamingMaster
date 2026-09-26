@@ -6,10 +6,13 @@ the game's ObservationEncoder / ActionDecoder.  Builders import lazily so
 importing one game never pays for the others.
 
 Register new games here (or call :func:`register_game` from plugin code).
+Candidate-action games (gmrules) register themselves: every module of
+model/games/candidates/ becomes an entry (:func:`_register_candidate_games`).
 """
 
 from __future__ import annotations
 
+import functools
 from typing import Callable, Dict
 
 import torch.nn as nn
@@ -179,6 +182,27 @@ GAME_REGISTRY: Dict[str, Callable[..., nn.Module]] = {
     "hearthstone": _build_hearthstone,
     "starcraft": _build_starcraft,
 }
+
+
+def _build_candidate(game: str, **overrides) -> nn.Module:
+    """A candidate-action game (model/games/candidates/<game>.py): the generic
+    CandidateEncoder / CandidateDecoder (or the entry's own classes)."""
+    from model.games.candidate import build_candidate_network
+
+    return build_candidate_network(game, **overrides)
+
+
+def _register_candidate_games() -> None:
+    """Every game of model/games/candidates/ (discovered: no edit here per game)."""
+    from model.games.candidates import candidate_games
+
+    for name in candidate_games():
+        if name in GAME_REGISTRY:
+            raise ValueError(f"candidate game {name!r} clashes with a registered game")
+        GAME_REGISTRY[name] = functools.partial(_build_candidate, name)
+
+
+_register_candidate_games()
 
 
 def register_game(name: str, builder: Callable[..., nn.Module]) -> None:

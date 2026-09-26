@@ -119,7 +119,14 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 
 from data_processing.games.dataset import collate_game_sequences, training_sampler
-from env.league import League, PoolPolicy, SnapshotPool, StreamStepper, scatter_rows
+from env.league import (
+    League,
+    PoolPolicy,
+    SnapshotPool,
+    StreamStepper,
+    restart_streams,
+    scatter_rows,
+)
 from env.vec_game import VecGameEnv, VecObs, has_simulator, make_vec_env
 from model.components.core import (
     MoEFFN,
@@ -130,6 +137,7 @@ from model.components.core import (
 )
 from model.components.heads import HLGaussValueHead
 from model.games.base import categorical_entropy, masked_log_prob
+from model.games.candidates import candidate_games
 from model.multi_game import MultiGameNetwork, core_config_overrides, is_core_key
 from model.optim import TRM_BETAS, AdamATan2, ModelEMA
 from model.rl_utils import sync_gradients
@@ -578,12 +586,46 @@ class LuxSpec(RLGameSpec):
         return terms
 
 
+class CandidateSpec(RLGameSpec):
+    """Candidate-action games (gmrules: env/vec_candidate.py +
+    model/games/candidate.py) — the GENERIC spec of every such game.  The action
+    is one categorical over the frame's legal candidates: μ = ``sample()``'s
+    ``action_log_prob`` and the policy ``log_prob_entropy``, both masked by the
+    frame's candidate mask (the decoder's decode context) ∧ ``legal["action"]``;
+    nothing to teacher-force; the KL is exact over every legal candidate (the
+    decoder's ``action`` head).  Forced frames (one candidate) carry no policy
+    loss.  The env is configured by ``--env_kw <game>:key=value`` (the gmrules
+    game config, e.g. ``kuhn_poker:players=3``) and checked against the network's
+    frame dimensions.  Per-seat games are not lockstep: use ``--actor stream``."""
+
+    full_kl = True
+
+    def check_env(self, env, net):
+        from model.games.candidates import CANDIDATE_META_ARCH
+
+        spec = getattr(env, "spec", None)
+        if spec is None:
+            raise SystemExit(f"{env.game}: not a candidate-action env (env/vec_candidate.py)")
+        bad = {k: (spec[k], getattr(net.cfg, f[0], None)) for k, f in CANDIDATE_META_ARCH.items()
+               if spec[k] != getattr(net.cfg, f[0], None)}
+        if bad:
+            raise SystemExit(f"{env.game} env {env.config} emits frames {{dim: (env, network)}} "
+                             f"{bad}: the network was trained on another variant")
+
+    def kl_targets(self, actions, forced, cfg):
+        return {"action_idx": actions["action_idx"].long()}
+
+
 GAME_SPECS: Dict[str, RLGameSpec] = {
     "generals": GeneralsSpec(),
     "othello": ForcedPassPlacementSpec(),
     "gomoku": GomokuSpec(),
     "lux": LuxSpec(),
 }
+# every candidate-action game (model/games/candidates/): its own spec or the generic one
+for _game, _entry in candidate_games().items():
+    GAME_SPECS.setdefault(_game, _entry.rl_spec() if _entry.rl_spec is not None
+                          else CandidateSpec())
 
 
 def game_spec(game: str) -> RLGameSpec:
@@ -694,7 +736,7 @@ class LearnerActor:
                 if rows.numel() == 0:
                     return {}
                 streams = obs.stream_id[rows].tolist()
-                restart = [s for s, ne in zip(streams, obs.new_episode[rows].tolist()) if ne]
+                restart = restart_streams(obs, rows)
                 if restart:
                     self.stepper.reset(restart)
                 with _autocast(self.device, self.bf16):
@@ -788,6 +830,7 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
     st = WaveStats(mirror=int(league.is_mirror().sum()))
     winner = torch.full((env.num_envs,), -1, dtype=torch.long)
     ep_len = torch.zeros(env.num_envs, dtype=torch.long)
+    last: Dict[int, Tuple[int, int]] = {}    # row → (record, position) of its latest frame
     try:
         while bool(obs.active.any()):
             if st.steps >= max_steps:
@@ -813,6 +856,23 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
                     "seat": obs.to_play[rows].long(), "vmask": acting.bool(),
                     "pmask": pmask.bool(), "forced": obs.forced[rows].bool(),
                     "rewards": rew[env_rows].float(), "done": done[env_rows].bool()})
+                for pos, r in enumerate(rows.tolist()):
+                    last[r] = (len(recs) - 1, pos)
+            # per-seat streams of alternating games (env/vec_candidate.py): a learner
+            # row idle on this step (another seat moved) still earns its seat's reward
+            # and sees its episode end — credited to its latest frame.  A no-op for
+            # layouts whose learner rows act on every step of their episode (skipped
+            # for lockstep envs: every env but those per-seat candidate games).
+            if not getattr(env, "lockstep", True):
+                earned = ((rew != 0).any(-1) | done)[obs.env_id] & league.learner_streams(obs)
+                if rows.numel():
+                    earned[rows] = False
+                for r in earned.nonzero().squeeze(1).tolist():
+                    if r in last:
+                        k, pos = last[r]
+                        e = int(obs.env_id[r])
+                        recs[k]["rewards"][pos] += rew[e].float()
+                        recs[k]["done"][pos] |= bool(done[e])
             winner = torch.where(done, info["winner"].long(), winner)
             ep_len = torch.where(done, info["episode_len"].long(), ep_len)
             league.update(nxt)
@@ -1117,6 +1177,10 @@ class JointRLTrainer:
                                **kw)
             if env.autoreset:
                 raise SystemExit(f"{g}: the trainer's lockstep waves need autoreset off")
+            if a.actor == "fixed" and not getattr(env, "lockstep", True):
+                raise SystemExit(f"{g}: --actor fixed steps every row at one frame index, but "
+                                 f"this env's per-seat streams advance separately (seats act "
+                                 f"on different turns); use --actor stream")
             spec.check_env(env, net)
             actor = LearnerActor(net, spec, self.depth, device, bf16=a.bf16, mode=a.actor,
                                  cuda_graph=a.cuda_graph)
