@@ -123,7 +123,7 @@ class ModelConfig:
     #             channel, and a train/eval mismatch); padded frames are kept
     #             out of them and DDP merges the running statistics
     # Checkpoints saved before this field existed load as "batch".
-    encoder_norm: str = "batch"
+    encoder_norm: str = "group"
     # GroupNorm groups of encoder_norm="group"; must divide encoder_channels
     # and d_model.  1 = LayerNorm over (C, H, W) per frame (per-channel
     # affine), the default: it keeps board-wide totals (counts, material) that

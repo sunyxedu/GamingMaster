@@ -16,7 +16,7 @@ encoder norm layer comes from ONE factory, :func:`make_encoder_norm`
            features a function of frame t: no statistics of the sequence's
            later frames, of the other samples or of padded frames reach it.
            The ``frame_mask`` exclusion of :func:`encode_frames` is not needed
-           and is skipped.
+           and is skipped.  Current default.
   "batch"  BatchNorm2d, the layout of every checkpoint written before the field
            existed (``model.config.LEGACY_CONFIG_DEFAULTS``), kept bit-exact.
            In train mode its statistics pool all B·T frames of the batch, so
@@ -158,7 +158,7 @@ class ResBlock(nn.Module):
     (norm → ReLU → conv3×3, twice).  ``norm``: an :class:`EncoderNorm`
     (:func:`encoder_norm_of` a config) or an ``encoder_norm`` value."""
 
-    def __init__(self, channels: int, norm: NormSpec = "batch"):
+    def __init__(self, channels: int, norm: NormSpec = "group"):
         super().__init__()
         norm = _as_norm(norm)
         self.net = nn.Sequential(

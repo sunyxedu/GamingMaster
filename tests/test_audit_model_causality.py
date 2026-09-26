@@ -18,13 +18,20 @@ one batch), so the network itself must not let frame t read
   (e) the decode context (lux unit cells, clash royale match clock) is a
       per-frame function of that frame's own obs.
 
-KNOWN LEAK (train mode only): the conv encoders' BatchNorm2d layers
-normalise with batch statistics over every frame of every sequence in the
-batch, so frame t sees (aggregated) statistics of future frames and of the
-other samples.  ``test_forward_causal_train_mode`` pins it as a strict
-xfail for the BatchNorm encoders; ``..._batchnorm_frozen`` shows it is the
-only train-mode coupling (train mode with just the BN layers in eval mode
-is exactly causal).
+Conv-encoder normalisation (``cfg.encoder_norm``, model/components/encoder.py).
+The default, a per-frame GroupNorm ("group"; one group = LayerNorm over
+(C, H, W) by default, 4 groups tested too), makes train mode exactly causal
+and the samples of a batch independent (``test_forward_causal_train_mode``,
+``test_samples_independent_train_mode``: every game, no exception).  LEGACY
+LEAK, kept on purpose: checkpoints written before the field existed rebuild
+their BatchNorm2d encoders bit-exactly ("batch"), whose train-mode batch
+statistics span every frame of every sequence in the batch, so frame t sees
+(aggregated) statistics of future frames and of the other samples.  The
+``..._legacy_batchnorm`` tests pin that as strict xfails, and
+``..._batchnorm_frozen`` shows it is the only train-mode coupling of the
+legacy layout (train mode with just the BN layers in eval mode is exactly
+causal).  Eval-mode tests run both layouts: legacy checkpoints are deployed
+too.
 """
 from __future__ import annotations
 
@@ -66,9 +73,12 @@ GAME_OVERRIDES = {
     "starcraft": dict(minimap_h=16, minimap_w=16, max_units=6),
 }
 
-#: encoders whose BatchNorm2d runs on batch statistics in train mode
-BATCHNORM_GAMES = frozenset({"generals", "chess", "go", "othello", "gomoku", "shogi", "lux",
-                             "clash_royale", "starcraft"})
+#: games with a normalised conv encoder (cfg.encoder_norm): per-frame GroupNorm
+#: by default, BatchNorm2d on batch statistics in train mode under "batch"
+CONV_ENCODER_GAMES = frozenset({"generals", "chess", "go", "othello", "gomoku", "shogi", "lux",
+                                "clash_royale", "starcraft"})
+#: cfg.encoder_norm values: the default, and the legacy layout
+NORMS = ("group", "batch")
 
 
 # ---------------------------------------------------------------------------
@@ -245,18 +255,27 @@ def _future_labels(labels, g_hi):
 _NETS: Dict = {}
 
 
-def _net(game: str, mixer: str = "recurrent", core: str = "trm") -> nn.Module:
-    key = (game, mixer, core)
+def _net(game: str, mixer: str = "recurrent", core: str = "trm",
+         norm: str = "group", groups: int = 1) -> nn.Module:
+    """The game's network (cached); ``norm`` = cfg.encoder_norm ("group" is the
+    default config, "batch" the legacy-checkpoint layout), ``groups`` =
+    cfg.encoder_norm_groups."""
+    key = (game, mixer, core, norm, groups)
     if key not in _NETS:
         torch.manual_seed(0)
         net = build_game_network(game, **BASE, **CORES[core], temporal_mixer=mixer,
+                                 encoder_norm=norm, encoder_norm_groups=groups,
                                  **GAME_OVERRIDES[game])
-        # non-trivial BatchNorm running statistics for the eval-mode runs
-        for m in net.modules():
-            if isinstance(m, nn.modules.batchnorm._BatchNorm):
-                with torch.no_grad():
+        with torch.no_grad():
+            for m in net.modules():
+                # non-trivial BatchNorm running statistics for the eval-mode runs
+                if isinstance(m, nn.modules.batchnorm._BatchNorm):
                     m.running_mean.uniform_(-0.5, 0.5)
                     m.running_var.uniform_(0.5, 2.0)
+                # and non-trivial GroupNorm affine parameters (init: 1 / 0)
+                if isinstance(m, nn.GroupNorm):
+                    m.weight.uniform_(0.5, 1.5)
+                    m.bias.uniform_(-0.5, 0.5)
         _NETS[key] = net
     return _NETS[key]
 
@@ -319,31 +338,44 @@ def _perturb_future(game, net, obs, legal, labels):
     return o, lg, lb
 
 
+def _norm_layers(net: nn.Module, kind) -> list:
+    return [m for m in net.modules() if isinstance(m, kind)]
+
+
 def test_registry_and_label_tables_cover_every_game():
     assert set(GAME_OVERRIDES) == set(GAME_REGISTRY)
     for game in GAME_REGISTRY:
         net = _net(game)
         assert set(_label_highs(game, net.cfg)) == set(LABEL_KEYS.get(game, ())), game
-        has_bn = any(isinstance(m, nn.modules.batchnorm._BatchNorm) for m in net.modules())
-        assert has_bn == (game in BATCHNORM_GAMES), game
+        # the default config: per-frame GroupNorm in every conv encoder, no
+        # BatchNorm anywhere
+        assert net.cfg.encoder_norm == "group"
+        assert not _norm_layers(net, nn.modules.batchnorm._BatchNorm), game
+        assert bool(_norm_layers(net, nn.GroupNorm)) == (game in CONV_ENCODER_GAMES), game
+        # the legacy layout swaps exactly those layers for BatchNorm2d
+        legacy = _net(game, norm="batch")
+        assert not _norm_layers(legacy, nn.GroupNorm), game
+        assert (len(_norm_layers(legacy, nn.modules.batchnorm._BatchNorm))
+                == len(_norm_layers(net, nn.GroupNorm))), game
 
 
 # ---------------------------------------------------------------------------
 # (a) causality over frames
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("norm", NORMS)
 @pytest.mark.parametrize("core", sorted(CORES))
 @pytest.mark.parametrize("mixer", MIXERS)
 @pytest.mark.parametrize("game", sorted(GAME_OVERRIDES))
-def test_forward_causal_eval(game, mixer, core):
-    net = _net(game, mixer, core)
+def test_forward_causal_eval(game, mixer, core, norm):
+    net = _net(game, mixer, core, norm)
     obs, legal, labels, _ = _batch(game, net)
     o2, lg2, lb2 = _perturb_future(game, net, obs, legal, labels)
     with _mode(net, "eval"):
         a = _run(net, obs, legal, labels)
         b = _run(net, o2, lg2, lb2)
     _assert_frames_equal(a, b, slice(0, T_CUT + 1), slice(None),
-                         f"{game}/{mixer}/{core} eval: frames <= {T_CUT} see the future",
+                         f"{game}/{mixer}/{core}/{norm} eval: frames <= {T_CUT} see the future",
                          exact=core != "rd_moe")
     # and the perturbation is live: a later frame does change
     assert any(not torch.equal(a[k][:, T_CUT + 1:], b[k][:, T_CUT + 1:]) for k in a)
@@ -352,11 +384,12 @@ def test_forward_causal_eval(game, mixer, core):
 @pytest.mark.parametrize("mixer", MIXERS)
 @pytest.mark.parametrize("game", sorted(GAME_OVERRIDES))
 def test_forward_causal_train_mode_batchnorm_frozen(game, mixer):
-    """Train mode (dropout, recurrence sampling, MoE load tally) with only the
-    BatchNorm layers on running statistics: exactly causal, so BatchNorm is
-    the ONLY train-mode coupling across frames."""
+    """The legacy layout (encoder_norm="batch") in train mode (dropout,
+    recurrence sampling, MoE load tally) with only the BatchNorm layers on
+    running statistics: exactly causal, so BatchNorm is the ONLY train-mode
+    coupling across frames of legacy checkpoints."""
     for core in CORES:
-        net = _net(game, mixer, core)
+        net = _net(game, mixer, core, "batch")
         obs, legal, labels, _ = _batch(game, net)
         o2, lg2, lb2 = _perturb_future(game, net, obs, legal, labels)
         with _mode(net, "train_bn_frozen"):
@@ -366,16 +399,13 @@ def test_forward_causal_train_mode_batchnorm_frozen(game, mixer):
                              f"{game}/{mixer}/{core} train (BN frozen)", exact=core != "rd_moe")
 
 
-def _bn_xfail(game):
-    return pytest.param(game, marks=pytest.mark.xfail(
-        game in BATCHNORM_GAMES, strict=True,
-        reason="AUDIT LEAK: train-mode BatchNorm2d batch statistics span every frame "
-               "(and sample) of the batch — frame t sees future frames"))
+_LEGACY_BN_LEAK = pytest.mark.xfail(
+    strict=True, reason="LEGACY LEAK (encoder_norm='batch', checkpoints predating the field): "
+                        "train-mode BatchNorm2d batch statistics span every frame (and sample) "
+                        "of the batch — frame t sees future frames")
 
 
-@pytest.mark.parametrize("game", [_bn_xfail(g) for g in sorted(GAME_OVERRIDES)])
-def test_forward_causal_train_mode(game):
-    net = _net(game, "recurrent", "trm")
+def _check_forward_causal_train_mode(net, game):
     obs, legal, labels, _ = _batch(game, net)
     o2, lg2, lb2 = _perturb_future(game, net, obs, legal, labels)
     with _mode(net, "train"):
@@ -383,6 +413,20 @@ def test_forward_causal_train_mode(game):
         b = _run(net, o2, lg2, lb2)
     _assert_frames_equal(a, b, slice(0, T_CUT + 1), slice(None),
                          f"{game} train: frames <= {T_CUT} see the future", exact=True)
+
+
+@pytest.mark.parametrize("groups", [1, 4])
+@pytest.mark.parametrize("game", sorted(GAME_OVERRIDES))
+def test_forward_causal_train_mode(game, groups):
+    """Train mode (the IL / PPO forward) is exactly causal for every game with
+    the default per-frame encoder norm (one group, and 4 groups)."""
+    _check_forward_causal_train_mode(_net(game, "recurrent", "trm", groups=groups), game)
+
+
+@_LEGACY_BN_LEAK
+@pytest.mark.parametrize("game", sorted(CONV_ENCODER_GAMES))
+def test_forward_causal_train_mode_legacy_batchnorm(game):
+    _check_forward_causal_train_mode(_net(game, "recurrent", "trm", "batch"), game)
 
 
 # ---------------------------------------------------------------------------
@@ -401,32 +445,43 @@ def _perturb_sample(game, net, obs, legal, labels, row: int):
     return (mix(obs, obs2), mix(legal, legal2) if legal is not None else None, labels)
 
 
+@pytest.mark.parametrize("norm", NORMS)
 @pytest.mark.parametrize("mixer", MIXERS)
 @pytest.mark.parametrize("game", sorted(GAME_OVERRIDES))
-def test_samples_independent_eval(game, mixer):
+def test_samples_independent_eval(game, mixer, norm):
     """Eval mode: sample 0's outputs ignore sample 2 entirely — the RL learner
     batches both seats' streams (mirror self-play) and the opponents' rows in
     one forward / step, so a coupling would hand one seat the other's view."""
     for core in CORES:
-        net = _net(game, mixer, core)
+        net = _net(game, mixer, core, norm)
         obs, legal, labels, _ = _batch(game, net)
         o2, lg2, lb2 = _perturb_sample(game, net, obs, legal, labels, row=2)
         with _mode(net, "eval"):
             a = _run(net, obs, legal, labels)
             b = _run(net, o2, lg2, lb2)
-        _assert_frames_equal(a, b, slice(None), slice(0, 2), f"{game}/{mixer}/{core} eval rows",
-                             exact=core != "rd_moe")
+        _assert_frames_equal(a, b, slice(None), slice(0, 2),
+                             f"{game}/{mixer}/{core}/{norm} eval rows", exact=core != "rd_moe")
 
 
-@pytest.mark.parametrize("game", [_bn_xfail(g) for g in sorted(GAME_OVERRIDES)])
-def test_samples_independent_train_mode(game):
-    net = _net(game, "recurrent", "trm")
+def _check_samples_independent_train_mode(net, game):
     obs, legal, labels, _ = _batch(game, net)
     o2, lg2, lb2 = _perturb_sample(game, net, obs, legal, labels, row=2)
     with _mode(net, "train"):
         a = _run(net, obs, legal, labels)
         b = _run(net, o2, lg2, lb2)
     _assert_frames_equal(a, b, slice(None), slice(0, 2), f"{game} train rows", exact=True)
+
+
+@pytest.mark.parametrize("groups", [1, 4])
+@pytest.mark.parametrize("game", sorted(GAME_OVERRIDES))
+def test_samples_independent_train_mode(game, groups):
+    _check_samples_independent_train_mode(_net(game, "recurrent", "trm", groups=groups), game)
+
+
+@_LEGACY_BN_LEAK
+@pytest.mark.parametrize("game", sorted(CONV_ENCODER_GAMES))
+def test_samples_independent_train_mode_legacy_batchnorm(game):
+    _check_samples_independent_train_mode(_net(game, "recurrent", "trm", "batch"), game)
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +499,8 @@ def _other_frames(t: int) -> torch.Tensor:
 def test_labels_condition_their_own_frame_only(game, mode):
     """Perturb the labels of EVERY frame but t (past and future): frame t's
     logits / committed indices / masks are unchanged.  (Train mode included:
-    labels never reach the encoder's BatchNorm.)"""
+    labels never reach the encoder, whose legacy BatchNorm is the only
+    train-mode coupling of a legacy layout.)"""
     net = _net(game, "recurrent", "trm")
     obs, legal, labels, _ = _batch(game, net)
     labels = _labels(game, net.cfg, torch.Generator().manual_seed(3), self_sample=False)
@@ -511,14 +567,15 @@ def test_decode_context_is_per_frame(game):
 # step() == forward() prefix: the per-frame inference path sees the same past
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("norm", NORMS)
 @pytest.mark.parametrize("mixer", MIXERS)
 @pytest.mark.parametrize("game", sorted(GAME_OVERRIDES))
-def test_step_chain_reproduces_forward_logits(game, mixer):
+def test_step_chain_reproduces_forward_logits(game, mixer, norm):
     """Chaining GameNetwork.step over frames 0..T-1 (the deployed bot) gives
     the full-sequence forward's logits at every frame (eval, no labels, exact
     masks): IL trains exactly the function the bot runs — no information in
     training that the step path does not have."""
-    net = _net(game, mixer, "trm")
+    net = _net(game, mixer, "trm", norm)
     obs, legal, _, _ = _batch(game, net)
     with _mode(net, "eval"), torch.no_grad():
         full = net(obs, legal=legal, labels=None, act_steps=2)

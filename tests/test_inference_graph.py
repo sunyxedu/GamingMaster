@@ -400,6 +400,9 @@ STEP_CASES = {
                                legal=True),
     "rd_moe_hl_gauss": dict(net=dict(core="recurrent_depth", moe=4, hl_gauss_value=True),
                             legal=False),
+    # the default encoder is a per-frame GroupNorm; legacy checkpoints keep BatchNorm
+    "rd_moe_legal_batchnorm": dict(net=dict(core="recurrent_depth", moe=4,
+                                            encoder_norm="batch"), legal=True),
 }
 
 

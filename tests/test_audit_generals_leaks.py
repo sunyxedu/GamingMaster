@@ -830,21 +830,27 @@ def test_memory_vision_is_one_recorded_setting():
     assert "memory_vision" in ModelConfig().__dict__
 
 
+@pytest.mark.parametrize("norm", ["group", "batch"])
 @pytest.mark.parametrize("mixer,joint,act_steps", [("attention", False, 1),
                                                     ("recurrent", True, 1),
                                                     ("attention", True, 3)])
-def test_network_prefix_run_equals_full_run(mixer, joint, act_steps):
+def test_network_prefix_run_equals_full_run(mixer, joint, act_steps, norm):
     """Complement to test_network_decision_at_t_ignores_later_frames, which
     keeps the sequence length T: a feature normalised by T (the game length
     in IL, where a record is the whole game) would pass it.  Running only the
     prefix [0, t] must give frames 0..t exactly the outputs of the full run
-    (eval mode, teacher-forced sources, TRM pondering depth 1 and 3)."""
+    (eval mode, teacher-forced sources, TRM pondering depth 1 and 3; both
+    encoder layouts: the default GroupNorm and legacy BatchNorm checkpoints).
+    "Exactly" up to fp32 rounding: the CPU conv kernels block B·(t+1) and B·T
+    frames differently (~1e-6 relative, up to ~1e-5 on the O(5) belief
+    tokens), hence rtol 1e-5 — a T-normalised feature moves outputs by O(1/T)."""
     from model.config import ModelConfig
     from model.network import GeneralsNetwork
     torch.manual_seed(0)
     cfg = ModelConfig(d_model=64, n_heads=4, core_type="trm", trm_H_cycles=1, trm_L_cycles=2,
                       trm_block_layers=1, temporal_mixer=mixer, joint_decoder=joint,
-                      predict_next_obs=True, turn_globals=True, global_features=7)
+                      predict_next_obs=True, turn_globals=True, global_features=7,
+                      encoder_norm=norm)
     net = GeneralsNetwork(cfg).eval()
     B, T = 2, 9
     g = torch.Generator().manual_seed(3)
@@ -868,7 +874,7 @@ def test_network_prefix_run_equals_full_run(mixer, joint, act_steps):
                 if torch.is_tensor(v) and v.dim() >= 2 and v.shape[:2] == (B, T):
                     assert part[k].shape[1] == t + 1, k
                     assert torch.allclose(v[:, :t + 1].float(), part[k].float(),
-                                          atol=1e-5, rtol=0), (k, t)
+                                          atol=1e-5, rtol=1e-5), (k, t)
                     checked += 1
     assert checked >= 15
 

@@ -11,6 +11,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
+import pytest
 import torch
 
 # ── Bug 1: q_halt_loss must use valid mask (not seq_mask) ────────────
@@ -498,10 +499,12 @@ def test_q_halt_full_answer_target():
     print(f"  wrong-direction loss {wrong_dir_loss:.3f} >> correct-move loss {right_loss:.4f} OK")
 
 
-def test_padded_frames_do_not_affect_batchnorm():
+@pytest.mark.parametrize("norm", ["group", "batch"])
+def test_padded_frames_do_not_affect_batchnorm(norm):
     """In train mode, padded-frame content must not leak into valid steps'
-    outputs via BatchNorm batch statistics."""
-    print("\n=== frame_mask: pad frames excluded from BatchNorm ===")
+    outputs: a legacy BatchNorm encoder excludes padded frames from its batch
+    statistics, the default per-frame GroupNorm cannot see them at all."""
+    print(f"\n=== frame_mask: pad frames cannot reach valid steps ({norm}) ===")
     from model.config import ModelConfig
     from model.network import GeneralsNetwork
 
@@ -509,6 +512,7 @@ def test_padded_frames_do_not_affect_batchnorm():
         d_model=64, n_heads=4, d_ff=128,
         n_st_layers=1, core_type="trm", trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1,
         encoder_channels=32, temporal_type="spatiotemporal", dropout=0.0,
+        encoder_norm=norm,
     )
     model = GeneralsNetwork(cfg)
     model.train()
@@ -605,7 +609,8 @@ def main():
         test_full_pipeline_real_data,
         test_inference_empty_legal_mask,
         test_step_vs_full_consistency,
-        test_padded_frames_do_not_affect_batchnorm,
+        lambda: test_padded_frames_do_not_affect_batchnorm("group"),
+        lambda: test_padded_frames_do_not_affect_batchnorm("batch"),
         test_step_vs_full_consistency_act_steps,
         test_q_halt_full_answer_target,
     ]

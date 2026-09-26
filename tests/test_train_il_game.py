@@ -144,17 +144,17 @@ def test_resume_arch_prefers_checkpoint_config(capsys):
     assert resume_arch_overrides(ckpt, {}) == {
         "d_model": 48, "board_h": 6,
         "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0,
-        "qk_norm": False}
+        "qk_norm": False, "encoder_norm": "batch"}
     # explicit CLI override is the escape hatch and applies loudly
     arch = resume_arch_overrides(ckpt, {"d_model": 64})
     assert arch == {"d_model": 64, "board_h": 6,
                     "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0,
-                    "qk_norm": False}
+                    "qk_norm": False, "encoder_norm": "batch"}
     assert "replaces checkpoint arch values" in capsys.readouterr().out
     # legacy checkpoint without a full config falls back to overrides
     assert resume_arch_overrides({"config_overrides": {"d_ff": 32}}, {}) == {
         "d_ff": 32, "core_type": "trm", "trm_arch": "legacy", "halt_exploration_prob": 0.0,
-        "qk_norm": False}
+        "qk_norm": False, "encoder_norm": "batch"}
 
 
 def test_resume_rebuilds_exact_arch_from_config():

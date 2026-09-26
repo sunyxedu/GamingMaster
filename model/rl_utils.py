@@ -646,6 +646,20 @@ def load_model_state(model: nn.Module, state_dict: Dict, ctx: str = "checkpoint"
             f"with qk_norm=False ({len(qk_unused)} keys, e.g. {qk_unused[:4]}); "
             f"build it from the checkpoint's own config"
         )
+    # Nor are BatchNorm statistics: a legacy BatchNorm encoder's checkpoint
+    # loaded into a GroupNorm encoder (encoder_norm="group", same weight /
+    # bias keys) would run the affine parameters under a different norm.
+    bn_unused = [k for k in unexpected
+                 if k.rsplit(".", 1)[-1] in ("running_mean", "running_var",
+                                             "num_batches_tracked")]
+    if bn_unused:
+        raise RuntimeError(
+            f"{ctx}: the checkpoint has BatchNorm statistics the model does not use "
+            f"({len(bn_unused)} keys, e.g. {bn_unused[:4]}): a legacy "
+            f"encoder_norm='batch' checkpoint in a model built with another encoder "
+            f"norm; build it from the checkpoint's own config (config_from_dict / "
+            f"upgrade_config_dict give configs predating the field 'batch')"
+        )
     if unexpected:
         print(f"  [warn] {ctx}: {len(unexpected)} unused checkpoint keys, "
               f"e.g. {unexpected[:8]}")

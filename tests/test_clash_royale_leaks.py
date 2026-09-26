@@ -20,7 +20,9 @@ Two leak classes, each with an invariance test:
 
 Known leaks are pinned (they fail once fixed, so the pin gets removed):
 ``KNOWN_FUTURE_LEAKS`` in ``leak_audit.rs`` (the hand-cycle inference uses the
-whole match) and the train-mode BatchNorm test below.
+whole match).  The train-mode BatchNorm channel of the arena encoder is fixed by
+the default per-frame GroupNorm (``cfg.encoder_norm="group"``); legacy
+checkpoints (``encoder_norm="batch"``) keep it, pinned below.
 """
 from __future__ import annotations
 
@@ -186,7 +188,7 @@ def test_expand_reads_only_decision_time_inputs():
 # the wait head's match-clock decode context included)
 # ======================================================================
 
-def _net_and_obs(B=2, T=6, seed=1):
+def _net_and_obs(B=2, T=6, seed=1, norm="group"):
     from model.game_network import GameNetwork
     from model.games.clash_royale import CardPlacementDecoder, ClashRoyaleConfig, ClashRoyaleEncoder
 
@@ -194,7 +196,7 @@ def _net_and_obs(B=2, T=6, seed=1):
         d_model=48, n_heads=4, d_ff=64, dropout=0.0, n_st_layers=1, core_type="trm",
         trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, halt_max_steps=2, encoder_channels=24,
         arena_h=8, arena_w=6, arena_channels=5, hand_size=4, n_cards=20, card_feature_dim=8,
-        cr_global_features=6)
+        cr_global_features=6, encoder_norm=norm)
     torch.manual_seed(0)
     net = GameNetwork(cfg, ClashRoyaleEncoder(cfg), CardPlacementDecoder(cfg))
     g = torch.Generator().manual_seed(seed)
@@ -225,30 +227,43 @@ def _max_past_change(net, obs, labels, k):
             for key in ("wait_logits", "card_logits", "placement_logits", "value")}
 
 
-def test_network_outputs_are_causal_in_time_eval():
-    net, obs, labels = _net_and_obs()
+@pytest.mark.parametrize("norm", ["group", "batch"])
+def test_network_outputs_are_causal_in_time_eval(norm):
+    net, obs, labels = _net_and_obs(norm=norm)
     net.eval()
     change = _max_past_change(net, obs, labels, k=4)
     assert all(v == 0.0 for v in change.values()), change
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "KNOWN minor leak: the arena encoder's BatchNorm2d normalises frame t with batch statistics "
-    "over all B*T frames in train mode (GameNetwork.forward passes whole sequences), so IL/PPO "
-    "forward passes let later frames of the sequence shift frame t's features; eval / step() use "
-    "running stats. Fix: per-frame normalisation (GroupNorm/LayerNorm) or frozen BN statistics."))
 def test_network_outputs_are_causal_in_time_train_mode():
+    """IL / PPO forwards pass whole sequences in train mode: with the default
+    per-frame GroupNorm arena encoder later frames cannot shift frame t."""
     net, obs, labels = _net_and_obs()
+    assert not any(isinstance(m, torch.nn.modules.batchnorm._BatchNorm) for m in net.modules())
+    net.train()
+    change = _max_past_change(net, obs, labels, k=4)
+    assert all(v == 0.0 for v in change.values()), change
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "LEGACY minor leak (encoder_norm='batch', checkpoints predating the field): the arena "
+    "encoder's BatchNorm2d normalises frame t with batch statistics over all B*T frames in train "
+    "mode (GameNetwork.forward passes whole sequences), so IL/PPO forward passes let later frames "
+    "of the sequence shift frame t's features; eval / step() use running stats. Fixed for new "
+    "models by the default per-frame GroupNorm (encoder_norm='group')."))
+def test_network_outputs_are_causal_in_time_train_mode_legacy_batchnorm():
+    net, obs, labels = _net_and_obs(norm="batch")
     net.train()
     change = _max_past_change(net, obs, labels, k=4)
     assert all(v == 0.0 for v in change.values()), change
 
 
 def test_train_mode_time_mixing_comes_only_from_batchnorm():
-    """Scope of the xfail above: with every BatchNorm layer on running statistics and
-    the rest of the network in train mode, outputs at t ignore frames > t again, so
-    the arena encoder's BatchNorm is the only non-causal path in training."""
-    net, obs, labels = _net_and_obs()
+    """Scope of the legacy xfail above: with every BatchNorm layer on running
+    statistics and the rest of the network in train mode, outputs at t ignore
+    frames > t again, so the arena encoder's BatchNorm is the only non-causal
+    path in training a legacy (encoder_norm="batch") network."""
+    net, obs, labels = _net_and_obs(norm="batch")
     net.train()
     bns = [m for m in net.modules() if isinstance(m, torch.nn.modules.batchnorm._BatchNorm)]
     assert bns and all(n.startswith("obs_encoder.arena_encoder") for n, m in net.named_modules() if m in bns)
