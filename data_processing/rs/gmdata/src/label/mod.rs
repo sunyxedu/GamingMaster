@@ -26,6 +26,8 @@
 //! tgt.teacher_raw        [T,K] f32   engine-native score (cp, discs, score lead), NaN pad —
 //!                                    games whose native unit is not Q (meta.teacher.raw_unit)
 //! tgt.teacher_visits     [T,K] f32   search visits, NaN pad — MCTS engines
+//! tgt.teacher_prior      [T,K] f32   the engine network's raw policy prior per move, NaN
+//!                                    pad — engines that report it (KataGo; meta.teacher.prior)
 //! tgt.engine_value       [T]   f32   2·Q(position) − 1 ∈ [−1,1] (0 where unlabelled)
 //! tgt.engine_value_mask  [T]   bool  frame has a teacher
 //! tgt.<h>_probs_idx/_val [T,k]       sparse soft target of categorical head h (k < n classes):
@@ -269,6 +271,16 @@ pub enum FakeKind {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         engine_flags: Vec<String>,
     },
+    /// KataGo analysis-engine (JSON) fake (see label/go/fake.rs)
+    Katago {
+        /// exit on the n-th analysis query
+        #[arg(long)]
+        crash_on: Option<usize>,
+        /// KataGo's own arguments (`analysis -config C -model M -override-config K=V,…`);
+        /// only reportAnalysisWinratesAs is read
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        katago_args: Vec<String>,
+    },
 }
 
 pub fn run(cmd: Cmd) -> Result<()> {
@@ -303,6 +315,13 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 fake::run_stdio(&mut fake::Canned::parse(&text)?)
             }
             FakeKind::Othello { .. } => fake::run_stdio(&mut othello::FakeEgaroucid::new()),
+            FakeKind::Katago { crash_on, katago_args } => {
+                let mut f = go::fake::KataFake::from_katago_args(&katago_args).map_err(anyhow::Error::msg)?;
+                if let Some(n) = crash_on {
+                    f = f.crash_on(n);
+                }
+                fake::run_stdio(&mut f)
+            }
         },
     }
 }
@@ -339,5 +358,21 @@ mod tests {
         assert!(g.common.to_opts().is_err(), "missing engine binary");
         assert!(go::run(Cli::try_parse_from(["gmdata", "go", "--input", "i", "--out", "o", "--engine", "/bin/sh"])
             .map(|c| match c.cmd { Cmd::Go(a) => a, _ => unreachable!() }).unwrap()).is_err());
+    }
+
+    #[test]
+    fn fake_katago_takes_katago_arguments() {
+        // the go labeller appends `-override-config …` to whatever --engine-arg gives
+        let cli = Cli::try_parse_from([
+            "gmdata", "fake-engine", "katago", "--crash-on", "3", "analysis", "-config", "c.cfg", "-override-config",
+            "reportAnalysisWinratesAs=SIDETOMOVE",
+        ])
+        .unwrap();
+        let Cmd::FakeEngine { kind: FakeKind::Katago { crash_on, katago_args } } = cli.cmd else { panic!() };
+        assert_eq!(crash_on, Some(3));
+        assert_eq!(katago_args, ["analysis", "-config", "c.cfg", "-override-config", "reportAnalysisWinratesAs=SIDETOMOVE"]);
+        let cli = Cli::try_parse_from(["gmdata", "fake-engine", "katago", "-override-config", "a=1"]).unwrap();
+        let Cmd::FakeEngine { kind: FakeKind::Katago { katago_args, .. } } = cli.cmd else { panic!() };
+        assert_eq!(katago_args, ["-override-config", "a=1"]);
     }
 }

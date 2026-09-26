@@ -52,13 +52,25 @@
 #   YANEURAOU_REF          git tag / branch (default: latest release tag)
 #   YANEURAOU_TARGET_CPU   Makefile TARGET_CPU (default: from the CPU flags)
 #   YANEURAOU_EVAL_URL     .7z / .zip archive containing nn.bin (default: Háo)
-#   KATAGO_TAG             release tag (default: v1.18.1 for CPU/OpenCL builds — later
-#                          tags so far ship CUDA builds only — and latest for CUDA)
-#   KATAGO_BACKEND         eigenavx2 | eigen | opencl | onnx-openvino | cuda12.8-cudnn9.8.0 | ...
-#                          (default: CUDA if an NVIDIA GPU + cuDNN 9 are present, OpenCL if a
-#                          GPU OpenCL ICD is present, else eigenavx2 / eigen — the CPU builds
-#                          are static-pie executables, so they need no extra system libraries)
-#   KATAGO_NET_URL         network URL (default: kata1 b18c384nbt, the fast choice on CPUs)
+#   KATAGO_TAG             release tag (default: v1.18.1 for every Linux backend — the newest
+#                          tag with CPU / OpenCL / TensorRT / ROCm assets; pinned so that labels
+#                          from GPU and CPU nodes share one engine version in meta.teacher)
+#   KATAGO_BACKEND         eigenavx2 | eigen | opencl | cuda12.8-cudnn9.8.0 | trt10.9.0-cuda12.8 |
+#                          onnx-openvino | ... (the part between the tag and "-linux-x64" in the
+#                          release asset name). Default, all without root: CUDA when an NVIDIA
+#                          GPU (nvidia-smi) plus cuDNN 9 and cuBLAS 12 are loadable (ldconfig or
+#                          LD_LIBRARY_PATH — e.g. after `module load cuda cudnn`, or pip's
+#                          nvidia-cudnn-cu12 / nvidia-cublas-cu12 lib dirs on LD_LIBRARY_PATH);
+#                          OpenCL when a GPU OpenCL ICD is present; else eigenavx2 / eigen (the
+#                          CPU builds are static-pie executables and need no system libraries).
+#                          TensorRT (fastest on NVIDIA; needs libnvinfer 10) only on request.
+#   KATAGO_NET_URL         network URL (default: kata1 b18c384nbt — strong and the cheapest
+#                          of the current kata1 nets per evaluation)
+#
+# KataGo on macOS: Homebrew's bottle (Metal backend; `brew install katago`) plus the
+# b18c384nbt network it bundles (reused, not downloaded again). `gmdata label go` runs
+# it with KataGo's Metal "mux" layout (2 GPU + 2 Neural Engine threads) by default.
+# Measured on an M4 Pro: ~550 network evaluations/s mux vs ~200 GPU-only.
 set -euo pipefail
 
 ROOT="${GM_ENGINES:-$HOME/gm-engines}"
@@ -454,34 +466,69 @@ install_yaneuraou() {
 
 # ------------------------------------------------------------------ KataGo
 
+# The ldconfig cache listing (empty when unavailable). ldconfig lives in /sbin on
+# Debian-like systems, which is not on a normal user's PATH ($LDCONFIG overrides).
+ldconfig_cache() {
+    if [ -n "${LDCONFIG:-}" ]; then "$LDCONFIG" -p 2>/dev/null || true; return 0; fi
+    local c
+    for c in "$(command -v ldconfig 2>/dev/null || true)" /sbin/ldconfig /usr/sbin/ldconfig; do
+        if [ -n "$c" ] && [ -x "$c" ]; then "$c" -p 2>/dev/null || true; return 0; fi
+    done
+}
+
+# Whether shared library $1 (e.g. libcudnn.so.9) is loadable: known to ldconfig or in a
+# directory of LD_LIBRARY_PATH (module systems / pip wheels, no root needed). The cache
+# is captured first: `ldconfig -p | grep -q` under `set -o pipefail` fails whenever grep
+# exits before ldconfig has written everything (SIGPIPE), i.e. on an early match.
+have_lib() {
+    local cache
+    cache="$(ldconfig_cache)"
+    case "$cache" in *"$1"*) return 0 ;; esac
+    local d
+    local IFS=:
+    for d in ${LD_LIBRARY_PATH:-}; do
+        [ -n "$d" ] && ls "$d/$1"* >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
 katago_backend() {
     if [ -n "${KATAGO_BACKEND:-}" ]; then echo "$KATAGO_BACKEND"; return; fi
-    if have nvidia-smi && nvidia-smi -L >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libcudnn.so.9'; then
+    if have nvidia-smi && nvidia-smi -L >/dev/null 2>&1 && have_lib libcudnn.so.9 && have_lib libcublas.so.12; then
         echo cuda12.8-cudnn9.8.0; return
     fi
-    if ls /etc/OpenCL/vendors/*.icd >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q libOpenCL.so && \
+    if ls /etc/OpenCL/vendors/*.icd >/dev/null 2>&1 && have_lib libOpenCL.so && \
         { have nvidia-smi || [ -e /dev/kfd ] || [ -e /dev/dri/renderD128 ]; }; then
         echo opencl; return
     fi
     if has_flag avx2; then echo eigenavx2; else echo eigen; fi
 }
 
+# Release tag for backend $1 (KATAGO_TAG overrides). One pinned tag for every Linux
+# backend: the KataGo version is part of meta.teacher (`gmdata label go`), and the loader
+# refuses to mix shards labelled by different versions — GPU- and CPU-node labels (or two
+# installs made months apart) must come from the same release. v1.18.1 is the newest tag
+# with CPU / OpenCL / TensorRT / ROCm assets (v1.18.2 ships CUDA builds only).
+KATAGO_LINUX_TAG=v1.18.1
+katago_tag() {
+    if [ -n "${KATAGO_TAG:-}" ]; then echo "$KATAGO_TAG"; return; fi
+    echo "$KATAGO_LINUX_TAG"
+}
+
 install_katago() {
-    local dir exe tag backend asset net_url net
+    local dir exe tag backend asset net_url net configs
     if [ "$OS" = Darwin ]; then
         have brew || die "on macOS, KataGo is installed with Homebrew (brew install katago)"
         if ! brew list katago >/dev/null 2>&1; then brew install katago; fi
         exe="$(brew --prefix)/bin/katago"
+        configs="$(brew --prefix)/share/katago/configs"
         dir="$ROOT/katago/brew"
         mkdir -p "$dir"
         link_bin katago "$exe"
     else
         [ "$ARCH" = x86_64 ] || die "KataGo release binaries are x86-64 only; build from source for $ARCH"
         backend="$(katago_backend)"
-        case "$backend" in
-            eigen* | opencl | onnx* | rocm*) tag="${KATAGO_TAG:-v1.18.1}" ;;
-            *) tag="${KATAGO_TAG:-$(latest_tag lightvector/KataGo || echo v1.18.2)}" ;;
-        esac
+        tag="$(katago_tag "$backend")"
         asset="katago-$tag-$backend-linux-x64.zip"
         dir="$ROOT/katago/$tag-$backend"
         if [ ! -x "$dir/katago" ]; then
@@ -503,14 +550,22 @@ install_katago() {
             log "install them or pick another backend (KATAGO_BACKEND=eigenavx2 / eigen need the fewest)"
         fi
         link_bin katago "$exe"
+        configs="$dir"
     fi
     net_url="${KATAGO_NET_URL:-https://media.katagotraining.org/uploaded/networks/models/kata1/kata1-b18c384nbt-s9996604416-d4316597426.bin.gz}"
     net="$ROOT/nets/katago/$(basename "$net_url")"
+    local bundled=""
+    [ "$OS" = Darwin ] && bundled="$(brew --prefix)/share/katago/$(basename "$net_url")"
+    if [ ! -s "$net" ] && [ -n "$bundled" ] && [ -s "$bundled" ]; then
+        mkdir -p "$(dirname "$net")"
+        ln -sfn "$bundled" "$net"
+        log "using the network bundled with Homebrew's katago ($bundled)"
+    fi
     fetch "$net_url" "$net" || die "cannot download the KataGo network ($net_url)"
     ln -sfn "$net" "$ROOT/nets/katago/default.bin.gz"
     local ver
     ver="$("$BIN/katago" version 2>/dev/null | head -1)" || true
-    echo "katago: $BIN/katago -> $exe (${ver:-version unknown}); network $net (KataGo Neural Network License); configs in $(dirname "$exe")"
+    echo "katago: $BIN/katago -> $exe (${ver:-version unknown}); network $net (KataGo Neural Network License); example configs in $configs"
 }
 
 # ------------------------------------------------------------------ main

@@ -81,10 +81,42 @@ impl SgfGame {
 /// The per-game constants of obs.globals_seq: (komi known, komi / 20 from white's
 /// view, area scoring, handicap / 9).
 fn game_globals(g: &SgfGame) -> (bool, f32, f32, f32) {
-    let komi = g.komi().filter(|k| k.is_finite());
+    globals_consts(g.komi(), g.handicap(), g.area_scoring())
+}
+
+/// [`game_globals`] from the values the sample meta records (`komi`, `handicap`) plus
+/// the area-scoring flag — shared with the go labeller's replay verification.
+pub(crate) fn globals_consts(komi: Option<f64>, handicap: i64, area: bool) -> (bool, f32, f32, f32) {
+    let komi = komi.filter(|k| k.is_finite());
     let white_komi = komi.map(|k| (k / 20.0).clamp(-1.0, 1.0) as f32).unwrap_or(0.0);
-    let ha = g.handicap().clamp(0, 9) as f32 / 9.0;
-    (komi.is_some(), white_komi, g.area_scoring() as u8 as f32, ha)
+    let ha = handicap.clamp(0, 9) as f32 / 9.0;
+    (komi.is_some(), white_komi, area as u8 as f32, ha)
+}
+
+/// One obs.globals_seq frame (`out`: [`GLOBAL_FEATURES`] values) for `color` to move.
+pub(crate) fn encode_globals(color: u8, consts: (bool, f32, f32, f32), prev_pass: bool, out: &mut [f32]) {
+    let (komi_known, white_komi, area, ha_feat) = consts;
+    out[0] = (color == BLACK) as u8 as f32;
+    out[1] = if color == BLACK { -white_komi } else { white_komi };
+    out[2] = komi_known as u8 as f32;
+    out[3] = area;
+    out[4] = ha_feat;
+    out[5] = prev_pass as u8 as f32;
+}
+
+/// One obs.board_seq frame (`out`: 4·N² values, all written) of `b` with `color` to
+/// move: own / opponent / empty stones and the simple-ko point.
+pub(crate) fn encode_planes(b: &Board, color: u8, out: &mut [f32]) {
+    let nn = (b.n * b.n) as usize;
+    for (i, &v) in b.g.iter().enumerate() {
+        out[i] = (v == color) as u8 as f32;
+        out[nn + i] = (v == opponent(color)) as u8 as f32;
+        out[2 * nn + i] = (v == EMPTY) as u8 as f32;
+    }
+    out[3 * nn..4 * nn].fill(0.0);
+    if let Some((kr, kc)) = b.ko {
+        out[3 * nn + (kr * b.n + kc) as usize] = 1.0;
+    }
 }
 
 /// Python `float()` on a string (surrounding whitespace allowed).
@@ -271,11 +303,11 @@ pub fn parse_sgf(text: &str) -> std::result::Result<Vec<SgfGame>, ()> {
 
 // ---------------------------------------------------------------- rules
 
-const EMPTY: u8 = 0;
-const BLACK: u8 = 1;
-const WHITE: u8 = 2;
+pub(crate) const EMPTY: u8 = 0;
+pub(crate) const BLACK: u8 = 1;
+pub(crate) const WHITE: u8 = 2;
 
-fn opponent(c: u8) -> u8 {
+pub(crate) fn opponent(c: u8) -> u8 {
     if c == BLACK {
         WHITE
     } else {
@@ -283,17 +315,24 @@ fn opponent(c: u8) -> u8 {
     }
 }
 
-struct Board {
-    n: i32,
-    g: Vec<u8>,
-    ko: Option<Point>,
+/// A Go position with the converter's rules (captures, suicide rejected, simple ko):
+/// `g` = N² points row-major (row 0 = SGF row `a` = the top), `ko` = the point the
+/// side to move may not play (set by a single-stone capture that could be retaken).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Board {
+    pub(crate) n: i32,
+    pub(crate) g: Vec<u8>,
+    pub(crate) ko: Option<Point>,
 }
 
 impl Board {
-    fn at(&self, p: Point) -> u8 {
+    pub(crate) fn new(n: i32) -> Self {
+        Board { n, g: vec![EMPTY; (n * n) as usize], ko: None }
+    }
+    pub(crate) fn at(&self, p: Point) -> u8 {
         self.g[(p.0 * self.n + p.1) as usize]
     }
-    fn set(&mut self, p: Point, v: u8) {
+    pub(crate) fn set(&mut self, p: Point, v: u8) {
         let n = self.n;
         self.g[(p.0 * n + p.1) as usize] = v;
     }
@@ -332,7 +371,7 @@ impl Board {
         }
         (stones, libs)
     }
-    fn setup(&mut self, color: u8, pts: &[Point]) -> bool {
+    pub(crate) fn setup(&mut self, color: u8, pts: &[Point]) -> bool {
         for &(r, c) in pts {
             if !(0..self.n).contains(&r) || !(0..self.n).contains(&c) || self.at((r, c)) != EMPTY {
                 return false;
@@ -342,7 +381,7 @@ impl Board {
         true
     }
     /// false = illegal (board unchanged)
-    fn play(&mut self, color: u8, p: Option<Point>) -> bool {
+    pub(crate) fn play(&mut self, color: u8, p: Option<Point>) -> bool {
         let Some((r, c)) = p else {
             self.ko = None;
             return true;
@@ -466,7 +505,7 @@ fn game_to_sample(g: &SgfGame, size: i32, allow_handicap: bool, allow_no_result:
         None if allow_no_result => 0,
         None => return Err("no_result"),
     };
-    let mut b = Board { n: size, g: vec![EMPTY; (size * size) as usize], ko: None };
+    let mut b = Board::new(size);
     if !b.setup(BLACK, &g.setup_black) || !b.setup(WHITE, &g.setup_white) {
         return Err("illegal_move");
     }
@@ -474,26 +513,12 @@ fn game_to_sample(g: &SgfGame, size: i32, allow_handicap: bool, allow_no_result:
     let nn = (size * size) as usize;
     let mut planes = vec![0f32; t * 4 * nn];
     let mut globals = vec![0f32; t * GLOBAL_FEATURES];
-    let (komi_known, white_komi, area, ha_feat) = game_globals(g);
+    let consts = game_globals(g);
     let (mut idx, mut passed, mut value) = (vec![0i64; t], vec![false; t], vec![0f32; t]);
     for (k, (ch, p)) in g.moves.iter().enumerate() {
         let color = if *ch == 'B' { BLACK } else { WHITE };
-        let gl = &mut globals[k * GLOBAL_FEATURES..(k + 1) * GLOBAL_FEATURES];
-        gl[0] = (color == BLACK) as u8 as f32;
-        gl[1] = if color == BLACK { -white_komi } else { white_komi };
-        gl[2] = komi_known as u8 as f32;
-        gl[3] = area;
-        gl[4] = ha_feat;
-        gl[5] = (k > 0 && passed[k - 1]) as u8 as f32;
-        let base = k * 4 * nn;
-        for (i, &v) in b.g.iter().enumerate() {
-            planes[base + i] = (v == color) as u8 as f32;
-            planes[base + nn + i] = (v == opponent(color)) as u8 as f32;
-            planes[base + 2 * nn + i] = (v == EMPTY) as u8 as f32;
-        }
-        if let Some((kr, kc)) = b.ko {
-            planes[base + 3 * nn + (kr * size + kc) as usize] = 1.0;
-        }
+        encode_globals(color, consts, k > 0 && passed[k - 1], &mut globals[k * GLOBAL_FEATURES..(k + 1) * GLOBAL_FEATURES]);
+        encode_planes(&b, color, &mut planes[k * 4 * nn..(k + 1) * 4 * nn]);
         match p {
             None => passed[k] = true,
             Some((r, c)) => idx[k] = (r * size + c) as i64,
@@ -653,7 +678,7 @@ mod tests {
 
     #[test]
     fn ko_and_capture() {
-        let mut b = Board { n: 5, g: vec![EMPTY; 25], ko: None };
+        let mut b = Board::new(5);
         // classic ko shape
         for (c, p) in [(BLACK, (0, 1)), (BLACK, (1, 0)), (BLACK, (2, 1)), (WHITE, (0, 2)), (WHITE, (1, 3)), (WHITE, (2, 2)), (WHITE, (1, 1))] {
             assert!(b.play(c, Some(p)));

@@ -16,7 +16,7 @@
 //!   sides' moves are covered), skip reasons, cache, engine query with one
 //!   restart-and-retry, policy transform, head rows.
 //! * Frames without a teacher (sampling, skips, engine failures, failed samples, frames
-//!   no sample covers) get pad rows: `teacher_idx` −1, `teacher_q/raw/visits` NaN,
+//!   no sample covers) get pad rows: `teacher_idx` −1, `teacher_q/raw/visits/prior` NaN,
 //!   sparse `_probs_idx` −1 / `_probs_val` 0, dense `_probs` zeros, bernoulli
 //!   `_probs` 0 with `_probs_mask` false, `engine_value` 0 with `engine_value_mask` false.
 //! * Health: the run stops before committing a shard when the engine fails
@@ -451,12 +451,20 @@ fn head_cols(spec: &HeadSpec) -> HeadCols {
 
 /// Column names a run adds (for docs / tests).
 pub fn teacher_columns(heads: &[HeadSpec], raw: bool, visits: bool) -> Vec<String> {
+    teacher_columns_with_prior(heads, raw, visits, false)
+}
+
+/// [`teacher_columns`] of a labeller that may also report priors (`tgt.teacher_prior`).
+pub fn teacher_columns_with_prior(heads: &[HeadSpec], raw: bool, visits: bool, prior: bool) -> Vec<String> {
     let mut v = vec!["tgt.teacher_idx".to_string(), "tgt.teacher_q".into()];
     if raw {
         v.push("tgt.teacher_raw".into());
     }
     if visits {
         v.push("tgt.teacher_visits".into());
+    }
+    if prior {
+        v.push("tgt.teacher_prior".into());
     }
     v.push("tgt.engine_value".into());
     v.push("tgt.engine_value_mask".into());
@@ -477,6 +485,7 @@ pub fn teacher_columns(heads: &[HeadSpec], raw: bool, visits: bool) -> Vec<Strin
 }
 
 /// Assemble the teacher columns of a shard from its labelled samples.
+#[allow(clippy::too_many_arguments)]
 fn build_overlay(
     reader: &ShardReader,
     outs: &[SampleOut],
@@ -484,6 +493,7 @@ fn build_overlay(
     k: usize,
     raw: bool,
     visits: bool,
+    prior: bool,
     stats: &mut Stats,
 ) -> Result<OverlayWriter> {
     let n = reader.n_frames;
@@ -503,6 +513,7 @@ fn build_overlay(
     let mut q = Padded::new(k, f32::NAN);
     let mut rawc = Padded::new(k, f32::NAN);
     let mut vis = Padded::new(k, f32::NAN);
+    let mut pri = Padded::new(k, f32::NAN);
     let (mut ev, mut evm) = (Vec::with_capacity(n), Vec::with_capacity(n));
     let mut cols: Vec<HeadCols> = heads.iter().map(head_cols).collect();
     for f in &frames {
@@ -512,6 +523,7 @@ fn build_overlay(
                 q.push(f.moves.iter().map(|m| m.q));
                 rawc.push(f.moves.iter().map(|m| m.raw));
                 vis.push(f.moves.iter().map(|m| m.visits));
+                pri.push(f.moves.iter().map(|m| m.prior));
                 ev.push(f.value);
                 evm.push(true);
                 for (c, row) in cols.iter_mut().zip(&f.heads) {
@@ -536,6 +548,7 @@ fn build_overlay(
                 q.push_empty();
                 rawc.push_empty();
                 vis.push_empty();
+                pri.push_empty();
                 ev.push(0.0);
                 evm.push(false);
                 for c in cols.iter_mut() {
@@ -559,6 +572,9 @@ fn build_overlay(
     }
     if visits {
         ov.add_f32("tgt.teacher_visits", &[k], vis.data)?;
+    }
+    if prior {
+        ov.add_f32("tgt.teacher_prior", &[k], pri.data)?;
     }
     ov.add_f32("tgt.engine_value", &[], ev)?;
     ov.add_bool("tgt.engine_value_mask", &[], &evm)?;
@@ -667,7 +683,7 @@ pub fn run<L: Labeller>(lab: L, opts: &RunOpts) -> Result<Summary> {
     if policy == PolicyKind::Visits && !lab.has_visits() {
         bail!("--policy visits: the {game} labeller reports no visits");
     }
-    let (raw, visits) = (lab.raw_unit().is_some(), lab.has_visits());
+    let (raw, visits, prior) = (lab.raw_unit().is_some(), lab.has_visits(), lab.has_prior());
     let cfg = Arc::new(EngineConfig {
         command: opts.command.clone(),
         options: opts.engine_options.clone(),
@@ -711,7 +727,7 @@ pub fn run<L: Labeller>(lab: L, opts: &RunOpts) -> Result<Summary> {
         PolicyKind::Softmax => json!({"kind": "softmax", "tau": opts.tau}),
         PolicyKind::Visits => json!({"kind": "visits"}),
     });
-    let teacher = json!({
+    let mut teacher = json!({
         "labeller": format!("gmdata label {game}"),
         "labeller_version": lab.version(),
         "core_version": CORE_VERSION,
@@ -727,6 +743,9 @@ pub fn run<L: Labeller>(lab: L, opts: &RunOpts) -> Result<Summary> {
         "visits": visits,
         "game": lab.teacher_meta(&cfg),
     });
+    if prior {
+        teacher["prior"] = json!(true);
+    }
 
     let stop = Arc::new(AtomicBool::new(false));
     let heads_arc = Arc::new(heads.clone());
@@ -831,7 +850,7 @@ pub fn run<L: Labeller>(lab: L, opts: &RunOpts) -> Result<Summary> {
         if failed >= 3 && failed as f64 > 0.1 * n_samples as f64 {
             bail!("{rel_s}: {failed} of {n_samples} samples failed replay/verification (systematic?); first errors: {:#?}", shard.errors);
         }
-        let mut ov = build_overlay(&data.reader, &outs, &heads, max_moves, raw, visits, &mut shard)?;
+        let mut ov = build_overlay(&data.reader, &outs, &heads, max_moves, raw, visits, prior, &mut shard)?;
         let secs = ts.elapsed().as_secs_f64();
         ov.set_teacher(teacher.clone());
         let mut stats_json = serde_json::to_value(&shard)?;

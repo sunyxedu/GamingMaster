@@ -118,3 +118,54 @@ def test_egaroucid_probe_parses_hint_rows(tmp_path):
     fake.chmod(0o755)
     rows = _bash(f'egaroucid_probe "{fake}"', tmp_path).stdout.splitlines()
     assert [r.split() for r in rows] == [["Depth", "Move", "Score", "Nodes"], ["11@74%", "d6", "+13", "111651"]]
+
+
+def test_katago_backend_and_tag(tmp_path):
+    """KataGo release picks: CUDA when an NVIDIA GPU plus cuDNN 9 / cuBLAS 12 are loadable
+    without root (LD_LIBRARY_PATH, e.g. `module load` or pip wheels), else the static CPU
+    builds; the CPU / OpenCL / TensorRT assets live on v1.18.1 (v1.18.2 is CUDA-only)."""
+    fake_bin, libs = tmp_path / "bin", tmp_path / "libs"
+    fake_bin.mkdir()
+    libs.mkdir()
+    smi = fake_bin / "nvidia-smi"
+    smi.write_text("#!/bin/sh\necho 'GPU 0: Fake GPU'\n")
+    smi.chmod(0o755)
+    path = f"{fake_bin}:{os.environ.get('PATH', '')}"
+    # LDCONFIG=true: an empty ldconfig cache, whatever the test host has installed
+    probe = f'PATH="{path}"; LD_LIBRARY_PATH="{libs}"; LDCONFIG=true; katago_backend'
+    assert _host(probe, tmp_path, flags=EPYC_9355) == ["eigenavx2"], "GPU without cuDNN → CPU build"
+    (libs / "libcudnn.so.9").write_text("")
+    (libs / "libcublas.so.12").write_text("")
+    assert _host(probe, tmp_path, flags=EPYC_9355) == ["cuda12.8-cudnn9.8.0"]
+    # one pinned release for every Linux backend (the engine version is part of meta.teacher)
+    assert _host("katago_tag eigenavx2; katago_tag opencl; katago_tag trt10.9.0-cuda12.8; katago_tag cuda12.8-cudnn9.8.0",
+                 tmp_path) == ["v1.18.1"] * 4
+    assert _host("KATAGO_TAG=v1.17.1; katago_tag cuda12.8-cudnn9.8.0", tmp_path) == ["v1.17.1"]
+    assert _host("KATAGO_BACKEND=trt10.9.0-cuda12.8; katago_backend", tmp_path) == ["trt10.9.0-cuda12.8"]
+
+
+def test_katago_libs_found_in_a_large_ldconfig_cache(tmp_path):
+    """System-wide CUDA libraries are found through the ldconfig cache even when the cache
+    is large and the match comes early (`ldconfig -p | grep -q` under `set -o pipefail`
+    reports SIGPIPE as "not found"); $LDCONFIG names an ldconfig that is not on PATH (the
+    script also tries /sbin and /usr/sbin, where Debian keeps it)."""
+    fake_bin = tmp_path / "sbin"
+    fake_bin.mkdir()
+    ldconfig = fake_bin / "ldconfig"
+    ldconfig.write_text(
+        "#!/bin/sh\n"
+        "echo '\tlibcudnn.so.9 (libc6,x86-64) => /usr/lib/x86_64-linux-gnu/libcudnn.so.9'\n"
+        "echo '\tlibcublas.so.12 (libc6,x86-64) => /usr/lib/x86_64-linux-gnu/libcublas.so.12'\n"
+        "i=0; while [ $i -lt 20000 ]; do echo \"\tlibfiller$i.so.1 (libc6,x86-64) => /usr/lib/libfiller$i.so.1\"; i=$((i+1)); done\n")
+    ldconfig.chmod(0o755)
+    smi = fake_bin / "nvidia-smi"
+    smi.write_text("#!/bin/sh\necho 'GPU 0: Fake GPU'\n")
+    smi.chmod(0o755)
+    path = f"{fake_bin}:{os.environ.get('PATH', '')}"
+    probe = f'PATH="{path}"; LD_LIBRARY_PATH=""; katago_backend'
+    assert _host(probe, tmp_path, flags=EPYC_9355) == ["cuda12.8-cudnn9.8.0"]
+    # an ldconfig outside PATH, named by $LDCONFIG; LDCONFIG=true = an empty cache
+    probe = f'PATH="{tmp_path / "nothing"}:/usr/bin:/bin"; LD_LIBRARY_PATH=""; LDCONFIG="{ldconfig}"; have_lib libcublas.so.12 && echo yes'
+    assert _host(probe, tmp_path, flags=EPYC_9355) == ["yes"]
+    probe = f'LD_LIBRARY_PATH=""; LDCONFIG=true; have_lib libcublas.so.12 || echo no'
+    assert _host(probe, tmp_path, flags=EPYC_9355) == ["no"]

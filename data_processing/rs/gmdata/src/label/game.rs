@@ -52,11 +52,19 @@ pub struct ScoredMove {
     pub raw: f32,
     /// search visits (MCTS engines); NaN when not applicable
     pub visits: f32,
+    /// the engine network's raw policy prior of the move (engines that report it,
+    /// e.g. KataGo `moveInfos[].prior`); NaN when not applicable
+    pub prior: f32,
 }
 
 impl ScoredMove {
     pub fn new(action: i64, q: f32) -> Self {
-        ScoredMove { action, q, raw: f32::NAN, visits: f32::NAN }
+        ScoredMove { action, q, raw: f32::NAN, visits: f32::NAN, prior: f32::NAN }
+    }
+
+    pub fn prior(mut self, prior: f32) -> Self {
+        self.prior = prior;
+        self
     }
 
     pub fn raw(mut self, raw: f32) -> Self {
@@ -291,6 +299,11 @@ pub trait Labeller: Send + Sync + 'static {
 
     /// Whether [`ScoredMove::visits`] is filled (adds `tgt.teacher_visits`).
     fn has_visits(&self) -> bool {
+        false
+    }
+
+    /// Whether [`ScoredMove::prior`] is filled (adds `tgt.teacher_prior`).
+    fn has_prior(&self) -> bool {
         false
     }
 
