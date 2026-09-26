@@ -229,8 +229,10 @@ impl Kyoku {
             self.pending[s] = false;
             self.riichi[s] = true;
         }
-        // the seat's own discard ends same-turn furiten (a discard after its own call too;
-        // other seats' calls never do)
+        // the seat's own discard ends same-turn furiten (同巡振聴の解消は打牌時), a discard after
+        // its own call too, even a pon called out of turn order: the stricter reading (no
+        // release after a 逆巡 call) contradicts 16 recorded rons in 165k Houou games; other
+        // seats' calls never release it
         self.furiten_temp[s] = false;
         self.rinshan_draw = false;
         Ok(k)

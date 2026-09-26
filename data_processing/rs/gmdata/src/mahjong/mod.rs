@@ -133,6 +133,13 @@ struct RawGame {
     kyoku_first: Option<i64>,
 }
 
+/// A game in the conversion queue: to convert, or filtered out by its announced length.
+enum Queued {
+    Game(RawGame),
+    Tonpuusen,
+    UnknownLength,
+}
+
 /// Every game of `input`, in order; `f` returns false to stop.
 fn iter_games(input: &Path, f: &mut dyn FnMut(RawGame) -> Result<bool>) -> Result<bool> {
     let is_parquet = |p: &Path| p.extension().map(|e| e == "parquet").unwrap_or(false);
@@ -278,13 +285,30 @@ pub fn convert(inputs: &[PathBuf], out: &Path, o: &ConvertOpts) -> Result<Value>
     // Games are converted in parallel chunks and written in input order, so the output
     // (stats, --max-games and --dedup included) is identical to a sequential pass.
     const CHUNK: usize = 512;
-    let mut buf: Vec<RawGame> = Vec::with_capacity(CHUNK);
-    let mut flush = |buf: &mut Vec<RawGame>, games: &mut usize| -> Result<()> {
-        let results: Vec<Converted> = buf.par_iter().map(|g| convert_text(g, o.min_frames)).collect();
-        for (g, r) in buf.iter().zip(results) {
+    let mut buf: Vec<Queued> = Vec::with_capacity(CHUNK);
+    let mut flush = |buf: &mut Vec<Queued>, games: &mut usize| -> Result<()> {
+        let results: Vec<Option<Converted>> = buf
+            .par_iter()
+            .map(|q| match q {
+                Queued::Game(g) => Some(convert_text(g, o.min_frames)),
+                _ => None,
+            })
+            .collect();
+        for (q, r) in buf.iter().zip(results) {
             if o.max_games.map(|m| *games >= m).unwrap_or(false) {
                 break;
             }
+            let (g, r) = match (q, r) {
+                (Queued::Game(g), Some(r)) => (g, r),
+                (Queued::Tonpuusen, _) => {
+                    low_quality += 1;
+                    continue;
+                }
+                _ => {
+                    unknown_length += 1;
+                    continue;
+                }
+            };
             let Some((key, ss, mismatch)) = r else {
                 skipped += 1;
                 if skipped <= 20 {
@@ -337,20 +361,18 @@ pub fn convert(inputs: &[PathBuf], out: &Path, o: &ConvertOpts) -> Result<Value>
             if o.max_games.map(|m| games >= m).unwrap_or(false) {
                 return Ok(false);
             }
-            if o.hanchan_only {
+            // filtered games stay in the queue so that the counts (and --max-games) follow
+            // the input order exactly
+            let q = if !o.hanchan_only {
+                Queued::Game(g)
+            } else {
                 match g.kyoku_first.or_else(|| start_game_kyoku_first(&g.text)) {
-                    Some(0) => {}
-                    Some(_) => {
-                        low_quality += 1;
-                        return Ok(true);
-                    }
-                    None => {
-                        unknown_length += 1;
-                        return Ok(true);
-                    }
+                    Some(0) => Queued::Game(g),
+                    Some(_) => Queued::Tonpuusen,
+                    None => Queued::UnknownLength,
                 }
-            }
-            buf.push(g);
+            };
+            buf.push(q);
             if buf.len() >= CHUNK {
                 flush(&mut buf, &mut games)?;
             }
@@ -641,12 +663,14 @@ pub(crate) mod tests {
         let mut nolen = evs.clone();
         nolen[0].as_object_mut().unwrap().remove("kyoku_first");
         write("nolen.mjson", &nolen);
-        let run = |dedup: bool, hanchan_only: bool| {
-            let out = tmpdir(&format!("out{dedup}{hanchan_only}"));
-            let o = ConvertOpts { shard_size: 1000, max_games: None, min_frames: 1, hanchan_only, top_placements: None, dedup,
+        let run_max = |dedup: bool, hanchan_only: bool, max_games: Option<usize>| {
+            let out = tmpdir(&format!("out{dedup}{hanchan_only}{max_games:?}"));
+            let o = ConvertOpts { shard_size: 1000, max_games, min_frames: 1, hanchan_only, top_placements: None, dedup,
                                   drop_inconsistent: false, stats_only: false };
             convert(std::slice::from_ref(&src), &out, &o).unwrap()
         };
+        let run = |dedup: bool, hanchan_only: bool| run_max(dedup, hanchan_only, None);
+        // files in name order: the fixture game, copy, nolen, tonpuu
         let s = run(false, true);
         assert_eq!((s["games"].as_u64(), s["low_quality"].as_u64(), s["unknown_length"].as_u64()), (Some(2), Some(1), Some(1)));
         let s = run(true, true);
@@ -655,5 +679,8 @@ pub(crate) mod tests {
         assert_eq!((s["games"].as_u64(), s["duplicates"].as_u64()), (Some(1), Some(3)));
         let s = run(false, false);
         assert_eq!(s["games"].as_u64(), Some(4));
+        // --max-games stops where a sequential pass would: nothing after the 2nd game is counted
+        let s = run_max(false, true, Some(2));
+        assert_eq!((s["games"].as_u64(), s["low_quality"].as_u64(), s["unknown_length"].as_u64()), (Some(2), Some(0), Some(0)));
     }
 }
