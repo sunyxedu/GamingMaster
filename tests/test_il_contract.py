@@ -571,12 +571,15 @@ def test_go_and_lux_meta():
 
 def test_schema_freeze_warning():
     assert SCHEMA_FREEZE_CONVERTER_VERSION == {"chess": 3, "go": 2, "shogi": 2,
-                                               "mahjong": 2, "lux": 2}
+                                               "mahjong": 3, "lux": 2}
     msg = schema_freeze_warning("chess", SimpleNamespace(converter_version=2))
     assert msg.startswith("chess shards have converter_version 2 < 3: they predate the "
                           "frozen pre-training schema")
     assert "repetition flags + legal masks" in msg and "re-convert" in msg
     assert "komi" in schema_freeze_warning("go", SimpleNamespace(converter_version=None))
+    msg = schema_freeze_warning("mahjong", SimpleNamespace(converter_version=2))
+    assert msg.startswith("mahjong shards have converter_version 2 < 3") and "il_weight" in msg
+    assert schema_freeze_warning("mahjong", SimpleNamespace(converter_version=3)) is None
     assert schema_freeze_warning("chess", SimpleNamespace(converter_version=3)) is None
     assert schema_freeze_warning("othello", SimpleNamespace(converter_version=1)) is None
     assert schema_freeze_warning("generals", SimpleNamespace(converter_version=1)) is None

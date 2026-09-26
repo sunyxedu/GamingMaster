@@ -18,7 +18,7 @@ exported here)::
     31..33  P F C           (haku, hatsu, chun — white/green/red dragons)
 
 Per-frame feature layouts (produced by
-``gmdata mahjong convert`` (data_processing/rs/gmdata/src/mahjong.rs), consumed here):
+``gmdata mahjong convert`` (data_processing/rs/gmdata/src/mahjong/), consumed here):
 
 ``tiles_seq`` [B, T, 34, TILE_FEATURE_DIM=16] float — per tile kind k:
     0..4   own concealed-hand count one-hot (0..4)
@@ -34,7 +34,8 @@ Per-frame feature layouts (produced by
     13     k is a terminal or honor
     14     own concealed hand holds the red five of this kind
     15     focus flag: the just-drawn tile on own-turn frames, the
-           claimable discard on call-opportunity frames
+           claimable discard (or robbable kakan tile) on call-opportunity
+           frames
 
 ``players_seq`` [B, T, 4, PLAYER_FEATURE_DIM=12] float — player-relative
 row r (0 self, 1 shimocha, 2 toimen, 3 kamicha):
@@ -45,7 +46,8 @@ row r (0 self, 1 shimocha, 2 toimen, 3 kamicha):
     7      meld count / 4
     8      discard count / 24
     9      kan count / 4
-    10     focus actor (the discarder on call-opportunity frames)
+    10     focus actor (the discarder / kakan declarer on call-opportunity
+           frames)
     11     1.0 bias
 
 ``table_seq`` [B, T, TABLE_FEATURE_DIM=12] float:
