@@ -380,6 +380,55 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    /// Real converter output (read-only): the first shard of every game directory under
+    /// `${GM_DATA_SHARDS:-$HOME/gm-data/shards}` reads completely and overlays cleanly.
+    /// Skipped when the directory does not exist.
+    #[test]
+    fn real_shards_read_and_overlay() {
+        let root = std::env::var_os("GM_DATA_SHARDS")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("gm-data").join("shards")));
+        let Some(root) = root.filter(|r| r.is_dir()) else {
+            eprintln!("skipping: no real shards");
+            return;
+        };
+        let mut games: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).filter(|p| p.is_dir()).collect();
+        games.sort();
+        let out = tmpdir("overlay-real");
+        let mut checked = 0;
+        for g in games {
+            let mut shards: Vec<PathBuf> = std::fs::read_dir(&g).unwrap().map(|e| e.unwrap().path()).filter(|p| ShardReader::is_shard(p)).collect();
+            shards.sort();
+            let Some(dir) = shards.first() else { continue };
+            let r = ShardReader::open(dir).unwrap();
+            let all = r.read_all().unwrap();
+            for (name, t) in &all {
+                assert_eq!(t.frames(), r.n_frames, "{}: {name}", dir.display());
+                if t.col.dtype() == DType::Bits {
+                    assert_eq!(t.rows_f32(0, r.n_frames).unwrap().len(), r.n_frames * t.frame_len());
+                }
+            }
+            let last = r.samples.last().unwrap();
+            assert_eq!(last.start + last.length, r.n_frames);
+            let mut ov = OverlayWriter::new(&r);
+            ov.add_f32("tgt.engine_value", &[], vec![0.0; r.n_frames]).unwrap();
+            ov.add_bool("tgt.engine_value_mask", &[], &vec![false; r.n_frames]).unwrap();
+            ov.set_teacher(json!({"engine": "none"}));
+            let dst = out.join(r.name());
+            ov.commit(&dst).unwrap();
+            let o = ShardReader::open(&dst).unwrap();
+            assert_eq!(o.samples, r.samples);
+            for (name, info) in &r.tensors {
+                assert_eq!(o.tensors[name], *info);
+                assert_eq!(std::fs::read(dst.join(&info.file)).unwrap(), std::fs::read(r.dir.join(&info.file)).unwrap());
+            }
+            eprintln!("real shard {} ({} tensors, {} frames): ok", dir.display(), all.len(), r.n_frames);
+            checked += 1;
+        }
+        eprintln!("{checked} real shard(s) checked");
+        std::fs::remove_dir_all(&out).unwrap();
+    }
+
     #[test]
     fn rejects_bad_columns() {
         let root = tmpdir("overlay-bad");
