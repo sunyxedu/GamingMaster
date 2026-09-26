@@ -8,7 +8,8 @@ Plays uniformly random legal moves with ``autoreset`` (the batch never thins
 out) and reports env steps/s (one step = one move of one env = one frame of
 its stream) for ``env.step`` alone — observation building included, since
 ``step`` returns the next frame — and for the whole loop with the env's own
-``random_actions`` (a torch multinomial over the legal mask).
+``random_actions`` (uniform over the legal mask: othello a torch
+multinomial, gomoku an inverse CDF).
 """
 
 from __future__ import annotations

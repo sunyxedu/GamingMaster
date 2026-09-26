@@ -464,7 +464,8 @@ class GomokuSpec(ForcedPassPlacementSpec):
     not the sampled k3 estimate of the taken one), and (3) a placement-only
     μ / π when a checkpoint does carry a pass head: the env applies the
     placement whatever pass flag is sampled, so the pass Bernoulli is not
-    part of the action (anchored to ``passed = False`` by the KL only)."""
+    part of the action (the full-head KL keeps it near the reference's pass
+    head, which IL trained on all-False targets)."""
 
     def env_kwargs(self, cfg):
         return {"board_size": (int(cfg.board_h), int(cfg.board_w))}
