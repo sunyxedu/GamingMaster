@@ -31,8 +31,8 @@ import os
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
-
 
 # ======================================================================
 # Direction offsets  (consistent with data_processing convention)
@@ -46,6 +46,31 @@ _BLANK = 0
 _CITY = 1
 _GENERAL = 2
 _MOUNTAIN = 3
+
+_N_STATES = 11
+_STATE_IDS = np.arange(_N_STATES).reshape(-1, 1, 1)
+# float32(math.log1p(a) / 10) per army value a — the army channel, looked up
+# instead of computed per tile (same float64 math, same float32 rounding as
+# writing the Python float into a float32 tensor); grown on demand.
+_LOG_ARMY = np.zeros(0, dtype=np.float32)
+
+
+def _log_army(army: np.ndarray) -> np.ndarray:
+    global _LOG_ARMY
+    top = int(army.max()) if army.size else 0
+    if int(army.min(initial=0)) < 0:
+        raise ValueError("math domain error: negative army on a visible tile")
+    if top >= len(_LOG_ARMY):
+        n = max(top + 1, 2 * len(_LOG_ARMY), 1024)
+        _LOG_ARMY = np.array([math.log1p(a) / 10.0 for a in range(n)], dtype=np.float32)
+    return _LOG_ARMY[army]
+
+
+def _pad1(a: np.ndarray, fill=0) -> np.ndarray:
+    """``a`` with a one-cell border of ``fill`` (np.pad without its overhead)."""
+    out = np.full((a.shape[0] + 2, a.shape[1] + 2), fill, dtype=a.dtype)
+    out[1:-1, 1:-1] = a
+    return out
 
 
 class _Tile:
@@ -140,6 +165,15 @@ class GeneralsEnv:
         # won't have on the real server), so the breakdown must follow it.
         self.breakdown_pid: int = 0
 
+        # Seat whose move executes first when the two moves of a tick tie on
+        # every priority key (the last one is the move order).  0 is this
+        # env's rule; replaying a recorded game sets the seat the replay
+        # lists first, which is what the replay simulator (and so the IL
+        # data) uses — see env.vec_generals.replay_tiebreak_by_step.
+        self.tiebreak_first: int = 0
+        # (terrain, army, occupied) arrays of the last observed state
+        self.obs_state_arrays: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None
+
         # Neutral-city reward budget for the WHOLE map: the per-city unit is
         # budget / n_cities (capped at 0.25). A flat per-city bonus let
         # city-dense replay maps pay out 2-3× the terminal reward per game,
@@ -190,11 +224,17 @@ class GeneralsEnv:
     # Reset
     # ==================================================================
 
-    def reset(self, seed: Optional[int] = None) -> Dict[int, Dict[str, torch.Tensor]]:
+    def reset(
+        self, seed: Optional[int] = None, map_data: Optional[Dict] = None,
+    ) -> Dict[int, Dict[str, torch.Tensor]]:
         """Reset the environment and return initial observations.
 
-        If a map pool is loaded (via ``load_map_pool``), a random replay map
-        is used.  Otherwise falls back to random map generation.
+        ``map_data`` (a map-pool entry: map_w / map_h / generals / cities /
+        city_armies / mountains) plays exactly that map, player ``i`` on
+        ``generals[i]`` — no random seat swap (replaying a recorded game,
+        env.vec_generals).  Otherwise, if a map pool is loaded (via
+        ``load_map_pool``), a random replay map is used, else random map
+        generation.
         """
         if seed is not None:
             random.seed(seed)
@@ -208,7 +248,9 @@ class GeneralsEnv:
         self.seen_mountains = [set(), set()]
 
         self.current_map_idx: Optional[int] = None
-        if self.map_pool:
+        if map_data is not None:
+            self._generate_map_from_replay(map_data)
+        elif self.map_pool:
             self.current_map_idx = random.randint(0, len(self.map_pool) - 1)
             map_data = self.map_pool[self.current_map_idx]
             # Randomly swap general assignments so P0 doesn't always get generals[0]
@@ -259,7 +301,7 @@ class GeneralsEnv:
             1: self._heuristic(1),
         }
 
-        return {0: self._get_observation(0), 1: self._get_observation(1)}
+        return self._observations()
 
     # ==================================================================
     # Step (simultaneous)
@@ -456,53 +498,95 @@ class GeneralsEnv:
 
         info["reward_breakdown"] = reward_breakdown
         info["turn"] = self.turn  # turn just completed (post-increment)
-        obs = {0: self._get_observation(0), 1: self._get_observation(1)}
+        obs = self._observations()
         return obs, rewards, self.done, info
 
     # ==================================================================
     # Observation
     # ==================================================================
 
-    def _get_observation(self, player_id: int) -> Dict[str, torch.Tensor]:
+    def _state_arrays(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """(terrain, army, occupied) [H, W] int64 of the real map bounds;
+        padding reads as blank / 0 / neutral."""
+        H, W = self.grid_h, self.grid_w
+        rH, rW = self.real_h, self.real_w
+        terrain = np.zeros((H, W), dtype=np.int64)
+        army = np.zeros((H, W), dtype=np.int64)
+        occ = np.full((H, W), -1, dtype=np.int64)
+        for r in range(rH):
+            row = self.map[r]
+            terrain[r, :rW] = [t.terrain for t in row[:rW]]
+            army[r, :rW] = [t.army for t in row[:rW]]
+            occ[r, :rW] = [t.occupied for t in row[:rW]]
+        return terrain, army, occ
+
+    def _observations(self) -> Dict[int, Dict[str, torch.Tensor]]:
+        """Both players' observations (the map read once; the arrays are
+        kept as ``obs_state_arrays`` — the state these observations show)."""
+        arrays = self._state_arrays()
+        self.obs_state_arrays = arrays
+        return {0: self._get_observation(0, arrays), 1: self._get_observation(1, arrays)}
+
+    def _get_observation(
+        self, player_id: int,
+        arrays: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """One player's observation, whole-grid numpy (``_tile_to_state`` is
+        the per-tile reference of the state encoding;
+        tests/test_generals_obs_vectorised.py pins this to the original
+        per-tile implementation bit for bit, memory updates included)."""
         H, W = self.grid_h, self.grid_w  # 25, 25 (padded)
         rH, rW = self.real_h, self.real_w  # real map bounds
+        terrain, army, occ = arrays if arrays is not None else self._state_arrays()
+        inb = np.zeros((H, W), dtype=bool)
+        inb[:rH, :rW] = True
 
-        # --- compute vision for this player ---
-        vision = [[0] * W for _ in range(H)]
-        for idx in self.player_land[player_id]:
-            r, c = divmod(idx, W)
-            vision[r][c] = 1   # owned
-            for dr in [-1, 0, 1]:
-                for dc in [-1, 0, 1]:
-                    nr, nc = r + dr, c + dc
-                    if 0 <= nr < rH and 0 <= nc < rW and vision[nr][nc] != 1:
-                        vision[nr][nc] = 2  # visible
+        # --- vision: 1 owned (player_land), 2 within the 8-neighbourhood of
+        # an owned tile and inside the real map, 0 elsewhere ---
+        own = np.zeros(H * W, dtype=bool)
+        own[self.player_land[player_id]] = True
+        own = own.reshape(H, W)
+        pad = _pad1(own, False)
+        near = np.zeros((H, W), dtype=bool)
+        for dr in range(3):
+            for dc in range(3):
+                near |= pad[dr:dr + H, dc:dc + W]
+        visible = near & inb & ~own
+        unseen = inb & ~near
 
-        # --- build grid channels ---
-        # Only encode tiles within real map bounds (padding stays all-zero,
-        # matching how the IL converter pads data)
-        grid = torch.zeros(12, H, W, dtype=torch.float32)
+        # --- tile states (padding stays -1 → all-zero one-hot, matching how
+        # the IL converter pads data); same precedence as _tile_to_state ---
+        blank, city = terrain == _BLANK, terrain == _CITY
+        gen, mtn = terrain == _GENERAL, terrain == _MOUNTAIN
+        neutral = occ == -1
+        enemy = ~neutral & (occ != player_id)
+        seen_state = np.select(
+            [blank & neutral, city & neutral, mtn, enemy & blank, enemy & city, enemy & gen],
+            [2, 3, 4, 8, 9, 10], default=2)
+        own_state = np.select([blank, city, gen], [5, 6, 7], default=5)
+        state = np.where(own & inb, own_state,
+                         np.where(visible, seen_state,
+                                  np.where(unseen, np.where(blank | gen, 0, 1), -1)))
         memory = (self.seen_mountains[player_id]
                   if getattr(self, "memory_vision", True) else None)
-        for r in range(rH):
-            for c in range(rW):
-                tile = self.map[r][c]
-                v = vision[r][c]
-                state = self._tile_to_state(tile, v, player_id)
-                if memory is not None:
-                    idx = r * W + c
-                    if v >= 1 and tile.terrain == _MOUNTAIN:
-                        memory.add(idx)
-                    elif v == 0 and idx in memory:
-                        # Sighted-before mountain: stays a mountain in this
-                        # player's observation instead of decaying to the
-                        # generic fog-obstacle state.
-                        state = 4
-                if 0 <= state <= 10:
-                    grid[state, r, c] = 1.0
-                # Army channel (only for visible tiles)
-                if v >= 1 and tile.terrain != _MOUNTAIN:
-                    grid[11, r, c] = math.log1p(tile.army) / 10.0
+        if memory is not None:
+            sighted = (own | visible) & inb & mtn
+            if sighted.any():
+                memory.update(np.flatnonzero(sighted).tolist())
+            if memory:
+                # Sighted-before mountain: stays a mountain in this player's
+                # observation instead of decaying to the generic fog-obstacle
+                # state.
+                mem = np.zeros(H * W, dtype=bool)
+                mem[[i for i in memory if 0 <= i < H * W]] = True
+                state = np.where(unseen & mem.reshape(H, W), 4, state)
+
+        # --- grid: 11 one-hot channels + army (only for seen tiles) ---
+        seen_army = (own | visible) & inb & ~mtn
+        army_ch = np.where(seen_army, _log_army(np.where(seen_army, army, 0)),
+                           np.float32(0.0))
+        grid = torch.from_numpy(np.concatenate(
+            [(state[None] == _STATE_IDS).astype(np.float32), army_ch[None]]))
 
         # --- globals ---
         stats = self._player_stats(player_id)
@@ -524,11 +608,8 @@ class GeneralsEnv:
         globals_vec = torch.tensor(glb, dtype=torch.float32)
 
         # --- legal mask (owned tiles with army > 1) ---
-        legal = torch.zeros(1, H, W, dtype=torch.bool)
-        for idx in self.player_land[player_id]:
-            r, c = divmod(idx, W)
-            if self.map[r][c].army > 1:
-                legal[0, r, c] = True
+        movable = own & (army > 1)
+        legal = torch.from_numpy(movable[None].copy())
 
         # --- capture-feasibility labels (auxiliary supervision) ---
         # For each movable owned tile and direction onto a DEFENDED
@@ -538,27 +619,22 @@ class GeneralsEnv:
         # supervising it directly forces the encoder to represent the
         # comparison. Neighbours of owned tiles are always visible, so the
         # labels never leak fogged information.
-        cap_label = torch.zeros(4, H, W, dtype=torch.float32)
-        cap_mask = torch.zeros(4, H, W, dtype=torch.bool)
-        for idx in self.player_land[player_id]:
-            r, c = divmod(idx, W)
-            a = self.map[r][c].army
-            if a <= 1:
-                continue
-            for d in range(4):
-                nr, nc = r + _DIR_DR[d], c + _DIR_DC[d]
-                if not (0 <= nr < rH and 0 <= nc < rW):
-                    continue
-                t = self.map[nr][nc]
-                if t.terrain == _MOUNTAIN:
-                    continue
-                defended = (t.occupied == 1 - player_id
-                            or (t.occupied == -1 and t.terrain == _CITY))
-                if not defended:
-                    continue
-                cap_mask[d, r, c] = True
-                if a - 1 > t.army:
-                    cap_label[d, r, c] = 1.0
+        inb_p = _pad1(inb, False)
+        ter_p = _pad1(terrain)
+        occ_p = _pad1(occ, -1)
+        army_p = _pad1(army)
+        cap_mask_np = np.zeros((4, H, W), dtype=bool)
+        cap_label_np = np.zeros((4, H, W), dtype=np.float32)
+        for d in range(4):
+            sl = (slice(1 + _DIR_DR[d], 1 + _DIR_DR[d] + H),
+                  slice(1 + _DIR_DC[d], 1 + _DIR_DC[d] + W))
+            t_ter, t_occ = ter_p[sl], occ_p[sl]
+            defended = (t_occ == 1 - player_id) | ((t_occ == -1) & (t_ter == _CITY))
+            m = movable & inb_p[sl] & (t_ter != _MOUNTAIN) & defended
+            cap_mask_np[d] = m
+            cap_label_np[d] = m & (army - 1 > army_p[sl])
+        cap_mask = torch.from_numpy(cap_mask_np)
+        cap_label = torch.from_numpy(cap_label_np)
 
         return {"grid": grid, "globals": globals_vec, "legal_mask": legal,
                 "capture_label": cap_label, "capture_mask": cap_mask,
@@ -792,8 +868,9 @@ class GeneralsEnv:
 
         # Two moves — determine priority (from simulator)
         m0, m1 = moves[0][0], moves[1][0]
-        p0 = self._move_priority(m0, m1, 0)
-        p1 = self._move_priority(m1, m0, 1)
+        i0 = 0 if self.tiebreak_first == 0 else 1
+        p0 = self._move_priority(m0, m1, i0)
+        p1 = self._move_priority(m1, m0, 1 - i0)
 
         if p0 <= p1:
             first, second = m0, m1
