@@ -367,6 +367,16 @@ mod tests {
         let o = a.common.to_opts().unwrap();
         assert_eq!((o.workers, o.tau, o.max_moves, o.every_nth_frame, o.part), (3, 0.1, Some(8), 2, Some((1, 4))));
         assert_eq!(o.tie_weight, Some(0.5));
+        // othello --disc-tau replaces the softmax: it takes no --tau / --tie-weight
+        let oth = |extra: &[&str]| {
+            let mut v = vec!["gmdata", "othello", "--input", "i", "--out", "o", "--engine", "/bin/sh"];
+            v.extend_from_slice(extra);
+            Cli::try_parse_from(v).map(|c| match c.cmd { Cmd::Othello(a) => a, _ => unreachable!() })
+        };
+        assert_eq!(oth(&["--tie-weight", "0"]).unwrap().common.tie_weight, Some(0.0));
+        assert_eq!(oth(&[]).unwrap().common.tie_weight, None, "default: the driver's 2.0 where it applies");
+        assert!(oth(&["--disc-tau", "2", "--tie-weight", "1"]).is_err() && oth(&["--disc-tau", "2", "--tau", "0.1"]).is_err());
+        assert!(oth(&["--disc-tau", "2"]).is_ok());
         assert_eq!(o.engine_options, vec![("Hash".to_string(), "16".to_string())]);
         assert_eq!(o.limits.get("nodes"), Some("1000"));
         assert_eq!((o.policy, o.link), (Some(PolicyKind::Visits), LinkPolicy::Copy));

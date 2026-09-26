@@ -6,7 +6,7 @@
 use super::*;
 use crate::label::driver::{run, RunOpts};
 use crate::label::testkit::{engine_path, overlay_tensor, quiet_opts, tmpdir};
-use crate::label::transform::softmax_q;
+use crate::label::transform::{softmax_q_tie, tie_scores};
 use gmshard::{Column, DType};
 use std::path::Path;
 
@@ -372,8 +372,9 @@ fn golden_real_wthor_shard() {
 
 // ------------------------------------------------------------------ end to end (fake engine)
 
-/// Check every teacher column of an overlay against the fake engine's answers;
-/// returns (labelled frames, exact frames, pass frames).
+/// Check every teacher column of an overlay against the fake engine's answers (the
+/// default softmax teacher with tie weight 2, or `--disc-tau`); returns (labelled frames,
+/// exact frames, pass frames).
 fn check_overlay(root: &Path, out: &str, shard: &str, disc_tau: Option<f64>) -> (usize, usize, usize) {
     let base = ShardReader::open(&root.join("base").join(shard)).unwrap();
     let o = ShardReader::open(&root.join(out).join(shard)).unwrap();
@@ -421,9 +422,14 @@ fn check_overlay(root: &Path, out: &str, shard: &str, disc_tau: Option<f64>) -> 
             }
             let mut want: Vec<(i64, i32, f32)> =
                 FakeEgaroucid::rows(pos).iter().map(|r| (r.square, r.discs, q_from_discs(r.discs, exact, DISC_SCALE))).collect();
-            want.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+            match disc_tau {
+                // the softmax teacher: by Q, among equal Q by the disc score, then square
+                None => want.sort_by(|a, b| b.2.total_cmp(&a.2).then(b.1.cmp(&a.1)).then(a.0.cmp(&b.0))),
+                // the custom policy keeps the plain order: by Q, then square
+                Some(_) => want.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0))),
+            }
             let n = want.len();
-            assert_eq!(row[..n], want.iter().map(|w| w.0).collect::<Vec<_>>()[..], "frame {f}: every legal move, sorted by Q then square");
+            assert_eq!(row[..n], want.iter().map(|w| w.0).collect::<Vec<_>>()[..], "frame {f}: every legal move, sorted");
             assert!(row[n..].iter().all(|&a| a == -1) && qs[n..].iter().all(|x| x.is_nan()));
             for (j, w) in want.iter().enumerate() {
                 assert_eq!((qs[j], rs[j]), (w.2, w.1 as f32));
@@ -434,7 +440,11 @@ fn check_overlay(root: &Path, out: &str, shard: &str, disc_tau: Option<f64>) -> 
             assert_eq!(evm[f], 1);
             assert!((ev[f] - (2.0 * want[0].2 - 1.0)).abs() < 1e-6);
             let pi = match disc_tau {
-                None => softmax_q(&qs[..n], 0.05),
+                None => {
+                    let u: Vec<f32> = rs[..n].iter().map(|&r| secondary_utility(r).unwrap()).collect();
+                    assert!(tie_scores(&qs[..n], &u, 0.05, 2.0).windows(2).all(|w| w[0] >= w[1]), "frame {f}: sorted by Q/τ + w·u");
+                    softmax_q_tie(&qs[..n], &u, 0.05, 2.0)
+                }
                 Some(t) => {
                     let e: Vec<f64> = want.iter().map(|w| ((w.1 - want.iter().map(|x| x.1).max().unwrap()) as f64 / t).exp()).collect();
                     let s: f64 = e.iter().sum();
@@ -466,7 +476,8 @@ fn end_to_end_with_the_fake_engine() {
     assert_eq!(s.stats.queries + s.stats.cache_hits, s.stats.labelled);
     assert_eq!(s.teacher["engine"], "Egaroucid for Console 7.8.0");
     assert_eq!(s.teacher["raw_unit"], "discs");
-    assert_eq!(s.teacher["policy"], json!({"kind": "softmax", "tau": 0.05}));
+    assert_eq!(s.teacher["policy"], json!({"kind": "softmax", "tau": 0.05, "tie_weight": 2.0, "secondary": {"of": "teacher_raw", "discs": "u = tanh(raw / 16)"}}));
+    assert_eq!((s.teacher["labeller_version"].as_u64(), s.teacher["core_version"].as_u64()), (Some(2), Some(2)));
     assert_eq!(s.teacher["limits"], json!({"level": "15", "exact_empties": "20"}));
     assert_eq!(s.teacher["heads"]["place"], json!({"kind": "categorical", "n": 64, "k": 64, "storage": "dense"}));
     assert_eq!(s.teacher["heads"]["pass"], json!({"kind": "bernoulli"}));
@@ -490,14 +501,100 @@ fn end_to_end_with_the_fake_engine() {
     assert_eq!(s2.teacher["policy"], json!({"kind": "softmax_discs", "disc_tau": 2.0}));
     for shard in ["othello_00000", "othello_00001"] {
         check_overlay(&root, "disc", shard, Some(2.0));
-        for col in ["tgt.teacher_q.npy", "tgt.teacher_idx.npy", "tgt.engine_value.npy"] {
-            assert_eq!(std::fs::read(root.join("out").join(shard).join(col)).unwrap(), std::fs::read(root.join("disc").join(shard).join(col)).unwrap());
+        let col = |dir: &str, name: &str| ShardReader::open(&root.join(dir).join(shard)).unwrap().read(name).unwrap();
+        assert_eq!(std::fs::read(root.join("out").join(shard).join("tgt.engine_value.npy")).unwrap(), std::fs::read(root.join("disc").join(shard).join("tgt.engine_value.npy")).unwrap());
+        // the same moves and Q (the softmax teacher orders equal Q by discs, --disc-tau by square)
+        let (Column::I64(ia), Column::F32(qa)) = (col("out", "tgt.teacher_idx").col, col("out", "tgt.teacher_q").col) else { panic!() };
+        let (Column::I64(ib), Column::F32(qb)) = (col("disc", "tgt.teacher_idx").col, col("disc", "tgt.teacher_q").col) else { panic!() };
+        for f in 0..ia.len() / 32 {
+            let pairs = |i: &[i64], q: &[f32]| {
+                let mut v: Vec<(i64, u32)> = (f * 32..f * 32 + 32).filter(|&j| i[j] >= 0).map(|j| (i[j], q[j].to_bits())).collect();
+                v.sort();
+                v
+            };
+            assert_eq!(pairs(&ia, &qa), pairs(&ib, &qb), "frame {f}");
         }
     }
     // resuming the first run with --disc-tau is refused (different teacher settings)
     let mut clash = opts(&root, fake_engine_command());
     clash.out = root.join("out");
     assert!(run(OthelloLabeller::new(DISC_SCALE, Some(2.0)).unwrap(), &clash).unwrap_err().to_string().contains("different settings"));
+    // --disc-tau replaces the softmax: an explicit --tie-weight is refused
+    let mut both = opts(&root, fake_engine_command());
+    both.out = root.join("both");
+    both.tie_weight = Some(1.0);
+    let err = run(OthelloLabeller::new(DISC_SCALE, Some(2.0)).unwrap(), &both).unwrap_err().to_string();
+    assert!(err.contains("--tie-weight 1") && err.contains("softmax_discs"), "{err}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn secondary_utility_of_disc_scores() {
+    assert_eq!(secondary_utility(0.0), Some(0.0));
+    for d in [-64, -20, -4, 1, 8, 16, 48, 64] {
+        let u = secondary_utility(d as f32).unwrap();
+        assert!((u as f64 - (d as f64 / 16.0).tanh()).abs() < 1e-7 && u.abs() < 1.0, "{d}");
+        assert_eq!(secondary_utility(-d as f32).unwrap(), -u);
+    }
+    let us: Vec<f32> = (-64..=64).map(|d| secondary_utility(d as f32).unwrap()).collect();
+    assert!(us.windows(2).all(|w| w[0] < w[1]), "strictly increasing in the disc score");
+    assert!(secondary_utility(f32::NAN).is_none());
+    // a pass is scored like any move (its raw = −(the opponent's best reply))
+    let lab = OthelloLabeller::default();
+    assert_eq!(lab.secondary(&ScoredMove::new(PASS_ID, 0.2).raw(-3.0)), secondary_utility(-3.0));
+    assert!(lab.secondary_meta().is_some());
+}
+
+/// Every move of a position loses (or every move wins) by a different margin: in a "lost"
+/// position (hash parity) the scores are −1 … −40, in a "won" one +1 … +40.
+fn decided_score(pos: &OthPos, sq: i64) -> i32 {
+    let won = splitmix(pos.mine() ^ splitmix(pos.theirs())) % 2 == 0;
+    let m = 1 + (FakeEgaroucid::score(pos, sq) + 20);
+    if won { m } else { -m }
+}
+
+/// Saturated Q: in exact frames every move is lost (Q = 0) or won (Q = 1) by a different
+/// margin; the teacher prefers the smaller loss / the larger win: π ∝ exp(w·tanh(discs/16)).
+#[test]
+fn saturated_q_follows_the_secondary_utility_end_to_end() {
+    let root = tmpdir("oth-tie");
+    converter_shards(&root, 8, 8, 17);
+    let cmd = EngineCommand::in_process("decided-egaroucid", || FakeEgaroucid::new().with_scores(decided_score));
+    let s = run(OthelloLabeller::default(), &opts(&root, cmd)).unwrap();
+    assert_eq!((s.stats.failed_samples(), s.stats.engine_errors, s.stats.bad_analysis), (0, 0, 0));
+    let o = ShardReader::open(&root.join("out/othello_00000")).unwrap();
+    let (idx, q, raw, pp) =
+        (o.read_i64("tgt.teacher_idx").unwrap(), o.read_f32("tgt.teacher_q").unwrap(), o.read_f32("tgt.teacher_raw").unwrap(), o.read_f32("tgt.place_probs").unwrap());
+    let data = ShardData::load(ShardReader::open(&root.join("base/othello_00000")).unwrap()).unwrap();
+    let lab = OthelloLabeller::default();
+    let (mut lost, mut won) = (0, 0);
+    for i in 0..data.reader.n_samples() {
+        let v = data.view(i);
+        for (t, pos) in lab.replay(&v).unwrap().iter().enumerate() {
+            let f = v.start + t;
+            if pos.n_legal() < 2 || pos.empties() > FakeEgaroucid::EXACT_EMPTIES {
+                continue;
+            }
+            let n = pos.n_legal() as usize;
+            let (row, qs, rs) = (&idx[f * 32..f * 32 + n], &q[f * 32..f * 32 + n], &raw[f * 32..f * 32 + n]);
+            assert!(qs.iter().all(|&x| x == qs[0]) && (qs[0] == 0.0 || qs[0] == 1.0), "exact: all Q equal {qs:?}");
+            assert!(rs.windows(2).all(|w| w[0] >= w[1]), "best first by discs: {rs:?}");
+            lost += (qs[0] == 0.0) as usize;
+            won += (qs[0] == 1.0) as usize;
+            // π ∝ exp(2·tanh(discs/16)) exactly as re-derived here
+            let e: Vec<f64> = rs.iter().map(|&d| (2.0 * (d as f64 / 16.0).tanh()).exp()).collect();
+            let z: f64 = e.iter().sum();
+            for (j, &sq) in row.iter().enumerate() {
+                assert!((pp[f * 64 + sq as usize] as f64 - e[j] / z).abs() < 1e-6, "frame {f} square {sq}");
+            }
+            // the smaller loss (larger win) gets more mass whenever the margins differ
+            for j in 1..n {
+                let (a, b) = (pp[f * 64 + row[j - 1] as usize], pp[f * 64 + row[j] as usize]);
+                assert!(if rs[j - 1] > rs[j] { a > b } else { a == b }, "frame {f}: {rs:?}");
+            }
+        }
+    }
+    assert!(lost > 10 && won > 10, "{lost} lost, {won} won exact frames");
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -707,7 +804,8 @@ fn real_egaroucid_reproduces_wthor_theoretical_scores() {
 }
 
 /// The full pipeline with the real engine on converter shards (fast search settings):
-/// labels are well formed, exact frames have W/D/L Q, and two worker layouts agree.
+/// labels are well formed, exact frames have W/D/L Q, two worker layouts agree, and in
+/// exactly lost (won) positions the teacher prefers the smaller loss (the larger win).
 #[test]
 fn real_egaroucid_end_to_end() {
     let Some(engine) = real_engine() else { return };
@@ -729,7 +827,7 @@ fn real_egaroucid_end_to_end() {
     );
     let data = ShardData::load(ShardReader::open(&root.join("base/othello_00000")).unwrap()).unwrap();
     let lab = OthelloLabeller::default();
-    let mut exact_frames = 0;
+    let (mut exact_frames, mut lost_split, mut won_split) = (0, 0, 0);
     for i in 0..data.reader.n_samples() {
         let v = data.view(i);
         for (t, pos) in lab.replay(&v).unwrap().iter().enumerate() {
@@ -760,9 +858,27 @@ fn real_egaroucid_end_to_end() {
             }
             exact_frames += (pos.empties() <= 12) as usize;
             assert!((pp[f * 64..(f + 1) * 64].iter().sum::<f32>() - 1.0).abs() < 1e-5);
+            // π = softmax(Q/τ + 2·tanh(discs/16)) of the stored columns, best first by (Q, discs)
+            let (qs, rs) = (&q[f * 32..f * 32 + n], &raw[f * 32..f * 32 + n]);
+            let e: Vec<f64> = qs.iter().zip(rs).map(|(&x, &d)| ((x as f64 - qs[0] as f64) / 0.05 + 2.0 * (d as f64 / 16.0).tanh()).exp()).collect();
+            let z: f64 = e.iter().sum();
+            for j in 0..n {
+                assert!((pp[f * 64 + row[j] as usize] as f64 - e[j] / z).abs() < 1e-5, "frame {f}");
+                assert!(j == 0 || qs[j - 1] > qs[j] || (qs[j - 1] == qs[j] && rs[j - 1] >= rs[j]), "frame {f}: {qs:?} {rs:?}");
+            }
+            // an exactly lost / won position with moves of different margins: the smaller
+            // loss (larger win) gets more mass, not the same (the saturated plain softmax)
+            if pos.empties() <= 12 && qs.iter().all(|&x| x == qs[0]) && qs[0] != 0.5 && rs[0] > rs[n - 1] {
+                let (best, worst) = (pp[f * 64 + row[0] as usize], pp[f * 64 + row[n - 1] as usize]);
+                assert!(best > worst, "frame {f}: discs {rs:?} → {best} vs {worst}");
+                lost_split += (qs[0] == 0.0) as usize;
+                won_split += (qs[0] == 1.0) as usize;
+            }
         }
     }
     assert!(exact_frames > 0);
+    eprintln!("{exact_frames} exact frames: {lost_split} lost and {won_split} won with moves of different margins");
+    assert!(lost_split > 0 && won_split > 0, "random games reach decided endgames");
     let mut o1 = opts(&root, EngineCommand::process(&engine, &[]));
     o1.limits = o.limits.clone();
     o1.workers = 1;

@@ -58,8 +58,9 @@
 //! # Labels
 //!
 //! * `tgt.teacher_idx` [T,K] = square `row·8 + col` (the tgt.place_idx encoding: a1 = 0,
-//!   h1 = 7, a8 = 56; the letter is the column), best first (by Q, ties by square; sort by
-//!   `teacher_raw` to rank by margin); 64 = pass, the single entry of a pass frame.
+//!   h1 = 7, a8 = 56; the letter is the column), best first (by Q, ties by the disc score,
+//!   then by square — under `--disc-tau` by Q, ties by square); 64 = pass, the single
+//!   entry of a pass frame.
 //! * `tgt.teacher_q` [T,K] = mover-POV expected score: an exact result (the row reports
 //!   depth = empties at 100%) gives win 1 / draw 0.5 / loss 0; any other score
 //!   `Q = 1 / (1 + exp(−discs / s))` with s = `--disc-scale`.
@@ -81,16 +82,31 @@
 //!
 //! # Defaults and why
 //!
-//! * `--policy softmax --tau 0.05`: π ∝ exp(Q/τ), as for the other games (the default
-//!   because Q is the unit shared across games and the value target, and because it
-//!   plays for the win: in decided positions — |discs| ≳ 8, Q > 0.97 — Q saturates, so
-//!   the teacher spreads over all moves that keep the win, exactly: uniform over the
-//!   winning moves, instead of chasing disc margin). Near Q = 0.5 the disc temperature is
-//!   4·s·τ ≈ 0.46 discs (a move one disc worse gets e^−2.2 ≈ 0.11 of the weight); mean
-//!   teacher entropy on WTHOR frames is 1.2 nats. Softer: a larger `--tau`, or
-//!   `--disc-tau T`: π ∝ exp(discs / T) in every position — margin-maximising, like the
-//!   WTHOR "theoretical score" — recorded as policy `{"kind": "softmax_discs",
-//!   "disc_tau": T}`; Q and engine_value are the same either way.
+//! * `--policy softmax --tau 0.05 --tie-weight 2`: π ∝ exp(Q/τ + w·u), u = tanh(discs/16)
+//!   of `tgt.teacher_raw` ([`secondary_utility`]; exact solves and midgame estimates
+//!   alike), as for the other games. Q is the unit shared across games and the value
+//!   target, and it plays for the win: a move that keeps a win beats any that does not.
+//!   But Q saturates in decided positions — exact solves give Q ∈ {0, ½, 1}, midgame
+//!   estimates Q > 0.97 from |discs| ≳ 8 — where `exp(Q/τ)` alone is uniform over the
+//!   moves: on two real 2000+ WTHOR shards labelled at the defaults (5.0k move frames)
+//!   11–12% of the move frames are exactly lost (5–8% exactly won), their moves 15–17
+//!   discs apart on average (up to 48), and the plain teacher put the same mass on the
+//!   smallest and the largest loss (and on every winning move alike). The tie-break
+//!   orders those by margin: within one Q class the weight ratio is e^(w·Δu), at most
+//!   e^(2w) ≈ 55 (a 4-disc loss vs a 20-disc loss: u = −0.24 vs −0.85, 3.3×); on those
+//!   shards the smallest loss's mean probability in exactly lost frames rises from
+//!   0.26–0.29 to 0.33–0.35. The scale 16 keeps the margin informative across the
+//!   decided range (u = 0.24 / 0.46 / 0.73 / 0.93 at 4 / 8 / 15 / 26 discs — the 10 / 25 /
+//!   50 / 75th percentiles of |best score| over real frames with Q ≥ 0.97 — and 0.995 at
+//!   48). Near Q = 0.5 the disc
+//!   temperature is 4·s·τ ≈ 0.46 discs (a move one disc worse gets e^−2.2 ≈ 0.11 of the
+//!   weight; the tie-break adds 6% to that slope, w/16 = 0.125 vs 2.2 per disc); mean
+//!   teacher entropy on WTHOR frames is 1.2 nats. `--tie-weight 0` gives π ∝ exp(Q/τ)
+//!   exactly (the labeller-v1 teacher). Softer: a larger `--tau`, or `--disc-tau T`:
+//!   π ∝ exp(discs / T) in every position — margin-maximising, like the WTHOR
+//!   "theoretical score" — recorded as policy `{"kind": "softmax_discs", "disc_tau": T}`
+//!   (it replaces the softmax, so it takes no `--tau` / `--tie-weight`); Q and
+//!   engine_value are the same either way.
 //! * `--disc-scale 2.3`: fitted with `--fit-disc-scale 1000` at the defaults (level 15,
 //!   exact ≤ 20 empties) on 1000 distinct positions with 21–60 empties from two
 //!   2000+ WTHOR shards: the maximum-likelihood s of P(the side to move wins the
@@ -193,7 +209,8 @@ pub const GAME: &str = "othello";
 /// The `gmdata othello convert` layout this labeller replays.
 pub const CONVERTER_VERSION: u32 = 1;
 /// Bump when the meaning of a label changes.
-pub const LABELLER_VERSION: u32 = 1;
+/// 2: the softmax teacher's secondary tie-break ([`secondary_utility`]).
+pub const LABELLER_VERSION: u32 = 2;
 pub const DEFAULT_LEVEL: u64 = 15;
 pub const DEFAULT_EXACT_EMPTIES: u64 = 20;
 pub const DEFAULT_HASH: u32 = 20;
@@ -202,6 +219,14 @@ pub const DEFAULT_MAX_MOVES: usize = 32;
 pub const DISC_SCALE: f64 = 2.3;
 /// The pass action id (`tgt.teacher_idx` of pass frames).
 pub const PASS_ID: i64 = 64;
+/// Disc scale of the secondary utility `tanh(discs / TIE_DISC_SCALE)` (see the module docs).
+pub const TIE_DISC_SCALE: f32 = 16.0;
+
+/// Secondary utility u = tanh(discs / 16) ∈ (−1, 1) of a `teacher_raw` disc score (the
+/// softmax tie-break, see the module docs); `None` for a non-finite raw.
+pub fn secondary_utility(discs: f32) -> Option<f32> {
+    discs.is_finite().then(|| ((discs as f64) / TIE_DISC_SCALE as f64).tanh() as f32)
+}
 
 /// `gmdata label othello` flags.
 #[derive(clap::Args, Debug, Clone)]
@@ -211,8 +236,9 @@ pub struct Args {
     /// logistic scale s (discs) of Q = 1/(1+exp(−discs/s)) for scores that are not exact
     #[arg(long, default_value_t = DISC_SCALE)]
     pub disc_scale: f64,
-    /// teacher policy ∝ exp(discs / T) over the raw disc scores instead of exp(Q / --tau)
-    #[arg(long, conflicts_with = "tau")]
+    /// teacher policy ∝ exp(discs / T) over the raw disc scores instead of
+    /// exp(Q / --tau + --tie-weight · u)
+    #[arg(long, conflicts_with_all = ["tau", "tie_weight"])]
     pub disc_tau: Option<f64>,
     /// calibration mode: fit --disc-scale from N self-play playouts of input positions
     /// (writes <out>/disc_scale_fit.json, no shards)
@@ -639,6 +665,14 @@ impl Labeller for OthelloLabeller {
         Some("discs")
     }
 
+    fn secondary(&self, m: &ScoredMove) -> Option<f32> {
+        secondary_utility(m.raw)
+    }
+
+    fn secondary_meta(&self) -> Option<Value> {
+        Some(json!({"of": "teacher_raw", "discs": "u = tanh(raw / 16)"}))
+    }
+
     fn default_max_moves(&self) -> usize {
         DEFAULT_MAX_MOVES
     }
@@ -772,13 +806,15 @@ impl Labeller for OthelloLabeller {
 /// An in-process stand-in for Egaroucid for Console (tests; `gmdata label fake-engine
 /// othello`): answers `version`, `setboard`, `hint N`, `clearcache` / `level` / `init`
 /// (silent) and unknown commands (`[ERROR] command `…` not found`), exits on `quit`.
-/// Scores are [`FakeEgaroucid::score`] (deterministic in position and move); rows report
-/// `E@100%` (exact) at ≤ [`FakeEgaroucid::EXACT_EMPTIES`] empties, else `15@74%`.
+/// Scores are [`FakeEgaroucid::score`] (deterministic in position and move; another
+/// scorer with [`FakeEgaroucid::with_scores`]); rows report `E@100%` (exact) at ≤
+/// [`FakeEgaroucid::EXACT_EMPTIES`] empties, else `15@74%`.
 pub struct FakeEgaroucid {
     pos: Option<OthPos>,
     hints: usize,
     crash_on: Option<usize>,
     hang_on: Option<(usize, Duration)>,
+    score: fn(&OthPos, i64) -> i32,
 }
 
 impl Default for FakeEgaroucid {
@@ -799,7 +835,13 @@ impl FakeEgaroucid {
     pub const VERSION: &'static str = "Egaroucid for Console 7.8.0 fake (in-process)";
 
     pub fn new() -> Self {
-        FakeEgaroucid { pos: None, hints: 0, crash_on: None, hang_on: None }
+        FakeEgaroucid { pos: None, hints: 0, crash_on: None, hang_on: None, score: Self::score }
+    }
+
+    /// Score moves with `f(position, square)` instead of [`FakeEgaroucid::score`].
+    pub fn with_scores(mut self, f: fn(&OthPos, i64) -> i32) -> Self {
+        self.score = f;
+        self
     }
 
     /// Exit on the `n`-th `hint` (1-based, per process).
@@ -821,10 +863,15 @@ impl FakeEgaroucid {
 
     /// The fake's rows for `pos`: every legal move, best first (ties by square).
     pub fn rows(pos: &OthPos) -> Vec<HintRow> {
+        Self::rows_with(pos, Self::score)
+    }
+
+    /// [`FakeEgaroucid::rows`] with the scorer `f`.
+    pub fn rows_with(pos: &OthPos, f: fn(&OthPos, i64) -> i32) -> Vec<HintRow> {
         let e = pos.empties();
         let depth = if e <= Self::EXACT_EMPTIES { (e, 100.0) } else { (15, 74.0) };
         let mut rows: Vec<HintRow> =
-            (0..64).filter(|&sq| pos.is_legal(sq)).map(|sq| HintRow { square: sq, discs: Self::score(pos, sq), depth: Some(depth) }).collect();
+            (0..64).filter(|&sq| pos.is_legal(sq)).map(|sq| HintRow { square: sq, discs: f(pos, sq), depth: Some(depth) }).collect();
         rows.sort_by(|a, b| b.discs.cmp(&a.discs).then(a.square.cmp(&b.square)));
         rows
     }
@@ -856,7 +903,7 @@ impl LineHandler for FakeEgaroucid {
                 let n = arg.trim().parse::<usize>().unwrap_or(1).max(1);
                 let w = 15;
                 let mut out = vec![format!("|{:>w$}|{:>w$}|{:>w$}|{:>w$}|{:>w$}|{:>w$}|{:>w$}|", "Level", "Depth", "Move", "Score", "Time", "Nodes", "NPS")];
-                for r in Self::rows(&pos).into_iter().take(n) {
+                for r in Self::rows_with(&pos, self.score).into_iter().take(n) {
                     let (d, p) = r.depth.unwrap();
                     out.push(format!(
                         "|{:>w$}|{:>w$}|{:>w$}|{:>w$}|{:>w$}|{:>w$}|{:>w$}|",

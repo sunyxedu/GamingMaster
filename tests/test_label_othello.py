@@ -7,7 +7,8 @@ exact at <= 20 empties) — and, when Egaroucid is installed
 (scripts/engines/fetch_engines.sh egaroucid, or $GM_EGAROUCID), with the real engine at a
 fast search setting. The overlays must load with GameShardDataset next to the base
 columns, carry the documented teacher columns (PlacementDecoder heads `place` / `pass`,
-raw disc scores, engine values), re-derive from the raw columns, and feed
+raw disc scores, engine values), re-derive from the raw columns (π ∝ exp(Q/τ + w·tanh(discs/16))),
+and feed
 training/train_il_game.py's soft-target and engine-value losses on the othello network.
 """
 from __future__ import annotations
@@ -26,6 +27,7 @@ from tests.test_rust_converters_parity import FIX, gmdata  # noqa: F401  (fixtur
 
 K = 32              # --max-moves default of the othello labeller
 TAU = 0.05          # --tau default
+W = 2.0             # --tie-weight default
 DISC_SCALE = 2.3    # --disc-scale default
 FAKE_EXACT = 20     # the fake engine reports exact results at <= 20 empties
 
@@ -74,7 +76,10 @@ def test_summary_and_meta(base, labelled):
     assert set(st["skipped"]) <= {"forced"} and st["labelled"] > 0
     t = summary["teacher"]
     assert t["engine"].startswith("Egaroucid for Console ")
-    assert t["raw_unit"] == "discs" and t["policy"] == {"kind": "softmax", "tau": TAU} and t["max_moves"] == K
+    assert t["raw_unit"] == "discs" and t["max_moves"] == K
+    assert t["policy"] == {"kind": "softmax", "tau": TAU, "tie_weight": W,
+                           "secondary": {"of": "teacher_raw", "discs": "u = tanh(raw / 16)"}}
+    assert t["labeller_version"] == 2 and t["core_version"] == 2
     assert t["heads"] == {"place": {"kind": "categorical", "n": 64, "k": 64, "storage": "dense"},
                           "pass": {"kind": "bernoulli"}}
     assert t["game"]["disc_scale"] == DISC_SCALE
@@ -129,7 +134,7 @@ def test_loader_columns(base, labelled):
 def test_policy_and_q_rederive_from_raw_columns(labelled):
     kind, out, summary = labelled
     exact_empties = FAKE_EXACT if kind == "fake" else int(summary["teacher"]["limits"]["exact_empties"])
-    n_pass = 0
+    n_pass = n_split = 0
     for name in _shards(out):
         a = GmShard(str(out / name)).arrays()
         idx, q, raw = (np.asarray(a[k]) for k in ("tgt.teacher_idx", "tgt.teacher_q", "tgt.teacher_raw"))
@@ -153,12 +158,21 @@ def test_policy_and_q_rederive_from_raw_columns(labelled):
                 n_pass += 1
                 assert (pp[f] == 0).all()
                 continue
-            e = np.exp((qs - qs.max()) / TAU)
+            # best first by Q, among equal Q by discs; π ∝ exp(Q/τ + w·tanh(discs/16))
+            assert all(qs[j - 1] > qs[j] or (qs[j - 1] == qs[j] and rs[j - 1] >= rs[j]) for j in range(1, len(qs)))
+            s = (qs - qs.max()) / TAU + W * np.tanh(rs / 16.0)
+            e = np.exp(s - s.max())
             dense = np.zeros(64)
             dense[idx[f][ok]] = e / e.sum()
             assert np.allclose(pp[f], dense, atol=1e-5), (name, f)
+            # an exactly decided position (all Q equal) with different margins: the teacher
+            # prefers the smaller loss / larger win instead of spreading uniformly
+            if empties[f] <= exact_empties and (qs == qs[0]).all() and qs[0] != 0.5 and rs[0] > rs[-1]:
+                n_split += 1
+                assert pp[f][idx[f][ok][0]] > pp[f][idx[f][ok][-1]], (name, f)
         assert n_exact > 0
     assert n_pass > 0, "the fixture games include pass frames"
+    assert n_split > 0, "exactly decided WTHOR endgames reach the tie-break"
 
 
 def test_trainer_consumes_teacher_targets(labelled):
