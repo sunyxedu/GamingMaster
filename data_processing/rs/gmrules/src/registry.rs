@@ -38,7 +38,11 @@ pub fn parse_config<G: Game>(json: &str) -> Result<G::Config, String> {
     let j = if json.trim().is_empty() { "{}" } else { json };
     let cfg: G::Config = serde_json::from_str(j).map_err(|e| format!("{} config {json:?}: {e}", G::NAME))?;
     G::check_config(&cfg).map_err(|e| format!("{} config {json:?}: {e}", G::NAME))?;
-    G::spec(&cfg).validate().map_err(|e| format!("{}: {e}", G::NAME))?;
+    let spec = G::spec(&cfg);
+    spec.validate().map_err(|e| format!("{}: {e}", G::NAME))?;
+    if let Some(t) = G::teams(&cfg) {
+        crate::game::validate_teams(&t, spec.n_seats).map_err(|e| format!("{}: {e}", G::NAME))?;
+    }
     Ok(cfg)
 }
 
@@ -57,6 +61,8 @@ pub trait DynGame: Send + Sync {
     fn name(&self) -> &'static str;
     fn version(&self) -> u32;
     fn spec(&self, cfg: &str) -> Result<FrameSpec, String>;
+    /// [`Game::teams`] of the config (None = every seat for itself).
+    fn teams(&self, cfg: &str) -> Result<Option<Vec<usize>>, String>;
     /// The config with every default filled in (JSON).
     fn normalize_config(&self, cfg: &str) -> Result<String, String>;
     fn new_state(&self, cfg: &str) -> Result<Box<dyn DynState>, String>;
@@ -81,6 +87,10 @@ impl<G: Game> DynGame for Entry<G> {
 
     fn spec(&self, cfg: &str) -> Result<FrameSpec, String> {
         Ok(G::spec(&parse_config::<G>(cfg)?))
+    }
+
+    fn teams(&self, cfg: &str) -> Result<Option<Vec<usize>>, String> {
+        Ok(G::teams(&parse_config::<G>(cfg)?))
     }
 
     fn normalize_config(&self, cfg: &str) -> Result<String, String> {

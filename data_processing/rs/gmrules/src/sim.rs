@@ -73,7 +73,9 @@ pub struct StepInfo {
     pub done: Vec<u8>,
     pub terminated: Vec<u8>,
     pub truncated: Vec<u8>,
-    /// Seat with the strictly highest outcome of an episode that ended, else −1.
+    /// Seat with the strictly highest outcome of an episode that ended, else −1;
+    /// team games ([`Game::teams`]): the lowest seat of the team with the strictly
+    /// highest outcome.
     pub winner: Vec<i64>,
     /// Decision turns of an episode that ended on this step (0 otherwise).
     pub episode_len: Vec<i64>,
@@ -142,6 +144,7 @@ struct Ctx<'a, G: Game> {
     n_keys: usize,
     max_turns: usize,
     autoreset: bool,
+    teams: Option<&'a [usize]>,
 }
 
 impl<G: Game> Ctx<'_, G> {
@@ -264,7 +267,10 @@ impl<G: Game> Ctx<'_, G> {
             out.returns.copy_from_slice(&r);
             *out.done = 1;
             *out.terminated = 1;
-            *out.winner = winner(&o);
+            *out.winner = match self.teams {
+                Some(t) => team_winner(&o, t),
+                None => winner(&o),
+            };
             *out.episode_len = env.turns as i64;
         } else if env.turns >= self.max_turns {
             env.done = true;
@@ -365,6 +371,7 @@ fn first_err(res: Vec<Result<(), String>>, what: &str) -> Result<(), String> {
 pub struct VecSim<G: Game> {
     cfg: G::Config,
     spec: FrameSpec,
+    teams: Option<Vec<usize>>,
     layout: Layout,
     opts: SimOptions,
     envs: Vec<Env<G>>,
@@ -379,6 +386,10 @@ impl<G: Game> VecSim<G> {
         G::check_config(&cfg).map_err(|e| format!("{} config: {e}", G::NAME))?;
         let spec = G::spec(&cfg);
         spec.validate()?;
+        let teams = G::teams(&cfg);
+        if let Some(t) = &teams {
+            crate::game::validate_teams(t, spec.n_seats).map_err(|e| format!("{}: {e}", G::NAME))?;
+        }
         let layout = spec.layout();
         if layout == Layout::Interleaved && spec.simultaneous {
             return Err("interleaved layout cannot hold simultaneous turns".into());
@@ -388,7 +399,7 @@ impl<G: Game> VecSim<G> {
         } else {
             None
         };
-        let mut sim = VecSim { cfg, spec, layout, opts, envs: Vec::new(), buf: RowBuffers::default(), legal: Vec::new(), pool };
+        let mut sim = VecSim { cfg, spec, teams, layout, opts, envs: Vec::new(), buf: RowBuffers::default(), legal: Vec::new(), pool };
         sim.resize(n_envs);
         Ok(sim)
     }
@@ -399,6 +410,11 @@ impl<G: Game> VecSim<G> {
 
     pub fn config(&self) -> &G::Config {
         &self.cfg
+    }
+
+    /// The game's teams ([`Game::teams`]; None = every seat for itself).
+    pub fn teams(&self) -> Option<&[usize]> {
+        self.teams.as_deref()
     }
 
     pub fn layout(&self) -> Layout {
@@ -505,6 +521,7 @@ impl<G: Game> VecSim<G> {
             n_keys: self.spec.action_keys.len(),
             max_turns: self.max_turns(),
             autoreset: self.opts.autoreset,
+            teams: self.teams.as_deref(),
         };
         let rows = split_rows(&mut self.buf, &mut self.legal, &self.spec, n, ctx.rpe);
         let envs = &mut self.envs;
@@ -552,6 +569,7 @@ impl<G: Game> VecSim<G> {
             n_keys: k,
             max_turns: self.max_turns(),
             autoreset: self.opts.autoreset,
+            teams: self.teams.as_deref(),
         };
         let mut info = StepInfo {
             rewards: vec![0.0; n * ns],
@@ -625,6 +643,21 @@ impl<G: Game> VecSim<G> {
     }
 }
 
+/// The lowest seat of the team (`teams[seat]` = team id) whose outcome is strictly
+/// the highest (a team's outcome = its best member's; teammates share one in team
+/// games), −1 on a tie for the top.
+pub fn team_winner(outcome: &[f32], teams: &[usize]) -> i64 {
+    let n_teams = teams.iter().max().map_or(0, |&t| t + 1);
+    let mut best = vec![f32::NEG_INFINITY; n_teams];
+    for (s, &v) in outcome.iter().enumerate() {
+        best[teams[s]] = best[teams[s]].max(v);
+    }
+    match winner(&best) {
+        -1 => -1,
+        t => teams.iter().position(|&x| x == t as usize).map_or(-1, |s| s as i64),
+    }
+}
+
 /// Seat with the strictly highest outcome, −1 on a tie for the top.
 pub fn winner(outcome: &[f32]) -> i64 {
     let mut best = 0usize;
@@ -637,5 +670,24 @@ pub fn winner(outcome: &[f32]) -> i64 {
         -1
     } else {
         best as i64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn winners_of_seats_and_teams() {
+        assert_eq!(winner(&[0.5, -0.5]), 0);
+        assert_eq!(winner(&[0.0, 0.0, -1.0]), -1);
+        // partnerships N/S vs E/W: the winning team's lowest seat, -1 on a tie
+        let t = [0, 1, 0, 1];
+        assert_eq!(team_winner(&[-0.3, 0.3, -0.3, 0.3], &t), 1);
+        assert_eq!(team_winner(&[0.3, -0.3, 0.3, -0.3], &t), 0);
+        assert_eq!(team_winner(&[0.0; 4], &t), -1);
+        // teams need not be contiguous; a team's outcome is its best member's
+        assert_eq!(team_winner(&[0.1, 0.9, 0.2], &[1, 0, 1]), 1);
+        assert_eq!(winner(&[0.25, -0.25, 0.25, -0.25]), -1); // seat winner of a team game: a tie
     }
 }

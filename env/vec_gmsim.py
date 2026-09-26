@@ -30,6 +30,9 @@ Rows / streams / seats (see env/vec_game.py), from the game's FrameSpec layout:
     games' layout; ``lockstep = True``).
 
 ``forced`` = a single legal action (the env applies it whatever is sent).
+Team games (``teams``: the team id of every seat, from the game's rules; e.g.
+bridge partnerships): teammates share one outcome and ``info["winner"]`` is
+the lowest seat of the winning team (−1: a tie).
 Actions: the decoder's ``sample()`` output or its replay keys — ``ACTION_KEYS``
 maps the former to the game's action keys (the entry's ``sample_keys``); keys
 that are no legal action of an acting row raise.  Rewards [N, n_seats] are the
@@ -97,6 +100,11 @@ class GmSimVecEnv(VecEnvBase):
             raise ValueError(f"{game}: sample_keys map to {bad}, not action keys "
                              f"{list(self.action_keys)}")
         self.n_seats = int(self.spec["n_seats"])
+        # team games (gmrules Game::teams, e.g. bridge partnerships [0, 1, 0, 1]):
+        # teammates share one outcome, info["winner"] is the winning team's lowest
+        # seat, and env/league.py gives a policy whole teams
+        teams = gmsim.game_info(game, cfg)["teams"]
+        self.teams: Optional[Tuple[int, ...]] = tuple(teams) if teams is not None else None
         self.layout = self.spec["layout"]
         self.interleaved = self.layout == "interleaved"
         self.rows_per_env = 1 if self.interleaved else self.n_seats

@@ -10,8 +10,9 @@
 //!   tensors; candidate schema: legal ids within `max_actions`, the legality mask =
 //!   the first n slots, entity type ids below `entity_types`, absent entities zero;
 //!   every schema: the action keys of every legal action decode back to it (the
-//!   simulator's step inverts the IL targets); outcomes in [-1, 1]; the simulator's
-//!   own trajectories replay to exactly the frames it emitted.
+//!   simulator's step inverts the IL targets); outcomes in [-1, 1] (equal for
+//!   teammates in team games, [`Game::teams`]); the simulator's own trajectories
+//!   replay to exactly the frames it emitted.
 
 use crate::frame::{action_keys_of, check_targets_equal, decode_action, encode_target, new_target, Frame};
 use crate::game::{FrameSpec, Game, Seat, Turn};
@@ -237,6 +238,10 @@ pub fn check_game<G: Game>(cfg: &G::Config, n_games: usize, seed: u64) -> Result
     G::check_config(cfg).map_err(|e| format!("config: {e}"))?;
     let spec = G::spec(cfg);
     spec.validate()?;
+    let teams = G::teams(cfg);
+    if let Some(t) = &teams {
+        crate::game::validate_teams(t, spec.n_seats)?;
+    }
     let mut rng = Rng::new(seed);
     let mut rep = CheckReport::default();
     let max_events = 64 * spec.max_decisions.max(1) + 4096;
@@ -255,6 +260,11 @@ pub fn check_game<G: Game>(cfg: &G::Config, n_games: usize, seed: u64) -> Result
             }
             if out.iter().any(|&v| !(-1.0..=1.0).contains(&v)) {
                 return Err(format!("game {gi}: outcome {out:?} outside [-1, 1]"));
+            }
+            if let Some(t) = &teams {
+                if (0..out.len()).any(|s| (0..out.len()).any(|q| t[s] == t[q] && out[s] != out[q])) {
+                    return Err(format!("game {gi}: teammates (teams {t:?}) get different outcomes {out:?}"));
+                }
             }
         } else {
             return Err(format!("game {gi}: random playout did not end within {max_events} events"));

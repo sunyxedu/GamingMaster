@@ -629,7 +629,10 @@ class League:
     by ``opponent_weights`` (uniform by default).  ``mirror_prob`` is the
     probability of a mirror episode (1.0, the default, or no opponents: pure
     mirror).  ``learner_seat`` pins the learner's seat in non-mirror episodes
-    (None: uniform per episode).
+    (None: uniform per episode).  Team games (``env.teams``, e.g. bridge
+    partnerships): the learner plays its seat's whole team and the opponent
+    the other team(s) — a policy never shares a team with another (bridge:
+    the declarer's controller also plays dummy's cards).
 
     Call :meth:`update` with every VecObs the env returns (it assigns the
     envs whose rows start a new episode and releases the opponents' streams
@@ -695,6 +698,9 @@ class League:
         name = self._names[int(torch.multinomial(self._weights, 1, generator=self._gen))]
         self.learner_seats[i] = False
         self.learner_seats[i, seat] = True
+        teams = getattr(self.env, "teams", None)
+        if teams is not None:       # team games: the learner takes its seat's whole team
+            self.learner_seats[i] = torch.tensor([t == teams[seat] for t in teams])
         self.opponent_of[i] = name
         theirs = ~self.learner_seats[i].to(obs.stream_seats.device)
         rows = (obs.env_id == i) & (obs.stream_seats & theirs).any(-1)

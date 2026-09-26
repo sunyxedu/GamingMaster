@@ -83,7 +83,10 @@ def games() -> List[str]:
 
 
 def game_info(game: str, config=None) -> Dict[str, Any]:
-    """``{"name", "version", "config" (normalised JSON), "spec": {...}}`` — spec =
+    """``{"name", "version", "config" (normalised JSON), "spec": {...}, "teams"}`` —
+    ``teams``: the team id of every seat for team games (bridge partnerships
+    ``[0, 1, 0, 1]``: teammates share one outcome, ``winner`` names the winning
+    team's lowest seat), else None; spec =
     ``n_seats``, ``layout`` ("per_seat" | "interleaved"), ``hidden_info``,
     ``simultaneous``, ``max_decisions``, ``schema``, the tensor lists ``obs`` /
     ``legal`` / ``target``, ``action_keys``, ``meta`` (the shard-meta schema facts,

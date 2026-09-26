@@ -163,19 +163,21 @@ fn games() -> Vec<&'static str> {
     registry::game_names()
 }
 
-/// `{"name", "version", "config" (normalised JSON), "spec": {...}}`.
+/// `{"name", "version", "config" (normalised JSON), "spec": {...}, "teams"}` (teams:
+/// team id per seat, or None).
 #[pyfunction]
 #[pyo3(signature = (game, config=""))]
 fn game_info<'py>(py: Python<'py>, game: &str, config: &str) -> PyResult<Bound<'py, PyDict>> {
-    let (g, spec, cfg) = guard(|| {
+    let (g, spec, cfg, teams) = guard(|| {
         let g = registry::lookup(game)?;
-        Ok((g, g.spec(config)?, g.normalize_config(config)?))
+        Ok((g, g.spec(config)?, g.normalize_config(config)?, g.teams(config)?))
     })?;
     let d = PyDict::new(py);
     d.set_item("name", g.name())?;
     d.set_item("version", g.version())?;
     d.set_item("config", cfg)?;
     d.set_item("spec", spec_dict(py, &spec)?)?;
+    d.set_item("teams", teams)?;
     Ok(d)
 }
 
