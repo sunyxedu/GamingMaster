@@ -27,7 +27,8 @@ env's per-seat stream) and picks a candidate (fold, check / call, all-in, min-ra
 pot fractions); its exact amount (``gmsim.State.decode``) goes back as k / c / f / bN.
 Every finished hand is verified: the replayed payoff (with Slumbot's cards when shown)
 must equal the API's ``winnings``.  Result: big blinds per 100 hands ± standard error
-(poker is noisy: ± ~5 bb/100 needs ~100 000 hands of plain play).
+(poker is noisy — about 10 bb of standard deviation per hand, so ± 5 bb/100 takes some
+40 000 hands; at ~4 s per hand a 2 000-hand run takes ~2 h and resolves ± ~20 bb/100).
 """
 
 from __future__ import annotations
