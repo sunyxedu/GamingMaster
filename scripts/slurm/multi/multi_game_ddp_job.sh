@@ -63,6 +63,11 @@
 # after a node failure, or the same RUN resubmitted after the 24 h wall), the
 # run continues from it (--resume); RESUME=0 starts from scratch instead.
 # Size --steps to the wall anyway: a resume restarts the data order.
+# New games join a running RUN: resubmit it with more --data entries in ARGS
+# (any order; the checkpoint's games must all stay) and they start fresh
+# around the trained core (train_multi_game.py docstring, "Resuming").  Pass
+# --global_games_per_step (or --games_per_step) explicitly: its default, the
+# number of games, would grow the batch with every game added.
 #
 # Sharded optimizer state (ZeRO-1, training/zero.py): SHARD_OPTIMIZER=1 (or
 # --shard_optimizer in ARGS) makes every rank keep AdamATan2's two moments and

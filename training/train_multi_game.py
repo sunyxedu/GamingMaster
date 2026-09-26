@@ -121,13 +121,45 @@ format, so either kind of run resumes the other, at any world size.
 
 Resuming.  ``--ckpt_every N`` makes rank 0 write ``multi_latest.pt`` every N
 steps and at the last one (weights, EMA shadows, optimizer, LR schedule,
-step; written atomically).  ``--resume <that file>`` continues from it with
-the same arguments, any world size: weights, optimizer moments, EMA, balance
-biases, BatchNorm statistics and the LR schedule continue exactly; game
-draws and data order restart from fresh RNG streams, and a TRM core's deep-
-supervision carries restart empty.  Each game's network is rebuilt from the
-config saved in the checkpoint (``--override`` values on top), so a config
-default that changed since it was written cannot reshape it.
+step, the optimizer's parameter names; written atomically).  ``--resume
+<that file>`` continues from it with the same arguments, any world size,
+sharded or not: weights, optimizer moments, EMA, balance biases, BatchNorm
+statistics and the LR schedule continue exactly; game draws and data order
+restart from fresh RNG streams, and a TRM core's deep-supervision carries
+restart empty.  Each game's network is rebuilt from the config saved in the
+checkpoint (``--override`` values on top), so a config default that changed
+since it was written cannot reshape it.
+
+Games can JOIN a running pretraining: ``--resume`` with ``--data`` naming a
+superset of the checkpoint's games, in any order (removing a game is
+refused).  Nothing is matched by position — games by name, tensors by
+parameter name (a shared core tensor has one name per game; its canonical
+one, the EMA's and the optimizer's, lies under the run's first game):
+
+    # chess joins the othello + go run: the same command, one --data more
+    uv run torchrun --standalone --nproc_per_node=4 -m training.train_multi_game \\
+        --data othello=... --data chess=data/chess/train --data go=... \\
+        --resume checkpoints/multi/multi_latest.pt <the run's other arguments>
+
+- an added game is built from the command line and its shard meta, every
+  shared-core field (CORE_CONFIG_FIELDS) forced to the checkpoint's core as
+  with --init_core: an --override contradicting that core is refused;
+- the checkpoint's weights and buffers load exactly; it may lack exactly the
+  added games' keys, which keep their fresh initialisation;
+- the optimizer state moves by parameter name to the new layout (names saved
+  in the checkpoint, rebuilt on the meta device from its configs for older
+  checkpoints and checked against them): moments and step counters of every
+  old parameter, the param groups (decay / QK-norm no-decay) with the
+  checkpoint's hyper-parameters; the EMA shadows likewise.  The added games'
+  parameters start without optimizer state (step counter 1, fresh bias
+  correction) and with their initial weights as EMA shadows;
+- --shard_optimizer: the partition is the new model's, every rank loads its
+  share of the remapped state (from sharded or unsharded checkpoints);
+- step and LR schedule continue (no new warmup: the added games train at the
+  current LR), --freeze_core / --train_core_norms must be the checkpoint's;
+  the mixture weights are recomputed for the new game set, the log shows the
+  checkpoint's and the new ones.  The default --games_per_step is the number
+  of games: pass it (or --global_games_per_step) to keep the batch size.
 """
 
 from __future__ import annotations
@@ -294,7 +326,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="write the resumable multi_latest.pt every N steps and at the "
                         "last step (0 = only multi_final.pt)")
     p.add_argument("--resume", default=None,
-                   help="continue from a multi_latest.pt (same arguments otherwise)")
+                   help="continue from a multi_latest.pt (same arguments otherwise; --data "
+                        "may add games, in any order: see Resuming in the module docstring)")
     p.add_argument("--num_workers", type=int, default=0)
     p.add_argument("--bf16", action="store_true")
     p.add_argument("--device", default=None)
