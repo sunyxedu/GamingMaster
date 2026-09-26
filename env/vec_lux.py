@@ -230,11 +230,6 @@ def param_defaults() -> Dict[str, np.ndarray]:
 # arrays (EnvObs field names; map arrays [x][y]).
 # ---------------------------------------------------------------------------
 
-OBS_ARRAY_KEYS = ("tile_type", "energy", "sensor_mask", "relic_nodes", "relic_nodes_mask",
-                  "unit_position", "unit_energy", "units_mask", "team_points", "team_wins",
-                  "steps", "match_steps")
-
-
 def env_obs_arrays(o) -> Dict[str, Any]:
     """A (batched) ``luxai_s3.state.EnvObs`` → the builders' input dict."""
     return {"tile_type": o.map_features.tile_type, "energy": o.map_features.energy,
