@@ -206,6 +206,34 @@ def test_importing_the_trainers_initialises_no_cuda():
     assert res.returncode == 0, res.stderr
 
 
+def _import_probe(queue) -> None:
+    import tests.test_grad_sync  # noqa: F401
+    import tests.test_mig_ddp  # noqa: F401
+    import tests.test_multi_game_ddp  # noqa: F401
+    import tests.test_rl_joint_dist  # noqa: F401
+    import tests.test_rl_joint_trainer  # noqa: F401
+    from training.distributed import cuda_initialised
+
+    queue.put(cuda_initialised())
+
+
+def test_spawned_ranks_import_the_test_modules_without_cuda():
+    """A spawned rank re-imports its test module before it pins its MIG
+    slice: no module on that path (tests/gloo_devices.py's skip marker
+    included) may initialise CUDA."""
+    ctx = torch.multiprocessing.get_context("spawn")
+    queue = ctx.Queue()
+    p = ctx.Process(target=_import_probe, args=(queue,))
+    p.start()
+    try:
+        why = queue.get(timeout=TIMEOUT_S)
+    finally:
+        p.join(timeout=30)
+        if p.is_alive():
+            p.terminate()
+    assert why is None, why
+
+
 @needs_cuda
 def test_the_driver_probe_sees_cuinit():
     """Positive path of the late-pin diagnostic (CUDA machines): after

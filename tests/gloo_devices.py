@@ -4,6 +4,7 @@ tensors over gloo when CUDA is available — the MIG-slice data-parallel mode
 rank pins itself to its own slice, on one GPU both ranks share it (gloo, unlike
 NCCL, allows that), with several GPUs each rank takes its own."""
 
+import multiprocessing
 import os
 
 import pytest
@@ -11,7 +12,18 @@ import torch
 
 from training.distributed import is_mig, pin_rank_device, visible_devices, visible_mig
 
-HAS_CUDA = torch.cuda.is_available()
+
+def _has_cuda() -> bool:
+    """Only the pytest process decides what to skip.  A spawned rank
+    re-imports the test modules (and so this one), and
+    torch.cuda.is_available() there would run cuInit on the unpinned MIG
+    list before the rank pins its slice (pin_rank_device then refuses)."""
+    if multiprocessing.parent_process() is not None:
+        return False
+    return torch.cuda.is_available()
+
+
+HAS_CUDA = _has_cuda()
 needs_cuda = pytest.mark.skipif(not HAS_CUDA, reason="needs CUDA (gloo on CUDA tensors)")
 DEVICES = ["cpu", pytest.param("cuda", marks=needs_cuda)]
 
