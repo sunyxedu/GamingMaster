@@ -307,13 +307,15 @@ egaroucid_cpu_flags() {
 # build it on the kind of node that runs the labelling; a shared home keeps one directory
 # per flavour, and bin/egaroucid points at the last one built).
 egaroucid_flavor() {
-    local f
-    case "$(egaroucid_defs)" in
+    local f defs
+    defs="$(egaroucid_defs)"
+    case "$defs" in
         *HAS_NO_AVX2*) f=generic ;;
         *HAS_AVX512*) f=avx512 ;;
         *) f=avx2 ;;
     esac
-    if is_amd; then f="$f-amd"; fi
+    # the AMD tag mirrors the build define (x86 only: ARM builds get no AMD tuning)
+    case "$defs" in *HAS_AMD_PROCESSOR*) f="$f-amd" ;; esac
     echo "$ARCH-$f"
 }
 

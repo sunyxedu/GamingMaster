@@ -21,8 +21,12 @@ EPYC_9355 = ("fpu sse sse2 ssse3 sse4_1 sse4_2 popcnt avx f16c fma bmi1 avx2 bmi
 OLD_X86 = "fpu sse sse2 ssse3 sse4_1 sse4_2 popcnt"
 
 
-def _host(snippet, tmp_path, os_="Linux", arch="x86_64", flags=""):
-    cmd = f'source "{SCRIPT}"; OS={os_}; ARCH={arch}; FLAGS=" {flags} "; {snippet}'
+def _host(snippet, tmp_path, os_="Linux", arch="x86_64", flags="", vendor=""):
+    """Source the script with a SIMULATED host: OS, ARCH, CPU flags AND vendor are all
+    pinned, so nothing of the machine running the test leaks in (the script reads the real
+    /proc/cpuinfo when sourced: AuthenticAMD on GitHub's runners, nothing on macOS)."""
+    cmd = (f'source "{SCRIPT}"; OS={os_}; ARCH={arch}; FLAGS=" {flags} "; VENDOR="{vendor}"; '
+           f'{snippet}')
     env = {**os.environ, "GM_ENGINES": str(tmp_path)}
     env.pop("KATAGO_BACKEND", None)
     env.pop("STOCKFISH_ARCH", None)
@@ -79,6 +83,11 @@ def test_egaroucid_build_flags(tmp_path):
     assert _host("egaroucid_cpu_flags", tmp_path, flags=EPYC_9355) == ["-march=native", "-mtune=native"]
     assert _host("VENDOR=AuthenticAMD; egaroucid_flavor", tmp_path, flags=EPYC_9355) == ["x86_64-avx512-amd"]
     assert _host("egaroucid_flavor", tmp_path, os_="Darwin", arch="arm64") == ["arm64-generic"]
+    # an ARM host never gets the AMD tag, whatever the vendor string says
+    assert _host("egaroucid_flavor", tmp_path, os_="Linux", arch="aarch64",
+                 vendor="AuthenticAMD") == ["aarch64-generic"]
+    assert _host("egaroucid_flavor", tmp_path, flags=EPYC_9355, vendor="AuthenticAMD") == ["x86_64-avx512-amd"]
+    assert _host("egaroucid_flavor", tmp_path, flags=EPYC_9355, vendor="GenuineIntel") == ["x86_64-avx512"]
 
 
 def _bash(snippet, tmp_path, check=True):
