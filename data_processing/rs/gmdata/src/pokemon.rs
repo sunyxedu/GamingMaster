@@ -56,7 +56,8 @@
 //! State tracking beyond v1: `-swapsideconditions` (Court Change) swaps the sides' hazards and
 //! screens; `-transform` gives the transformed Pokémon the target's revealed moves and boosts
 //! for as long as it stays in (moves used meanwhile are not added to its own moveset);
-//! Revival Blessing's `-heal` clears the fainted flag.  Replays without a `|win|` yield no samples.
+//! Revival Blessing's `-heal` revives the Pokémon: fainted flag, status and tera state cleared
+//! (as Showdown does).  Replays without a `|win|` yield no samples.
 //!
 //! Re-conversion (v1 shards are obsolete: different frames, targets and field width; shard
 //! meta `{"field_features": 22, "move_buckets": 1024, "species_buckets": 512}`) — on the
@@ -698,8 +699,12 @@ fn parse_log(log: &str) -> Parse {
                 p.hp = hp;
                 if fnt {
                     p.fainted = true;
-                } else if cmd == "-heal" && hp > 0.0 {
-                    p.fainted = false; // Revival Blessing
+                } else if cmd == "-heal" && hp > 0.0 && p.fainted {
+                    // Revival Blessing: Showdown clears the revived Pokémon's status, and fainting
+                    // already ended its terastallization
+                    p.fainted = false;
+                    p.status = 0;
+                    p.tera = false;
                 }
                 if let Some(st) = st {
                     p.status = st;
@@ -1339,6 +1344,27 @@ mod tests {
         assert_eq!((own(4).move_idx, own(4).move_name.as_str()), (-1, "Shadow Ball"));
         assert_eq!(own(5).frame.moves[2], "Shadow Ball");
         assert!(own(7).frame.moves.iter().all(|m| m.is_empty()), "Ditto's own moveset stays unrevealed");
+    }
+
+    #[test]
+    fn revival_blessing_revives_without_status_or_tera() {
+        // Showdown's revival (battle.ts 'revivalblessing' action) clears the status, and fainting
+        // already dropped the tera state (faintMessages: `delete pokemon.terastallized`): the
+        // revived Pokémon comes back at 50% with neither, in both sides' frames
+        let p = parse(&["|turn|1", "|-terastallize|p1a: Garchomp|Fire", "|move|p1a: Garchomp|Swords Dance|p1a: Garchomp",
+            "|move|p2a: Gholdengo|Will-O-Wisp|p1a: Garchomp", "|-status|p1a: Garchomp|brn", "|upkeep", "|turn|2",
+            "|move|p2a: Gholdengo|Make It Rain|p1a: Garchomp", "|-damage|p1a: Garchomp|0 fnt", "|faint|p1a: Garchomp", "|upkeep",
+            "|switch|p1a: Corviknight|Corviknight, F|100/100", "|turn|3", "|move|p1a: Corviknight|Revival Blessing|p1a: Corviknight",
+            "|-heal|p1: Garchomp|50/100|[from] move: Revival Blessing", "|upkeep", "|turn|4"]);
+        let feats = |r: &Rec, j: usize| r.frame.feats[j * FEAT..(j + 1) * FEAT].to_vec();
+        let (own, opp) = (p.records[0].last().unwrap(), p.records[1].last().unwrap());
+        assert_eq!(turn(own), 4);
+        for f in [feats(own, 0), feats(opp, TEAM)] {
+            assert_eq!((f[F_HP], f[F_FAINTED]), (0.5, 0.0), "revived at 50%");
+            assert_eq!(f[F_STATUS], 1.0, "no status after the revival (the burn was cleared)");
+            assert_eq!(f[F_TERA], 0.0, "no tera after fainting");
+        }
+        assert_eq!(own.legal_switch, [true, true, false, false, false, false], "the revived Garchomp may come in");
     }
 
     #[test]
