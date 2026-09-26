@@ -889,3 +889,31 @@ fn real_egaroucid_end_to_end() {
     }
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// A tie weight beyond f32 (finite as the f64 flag, inf in the workers) used to pass the
+/// check and turn every policy into NaN: the frames failed as bad analyses and the run
+/// "succeeded" with pad rows. It is refused up front; the largest f32 weight still labels
+/// every frame with a finite, normalised policy.
+#[test]
+fn tie_weights_beyond_f32_are_refused() {
+    let root = tmpdir("oth-huge-w");
+    converter_shards(&root, 4, 4, 5);
+    let mut o = opts(&root, fake_engine_command());
+    o.tie_weight = Some(1e39);
+    let err = run(OthelloLabeller::default(), &o).unwrap_err().to_string();
+    assert!(err.contains("--tie-weight 1000000000000000000000000000000000000000") && err.contains("f32::MAX"), "{err}");
+    assert!(!root.join("out").exists(), "nothing written");
+    o.tie_weight = Some(f32::MAX as f64);
+    let s = run(OthelloLabeller::default(), &o).unwrap();
+    assert_eq!((s.stats.bad_analysis, s.stats.engine_errors), (0, 0), "{:?}", s.stats.errors);
+    assert!(s.stats.labelled > 100);
+    let out = ShardReader::open(&root.join("out/othello_00000")).unwrap();
+    let pp = out.read_f32("tgt.place_probs").unwrap();
+    let evm = out.read_bool("tgt.engine_value_mask").unwrap();
+    let passed = ShardReader::open(&root.join("base/othello_00000")).unwrap().read_bool("tgt.passed").unwrap();
+    for f in (0..out.n_frames).filter(|&f| evm[f] && !passed[f]) {
+        let row = &pp[f * 64..f * 64 + 64];
+        assert!(row.iter().all(|x| x.is_finite()) && (row.iter().sum::<f32>() - 1.0).abs() < 1e-5, "frame {f}: {row:?}");
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}

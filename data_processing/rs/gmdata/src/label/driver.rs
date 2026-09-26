@@ -733,8 +733,9 @@ pub fn run<L: Labeller>(lab: L, opts: &RunOpts) -> Result<Summary> {
     let secondary = lab.secondary_meta();
     let tie_applies = policy == PolicyKind::Softmax && custom.is_none() && secondary.is_some();
     if let Some(w) = opts.tie_weight {
-        if !(w.is_finite() && w >= 0.0) {
-            bail!("--tie-weight {w}: must be finite and >= 0");
+        // the workers compute in f32: a larger w would become inf there (NaN policies)
+        if !(w.is_finite() && w >= 0.0 && (w as f32).is_finite()) {
+            bail!("--tie-weight {w}: must be finite and >= 0 (at most f32::MAX = {:e})", f32::MAX);
         }
         if w > 0.0 && !tie_applies {
             let why = if policy != PolicyKind::Softmax {
@@ -1030,7 +1031,8 @@ mod tests {
         v.policy = Some(PolicyKind::Visits);
         let err = run(ToyLabeller { visits: true, ..Default::default() }, &v).unwrap_err().to_string();
         assert!(err.contains("--policy visits"), "{err}");
-        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+        // 1e39 is a finite f64 but inf as the workers' f32
+        for bad in [-1.0, f64::NAN, f64::INFINITY, 1e39, f64::MAX] {
             let err = run(ToyLabeller::default(), &o(Some(bad), "e")).unwrap_err().to_string();
             assert!(err.contains("must be finite and >= 0"), "{err}");
         }
