@@ -105,6 +105,20 @@ ranks) and writes checkpoints; validation batches are split over the ranks
 and their (sum, count) statistics gathered.  ``--steps`` counts optimizer
 steps.
 
+Sharded optimizer state (``--shard_optimizer``, data parallel only; ZeRO-1,
+training/zero.py).  Without it every rank holds the weights, gradients,
+AdamATan2 moments and EMA shadows of the whole model: 20 bytes per
+parameter.  With it the trainable parameters are partitioned over the ranks
+(whole tensors, balanced by size, a function of the architecture and the
+world size only) and each rank keeps the moments, step counters and EMA
+shadows of its partition: 8 + 12/world bytes per parameter.  Each rank steps
+its own parameters (the same AdamATan2 kernel on the same tensors; grad-None
+parameters skipped as before) and the owners broadcast the updated weights
+(bucketed by --bucket_mb), so the run is bit-identical to the unsharded one.
+Validation swaps the gathered EMA into the live model instead of copying it;
+checkpoints are gathered onto rank 0 (every rank takes part) in the unsharded
+format, so either kind of run resumes the other, at any world size.
+
 Resuming.  ``--ckpt_every N`` makes rank 0 write ``multi_latest.pt`` every N
 steps and at the last one (weights, EMA shadows, optimizer, LR schedule,
 step; written atomically).  ``--resume <that file>`` continues from it with
@@ -183,6 +197,7 @@ from training.train_il_game import (
     prepare_rows,
     schema_freeze_warning,
 )
+from training.zero import Zero1
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -291,6 +306,12 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="data parallel: process-group backend; auto = NCCL on full GPUs, "
                         "gloo on MIG slices (NCCL refuses two ranks on one physical GPU; "
                         "every rank is pinned to its own slice) and on the CPU")
+    p.add_argument("--shard_optimizer", action="store_true",
+                   help="data parallel (world > 1 only): ZeRO-1 — every rank keeps the "
+                        "AdamATan2 moments and the EMA of its 1/world partition of the "
+                        "parameters only (training/zero.py); the same training, bit for "
+                        "bit, and the same checkpoint format (resumable either way, any "
+                        "world size), for 12/world instead of 12 bytes per parameter")
     return p.parse_args(argv)
 
 
@@ -523,6 +544,10 @@ def main(argv=None) -> Dict[str, object]:
     device = torch.device(args.device) if args.device else pick_device()
     dist_env, device = init_distributed(device, args.dist_timeout, args.dist_backend)
     rank0, rank, world = dist_env.is_main, dist_env.rank, dist_env.world
+    if args.shard_optimizer and not dist_env.enabled:
+        raise SystemExit("--shard_optimizer partitions the optimizer state and the EMA over "
+                         "data-parallel ranks: it needs torchrun with more than one rank "
+                         "(this run has world size 1; drop the flag)")
     # rank-specific streams (game draws, data order, crops); rank 0 == single-process
     random.seed(rank_seed(args.seed, rank))
     torch.manual_seed(rank_seed(args.seed, rank))
@@ -698,12 +723,23 @@ def main(argv=None) -> Dict[str, object]:
                           betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, trm_lr_lambda(args.warmup_steps, args.steps, args.lr_min_ratio))
-    ema = ModelEMA(model, mu=args.ema_rate) if args.ema_rate > 0 else None
+    # --shard_optimizer: this rank's partition of the optimizer state and EMA
+    zero = (Zero1(model, optimizer, rank, world, bucket_mb=args.bucket_mb)
+            if args.shard_optimizer else None)
+    ema = None
+    if args.ema_rate > 0:
+        ema = (zero.make_ema(model, args.ema_rate) if zero is not None
+               else ModelEMA(model, mu=args.ema_rate))
+    if zero is not None:
+        log(zero.describe(ema is not None))
     carries = {g: BatchCarry(model[g].supervision_steps, model[g].cfg.halt_exploration_prob)
                for g in games}
     start = 1
     if resume is not None:
-        optimizer.load_state_dict(resume["optimizer_state"])
+        if zero is not None:
+            zero.load_optimizer_state(resume["optimizer_state"])    # own partition only
+        else:
+            optimizer.load_state_dict(resume["optimizer_state"])
         scheduler.load_state_dict(resume["scheduler_state"])
         if ema is not None and resume.get("ema_state") is not None:
             ema.load_state_dict(resume["ema_state"])
@@ -719,8 +755,22 @@ def main(argv=None) -> Dict[str, object]:
     if rank0:
         os.makedirs(args.save_dir, exist_ok=True)
 
-    def save(tag: str, step: int = 0, resumable: bool = False) -> str:
-        state = ema.ema_model_state(model) if ema is not None else model.state_dict()
+    def save(tag: str, step: int = 0, resumable: bool = False) -> Optional[str]:
+        """Rank 0 writes ``multi_<tag>.pt``.  With --shard_optimizer EVERY rank
+        calls this: the EMA and optimizer partitions are gathered onto rank 0
+        (on the CPU, bucket by bucket) in the unsharded layout; the other
+        ranks return None."""
+        if zero is not None:
+            ema_state = zero.gather_ema(ema) if ema is not None else None
+            optimizer_state = zero.gather_optimizer_state() if resumable else None
+            if not rank0:
+                return None
+            state = (zero.ema_model_state(model, ema_state) if ema is not None
+                     else model.state_dict())
+        else:
+            ema_state = ema.state_dict() if ema is not None else None
+            optimizer_state = optimizer.state_dict() if resumable else None
+            state = ema.ema_model_state(model) if ema is not None else model.state_dict()
         pre = f"nets.{games[0]}."
         core = {k[len(pre):]: v for k, v in state.items()
                 if k.startswith(pre) and is_core_key(k[len(pre):])}
@@ -737,9 +787,8 @@ def main(argv=None) -> Dict[str, object]:
             "world_size": dist_env.world,
         }
         if resumable:
-            ck.update(step=step, optimizer_state=optimizer.state_dict(),
-                      scheduler_state=scheduler.state_dict(),
-                      ema_state=ema.state_dict() if ema is not None else None)
+            ck.update(step=step, optimizer_state=optimizer_state,
+                      scheduler_state=scheduler.state_dict(), ema_state=ema_state)
         # atomic: a job killed mid-write never leaves a truncated checkpoint
         torch.save(ck, f"{path}.tmp")
         os.replace(f"{path}.tmp", path)
@@ -781,7 +830,10 @@ def main(argv=None) -> Dict[str, object]:
         else:
             grad_norm = torch.nn.utils.clip_grad_norm_(params, max_norm)
         if torch.isfinite(grad_norm):
-            optimizer.step()
+            if zero is not None:
+                zero.step()     # own partition, then every owner broadcasts its update
+            else:
+                optimizer.step()
             scheduler.step()
             if ema is not None:
                 ema.update(model)
@@ -820,7 +872,12 @@ def main(argv=None) -> Dict[str, object]:
                 flush=True)
             window = {}
         if has_val and (step % args.eval_every == 0 or step == args.steps):
-            ev_model = ema.ema_copy(model) if ema is not None else model
+            if zero is not None and ema is not None:
+                # the gathered EMA swapped into the live model (no model copy)
+                ev_ctx = zero.ema_weights(model, ema)
+            else:
+                ev_ctx = contextlib.nullcontext(ema.ema_copy(model) if ema is not None
+                                                else model)
             diag: Dict[str, str] = {}
             # only the flags that differ from eval_sums' defaults: an unused
             # flag leaves the historical evaluate(...) call unchanged
@@ -828,26 +885,31 @@ def main(argv=None) -> Dict[str, object]:
                                          ("soft_target_weight", args.soft_target_weight),
                                          ("engine_value_weight", args.engine_value_weight))
                        if v != EVAL_LOSS_DEFAULTS[k]}
-            if dist_env.enabled:
-                res = evaluate_sharded(ev_model, val_loaders, device, args.value_weight,
-                                       args.bf16, **loss_kw)
-            else:
-                res = evaluate(ev_model, val_loaders, device, args.value_weight, args.bf16,
-                               args.eval_batches, diag=diag, **loss_kw)
-            del ev_model
+            with ev_ctx as ev_model:
+                if dist_env.enabled:
+                    res = evaluate_sharded(ev_model, val_loaders, device, args.value_weight,
+                                           args.bf16, **loss_kw)
+                else:
+                    res = evaluate(ev_model, val_loaders, device, args.value_weight,
+                                   args.bf16, args.eval_batches, diag=diag, **loss_kw)
+            del ev_model, ev_ctx
             for g, m in res.items():
                 keys = [k for k in sorted(m) if k.endswith(("loss", "acc", "mse", "kl"))]
                 log(f"[val {step}] {g}: " + " ".join(f"{k}={m[k]:.4f}" for k in keys),
                     flush=True)
                 if diag.get(g):
                     log(f"[attn {step}] {g}: {diag[g]}", flush=True)
-        if args.ckpt_every and (step % args.ckpt_every == 0 or step == args.steps) and rank0:
+        # sharded: every rank takes part in the gather, rank 0 writes
+        writes = rank0 or zero is not None
+        if args.ckpt_every and (step % args.ckpt_every == 0 or step == args.steps) and writes:
             save("latest", step, resumable=True)
+    final = save("final") if rank0 or zero is not None else None
     if rank0:
-        print(f"[done] saved {save('final')}")
+        print(f"[done] saved {final}")
     dist_env.barrier()
     dist_env.destroy()
-    return {"model": model, "ema": ema, "optimizer": optimizer, "dist": dist_env}
+    return {"model": model, "ema": ema, "optimizer": optimizer, "dist": dist_env,
+            "zero": zero}
 
 
 if __name__ == "__main__":
