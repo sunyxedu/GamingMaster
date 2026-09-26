@@ -107,7 +107,9 @@ step; written atomically).  ``--resume <that file>`` continues from it with
 the same arguments, any world size: weights, optimizer moments, EMA, balance
 biases, BatchNorm statistics and the LR schedule continue exactly; game
 draws and data order restart from fresh RNG streams, and a TRM core's deep-
-supervision carries restart empty.
+supervision carries restart empty.  Each game's network is rebuilt from the
+config saved in the checkpoint (``--override`` values on top), so a config
+default that changed since it was written cannot reshape it.
 """
 
 from __future__ import annotations
@@ -596,7 +598,19 @@ def main(argv=None) -> Dict[str, object]:
 
     nets = {}
     for g in games:
-        kw = apply_meta_arch_defaults(g, dict(core_kw), datasets[g].shard_meta)
+        saved = (resume.get("configs") or {}).get(g) if resume is not None else None
+        if saved is not None:
+            # the checkpoint defines each game's architecture (train_il_game's
+            # resume invariant): a config default changed since it was written
+            # (e.g. lux_sap_head) must not reshape the net under its weights;
+            # fields newer than the checkpoint take their legacy values
+            kw = upgrade_config_dict(dict(saved))
+            changed = {k: v for k, v in core_kw.items() if k in kw and kw[k] != v}
+            if changed:
+                log(f"[warn] {g}: --override replaces checkpoint arch values: {changed}")
+            kw.update(core_kw)
+        else:
+            kw = apply_meta_arch_defaults(g, dict(core_kw), datasets[g].shard_meta)
         net, dropped = build_net_tolerant(g, kw)
         if dropped:
             log(f"[warn] {g}: config fields unknown to {g}'s config, ignored: {dropped}")
