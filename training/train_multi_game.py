@@ -805,6 +805,16 @@ def main(argv=None) -> Dict[str, object]:
             caps = qk_caps(first)
             if caps:
                 extra += f"  qk_cap_max={max(caps.values()):.2f}"
+            if device.type == "cuda":
+                # peak allocated GiB since the last log line, max over ranks
+                # (every rank takes part in the all-reduce)
+                peak = torch.tensor([torch.cuda.max_memory_allocated(device) / 2**30,
+                                     torch.cuda.max_memory_reserved(device) / 2**30],
+                                    device=device)
+                if dist_env.enabled:
+                    dist.all_reduce(peak, op=dist.ReduceOp.MAX)
+                torch.cuda.reset_peak_memory_stats(device)
+                extra += f"  mem_peak={peak[0].item():.1f}/{peak[1].item():.1f}G"
             log(f"[step {step}/{args.steps}] lr={scheduler.get_last_lr()[0]:.2e} "
                 f"gnorm={float(grad_norm):.3f} {msg}{extra}  ({time.time() - t0:.0f}s)",
                 flush=True)
