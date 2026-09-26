@@ -92,7 +92,8 @@ impl Visitor for Collector {
     }
 }
 
-fn result_white(r: &str) -> Option<f32> {
+/// The result for white of a PGN `Result` tag (`None` = unfinished / unknown).
+pub(crate) fn result_white(r: &str) -> Option<f32> {
     match r {
         "1-0" => Some(1.0),
         "0-1" => Some(-1.0),
@@ -186,7 +187,9 @@ fn passes(g: &Game, min_elo: i64, min_plies: usize, skip_bullet: bool) -> bool {
     g.moves.len() >= min_plies.max(1)
 }
 
-fn pov(sq: Square, flip: bool) -> i64 {
+/// POV square index `row·8 + file` of `sq` for the side to move (`flip` = black to move:
+/// row = rank; white to move: row = 7 − rank; ranks / files 0-based from a1).
+pub(crate) fn pov(sq: Square, flip: bool) -> i64 {
     let (file, rank) = (u32::from(sq.file()) as i64, u32::from(sq.rank()) as i64);
     if flip {
         rank * 8 + file
@@ -221,7 +224,7 @@ fn promo_idx(r: Option<Role>) -> i64 {
 /// (from square, to square, promotion index). Castling → king destination file g/c
 /// (python-chess standard mode; shakmaty encodes castling as king → rook). Used for the
 /// labels AND the legality masks, so the GT move always lies inside its own masks.
-fn move_target(m: &Move, flip: bool) -> Option<(i64, i64, i64)> {
+pub(crate) fn move_target(m: &Move, flip: bool) -> Option<(i64, i64, i64)> {
     let from_sq = m.from()?;
     let to_sq = match *m {
         Move::Castle { king, rook } => {
@@ -237,7 +240,7 @@ fn move_target(m: &Move, flip: bool) -> Option<(i64, i64, i64)> {
 /// (legal from-squares, legal destinations from `gt.from`, legal promotions of
 /// (`gt.from`, `gt.to`)). `None` if `gt` is not inside all three (never for a legal move).
 #[allow(clippy::type_complexity)]
-fn legal_masks(pos: &Chess, flip: bool, gt: (i64, i64, i64)) -> Option<([f32; 64], [f32; 64], [f32; N_PROMOTIONS])> {
+pub(crate) fn legal_masks(pos: &Chess, flip: bool, gt: (i64, i64, i64)) -> Option<([f32; 64], [f32; 64], [f32; N_PROMOTIONS])> {
     let (mut from, mut to_of, mut promo_of) = ([0f32; 64], [0f32; 64], [0f32; N_PROMOTIONS]);
     for m in pos.legal_moves() {
         let Some((f, t, p)) = move_target(&m, flip) else { continue };
@@ -251,6 +254,56 @@ fn legal_masks(pos: &Chess, flip: bool, gt: (i64, i64, i64)) -> Option<([f32; 64
     }
     let inside = from[gt.0 as usize] == 1.0 && to_of[gt.1 as usize] == 1.0 && promo_of[gt.2 as usize] == 1.0;
     inside.then_some((from, to_of, promo_of))
+}
+
+/// Floats of one `obs.board_seq` frame (14 planes of 8×8).
+pub(crate) const PLANE_LEN: usize = 14 * 64;
+
+/// Occurrence counts of the positions of one game (Chess Eq/Hash = FIDE repetition
+/// identity: board, side to move, castling rights, legal en-passant square).
+#[derive(Default)]
+pub(crate) struct Repetitions(HashMap<Chess, u32>);
+
+impl Repetitions {
+    /// Record `pos`; returns how often it occurred earlier in the game.
+    pub(crate) fn see(&mut self, pos: &Chess) -> u32 {
+        let n = self.0.entry(pos.clone()).or_insert(0);
+        *n += 1;
+        *n - 1
+    }
+}
+
+/// Observation of one frame (the position before the move, from the mover's POV):
+/// writes the `obs.board_seq` planes into `planes` (`PLANE_LEN` floats, zero on entry)
+/// and appends the `GLOBAL_FEATURES` `obs.globals_seq` values to `globals`; `prior` =
+/// earlier occurrences of the position ([`Repetitions::see`]). Shared with
+/// `gmdata label chess`, which re-encodes replayed games to verify them.
+pub(crate) fn encode_position(pos: &Chess, prior: u32, planes: &mut [f32], globals: &mut Vec<f32>) {
+    let own = pos.turn();
+    let flip = own == Color::Black;
+    for (sq, piece) in pos.board().iter() {
+        let plane = if piece.color == own { 0 } else { 6 } + role_idx(piece.role);
+        planes[plane * 64 + pov(sq, flip) as usize] = 1.0;
+    }
+    if let Some(ep) = pos.ep_square(EnPassantMode::Always) {
+        planes[12 * 64 + pov(ep, flip) as usize] = 1.0;
+    }
+    for x in &mut planes[13 * 64..14 * 64] {
+        *x = 1.0;
+    }
+    let c = pos.castles();
+    globals.extend_from_slice(&[
+        c.has(own, CastlingSide::KingSide) as u8 as f32,
+        c.has(own, CastlingSide::QueenSide) as u8 as f32,
+        c.has(!own, CastlingSide::KingSide) as u8 as f32,
+        c.has(!own, CastlingSide::QueenSide) as u8 as f32,
+        (own == Color::White) as u8 as f32,
+        (u32::from(pos.fullmoves()) as f64 / 100.0).min(1.0) as f32,
+        (pos.halfmoves() as f64 / 100.0).min(1.0) as f32,
+        pos.is_check() as u8 as f32,
+        (prior >= 1) as u8 as f32,
+        (prior >= 2) as u8 as f32,
+    ]);
 }
 
 /// Why a game produced no sample.
@@ -280,7 +333,7 @@ struct Frames {
 fn encode_moves(moves: &[Move], wv: f32) -> Result<Frames, Skip> {
     let t = moves.len();
     let mut f = Frames {
-        planes: vec![0f32; t * 14 * 64],
+        planes: vec![0f32; t * PLANE_LEN],
         globals: Vec::with_capacity(t * GLOBAL_FEATURES),
         legal_from: Vec::with_capacity(t * 64),
         legal_to_of: Vec::with_capacity(t * 64),
@@ -288,43 +341,15 @@ fn encode_moves(moves: &[Move], wv: f32) -> Result<Frames, Skip> {
         ..Frames::default()
     };
     let mut pos = Chess::default();
-    // occurrences so far of each position (Chess Eq/Hash = FIDE repetition identity)
-    let mut occurrences: HashMap<Chess, u32> = HashMap::new();
+    let mut reps = Repetitions::default();
     for (k, m) in moves.iter().enumerate() {
         if !pos.is_legal(*m) {
             return Err(Skip::Invalid);
         }
         let own = pos.turn();
         let flip = own == Color::Black;
-        let base = k * 14 * 64;
-        for (sq, piece) in pos.board().iter() {
-            let plane = if piece.color == own { 0 } else { 6 } + role_idx(piece.role);
-            f.planes[base + plane * 64 + pov(sq, flip) as usize] = 1.0;
-        }
-        if let Some(ep) = pos.ep_square(EnPassantMode::Always) {
-            f.planes[base + 12 * 64 + pov(ep, flip) as usize] = 1.0;
-        }
-        for i in 0..64 {
-            f.planes[base + 13 * 64 + i] = 1.0;
-        }
-        let prior = {
-            let n = occurrences.entry(pos.clone()).or_insert(0);
-            *n += 1;
-            *n - 1
-        };
-        let c = pos.castles();
-        f.globals.extend_from_slice(&[
-            c.has(own, CastlingSide::KingSide) as u8 as f32,
-            c.has(own, CastlingSide::QueenSide) as u8 as f32,
-            c.has(!own, CastlingSide::KingSide) as u8 as f32,
-            c.has(!own, CastlingSide::QueenSide) as u8 as f32,
-            (own == Color::White) as u8 as f32,
-            (u32::from(pos.fullmoves()) as f64 / 100.0).min(1.0) as f32,
-            (pos.halfmoves() as f64 / 100.0).min(1.0) as f32,
-            pos.is_check() as u8 as f32,
-            (prior >= 1) as u8 as f32,
-            (prior >= 2) as u8 as f32,
-        ]);
+        let prior = reps.see(&pos);
+        encode_position(&pos, prior, &mut f.planes[k * PLANE_LEN..(k + 1) * PLANE_LEN], &mut f.globals);
         let gt = move_target(m, flip).ok_or(Skip::Invalid)?;
         let (lf, lt, lp) = legal_masks(&pos, flip, gt).ok_or(Skip::MaskMismatch)?;
         f.legal_from.extend_from_slice(&lf);
