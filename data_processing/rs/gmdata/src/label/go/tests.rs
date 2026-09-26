@@ -243,11 +243,12 @@ fn end_to_end_with_the_fake_engine() {
 
 #[test]
 fn fake_engine_failures_are_retried_on_a_fresh_process() {
-    // every fake process fails its 2nd analysis query; the retry (a fresh process's 1st) works
+    // every fake process fails its 3rd analysis query (the 1st is the perspective probe of
+    // open_session, the 2nd a game); the retry (a fresh process's first game) works
     for (tag, make) in [
-        ("crash", (|| KataFake::new().crash_on(2)) as fn() -> KataFake),
-        ("error", || KataFake::new().error_on(2)),
-        ("hang", || KataFake::new().hang_on(2, Duration::from_millis(900))),
+        ("crash", (|| KataFake::new().crash_on(3)) as fn() -> KataFake),
+        ("error", || KataFake::new().error_on(3)),
+        ("hang", || KataFake::new().hang_on(3, Duration::from_millis(900))),
     ] {
         let root = scenario_root(&format!("go-flaky-{tag}"));
         let mut o = quiet_opts(&root, EngineCommand::in_process("flaky", make));
@@ -261,12 +262,36 @@ fn fake_engine_failures_are_retried_on_a_fresh_process() {
         assert_eq!((s.stats.engine_errors, s.stats.labelled + 3), (0, s.stats.frames), "{tag}: {:?}", s.stats);
         std::fs::remove_dir_all(&root).ok();
     }
-    // a dead engine: every query rejected → the run fails loudly
+    // an engine that rejects every game query (its probe passes) → the run fails loudly
     let root = scenario_root("go-dead");
-    let o = quiet_opts(&root, EngineCommand::in_process("dead", || KataFake::new().error_on(1)));
+    let o = quiet_opts(&root, EngineCommand::in_process("dead", || KataFake::new().error_on(2)));
     let err = format!("{:#}", driver::run(lab9(), &o).unwrap_err());
     assert!(err.contains("engine queries failed") && err.contains("injected error"), "{err}");
     std::fs::remove_dir_all(&root).ok();
+    // one that rejects everything fails before labelling anything (the startup probe)
+    let root = scenario_root("go-dead-probe");
+    let o = quiet_opts(&root, EngineCommand::in_process("dead", || KataFake::new().error_on(1)));
+    let err = format!("{:#}", driver::run(lab9(), &o).unwrap_err());
+    assert!(err.contains("start the engine") && err.contains("injected error"), "{err}");
+    assert!(!root.join("out").join("go_00000").exists());
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// KataGo reports winrates from the side to move only when its config says so (a query
+/// field of that name is ignored), and its analysis_example.cfg says BLACK: a process
+/// reporting from one colour's view must never label — every white-to-move (or
+/// black-to-move) Q, score lead and engine value would be sign-flipped.
+#[test]
+fn a_fixed_colour_perspective_is_refused() {
+    use super::fake::Perspective;
+    for p in [Perspective::Black, Perspective::White] {
+        let root = scenario_root(&format!("go-pov-{p:?}"));
+        let o = quiet_opts(&root, EngineCommand::in_process("black-pov", move || KataFake::new().report_as(p)));
+        let err = format!("{:#}", driver::run(lab9(), &o).unwrap_err());
+        assert!(err.contains("does not report winrates from the side to move"), "{err}");
+        assert!(!root.join("out").join("go_00000").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
 }
 
 /// Wraps the fake and mirrors every reported move vertically (row r → N−1−r), as if
@@ -470,6 +495,37 @@ fn real_katago_scenarios() {
     let f1 = out.reader.samples[1].start + 1;
     assert!(evm[f1] && !idx[f1 * K..(f1 + 1) * K].contains(&KO_POINT));
     assert_eq!(evm[out.reader.sample_range(2)].to_vec(), PASSES_MASK.to_vec());
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A user config that reports winrates from black's view (as KataGo's own
+/// analysis_example.cfg does), passed with explicit engine args: the labeller forces the
+/// side to move, so white-to-move frames of the 2-stone 9×9 handicap game (black far
+/// ahead) get negative engine values and black-to-move frames positive ones.
+#[test]
+fn real_katago_black_perspective_config_is_overridden() {
+    let Some((exe, model)) = real_katago() else {
+        eprintln!("skipping: KataGo or its network not installed (scripts/engines/fetch_engines.sh katago)");
+        return;
+    };
+    let root = scenario_root("go-real-pov");
+    let (lab, _) = real_lab(9, &model);
+    let text = katago::config_text(&lab.settings).replace("reportAnalysisWinratesAs = SIDETOMOVE", "reportAnalysisWinratesAs = BLACK");
+    assert!(text.contains("= BLACK"));
+    let cfg = root.join("black.cfg");
+    std::fs::write(&cfg, text).unwrap();
+    let args = vec!["analysis".into(), "-config".into(), cfg.display().to_string(), "-model".into(), model.display().to_string()];
+    let lab = GoLabeller { config: None, ..lab };
+    let s = driver::run(lab, &real_opts(&root, &exe, &args, 64)).unwrap();
+    assert_eq!((s.stats.engine_errors, s.stats.bad_analysis, s.stats.failed_samples()), (0, 0, 0), "{:?}", s.stats);
+    let base = load(&root.join("base").join("go_00000"));
+    let out = load(&root.join("out").join("go_00000"));
+    let ev = f32s(&out.tensors["tgt.engine_value"]);
+    let gl = f32s(&base.tensors["obs.globals_seq"]);
+    for f in base.reader.sample_range(3) {
+        let black = gl[f * GLOBAL_FEATURES] == 1.0;
+        assert!(if black { ev[f] > 0.0 } else { ev[f] < 0.0 }, "frame {f}: {} to move, engine value {}", if black { "B" } else { "W" }, ev[f]);
+    }
     std::fs::remove_dir_all(&root).unwrap();
 }
 

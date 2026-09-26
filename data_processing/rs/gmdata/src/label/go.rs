@@ -10,8 +10,8 @@
 //!
 //! Label train and validation shards with the same settings and KataGo installation:
 //! the engine id (`KataGo <version> <network>`) is part of `meta.teacher`, and the loader
-//! refuses to mix metas (Homebrew's macOS KataGo is 1.18.2, the Linux CPU / OpenCL /
-//! TensorRT release builds 1.18.1).
+//! refuses to mix metas (Homebrew's macOS KataGo is 1.18.2; fetch_engines.sh pins every
+//! Linux build — CPU, OpenCL, CUDA, TensorRT — to 1.18.1).
 //!
 //! Without `--engine-arg`, the engine runs as
 //! `katago analysis -config <generated> -model <--model>`; the generated config (a
@@ -20,7 +20,11 @@
 //! `ignorePreRootHistory = false`, `analysisPVLen = 1` and the thread / batch / cache
 //! flags below. `--engine-option K=V` becomes `-override-config K=V,…` (any KataGo
 //! config key, e.g. `wideRootNoise=0.04`); with explicit `--engine-arg`s the command is
-//! exactly `--engine` + those args (+ `-override-config`).
+//! exactly `--engine` + those args + `-override-config` (an `-override-config` among the
+//! args is extended). The override always carries `reportAnalysisWinratesAs=SIDETOMOVE`
+//! (KataGo has no per-query switch, and its analysis_example.cfg reports BLACK, which would
+//! flip every white-to-move Q / score lead / engine value), and every new process must pass
+//! a perspective probe (komi 150: black to move ≈ 0, white to move ≈ 1) before it labels.
 //!
 //! # What is labelled
 //!
@@ -479,22 +483,19 @@ impl Labeller for GoLabeller {
     fn open_session(&self, cfg: &EngineConfig) -> Result<KataSession> {
         self.write_config()?;
         let cmd = match &cfg.command {
-            EngineCommand::Process { program, args, cwd, env } if !cfg.options.is_empty() => {
-                let mut kv = Vec::new();
-                for (k, v) in &cfg.options {
-                    if k.contains([',', '=']) || v.contains([',', '=']) || k.is_empty() {
-                        bail!("--engine-option {k}={v}: KataGo config keys / values cannot contain ',' or '='");
-                    }
-                    kv.push(format!("{k}={v}"));
-                }
-                let mut a = args.clone();
-                a.push("-override-config".into());
-                a.push(kv.join(","));
-                EngineCommand::Process { program: program.clone(), args: a, cwd: cwd.clone(), env: env.clone() }
-            }
+            // --engine-option + the forced side-to-move perspective (whatever config the
+            // process runs with, e.g. KataGo's analysis_example.cfg says BLACK)
+            EngineCommand::Process { program, args, cwd, env } => EngineCommand::Process {
+                program: program.clone(),
+                args: katago::override_args(args, &cfg.options)?,
+                cwd: cwd.clone(),
+                env: env.clone(),
+            },
             c => c.clone(),
         };
-        KataSession::open(cmd, self.startup_timeout.max(cfg.timeout), cfg.timeout)
+        let mut session = KataSession::open(cmd, self.startup_timeout.max(cfg.timeout), cfg.timeout)?;
+        session.check_side_to_move(self.n, cfg.timeout)?;
+        Ok(session)
     }
 
     fn engine_id(&self, session: &KataSession) -> String {

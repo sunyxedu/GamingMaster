@@ -8,7 +8,11 @@
 //!   query's `id`, `turnNumber`, `moveInfos` (per searched move: `move`, `visits`,
 //!   `edgeVisits`, `winrate`, `scoreLead`, `prior`, …) and `rootInfo` (`winrate`,
 //!   `scoreLead`, `currentPlayer`, …). With `reportAnalysisWinratesAs = SIDETOMOVE`
-//!   winrates and scores are from the side to move at that turn.
+//!   winrates and scores are from the side to move at that turn. That is a config
+//!   setting only — KataGo ignores a query field of that name (with an "unused field"
+//!   warning), and its own analysis_example.cfg says `BLACK` — so every process gets
+//!   [`FORCED_CONFIG`] through `-override-config` ([`override_args`]) and every new
+//!   session checks the perspective on a probe position ([`KataSession::check_side_to_move`]).
 //! * `{"id":…,"error":…}` = the query was rejected (e.g. an illegal move),
 //!   `{"id":…,"warning":…}` = accepted with a warning (ignored here),
 //!   `"noResults": true` = the turn was not analysed (terminated).
@@ -94,9 +98,52 @@ pub fn query_line(id: &str, g: &QueryGame, turns: &[usize], max_visits: u64) -> 
         "moves": g.moves[..last].iter().map(|&(c, p)| json!([colour_str(c), vertex(p)])).collect::<Vec<_>>(),
         "analyzeTurns": turns,
         "maxVisits": max_visits,
-        "reportAnalysisWinratesAs": "SIDETOMOVE",
     });
     q.to_string()
+}
+
+/// Config values the response parsing relies on, forced on every KataGo process through
+/// `-override-config` whatever config file it runs with (see the module docs): winrates
+/// and score leads from the side to move.
+pub const FORCED_CONFIG: &[(&str, &str)] = &[("reportAnalysisWinratesAs", "SIDETOMOVE")];
+
+/// `args` + `-override-config K=V,…` carrying `options` (`--engine-option`, in order) and
+/// [`FORCED_CONFIG`]; an `-override-config` already among `args` is extended instead of
+/// repeated. A forced key may only be given its forced value.
+pub fn override_args(args: &[String], options: &[(String, String)]) -> Result<Vec<String>> {
+    let mut out = args.to_vec();
+    let existing = out.iter().position(|a| a == "-override-config" || a == "--override-config");
+    let mut kv: Vec<(String, String)> = Vec::new();
+    if let Some(i) = existing {
+        let v = out.get(i + 1).with_context(|| format!("{} without a value", out[i]))?;
+        for item in v.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+            let (k, v) = item.split_once('=').with_context(|| format!("-override-config item {item:?} is not KEY=VALUE"))?;
+            kv.push((k.trim().to_string(), v.trim().to_string()));
+        }
+    }
+    for (k, v) in options {
+        if k.is_empty() || k.contains([',', '=']) || v.contains([',', '=']) {
+            bail!("--engine-option {k}={v}: KataGo config keys / values cannot contain ',' or '='");
+        }
+        kv.push((k.clone(), v.clone()));
+    }
+    for (fk, fv) in FORCED_CONFIG {
+        if let Some((_, v)) = kv.iter().find(|(k, v)| k == fk && !v.eq_ignore_ascii_case(fv)) {
+            bail!("{fk}={v}: the go labeller parses KataGo's answers as {fk}={fv} and sets it itself");
+        }
+        if !kv.iter().any(|(k, _)| k == fk) {
+            kv.push((fk.to_string(), fv.to_string()));
+        }
+    }
+    let joined = kv.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(",");
+    match existing {
+        Some(i) => out[i + 1] = joined,
+        None => {
+            out.push("-override-config".into());
+            out.push(joined);
+        }
+    }
+    Ok(out)
 }
 
 /// One searched move of a response.
@@ -260,6 +307,29 @@ impl KataSession {
             None => format!("KataGo {}", self.version),
         }
     }
+
+    /// Fail unless winrates come from the side to move: an empty `n`×`n` board with komi
+    /// 150 (white wins by any measure), black to move at turn 0 and — after black passes —
+    /// white at turn 1. The side to move reads ≈0 then ≈1; black's view gives ≈0 twice and
+    /// white's ≈1 twice (a config's `reportAnalysisWinratesAs = BLACK / WHITE`).
+    pub fn check_side_to_move(&mut self, n: usize, timeout: Duration) -> Result<()> {
+        use crate::go::{BLACK, WHITE};
+        let g = QueryGame { n, initial: Vec::new(), initial_player: BLACK, moves: vec![(BLACK, None)], rules: json!("chinese"), komi: 150.0 };
+        let r = self.analyze(&g, &[0, 1], 2, timeout).context("KataGo perspective check")?;
+        let (b, w) = (&r[0], &r[1]);
+        if b.current_player != BLACK || w.current_player != WHITE {
+            bail!("KataGo perspective check: sides to move {} / {}, expected B / W", colour_str(b.current_player), colour_str(w.current_player));
+        }
+        if !(b.root_winrate < 0.5 && w.root_winrate > 0.5) {
+            bail!(
+                "KataGo does not report winrates from the side to move (reportAnalysisWinratesAs): with komi 150 it gives \
+                 black to move {:.3} and white to move {:.3}, expected about 0 and 1",
+                b.root_winrate,
+                w.root_winrate
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Settings of the generated analysis config (`--engine-option K=V` overrides them via
@@ -365,7 +435,10 @@ mod tests {
         assert_eq!(v["initialPlayer"], "W");
         assert_eq!(v["moves"], json!([["W", "E5"], ["B", "pass"]]), "moves up to the last analysed turn");
         assert_eq!((v["analyzeTurns"].clone(), v["maxVisits"].clone(), v["komi"].clone()), (json!([0, 2]), json!(50), json!(6.5)));
-        assert_eq!((v["rules"].clone(), v["reportAnalysisWinratesAs"].clone(), v["boardXSize"].clone()), (json!("japanese"), json!("SIDETOMOVE"), json!(9)));
+        assert_eq!((v["rules"].clone(), v["boardXSize"].clone()), (json!("japanese"), json!(9)));
+        // KataGo has no such query field (it warns "unused field" and ignores it): the
+        // perspective is config-only, forced through -override-config
+        assert!(v.get("reportAnalysisWinratesAs").is_none());
     }
 
     #[test]
@@ -385,6 +458,30 @@ mod tests {
         assert!(parse_turn(&serde_json::from_str(&dup).unwrap(), 19).is_err());
         let off = line.replace(r#""move":"D16""#, r#""move":"Z30""#);
         assert!(parse_turn(&serde_json::from_str(&off).unwrap(), 19).is_err());
+    }
+
+    #[test]
+    fn side_to_move_is_forced_on_every_command_line() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        let kv = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let base = s(&["analysis", "-config", "a.cfg", "-model", "m.bin.gz"]);
+        assert_eq!(override_args(&base, &[]).unwrap()[5..], s(&["-override-config", "reportAnalysisWinratesAs=SIDETOMOVE"]));
+        let with = override_args(&base, &[kv("wideRootNoise", "0.04")]).unwrap();
+        assert_eq!(with[5..], s(&["-override-config", "wideRootNoise=0.04,reportAnalysisWinratesAs=SIDETOMOVE"]));
+        // an -override-config among --engine-arg is extended, not repeated
+        let own = s(&["analysis", "-override-config", "maxTime=5, rootSymmetryPruning=false", "-model", "m"]);
+        let got = override_args(&own, &[kv("wideRootNoise", "0")]).unwrap();
+        assert_eq!(got, s(&["analysis", "-override-config", "maxTime=5,rootSymmetryPruning=false,wideRootNoise=0,reportAnalysisWinratesAs=SIDETOMOVE", "-model", "m"]));
+        assert_eq!(got.iter().filter(|a| *a == "-override-config").count(), 1);
+        // the forced value itself is fine (any case); another perspective is refused
+        assert!(override_args(&base, &[kv("reportAnalysisWinratesAs", "sidetomove")]).unwrap().last().unwrap().ends_with("=sidetomove"));
+        for bad in ["BLACK", "WHITE"] {
+            assert!(override_args(&base, &[kv("reportAnalysisWinratesAs", bad)]).is_err());
+            let own = s(&["analysis", "-override-config", &format!("reportAnalysisWinratesAs={bad}")]);
+            assert!(override_args(&own, &[]).is_err());
+        }
+        assert!(override_args(&base, &[kv("a,b", "1")]).is_err() && override_args(&base, &[kv("a", "1=2")]).is_err());
+        assert!(override_args(&s(&["analysis", "-override-config"]), &[]).is_err());
     }
 
     #[test]

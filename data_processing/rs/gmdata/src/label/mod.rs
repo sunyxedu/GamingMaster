@@ -269,6 +269,10 @@ pub enum FakeKind {
         /// exit on the n-th analysis query
         #[arg(long)]
         crash_on: Option<usize>,
+        /// KataGo's own arguments (`analysis -config C -model M -override-config K=V,…`);
+        /// only reportAnalysisWinratesAs is read
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        katago_args: Vec<String>,
     },
 }
 
@@ -302,8 +306,8 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 let text = std::fs::read_to_string(&script).with_context(|| format!("read {}", script.display()))?;
                 fake::run_stdio(&mut fake::Canned::parse(&text)?)
             }
-            FakeKind::Katago { crash_on } => {
-                let mut f = go::fake::KataFake::new();
+            FakeKind::Katago { crash_on, katago_args } => {
+                let mut f = go::fake::KataFake::from_katago_args(&katago_args).map_err(anyhow::Error::msg)?;
                 if let Some(n) = crash_on {
                     f = f.crash_on(n);
                 }
@@ -345,5 +349,21 @@ mod tests {
         assert!(g.common.to_opts().is_err(), "missing engine binary");
         assert!(go::run(Cli::try_parse_from(["gmdata", "go", "--input", "i", "--out", "o", "--engine", "/bin/sh"])
             .map(|c| match c.cmd { Cmd::Go(a) => a, _ => unreachable!() }).unwrap()).is_err());
+    }
+
+    #[test]
+    fn fake_katago_takes_katago_arguments() {
+        // the go labeller appends `-override-config …` to whatever --engine-arg gives
+        let cli = Cli::try_parse_from([
+            "gmdata", "fake-engine", "katago", "--crash-on", "3", "analysis", "-config", "c.cfg", "-override-config",
+            "reportAnalysisWinratesAs=SIDETOMOVE",
+        ])
+        .unwrap();
+        let Cmd::FakeEngine { kind: FakeKind::Katago { crash_on, katago_args } } = cli.cmd else { panic!() };
+        assert_eq!(crash_on, Some(3));
+        assert_eq!(katago_args, ["analysis", "-config", "c.cfg", "-override-config", "reportAnalysisWinratesAs=SIDETOMOVE"]);
+        let cli = Cli::try_parse_from(["gmdata", "fake-engine", "katago", "-override-config", "a=1"]).unwrap();
+        let Cmd::FakeEngine { kind: FakeKind::Katago { katago_args, .. } } = cli.cmd else { panic!() };
+        assert_eq!(katago_args, ["-override-config", "a=1"]);
     }
 }

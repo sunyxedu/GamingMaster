@@ -180,6 +180,29 @@ def test_trainer_consumes_go_teacher_targets(labelled):
     loss.backward()
 
 
+def test_black_perspective_config_is_overridden_or_refused(gmdata, labelled, tmp_path):  # noqa: F811
+    """KataGo's analysis_example.cfg says reportAnalysisWinratesAs = BLACK, and KataGo has no
+    per-query switch. A config like that passed through --engine-arg must still yield
+    side-to-move labels (the labeller forces the setting through -override-config; the
+    fake child process honours -config / -override-config like KataGo), and an
+    --engine-option asking for another perspective is refused."""
+    root, s = labelled
+    cfg = tmp_path / "black.cfg"
+    cfg.write_text("# like KataGo's analysis_example.cfg\nreportAnalysisWinratesAs = BLACK\n")
+    fake = ["--engine", gmdata, "--engine-arg", "label", "--engine-arg", "fake-engine", "--engine-arg", "katago",
+            "--engine-arg", "analysis", "--engine-arg", "-config", "--engine-arg", str(cfg)]
+    s2 = _label(gmdata, root, tmp_path / "out", fake, "--workers", "1")
+    assert s2["stats"]["labelled"] == s["stats"]["labelled"] and s2["stats"]["engine_errors"] == 0
+    a, b = GmShard(str(root / "out" / "go_00000")).arrays(), GmShard(str(tmp_path / "out" / "go_00000")).arrays()
+    for key in ("tgt.engine_value", "tgt.teacher_q", "tgt.teacher_raw", "tgt.teacher_idx", "tgt.place_probs_val"):
+        np.testing.assert_array_equal(np.asarray(a[key]), np.asarray(b[key]), err_msg=key)
+    r = subprocess.run([gmdata, "label", "go", "--input", str(root / "base"), "--out", str(tmp_path / "refused"),
+                        "--board-size", str(N), *fake, "--engine-option", "reportAnalysisWinratesAs=BLACK"],
+                       capture_output=True, text=True)
+    assert r.returncode != 0 and "reportAnalysisWinratesAs" in r.stderr, r.stderr[-2000:]
+    assert not (tmp_path / "refused" / "go_00000").exists()
+
+
 def test_real_katago_labels_feed_the_trainer(gmdata, tmp_path):  # noqa: F811
     kg = _katago()
     if kg is None:

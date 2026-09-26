@@ -8,20 +8,28 @@
 //! (`{"id":…,"error":"Illegal move …","field":"moves"}`), and answers each analysed
 //! turn with every legal move of the side to move scored by a transparent rule:
 //!
-//! * winrate = 0.45 + 0.1·h + 0.3·min(captured, 3)/3 (h ∈ [0,1) a hash of point and
-//!   turn), so a capturing move always beats every quiet move and bigger captures win;
-//!   pass scores 0.3 (0.5 when it is the only legal move);
+//! * side-to-move winrate = 0.45 + 0.1·h + 0.3·min(captured, 3)/3 + k/100, clamped to
+//!   [0.001, 0.999] (h ∈ [0,1) a hash of point and turn, k = the komi from the mover's
+//!   view: +komi for white, −komi for black), so a capturing move always beats every
+//!   quiet move and bigger captures win; pass scores 0.3 + k/100 (0.5 + k/100 when it is
+//!   the only legal move);
 //! * the top 12 moves (by winrate) get `edgeVisits` ∝ exp((wr − best)/0.03) out of
 //!   `maxVisits` (at least one each), `prior` ∝ exp(2h), `scoreLead` = 40·(wr − ½);
 //! * `rootInfo`: `currentPlayer` (initialPlayer, then the opponent of the previous
-//!   move's colour), `winrate` = the best move's.
+//!   move's colour), `winrate` = the best move's;
+//! * winrates and score leads are reported from the side to move, or — like KataGo with
+//!   `reportAnalysisWinratesAs = BLACK / WHITE` in its config — from that colour's view
+//!   ([`KataFake::report_as`]; as a child process from `-config FILE` / `-override-config`).
+//!   Like KataGo, a query field `reportAnalysisWinratesAs` is ignored with an "unused
+//!   field" warning.
 //!
 //! Turns are answered in reverse order (the real engine answers in completion order),
 //! preceded by a warning line. `query_version` answers `1.18.2-fake`, `query_models`
 //! the network `fake-b1c1`. Failure injection: crash (exit) / hang / error reply on
-//! the n-th analysis query of a process.
+//! the n-th analysis query of a process (the labeller's perspective probe included).
 //!
-//! As a child process: `gmdata label fake-engine katago [--crash-on N]`.
+//! As a child process: `gmdata label fake-engine katago [--crash-on N] [KataGo args]`
+//! (`analysis -config C -model M -override-config K=V,…`; only the perspective is read).
 
 use super::super::engine::LineHandler;
 use crate::go::{opponent, Board, BLACK, EMPTY, WHITE};
@@ -35,6 +43,26 @@ pub const FAKE_MODEL: &str = "fake-b1c1";
 /// Moves reported per turn.
 pub const FAKE_TOP: usize = 12;
 
+/// Whose view winrates / score leads are reported from (`reportAnalysisWinratesAs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Perspective {
+    #[default]
+    SideToMove,
+    Black,
+    White,
+}
+
+impl Perspective {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "SIDETOMOVE" => Some(Perspective::SideToMove),
+            "BLACK" => Some(Perspective::Black),
+            "WHITE" => Some(Perspective::White),
+            _ => None,
+        }
+    }
+}
+
 /// The fake engine (see the module docs).
 #[derive(Default)]
 pub struct KataFake {
@@ -42,6 +70,7 @@ pub struct KataFake {
     crash_on: Option<usize>,
     error_on: Option<usize>,
     hang_on: Option<(usize, Duration)>,
+    report_as: Perspective,
 }
 
 /// Point of a GTP vertex, computed arithmetically (independent of
@@ -90,6 +119,42 @@ impl KataFake {
         Self::default()
     }
 
+    /// Report winrates / score leads from `p`'s view (default: the side to move).
+    pub fn report_as(mut self, p: Perspective) -> Self {
+        self.report_as = p;
+        self
+    }
+
+    /// A fake configured from KataGo's command line: `reportAnalysisWinratesAs` from the
+    /// `-config` file, then from `-override-config` (KataGo's order); everything else is
+    /// ignored. Without either: the side to move (KataGo's built-in default).
+    pub fn from_katago_args(args: &[String]) -> Result<Self, String> {
+        let mut report_as = Perspective::SideToMove;
+        let mut set = |k: &str, v: &str| -> Result<(), String> {
+            if k.trim() == "reportAnalysisWinratesAs" {
+                report_as = Perspective::parse(v).ok_or(format!("bad reportAnalysisWinratesAs {v:?}"))?;
+            }
+            Ok(())
+        };
+        let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1));
+        if let Some(path) = value("-config") {
+            let text = std::fs::read_to_string(path).map_err(|e| format!("-config {path}: {e}"))?;
+            for line in text.lines() {
+                let line = line.split('#').next().unwrap_or("");
+                if let Some((k, v)) = line.split_once('=') {
+                    set(k, v)?;
+                }
+            }
+        }
+        if let Some(ov) = value("-override-config") {
+            for item in ov.split(',') {
+                let (k, v) = item.split_once('=').ok_or(format!("-override-config item {item:?}"))?;
+                set(k, v)?;
+            }
+        }
+        Ok(KataFake { report_as, ..Self::default() })
+    }
+
     /// Exit on the `n`-th analysis query (1-based, per process).
     pub fn crash_on(mut self, n: usize) -> Self {
         self.crash_on = Some(n);
@@ -113,9 +178,6 @@ impl KataFake {
         let n = q["boardXSize"].as_u64().ok_or(("boardXSize missing".to_string(), "boardXSize"))? as usize;
         if q["boardYSize"].as_u64() != Some(n as u64) || !(2..=25).contains(&n) {
             return Err(("non-square board".into(), "boardYSize"));
-        }
-        if q["reportAnalysisWinratesAs"] != "SIDETOMOVE" {
-            return Err(("the fake only reports SIDETOMOVE".into(), "reportAnalysisWinratesAs"));
         }
         match q["rules"].as_str() {
             Some("chinese") | Some("japanese") | Some("korean") | Some("aga") | Some("tromp-taylor") | Some("new-zealand") => {}
@@ -171,9 +233,16 @@ impl KataFake {
             to_move = opponent(c);
         }
         let mut out = vec![json!({"id": id, "warning": "fake engine: no real search", "field": "maxVisits"}).to_string()];
+        if q.get("reportAnalysisWinratesAs").is_some() {
+            // KataGo 1.18: not a query field (the perspective is a config setting)
+            out.push(json!({"id": id, "field": "reportAnalysisWinratesAs",
+                            "warning": "Unexpected or unused field, do you have a typo? (set warnUnusedFields=false in the config to disable this warning)"}).to_string());
+        }
         snaps.reverse();
         for (t, b, pla) in snaps {
             let before = stones(&b);
+            let k = (if pla == WHITE { komi } else { -komi }) / 100.0;
+            let wr = |x: f64| (x + k).clamp(0.001, 0.999);
             let mut scored: Vec<(Option<usize>, f64, f64)> = Vec::new(); // (point, winrate, h)
             for i in 0..n * n {
                 let mut after = b.clone();
@@ -182,15 +251,22 @@ impl KataFake {
                 }
                 let captured = (before + 1 - stones(&after)) as f64;
                 let h = hash01(i as u64, t as u64);
-                scored.push((Some(i), 0.45 + 0.1 * h + 0.3 * captured.min(3.0) / 3.0, h));
+                scored.push((Some(i), wr(0.45 + 0.1 * h + 0.3 * captured.min(3.0) / 3.0), h));
             }
             let only_pass = scored.is_empty();
-            scored.push((None, if only_pass { 0.5 } else { 0.3 }, 0.0));
+            scored.push((None, wr(if only_pass { 0.5 } else { 0.3 }), 0.0));
             scored.sort_by(|a, b| b.1.total_cmp(&a.1));
             scored.truncate(FAKE_TOP);
             let best = scored[0].1;
             let w: Vec<f64> = scored.iter().map(|s| ((s.1 - best) / 0.03).exp()).collect();
             let (ws, ps): (f64, f64) = (w.iter().sum(), scored.iter().map(|s| (2.0 * s.2).exp()).sum());
+            // side-to-move winrate → the reported view
+            let flip = match self.report_as {
+                Perspective::SideToMove => false,
+                Perspective::Black => pla == WHITE,
+                Perspective::White => pla == BLACK,
+            };
+            let view = |x: f64| if flip { 1.0 - x } else { x };
             let infos: Vec<Value> = scored
                 .iter()
                 .zip(&w)
@@ -199,8 +275,8 @@ impl KataFake {
                     let v = (visits * wi / ws).floor().max(1.0);
                     json!({
                         "move": s.0.map(|i| name(i, n)).unwrap_or_else(|| "pass".into()),
-                        "order": order, "visits": v, "edgeVisits": v, "winrate": s.1,
-                        "scoreLead": 40.0 * (s.1 - 0.5), "prior": (2.0 * s.2).exp() / ps,
+                        "order": order, "visits": v, "edgeVisits": v, "winrate": view(s.1),
+                        "scoreLead": 40.0 * (view(s.1) - 0.5), "prior": (2.0 * s.2).exp() / ps,
                         "pv": [s.0.map(|i| name(i, n)).unwrap_or_else(|| "pass".into())],
                     })
                 })
@@ -208,8 +284,8 @@ impl KataFake {
             out.push(
                 json!({
                     "id": id, "isDuringSearch": false, "turnNumber": t, "moveInfos": infos,
-                    "rootInfo": {"currentPlayer": if pla == BLACK { "B" } else { "W" }, "winrate": best,
-                                 "scoreLead": 40.0 * (best - 0.5), "visits": visits},
+                    "rootInfo": {"currentPlayer": if pla == BLACK { "B" } else { "W" }, "winrate": view(best),
+                                 "scoreLead": 40.0 * (view(best) - 0.5), "visits": visits},
                 })
                 .to_string(),
             );
@@ -281,7 +357,7 @@ mod tests {
         // 5x5: white C3 surrounded on three sides; black to capture at C2
         let q = json!({"id": "a", "boardXSize": 5, "boardYSize": 5, "rules": "chinese", "komi": 7.5,
                        "initialStones": [["W", "C3"], ["B", "B3"], ["B", "D3"], ["B", "C4"]], "initialPlayer": "B",
-                       "moves": [], "analyzeTurns": [0], "maxVisits": 50, "reportAnalysisWinratesAs": "SIDETOMOVE"});
+                       "moves": [], "analyzeTurns": [0], "maxVisits": 50});
         let r = ask(&mut f, q.clone());
         assert!(r[0].get("warning").is_some());
         assert_eq!(r[1]["moveInfos"][0]["move"], "C2");
@@ -290,8 +366,47 @@ mod tests {
         bad["moves"] = json!([["B", "C3"]]);
         let r = ask(&mut f, bad);
         assert_eq!(r[0]["field"], "moves", "{r:?}");
-        let mut km = q;
+        let mut km = q.clone();
         km["komi"] = json!(7.25);
         assert_eq!(ask(&mut f, km)[0]["field"], "komi");
+        // like KataGo: a query-level reportAnalysisWinratesAs is only warned about
+        let mut stm = q;
+        stm["reportAnalysisWinratesAs"] = json!("BLACK");
+        let r = ask(&mut f, stm);
+        assert!(r.iter().any(|l| l["field"] == "reportAnalysisWinratesAs" && l.get("warning").is_some()));
+        assert_eq!(r.last().unwrap()["rootInfo"]["currentPlayer"], "B");
+    }
+
+    #[test]
+    fn perspective_follows_the_command_line() {
+        // komi 150, black to move then white (after black's pass): side to move ≈ 0 / ≈ 1
+        let q = json!({"id": "p", "boardXSize": 9, "boardYSize": 9, "rules": "chinese", "komi": 150,
+                       "initialPlayer": "B", "moves": [["B", "pass"]], "analyzeTurns": [0, 1], "maxVisits": 2});
+        let roots = |f: &mut KataFake| -> Vec<(String, f64)> {
+            let mut v: Vec<(String, f64)> = ask(f, q.clone())
+                .iter()
+                .filter(|l| l.get("rootInfo").is_some())
+                .map(|l| (l["rootInfo"]["currentPlayer"].as_str().unwrap().to_string(), (l["rootInfo"]["winrate"].as_f64().unwrap() * 1e6).round() / 1e6))
+                .collect();
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v
+        };
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        let dir = std::env::temp_dir().join(format!("katafake-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = dir.join("black.cfg");
+        std::fs::write(&cfg, "# like analysis_example.cfg\nreportAnalysisWinratesAs = BLACK\nnnRandomize = true\n").unwrap();
+        let c = cfg.to_str().unwrap();
+        for (args, b, w) in [
+            (s(&["analysis"]), 0.001, 0.999),
+            (s(&["analysis", "-config", c]), 0.001, 0.001),
+            (s(&["analysis", "-config", c, "-override-config", "reportAnalysisWinratesAs=SIDETOMOVE"]), 0.001, 0.999),
+            (s(&["analysis", "-override-config", "x=1,reportAnalysisWinratesAs=WHITE"]), 0.999, 0.999),
+        ] {
+            let mut f = KataFake::from_katago_args(&args).unwrap();
+            assert_eq!(roots(&mut f), vec![("B".to_string(), b), ("W".to_string(), w)], "{args:?}");
+        }
+        assert!(KataFake::from_katago_args(&s(&["-override-config", "reportAnalysisWinratesAs=SIDEWAYS"])).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
