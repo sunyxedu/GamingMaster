@@ -5,14 +5,16 @@ environment, never in the project one:
     # OpenSpiel's own random playouts (boards = duplicate board numbers: dealer and
     # vulnerability by the standard rotation)
     uv run --no-project --python 3.12 --with open_spiel \\
-        python scripts/reference/openspiel_bridge_dump.py --episodes 40 --boards 1 6 7 12 --out ref.json
+        python scripts/reference/openspiel_bridge_dump.py --episodes 40 --boards 1 6 7 12 \\
+        --out ref.json
     # gmrules trajectories (JSON {"variants": [{"board", "trajectories": [[[seat, id], ...]]}]})
     # replayed through OpenSpiel
     uv run --no-project --python 3.12 --with open_spiel \\
         python scripts/reference/openspiel_bridge_dump.py --replay ours.json --out ref.json
     # real records (the WBridge5 dataset: one OpenSpiel history per line, board 1)
     uv run --no-project --python 3.12 --with open_spiel \\
-        python scripts/reference/openspiel_bridge_dump.py --records test.txt --max-records 500 --out ref.json
+        python scripts/reference/openspiel_bridge_dump.py --records test.txt --max-records 500 \\
+        --out ref.json
 
 Every step records what OpenSpiel says — the turn ("chance": the outcome ids as a
 bit mask ``mask`` and their common probability ``p``; "act": the acting seat and its
