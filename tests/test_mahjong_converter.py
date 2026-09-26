@@ -55,6 +55,11 @@ def test_schema_and_mismatch_stat(converted):
     assert stats["frames"] > 0
     ds = GameShardDataset(out)
     assert ds.converter_version == 3 and ds.shard_meta == {}
+    # the tile planes are stored as u8 quarters and expanded (exactly) at load
+    import json as _json
+    import os
+    idx = _json.load(open(os.path.join(out, "mahjong_00000", "index.json")))
+    assert idx["tensors"]["raw.tiles_q"]["dtype"] == "uint8" and "obs.tiles_seq" not in idx["tensors"]
     for s in load_gm_samples(out):
         T = s["tgt"]["action_type"].shape[0]
         assert s["tgt"]["legal_action_type"].shape == (T, N_ACTION_TYPES)
@@ -63,6 +68,21 @@ def test_schema_and_mismatch_stat(converted):
         for k in ("legal_action_type", "legal_tile_of", "il_weight"):   # packed bits → float {0, 1}
             v = s["tgt"][k]
             assert v.dtype == torch.float32 and ((v == 0) | (v == 1)).all()
+        tiles = s["obs"]["tiles_seq"]
+        assert tiles.dtype == torch.float32 and tiles.shape == (T, N_TILE_KINDS, 16)
+        assert torch.equal(tiles * 4, (tiles * 4).round()) and "raw" not in s
+
+
+def test_tile_planes_expand_exactly():
+    """raw.tiles_q (u8 quarters) → float32 tiles_seq, bit-exact; older shards (obs.tiles_seq on
+    disk, no raw field) pass through untouched."""
+    from data_processing.games.mahjong import expand
+    q = torch.randint(0, 5, (3, N_TILE_KINDS, 16), dtype=torch.uint8)
+    out = expand({"tiles_q": q}, {})
+    ref = torch.tensor([[[v / 4.0 for v in row] for row in f] for f in q.tolist()], dtype=torch.float64)
+    assert out["tiles_seq"].dtype == torch.float32
+    assert torch.equal(out["tiles_seq"], ref.to(torch.float32))
+    assert expand({}, {}) == {}
 
 
 def test_every_ground_truth_inside_its_masks(converted):

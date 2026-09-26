@@ -77,7 +77,8 @@ pub(super) fn seat(ev: &Value, k: &str) -> R<usize> {
 /// Observation buffers of one seat's frames (layouts in `Kyoku::encode`).
 #[derive(Default)]
 pub(super) struct ObsBuf {
-    pub tiles: Vec<f32>,
+    /// tile planes [T, 34, 16] as u8 quarters (value × 4)
+    pub tiles_q: Vec<u8>,
     pub players: Vec<f32>,
     pub table: Vec<f32>,
 }
@@ -545,7 +546,9 @@ impl Kyoku {
     }
 
     /// The observation of `seat` (tiles [34,16], players [4,12], table [12]; layouts in
-    /// model/games/mahjong.py) appended to the three buffers.
+    /// model/games/mahjong.py) appended to the three buffers.  Every tile feature is a
+    /// multiple of 1/4 (counts / 4 and 0/1 flags), stored exactly as u8 quarters (value × 4):
+    /// the loader expands them to the float32 `tiles_seq` (data_processing/games/mahjong.py).
     pub fn encode(&self, seat: usize, focus: Option<usize>, own_turn: bool, focus_actor: Option<usize>, out: &mut ObsBuf) {
         let (shimo, toi, kami) = ((seat + 1) % 4, (seat + 2) % 4, (seat + 3) % 4);
         let dora_kinds: HashSet<usize> = self.dora.iter().map(|&m| dora_from_marker(m)).collect();
@@ -553,22 +556,23 @@ impl Kyoku {
         for &m in &self.dora {
             marker[m] += 1;
         }
+        let q = |x: i64| x.clamp(0, 255) as u8;
         for k in 0..NK {
-            let mut row = [0f64; 16];
-            row[self.hands[seat][k].min(4) as usize] = 1.0;
-            row[5] = self.melds[seat][k] as f64 / 4.0;
-            row[6] = (self.melds[shimo][k] + self.melds[toi][k] + self.melds[kami][k]) as f64 / 4.0;
-            row[7] = self.disc[seat][k] as f64 / 4.0;
-            row[8] = self.disc[shimo][k] as f64 / 4.0;
-            row[9] = self.disc[toi][k] as f64 / 4.0;
-            row[10] = self.disc[kami][k] as f64 / 4.0;
-            row[11] = dora_kinds.contains(&k) as u8 as f64;
+            let mut row = [0u8; 16];
+            row[self.hands[seat][k].clamp(0, 4) as usize] = 4;
+            row[5] = q(self.melds[seat][k]);
+            row[6] = q(self.melds[shimo][k] + self.melds[toi][k] + self.melds[kami][k]);
+            row[7] = q(self.disc[seat][k]);
+            row[8] = q(self.disc[shimo][k]);
+            row[9] = q(self.disc[toi][k]);
+            row[10] = q(self.disc[kami][k]);
+            row[11] = 4 * dora_kinds.contains(&k) as u8;
             let visible = self.hands[seat][k] + marker[k] + (0..4).map(|p| self.melds[p][k] + self.disc[p][k]).sum::<i64>();
-            row[12] = visible.min(4) as f64 / 4.0;
-            row[13] = is_terminal_or_honor(k) as u8 as f64;
-            row[14] = self.reds[seat].contains(&k) as u8 as f64;
-            row[15] = (Some(k) == focus) as u8 as f64;
-            out.tiles.extend(row.iter().map(|&x| x as f32));
+            row[12] = q(visible.min(4));
+            row[13] = 4 * is_terminal_or_honor(k) as u8;
+            row[14] = 4 * self.reds[seat].contains(&k) as u8;
+            row[15] = 4 * (Some(k) == focus) as u8;
+            out.tiles_q.extend_from_slice(&row);
         }
         for rel in 0..4 {
             let p = (seat + rel) % 4;

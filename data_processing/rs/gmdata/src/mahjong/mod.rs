@@ -8,10 +8,13 @@
 //!               rob it (chankan); label: the call or ron it made, else pass
 //! State: hands, reds, melds, ponds, riichi, dora, scores, wall.
 //!
-//!   obs.tiles_seq   [T,34,16] f32   obs.players_seq [T,4,12] f32   obs.table_seq [T,12] f32
+//!   raw.tiles_q     [T,34,16] u8    obs.players_seq [T,4,12] f32   obs.table_seq [T,12] f32
 //!   tgt.action_type [T] i64         tgt.tile_idx [T] i64           tgt.value [T] f32
 //!   tgt.legal_action_type [T,8]     tgt.legal_tile_of [T,34]       tgt.il_weight [T]
 //!   (the last three: packed bits → f32 {0,1})
+//! raw.tiles_q holds the tile planes as exact quarters (every tile feature is a count / 4 or
+//! a 0/1 flag: value × 4); the loader expands it to the adapter's float32 obs.tiles_seq
+//! (data_processing/games/mahjong.py), a quarter of the disk space.
 //! value = final placement 1st +1, 2nd +1/3, 3rd −1/3, 4th −1 (ties → lower seat).
 //!
 //! Information (converter_version 3).  A frame — its observation, its masks and whether it
@@ -85,8 +88,8 @@
 //! beyond them — keep the raw data and the shards private.
 //!
 //! Full-scale conversion (schema v3: every earlier mahjong shard must be regenerated).  One
-//! Houou hanchan gives ~660 frames of ~2.4 KB: the whole corpus (~2.04M hanchan after
-//! --dedup) is ~1.35e9 frames, ~3.3 TB of shards (~1.6 MB per game).  On the cluster (gmdata
+//! Houou hanchan gives ~660 frames of ~0.8 KB: the whole corpus (~2.04M hanchan after
+//! --dedup) is ~1.35e9 frames, ~1.1 TB of shards (~540 KB per game).  On the cluster (gmdata
 //! built with `cargo build --release` in data_processing/), holding out the most recent shard:
 //!
 //!     G=data_processing/target/release/gmdata R=~/gm-data/mahjong/raw O=~/gm-data/mahjong-v3

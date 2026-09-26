@@ -18,7 +18,10 @@ exported here)::
     31..33  P F C           (haku, hatsu, chun — white/green/red dragons)
 
 Per-frame feature layouts (produced by
-``gmdata mahjong convert`` (data_processing/rs/gmdata/src/mahjong/), consumed here):
+``gmdata mahjong convert`` (data_processing/rs/gmdata/src/mahjong/), consumed here;
+converter_version ≥ 3 stores ``tiles_seq`` as exact quarters, ``raw.tiles_q``
+uint8 = value × 4, expanded when a sample is loaded —
+data_processing/games/mahjong.py):
 
 ``tiles_seq`` [B, T, 34, TILE_FEATURE_DIM=16] float — per tile kind k:
     0..4   own concealed-hand count one-hot (0..4)

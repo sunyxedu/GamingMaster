@@ -176,6 +176,9 @@ def _expander(game: str):
     if game == "generals":
         from data_processing.games import generals
         return generals.expand, frozenset(generals.OBS_KEYS)
+    if game == "mahjong":
+        from data_processing.games import mahjong
+        return mahjong.expand, frozenset(mahjong.OBS_KEYS)
     return None
 
 

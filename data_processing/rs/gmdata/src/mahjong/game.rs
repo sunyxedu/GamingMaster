@@ -365,7 +365,7 @@ pub(super) fn convert_game(evs: &[Value], name: &str, min_frames: usize) -> R<(V
         let v = PLACEMENT[placement[sidx]];
         let smp = Sample::new(json!({"name": name, "seat": sidx, "kyokus": n_kyoku, "placement": placement[sidx] + 1,
                                      "final_score": scores[sidx]}))
-            .f32("obs.tiles_seq", &[NK, 16], f.obs.tiles)
+            .u8("raw.tiles_q", &[NK, 16], f.obs.tiles_q)
             .f32("obs.players_seq", &[4, 12], f.obs.players)
             .f32("obs.table_seq", &[12], f.obs.table)
             .i64("tgt.action_type", &[], f.atype)
