@@ -434,17 +434,21 @@ def _rollout_samples(n_envs: int, seed: int):
     return out
 
 
-def test_train_rl_joint_on_lux(tmp_path):
+@pytest.mark.parametrize("actor", ["stream", "fixed"])
+def test_train_rl_joint_on_lux(tmp_path, actor):
     """Stage 1 (train_multi_game on converter-v2 shaped lux data) → 2 Stage-2
     iterations of --rl lux: finite metrics, an exact replay (π/π_old = 1),
-    the actor's μ = π_old, the full-head KL anchor."""
+    the actor's μ = π_old, the full-head KL anchor.  The fixed-batch actor
+    (recurrent temporal mixer) checks the lockstep contract: every row's
+    step_idx is the wave's frame count (a wave = one match)."""
     from tests.test_core_moe import CORE
     from training import train_multi_game, train_rl_joint
 
     data = tmp_path / "lux"
     save_shard(str(data / "a.pt"), "lux", _rollout_samples(2, 0) + _rollout_samples(2, 1),
                converter_version=2, meta={"global_features": 11, "sap_range": SAP_WINDOW})
-    core = [f"{k}={v}" for k, v in {**CORE, "encoder_channels": 8}.items()]
+    extra = {"temporal_mixer": "recurrent"} if actor == "fixed" else {}
+    core = [f"{k}={v}" for k, v in {**CORE, "encoder_channels": 8, **extra}.items()]
     torch.manual_seed(0)
     train_multi_game.main(["--data", f"lux={data}", "--steps", "1", "--batch_size", "2",
                            "--game_max_len", "lux=6", "--warmup_steps", "1",
@@ -454,7 +458,7 @@ def test_train_rl_joint_on_lux(tmp_path):
     out = train_rl_joint.main([
         "--init", str(tmp_path / "ck" / "multi_final.pt"), "--rl", "lux",
         "--data", f"lux={data}", "--replay_max_len", "lux=6", "--replay_batch_size", "2",
-        "--tokens_per_iter", "40", "--envs", "lux=2",
+        "--tokens_per_iter", "40", "--envs", "lux=2", "--actor", actor,
         "--env_kw", "lux:env_params={'max_steps_in_match': 10}",
         "--epochs", "1", "--minibatches", "2", "--iterations", "2", "--seed", "3",
         "--snapshot_dir", "memory", "--device", "cpu", "--save_dir", str(tmp_path / "rl")])
@@ -466,6 +470,7 @@ def test_train_rl_joint_on_lux(tmp_path):
                   "il_loss", "core_gnorm_rl"):
             assert math.isfinite(row[k]), (k, row[k])
         assert row["tokens"] >= 1 and row["episodes"] >= 2
+        assert row["ep_len"] == SHORT["max_steps_in_match"] + 1
         assert row["canary_log_ratio"] < 1e-5 and row["canary_log_old_mu"] < 1e-4
         assert row["kl"] >= 0.0
     assert out["trainer"].rl["lux"].spec.full_kl

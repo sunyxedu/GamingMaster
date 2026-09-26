@@ -22,8 +22,10 @@ Row ``r`` belongs to env ``r // rows_per_env`` (a fixed layout: rows never move,
 so step caches stay aligned).  A row is one temporal STREAM of the network —
 the sequence of frames whose Stage-1 state carries over:
 
-  * simultaneous games (generals): ``rows_per_env = n_seats``; row
+  * simultaneous games (generals, lux): ``rows_per_env = n_seats``; row
     ``(env, seat)`` is that seat's own fog-of-war view, one frame per turn.
+    (Lux: one episode = one match — the IL sample — and ``reset`` continues
+    the 5-match game; see env/vec_lux.py.)
   * alternating games (othello, ``interleaved = True``): ``rows_per_env = 1``;
     the row is ONE interleaved stream holding both movers' frames, each from
     the side-to-move perspective, forced pass frames included — exactly the
