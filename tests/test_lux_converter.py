@@ -127,3 +127,63 @@ def test_unit_cells_align_with_the_map_planes(converted):
         assert torch.equal(target[sel & on_map], (ty * W + tx)[sel & on_map])
         n_sap += int(sel.sum())
     assert off_diagonal > 0 and n_sap > 0
+
+
+def test_legal_from_obs_admits_every_recorded_sap(converted):
+    """The IL sap mask derived from the observation (LEGAL_FROM_OBS) never
+    excludes a recorded target; the fixture's env_cfg is unknown, so the full
+    window (clipped to the map) applies."""
+    from model.games.lux import lux_legal_from_obs
+    from training.train_il_game import batch_legal
+
+    n_rows = 0
+    for s in load_gm_samples(converted[0]):
+        obs = {k: v.unsqueeze(0) for k, v in s["obs"].items()}
+        legal = batch_legal("lux", obs, {})
+        assert torch.equal(legal["unit"], obs["unit_mask"].bool())
+        sap = legal["sap"][0]                                 # [T, U, 225]
+        assert sap.shape[-1] == (2 * SAP_R + 1) ** 2
+        so = s["tgt"]["sap_offset"]
+        # the fixture's slot-2 raw action [9, 2, -1] is clamped to a sap at
+        # (+2, -1), also for absent slots and for units on row 0 (off the map;
+        # the real corpus has neither); every on-map target of a present unit
+        # must be legal
+        xy = (s["obs"]["units_seq"][..., :2] * 24).round().long()
+        dx, dy = so % (2 * SAP_R + 1) - SAP_R, so // (2 * SAP_R + 1) - SAP_R
+        tx, ty = xy[..., 0] + dx, xy[..., 1] + dy
+        on_map = (tx >= 0) & (tx < 24) & (ty >= 0) & (ty < 24)
+        present = s["obs"]["unit_mask"].bool()       # absent slots are gated out of the loss
+        rows = ((so >= 0) & on_map & present).nonzero(as_tuple=True)
+        n_rows += rows[0].numel()
+        assert sap[rows[0], rows[1], so[rows]].all()
+        off = ((so >= 0) & ~on_map).nonzero(as_tuple=True)
+        assert not sap[off[0], off[1], so[off]].any()
+        assert not sap[~obs["unit_mask"][0].bool()].any()     # absent slots: no legal sap
+        # pre-v2 observations (no env-param globals) get the slot mask only
+        old = dict(obs, globals_seq=obs["globals_seq"][..., :6])
+        assert set(lux_legal_from_obs(old)) == {"unit"}
+    assert n_rows > 0
+
+
+def test_legal_from_obs_uses_the_known_sap_range():
+    from model.games.lux import lux_legal_from_obs, lux_sap_offset_grid
+
+    H = W = 24
+    units = torch.zeros(1, 1, 16, 16)
+    mask = torch.zeros(1, 1, 16, dtype=torch.bool)
+    units[0, 0, 0, :2] = torch.tensor([12 / W, 12 / H])       # centre of the map
+    units[0, 0, 1, :2] = torch.tensor([0.0, 0.0])             # corner
+    mask[0, 0, :2] = True
+    g = torch.zeros(1, 1, 11)
+    g[..., 8] = 3 / 8                                         # unit_sap_range 3
+    g[..., 10] = 1.0                                          # env_cfg known
+    obs = {"units_seq": units, "unit_mask": mask, "globals_seq": g,
+           "map_seq": torch.zeros(1, 1, 12, H, W)}
+    sap = lux_legal_from_obs(obs)["sap"][0, 0]
+    dx, dy = lux_sap_offset_grid(SAP_R)
+    in_range = (dx.abs() <= 3) & (dy.abs() <= 3)
+    assert torch.equal(sap[0], in_range)                      # centre: the range square
+    assert torch.equal(sap[1], in_range & (dx >= 0) & (dy >= 0))   # corner: clipped
+    g[..., 10] = 0.0                                          # unknown env: full window
+    sap = lux_legal_from_obs(obs)["sap"][0, 0]
+    assert sap[0].all()

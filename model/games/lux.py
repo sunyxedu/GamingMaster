@@ -345,6 +345,47 @@ def lux_sap_legal(
     return ok & unit_mask.bool().unsqueeze(-1)
 
 
+#: obs.globals_seq columns of converter v2 (data_processing/rs/gmdata/src/lux.rs):
+#: unit_sap_range / 8 and env_cfg_known
+LUX_GLOBAL_SAP_RANGE = 8
+LUX_GLOBAL_ENV_CFG_KNOWN = 10
+#: sap offset window of the frozen v2 schema (shard meta "sap_range")
+LUX_SAP_WINDOW = 7
+
+
+def lux_legal_from_obs(obs: Dict[str, torch.Tensor],
+                       sap_window: int = LUX_SAP_WINDOW) -> Dict[str, torch.Tensor]:
+    """The decoder ``legal`` dict an IL batch can derive from its own
+    observation (training/train_il_game.py LEGAL_FROM_OBS):
+
+      ``unit`` [B, T, U] bool — occupied unit slots (gates the joint log-prob)
+      ``sap``  [B, T, U, (2W+1)²] bool — :func:`lux_sap_legal` with the unit
+               cells read back from ``units_seq`` (x/W, y/H) and the episode's
+               ``unit_sap_range`` from ``globals_seq`` — the rule the env
+               enforces, so the IL sap head only competes among targets the
+               recorded player could legally pick (every recorded sap of the
+               v2 corpus lies inside it).  Frames whose env parameters were
+               not known (env_cfg_known = 0: the globals then carry the Lux S3
+               default range, maybe not the episode's) get the full window.
+
+    ``sap`` needs converter-v2 globals (11 columns); older observations get
+    ``unit`` only."""
+    unit_mask = obs["unit_mask"].bool()
+    legal = {"unit": unit_mask}
+    g = obs.get("globals_seq")
+    if g is None or g.shape[-1] <= LUX_GLOBAL_ENV_CFG_KNOWN or sap_window <= 0:
+        return legal
+    H, W = obs["map_seq"].shape[-2:]
+    units = obs["units_seq"]
+    xy = torch.stack([torch.round(units[..., 0].float() * W).long().clamp(0, W - 1),
+                      torch.round(units[..., 1].float() * H).long().clamp(0, H - 1)], dim=-1)
+    known = g[..., LUX_GLOBAL_ENV_CFG_KNOWN] > 0.5
+    rng = torch.round(g[..., LUX_GLOBAL_SAP_RANGE].float() * 8).long()
+    rng = torch.where(known, rng, torch.full_like(rng, sap_window))
+    legal["sap"] = lux_sap_legal(xy, unit_mask, rng, sap_window, W, H)
+    return legal
+
+
 class LuxDecoder(ActionDecoder):
     """Factored per-unit decoder: an independent categorical per unit slot.
 

@@ -51,6 +51,7 @@ from model.components.core import update_moe_balance
 from model.config import upgrade_config_dict
 from model.games import build_game_network
 from model.games import generals as generals_adapter
+from model.games import lux as lux_adapter
 from model.games.base import densify_soft_target, soft_cross_entropy
 from model.losses import hl_gauss_cross_entropy
 from model.optim import (
@@ -114,7 +115,8 @@ LABELS_FROM_TGT = {
 LEGAL_FROM_OBS = {
     # source mask (+ direction mask when present), as train_il.py passes it
     "generals": generals_adapter.legal_from_obs,
-    "lux": lambda obs: {"unit": obs["unit_mask"].bool()},
+    # occupied slots + the episode's sap range (model.games.lux.lux_legal_from_obs)
+    "lux": lux_adapter.lux_legal_from_obs,
     "starcraft": lambda obs: {"actor": obs["unit_mask"].bool()},
     # entity_mask (True = slot occupied) keeps tf_prob<1 actor
     # self-sampling off empty entity slots, same as starcraft above.
