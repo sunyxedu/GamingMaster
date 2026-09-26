@@ -11,9 +11,12 @@
 //! [`parse_info`] reads `info` lines in any token order: depth, seldepth, multipv
 //! (default 1), score cp/mate (USI `mate +` / `mate -` without a distance = mate of
 //! unknown length), lowerbound/upperbound, wdl (permille, side to move), nodes, pv.
-//! [`collect`] keeps, per multipv index, the last exact-bound line with a score and a
-//! pv (bound lines only when a line never got an exact score) — for a node-limited
-//! search that is the final iteration.
+//! [`collect`] keeps, per multipv index, the last line with a score and a pv, whatever
+//! its bound: engines print one consistent block of all multipv lines when the search
+//! stops, whereas picking "the last exact line" per index mixes iterations and can
+//! list one move twice (seen with Stockfish 19 under a node limit). A line's `bound`
+//! and `depth` are kept for the labeller; a repeated first move is dropped (first,
+//! i.e. best-ranked, occurrence wins).
 //!
 //! Scores are from the side to move. Stockfish reports `wdl` only with
 //! `setoption name UCI_ShowWDL value true`; convert with
@@ -128,8 +131,7 @@ pub struct SearchResult {
 
 /// Fold a search's output into its final multipv lines (see the module docs).
 pub fn collect(lines: &[String]) -> Result<SearchResult> {
-    let mut exact: Vec<Option<Info>> = Vec::new();
-    let mut any: Vec<Option<Info>> = Vec::new();
+    let mut last: Vec<Option<Info>> = Vec::new();
     let mut bestmove = None;
     for l in lines {
         if let Some(rest) = l.strip_prefix("bestmove") {
@@ -141,17 +143,14 @@ pub fn collect(lines: &[String]) -> Result<SearchResult> {
             continue;
         }
         let k = info.multipv - 1;
-        if exact.len() <= k {
-            exact.resize(k + 1, None);
-            any.resize(k + 1, None);
+        if last.len() <= k {
+            last.resize(k + 1, None);
         }
-        if info.bound == Bound::Exact {
-            exact[k] = Some(info.clone());
-        }
-        any[k] = Some(info);
+        last[k] = Some(info);
     }
     let Some(bestmove) = bestmove else { bail!(EngineError::Protocol("search output has no bestmove".into())) };
-    let lines = exact.into_iter().zip(any).filter_map(|(e, a)| e.or(a)).collect();
+    let mut seen = std::collections::HashSet::new();
+    let lines = last.into_iter().flatten().filter(|i| seen.insert(i.pv[0].clone())).collect();
     Ok(SearchResult { lines, bestmove })
 }
 
@@ -232,15 +231,19 @@ mod tests {
     }
 
     #[test]
-    fn collect_keeps_last_exact_line_per_multipv() {
+    fn collect_keeps_the_final_block() {
         let lines: Vec<String> = [
             "info depth 1 multipv 1 score cp 10 pv a",
             "info depth 1 multipv 2 score cp 5 pv b",
+            "info depth 1 multipv 3 score cp 1 pv c",
             "info depth 2 multipv 1 score cp 30 lowerbound pv a",
             "info depth 2 multipv 1 score cp 25 pv c",
-            "info depth 2 multipv 2 score cp 99 upperbound pv b",
-            "info depth 3 multipv 3 score cp -7 upperbound pv d",
             "info string hello",
+            // final block at the node limit: line 2 failed low in the last iteration
+            "info depth 2 multipv 1 score cp 25 pv c a",
+            "info depth 2 multipv 2 score cp 12 upperbound pv a",
+            "info depth 1 multipv 3 score cp 5 pv b",
+            "info depth 1 multipv 4 score cp 3 pv a",
             "bestmove c ponder a",
         ]
         .iter()
@@ -248,9 +251,87 @@ mod tests {
         .collect();
         let r = collect(&lines).unwrap();
         assert_eq!(r.bestmove, "c");
-        let got: Vec<(String, Score)> = r.lines.iter().map(|i| (i.pv[0].clone(), i.score.unwrap())).collect();
-        assert_eq!(got, vec![("c".into(), Score::Cp(25)), ("b".into(), Score::Cp(5)), ("d".into(), Score::Cp(-7))]);
+        let got: Vec<(String, Score, Bound)> = r.lines.iter().map(|i| (i.pv[0].clone(), i.score.unwrap(), i.bound)).collect();
+        assert_eq!(got, vec![
+            ("c".into(), Score::Cp(25), Bound::Exact),
+            ("a".into(), Score::Cp(12), Bound::Upper),
+            ("b".into(), Score::Cp(5), Bound::Exact),
+        ], "last line per index; the repeated first move of line 4 dropped");
         assert!(collect(&lines[..3]).is_err(), "no bestmove");
+    }
+
+    /// Moves of a real game (Ruy Lopez, Morphy defence) as UCI strings.
+    const GAME: &str = "e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1 f8e7 f1e1 b7b5 a4b3 d7d6 c2c3 e8g8 h2h3 c6a5 \
+                        b3c2 c7c5 d2d4 d8c7 b1d2 c5d4 c3d4 a5c6 d2b3 a6a5 c1e3 a5a4 b3d2 c8d7 a1c1 c7b7 d2f1 f8c8";
+
+    fn stockfish(multipv: usize) -> Option<UciSession> {
+        let path = crate::label::testkit::engine_path("STOCKFISH", "stockfish")?;
+        let opts: Vec<(String, String)> = [("Threads", "1"), ("Hash", "16"), ("UCI_ShowWDL", "true")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .chain(std::iter::once(("MultiPV".to_string(), multipv.to_string())))
+            .collect();
+        let cmd = crate::label::engine::EngineCommand::process(path, &[]);
+        Some(UciSession::open(cmd, Flavor::Uci, &opts, Duration::from_secs(60)).expect("stockfish handshake"))
+    }
+
+    /// Real Stockfish (skipped when not installed: `scripts/engines/fetch_engines.sh stockfish`
+    /// or `STOCKFISH=/path/to/stockfish`).
+    #[test]
+    fn real_stockfish_multipv_wdl() {
+        let Some(mut s) = stockfish(8) else {
+            eprintln!("skipping: stockfish not found");
+            return;
+        };
+        assert!(s.id_name.starts_with("Stockfish"), "{}", s.id_name);
+        s.new_game().unwrap();
+        let r = s.search("position startpos", "go nodes 20000", Duration::from_secs(60)).unwrap();
+        assert_eq!(r.lines.len(), 8, "{r:?}");
+        assert_eq!(r.bestmove, r.lines[0].pv[0]);
+        let mut seen = std::collections::HashSet::new();
+        for (k, l) in r.lines.iter().enumerate() {
+            assert_eq!(l.multipv, k + 1);
+            assert!(l.depth.unwrap_or(0) > 0);
+            let [w, d, lo] = l.wdl.expect("UCI_ShowWDL");
+            assert_eq!(w + d + lo, 1000);
+            assert!(matches!(l.score, Some(Score::Cp(cp)) if cp.abs() < 200));
+            assert!(seen.insert(l.pv[0].clone()), "multipv first moves are distinct");
+        }
+        // mate scores are parsed too (scholar's mate in one for white)
+        s.new_game().unwrap();
+        let r = s.search("position startpos moves e2e4 e7e5 f1c4 b8c6 d1h5 g8f6", "go nodes 20000", Duration::from_secs(60)).unwrap();
+        assert_eq!(r.lines[0].score, Some(Score::Mate(1)));
+        assert_eq!(r.bestmove, "h5f7");
+    }
+
+    /// Positions/s of one single-threaded Stockfish at labelling settings. Opt-in:
+    /// `cargo test --release -p gmdata real_stockfish_throughput -- --ignored --nocapture`
+    /// (`SF_NODES`, `SF_MULTIPV` override the defaults 1000000 / 32).
+    #[test]
+    #[ignore]
+    fn real_stockfish_throughput() {
+        let nodes: u64 = std::env::var("SF_NODES").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000_000);
+        let multipv: usize = std::env::var("SF_MULTIPV").ok().and_then(|v| v.parse().ok()).unwrap_or(32);
+        let Some(mut s) = stockfish(multipv) else {
+            eprintln!("skipping: stockfish not found");
+            return;
+        };
+        let moves: Vec<&str> = GAME.split_whitespace().collect();
+        let t0 = std::time::Instant::now();
+        let mut lines = 0;
+        for ply in 0..moves.len() {
+            s.new_game().unwrap();
+            let pos = format!("position startpos moves {}", moves[..ply].join(" "));
+            lines += s.search(pos.trim_end(), &format!("go nodes {nodes}"), Duration::from_secs(600)).unwrap().lines.len();
+        }
+        let secs = t0.elapsed().as_secs_f64();
+        eprintln!(
+            "{}: {} positions, nodes {nodes}, multipv {multipv}: {:.2} positions/s per process ({:.1} scored moves/position)",
+            s.id_name,
+            moves.len(),
+            moves.len() as f64 / secs,
+            lines as f64 / moves.len() as f64
+        );
     }
 
     #[test]
