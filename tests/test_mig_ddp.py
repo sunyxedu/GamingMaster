@@ -209,11 +209,13 @@ def test_importing_the_trainers_initialises_no_cuda():
 @needs_cuda
 def test_the_driver_probe_sees_cuinit():
     """Positive path of the late-pin diagnostic (CUDA machines): after
-    torch.cuda.is_available() a MIG pin raises instead of being ignored."""
+    cudaGetDeviceCount (what torch.cuda.is_available() runs, unless
+    PYTORCH_NVML_BASED_CUDA_CHECK=1 on non-MIG devices) a MIG pin raises
+    instead of being ignored, although torch.cuda is not initialised."""
     res = _python("import os, torch\n"
                   "from training.distributed import cuda_initialised, pin_rank_device\n"
                   "assert cuda_initialised() is None\n"
-                  "assert torch.cuda.is_available()\n"
+                  "assert torch._C._cuda_getDeviceCount() > 0\n"
                   "assert not torch.cuda.is_initialized()\n"
                   "assert cuda_initialised() is not None\n"
                   f"os.environ.update(CUDA_VISIBLE_DEVICES='{MIG_A},{MIG_B}', LOCAL_RANK='1')\n"
