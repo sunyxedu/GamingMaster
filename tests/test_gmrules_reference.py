@@ -1,8 +1,9 @@
 """Differential tests of the gmrules games against an independent reference
-implementation (OpenSpiel): kuhn_poker (2-4 players) and goofspiel (simultaneous,
-2-4 players, random / fixed prize order).
+implementation (OpenSpiel): kuhn_poker (2-4 players), goofspiel (simultaneous,
+2-4 players, random / fixed prize order), pig (dice, interleaved) and breakthrough
+(the custom-schema board game: 4x3, 6x5, 8x8).
 
-- committed fixture (tests/fixtures/candidate/openspiel_reference.json, written by
+- committed fixture (tests/fixtures/gmrules/openspiel_reference.json, written by
   scripts/reference/openspiel_dump.py from OpenSpiel's own random playouts): at every
   step gmsim.State must agree on the turn, the acting seats, every legal action set,
   the chance outcomes and their probabilities, and the final returns;
@@ -28,7 +29,7 @@ import gmsim
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURE = ROOT / "tests" / "fixtures" / "candidate" / "openspiel_reference.json"
+FIXTURE = ROOT / "tests" / "fixtures" / "gmrules" / "openspiel_reference.json"
 DUMP = ROOT / "scripts" / "reference" / "openspiel_dump.py"
 
 
@@ -86,6 +87,11 @@ def test_fixture_covers_the_rules():
     goof = next(v for v in _FIXTURE["variants"] if v["key"] == "goof5x3")
     returns = {tuple(t["returns"]) for t in goof["trajectories"]}
     assert len(returns) >= 3                                       # wins, split wins, draws
+    for key in ("bt4x3", "bt6x5"):
+        bt = next(v for v in _FIXTURE["variants"] if v["key"] == key)
+        assert {tuple(t["returns"]) for t in bt["trajectories"]} == {(1.0, -1.0), (-1.0, 1.0)}
+        events = [ev for t in bt["trajectories"] for step in t["steps"] for ev in step["events"]]
+        assert any(a % 2 == 1 for _, a in events)                  # captures (odd ids)
 
 
 def _uv():

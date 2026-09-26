@@ -439,6 +439,13 @@ class RLGameSpec:
     def kl_terms(self, net, pred, tgt, mask, legal) -> Dict[str, Dict]:
         return net.action_decoder.il_head_terms(pred, tgt, mask)
 
+    def rollout_legal(self, legal: Dict[str, torch.Tensor],
+                      out: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """The ``legal`` dict stored with the learner's frames for the replay: the
+        env's (default), or a compact equivalent derived from the actor's outputs
+        ``out`` (its sample() keys) that replays the rollout exactly."""
+        return legal
+
 
 class ForcedPassPlacementSpec(RLGameSpec):
     """Placement games whose passes are rules-forced (othello): the env
@@ -617,17 +624,72 @@ class CandidateSpec(RLGameSpec):
         return {"action_idx": actions["action_idx"].long()}
 
 
+class FromToSpec(RLGameSpec):
+    """From-to decoder games (model/games/board.py FromToDecoder on a gmrules custom
+    schema: env/vec_gmsim.py legal ``from`` / ``to_cond`` (/ ``promotion_cond``),
+    action keys ``from_idx`` / ``to_idx`` (/ ``promotion``) — breakthrough, chess
+    variants, xiangqi, ...) — the GENERIC spec of such games.  The rollout commits
+    from → to (→ promotion) under the env's exact tables; the replay teacher-forces
+    the stored from / to (``labels``), so the to / promotion heads condition exactly
+    as in the rollout, under the masks the rollout sampled with (FromToDecoder.sample's
+    ``legal_from`` / ``legal_to`` / ``legal_promotion``, stored as ``from`` / ``to_of``
+    / ``promotion_of`` — [N] per frame instead of the env's [N, N] tables): log π_old
+    = μ.  The KL covers every head (``il_head_terms``: from, to | stored from,
+    promotion | stored from / to) under those masks.  The env is checked against the
+    network's board (``board_seq`` [piece_channels, board_h, board_w], globals)."""
+
+    full_kl = True
+
+    def check_env(self, env, net):
+        cfg = net.cfg
+        schema = env.obs_schema()
+        if "board_seq" not in schema:
+            raise SystemExit(f"{env.game}: FromToSpec needs a board_seq observation")
+        have = tuple(schema["board_seq"][0])
+        want = (cfg.piece_channels, cfg.board_h, cfg.board_w)
+        g = schema["globals_seq"][0][0] if "globals_seq" in schema else 0
+        if have != want or g != getattr(cfg, "board_global_features", 0):
+            raise SystemExit(f"{env.game} env emits board_seq {have} / {g} globals, the network "
+                             f"expects {want} / {getattr(cfg, 'board_global_features', 0)} "
+                             f"(piece_channels, board_h, board_w / board_global_features)")
+
+    def rollout_legal(self, legal, out):
+        from model.games.board import fromto_replay_legal
+
+        stored = fromto_replay_legal(out)
+        return stored if "from" in stored and "to_of" in stored else legal
+
+    def labels(self, actions, cfg):
+        return {"from_idx": actions["from_idx"].long(), "to_idx": actions["to_idx"].long()}
+
+    def kl_targets(self, actions, forced, cfg):
+        tgt = {"from_idx": actions["from_idx"].long(), "to_idx": actions["to_idx"].long()}
+        if "promotion" in actions:
+            tgt["promotion"] = actions["promotion"].long()
+        return tgt
+
+
 GAME_SPECS: Dict[str, RLGameSpec] = {
     "generals": GeneralsSpec(),
     "othello": ForcedPassPlacementSpec(),
     "gomoku": GomokuSpec(),
     "lux": LuxSpec(),
 }
+
+
+def _spec_factory(ref) -> Callable[[], RLGameSpec]:
+    """A RulesGame ``rl_spec`` reference; ``"training.train_rl_joint:X"`` resolves
+    here (no second import of this module when it runs as ``__main__``)."""
+    if isinstance(ref, str) and ref.startswith("training.train_rl_joint:"):
+        return globals()[ref.split(":", 1)[1]]
+    return resolve(ref)
+
+
 # every gmrules game (model/games/gmrules/): its own spec, else the generic
 # candidate spec (custom schemas without one fall back to game_spec's rules)
 for _game, _entry in rules_games().items():
     if _entry.rl_spec is not None:
-        GAME_SPECS.setdefault(_game, resolve(_entry.rl_spec)())
+        GAME_SPECS.setdefault(_game, _spec_factory(_entry.rl_spec)())
     elif _entry.is_candidate:
         GAME_SPECS.setdefault(_game, CandidateSpec())
 
@@ -854,7 +916,8 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
                 recs.append({
                     "rows": rows.clone(),
                     "obs": {k: v[rows] for k, v in obs.obs.items()},
-                    "legal": {k: v[rows] for k, v in obs.legal.items()},
+                    "legal": actor.spec.rollout_legal({k: v[rows] for k, v in obs.legal.items()},
+                                                      out),
                     "actions": {k: v.cpu() for k, v in acts.items()},
                     "mu": out["mu"], "value": out["value"],
                     "seat": obs.to_play[rows].long(), "vmask": acting.bool(),

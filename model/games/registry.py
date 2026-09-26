@@ -195,7 +195,13 @@ def _build_rules_game(game: str, **overrides) -> nn.Module:
         from model.games.candidate import build_candidate_network
 
         return build_candidate_network(game, **overrides)
-    return resolve(entry.builder)(**{**entry.config, **overrides})
+    # precedence: overrides (incl. a fresh IL run's shard meta) > the entry's config >
+    # the simulator's spec meta for its sim_config (the meta_arch keys)
+    keys = [k for ks in entry.meta_arch_keys().values() for k in ks]
+    base = {}
+    if keys and not all(k in entry.config or k in overrides for k in keys):
+        base = entry.sim_dims()
+    return resolve(entry.builder)(**{**base, **entry.config, **overrides})
 
 
 def _register_rules_games() -> None:

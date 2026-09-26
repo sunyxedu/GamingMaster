@@ -906,3 +906,14 @@ class PlacementDecoder(ActionDecoder):
             metrics["answer_correct"] = torch.where(
                 passed, pred_pass, ~pred_pass & place_ok)
         return {"loss": pass_loss + place_loss, **metrics}
+
+
+def build_fromto_network(**overrides) -> nn.Module:
+    """BoardEncoder + FromToDecoder on a :class:`BoardConfig` — the model of the
+    from-to gmrules games (custom schema: obs ``board_seq`` / ``globals_seq``, legal
+    ``from`` / ``to_cond`` (/ ``promotion_cond``), action keys ``from_idx`` /
+    ``to_idx`` (/ ``promotion``); e.g. model/games/gmrules/breakthrough.py)."""
+    from model.game_network import GameNetwork
+
+    cfg = BoardConfig(**overrides)
+    return GameNetwork(cfg, BoardEncoder(cfg), FromToDecoder(cfg))

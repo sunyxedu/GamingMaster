@@ -1,6 +1,6 @@
 //! Kuhn poker for 2-4 players — the toy reference game of the framework, exactly
 //! OpenSpiel's `kuhn_poker(players=N)` (ids, turn order, payoffs; pinned by
-//! tests/test_candidate_reference.py against OpenSpiel itself).
+//! tests/test_gmrules_reference.py against OpenSpiel itself).
 //!
 //! Rules. N players, N+1 cards (ranks 0..=N). Everyone antes 1; chance deals one
 //! private card to each player in seat order (chance outcome = card rank). Players

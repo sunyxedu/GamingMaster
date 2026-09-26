@@ -190,7 +190,7 @@ bit-packed (`FrameSpec::bits_*`).
    outcomes + probabilities and the final returns; a small committed fixture plus a
    live test (`GM_REFERENCE=1`) in both directions — reference playouts stepped
    through `gmsim.State`, and gmrules' random playouts replayed through the
-   reference (`tests/test_candidate_reference.py`). Real records replayed by the
+   reference (`tests/test_gmrules_reference.py`). Real records replayed by the
    converter are the second proof: `illegal` / `returns_mismatch` must stay ~0.
 3. Converter — `rs/gmdata/src/<game>.rs`: `fetch` (download; or a
    `scripts/fetch_<game>.sh`), a parser from the source format to `cand::Record`s
@@ -233,7 +233,7 @@ uv run pytest tests/test_rust_converters_parity.py \
               tests/test_label_chess.py tests/test_label_othello.py \
               tests/test_label_shogi.py tests/test_label_go.py
 uv run pytest tests/test_candidate_*.py               # gmrules / gmsim / candidate adapter
-GM_REFERENCE=1 uv run pytest tests/test_candidate_reference.py   # + live OpenSpiel diff
+GM_REFERENCE=1 uv run pytest tests/test_gmrules_reference.py   # + live OpenSpiel diff
 ```
 
 Real-engine tests run only when the engine is installed (e.g. `STOCKFISH=path`

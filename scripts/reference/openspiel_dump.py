@@ -1,5 +1,5 @@
 """Reference trajectories from OpenSpiel for the differential tests of gmrules games
-(tests/test_candidate_reference.py).  Standalone: runs in its own throw-away uv
+(tests/test_gmrules_reference.py).  Standalone: runs in its own throw-away uv
 environment, never in the project one:
 
     uv run --no-project --python 3.12 --with open_spiel \\
@@ -47,6 +47,9 @@ VARIANTS = {
              {"players": 2, "winscore": 10, "diceoutcomes": 6, "horizon": 40}),
     "pig3": ("pig(players=3,winscore=8,diceoutcomes=3,horizon=12)", "pig",
              {"players": 3, "winscore": 8, "diceoutcomes": 3, "horizon": 12}),
+    "bt4x3": ("breakthrough(rows=4,columns=3)", "breakthrough", {"rows": 4, "columns": 3}),
+    "bt6x5": ("breakthrough(rows=6,columns=5)", "breakthrough", {"rows": 6, "columns": 5}),
+    "bt8x8": ("breakthrough(rows=8,columns=8)", "breakthrough", {"rows": 8, "columns": 8}),
 }
 
 

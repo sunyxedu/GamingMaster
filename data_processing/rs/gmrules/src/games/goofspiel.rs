@@ -1,6 +1,6 @@
 //! Goofspiel — the framework's SIMULTANEOUS-move test game, exactly OpenSpiel's
 //! `goofspiel(num_cards=K, players=N, points_order=..., imp_info=False,
-//! returns_type=win_loss)` (pinned by tests/test_candidate_reference.py).
+//! returns_type=win_loss)` (pinned by tests/test_gmrules_reference.py).
 //!
 //! Rules. Every player holds the cards 1..K; a prize deck 1..K. Each turn one prize
 //! card is revealed (chance draws it uniformly from the remaining ones for

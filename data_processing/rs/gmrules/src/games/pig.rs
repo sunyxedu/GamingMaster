@@ -2,7 +2,7 @@
 //! through the INTERLEAVED layout (one stream per game holding every decision from
 //! the mover's view, like backgammon would be). Exactly OpenSpiel's
 //! `pig(players=N, winscore=W, diceoutcomes=D, horizon=H)` (pinned by
-//! tests/test_candidate_reference.py).
+//! tests/test_gmrules_reference.py).
 //!
 //! Rules. Players take turns from seat 0. On its turn a player repeatedly chooses Roll
 //! (0) or Stop (1). Roll: chance throws a D-sided die (outcome id = face − 1); a 1
