@@ -12,6 +12,8 @@ The divergent-coverage test here runs the exact failure shape on a real
 timeout); with sync_gradients it completes and the missing rank
 contributes zeros. The nowhere-coverage test pins the preserved old
 semantics: parameters without gradients on ANY rank stay untouched.
+The divergent and bucketed tests also run on CUDA tensors over gloo (the
+MIG-slice mode, tests/gloo_devices.py) where CUDA is available.
 """
 
 import io
@@ -24,6 +26,8 @@ import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests.gloo_devices import DEVICES, local_ranks  # noqa: E402
+
 SMALL_CFG = dict(
     d_model=32, n_heads=4, d_ff=64, encoder_channels=16, n_st_layers=1,
     core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, dropout=0.0,
@@ -34,9 +38,11 @@ WORLD = 2
 JOIN_TIMEOUT_S = 180
 
 
-def _worker(rank, init_file, scenario, queue, sync_kw=None):
+def _worker(rank, init_file, scenario, queue, sync_kw=None, kind="cpu", lrs=(0, 1)):
     """Runs in a spawned process: build the model, plant per-rank grads,
     sync, and report the first element of every grad back to the parent.
+    ``kind`` "cuda": the model and gradients live on this rank's CUDA device
+    (its own MIG slice where there are enough; ``lrs`` = the LOCAL_RANKs).
 
     With ``sync_kw`` (keyword arguments for sync_gradients) the planted
     gradients differ per element and per tensor — (rank+1)·(1 + arange) + i
@@ -46,6 +52,9 @@ def _worker(rank, init_file, scenario, queue, sync_kw=None):
     import torch.distributed as dist
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from tests.gloo_devices import worker_device
+
+    device = worker_device(kind, lrs[rank])     # before anything touches CUDA
     from model.config import ModelConfig
     from model.network import GeneralsNetwork
     from model.rl_utils import sync_gradients
@@ -55,13 +64,14 @@ def _worker(rank, init_file, scenario, queue, sync_kw=None):
     )
     try:
         torch.manual_seed(0)  # identical model on both ranks
-        net = GeneralsNetwork(ModelConfig(**SMALL_CFG))
+        net = GeneralsNetwork(ModelConfig(**SMALL_CFG)).to(device)
 
         # Deterministic per-rank gradients: rank 0 → 1.0, rank 1 → 2.0
         for i, (_, p) in enumerate(net.named_parameters()):
             p.grad = torch.full_like(p, float(rank + 1))
             if sync_kw is not None:
-                p.grad += (rank + 1) * torch.arange(p.numel(), dtype=p.dtype).view_as(p) + i
+                p.grad += (rank + 1) * torch.arange(p.numel(), dtype=p.dtype,
+                                                    device=device).view_as(p) + i
 
         if scenario == "divergent" and rank == 1:
             # The production incident: one rank misses the q_head module
@@ -80,7 +90,7 @@ def _worker(rank, init_file, scenario, queue, sync_kw=None):
         # go through shared memory that dies with this process
         grads = {
             name: (None if p.grad is None
-                   else p.grad.numpy().copy() if sync_kw is not None
+                   else p.grad.cpu().numpy().copy() if sync_kw is not None
                    else p.grad.flatten()[0].item())
             for name, p in net.named_parameters()
         }
@@ -89,12 +99,13 @@ def _worker(rank, init_file, scenario, queue, sync_kw=None):
         dist.destroy_process_group()
 
 
-def _run(scenario, tmp_path, sync_kw=None):
+def _run(scenario, tmp_path, sync_kw=None, kind="cpu"):
     ctx = torch.multiprocessing.get_context("spawn")
     queue = ctx.Queue()
     init_file = tmp_path / f"store-{scenario}"
+    lrs = local_ranks(WORLD, kind)
     procs = [
-        ctx.Process(target=_worker, args=(r, str(init_file), scenario, queue, sync_kw))
+        ctx.Process(target=_worker, args=(r, str(init_file), scenario, queue, sync_kw, kind, lrs))
         for r in range(WORLD)
     ]
     for p in procs:
@@ -123,11 +134,12 @@ def test_uniform_coverage_averages_grads(tmp_path):
             assert g == pytest.approx(1.5), name  # (1.0 + 2.0) / 2
 
 
-def test_divergent_coverage_completes_and_zero_fills(tmp_path):
+@pytest.mark.parametrize("kind", DEVICES)
+def test_divergent_coverage_completes_and_zero_fills(tmp_path, kind):
     """The incident shape: rank 1 misses q_head grads. Must complete (old
     code deadlocks here), average q_head as (1.0 + 0)/2 on BOTH ranks,
     and warn on the rank that came up short."""
-    results = _run("divergent", tmp_path)
+    results = _run("divergent", tmp_path, kind=kind)
     for rank in range(WORLD):
         grads, warned = results[rank]
         assert warned == (rank == 1)
@@ -153,13 +165,14 @@ def test_nowhere_coverage_skips_param_on_all_ranks(tmp_path):
                 assert g == pytest.approx(1.5), f"rank {rank} {name}"
 
 
+@pytest.mark.parametrize("kind", DEVICES)
 @pytest.mark.parametrize("bucket_mb", [0.0, 0.001, 1000.0])
-def test_bucketed_sync_is_exact_per_element(tmp_path, bucket_mb):
+def test_bucketed_sync_is_exact_per_element(tmp_path, bucket_mb, kind):
     """Per-tensor (0), many small buckets and one big bucket all average
     every element into the right tensor and offset; rank 1's missing q_head
     is zero-filled; ``warn_partial=False`` silences the expected-gap warning."""
     results = _run("divergent", tmp_path,
-                   sync_kw=dict(bucket_mb=bucket_mb, warn_partial=False))
+                   sync_kw=dict(bucket_mb=bucket_mb, warn_partial=False), kind=kind)
     for rank in range(WORLD):
         grads, warned = results[rank]
         assert not warned
