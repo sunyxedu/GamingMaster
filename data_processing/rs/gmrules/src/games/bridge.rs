@@ -380,6 +380,25 @@ pub fn score(level: u8, denom: u8, dbl: u8, tricks: u8, vul: bool) -> i32 {
     }
 }
 
+/// Per-seat duplicate scores of a finished deal: contract `c` (None = passed out),
+/// `tricks` taken by the declarer, vulnerability `vul` by partnership `[N/S, E/W]` —
+/// [`Game::returns`] of the deal (also a converter's score of a claimed deal).
+pub fn deal_returns(c: Option<Contract>, tricks: u8, vul: [bool; 2]) -> Vec<f64> {
+    let Some(c) = c else { return vec![0.0; 4] };
+    let s = score(c.level, c.denom, c.dbl, tricks, vul[partnership(c.declarer) as usize]) as f64;
+    (0..4u8).map(|p| if partnership(p) == partnership(c.declarer) { s } else { -s }).collect()
+}
+
+/// A seat's duplicate score on the outcome scale ([`Game::outcome`]): `imp` — the IMPs
+/// of the score against 0, / 24 (config `reward = "imp"`); else score / 7600.
+pub fn outcome_scale(score: f64, imp: bool) -> f32 {
+    if imp {
+        imps(score as i32) as f32 / 24.0
+    } else {
+        (score / 7600.0) as f32
+    }
+}
+
 /// The WBF IMP scale: IMPs of a score difference (signed, 0..=24).
 pub fn imps(diff: i32) -> i32 {
     const UP: [i32; 24] = [20, 50, 90, 130, 170, 220, 270, 320, 370, 430, 500, 600, 750, 900, 1100, 1300, 1500, 1750,
@@ -702,12 +721,6 @@ impl Bridge {
         }
     }
 
-    fn score_declarer(&self) -> i32 {
-        if self.level == 0 {
-            return 0;
-        }
-        score(self.level, self.denom, self.dbl, self.declarer_tricks(), self.vul[partnership(self.declarer) as usize])
-    }
 }
 
 impl Game for Bridge {
@@ -902,19 +915,14 @@ impl Game for Bridge {
     }
 
     fn returns(&self) -> Vec<f64> {
-        if self.phase != Phase::Over || self.level == 0 {
+        if self.phase != Phase::Over {
             return vec![0.0; 4];
         }
-        let s = self.score_declarer() as f64;
-        let side = partnership(self.declarer);
-        (0..4u8).map(|p| if partnership(p) == side { s } else { -s }).collect()
+        deal_returns(self.contract(), self.declarer_tricks(), self.vul)
     }
 
     fn outcome(&self) -> Vec<f32> {
-        self.returns()
-            .iter()
-            .map(|&r| if self.imp { imps(r as i32) as f32 / 24.0 } else { (r / 7600.0) as f32 })
-            .collect()
+        self.returns().iter().map(|&r| outcome_scale(r, self.imp)).collect()
     }
 
     fn encode_obs(&self, seat: Seat, obs: &mut ObsView<'_>) {

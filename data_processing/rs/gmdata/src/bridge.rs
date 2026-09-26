@@ -31,10 +31,24 @@
 //! `--input` may be a file or a directory. Records are trajectories of the DEFAULT
 //! config (board drawn by chance, IMP outcome): the board event of the record's
 //! dealer / vulnerability, the deal, the calls and cards, so every source lands in one
-//! shard family (same meta, same tensors). Records that stop early — claims, auctions
-//! without play — are kept with `tgt.value_mask` false (all bridge shards carry
-//! value_mask; `--complete-only` drops them). The same deal never straddles a split:
-//! `--split train|val` routes by a hash of the deal (`--val-mod`, default 1 in 100).
+//! shard family (same meta, same tensors). A record that stops early keeps its frames:
+//! with a recorded result — a claim (LIN `mc`), a stated result (PBN `[Result]`, Jack
+//! results) — that result is its value target (traj.rs `Record::final_outcome`: sample
+//! meta `adjudicated`), after a consistency check (the claimed total can neither be
+//! below the tricks declarer already won nor above them plus the tricks left); without
+//! one (an auction without the play) `tgt.value_mask` is false (all bridge shards
+//! carry value_mask; `--complete-only` drops these). The same deal never straddles a
+//! split: `--split train|val` routes by a hash of the deal (`--val-mod`, default 1 in
+//! 100).
+//!
+//! Verification on the real corpora (`gmdata bridge check`, the converter's checks
+//! without writing frames): the WBridge5 test set 10,000 / 10,000 deals; Ben's WBC
+//! archive 1,883,562 of 1,887,139 boards complete and consistent, 291 kept as
+//! auction-only records (the final passes are missing), 2,951 illegal (2,686 open the
+//! play from a hand that is not declarer's left-hand opponent — 2,202 of them become
+//! legal under another dealer; 169 illegal calls; 96 tricks led by a hand that did not
+//! win the previous one), 334 whose recorded result contradicts the played cards, 1
+//! with calls after a passed-out auction: all rejected.
 //!
 //! ```sh
 //! gmdata bridge fetch --source openspiel --out data/bridge/raw/openspiel
@@ -169,18 +183,17 @@ fn push_action(g: &mut Bridge, events: &mut Vec<Event>, a: u32) -> Result<bool> 
     Ok(g.apply_action(seat, a).is_ok())
 }
 
-/// The scores of a finished deal (per seat) for a contract and declarer tricks.
-fn returns_of(c: Option<br::Contract>, tricks: u8, vul: [bool; 2]) -> Vec<f64> {
-    let Some(c) = c else { return vec![0.0; 4] };
-    let s = br::score(c.level, c.denom, c.dbl, tricks, vul[br::partnership(c.declarer) as usize]) as f64;
-    (0..4u8).map(|p| if br::partnership(p) == br::partnership(c.declarer) { s } else { -s }).collect()
-}
-
-/// A deal as a verified-on-replay record of the default config: the board event, the
-/// deal (each hand ascending, card k to seat k mod 4), the calls and the cards (seats
-/// from the rules). The recorded contract is checked here, the recorded result through
-/// `expected_returns` (checked by the converter against the replayed returns).
-pub fn deal_record(d: Deal) -> Result<Record> {
+/// A deal as a verified-on-replay record of the default config (board drawn by
+/// chance; `cfg.reward` only scales the recorded result of a deal that stops early):
+/// the board event, the deal (each hand ascending, card k to seat k mod 4), the calls
+/// and the cards (seats from the rules). The recorded contract is checked here; the
+/// recorded result (the claim, else the stated result) of a finished deal through
+/// `expected_returns` (checked by the converter against the replay's returns). A deal
+/// that stops early — a claim, an auction without the play — takes its recorded
+/// result as `final_outcome` (the converter keeps it as "adjudicated": that result is
+/// the value target) once it passes the claim check: declarer's total can neither be
+/// below the tricks declarer already won nor above them plus the tricks left.
+pub fn deal_record(d: Deal, cfg: &BridgeConfig) -> Result<Record> {
     check_hands(&d.hands)?;
     let board = br::board_of(d.dealer, d.vul);
     let mut hands = d.hands.clone();
@@ -227,6 +240,7 @@ pub fn deal_record(d: Deal) -> Result<Record> {
                         let Some(hand) = g.hand_to_play() else { break 'tricks };
                         let Some(c) = row[((hand + 4 - first) % 4) as usize] else { break 'tricks };
                         if !push_action(&mut g, &mut events, c as u32)? {
+                            legal = false;
                             break 'tricks;
                         }
                     }
@@ -235,21 +249,36 @@ pub fn deal_record(d: Deal) -> Result<Record> {
             None => {
                 for &c in &d.plays {
                     if !push_action(&mut g, &mut events, c as u32)? {
+                        legal = false;
                         break;
                     }
                 }
             }
         }
     }
-    // a finished deal with a recorded result: its returns (checked by the converter
-    // against the replay's); passed out: 0
     let finished = g.turn() == Turn::Terminal;
+    let recorded = d.claim.or(d.tricks);
+    // a finished deal: the recorded result's returns (checked by the converter against
+    // the replay's); passed out: 0
     let expected_returns = if !finished {
         None
     } else if g.contract().is_none() {
         Some(vec![0.0; 4])
     } else {
-        d.tricks.map(|t| returns_of(g.contract(), t, d.vul))
+        recorded.map(|t| br::deal_returns(g.contract(), t, d.vul))
+    };
+    // a deal that stops early with a recorded result (a claim, a stated result)
+    let final_outcome = match (finished, legal && auction_over, g.contract(), recorded) {
+        (false, true, Some(c), Some(t)) => {
+            let done = g.cards_played() / 4;
+            let have = g.declarer_tricks();
+            ensure!(have <= t && t <= have + (13 - done),
+                    "recorded result {t} tricks for declarer, who won {have} of the first {done} tricks ({})",
+                    c.to_string_short());
+            let imp = cfg.reward != "score";
+            Some(br::deal_returns(Some(c), t, d.vul).iter().map(|&r| br::outcome_scale(r, imp)).collect())
+        }
+        _ => None,
     };
     let mut meta = json!({
         "board": board,
@@ -260,12 +289,15 @@ pub fn deal_record(d: Deal) -> Result<Record> {
     if let Some(t) = d.claim {
         meta["claim"] = json!(t);
     }
+    if let Some(t) = recorded {
+        meta["tricks"] = json!(t);
+    }
     if let Value::Object(m) = d.meta {
         for (k, v) in m {
             meta[k] = v;
         }
     }
-    Ok(Record { id: d.id, events, meta, seats: None, expected_returns, soft_targets: Vec::new() })
+    Ok(Record { id: d.id, events, meta, seats: None, expected_returns, final_outcome, soft_targets: Vec::new() })
 }
 
 fn contract_name(c: Option<(u8, u8)>) -> String {
@@ -303,9 +335,7 @@ pub fn openspiel_record(line: &str, id: &str) -> Result<Option<Record>> {
         id: id.to_string(),
         events,
         meta: json!({"source": "openspiel", "board": 1, "contract": contract}),
-        seats: None,
-        expected_returns: None,
-        soft_targets: Vec::new(),
+        ..Default::default()
     }))
 }
 
@@ -759,8 +789,9 @@ pub struct Selection {
 }
 
 /// Records of every input file of `format` under `input`, routed by `split` (deal
-/// hash modulo `val_mod`: 0 = val), after skipping `skip` and at most `max` of them.
-pub fn records<'a>(format: Format, input: &Path, split: Split, val_mod: u64, sel: &'a Selection)
+/// hash modulo `val_mod`: 0 = val); `cfg` scales the recorded results of deals that
+/// stop early ([`deal_record`]).
+pub fn records<'a>(format: Format, input: &Path, split: Split, val_mod: u64, sel: &'a Selection, cfg: &BridgeConfig)
     -> Result<impl Iterator<Item = Result<Record>> + 'a> {
     let files: Vec<PathBuf> = common::find_files(input, format.extensions())?
         .into_iter()
@@ -773,13 +804,14 @@ pub fn records<'a>(format: Format, input: &Path, split: Split, val_mod: u64, sel
             Err(e) => Box::new(std::iter::once(Err(e))),
         }
     });
+    let cfg = cfg.clone();
     Ok(it.filter_map(move |item| {
         let rec = match item {
             Err(e) => return Some(Err(e)),
             Ok(Item::Record(r)) => r,
             Ok(Item::Deal(d)) => {
                 let id = d.id.clone();
-                match deal_record(d).with_context(|| id) {
+                match deal_record(d, &cfg).with_context(|| id) {
                     Ok(r) => r,
                     Err(e) => return Some(Err(e)),
                 }
@@ -864,7 +896,8 @@ pub enum Cmd {
         /// store each sample's trajectory in its meta (golden tests)
         #[arg(long)]
         store_events: bool,
-        /// drop records that stop before the end of the deal (claims, auctions only)
+        /// drop records that stop before the end of the deal without a recorded
+        /// result (claims and deals with a stated result are always kept)
         #[arg(long)]
         complete_only: bool,
         /// game config JSON (only "reward" may change: records carry their own board)
@@ -873,11 +906,16 @@ pub enum Cmd {
     },
 }
 
-/// Counters of [`check`].
+/// Counters of [`check`] (the converter's verdicts: `complete` + `adjudicated` are
+/// converted, `truncated` too unless `--complete-only`).
 #[derive(Debug, Default, serde::Serialize)]
 pub struct CheckStats {
     pub records: usize,
+    /// the replay reaches the end of the deal
     pub complete: usize,
+    /// stops early with a recorded result (a claim): kept, the result is the value
+    pub adjudicated: usize,
+    /// stops early without a recorded result
     pub truncated: usize,
     pub illegal: usize,
     pub returns_mismatch: usize,
@@ -886,11 +924,11 @@ pub struct CheckStats {
     pub errors: Vec<String>,
 }
 
-/// Replay every record (in parallel chunks) with the rules, as the converter does,
-/// without encoding shards to disk.
-pub fn check(recs: impl Iterator<Item = Result<Record>>, max_errors: usize) -> CheckStats {
+/// Replay every record (in parallel chunks) with the rules and apply the converter's
+/// checks (traj.rs: recorded returns / outcome of a finished deal), without encoding
+/// frames.
+pub fn check(recs: impl Iterator<Item = Result<Record>>, cfg: &BridgeConfig, max_errors: usize) -> CheckStats {
     use rayon::prelude::*;
-    let cfg = BridgeConfig::default();
     let mut st = CheckStats::default();
     let mut recs = recs.peekable();
     while recs.peek().is_some() {
@@ -899,12 +937,17 @@ pub fn check(recs: impl Iterator<Item = Result<Record>>, max_errors: usize) -> C
             .par_iter()
             .filter_map(|r| r.as_ref().ok())
             .map(|rec| {
-                let out = gmrules::replay::<Bridge>(&cfg, &rec.events).map_err(|e| e.to_string()).map(|r| {
-                    let mismatch = match (&rec.expected_returns, r.terminal()) {
+                let out = gmrules::replay::<Bridge>(cfg, &rec.events).map_err(|e| e.to_string()).map(|r| {
+                    let terminal = r.terminal();
+                    let returns_differ = match (&rec.expected_returns, terminal) {
                         (Some(want), true) => want.iter().zip(r.state.returns()).any(|(a, b)| (a - b).abs() > 1e-6),
                         _ => false,
                     };
-                    (r.terminal(), mismatch, r.decisions.len())
+                    let outcome_differs = match (&rec.final_outcome, terminal) {
+                        (Some(want), true) => want.iter().zip(r.state.outcome()).any(|(a, b)| (a - b).abs() > 1e-6),
+                        _ => false,
+                    };
+                    (terminal, returns_differ || outcome_differs, r.decisions.len())
                 });
                 (rec.id.clone(), out)
             })
@@ -918,6 +961,8 @@ pub fn check(recs: impl Iterator<Item = Result<Record>>, max_errors: usize) -> C
                 }
             }
         }
+        let adjudicable: std::collections::HashSet<&str> =
+            chunk.iter().filter_map(|r| r.as_ref().ok()).filter(|r| r.final_outcome.is_some()).map(|r| r.id.as_str()).collect();
         for (id, r) in res {
             st.records += 1;
             let note = match r {
@@ -927,7 +972,13 @@ pub fn check(recs: impl Iterator<Item = Result<Record>>, max_errors: usize) -> C
                 }
                 Ok((terminal, false, frames)) => {
                     st.frames += frames;
-                    if terminal { st.complete += 1 } else { st.truncated += 1 }
+                    if terminal {
+                        st.complete += 1;
+                    } else if adjudicable.contains(id.as_str()) {
+                        st.adjudicated += 1;
+                    } else {
+                        st.truncated += 1;
+                    }
                     continue;
                 }
                 Err(e) => {
@@ -969,8 +1020,9 @@ pub fn run(cmd: Cmd) -> Result<()> {
         }
         Cmd::Check { format, input, split, val_mod, max_records, max_errors } => {
             let sel = Selection::default();
-            let recs = records(format, &input, split, val_mod, &sel)?.take(max_records.unwrap_or(usize::MAX));
-            let mut v = serde_json::to_value(check(recs, max_errors))?;
+            let cfg = BridgeConfig::default();
+            let recs = records(format, &input, split, val_mod, &sel, &cfg)?.take(max_records.unwrap_or(usize::MAX));
+            let mut v = serde_json::to_value(check(recs, &cfg, max_errors))?;
             v["format"] = json!(format.name());
             v["other_split"] = json!(sel.other_split.load(std::sync::atomic::Ordering::Relaxed));
             println!("{v}");
@@ -981,7 +1033,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
             Bridge::check_config(&cfg).map_err(|e| anyhow::anyhow!("{e}"))?;
             ensure!(cfg.board == 0 && cfg.deal.is_empty(), "records carry their own board and deal: config may only set \"reward\"");
             let sel = Selection::default();
-            let recs = records(format, &input, split, val_mod, &sel)?.skip(skip).take(max_records.unwrap_or(usize::MAX));
+            let recs = records(format, &input, split, val_mod, &sel, &cfg)?.skip(skip).take(max_records.unwrap_or(usize::MAX));
             let opts = ConvertOptions { shard_size, store_events, allow_truncated: !complete_only, soft_k: 0 };
             let st = traj::convert::<Bridge>(&cfg, recs, &out, &opts)?;
             let mut v = serde_json::to_value(&st)?;
@@ -999,6 +1051,10 @@ mod tests {
     use gmrules::replay;
 
     const HANDS: [&str; 4] = ["AKQJ.AKQ.AKQ.AKQ", "T98.JT9.JT9.JT98", "765.876.876.7654", "432.5432.5432.32"];
+
+    fn rec(d: Deal) -> Result<Record> {
+        deal_record(d, &BridgeConfig::default())
+    }
 
     fn hands() -> [Vec<u8>; 4] {
         let mut h: [Vec<u8>; 4] = Default::default();
@@ -1033,7 +1089,7 @@ mod tests {
         // N opens 7NT, all pass, N takes all 13 tricks (highest legal card every time)
         let mut d = Deal { id: "x".into(), dealer: 0, vul: [false, false], hands: hands(), ..Default::default() };
         d.calls = ["7NT", "Pass", "Pass", "Pass"].iter().map(|c| br::parse_call(c).unwrap()).collect();
-        let r = deal_record(d.clone()).unwrap();
+        let r = rec(d.clone()).unwrap();
         let mut g = replay::<Bridge>(&BridgeConfig::default(), &r.events).unwrap().state;
         let mut plays = Vec::new();
         while let Turn::Act(s) = g.turn() {
@@ -1047,7 +1103,7 @@ mod tests {
         d.plays = plays;
         d.contract = Some(Some((7, 4)));
         d.tricks = Some(13);
-        let r = deal_record(d.clone()).unwrap();
+        let r = rec(d.clone()).unwrap();
         assert_eq!(r.events.len(), 1 + 52 + 4 + 52);
         assert_eq!(r.events[0], Event::Chance(0)); // board 1
         assert_eq!(r.expected_returns, Some(vec![1520.0, -1520.0, 1520.0, -1520.0]));
@@ -1056,18 +1112,18 @@ mod tests {
         // a wrong recorded result is carried to the converter's returns check
         let mut wrong = d.clone();
         wrong.tricks = Some(12);
-        assert_eq!(deal_record(wrong).unwrap().expected_returns.unwrap()[0], -50.0);
+        assert_eq!(rec(wrong).unwrap().expected_returns.unwrap()[0], -50.0);
         // a wrong recorded contract / declarer is rejected here
         let mut wrong = d.clone();
         wrong.contract = Some(Some((7, 3)));
-        assert!(deal_record(wrong).unwrap_err().to_string().contains("recorded contract"));
+        assert!(rec(wrong).unwrap_err().to_string().contains("recorded contract"));
         let mut wrong = d.clone();
         wrong.declarer = Some(2);
-        assert!(deal_record(wrong).is_err());
+        assert!(rec(wrong).is_err());
         // an illegal card stops the record there (the replay reports it as illegal)
         let mut bad = d.clone();
         bad.plays.swap(0, 1);
-        let r = deal_record(bad).unwrap();
+        let r = rec(bad).unwrap();
         assert!(replay::<Bridge>(&BridgeConfig::default(), &r.events).is_err());
         // board of the dealer / vulnerability: E deals, N/S vulnerable = board 2
         let mut e = d.clone();
@@ -1077,7 +1133,7 @@ mod tests {
         e.plays.clear();
         e.contract = Some(None);
         e.tricks = None;
-        let r = deal_record(e).unwrap();
+        let r = rec(e).unwrap();
         assert_eq!(r.events[0], Event::Chance(1));
         assert_eq!(r.expected_returns, Some(vec![0.0; 4]));
     }
@@ -1106,7 +1162,7 @@ mod tests {
         .collect();
         let d = jack_deal(&lines, "j:1").unwrap();
         assert_eq!((d.dealer, d.vul, d.contract, d.tricks), (3, [true, true], Some(Some((3, 4))), Some(8)));
-        let r = deal_record(d).unwrap();
+        let r = rec(d).unwrap();
         assert_eq!(r.events[0], Event::Chance(3)); // W deals, all vulnerable: board 4
         let st = replay::<Bridge>(&BridgeConfig::default(), &r.events).unwrap();
         assert!(st.terminal());
@@ -1124,12 +1180,26 @@ mod tests {
         assert_eq!(d.calls, vec![br::bid_action(1, 4), br::PASS, br::PASS, br::PASS]);
         let (first, rows) = d.trick_rows.clone().unwrap();
         assert_eq!((first, rows.len()), (1, 1));
-        let r = deal_record(d).unwrap();
+        let r = rec(d.clone()).unwrap();
         // one trick recorded: E leads HJ, S H8, W H5, N HA; then the record stops
         let st = replay::<Bridge>(&BridgeConfig::default(), &r.events).unwrap();
         assert!(!st.terminal());
         assert_eq!(st.state.cards_played(), 4);
         assert_eq!(r.expected_returns, None);
+        // the stated result (13 tricks in 1NT, nobody vulnerable: +270) is the value of
+        // the deal that stops early: IMPs of 270 = 7, / 24
+        let v = 7.0 / 24.0;
+        assert_eq!(r.final_outcome, Some(vec![v, -v, v, -v]));
+        let score = deal_record(d.clone(), &BridgeConfig { reward: "score".into(), ..Default::default() }).unwrap();
+        assert_eq!(score.final_outcome.unwrap()[0], (270.0f64 / 7600.0) as f32);
+        // a result the play already contradicts is rejected (N won the first trick)
+        let mut bad = d.clone();
+        bad.tricks = Some(0);
+        assert!(rec(bad).unwrap_err().to_string().contains("recorded result 0 tricks"));
+        // no result stated: no value (the converter masks it out)
+        let mut none = d;
+        none.tricks = None;
+        assert_eq!(rec(none).unwrap().final_outcome, None);
         assert!(pbn_deal("[Event \"x\"]\n", "p").unwrap().is_none());
     }
 
@@ -1143,10 +1213,16 @@ mod tests {
         let d = deals.into_iter().next().unwrap().unwrap();
         assert_eq!((d.dealer, d.vul, d.claim), (2, [false, true], Some(13)));
         assert_eq!(d.hands[1].len(), 13);
-        let r = deal_record(d).unwrap();
+        let r = rec(d).unwrap();
         let st = replay::<Bridge>(&BridgeConfig::default(), &r.events).unwrap();
         assert_eq!((st.terminal(), st.state.cards_played()), (false, 4));
         assert_eq!(r.meta["claim"], 13);
+        // the claim (all 13 tricks: 1NT by S, N/S not vulnerable, +270 = 7 IMPs) is the value
+        let v = 7.0 / 24.0;
+        assert_eq!(r.final_outcome, Some(vec![v, -v, v, -v]));
+        assert_eq!(st.state.returns(), vec![0.0; 4]);                      // (not over)
+        let over = br::deal_returns(st.state.contract(), 13, [false, true]);
+        assert_eq!(over, vec![270.0, -270.0, 270.0, -270.0]);
         // two boards (qx), names carried over
         let two = format!("vg|Test,,I,1,2,A,,B,|pn|a,b,c,d|qx|o1|{}qx|o2|{}",
                           "md|3HAKQJT98765432,SAKQJT98765432,DAKQJT98765432,|sv|o|mb|p|mb|p|mb|p|mb|p|",
@@ -1156,7 +1232,7 @@ mod tests {
         assert_eq!((deals[0].dealer, deals[1].dealer, deals[1].vul), (0, 1, [true, true]));
         assert_eq!(deals[1].meta["players_swne"][0], "a");
         for d in deals {
-            let r = deal_record(d).unwrap();
+            let r = rec(d).unwrap();
             assert!(replay::<Bridge>(&BridgeConfig::default(), &r.events).unwrap().terminal());
         }
     }

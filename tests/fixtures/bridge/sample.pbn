@@ -47,3 +47,20 @@ Pass 1C X 1H 2D AP
 [Contract "Pass"]
 [Auction "N"]
 Pass Pass Pass Pass
+
+[Event "fixture (claimed after three tricks)"]
+[Board "2"]
+[Dealer "E"]
+[Vulnerable "NS"]
+[Deal "N:T43.KQ964.86.A54 QJ6.JT.9532.K762 AK97.73.A7.JT983 852.A852.KQJT4.Q"]
+[Declarer "E"]
+[Contract "2D"]
+[Result "8"]
+[Auction "E"]
+Pass 1C X 1H
+2D Pass Pass Pass
+[Play "S"]
+CJ CQ CA C6
+SK S2 S4 SQ
+SA S8 S3 S6
+*
