@@ -137,8 +137,11 @@ def compare_game(game, config=STANDARD) -> Dict[str, int]:
         def excluded(m) -> str:
             if rocket_kicker(m) or bomb_wing(m):
                 return "douzero_kickers"
-            if rival is not None and (trio_wings(rival) and airplane_solo_shape(m) and len(m) == len(rival)
-                                      or airplane_solo_shape(rival) and trio_wings(m)):
+            if rival is None:
+                return ""
+            if trio_wings(rival) and airplane_solo_shape(m) and len(m) == len(rival):
+                return "trio_wings"
+            if airplane_solo_shape(rival) and trio_wings(m):
                 return "trio_wings"
             return ""
 
@@ -204,14 +207,15 @@ def test_fixture_covers_the_move_types():
 def test_rule_difference_predicates():
     assert rocket_kicker((3, 3, 3, 3, 20, 30)) and not rocket_kicker((20, 30))
     assert bomb_wing((3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 9, 9, 9, 9))
-    assert trio_wings((3, 3, 3, 4, 4, 4, 5, 5, 5, 9, 9, 9)) and not trio_wings((3, 3, 3, 4, 4, 4, 5, 6))
+    assert trio_wings((3, 3, 3, 4, 4, 4, 5, 5, 5, 9, 9, 9))
+    assert not trio_wings((3, 3, 3, 4, 4, 4, 5, 6))
     assert dz_cards("333444-5(BWJ)") == (3, 3, 3, 4, 4, 4, 5, 20) and dz_cards("Pass") == ()
     ev = deal_events(_FIXTURE["games"][0]["deal"])
     assert len(ev) == 53 and ev[-1] == (0, 3)
 
 
 live = pytest.mark.skipif(os.environ.get("GM_REFERENCE") != "1",
-                          reason="live reference tests: set GM_REFERENCE=1 (network the first time)")
+                          reason="live reference tests: set GM_REFERENCE=1 (network needed once)")
 
 
 def _run_dump(tmp_path, *args):
@@ -238,7 +242,8 @@ def douzero_game(events):
     if landlord is None:
         return None, None
     hands = [[card_value(c) for i, c in enumerate(cards) if i % 3 == s] for s in range(3)]
-    pos = {landlord: "landlord", (landlord + 1) % 3: "landlord_down", (landlord + 2) % 3: "landlord_up"}
+    pos = {landlord: "landlord", (landlord + 1) % 3: "landlord_down",
+           (landlord + 2) % 3: "landlord_up"}
     deal = {"landlord": sorted(hands[landlord] + [card_value(c) for c in kitty]),
             "landlord_down": sorted(hands[(landlord + 1) % 3]),
             "landlord_up": sorted(hands[(landlord + 2) % 3]),
@@ -272,8 +277,8 @@ def test_live_gmrules_play_phases_replayed_in_douzero(tmp_path):
     for game, (ev, landlord) in zip(data["games"], ours):
         if any("rejected" in s for s in game["steps"]):
             rej = next(s for s in game["steps"] if "rejected" in s)
-            assert trio_wings(tuple(rej["rejected"])) or any(trio_wings(tuple(s["move"])) for s in game["steps"]
-                                                             if "move" in s), rej
+            played = [tuple(s["move"]) for s in game["steps"] if "move" in s]
+            assert trio_wings(tuple(rej["rejected"])) or any(map(trio_wings, played)), rej
             rejected += 1
             continue
         assert game["over"]

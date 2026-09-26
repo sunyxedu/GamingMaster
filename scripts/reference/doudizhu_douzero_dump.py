@@ -95,7 +95,8 @@ def play(game_env, md, deal: Dict, rng: random.Random, moves=None) -> Dict:
             if not player.script:
                 break
             if positions[len(steps)] != pos:
-                raise SystemExit(f"replay: move {len(steps)} by {positions[len(steps)]}, DouZero expects {pos}")
+                raise SystemExit(f"replay: move {len(steps)} by {positions[len(steps)]}, "
+                                 f"DouZero expects {pos}")
             if tuple(sorted(player.script[0])) not in legal:
                 rejected = sorted(player.script[0])
                 steps.append({"pos": pos, "hand": sorted(info.player_hand_cards),
@@ -104,8 +105,9 @@ def play(game_env, md, deal: Dict, rng: random.Random, moves=None) -> Dict:
         env.step()
         _, move = player.log[-1]
         t = md.get_move_type(list(move))
-        steps.append({"pos": pos, "hand": sorted(info.player_hand_cards), "legal": [list(m) for m in legal],
-                      "move": list(move), "type": [t["type"], t.get("rank", 0), t.get("len", 1)]})
+        steps.append({"pos": pos, "hand": sorted(info.player_hand_cards),
+                      "legal": [list(m) for m in legal], "move": list(move),
+                      "type": [t["type"], t.get("rank", 0), t.get("len", 1)]})
     out = {"deal": deal, "steps": steps, "over": bool(env.game_over)}
     if env.game_over:
         out["winner"] = env.get_winner()
