@@ -143,6 +143,30 @@ def test_single_process_needs_no_group(monkeypatch):
     assert not env.enabled and device == torch.device("cpu")
 
 
+def test_forced_nccl_on_mig_warns_before_it_fails(monkeypatch, capsys):
+    """--dist_backend nccl on MIG slices: NCCL connects eagerly inside
+    init_process_group (device_id is passed) and raises "Duplicate GPU
+    detected" there, so the hint must be printed BEFORE that call."""
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "1")
+    monkeypatch.setenv("LOCAL_RANK", "1")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", MIG_B)           # pinned already
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "set_device", lambda device: None)
+    seen = {}
+
+    def init_process_group(backend, timeout, device_id):
+        seen.update(backend=backend, device_id=device_id,
+                    printed=capsys.readouterr().out)
+        raise RuntimeError("ncclInvalidUsage: Duplicate GPU detected")
+
+    monkeypatch.setattr(D.dist, "init_process_group", init_process_group)
+    with pytest.raises(RuntimeError, match="Duplicate GPU"):
+        D.init_distributed(torch.device("cuda"), backend="nccl")
+    assert seen["backend"] == "nccl" and seen["device_id"] == torch.device("cuda", 0)
+    assert "WARNING: NCCL on MIG" in seen["printed"]
+
+
 # ----------------------------------------------------------------------
 # the trainers pin before anything touches CUDA
 # ----------------------------------------------------------------------

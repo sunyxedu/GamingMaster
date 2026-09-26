@@ -250,15 +250,17 @@ def init_distributed(device: torch.device, timeout_min: float = 30.0,
                              f"(CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')})")
         device = torch.device("cuda", index)
         torch.cuda.set_device(device)
+    if name == "nccl" and mig:
+        # BEFORE init_process_group: with device_id NCCL connects eagerly and
+        # raises right there — this line must already be in the log
+        print("[dist] WARNING: NCCL on MIG instances fails with 'Duplicate GPU detected' when "
+              "two ranks share a physical GPU; --dist_backend auto (gloo) works", flush=True)
     dist.init_process_group(name, timeout=timedelta(minutes=timeout_min),
                             device_id=device if name == "nccl" else None)
     what = (f" {torch.cuda.get_device_name(device)} "
             f"[{os.environ.get('CUDA_VISIBLE_DEVICES')}]" if device.type == "cuda" else "")
     print(f"[dist] rank {env.rank}/{env.world} (local {env.local_rank}): backend={name} "
           f"device={device}{what}", flush=True)
-    if name == "nccl" and mig:
-        print("[dist] WARNING: NCCL on MIG instances fails with 'Duplicate GPU detected' when "
-              "two ranks share a physical GPU; --dist_backend auto (gloo) works", flush=True)
     return env, device
 
 
