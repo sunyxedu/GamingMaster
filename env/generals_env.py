@@ -5,10 +5,14 @@ Game mechanics are adapted from ``data_processing/processing/simulator.py``
 (the verified replay simulator) into a Gym-like interface that supports
 two-player simultaneous-move self-play.
 
-Observation format matches the model's ``step()`` input:
+Observation format matches the model's ``step()`` input — one player's own
+fog-of-war view and nothing it could not know:
     grid       [C, H, W]     12-channel one-hot + army
     globals    [G]            4 log-normalised stats
     legal_mask [1, H, W]     owned tiles with army > 1
+    dir_mask   [4, H, W]     legal directions at the player's own tiles
+                             (destination in bounds, not a mountain), False
+                             elsewhere — see _get_observation
 
 Reward design (per step; discounted returns are NOT bounded to [-1, 1] —
 the value head is deliberately unbounded):
@@ -271,8 +275,10 @@ class GeneralsEnv:
 
         # Direction-validity grid [4, H, W]: moving from (r, c) in direction
         # d stays in real bounds and does not enter a mountain. Static per
-        # map and player-independent — used to hard-mask the direction head
-        # so illegal moves are never sampled.
+        # map and player-independent: the FULL map, so never handed to a
+        # player as is — each observation's dir_mask is this table at the
+        # player's own tiles only (_get_observation), which hard-masks the
+        # direction head so illegal moves are never sampled.
         dir_valid = torch.zeros(4, self.grid_h, self.grid_w, dtype=torch.bool)
         for r in range(self.real_h):
             for c in range(self.real_w):
@@ -534,7 +540,12 @@ class GeneralsEnv:
         """One player's observation, whole-grid numpy (``_tile_to_state`` is
         the per-tile reference of the state encoding;
         tests/test_generals_obs_vectorised.py pins this to the original
-        per-tile implementation bit for bit, memory updates included)."""
+        per-tile implementation bit for bit, memory updates included).
+
+        Everything in it is information the player has at this point
+        (tests/test_audit_generals_leaks.py): its own fog-of-war view, the
+        public leaderboard totals, and masks / labels at its own tiles —
+        whose neighbours are always in its vision."""
         H, W = self.grid_h, self.grid_w  # 25, 25 (padded)
         rH, rW = self.real_h, self.real_w  # real map bounds
         terrain, army, occ = arrays if arrays is not None else self._state_arrays()
@@ -611,6 +622,15 @@ class GeneralsEnv:
         movable = own & (army > 1)
         legal = torch.from_numpy(movable[None].copy())
 
+        # --- direction mask: the legal directions at the player's OWN
+        # tiles (destination in bounds and not a mountain), False elsewhere.
+        # Every destination of an owned tile lies in its 3x3 vision, so
+        # this is exactly what the player's grid shows there; the full-map
+        # table off its own tiles would tell a never-seen mountain from a
+        # never-seen city.  Only own tiles can be move sources, so the
+        # decoders' masked policies are unchanged.
+        dir_mask = torch.from_numpy(self.dir_valid.numpy() & own[None])
+
         # --- capture-feasibility labels (auxiliary supervision) ---
         # For each movable owned tile and direction onto a DEFENDED
         # neighbour (neutral city or enemy tile): would a full move capture
@@ -638,7 +658,7 @@ class GeneralsEnv:
 
         return {"grid": grid, "globals": globals_vec, "legal_mask": legal,
                 "capture_label": cap_label, "capture_mask": cap_mask,
-                "dir_mask": self.dir_valid}
+                "dir_mask": dir_mask}
 
     # ==================================================================
     # Internal: state encoding (same as simulator)

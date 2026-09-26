@@ -1,8 +1,10 @@
 """GeneralsEnv._get_observation (whole-grid numpy) == the original per-tile
-implementation, kept here verbatim as the oracle: every returned tensor bit for
-bit (dtype included) and the sighted-mountain memory it updates — on random
-full-size and non-square maps, replay maps smaller than the grid, memory vision
-on and off, turn globals, and the terminal state after a general capture."""
+implementation, kept here verbatim as the oracle (the direction mask since
+restricted to the player's own tiles, tests/test_audit_generals_leaks.py):
+every returned tensor bit for bit (dtype included) and the sighted-mountain
+memory it updates — on random full-size and non-square maps, replay maps
+smaller than the grid, memory vision on and off, turn globals, and the
+terminal state after a general capture."""
 
 from __future__ import annotations
 
@@ -95,9 +97,16 @@ def reference_observation(self, player_id):
             if a - 1 > t.army:
                 cap_label[d, r, c] = 1.0
 
+    # legal directions at the player's own tiles only (the per-tile
+    # legality check), False elsewhere
+    dir_mask = torch.zeros(4, H, W, dtype=torch.bool)
+    for idx in self.player_land[player_id]:
+        r, c = divmod(idx, W)
+        dir_mask[:, r, c] = torch.tensor(self.get_valid_directions(idx))
+
     return {"grid": grid, "globals": globals_vec, "legal_mask": legal,
             "capture_label": cap_label, "capture_mask": cap_mask,
-            "dir_mask": self.dir_valid}
+            "dir_mask": dir_mask}
 
 
 def _assert_same(got, want, ctx):

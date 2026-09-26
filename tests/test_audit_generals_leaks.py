@@ -32,14 +32,18 @@ PRIVACY (fog of war)
         seen obstacles.
     The opponent totals p's globals carry are exactly the opponent's own
     army/land (the leaderboard columns; no city count), and the decoder's
-    direction mask is a function of p's view at every cell that can be a legal
-    source (a move's destination is always inside the 3x3 vision of an owned
-    tile), while its entries at other cells never reach the policy.
+    direction mask is a function of p's view: the legal directions at p's
+    own tiles (a move's destination is always inside the 3x3 vision of an
+    owned tile), False elsewhere — and entries off legal sources never reach
+    the policy anyway.
+
+Fixed findings of this audit (formerly strict xfails): the direction mask
+used to be the full-map table at every cell, so off a seat's own tiles it told
+never-seen mountains from never-seen cities.
 
 Known issues pinned as strict xfails (they flip to XPASS, i.e. fail, once
-fixed; drop the marker then): the direction mask off a seat's own cells reads
-never-seen terrain, and memory_vision is not one recorded setting across the
-IL data, GeneralsEnv (train_rl.py) and GeneralsVecEnv (rl_joint).
+fixed; drop the marker then): memory_vision is not one recorded setting
+across the IL data, GeneralsEnv (train_rl.py) and GeneralsVecEnv (rl_joint).
 
 Data: the committed .gior fixture always; the Rust tests need cargo (skipped
 otherwise); the real-replay variants read a few ladder replays from
@@ -747,10 +751,10 @@ def _dir_ok_from_view(grid: torch.Tensor) -> torch.Tensor:
 
 
 def test_env_direction_mask_is_observable_at_own_cells():
-    """legal["direction"] is built from the true map (static, player
-    independent), but at every cell a seat owns — the only cells that can be
-    legal sources — it equals what the seat's own grid shows (a destination
-    is always inside the 3x3 vision of the owned source)."""
+    """legal["direction"] is per seat: at every cell the seat owns — the
+    only cells that can be legal sources — it equals what the seat's own
+    grid shows (a destination is always inside the 3x3 vision of the owned
+    source), and it is False everywhere else."""
     n = 0
     for t, _vec, obs in _replay_frames(_fixture_replay()):
         for p in (0, 1):
@@ -758,6 +762,7 @@ def test_env_direction_mask_is_observable_at_own_cells():
             own = grid[5:8].sum(0) > 0
             dm = obs.legal["direction"][p]
             assert torch.equal(dm[:, own], _dir_ok_from_view(grid)[:, own]), (t, p)
+            assert not dm[:, ~own].any(), (t, p)
             n += int(own.sum())
     assert n > 1000
 
@@ -796,17 +801,13 @@ def test_env_obs_invariant_to_opponent_play_in_fog():
                    for a, b in zip(rows["A"], rows[v]))
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "confirmed leak (audit): GeneralsEnv.dir_valid is built from the true map, so "
-    "legal['direction'] off a seat's own cells tells a never-seen mountain from a "
-    "never-seen city; no action depends on it today (decoders read it only at legal "
-    "sources), fix = build it per seat from the seat's view"))
 def test_env_direction_mask_invariant_to_opponent_private_terrain():
     """The decoder's direction mask is decision-time input, so it must obey
     the same privacy invariance as the observation: seat 0's
     legal['direction'] must not change when never-seen fog obstacles trade
     places (variants A vs B: the fogged mountain (10, 5) and city (5, 10)
-    swap) or the opponent's general moves (C)."""
+    swap) or the opponent's general moves (C).  (It used to be the full-map
+    table GeneralsEnv.dir_valid at every cell.)"""
     rows = {v: _env_rows(v) for v in "ABC"}
     for v in "BC":
         for t, (a, b) in enumerate(zip(rows["A"], rows[v])):
@@ -913,10 +914,10 @@ def test_network_decision_at_t_ignores_later_frames(mixer, joint):
 
 @pytest.mark.parametrize("joint", [False, True])
 def test_decoder_ignores_direction_mask_outside_legal_sources(joint):
-    """The direction-mask entries at cells that are not legal sources (where
-    the env's static mask does encode fogged terrain) never reach the policy:
-    rollout step and teacher-forced replay give bit-identical outputs when
-    only those entries change."""
+    """The direction-mask entries at cells that are not legal sources (the
+    env now leaves them False; a full-map mask would encode fogged terrain
+    there) never reach the policy: rollout step and teacher-forced replay
+    give bit-identical outputs when only those entries change."""
     from model.config import ModelConfig
     from model.network import GeneralsNetwork
     torch.manual_seed(0)

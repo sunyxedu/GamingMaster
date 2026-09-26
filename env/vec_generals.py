@@ -23,8 +23,10 @@ observation is bit-identical to it (tests/test_vec_game_golden.py).  The
 phase-5+ generals RL runs used it on.
 
 legal = {"source": [1, H, W], "direction": [4, H, W]} (the direction key only
-with ``direction_mask``: in-bounds, not-a-mountain directions per cell).  A
-row with no movable army is ``forced``: the env passes whatever is sent.
+with ``direction_mask``): the source mask, and the in-bounds, not-a-mountain
+directions at the row's own tiles (False elsewhere) — like everything in a
+row, a function of that seat's own view (tests/test_audit_generals_leaks.py).
+A row with no movable army is ``forced``: the env passes whatever is sent.
 
 Actions: the GeneralsDecoder's sample() output (action_source / _direction /
 _split / _pass) or its replay format (source_idx, direction, split, passed).
