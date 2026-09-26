@@ -60,7 +60,7 @@ belief against true cycles; `tests/test_clash_royale_leaks.py`). Per frame:
 | `deck_ids`, `deck_form`, `deck_kind`, `deck_cost` | the 8 own deck cards — the **deck tokens**, ordered by card id (the order carries no meaning) |
 | `deck_in_hand`, `deck_next` | the causal hand belief: of the 70 × 24 equally likely initial (hand set, queue order) states, those under which every own play **before the frame** was in hand; per deck card the fraction with it in hand / next (`crdata/src/hand.rs::CycleBelief`). After m ≤ 3 in-deck own plays: played cards 0, the rest 4/(8 − m) resp. 1/(8 − m); from the 4th on exactly 0/1 |
 | `recent_*` | the last `--recent` plays of both sides with card, cell (own frame) and age in ticks; ability events are attributed to the unique ability-capable card their side has already played, else unknown |
-| `waited`, `card_slot`, `place_x/y`, `ability` | the first own action inside the frame window; `card_slot` = **deck index** of the played card |
+| `waited`, `card_slot`, `place_x/y`, `ability` | the first own action inside the frame window; `card_slot` = **deck index** of the played card (two cards the catalog does not know share its unknown id: the copy the belief can hold, `CycleBelief::attribute`) |
 | `phase`, `overtime` | single / double / triple elixir and overtime flags |
 
 `expand.py` builds the adapter's observation at load time: deployment planes (where each
@@ -72,7 +72,8 @@ the whole arena when a playable card is a spell), and targets (`waited`,
 `card_slot`, `place_idx`, `value`). The card head of the network points over
 the deck tokens (`ClashRoyaleConfig.cr_card_tokens = "deck"`). The IL loss is
 not masked: the label is the first action inside the 0.5 s window, and a card
-can become affordable during it (0.2 % of real play labels). Shard `meta`
+can become affordable during it (0.3 % of real play labels, default filters or
+`--hq`; 1.8 % if sides the elixir-violation filter drops are kept). Shard `meta`
 carries `n_cards`, `arena_channels`, `card_tokens`, `deck_size`,
 `card_feature_dim` etc. so `GameShardDataset` refuses to mix generations and
 the trainers refuse a mismatching network.
