@@ -207,7 +207,13 @@ list|check|random|convert` work for every registered game without per-game code
      plays every variant) — or a custom `FrameSpec` (copy `games/breakthrough.rs`);
      a decision whose legal set can exceed a few hundred (Dou Dizhu leads, backgammon
      doubles) is better FACTORED into consecutive decisions of the same seat (main
-     group, then kickers; one checker move per die), each its own frame;
+     group, then kickers; one checker move per die), each its own frame; an
+     ABSTRACTED action space (poker: exact bet amounts in the rules and the records,
+     a few discretised sizes for the policy) is a custom schema with the candidate
+     layout (the same obs tensors / `action_idx` / meta dims, so the candidate
+     adapter and `CandidateSpec` apply) whose `target_custom` maps every legal
+     amount to its size candidate and whose `decode_custom` maps a candidate to its
+     representative legal amount (the battery checks that the two agree);
    - encoders read ONLY what the seat knows now (public state, its own private
      state and actions); `outcome()` in [-1, 1] is both the IL value target and the
      RL reward; `returns()` the raw payoffs; `check_config` validates the config;

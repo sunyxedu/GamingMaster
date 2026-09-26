@@ -15,6 +15,8 @@ HANDS=${2:-1000000}
 PLAYERS=${3:-2}
 SEED=${SEED:-0}
 
+# a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
+command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
 cd "$ROOT/data_processing"
 cargo build --release -q -p gmdata
 G="$ROOT/data_processing/target/release/gmdata"

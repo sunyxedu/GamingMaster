@@ -20,13 +20,13 @@ uv sync            # builds and installs gmsim (Rust release build, ~20 s first 
 ```
 
 builds it on macOS (arm64 / x86-64) and Linux (x86-64 / aarch64). Requirements:
-`cargo` on `PATH` (stable Rust, https://rustup.rs) — maturin itself comes from PyPI as
-a build dependency. On the cluster (user-level rustup in `~/.cargo`):
-
-```sh
-source ~/.cargo/env          # or: export PATH="$HOME/.cargo/bin:$PATH"
-uv sync
-```
+stable Rust (https://rustup.rs) — maturin itself comes from PyPI as a build
+dependency. The build backend is maturin behind a thin in-tree shim
+(`gmsim_build.py`) that puts a user-level rustup (`$CARGO_HOME/bin`, else
+`~/.cargo/bin`) on `PATH` when `cargo` is not there, so on the cluster (user-level
+rustup in `~/.cargo`) a plain `uv sync` works without sourcing `~/.cargo/env`.
+Verified on macOS arm64 (also with cargo absent from `PATH`); the Linux build is the
+same maturin PEP 517 path (no `patchelf` / manylinux step for a local build).
 
 Slurm jobs run `.venv/bin/python` / `torchrun` directly and never rebuild; run
 `uv sync` on the login node after pulling Rust changes.

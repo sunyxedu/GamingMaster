@@ -1,6 +1,9 @@
 [build-system]
 requires = ["maturin>=1.7,<2"]
-build-backend = "maturin"
+# maturin behind a thin in-tree shim that finds a user-level rustup (~/.cargo/bin)
+# when cargo is not on PATH (gmsim_build.py)
+build-backend = "gmsim_build"
+backend-path = ["."]
 
 [project]
 name = "gmsim"
@@ -20,6 +23,7 @@ manifest-path = "Cargo.toml"
 # rebuild the wheel whenever the Rust sources (this crate or gmrules) change
 cache-keys = [
     { file = "pyproject.toml" },
+    { file = "gmsim_build.py" },
     { file = "Cargo.toml" },
     { file = "src/**/*.rs" },
     { file = "python/**/*.py" },

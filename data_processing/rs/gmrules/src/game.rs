@@ -429,10 +429,13 @@ pub trait Game: Clone + Send + Sync + 'static {
         panic!("{}: a custom-schema game must implement Game::target_custom", Self::NAME)
     }
 
-    /// Custom schema: the canonical action whose action keys are `keys` (in
-    /// `FrameSpec::action_keys` order), or None when no legal action has them. Must
-    /// invert [`target_custom`](Game::target_custom) on every legal action (the
-    /// conformance battery checks it).
+    /// Custom schema: the legal action the simulator plays for the action keys `keys`
+    /// (in `FrameSpec::action_keys` order), or None when they name no legal action.
+    /// For every legal `a`, `decode(target(a))` must be a legal action with the same
+    /// keys (the conformance battery checks it): the inverse of
+    /// [`target_custom`](Game::target_custom) for a one-to-one action space; with an
+    /// abstracted one (exact bet amounts in the rules, discretised sizes as keys)
+    /// several legal actions share keys and decode to their representative.
     fn decode_custom(&self, _seat: Seat, _legal: &[u32], _keys: &[i64]) -> Option<u32> {
         panic!("{}: a custom-schema game must implement Game::decode_custom", Self::NAME)
     }

@@ -192,7 +192,10 @@ fn check_decision<G: Game>(spec: &FrameSpec, g: &G, d: &Decision, what: &str) ->
             return Err(format!("{what}: padded candidate slots have non-zero features"));
         }
     }
-    // the action keys of every legal action decode back to it
+    // action keys ↔ actions: the keys of every legal action decode to a legal action
+    // with the same keys (the simulator plays what the IL target names); one-to-one
+    // for the candidate schema, many-to-one allowed for an abstracted custom action
+    // space (e.g. exact bet amounts labelled with the nearest discretised size)
     let mut t = new_target(spec);
     let mut seen = std::collections::HashSet::new();
     for &a in &f.legal_ids {
@@ -200,9 +203,15 @@ fn check_decision<G: Game>(spec: &FrameSpec, g: &G, d: &Decision, what: &str) ->
         let keys = action_keys_of(spec, &t);
         let back = decode_action(g, d.seat, spec, &f.legal_ids, &keys).map_err(|e| format!("{what}: action {a}: {e}"))?;
         if back != a {
-            return Err(format!("{what}: action {a} has action keys {keys:?}, which decode to action {back}"));
+            encode_target(g, d.seat, spec, &f.legal_ids, back, &mut TensorsMut::of(&spec.target, &mut t))
+                .map_err(|e| format!("{what}: {e}"))?;
+            let again = action_keys_of(spec, &t);
+            if again != keys || spec.is_candidate() {
+                return Err(format!("{what}: action {a} has action keys {keys:?}, which decode to action {back} \
+                                    (action keys {again:?})"));
+            }
         }
-        if !seen.insert(keys.clone()) {
+        if spec.is_candidate() && !seen.insert(keys.clone()) {
             return Err(format!("{what}: two legal actions share the action keys {keys:?}"));
         }
     }
@@ -358,4 +367,105 @@ pub fn check_sim_replays<G: Game>(cfg: &G::Config, n_envs: usize, seed: u64, thr
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame::FrameMut;
+    use crate::game::{RulesError, SeatSet};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    struct BidCfg {
+        broken: bool,
+    }
+
+    /// Two seats bid exact amounts 1..=9 once each (the rules are exact); the policy
+    /// only names a size bucket (1-3, 4-6, 7-9) — an abstracted action space.
+    #[derive(Clone, Debug)]
+    struct Bid {
+        bids: Vec<u32>,
+        broken: bool,
+    }
+
+    fn bucket(a: u32) -> i64 {
+        (a as i64 - 1) / 3
+    }
+
+    impl Game for Bid {
+        type Config = BidCfg;
+        const NAME: &'static str = "bid_test";
+        const VERSION: u32 = 0;
+        fn spec(_: &BidCfg) -> FrameSpec {
+            FrameSpec {
+                n_seats: 2,
+                hidden_info: false,
+                simultaneous: false,
+                max_decisions: 2,
+                schema: "bucket.v1".into(),
+                obs: vec![TensorSpec::f32("bids", &[2])],
+                legal: vec![TensorSpec::bool("bucket", &[3])],
+                target: vec![TensorSpec::i64("bucket", &[]), TensorSpec::i64("amount", &[])],
+                action_keys: vec!["bucket".into()],
+                meta: serde_json::json!({}),
+                candidate: None,
+            }
+        }
+        fn new_game(c: &BidCfg) -> Self {
+            Bid { bids: Vec::new(), broken: c.broken }
+        }
+        fn turn(&self) -> Turn {
+            if self.bids.len() == 2 { Turn::Terminal } else { Turn::Act(SeatSet::single(self.bids.len())) }
+        }
+        fn chance_outcomes(&self, _: &mut Vec<(u32, f64)>) {}
+        fn apply_chance(&mut self, _: u32) -> Result<(), RulesError> {
+            Err(RulesError("no chance".into()))
+        }
+        fn legal_actions(&self, s: Seat, out: &mut Vec<u32>) {
+            if self.turn() == Turn::Act(SeatSet::single(s)) {
+                out.extend(1..=9);
+            }
+        }
+        fn apply_action(&mut self, _: Seat, a: u32) -> Result<(), RulesError> {
+            self.bids.push(a);
+            Ok(())
+        }
+        fn outcome(&self) -> Vec<f32> {
+            let d = (self.bids[0] as f32 - self.bids[1] as f32).signum();
+            vec![d, -d]
+        }
+        fn returns(&self) -> Vec<f64> {
+            self.outcome().iter().map(|&x| x as f64).collect()
+        }
+        fn encode_custom(&self, _: Seat, f: &mut FrameMut<'_>) {
+            for (i, &b) in self.bids.iter().enumerate() {
+                f.obs.f32(0)[i] = b as f32 / 9.0;
+            }
+            for &a in f.legal_ids.iter() {
+                f.legal.bool(0)[bucket(a) as usize] = 1;
+            }
+        }
+        fn target_custom(&self, _: Seat, _: &[u32], a: u32, t: &mut TensorsMut<'_>) {
+            t.i64(0)[0] = bucket(a);
+            t.i64(1)[0] = a as i64;
+        }
+        fn decode_custom(&self, _: Seat, legal: &[u32], keys: &[i64]) -> Option<u32> {
+            // the bucket's middle amount; a broken decoder lands in the next bucket
+            let a = 3 * keys[0] as u32 + 2 + if self.broken { 3 } else { 0 };
+            legal.contains(&a).then_some(a)
+        }
+        fn state_string(&self) -> String {
+            format!("{:?}", self.bids)
+        }
+    }
+
+    #[test]
+    fn abstracted_action_keys_pass_inconsistent_decoders_fail() {
+        let rep = check_game::<Bid>(&BidCfg { broken: false }, 20, 1).unwrap();
+        assert_eq!(rep.terminal, 20);
+        let err = check_game::<Bid>(&BidCfg { broken: true }, 20, 1).unwrap_err();
+        assert!(err.contains("decode to action") || err.contains("no legal action"), "{err}");
+    }
 }

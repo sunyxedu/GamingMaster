@@ -611,7 +611,12 @@ class CandidateSpec(RLGameSpec):
         from model.games.gmrules import CANDIDATE_META_ARCH
 
         spec = getattr(env, "spec", None)
-        if spec is None or spec.get("candidate") is None:
+        # the candidate schema, or a custom one with its layout (e.g. an abstracted
+        # action space: exact bets in the rules, discretised sizes as candidates)
+        need = {"entities", "entity_mask", "globals", "actions", "action_mask"}
+        if (spec is None or not need <= {t["name"] for t in spec["obs"]}
+                or spec["action_keys"] != ["action_idx"]
+                or not set(CANDIDATE_META_ARCH) <= set(spec["meta"])):
             raise SystemExit(f"{env.game}: not a candidate-action gmsim env (env/vec_gmsim.py)")
         meta = spec["meta"]
         bad = {k: (meta[k], getattr(net.cfg, f[0], None)) for k, f in CANDIDATE_META_ARCH.items()
