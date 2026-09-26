@@ -6,8 +6,8 @@
 //! ```text
 //! scripts/engines/fetch_engines.sh yaneuraou      # → ~/gm-engines/bin/yaneuraou (+ Háo nn.bin)
 //! gmdata label shogi --input data/shogi/train --out data/shogi_yo/train \
-//!     --engine ~/gm-engines/bin/yaneuraou --workers 64
-//! #  = defaults: --limit nodes=1000000 --max-moves 8 --tau 0.05 --policy softmax
+//!     --engine ~/gm-engines/bin/yaneuraou --workers 32 --tau 0.025   # one worker per core
+//! #  defaults: --limit nodes=1000000 --max-moves 8 --policy softmax (--tau: see below)
 //! gmdata label shogi --input data/shogi/val --out data/shogi_yo/val --engine … (same flags!)
 //! python -m training.train_il_game --game shogi --data_dir data/shogi_yo/train \
 //!     --val_dir data/shogi_yo/val --soft_target_weight 1.0 --engine_value_weight 0.5 ...
@@ -34,26 +34,39 @@
 //! Default USI options ([`DEFAULT_OPTIONS`]; any can be overridden by `--engine-option
 //! NAME=VALUE`, and all effective values are recorded in `meta.teacher.game.usi_options`):
 //! `Threads=1` and `USI_Hash=16` (one process per core; a 1M-node MultiPV-8 search fills
-//! about a third of a 16 MB table, hashfull ≈ 370/1000), no opening book (`USI_OwnBook=false`, `BookFile=no_book`), `FV_SCALE=20`
-//! (the value the Háo authors specify; other evals need their own), draws scored 0
+//! about a third of a 16 MB table, hashfull ≈ 370/1000), no opening book
+//! (`USI_OwnBook=false`, `BookFile=no_book`), `FV_SCALE=20` (the value the Háo authors
+//! specify; other evals need their own), draws scored 0
 //! (`DrawValueBlack/White=0`, YaneuraOu's default −2 is a playing contempt),
 //! `GenerateAllLegalMoves=true` (by default YaneuraOu never considers pawn / bishop / rook
 //! non-promotions, which are legal and in the decoder's action space), the floodgate
 //! entering-king rule `EnteringKingRule=CSARule27`, and no move-count draw
 //! (`MaxMovesToDraw=0`).
 //!
-//! Search budget and policy defaults, and why:
+//! Search budget and policy, and why (measured on an Apple M4 Pro core with YaneuraOu 9.40 +
+//! Háo, MultiPV 8, floodgate positions; the `real_yaneuraou_*` tests in `shogi/tests.rs`):
 //!
-//! * `--limit nodes=1000000` (the only accepted limit — node counts make single-threaded
-//!   searches deterministic): ~1.0 positions per CPU-second on an Apple M4 Pro (YaneuraOu
-//!   9.40 NNUE, 1.0–1.3 M nodes/s single-threaded), average depth 12.9 with MultiPV 8 on
-//!   floodgate positions; 1M keeps the whole floodgate split (~1.5 M frames) within a few
-//!   node-hours. Budget / quality trade-off: `real_yaneuraou_budget_agreement` (below).
-//!   Higher budgets: `--limit nodes=4000000`.
-//! * `--max-moves 8` = MultiPV 8: softmax(Q/τ) with τ = 0.05 gives a move 100 cp behind the
-//!   best (near equality) 0.43× the best move's weight, one 400 cp behind ≈ 0.04×, so moves
-//!   beyond the top 8 carry negligible mass; each extra PV line costs search.
-//! * `--tau 0.05` over Q (the core default; ≈ 120 cp per e-fold near equality).
+//! * `--limit nodes=1000000` (the only accepted limit — node counts keep single-threaded
+//!   searches deterministic): 1.26 positions/s per process (1.26 M nodes/s, average depth
+//!   12.9, plus ~12 ms of isready per position). Against a 4M-node reference (80 positions,
+//!   policies at τ = 0.05), 1M nodes pick the same best move on 59% of the positions (250k:
+//!   49%, 100k: 51%). Shogi positions often have several near-equal moves: by the
+//!   reference's own scores the 1M choice loses only 0.003 Q (≈ 8 cp) on average. The two
+//!   teacher policies differ by a total-variation distance of 0.17 (250k: 0.25, 100k: 0.28).
+//!   On 12 real floodgate games (1455 labelled frames) the 1M-node teacher's best move is the
+//!   move played 53% of the time, the played move is among its 8 scored moves 96% of the
+//!   time, and the sign of its value matches the game result on 87% of the frames. 1M labels
+//!   the whole floodgate split in a few node-hours (below); `--limit nodes=4000000` buys a
+//!   stronger, 4× slower teacher.
+//! * `--max-moves 8` = MultiPV 8: at the recommended τ a move 100 cp behind the best (near
+//!   equality) gets 0.19× the best move's weight, so moves beyond the top 8 carry negligible
+//!   mass; each extra PV line costs search.
+//! * `--tau`: the pipeline default 0.05 (shared by all games) makes a flat shogi teacher
+//!   (mean top-move probability 0.37, entropy 1.6 nats). The likelihood of the moves actually
+//!   played on floodgate peaks for τ between 0.02 and 0.03 (mean log-probability −1.54, vs
+//!   −1.61 at 0.05), where the teacher is also calibrated (mean top probability 0.48 ≈ its 53%
+//!   top-1 agreement with the played move): use `--tau 0.025` for shogi. teacher_q /
+//!   teacher_raw keep the raw scores, so the policy can be re-derived with another τ.
 //! * Q = logistic(cp / 600) — the usual shogi-engine win-rate model (the "Ponanza constant"
 //!   600 of YaneuraOu's learner); mate for the mover → 1, mated → 0 ([`CP_SCALE`]). Note that
 //!   YaneuraOu 9.x prints cp = 100·v/90 of its internal value v (PawnValue 90), so this is
@@ -63,13 +76,15 @@
 //!   engine's first MultiPV line (its root score; with a node limit the lines can come from
 //!   different iterations, so another line may show a higher score).
 //!
-//! Expected throughput on the labelling nodes (AMD EPYC 9355, Zen 5, AVX-512 VNNI build
-//! TARGET_CPU=AVX512VNNI): roughly 1.2–1.6 M nodes/s per single-threaded process, i.e.
-//! 1.2–1.6 positions/s per process at the default 1M nodes, ~40–50 positions/s for a
-//! 32-core socket with one worker per core (SMT siblings add little for NNUE search) —
-//! the ~1.5 M-frame floodgate split in ~9 h on one socket, or split with `--part i/n`.
-//! Measure on the node with `YO_NODES=1000000 cargo test --release -p gmdata
-//! real_yaneuraou_throughput -- --ignored --nocapture`.
+//! Expected throughput on the labelling nodes (AMD EPYC 9355, Zen 5 with AVX-512 VNNI;
+//! fetch_engines.sh builds TARGET_CPU=AVX512VNNI with g++) — an estimate, not measured
+//! there: YaneuraOu's halfkp_256x2 NNUE search runs at a similar speed per core on Zen 5
+//! and Apple M4 cores, so ~1.0–1.3 positions/s per single-threaded process at 1M nodes,
+//! ~32–40 positions/s per 32-core socket with one worker per physical core (SMT siblings
+//! add little to NNUE search). The floodgate train split (52 shards, ~1.4 M frames, ~1.3 M
+//! searches after forced frames and opening cache hits) is then ~10 socket-hours; spread it
+//! over jobs with `--part i/n`. To measure on a node: label one shard with
+//! `--max-samples 64 --workers 32` and read `positions_per_s` in the JSON summary.
 //!
 //! Replay and verification: a sample's start position is decoded from its first frame
 //! (obs.board_seq / hand_seq / globals_seq — hirate for floodgate, but handicap starts

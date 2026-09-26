@@ -358,8 +358,14 @@ fn end_to_end_with_fake_engine() {
 fn engine_crashes_and_timeouts_are_retried() {
     let root = tmpdir("shogi-crash");
     fixture_shards(&root);
-    let mut o = opts(&root, EngineCommand::in_process("flaky-usi", || fake_engine().crash_on(5).hang_on(3, Duration::from_millis(500))));
-    o.timeout = Duration::from_millis(200);
+    // odd engine processes crash on their 12th search, even ones hang on it (→ timeout)
+    let spawns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let cmd = EngineCommand::in_process("flaky-usi", move || {
+        let n = spawns.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n % 2 == 1 { fake_engine().crash_on(12) } else { fake_engine().hang_on(12, Duration::from_millis(400)) }
+    });
+    let mut o = opts(&root, cmd);
+    o.timeout = Duration::from_millis(150);
     o.max_shards = Some(1);
     o.max_samples = Some(4);
     let s = run(ShogiLabeller::new(Some(4)), &o).unwrap();
@@ -375,6 +381,27 @@ fn engine_crashes_and_timeouts_are_retried() {
     for f in ["tgt.teacher_idx.npy", "tgt.teacher_q.npy", "tgt.from_probs_val.npy", "tgt.engine_value.npy"] {
         assert_eq!(std::fs::read(root.join("out").join(&name).join(f)).unwrap(), std::fs::read(root.join("clean").join(&name).join(f)).unwrap(), "{f}");
     }
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A handicap game (white without rook and bishop, white to move first) replays from its
+/// first frame and is sent to the engine as `position sfen … moves …`.
+#[test]
+fn handicap_start_uses_sfen() {
+    let text = "PI82HI22KA\n-\n-3334FU\n+7776FU\n-4344FU\n+2726FU\n-5142OU\n+2625FU\n%TORYO\n";
+    let root = tmpdir("shogi-handicap");
+    let mut w = ShardWriter::new(&root.join("base"), "shogi", rules::CONVERTER_VERSION, json!({"global_features": 7}), 4).unwrap();
+    w.push(rules::convert_game(text, 0, false).unwrap()).unwrap();
+    w.flush().unwrap();
+    let lab = ShogiLabeller::default();
+    let data = load_all(&root.join("base")).remove(0);
+    let v = data.view(0);
+    let pos = lab.replay(&v).unwrap();
+    lab.verify(&v, &pos).unwrap();
+    assert_eq!(pos[0].game.start, "sfen lnsgkgsnl/9/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL w - 1");
+    assert_eq!(pos[2].position_line(), "position sfen lnsgkgsnl/9/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL w - 1 moves 3c3d 7g7f");
+    let s = run(ShogiLabeller::default(), &opts(&root, fake_engine_command())).unwrap();
+    assert_eq!((s.stats.labelled, s.stats.engine_errors, s.stats.bad_analysis), (6, 0, 0), "{:?}", s.stats.errors);
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -578,9 +605,13 @@ fn real_yaneuraou_throughput() {
     );
 }
 
-/// Best-move agreement of smaller budgets with a large one (MultiPV as labelled). Opt-in:
+/// Teacher quality of smaller budgets against a large one, on the labelled transform
+/// (MultiPV 8, softmax(Q/0.05)): best-move agreement, total-variation distance between the
+/// two teacher policies, and the reference's Q loss of the smaller budget's best move (a move
+/// outside the reference's 8 lines counts as the reference's lowest line). Opt-in:
 /// `cargo test --release -p gmdata real_yaneuraou_budget_agreement -- --ignored --nocapture`
-/// (`YO_POSITIONS` default 50, `YO_REF_NODES` default 4000000).
+/// (`YO_POSITIONS` default 50, `YO_BUDGETS` default "100000,250000,1000000", `YO_REF_NODES`
+/// default 4000000).
 #[test]
 #[ignore]
 fn real_yaneuraou_budget_agreement() {
@@ -590,10 +621,17 @@ fn real_yaneuraou_budget_agreement() {
     };
     let n: usize = env_or("YO_POSITIONS", 50);
     let reference: u64 = env_or("YO_REF_NODES", 4_000_000);
+    let mut budgets: Vec<u64> = std::env::var("YO_BUDGETS")
+        .unwrap_or_else(|_| "100000,250000,1000000".into())
+        .split(',')
+        .map(|x| x.trim().parse().unwrap())
+        .collect();
+    budgets.push(reference);
     let positions = fixture_positions(n);
     let (mut s, cfg) = yo_session(&exe, DEFAULT_MAX_MOVES);
-    let budgets = [100_000u64, 250_000, 500_000, 1_000_000, reference];
-    let mut best: Vec<Vec<String>> = vec![Vec::new(); budgets.len()];
+    // per budget and position: the teacher policy {move: p}, the moves' Q, the best move
+    type Run = (HashMap<String, f64>, HashMap<String, f32>, String);
+    let mut runs: Vec<Vec<Run>> = vec![Vec::new(); budgets.len()];
     let mut secs = vec![0.0; budgets.len()];
     for (line, _, _) in &positions {
         for (b, &nodes) in budgets.iter().enumerate() {
@@ -601,17 +639,34 @@ fn real_yaneuraou_budget_agreement() {
             let t0 = std::time::Instant::now();
             let r = s.uci.search(line, &format!("go nodes {nodes}"), cfg.timeout).unwrap();
             secs[b] += t0.elapsed().as_secs_f64();
-            best[b].push(r.lines.first().map(|l| l.pv[0].clone()).unwrap_or_default());
+            let q: Vec<f32> = r.lines.iter().map(|l| q_score(l.score.unwrap())).collect();
+            let pi = softmax_q(&q, 0.05);
+            let mv: Vec<String> = r.lines.iter().map(|l| l.pv[0].clone()).collect();
+            runs[b].push((
+                mv.iter().cloned().zip(pi.iter().map(|&p| p as f64)).collect(),
+                mv.iter().cloned().zip(q.iter().copied()).collect(),
+                mv.first().cloned().unwrap_or_default(),
+            ));
         }
     }
     let r = budgets.len() - 1;
     for (b, &nodes) in budgets.iter().enumerate().take(r) {
-        let agree = best[b].iter().zip(&best[r]).filter(|(x, y)| x == y).count();
+        let (mut agree, mut tv, mut regret) = (0usize, 0.0f64, 0.0f64);
+        for (x, y) in runs[b].iter().zip(&runs[r]) {
+            agree += (x.2 == y.2) as usize;
+            let keys: std::collections::BTreeSet<&String> = x.0.keys().chain(y.0.keys()).collect();
+            tv += 0.5 * keys.iter().map(|k| (x.0.get(*k).unwrap_or(&0.0) - y.0.get(*k).unwrap_or(&0.0)).abs()).sum::<f64>();
+            let q_best = y.1[&y.2];
+            let q_floor = y.1.values().copied().fold(f32::INFINITY, f32::min);
+            regret += (q_best - y.1.get(&x.2).copied().unwrap_or(q_floor)) as f64;
+        }
+        let m = positions.len() as f64;
         eprintln!(
-            "nodes {nodes:>8}: best move = {reference}-node best on {agree}/{} ({:.0}%), {:.2} positions/s",
-            positions.len(),
-            100.0 * agree as f64 / positions.len() as f64,
-            positions.len() as f64 / secs[b]
+            "nodes {nodes:>8} vs {reference}: best move agrees {:.0}%, policy TV distance {:.3}, Q loss of its best move {:.4}, {:.2} positions/s",
+            100.0 * agree as f64 / m,
+            tv / m,
+            regret / m,
+            m / secs[b]
         );
     }
 }
