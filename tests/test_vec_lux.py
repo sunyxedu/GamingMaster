@@ -289,6 +289,26 @@ def test_legal_masks_follow_the_rules():
     assert checked_legal > 50 and checked_masked > 10
 
 
+def test_env_sap_legal_is_the_il_rule_on_the_gated_units():
+    """The IL batches' sap legality (model.games.lux.lux_legal_from_obs: unit
+    cells from units_seq, the sap range from globals_seq) is the env's
+    legal["sap"] restricted to the units whose action has an effect."""
+    from model.games.lux import lux_legal_from_obs
+
+    env = LuxVecEnv(3, seed=8)
+    obs = env.observe()
+    g = _gen(8)
+    n = 0
+    for _ in range(25):
+        obs, *_ = env.step(env.random_actions(obs, g))
+        il = lux_legal_from_obs(obs.obs)
+        gate = obs.legal["unit"]
+        assert not (gate & ~il["unit"]).any()                   # gate ⊆ occupied slots
+        assert torch.equal(il["sap"] & gate.unsqueeze(-1), obs.legal["sap"])
+        n += int(gate.sum())
+    assert n > 0
+
+
 def test_action_mask_off_and_legacy_window():
     env = LuxVecEnv(2, action_mask=False, sap_window=0, seed=0)
     obs = env.observe()
