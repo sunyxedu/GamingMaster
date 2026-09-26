@@ -166,7 +166,9 @@ META_ARCH_KEYS = {
 # checkpoint on old shards (or an old one on new shards) fails loudly.
 # These equal the config dataclass / registry defaults, so a fresh run on
 # old shards builds the legacy architecture without injecting anything
-# (apply_meta_arch_defaults only reads keys the meta actually has).
+# (apply_meta_arch_defaults only reads keys the meta actually has) — except
+# for config defaults that changed with the new generation, which
+# META_LEGACY_IMPLIES injects (pokemon's move head).
 META_LEGACY = {
     "go": {"global_features": 0},
     "chess": {"global_features": 8},
@@ -291,14 +293,28 @@ def meta_arch_value(game: str, meta_key: str, value, cfg_get):
     return value
 
 
+# Config fields an old converter generation implies without a meta key of
+# their own: when the shard meta lacks META key K (the converter predates it),
+# a fresh run also defaults these fields, so pre-freeze shards keep training
+# the architecture they were made for.  pokemon: converter v1 shards (no
+# "field_features") carry only the revealed-move slot target tgt.move_idx —
+# the identity move head (the config default) trains on v2's tgt.move_id.
+META_LEGACY_IMPLIES = {"pokemon": {"field_features": {"pokemon_move_head": "slot"}}}
+
+
 def apply_meta_arch_defaults(game: str, kw: Dict, shard_meta: Dict) -> Dict:
     """Fresh runs: default ``game``'s data-dependent config fields
-    (META_ARCH_KEYS) from the shard meta; explicit values in ``kw`` win
-    (check_meta_arch then rejects a contradiction)."""
+    (META_ARCH_KEYS) from the shard meta, plus META_LEGACY_IMPLIES when the
+    meta predates a key; explicit values in ``kw`` win (check_meta_arch then
+    rejects a contradiction)."""
     for meta_key, cfg_keys in META_ARCH_KEYS.get(game, {}).items():
         if meta_key in shard_meta:
             v = meta_arch_value(game, meta_key, shard_meta[meta_key], kw.get)
             for ck in cfg_keys:
+                kw.setdefault(ck, v)
+    for meta_key, implied in META_LEGACY_IMPLIES.get(game, {}).items():
+        if meta_key not in shard_meta:
+            for ck, v in implied.items():
                 kw.setdefault(ck, v)
     return kw
 

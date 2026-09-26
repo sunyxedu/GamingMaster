@@ -588,6 +588,16 @@ def test_pokemon_meta():
                                                    pokemon_species_buckets=512), v2)
     with pytest.raises(ValueError, match="field_features=20 .implied"):
         check_meta_arch("pokemon", net.cfg, {"move_buckets": 1024, "species_buckets": 512})
+    # the move head: v2 shards take the config default (identity); v1 shards (no
+    # field_features, no tgt.move_id) keep the legacy slot head in fresh runs — the identity
+    # head cannot train on them — unless the command line says otherwise
+    assert net.cfg.pokemon_move_head == "identity" and "pokemon_move_head" not in kw
+    v1 = {"move_buckets": 256, "species_buckets": 512}
+    old = build_game_network("pokemon", **apply_meta_arch_defaults("pokemon", dict(TINY), v1)).cfg
+    assert (old.pokemon_move_head, old.pokemon_field_features) == ("slot", 20)
+    check_meta_arch("pokemon", old, v1)
+    explicit = apply_meta_arch_defaults("pokemon", {**TINY, "pokemon_move_head": "identity"}, v1)
+    assert explicit["pokemon_move_head"] == "identity"
 
 
 def test_schema_freeze_warning():

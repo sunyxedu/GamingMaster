@@ -798,3 +798,39 @@ def test_train_il_game_on_converter_v2_shards(v2_shards, tmp_path, monkeypatch, 
     assert "illegal_target_frac=0.0000" in val and "move_loss=" in val
     log = run(2, "--resume", str(tmp_path / "ck" / "pokemon_epoch0.pt"))
     assert "[resume]" in log and (tmp_path / "ck" / "pokemon_epoch1.pt").exists()
+
+
+V1_KEYS = {"obs": ("species_ids", "move_ids", "poke_feats", "slot_mask", "field_seq"),
+           "tgt": ("action_type", "move_idx", "switch_idx", "tera", "active_idx", "value")}
+
+
+def test_train_il_game_fresh_on_converter_v1_shards(v2_shards, tmp_path, monkeypatch, capsys):
+    """Pre-freeze shards still train (with the schema-freeze warning) the architecture they
+    were made for: a fresh run on converter-v1 shards (meta without field_features, no
+    tgt.move_id — rebuilt here from the v2 conversion: turn frames with a visible choice,
+    20 field features, the v1 keys) builds the slot move head on 20 field features instead of
+    the identity head, which cannot train on them."""
+    from data_processing.games.dataset import load_gm_samples, save_shard
+    from training import train_il_game
+
+    v1 = []
+    for s in load_gm_samples(str(v2_shards)):
+        fs = s["obs"]["field_seq"]
+        keep = (fs[:, 20] == 0) & (fs[:, 21] == 0) & (s["tgt"]["action_type"] >= 0)
+        v1.append({"obs": {k: s["obs"][k][keep] for k in V1_KEYS["obs"]},
+                   "tgt": {k: s["tgt"][k][keep] for k in V1_KEYS["tgt"]}, "meta": s["meta"]})
+        v1[-1]["obs"]["field_seq"] = v1[-1]["obs"]["field_seq"][:, :20].contiguous()
+    data = tmp_path / "v1"
+    save_shard(str(data / "pokemon_00000.pt"), "pokemon", v1, converter_version=1,
+               meta={"move_buckets": 256, "species_buckets": 512})
+    monkeypatch.setattr(train_il_game, "pick_device", lambda: torch.device("cpu"))
+    monkeypatch.setattr(sys, "argv", [
+        "train_il_game", "--game", "pokemon", "--data_dir", str(data), "--epochs", "1",
+        "--batch_size", "2", "--warmup_steps", "1", "--ema_rate", "0",
+        "--save_dir", str(tmp_path / "ck"), "--override", "d_model=32", "n_heads=4", "d_ff=64",
+        "n_st_layers=1", "dropout=0.0", "core_type=transformer", "core_layers=1"])
+    train_il_game.main()
+    assert "converter_version 1 < 2" in capsys.readouterr().out
+    cfg = torch.load(tmp_path / "ck" / "pokemon_epoch0.pt", map_location="cpu",
+                     weights_only=False)["config"]
+    assert (cfg["pokemon_move_head"], cfg["pokemon_field_features"]) == ("slot", 20)
