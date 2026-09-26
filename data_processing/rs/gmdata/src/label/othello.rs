@@ -50,8 +50,7 @@
 //!
 //! * `tgt.teacher_idx` [T,K] = square `row·8 + col` (the tgt.place_idx encoding: a1 = 0,
 //!   h1 = 7, a8 = 56; the letter is the column), best first (by Q, ties by square; sort by
-//!   `teacher_raw` to rank by margin). Pass (id 64) is never labelled: pass frames are
-//!   forced moves.
+//!   `teacher_raw` to rank by margin); 64 = pass, the single entry of a pass frame.
 //! * `tgt.teacher_q` [T,K] = mover-POV expected score: an exact result (the row reports
 //!   depth = empties at 100%) gives win 1 / draw 0.5 / loss 0; any other score
 //!   `Q = 1 / (1 + exp(−discs / s))` with s = `--disc-scale`.
@@ -59,11 +58,14 @@
 //! * `tgt.engine_value` = 2·max Q − 1, `tgt.engine_value_mask`.
 //! * PlacementDecoder heads (model/games/board.py `il_head_terms`): `tgt.place_probs`
 //!   [T,64] dense = p(place | not pass) = the teacher policy; `tgt.pass_probs` [T] = P(pass)
-//!   = 0 with `tgt.pass_probs_mask` on labelled frames (passing is illegal while a move
-//!   exists; the pass head is supervised on every frame, so this is an exact teacher).
-//! * Not labelled (pad rows, masks false): pass frames (skip reason "pass"), frames with a
-//!   single legal move ("forced"), engine failures, failed samples, `--every-nth-frame` /
-//!   `--max-samples` sampling.
+//!   with `tgt.pass_probs_mask`: 0 on move frames (passing is illegal while a move exists),
+//!   1 on pass frames. The decoder supervises its pass head on every valid frame, so pass
+//!   frames carry this pass teacher (and no place teacher: the place head is unsupervised
+//!   there); their Q / engine value is the passing side's, 1 − Q(the opponent's best
+//!   reply), scored with `hint 1` on the position after the pass.
+//! * Not labelled (pad rows, masks false): frames with a single legal move ("forced", the
+//!   global rule for forced moves), engine failures, failed samples, `--every-nth-frame`
+//!   / `--max-samples` sampling.
 //!
 //! Cache key: (mover discs, opponent discs) bitboards — Egaroucid is colour-blind (it
 //! searches player / opponent boards), so this is the full identity of the answer.
@@ -131,14 +133,15 @@
 //! # Expected cluster throughput
 //!
 //! Measured on the Mac above: ~4.3 positions per CPU-second per worker at the defaults
-//! (one full hint per position). On real WTHOR games ~8% of the frames are skipped (5%
-//! forced, 3% pass) and ~7% of the positions hit the per-worker cache (repeated
-//! openings). Not measured on the cluster; estimate for an AMD EPYC 9355 node with the
+//! (one full hint per position). Of the 2.10M frames of the 68 local 2000+ WTHOR shards
+//! 3.9% are skipped as forced and 1.6% are pass frames (one cheaper `hint 1` each); ~7%
+//! of the positions hit the per-worker cache (repeated openings). Not measured on the
+//! cluster; estimate for an AMD EPYC 9355 node with the
 //! AVX-512 build: Egaroucid's docs put its SIMD build at ~1.5× the generic one, a Zen 5
 //! core at server clocks is somewhat slower per thread than an M4 P-core, and two SMT
 //! workers per core share it, so ~5–6.5 positions/s per physical core, i.e. ~160–210
 //! positions/s per 32-core socket with 64 workers: the 2.1M frames of the 2000+ WTHOR
-//! set (~1.85M engine queries) in ~2.5–3.2 socket-hours. Measure first with
+//! set (~1.9M engine queries) in ~2.5–3.3 socket-hours. Measure first with
 //! `--max-shards 1` (the progress line reports positions/s and searches/s). A full run of
 //! 64 games on the Mac (8 workers, the machine oversubscribed ~8×) gave 13 positions/s.
 //!
@@ -177,7 +180,7 @@ pub const DEFAULT_HASH: u32 = 20;
 pub const DEFAULT_MAX_MOVES: usize = 32;
 /// Logistic scale (discs) of Q for non-exact scores (see the module docs).
 pub const DISC_SCALE: f64 = 2.3;
-/// The pass action id (documented; never emitted — pass frames are not labelled).
+/// The pass action id (`tgt.teacher_idx` of pass frames).
 pub const PASS_ID: i64 = 64;
 
 /// `gmdata label othello` flags.
@@ -657,7 +660,7 @@ impl Labeller for OthelloLabeller {
     fn teacher_meta(&self, cfg: &EngineConfig) -> Value {
         let o = EgaOptions::parse(&cfg.options).ok();
         json!({
-            "action_id": "row*8+col (a1=0, h1=7, a8=56; tgt.place_idx encoding); pass=64 never labelled",
+            "action_id": "row*8+col (a1=0, h1=7, a8=56; tgt.place_idx encoding); 64 = pass (pass frames)",
             "q": "exact (depth = empties @100%): win 1 / draw 0.5 / loss 0; else 1/(1+exp(-discs/disc_scale))",
             "disc_scale": self.disc_scale,
             "search": "egaroucid hint per position after clearcache; -dpr: level-L midgame above exact_empties, exact solve at or below",
@@ -715,11 +718,7 @@ impl Labeller for OthelloLabeller {
     }
 
     fn skip_reason(&self, _s: &SampleView, _t: usize, pos: &OthPos) -> Option<&'static str> {
-        match pos.n_legal() {
-            0 => Some("pass"),
-            1 => Some("forced"),
-            _ => None,
-        }
+        (pos.n_legal() == 1).then_some("forced")
     }
 
     fn key(&self, pos: &OthPos) -> (u64, u64) {
@@ -727,12 +726,24 @@ impl Labeller for OthelloLabeller {
     }
 
     fn query(&self, session: &mut EgaSession, pos: &OthPos, cfg: &EngineConfig) -> Result<Analysis> {
+        if pos.legal == 0 {
+            // a pass frame: the pass is scored by the opponent's best reply after it
+            let after = OthPos::new(pos.board, rules::opponent(pos.mover));
+            let best = session.hint(&after, 1, cfg.timeout)?.remove(0);
+            let q = 1.0 - q_from_discs(best.discs, best.exact(after.empties()), self.disc_scale);
+            return Ok(Analysis { moves: vec![ScoredMove::new(PASS_ID, q).raw(-best.discs as f32)], value: None });
+        }
         let rows = session.hint(pos, cfg.max_moves, cfg.timeout)?;
         Ok(self.analysis(pos, &rows))
     }
 
-    fn head_rows(&self, _s: &SampleView, _t: usize, _pos: &OthPos, policy: &[(i64, f32)]) -> Result<Vec<HeadRow>> {
-        Ok(vec![HeadRow::Categorical(policy.to_vec()), HeadRow::Bernoulli(0.0)])
+    fn head_rows(&self, _s: &SampleView, _t: usize, pos: &OthPos, policy: &[(i64, f32)]) -> Result<Vec<HeadRow>> {
+        Ok(if pos.legal == 0 {
+            // p(place | not pass) has no support; P(pass) = 1 (the pass head is supervised here)
+            vec![HeadRow::Missing, HeadRow::Bernoulli(1.0)]
+        } else {
+            vec![HeadRow::Categorical(policy.to_vec()), HeadRow::Bernoulli(0.0)]
+        })
     }
 }
 

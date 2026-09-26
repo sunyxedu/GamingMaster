@@ -372,8 +372,9 @@ fn golden_real_wthor_shard() {
 
 // ------------------------------------------------------------------ end to end (fake engine)
 
-/// Check every teacher column of an overlay against the fake engine's answers.
-fn check_overlay(root: &Path, out: &str, shard: &str, disc_tau: Option<f64>) -> (usize, usize) {
+/// Check every teacher column of an overlay against the fake engine's answers;
+/// returns (labelled frames, exact frames, pass frames).
+fn check_overlay(root: &Path, out: &str, shard: &str, disc_tau: Option<f64>) -> (usize, usize, usize) {
     let base = ShardReader::open(&root.join("base").join(shard)).unwrap();
     let o = ShardReader::open(&root.join(out).join(shard)).unwrap();
     for (name, info) in &base.tensors {
@@ -389,7 +390,7 @@ fn check_overlay(root: &Path, out: &str, shard: &str, disc_tau: Option<f64>) -> 
     let Column::F32(pb) = overlay_tensor(&o, "tgt.pass_probs", DType::F32, &[]).col else { panic!() };
     let Column::Bool(pm) = overlay_tensor(&o, "tgt.pass_probs_mask", DType::Bool, &[]).col else { panic!() };
     assert!(!o.has("tgt.teacher_visits"));
-    let (mut labelled, mut exact_frames) = (0, 0);
+    let (mut labelled, mut exact_frames, mut passes) = (0, 0, 0);
     let data = ShardData::load(base).unwrap();
     let lab = OthelloLabeller::default();
     for i in 0..data.reader.n_samples() {
@@ -398,14 +399,26 @@ fn check_overlay(root: &Path, out: &str, shard: &str, disc_tau: Option<f64>) -> 
             let f = v.start + t;
             let (row, qs, rs) = (&idx[f * k..(f + 1) * k], &q[f * k..(f + 1) * k], &raw[f * k..(f + 1) * k]);
             let probs = &pp[f * 64..(f + 1) * 64];
-            if pos.n_legal() <= 1 {
+            let exact = pos.empties() <= FakeEgaroucid::EXACT_EMPTIES;
+            if pos.n_legal() == 1 {
                 assert!(row.iter().all(|&a| a == -1) && qs.iter().all(|x| x.is_nan()) && rs.iter().all(|x| x.is_nan()));
                 assert!(evm[f] == 0 && ev[f] == 0.0 && pm[f] == 0 && pb[f] == 0.0 && probs.iter().all(|&p| p == 0.0), "frame {f}");
                 continue;
             }
             labelled += 1;
-            let exact = pos.empties() <= FakeEgaroucid::EXACT_EMPTIES;
             exact_frames += exact as usize;
+            if pos.legal == 0 {
+                // pass frame: the pass scored by the opponent's best reply; pass teacher only
+                passes += 1;
+                let reply = FakeEgaroucid::rows(&OthPos::new(pos.board, crate::othello::opponent(pos.mover)))[0].clone();
+                let want = 1.0 - q_from_discs(reply.discs, exact, DISC_SCALE);
+                assert_eq!((row[0], qs[0], rs[0]), (PASS_ID, want, -reply.discs as f32), "frame {f}");
+                assert!(row[1..].iter().all(|&a| a == -1) && qs[1..].iter().all(|x| x.is_nan()));
+                assert!(evm[f] == 1 && (ev[f] - (2.0 * want - 1.0)).abs() < 1e-6);
+                assert!(probs.iter().all(|&p| p == 0.0), "no place teacher on a pass frame");
+                assert_eq!((pb[f], pm[f]), (1.0, 1), "P(pass) = 1 on a pass frame");
+                continue;
+            }
             let mut want: Vec<(i64, i32, f32)> =
                 FakeEgaroucid::rows(pos).iter().map(|r| (r.square, r.discs, q_from_discs(r.discs, exact, DISC_SCALE))).collect();
             want.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
@@ -436,7 +449,7 @@ fn check_overlay(root: &Path, out: &str, shard: &str, disc_tau: Option<f64>) -> 
             assert_eq!((pb[f], pm[f]), (0.0, 1), "P(pass) = 0 while a move exists");
         }
     }
-    (labelled, exact_frames)
+    (labelled, exact_frames, passes)
 }
 
 #[test]
@@ -447,7 +460,7 @@ fn end_to_end_with_the_fake_engine() {
     assert_eq!((s.shards_total, s.shards_written), (2, 2));
     assert_eq!((s.stats.failed_samples(), s.stats.engine_errors, s.stats.bad_analysis), (0, 0, 0));
     let skipped = s.stats.skipped.values().sum::<u64>();
-    assert!(s.stats.skipped["pass"] >= 1 && s.stats.skipped["forced"] >= 1, "{:?}", s.stats.skipped);
+    assert!(s.stats.skipped.len() == 1 && s.stats.skipped["forced"] >= 1, "only forced frames are skipped: {:?}", s.stats.skipped);
     assert_eq!(s.stats.labelled + skipped, s.stats.frames);
     assert!(s.stats.cache_hits > 0, "the opening positions repeat across games");
     assert_eq!(s.stats.queries + s.stats.cache_hits, s.stats.labelled);
@@ -459,16 +472,17 @@ fn end_to_end_with_the_fake_engine() {
     assert_eq!(s.teacher["heads"]["pass"], json!({"kind": "bernoulli"}));
     assert_eq!(s.teacher["game"]["disc_scale"], DISC_SCALE);
     assert_eq!((s.teacher["game"]["hash"].as_u64(), s.teacher["game"]["book"].as_bool()), (Some(20), Some(false)));
-    let (mut labelled, mut exact) = (0, 0);
+    let (mut labelled, mut exact, mut passes) = (0, 0, 0);
     for shard in ["othello_00000", "othello_00001"] {
-        let (l, e) = check_overlay(&root, "out", shard, None);
+        let (l, e, p) = check_overlay(&root, "out", shard, None);
         labelled += l;
         exact += e;
+        passes += p;
         let o = ShardReader::open(&root.join("out").join(shard)).unwrap();
         assert_eq!(o.meta()["teacher"], s.teacher);
     }
     assert_eq!(labelled as u64, s.stats.labelled);
-    assert!(exact > 0 && exact < labelled);
+    assert!(exact > 0 && exact < labelled && passes >= 3, "{labelled} labelled, {exact} exact, {passes} pass frames");
     // --disc-tau: softmax over the raw disc scores, Q / engine value unchanged
     let mut o = opts(&root, fake_engine_command());
     o.out = root.join("disc");
@@ -639,8 +653,15 @@ fn real_egaroucid_end_to_end() {
         let v = data.view(i);
         for (t, pos) in lab.replay(&v).unwrap().iter().enumerate() {
             let f = v.start + t;
-            assert_eq!(evm[f], pos.n_legal() >= 2);
-            if pos.n_legal() < 2 {
+            assert_eq!(evm[f], pos.n_legal() != 1);
+            if pos.n_legal() == 1 {
+                continue;
+            }
+            if pos.legal == 0 {
+                let (qq, rr) = (q[f * 32], raw[f * 32]);
+                assert_eq!(idx[f * 32..f * 32 + 2], [PASS_ID, -1]);
+                assert!((qq - q_from_discs(rr as i32, pos.empties() <= 12, DISC_SCALE)).abs() < 1e-6);
+                assert!(pp[f * 64..(f + 1) * 64].iter().all(|&p| p == 0.0));
                 continue;
             }
             let n = pos.n_legal() as usize;

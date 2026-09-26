@@ -71,7 +71,7 @@ def test_summary_and_meta(base, labelled):
     assert summary["shards_written"] == 2 and st["samples"] == 8
     assert st["verify_failed"] == st["replay_failed"] == st["engine_errors"] == st["bad_analysis"] == 0
     assert st["labelled"] + sum(st["skipped"].values()) == st["frames"]
-    assert set(st["skipped"]) <= {"pass", "forced"} and st["labelled"] > 0
+    assert set(st["skipped"]) <= {"forced"} and st["labelled"] > 0
     t = summary["teacher"]
     assert t["engine"].startswith("Egaroucid for Console ")
     assert t["raw_unit"] == "discs" and t["policy"] == {"kind": "softmax", "tau": TAU} and t["max_moves"] == K
@@ -110,14 +110,17 @@ def test_loader_columns(base, labelled):
             assert v.dtype == dt and tuple(v.shape) == (T, *shape), (key, v.dtype, v.shape)
         m, idx = s["tgt"]["engine_value_mask"], s["tgt"]["teacher_idx"]
         passed = s["tgt"]["passed"]
-        assert not (m & passed).any(), "pass frames carry no teacher"
-        assert torch.equal(s["tgt"]["pass_probs_mask"], m) and (s["tgt"]["pass_probs"] == 0).all()
+        # pass frames: the pass teacher P(pass) = 1, the pass scored (id 64), no place teacher
+        assert m[passed].all() and (idx[passed][:, 0] == 64).all() and (idx[passed][:, 1:] == -1).all()
+        assert torch.equal(s["tgt"]["pass_probs_mask"], m)
+        assert torch.equal(s["tgt"]["pass_probs"], passed.float() * m)
+        mv = m & ~passed
         pp = s["tgt"]["place_probs"]
-        assert torch.allclose(pp[m].sum(-1), torch.ones(int(m.sum())), atol=1e-5) and (pp[~m] == 0).all()
+        assert torch.allclose(pp[mv].sum(-1), torch.ones(int(mv.sum())), atol=1e-5) and (pp[~mv] == 0).all()
         assert (idx[~m] == -1).all()
         # teacher squares are empty cells (legal placements); the played move is among them
         empty = s["obs"]["board_seq"][:, 2].reshape(T, 64)
-        for t in torch.nonzero(m).flatten().tolist():
+        for t in torch.nonzero(mv).flatten().tolist():
             sq = idx[t][idx[t] >= 0]
             assert (empty[t, sq] == 1).all() and int(s["tgt"]["place_idx"][t]) in sq.tolist()
             assert (pp[t][empty[t] == 0] == 0).all()
@@ -126,6 +129,7 @@ def test_loader_columns(base, labelled):
 def test_policy_and_q_rederive_from_raw_columns(labelled):
     kind, out, summary = labelled
     exact_empties = FAKE_EXACT if kind == "fake" else int(summary["teacher"]["limits"]["exact_empties"])
+    n_pass = 0
     for name in _shards(out):
         a = GmShard(str(out / name)).arrays()
         idx, q, raw = (np.asarray(a[k]) for k in ("tgt.teacher_idx", "tgt.teacher_q", "tgt.teacher_raw"))
@@ -145,11 +149,16 @@ def test_policy_and_q_rederive_from_raw_columns(labelled):
                 want = 1.0 / (1.0 + np.exp(-rs / DISC_SCALE))
             assert np.allclose(qs, want, atol=1e-6), (name, f)
             assert math.isclose(ev[f], 2 * qs.max() - 1, abs_tol=1e-6)
+            if idx[f][0] == 64:  # a pass frame: no place teacher
+                n_pass += 1
+                assert (pp[f] == 0).all()
+                continue
             e = np.exp((qs - qs.max()) / TAU)
             dense = np.zeros(64)
             dense[idx[f][ok]] = e / e.sum()
             assert np.allclose(pp[f], dense, atol=1e-5), (name, f)
         assert n_exact > 0
+    assert n_pass > 0, "the fixture games include pass frames"
 
 
 def test_trainer_consumes_teacher_targets(labelled):
