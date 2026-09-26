@@ -106,7 +106,8 @@ def _legal(v: str, fen: str, moves: List[str]) -> List[str]:
 
 def _step(legal: List[str], optional: bool, compact: bool, ok: bool = True):
     if compact:
-        return f"{len(legal)}:{legal_hash(legal)}" + (":o" if optional else "") + ("" if ok else ":x")
+        flags = (":o" if optional else "") + ("" if ok else ":x")
+        return f"{len(legal)}:{legal_hash(legal)}{flags}"
     st: Dict = {"legal": legal}
     if optional:
         st["o"] = 1
@@ -156,11 +157,13 @@ def replay(t: Dict, compact: bool) -> Dict:
     steps = []
     for m in t["moves"]:
         legal = _legal(v, fen, moves)
-        steps.append(_step(legal, sf.is_optional_game_end(v, fen, moves, True)[0], compact, m in legal))
+        claim = sf.is_optional_game_end(v, fen, moves, True)[0]
+        steps.append(_step(legal, claim, compact, m in legal))
         if m not in legal:
             break
         moves.append(m)
-    return {**t, "fen": fen, "moves": moves, "steps": steps, "final": _final(v, fen, moves, compact)}
+    return {**t, "fen": fen, "moves": moves, "steps": steps,
+            "final": _final(v, fen, moves, compact)}
 
 
 def main() -> None:
@@ -184,7 +187,8 @@ def main() -> None:
             for t in json.load(fh)["trajectories"]:
                 out.append(replay(t, a.compact))
     with open(a.out, "w") as fh:
-        json.dump({"source": f"pyffish {'.'.join(map(str, sf.version()))}", "trajectories": out}, fh)
+        source = f"pyffish {'.'.join(map(str, sf.version()))}"
+        json.dump({"source": source, "trajectories": out}, fh)
 
 
 if __name__ == "__main__":

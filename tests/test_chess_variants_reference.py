@@ -49,7 +49,6 @@ from fairy_stockfish_dump import chess960_back_rank, legal_hash, parse_step  # n
 #: the variant chance outcomes (gmrules ChessVariant order)
 VARIANTS = ["chess960", "crazyhouse", "atomic", "antichess", "threecheck", "kingofthehill",
             "horde", "racingkings"]
-MATE = 32000
 #: our automatic ends that are no Fairy-Stockfish game end
 LICHESS_DRAWS = ("InsufficientMaterial", "FiftyMoves", "Fivefold", "PlyCap")
 
@@ -104,7 +103,8 @@ def _same_legal(ours: Dict[str, int], step: Dict, where: str) -> None:
     if "legal" in step:
         assert mine == step["legal"], (where, sorted(set(mine) ^ set(step["legal"])))
     else:
-        assert (len(mine), legal_hash(mine)) == (step["n"], step["h"]), (where, len(mine), step["n"])
+        assert (len(mine), legal_hash(mine)) == (step["n"], step["h"]), \
+            (where, len(mine), step["n"])
 
 
 def compare(t: Dict, stats: Counter) -> None:
@@ -269,7 +269,8 @@ def real_games(tmp: Path) -> List[Dict]:
                    capture_output=True)
     from data_processing.games.dataset import load_gm_samples
 
-    return [_uci_record(s["meta"]["record"], s["meta"]["events"]) for s in load_gm_samples(str(out))]
+    return [_uci_record(s["meta"]["record"], s["meta"]["events"])
+            for s in load_gm_samples(str(out))]
 
 
 def regenerate() -> None:
