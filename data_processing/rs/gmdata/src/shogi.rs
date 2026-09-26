@@ -48,26 +48,26 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// Shard converter_version: 2 = repetition globals [T,7] + legality masks.
-const CONVERTER_VERSION: u32 = 2;
+pub(crate) const CONVERTER_VERSION: u32 = 2;
 /// obs.globals_seq width (shard meta `global_features`).
-const GLOBAL_FEATURES: usize = 7;
+pub(crate) const GLOBAL_FEATURES: usize = 7;
 
-const BLACK: usize = 0;
-const WHITE: usize = 1;
-const NONE: u8 = 0;
-const PAWN: u8 = 1;
-const LANCE: u8 = 2;
-const KNIGHT: u8 = 3;
-const SILVER: u8 = 4;
-const GOLD: u8 = 5;
-const BISHOP: u8 = 6;
-const ROOK: u8 = 7;
-const KING: u8 = 8;
-const PROM_PAWN: u8 = 9;
-const PROM_BISHOP: u8 = 13;
-const PROM_ROOK: u8 = 14;
+pub(crate) const BLACK: usize = 0;
+pub(crate) const WHITE: usize = 1;
+pub(crate) const NONE: u8 = 0;
+pub(crate) const PAWN: u8 = 1;
+pub(crate) const LANCE: u8 = 2;
+pub(crate) const KNIGHT: u8 = 3;
+pub(crate) const SILVER: u8 = 4;
+pub(crate) const GOLD: u8 = 5;
+pub(crate) const BISHOP: u8 = 6;
+pub(crate) const ROOK: u8 = 7;
+pub(crate) const KING: u8 = 8;
+pub(crate) const PROM_PAWN: u8 = 9;
+pub(crate) const PROM_BISHOP: u8 = 13;
+pub(crate) const PROM_ROOK: u8 = 14;
 
-fn promoted(p: u8) -> u8 {
+pub(crate) fn promoted(p: u8) -> u8 {
     match p {
         1..=4 => p + 8,
         6 => 13,
@@ -120,28 +120,28 @@ impl Sqs {
     }
 }
 
-#[derive(Clone)]
-struct Board {
-    piece: [u8; 81],
-    color: [u8; 81], // owner, valid when piece != NONE
-    hand: [[u32; 9]; 2],
-    turn: usize,
-    king: [Option<usize>; 2],
-    move_number: u32,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Board {
+    pub(crate) piece: [u8; 81],
+    pub(crate) color: [u8; 81], // owner, valid when piece != NONE
+    pub(crate) hand: [[u32; 9]; 2],
+    pub(crate) turn: usize,
+    pub(crate) king: [Option<usize>; 2],
+    pub(crate) move_number: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Mv {
-    from: Option<usize>,
-    to: usize,
-    promotion: bool,
-    drop: u8,
+pub(crate) struct Mv {
+    pub(crate) from: Option<usize>,
+    pub(crate) to: usize,
+    pub(crate) promotion: bool,
+    pub(crate) drop: u8,
 }
 
 /// Position identity for the repetition counts: pieces with owners (owner 0 on empty
 /// squares), hands (P..R) and the side to move.
 #[derive(Clone, PartialEq, Eq, Hash)]
-struct PosKey {
+pub(crate) struct PosKey {
     piece: [u8; 81],
     color: [u8; 81],
     hand: [[u32; 7]; 2],
@@ -149,7 +149,7 @@ struct PosKey {
 }
 
 impl Board {
-    fn occupied(&self, sq: usize) -> bool {
+    pub(crate) fn occupied(&self, sq: usize) -> bool {
         self.piece[sq] != NONE
     }
     fn owned_by(&self, sq: usize, c: usize) -> bool {
@@ -158,7 +158,7 @@ impl Board {
 
     /// Repetition identity (sennichite compares pieces with owners, both hands and the side
     /// to move; the move number is not part of it).
-    fn key(&self) -> PosKey {
+    pub(crate) fn key(&self) -> PosKey {
         let mut color = [0u8; 81];
         for (sq, c) in color.iter_mut().enumerate() {
             if self.occupied(sq) {
@@ -239,7 +239,7 @@ impl Board {
         false
     }
 
-    fn is_check(&self) -> bool {
+    pub(crate) fn is_check(&self) -> bool {
         self.is_attacked_by(self.turn ^ 1, self.king[self.turn], false)
     }
 
@@ -297,7 +297,7 @@ impl Board {
         }
     }
 
-    fn push(&mut self, m: &Mv) {
+    pub(crate) fn push(&mut self, m: &Mv) {
         self.move_number += 1;
         let mover = self.turn;
         let pt = if m.drop != NONE {
@@ -350,7 +350,7 @@ impl Board {
         true
     }
 
-    fn is_legal(&self, m: &Mv) -> bool {
+    pub(crate) fn is_legal(&self, m: &Mv) -> bool {
         if !self.is_pseudo_legal(m) {
             return false;
         }
@@ -365,7 +365,7 @@ impl Board {
     /// the promotion-zone and forced-promotion rules) and drops of each hand piece onto each
     /// EMPTY square, all filtered by [`Board::is_legal`] (self-check, nifu, dead drops,
     /// pawn-drop mate). Deterministic order, no duplicates.
-    fn legal_moves(&self) -> Vec<Mv> {
+    pub(crate) fn legal_moves(&self) -> Vec<Mv> {
         let t = self.turn;
         let mut out = Vec::new();
         for from in 0..81 {
@@ -407,16 +407,16 @@ impl Board {
 /// Per-frame legality masks in POV indices (see the module doc); the `_of` rows are the
 /// ones selected by the stored target indices of the frame.
 #[derive(Debug)]
-struct FrameMasks {
-    mode: [bool; 2],
-    from: [bool; 81],
-    to_of: [bool; 81],
-    promo_of: [bool; 2],
-    drop_piece: [bool; 14],
-    drop_to_of: [bool; 81],
+pub(crate) struct FrameMasks {
+    pub(crate) mode: [bool; 2],
+    pub(crate) from: [bool; 81],
+    pub(crate) to_of: [bool; 81],
+    pub(crate) promo_of: [bool; 2],
+    pub(crate) drop_piece: [bool; 14],
+    pub(crate) drop_to_of: [bool; 81],
 }
 
-fn frame_masks(moves: &[Mv], mover_black: bool, from_idx: i64, to_idx: i64, piece_idx: i64) -> FrameMasks {
+pub(crate) fn frame_masks(moves: &[Mv], mover_black: bool, from_idx: i64, to_idx: i64, piece_idx: i64) -> FrameMasks {
     let mut f = FrameMasks {
         mode: [false; 2],
         from: [false; 81],
@@ -454,7 +454,7 @@ fn frame_masks(moves: &[Mv], mover_black: bool, from_idx: i64, to_idx: i64, piec
 
 /// Repetition counts: for each frame, how often the position before that move occurred
 /// earlier in the game (the start position included).
-fn repetition_counts(start: &Board, moves: &[Mv]) -> Vec<u32> {
+pub(crate) fn repetition_counts(start: &Board, moves: &[Mv]) -> Vec<u32> {
     let mut seen: HashMap<PosKey, u32> = HashMap::new();
     let mut b = start.clone();
     let mut out = Vec::with_capacity(moves.len());
@@ -476,7 +476,7 @@ fn csa_piece(s: &str) -> Option<u8> {
 }
 
 /// CSA "91" (file 9, rank 1) → square index.
-fn csa_square(s: &str) -> Option<usize> {
+pub(crate) fn csa_square(s: &str) -> Option<usize> {
     let b = s.as_bytes();
     if b.len() != 2 || !(b'1'..=b'9').contains(&b[0]) || !(b'1'..=b'9').contains(&b[1]) {
         return None;
@@ -491,7 +491,7 @@ struct Parsed {
     moves: Vec<Mv>,
 }
 
-fn hirate() -> [Option<(u8, usize)>; 81] {
+pub(crate) fn hirate() -> [Option<(u8, usize)>; 81] {
     let mut p = [None; 81];
     let back = [LANCE, KNIGHT, SILVER, GOLD, KING, GOLD, SILVER, KNIGHT, LANCE];
     for c in 0..9 {
@@ -685,7 +685,7 @@ fn game_result(text: &str, start_turn: usize, n_moves: usize) -> &'static str {
     }
 }
 
-fn result_value(result: &str, mover_black: bool) -> f32 {
+pub(crate) fn result_value(result: &str, mover_black: bool) -> f32 {
     match result {
         "b" => if mover_black { 1.0 } else { -1.0 },
         "w" => if mover_black { -1.0 } else { 1.0 },
@@ -693,7 +693,7 @@ fn result_value(result: &str, mover_black: bool) -> f32 {
     }
 }
 
-fn pov(sq: usize, mover_black: bool) -> i64 {
+pub(crate) fn pov(sq: usize, mover_black: bool) -> i64 {
     if mover_black {
         sq as i64
     } else {
@@ -701,7 +701,107 @@ fn pov(sq: usize, mover_black: bool) -> i64 {
     }
 }
 
-fn convert_game(text: &str, min_moves: usize, allow_no_result: bool) -> std::result::Result<Sample, &'static str> {
+/// Floats per obs.board_seq frame (28 planes × 81 squares).
+pub(crate) const OBS_BOARD: usize = 28 * 81;
+
+/// One frame's observation — the converter's encoding, shared with the replay
+/// verification of `gmdata label shogi`. `board` is the frame's zeroed obs.board_seq slice
+/// [28·81]; the frame's obs.hand_seq [14·4] and obs.globals_seq [7] values are appended to
+/// `hand` / `glb`. `rep` = earlier occurrences of the position ([`repetition_counts`]).
+pub(crate) fn encode_obs(b: &Board, rep: u32, board: &mut [f32], hand: &mut Vec<f32>, glb: &mut Vec<f32>) {
+    let mover = b.turn;
+    let mb = mover == BLACK;
+    for sq in 0..81 {
+        let pt = b.piece[sq];
+        if pt == NONE {
+            continue;
+        }
+        let plane = (pt - 1) as usize + if b.color[sq] as usize == mover { 0 } else { 14 };
+        board[plane * 81 + pov(sq, mb) as usize] = 1.0;
+    }
+    for c in [mover, mover ^ 1] {
+        for pt in 1..8usize {
+            let n = b.hand[c][pt] as f32;
+            hand.extend_from_slice(&[n, (n > 0.0) as u8 as f32, (n as f64 / 4.0).min(1.0) as f32, 1.0]);
+        }
+    }
+    glb.extend_from_slice(&[
+        (b.move_number as f64 / 512.0).min(1.0) as f32,
+        mb as u8 as f32,
+        b.is_check() as u8 as f32,
+        1.0,
+        (rep >= 1) as u8 as f32,
+        (rep >= 2) as u8 as f32,
+        (rep >= 3) as u8 as f32,
+    ]);
+}
+
+/// (dropped, from, to, promoted, piece, drop_to) targets of `m` in POV indices (from / to /
+/// promoted are 0 / false on drops, piece / drop_to 0 on board moves).
+pub(crate) fn move_indices(m: &Mv, mover_black: bool) -> (i64, i64, i64, bool, i64, i64) {
+    if m.drop != NONE {
+        (1, 0, 0, false, m.drop as i64 - 1, pov(m.to, mover_black))
+    } else {
+        (0, pov(m.from.unwrap(), mover_black), pov(m.to, mover_black), m.promotion, 0, 0)
+    }
+}
+
+/// The position of an encoded frame (the inverse of [`encode_obs`]): pieces from the 28
+/// planes, hands from the counts, the side to move and the move number from the globals.
+/// Rejects frames no position encodes to (two pieces on a square, fractional counts, …).
+pub(crate) fn board_from_obs(board: &[f32], hand: &[f32], glb: &[f32]) -> std::result::Result<Board, String> {
+    if board.len() != OBS_BOARD || hand.len() != 56 || glb.len() < 2 {
+        return Err(format!("frame sizes {} / {} / {} are not 28·81 / 14·4 / ≥2", board.len(), hand.len(), glb.len()));
+    }
+    let mover = if glb[1] == 1.0 {
+        BLACK
+    } else if glb[1] == 0.0 {
+        WHITE
+    } else {
+        return Err(format!("globals[1] (mover is black) = {}", glb[1]));
+    };
+    let mb = mover == BLACK;
+    let mut b = Board { piece: [NONE; 81], color: [0; 81], hand: [[0; 9]; 2], turn: mover, king: [None, None], move_number: 1 };
+    for plane in 0..28 {
+        for p in 0..81 {
+            let x = board[plane * 81 + p];
+            if x == 0.0 {
+                continue;
+            }
+            if x != 1.0 {
+                return Err(format!("board plane {plane} square {p} = {x}"));
+            }
+            let sq = if mb { p } else { 80 - p };
+            if b.piece[sq] != NONE {
+                return Err(format!("two pieces on square {sq}"));
+            }
+            let (pt, owner) = ((plane % 14 + 1) as u8, if plane < 14 { mover } else { mover ^ 1 });
+            b.piece[sq] = pt;
+            b.color[sq] = owner as u8;
+            if pt == KING {
+                if b.king[owner].is_some() {
+                    return Err(format!("two kings of colour {owner}"));
+                }
+                b.king[owner] = Some(sq);
+            }
+        }
+    }
+    for (row, (c, pt)) in [mover, mover ^ 1].iter().flat_map(|&c| (1..8usize).map(move |pt| (c, pt))).enumerate() {
+        let n = hand[row * 4];
+        if !(n >= 0.0 && n.fract() == 0.0 && n <= 18.0) {
+            return Err(format!("hand row {row} count {n}"));
+        }
+        b.hand[c][pt] = n as u32;
+    }
+    let g = glb[0] as f64 * 512.0;
+    if !(1.0..512.0).contains(&g) {
+        return Err(format!("globals[0] = {} is not a move number in [1, 512)", glb[0]));
+    }
+    b.move_number = g.round() as u32;
+    Ok(b)
+}
+
+pub(crate) fn convert_game(text: &str, min_moves: usize, allow_no_result: bool) -> std::result::Result<Sample, &'static str> {
     let p = parse_csa(text).map_err(|_| "parse_error")?;
     if p.moves.len() < min_moves {
         return Err("too_short");
@@ -713,7 +813,7 @@ fn convert_game(text: &str, min_moves: usize, allow_no_result: bool) -> std::res
     }
     let t = p.moves.len();
     let reps = repetition_counts(&p.start, &p.moves);
-    let mut board = vec![0f32; t * 28 * 81];
+    let mut board = vec![0f32; t * OBS_BOARD];
     let mut hand = Vec::with_capacity(t * 56);
     let mut glb = Vec::with_capacity(t * GLOBAL_FEATURES);
     let (mut dropped, mut from, mut to, mut promo, mut piece_idx, mut drop_to, mut value) =
@@ -729,39 +829,9 @@ fn convert_game(text: &str, min_moves: usize, allow_no_result: bool) -> std::res
         if !b.is_legal(m) {
             return Err("illegal_move");
         }
-        let mover = b.turn;
-        let mb = mover == BLACK;
-        let base = k * 28 * 81;
-        for sq in 0..81 {
-            let pt = b.piece[sq];
-            if pt == NONE {
-                continue;
-            }
-            let plane = (pt - 1) as usize + if b.color[sq] as usize == mover { 0 } else { 14 };
-            board[base + plane * 81 + pov(sq, mb) as usize] = 1.0;
-        }
-        for c in [mover, mover ^ 1] {
-            for pt in 1..8usize {
-                let n = b.hand[c][pt] as f32;
-                hand.extend_from_slice(&[n, (n > 0.0) as u8 as f32, (n as f64 / 4.0).min(1.0) as f32, 1.0]);
-            }
-        }
-        let rep = reps[k];
-        glb.extend_from_slice(&[
-            (b.move_number as f64 / 512.0).min(1.0) as f32,
-            mb as u8 as f32,
-            b.is_check() as u8 as f32,
-            1.0,
-            (rep >= 1) as u8 as f32,
-            (rep >= 2) as u8 as f32,
-            (rep >= 3) as u8 as f32,
-        ]);
-        // (dropped, from, to, promoted, piece, drop_to) in POV indices
-        let (d, fi, ti, pr, pi, dt) = if m.drop != NONE {
-            (1, 0, 0, false, m.drop as i64 - 1, pov(m.to, mb))
-        } else {
-            (0, pov(m.from.unwrap(), mb), pov(m.to, mb), m.promotion, 0, 0)
-        };
+        let mb = b.turn == BLACK;
+        encode_obs(&b, reps[k], &mut board[k * OBS_BOARD..(k + 1) * OBS_BOARD], &mut hand, &mut glb);
+        let (d, fi, ti, pr, pi, dt) = move_indices(m, mb);
         let f = frame_masks(&b.legal_moves(), mb, fi, ti, pi);
         let inside = if d == 1 {
             f.mode[1] && f.drop_piece[pi as usize] && f.drop_to_of[dt as usize]
