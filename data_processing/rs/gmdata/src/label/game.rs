@@ -17,8 +17,11 @@
 //!    scored moves as flat action ids with mover-POV Q), or [`Labeller::query_batch`]
 //!    over chunks of [`Labeller::batch_size`] frames for engines that analyse many
 //!    positions per request.
-//! 4. the driver keeps the top `--max-moves` moves, computes the policy (softmax of
-//!    Q/τ, or normalised visits), and [`Labeller::head_rows`] turns that policy over
+//! 4. the driver sorts the moves by the policy's score and keeps the top `--max-moves`
+//!    (softmax: `Q/τ + w·u`, u = [`Labeller::secondary`] of the engine's native score, a
+//!    tie-break for decided positions; visits: visits), computes the policy (the softmax
+//!    of that score, normalised visits, or [`Labeller::custom_policy`]), and
+//!    [`Labeller::head_rows`] turns that policy over
 //!    full actions into one row per decoder head, exactly as the decoder's
 //!    `il_head_terms` docstring defines the head's soft target (marginals and
 //!    conditionals on the ground-truth prefix: [`super::transform::marginal`] /
@@ -81,8 +84,8 @@ impl ScoredMove {
 /// What the engine said about one position.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Analysis {
-    /// scored moves, any order (the driver sorts by Q — by visits under
-    /// `--policy visits` — and keeps the top `--max-moves`)
+    /// scored moves, any order (the driver sorts by Q with the secondary tie-break — by
+    /// visits under `--policy visits` — and keeps the top `--max-moves`)
     pub moves: Vec<ScoredMove>,
     /// mover-POV expected score of the position in [0, 1] (the engine's root
     /// evaluation); `None` = the best scored move's Q
@@ -322,7 +325,30 @@ pub trait Labeller: Send + Sync + 'static {
 
     /// The teacher meta `policy` entry when [`Labeller::custom_policy`] is active
     /// (`None` = the driver's `{"kind": "softmax", "tau": …}` / `{"kind": "visits"}`).
+    /// `Some` is what tells the driver that the custom policy is active: it then sorts
+    /// and truncates by Q and applies no secondary tie-break.
     fn custom_policy_meta(&self) -> Option<Value> {
+        None
+    }
+
+    /// Secondary utility u(a) ∈ [−1, 1] of a scored move for the tie-break of the softmax
+    /// teacher `π ∝ exp(Q/τ + w·u)` (w = `--tie-weight`, [`super::transform`] module docs):
+    /// a function of the engine's native score [`ScoredMove::raw`] (so it can be
+    /// re-derived from `tgt.teacher_raw`), strictly increasing in it — as Q is, so the
+    /// tie-break orders moves Q cannot tell apart (decided positions) and never overturns a
+    /// Q difference — and ranking every mate above every non-mate score where the game has
+    /// mates. `None` (the default) = no tie-break for this game (e.g. go, whose default
+    /// policy is search visits); a game that has one must also give
+    /// [`Labeller::secondary_meta`] and return `Some` for every move it scores (the driver
+    /// rejects a frame otherwise).
+    fn secondary(&self, _m: &ScoredMove) -> Option<f32> {
+        None
+    }
+
+    /// The definition of [`Labeller::secondary`] for the teacher meta (`policy.secondary`,
+    /// with `policy.tie_weight`), `Some` exactly when the game defines one. Must be
+    /// identical for every shard of a run (resume checks compare it).
+    fn secondary_meta(&self) -> Option<Value> {
         None
     }
 
