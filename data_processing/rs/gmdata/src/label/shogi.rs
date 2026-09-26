@@ -79,8 +79,9 @@
 //! * Stale lines ([`analysis`]): the node limit stops the search inside an iteration, and
 //!   YaneuraOu (like Stockfish) then prints the lines it has not re-searched in that
 //!   iteration with their score from the previous, shallower one (depth − 1 in the final
-//!   block). Such a score can be far too high: the unfinished iteration's first line already
-//!   searched every move and found them no better than its own score. On 12 real floodgate
+//!   block). Such a score can be far too high: each MultiPV pass of the unfinished iteration
+//!   picks the best of the remaining moves, so it had already ranked them below its own,
+//!   deeper lines (at their depth, not at the old one). On 12 real floodgate
 //!   games at 1M nodes 9% of the labelled frames had a stale line above the first line,
 //!   e.g. `multipv 1 depth 10 cp −1270 upperbound G*7h` with `multipv 2 depth 9 cp +346
 //!   3h3d+` (an 8M-node search scores 3h3d+ ≤ −1235), which would give the refuted move
@@ -634,10 +635,11 @@ pub fn q_score(s: Score) -> f32 {
 /// Stale lines: a search stopped by the node limit ends inside an iteration, and the lines
 /// not yet re-searched in it are printed with their score from the previous, shallower
 /// iteration (a lower `depth` than the lines of the unfinished one). Such a score can be far
-/// too high — the unfinished iteration already searched those moves and found none better
-/// than its own lines — and would dominate the softmax, so the Q and raw score of every line
-/// shallower than the deepest one are capped at the lowest Q / raw score among the deepest
-/// lines (dropped lines included: the bound comes from the search, not from our move list).
+/// too high — each MultiPV pass of the unfinished iteration picks the best remaining move, so
+/// it had ranked them below its own lines — and would dominate the softmax, so the Q and raw
+/// score of every line shallower than the deepest one are capped at the lowest Q / raw score
+/// among the deepest lines (dropped lines included: the bound comes from the search, not from
+/// our move list).
 pub fn analysis(pos: &ShogiPos, lines: &[Info]) -> Result<Analysis> {
     let mb = pos.mover_black();
     // (multipv, depth, action id if the converter's rules allow the move, Q, raw)

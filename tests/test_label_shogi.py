@@ -117,7 +117,7 @@ def test_loader_columns(labelled):
            **{key: (torch.float32, shape) for key, shape in HEADS.values()},
            **{f"{h}_probs_idx": (torch.int64, (K,)) for h in SPARSE},
            **{f"{h}_probs_val": (torch.float32, (K,)) for h in SPARSE}}
-    drops = 0
+    drops = mates = 0
     for i in range(len(ds)):
         s, b = ds[i], b_ds[i]
         assert set(s["tgt"]) == set(b["tgt"]) | set(new)
@@ -132,6 +132,12 @@ def test_loader_columns(labelled):
         assert not (tg["teacher_idx"][~m] != -1).any() and (tg["engine_value"][~m] == 0).all()
         ev = tg["engine_value"][m]
         assert ((ev >= -1) & (ev <= 1)).all()
+        # teacher_raw: cp, mates at +-(100000 - n) — beyond any cp YaneuraOu prints (35281)
+        raw, tq = tg["teacher_raw"], tg["teacher_q"]
+        mate = raw.abs() > 90000
+        assert torch.equal(tq[mate], (raw[mate] > 0).float())
+        assert (raw[~mate & ~torch.isnan(raw)].abs() <= 600).all(), "the fake engine's cp range"
+        mates += int(mate.sum())
         assert torch.allclose(ev, 2 * tg["teacher_q"][m][:, 0] - 1, atol=1e-6)
         assert torch.allclose(tg["mode_probs"][m].sum(-1), torch.ones(int(m.sum())), atol=1e-5)
         mv, dr = tg["dropped"] == 0, tg["dropped"] == 1
@@ -144,6 +150,7 @@ def test_loader_columns(labelled):
             assert (((sums - 1).abs() < 1e-5) | (sums == 0)).all() and (sums[~m] == 0).all(), key
         drops += int((dr & m & (tg["drop_to_probs_val"].sum(-1) > 0)).sum())
     assert drops > 0, "drop frames carry drop-square teachers"
+    assert mates > 0, "mate scores reach teacher_raw"
 
 
 def test_soft_targets_rederive_from_raw_columns(labelled):
