@@ -33,6 +33,7 @@ import torch
 import torch.nn.functional as F
 
 from env.board_selfplay_env import BoardSelfPlayEnv
+from model.components.core import update_moe_balance
 from model.games.base import categorical_entropy, masked_log_prob
 from model.rl_utils import compute_gae, freeze_encoder, optim_param_groups
 from training.train_il_game import build_net_tolerant, pick_device, resume_arch_overrides
@@ -55,6 +56,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--value_coef", type=float, default=0.5)
     p.add_argument("--entropy_coef", type=float, default=0.01)
     p.add_argument("--clip_grad", type=float, default=1.0)
+    p.add_argument("--moe_balance_rate", type=float, default=1e-3,
+                   help="γ of the MoE aux-loss-free balance-bias update, once per "
+                        "optimizer step (MoE cores only; as the IL trainers)")
     p.add_argument("--act_steps", type=int, default=0,
                    help="fixed TRM depth for rollout AND update "
                         "(0 = the model's full depth cfg.halt_max_steps)")
@@ -213,7 +217,7 @@ def batch_trajectories(
 def ppo_update(
     net, batch: Dict, optimizer, *, ppo_epochs: int, clip: float,
     value_coef: float, entropy_coef: float, clip_grad: float,
-    act_steps: int,
+    act_steps: int, moe_balance_rate: float = 0.0,
 ) -> Dict[str, float]:
     pmask = batch["pmask"]
     n_pol = pmask.float().sum().clamp(min=1.0)
@@ -255,6 +259,9 @@ def ppo_update(
             [p for p in net.parameters() if p.requires_grad], clip_grad,
         )
         optimizer.step()
+        # MoE routing balance from this step's load (resets the tally; no-op
+        # without MoE layers)
+        update_moe_balance(net, moe_balance_rate)
 
         stats = {
             "loss": float(loss.detach()),
@@ -319,7 +326,7 @@ def main() -> None:
             net, batch, optimizer, ppo_epochs=args.ppo_epochs,
             clip=args.clip, value_coef=args.value_coef,
             entropy_coef=args.entropy_coef, clip_grad=args.clip_grad,
-            act_steps=args.act_steps,
+            act_steps=args.act_steps, moe_balance_rate=args.moe_balance_rate,
         )
         if it % args.log_every == 0:
             n_games = args.games_per_iter

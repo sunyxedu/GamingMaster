@@ -102,6 +102,12 @@ pub enum Cmd {
         /// records per shard directory
         #[arg(long, default_value_t = 128)]
         shard_size: usize,
+        /// seed of the record shuffle before writing (the trainers read a shard at a time)
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// write records in path order instead of shuffled
+        #[arg(long)]
+        keep_order: bool,
     },
 }
 
@@ -187,8 +193,9 @@ pub fn run(cmd: Cmd) -> Result<()> {
             let a = ladder::LadderArgs { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency };
             println!("{}", ladder::run(&a)?);
         }
-        Cmd::Shard { input, out, shard_size } => {
-            println!("{}", shard::shard(&input, &out, shard_size)?);
+        Cmd::Shard { input, out, shard_size, seed, keep_order } => {
+            let order = if keep_order { None } else { Some(seed) };
+            println!("{}", shard::shard(&input, &out, shard_size, order)?);
         }
         Cmd::Pipeline(p) => {
             if p.merge {

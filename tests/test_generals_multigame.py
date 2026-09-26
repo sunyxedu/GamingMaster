@@ -134,9 +134,13 @@ def test_prefix_truncation_and_cached_total_frames(gio_dir, monkeypatch):
         for grp in ("obs", "tgt"):
             for k in a[grp]:
                 assert torch.equal(b[grp][k], a[grp][k][:T]), k   # the FIRST frames
+    seq7 = SeqReplayDataset(gio_dir, max_sequence_length=7)       # train_il.py's truncation
+    for i in range(len(crop)):
+        assert _same_sample(crop[i], gdata.sample_from_seq_item(seq7[i]))
     cache = os.path.join(gio_dir, gdata.LENGTH_CACHE)
     assert os.path.exists(cache) and not cache.endswith(".json")
     assert len(SeqReplayDataset(gio_dir)) == 5                    # invisible to train_il.py
+    assert not [f for f in os.listdir(gio_dir) if f.endswith(".tmp")]
 
     def boom(path):
         raise AssertionError("length should come from the cache")
@@ -144,16 +148,89 @@ def test_prefix_truncation_and_cached_total_frames(gio_dir, monkeypatch):
     assert gdata.GeneralsGioDataset(gio_dir, max_len=7).total_frames() == crop.total_frames()
 
 
-def test_record_length_reads_count_or_grid(tmp_path):
+def _same_sample(a, b):
+    assert a["meta"]["file"] == b["meta"]["file"]
+    for grp in ("obs", "tgt"):
+        assert a[grp].keys() == b[grp].keys(), grp
+        for k in a[grp]:
+            assert a[grp][k].dtype == b[grp][k].dtype, k
+            assert torch.equal(a[grp][k], b[grp][k]), k
+    return True
+
+
+@pytest.mark.parametrize("chunk", [None, 5, 64])
+def test_record_length_reads_count_or_grid(tmp_path, monkeypatch, chunk):
+    if chunk is not None:      # tiny read-back chunks: the key straddles chunk borders
+        monkeypatch.setattr(gdata, "_CHUNK", chunk)
     p = write_gio_dir(str(tmp_path), [6])[0]
     assert gdata.record_length(p) == 6
     rec = json.load(open(p))
+    q = tmp_path / "indented.json"
+    q.write_text(json.dumps(rec, indent=1))
+    assert gdata.record_length(str(q)) == 6
     del rec["count"]
     q = tmp_path / "nocount.json"
     q.write_text(json.dumps(rec, indent=1))
     assert gdata.record_length(str(q)) == 6
     (tmp_path / "bad.json").write_text("{truncated")
     assert gdata.record_length(str(tmp_path / "bad.json")) == 0
+    (tmp_path / "open.json").write_text('{"grid_seq": [], "count": [1, 0')
+    assert gdata.record_length(str(tmp_path / "open.json")) == 0
+
+
+def test_absent_fields_take_seq_replay_defaults(tmp_path):
+    p = write_gio_dir(str(tmp_path), [5])[0]
+    rec = json.load(open(p))
+    for k in ("globals_seq", "legal_source_mask_seq", "max_actions_per_tick", "count",
+              "src_y", "value", "enemy_heatmap", "tick_seq"):
+        del rec[k]
+    rec["src_x"] = [[1, 2, 3, 4]] * 5            # K defaults to 4
+    json.dump(rec, open(p, "w"))
+    for ml in (None, 3):
+        a = gdata.GeneralsGioDataset(str(tmp_path), max_len=ml)[0]
+        b = gdata.sample_from_seq_item(SeqReplayDataset(str(tmp_path),
+                                                        max_sequence_length=ml)[0])
+        assert _same_sample(a, b)
+
+
+def test_length_scan_split_over_ranks_and_read_only_cache(tmp_path, monkeypatch):
+    """Data-parallel trainers scan a strided share per rank and adopt the
+    union; a read-only data directory caches under $GM_CACHE_DIR."""
+    root = tmp_path / "gio"
+    write_gio_dir(str(root), [4, 7, 5, 9, 6])
+    monkeypatch.setenv("GM_CACHE_DIR", str(tmp_path / "usercache"))
+    ds = gdata.GeneralsGioDataset(str(root))
+    parts = [ds.scan_lengths(r, 2) for r in range(2)]
+    assert sorted(parts[0]) == [0, 2, 4] and sorted(parts[1]) == [1, 3]
+    fresh = gdata.GeneralsGioDataset(str(root))
+    fresh.adopt_lengths({**parts[0], **parts[1]}, write_cache=False)
+    assert fresh.lengths() == [4, 7, 5, 9, 6]
+    assert not os.path.exists(root / gdata.LENGTH_CACHE)
+    with pytest.raises(ValueError, match="missing"):
+        gdata.GeneralsGioDataset(str(root)).adopt_lengths(parts[0])
+    # read-only data directory: the user cache takes the lengths
+    os.chmod(root, 0o555)
+    try:
+        if os.access(root, os.W_OK):
+            pytest.skip("running with permissions that ignore read-only directories")
+        assert gdata.GeneralsGioDataset(str(root)).total_frames() == 31
+        assert not os.path.exists(root / gdata.LENGTH_CACHE)
+        user = gdata._user_cache_path(str(root))
+        assert os.path.exists(user) and user.startswith(str(tmp_path / "usercache"))
+        assert not [f for f in os.listdir(os.path.dirname(user)) if f.endswith(".tmp")]
+
+        def boom(path):
+            raise AssertionError("length should come from the user cache")
+        monkeypatch.setattr(gdata, "record_length", boom)
+        assert gdata.GeneralsGioDataset(str(root)).total_frames() == 31
+    finally:
+        os.chmod(root, 0o755)
+
+
+def test_gio_dataset_advice():
+    assert gdata.gio_dataset_advice(10, 4) is None
+    assert "gmdata generals shard" in gdata.gio_dataset_advice(gdata.LARGE_GIO_DATASET, 4)
+    assert "--num_workers" in gdata.gio_dataset_advice(10, 0)
 
 
 def test_open_game_dataset_dispatch_and_crop_modes(gio_dir, tmp_path):
@@ -232,14 +309,22 @@ def test_teacher_forcing_labels_and_legality(gio_dir):
     assert "direction" in gmodel.legal_from_obs({**b["obs"], "direction_mask_seq": dm})
 
 
-def _legacy_loss(net, batch, seed, **kw):
-    """training/train_il.py forward_backward's loss on ``batch`` (tf_ratio 1:
-    ground-truth source on move frames, sampled elsewhere)."""
+def _legacy_loss(net, batch, seed, tf=1.0, **kw):
+    """training/train_il.py prepare_rows + forward_backward's loss on
+    ``batch`` at teacher-forcing ratio ``tf`` (ground-truth source on the
+    kept move frames, sampled elsewhere; no labels at all at tf 0).  At tf 1
+    train_il.py still draws its keep mask, which keeps every frame (rand < 1)
+    — skipped here so both paths reach the decoder with the same RNG state."""
     obs, tgt, fm = batch["obs"], batch["tgt"], batch["meta"]["frame_mask"]
-    use_gt = tgt["count"] > 0
-    sy = torch.where(use_gt, tgt["src_y"][:, :, 0], torch.full_like(tgt["src_y"][:, :, 0], -1))
-    sx = torch.where(use_gt, tgt["src_x"][:, :, 0], torch.full_like(tgt["src_x"][:, :, 0], -1))
     torch.manual_seed(seed)
+    sy = sx = use_gt = None
+    if tf > 0:
+        source_y, source_x = tgt["src_y"][:, :, 0], tgt["src_x"][:, :, 0]
+        tf_mask = (torch.rand_like(source_y, dtype=torch.float32) < tf if tf < 1
+                   else torch.ones_like(source_y, dtype=torch.bool))
+        use_gt = tf_mask & (tgt["count"] > 0)
+        sy = torch.where(use_gt, source_y, torch.full_like(source_y, -1))
+        sx = torch.where(use_gt, source_x, torch.full_like(source_x, -1))
     pred = net(obs["grid_seq"], obs["globals_seq"], legal_mask=obs["legal_source_mask_seq"],
                source_y=sy, source_x=sx, frame_mask=fm, return_carry=True, **kw)
     crit = ImitationLoss(grid_w=net.cfg.grid_w,
@@ -248,9 +333,9 @@ def _legacy_loss(net, batch, seed, **kw):
     return crit(pred, tgt, tf_mask=use_gt, frame_mask=active if active is not None else fm), pred
 
 
-def _generic_loss(net, batch, seed, **kw):
-    mb = prepare_batch("generals", batch, CPU, tf_prob=1.0, cfg=net.cfg)
-    torch.manual_seed(seed)
+def _generic_loss(net, batch, seed, tf=1.0, **kw):
+    torch.manual_seed(seed)         # the teacher-forcing draw, then the decoder's
+    mb = prepare_batch("generals", batch, CPU, tf_prob=tf, cfg=net.cfg)
     return batch_loss(net, mb, CPU, 0.2, Q_HALT_WEIGHT, False, **kw)
 
 
@@ -298,6 +383,95 @@ def test_generic_objective_equals_train_il(gio_dir, core, joint):
         loss2, stats2, _ = _generic_loss(net, b, seed=11, **kw)
         assert torch.equal(loss2, legacy2["loss"])
         assert stats2["q_halt_loss"] == float(legacy2["q_halt_loss"])
+
+
+@pytest.mark.parametrize("joint", [False, True])
+@pytest.mark.parametrize("tf", [0.0, 0.5])
+def test_generic_objective_equals_train_il_below_full_teacher_forcing(gio_dir, joint, tf):
+    """tf < 1 (train_il.py's default is 0): the same teacher-forcing draw,
+    the same self-sampled sources — for the joint decoder too, which used to
+    pin unlabelled frames to cell 0 under the generic trainers' all-−1 labels."""
+    ds = gdata.GeneralsGioDataset(gio_dir)
+    torch.manual_seed(0)
+    net = _net(ds, "transformer", joint_decoder=joint)
+    b = _batch(ds, (0, 1, 2, 3))
+    legacy, lpred = _legacy_loss(net, b, seed=7, tf=tf)
+    legacy["loss"].backward()
+    g_legacy = _grads(net)
+    net.zero_grad(set_to_none=True)
+    loss, stats, pred = _generic_loss(net, b, seed=7, tf=tf)
+    loss.backward()
+    assert torch.equal(pred["src_idx"], lpred["src_idx"])
+    assert torch.equal(loss, legacy["loss"])
+    for k in ("source_loss", "direction_loss", "split_loss", "pass_loss"):
+        assert stats[k] == float(legacy[k]), k
+    g_generic = _grads(net)
+    assert g_legacy.keys() == g_generic.keys()
+    for n in g_legacy:
+        assert torch.allclose(g_legacy[n], g_generic[n], rtol=1e-5, atol=1e-7), n
+
+
+def test_tf0_means_no_labels():
+    tgt = {"count": torch.tensor([[1, 0, -1]]), "src_y": torch.ones(1, 3, 4, dtype=torch.long),
+           "src_x": torch.ones(1, 3, 4, dtype=torch.long)}
+    fm = torch.ones(1, 3, dtype=torch.bool)
+    state = torch.get_rng_state()
+    assert build_labels("generals", tgt, 0.0, fm) is None
+    assert build_labels("chess", {"from_idx": torch.zeros(1, 3, dtype=torch.long),
+                                  "to_idx": torch.zeros(1, 3, dtype=torch.long)}, 0.0, fm) is None
+    assert torch.equal(torch.get_rng_state(), state)          # no teacher-forcing draw
+    # state labels are never dropped: pokemon keeps active_idx at tf 0
+    poke = build_labels("pokemon", {"action_type": torch.zeros(1, 3, dtype=torch.long),
+                                    "active_idx": torch.full((1, 3), 2)}, 0.0, fm)
+    assert torch.equal(poke["active_idx"], torch.full((1, 3), 2))
+    assert (poke["action_type"] == -1).all()
+
+
+def test_joint_decoder_samples_unlabelled_frames(gio_dir):
+    """−1 labels mean "sample from the policy", as for GeneralsDecoder: the
+    joint decoder anchors its factorized views on its own draw there (not
+    on cell 0), and keeps the ground truth where labelled."""
+    ds = gdata.GeneralsGioDataset(gio_dir)
+    torch.manual_seed(0)
+    net = _net(ds, joint_decoder=True).eval()
+    b = _batch(ds, (0, 1, 2, 3))
+    obs, fm = b["obs"], b["meta"]["frame_mask"]
+    legal = gmodel.legal_from_obs(obs)
+    minus = {"source_y": torch.full(fm.shape, -1), "source_x": torch.full(fm.shape, -1)}
+    with torch.no_grad():
+        torch.manual_seed(4)
+        free = net(obs, legal=legal, frame_mask=fm)
+        torch.manual_seed(4)
+        unl = net(obs, legal=legal, labels=minus, frame_mask=fm)
+        lab = gmodel.source_labels(b["tgt"])
+        torch.manual_seed(4)
+        mixed = net(obs, legal=legal, labels=lab, frame_mask=fm)
+    assert torch.equal(unl["src_idx"], free["src_idx"])
+    assert (free["src_idx"][fm] != 0).any()
+    for k in ("direction_logits", "split_logits", "source_logits", "pass_logits"):
+        assert torch.equal(unl[k], free[k]), k
+    move = lab["source_y"] >= 0
+    gt = lab["source_y"] * net.cfg.grid_w + lab["source_x"]
+    assert torch.equal(mixed["src_idx"][move], gt[move])
+    assert torch.equal(mixed["src_idx"][~move], free["src_idx"][~move])
+
+
+def test_value_loss_ignores_non_finite_masked_frames(gio_dir):
+    """A NaN / inf value prediction on a masked (padded / halted) frame must
+    not poison the loss — ImitationLoss's nan_to_num-before-mask rule."""
+    target = torch.tensor([[0.5, -0.5, 0.0]])
+    mask = torch.tensor([[True, True, False]])
+    for bad in (float("nan"), float("inf")):
+        pred = {"value": torch.tensor([[0.25, -0.25, bad]])}
+        v_loss, v_mse = value_losses(None, pred, target, mask)
+        assert float(v_loss) == float(v_mse) == pytest.approx(0.0625)
+    ds = gdata.GeneralsGioDataset(gio_dir)
+    net = _net(ds, hl_gauss_value=True, hl_gauss_bins=16)
+    logits = torch.zeros(1, 3, 16)
+    logits[0, 2] = float("nan")
+    v_loss, v_mse = value_losses(net, {"value": torch.tensor([[0.0, 0.0, float("nan")]]),
+                                       "value_logits": logits}, target, mask)
+    assert torch.isfinite(v_loss) and torch.isfinite(v_mse)
 
 
 def test_il_loss_contract(gio_dir):
@@ -483,6 +657,72 @@ def test_train_il_game_trains_generals(gio_dir, tmp_path, monkeypatch, capsys):
     net, _ = build_net_tolerant("generals", ck["config"])
     assert isinstance(net, GeneralsNetwork)
     net.load_state_dict(ck["model_state"])
+
+
+def test_multi_game_generals_recipe_defaults(gio_dir, tmp_path, capsys, monkeypatch):
+    """generals in train_multi_game: teacher forcing 0 by default (train_il.py),
+    per-game schedules and loss weights, validation on the training crop,
+    and a global --max_len refused for its prefix crop."""
+    from training import train_multi_game as tmg
+
+    assert tmg.tf_schedule("0.4:0") == (0.4, 0.0) and tmg.tf_schedule("1") == (1.0, 1.0)
+    assert [tmg.tf_at((0.4, 0.0), s, 5) for s in (1, 3, 5)] == pytest.approx([0.4, 0.2, 0.0])
+    with pytest.raises(SystemExit):
+        tmg.tf_schedule("1.5")
+    core = [f"{k}={v}" for k, v in {**TINY, **CORES["transformer"]}.items()]
+    base = ["--data", f"generals={gio_dir}", "--steps", "1", "--batch_size", "2",
+            "--warmup_steps", "1", "--ema_rate", "0", "--device", "cpu",
+            "--save_dir", str(tmp_path / "ck"), "--override", *core]
+    with pytest.raises(SystemExit, match="game_max_len generals=N"):
+        tmg.main(base + ["--max_len", "64"])
+
+    crops, tfs = [], []
+    real_open, real_prep = tmg.open_dataset, tmg.prepare_rows
+    monkeypatch.setattr(tmg, "open_dataset",
+                        lambda g, d, ml=None: crops.append((g, ml)) or real_open(g, d, ml))
+    monkeypatch.setattr(tmg, "prepare_rows",
+                        lambda g, b, dev, tf, cfg=None: tfs.append((g, tf))
+                        or real_prep(g, b, dev, tf, cfg=cfg))
+    (tmp_path / "othello").mkdir()
+    save_shard(str(tmp_path / "othello" / "a.pt"), "othello", _board_samples("othello", 4, 6))
+    tmg.main(base + ["--data", f"othello={tmp_path / 'othello'}", "--val", f"generals={gio_dir}",
+                     "--game_max_len", "generals=6", "--games_per_step", "4",
+                     "--game_loss_weight", "generals=0.4", "--eval_every", "1"])
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if ln.startswith("[objective]"))
+    assert "generals: tf=0 λ=0.4" in line and "othello: tf=1" in line
+    assert {tf for g, tf in tfs if g == "generals"} == {0.0}
+    assert {tf for g, tf in tfs if g == "othello"} <= {1.0}
+    assert crops == [("generals", 6), ("othello", None), ("generals", 6)]   # val = train crop
+
+    tfs.clear()
+    tmg.main(base + ["--game_max_len", "generals=6", "--steps", "3",
+                     "--game_tf", "generals=0.4:0", "--games_per_step", "1"])
+    assert [tf for _, tf in tfs] == pytest.approx([0.4, 0.2, 0.0])
+
+
+def test_rl_trainers_balance_moe_experts(gio_dir):
+    """train_rl / train_rl_game update the MoE routing bias after their
+    optimizer steps (the load resets); rate 0 only clears the tally."""
+    from model.components.core import moe_layers
+    from training.train_rl import moe_balance_step
+
+    ds = gdata.GeneralsGioDataset(gio_dir)
+    net = _net(ds, moe_experts=4, moe_top_k=1).train()
+    b = _batch(ds)
+    mb = prepare_batch("generals", b, CPU, 1.0, cfg=net.cfg)
+    net(mb["obs"], legal=mb["legal"], labels=mb["labels"], frame_mask=mb["frame_mask"])
+    layers = moe_layers(net)
+    assert layers and all(m.load.sum() > 0 for m in layers)
+    before = [m.balance_bias.clone() for m in layers]
+    moe_balance_step(net, 1e-2)
+    assert all(m.load.sum() == 0 for m in layers)
+    assert any(not torch.equal(m.balance_bias, b0) for m, b0 in zip(layers, before))
+    net(mb["obs"], legal=mb["legal"], labels=mb["labels"], frame_mask=mb["frame_mask"])
+    frozen = [m.balance_bias.clone() for m in layers]
+    moe_balance_step(net, 0.0)
+    assert all(m.load.sum() == 0 for m in layers)
+    assert all(torch.equal(m.balance_bias, b0) for m, b0 in zip(layers, frozen))
 
 
 # ---------------------------------------------------------------------------

@@ -74,7 +74,11 @@ def main(argv: Optional[List[str]] = None) -> None:
                    help="per-game batch size (full-length clash_royale sequences are "
                         "~460 frames x 580 tokens: use 1-2)")
     p.add_argument("--bf16", action="store_true")
-    p.add_argument("--max_len", type=int, default=None)
+    p.add_argument("--max_len", type=int, default=None,
+                   help="crop every game (random window; generals: its first frames)")
+    p.add_argument("--game_max_len", action="append", default=[], metavar="GAME=N",
+                   help="per-game --max_len, e.g. bound generals (prefix crop, as "
+                        "trained) while the other games are evaluated in full")
     p.add_argument("--max_batches", type=int, default=0)
     p.add_argument("--raw", action="store_true", help="raw weights instead of EMA")
     p.add_argument("--json", default=None, help="write results here")
@@ -84,15 +88,16 @@ def main(argv: Optional[List[str]] = None) -> None:
     model = load_multi(a.ckpt, device, raw=a.raw)
     depths = a.depths or [None]
     results: Dict[str, Dict[str, Dict[str, float]]] = {}
+    gb = {k: int(v) for k, v in (x.split("=", 1) for x in a.game_batch)}
+    gml = {k: int(v) for k, v in (x.split("=", 1) for x in a.game_max_len)}
     for item in a.val:
         g, _, d = item.partition("=")
         if g not in model.games:
             print(f"[skip] {g}: not in checkpoint games {model.games}")
             continue
-        gb = {k: int(v) for k, v in (x.split("=", 1) for x in a.game_batch)}
-        # the trainer's crop policy: generals keeps the first --max_len frames,
+        # the trainer's crop policy: generals keeps the first max_len frames,
         # clash_royale is never cropped, the others take random windows
-        ds = open_dataset(g, d, None if g in UNCROPPABLE else a.max_len)
+        ds = open_dataset(g, d, None if g in UNCROPPABLE else gml.get(g, a.max_len))
         loader = DataLoader(ds, batch_size=gb.get(g, a.batch_size),
                             collate_fn=collate_game_sequences)
         for depth in depths:

@@ -130,9 +130,11 @@ def test_shard_matches_seq_replay_dataset(gmdata, tmp_path):
         "grid_h": 25, "grid_w": 25, "grid_channels": 12, "global_features": 4,
         "max_actions_per_tick": 4}
     assert shards.total_frames() == gio.total_frames() == summary["frames"]
+    assert summary["shuffle_seed"] == 0          # records are shuffled by default
     seq = SeqReplayDataset(str(gio_dir))
+    by_file = {shards[i]["meta"]["file"]: i for i in range(2)}
     for i in range(2):
-        a = shards[i]
+        a = shards[by_file[gio[i]["meta"]["file"]]]
         _assert_same_samples(a, gio[i])
         item = seq[i]                           # the train_il.py decoding itself
         for grp, keys in (("obs", ("grid_seq", "globals_seq", "legal_source_mask_seq")),
@@ -143,5 +145,13 @@ def test_shard_matches_seq_replay_dataset(gmdata, tmp_path):
     s8 = GameShardDataset(str(tmp_path / "shards"), game="generals", max_len=8, crop="prefix")
     g8 = GeneralsGioDataset(str(gio_dir), max_len=8)
     for i in range(2):
-        _assert_same_samples(s8[i], g8[i])
+        _assert_same_samples(s8[by_file[g8[i]["meta"]["file"]]], g8[i])
     assert s8.total_frames() == g8.total_frames() == 16
+    # --keep-order writes path order (GeneralsGioDataset's)
+    res = subprocess.run([gmdata, "generals", "shard", "--input", gio_dir, "--out",
+                          tmp_path / "ordered", "--keep-order"],
+                         check=True, capture_output=True, text=True)
+    assert json.loads(res.stdout)["shuffle_seed"] is None
+    ordered = open_game_dataset(str(tmp_path / "ordered"), "generals")
+    for i in range(2):
+        _assert_same_samples(ordered[i], gio[i])

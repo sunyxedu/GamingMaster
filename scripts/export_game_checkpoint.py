@@ -9,6 +9,10 @@ post-training of a jointly pretrained brain:
     uv run python -m training.train_rl --il_checkpoint generals_brain.pt ...
     uv run python -m training.train_il --finetune_from generals_brain.pt ...
 
+A MoE core keeps balancing its experts there: both update the routing bias
+once per optimizer step (``--moe_balance_rate``) on the load summed over the
+ranks, as the multi-game trainer does.
+
 The output holds ``game``, ``config``, ``model_state`` (EMA weights) and
 ``train_model_state`` (raw weights); see training.train_multi_game.game_checkpoint.
 """

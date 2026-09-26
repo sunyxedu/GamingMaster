@@ -38,6 +38,7 @@ from data_processing.games.dataset import (
     open_game_dataset,
     training_sampler,
 )
+from data_processing.games.generals import GeneralsGioDataset, gio_dataset_advice
 from model.components.core import update_moe_balance
 from model.config import upgrade_config_dict
 from model.games import build_game_network
@@ -135,6 +136,19 @@ META_ARCH_KEYS = {
         "grid_h", "grid_w", "grid_channels", "global_features")},
 }
 
+# Teacher-forcing probability a game trains at unless the command line says
+# otherwise (train_il_game --tf_start/--tf_end, train_multi_game --tf_prob /
+# --game_tf); every other game: 1.0.  generals: 0, training/train_il.py's
+# default — its direction / split / pass heads then learn on the source the
+# policy itself picks, as in play (teacher-forced sources are an exposure
+# bias the generals recipe anneals away, e.g. --tf_start 0.4 --tf_end 0).
+DEFAULT_TF = {"generals": 0.0}
+
+
+def default_tf(game: str) -> float:
+    return DEFAULT_TF.get(game, 1.0)
+
+
 # Games whose sequences must not be random-cropped: the clash_royale wait
 # head derives absolute time from t0=0 (model/games/clash_royale.py decode).
 UNCROPPABLE = frozenset({"clash_royale"})
@@ -224,15 +238,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--ema_rate", type=float, default=TRM_EMA_RATE,
                    help="EMA of the weights (evaluation + saved model_state); 0 = off")
     p.add_argument("--max_len", type=int, default=None,
-                   help="random-crop sequences longer than this")
+                   help="crop sequences longer than this: a random window "
+                        "(generals: its first max_len frames, see PREFIX_CROP)")
     p.add_argument("--halt_max_steps", type=int, default=0,
                    help="N_sup: max deep-supervision steps per frame "
                         "(0 = model config, reference 16); inference runs all")
     p.add_argument("--q_halt_weight", type=float, default=Q_HALT_WEIGHT)
     p.add_argument("--value_weight", type=float, default=0.2)
-    p.add_argument("--tf_start", type=float, default=1.0,
-                   help="teacher-forcing prob at epoch 0 (conditioning labels)")
-    p.add_argument("--tf_end", type=float, default=1.0)
+    p.add_argument("--tf_start", type=float, default=None,
+                   help="teacher-forcing prob at epoch 0 (conditioning labels); "
+                        "default: the game's DEFAULT_TF (generals 0 = train_il.py, "
+                        "the others 1.0)")
+    p.add_argument("--tf_end", type=float, default=None,
+                   help="teacher-forcing prob at the last epoch (linear in between); "
+                        "default: the game's DEFAULT_TF")
     p.add_argument("--clip_grad", type=float, default=0.0,
                    help="max grad norm; 0 = no clipping (reference TRM)")
     p.add_argument("--num_workers", type=int, default=0)
@@ -343,13 +362,19 @@ def build_labels(
     """Teacher-forcing labels: keep the ground-truth conditioning with
     probability ``tf_prob`` per frame, else −1 (decoder self-samples).
     STATE_LABEL_KEYS entries are copied unconditionally — they are game
-    state, not decisions, and must never be dropped to −1."""
+    state, not decisions, and must never be dropped to −1.
+
+    ``tf_prob <= 0`` without state keys returns None (no labels at all, no
+    RNG draw): what training/train_il.py passes at tf 0, and what every
+    decoder treats like all-−1 labels."""
+    state_keys = set(STATE_LABEL_KEYS.get(game, ()))
+    if tf_prob <= 0 and not state_keys:
+        return None
     derive = LABELS_FROM_TGT.get(game)
     src = derive(tgt) if derive is not None else tgt
     keys = [k for k in LABEL_KEYS[game] if k in src]
     if not keys:
         return None
-    state_keys = set(STATE_LABEL_KEYS.get(game, ()))
     labels = {}
     if tf_prob >= 1.0:
         for k in keys:
@@ -447,19 +472,22 @@ def value_losses(net, pred: Dict[str, torch.Tensor], target: torch.Tensor,
     n = mask_f.sum().clamp(min=1)
     target = target.float()
     logits = pred.get("value_logits")
+    # per-frame terms are nan_to_num'ed BEFORE masking, as ImitationLoss
+    # does: a non-finite prediction on a padded / halted frame (NaN·0 = NaN)
+    # must not turn the whole micro-batch's loss into NaN
     if logits is None:
         mse = (F.mse_loss(pred["value"].float(), target,
-                          reduction="none") * mask_f).sum() / n
+                          reduction="none").nan_to_num(0.0) * mask_f).sum() / n
         return mse, mse
     # support = the head's own (vmax fixed its bin centres); sigma = config,
     # the same source train_rl's RLLoss reads
     vmax = float(net.value_head.vmax)
     check_value_support(target, mask, vmax)
     ce = hl_gauss_cross_entropy(logits, target, vmax, float(net.cfg.hl_gauss_sigma))
-    v_loss = (ce * mask_f).sum() / n
+    v_loss = (ce.nan_to_num(0.0) * mask_f).sum() / n
     with torch.no_grad():
         mse = (F.mse_loss(pred["value"].float(), target,
-                          reduction="none") * mask_f).sum() / n
+                          reduction="none").nan_to_num(0.0) * mask_f).sum() / n
     return v_loss, mse
 
 
@@ -597,6 +625,10 @@ def main() -> None:
                 f"(converter_version={dataset.converter_version}, "
                 f"meta={dataset.shard_meta}); re-convert both together"
             )
+    if isinstance(dataset, GeneralsGioDataset):
+        advice = gio_dataset_advice(len(dataset), args.num_workers)
+        if advice:
+            print(f"[warn] {advice}")
     min_cv = MIN_CONVERTER_VERSION.get(args.game)
     if min_cv is not None and (dataset.converter_version or 1) < min_cv:
         print(f"[WARN] {args.game} shards have converter_version "
@@ -710,9 +742,12 @@ def main() -> None:
     carries = [BatchCarry(net.supervision_steps, cfg.halt_exploration_prob, store=store)
                for _ in range(max(1, args.grad_accum))]
 
+    tf_start = args.tf_start if args.tf_start is not None else default_tf(args.game)
+    tf_end = args.tf_end if args.tf_end is not None else default_tf(args.game)
+    print(f"[init] teacher forcing {tf_start:g} → {tf_end:g}")
     for epoch in range(start_epoch, args.epochs):
         frac = epoch / max(1, args.epochs - 1)
-        tf_prob = args.tf_start + (args.tf_end - args.tf_start) * frac
+        tf_prob = tf_start + (tf_end - tf_start) * frac
         t0 = time.time()
         optimizer.zero_grad(set_to_none=True)
         slot = 0

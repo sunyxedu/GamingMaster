@@ -699,6 +699,30 @@ class JointGeneralsDecoder(ActionDecoder):
 
     # ------------------------------------------------------------------
 
+    @torch.no_grad()
+    def _draw_joint(self, joint: torch.Tensor, move_lse: torch.Tensor) -> torch.Tensor:
+        """[BT] joint action index drawn from the (masked) joint policy;
+        ``2DN`` = pass."""
+        cfg = self.cfg
+        pass_idx = 2 * cfg.n_directions * cfg.grid_h * cfg.grid_w
+        if self.greedy:
+            # Hierarchical greedy. Pass is a single ATOM of the joint but
+            # carries the whole "don't move" intent: raw argmax would play
+            # pass whenever the move mass is spread over many arrows
+            # (p_pass > p_best_arrow even at p_pass ≈ 1%) — a systematic
+            # hesitation bias under greedy eval. Decide pass-vs-move by
+            # MASS, then take the best arrow.
+            best_arrow = joint[..., :-1].argmax(-1)
+            return torch.where(joint[..., -1] > move_lse,
+                               torch.full_like(best_arrow, pass_idx), best_arrow)
+        return categorical_sample(F.softmax(joint.float(), dim=-1))
+
+    def _joint_source(self, j_idx: torch.Tensor) -> torch.Tensor:
+        """Source cell of joint indices (cell 0 for pass)."""
+        N = self.cfg.grid_h * self.cfg.grid_w
+        return torch.where(j_idx >= 2 * self.cfg.n_directions * N,
+                           torch.zeros_like(j_idx), j_idx % N)
+
     def decode(
         self,
         tokens: torch.Tensor,
@@ -715,7 +739,6 @@ class JointGeneralsDecoder(ActionDecoder):
         D = cfg.n_directions
         N = cfg.grid_h * cfg.grid_w
         W = cfg.grid_w
-        device = tokens.device
 
         joint, arr, pass_logit = self._joint_and_views(
             tokens, hl, ll, BT, legal)
@@ -727,34 +750,26 @@ class JointGeneralsDecoder(ActionDecoder):
         source_x = labels.get("source_x") if labels else None
         j_idx = None
         if source_y is not None and source_x is not None:
-            # Replay path: the action tuple is re-encoded by
-            # log_prob_entropy; here only the source index is needed to
+            # Replay / teacher-forcing path: the action tuple is re-encoded
+            # by log_prob_entropy; here only the source index is needed to
             # anchor the factorized views.
             sy = source_y.reshape(BT)
             sx = source_x.reshape(BT)
             src_idx = (sy * W + sx).long().clamp(0, N - 1)
+            # Unlabelled frames (sy < 0: teacher forcing dropped the label,
+            # or a pass / dropped-move frame) anchor the views on the
+            # policy's OWN draw, exactly as without labels — like
+            # GeneralsDecoder.  Clamping −1 to cell 0 would supervise the
+            # conditional direction / split views only on frames whose
+            # ground-truth source happens to be cell 0.
+            needs_sample = sy < 0
+            if needs_sample.any():
+                drawn = self._draw_joint(joint, move_lse)
+                src_idx = torch.where(needs_sample, self._joint_source(drawn), src_idx)
         else:
             # Rollout: draw the arrow from the joint categorical.
-            with torch.no_grad():
-                if self.greedy:
-                    # Hierarchical greedy. Pass is a single ATOM of the
-                    # joint but carries the whole "don't move" intent:
-                    # raw argmax would play pass whenever the move mass
-                    # is spread over many arrows (p_pass > p_best_arrow
-                    # even at p_pass ≈ 1%) — a systematic hesitation
-                    # bias under greedy eval. Decide pass-vs-move by
-                    # MASS, then take the best arrow.
-                    best_arrow = joint[..., :-1].argmax(-1)
-                    j_idx = torch.where(
-                        joint[..., -1] > move_lse,
-                        torch.full_like(best_arrow, 2 * D * N),
-                        best_arrow)
-                else:
-                    probs = F.softmax(joint.float(), dim=-1)
-                    j_idx = categorical_sample(probs)
-            src_idx = torch.where(
-                j_idx >= 2 * D * N,
-                torch.zeros_like(j_idx), j_idx % N)
+            j_idx = self._draw_joint(joint, move_lse)
+            src_idx = self._joint_source(j_idx)
 
         src_logits, dir_logits, spl_logits, pass_view = self._views(
             arr, pass_logit, src_idx, BT, legal, move_lse)

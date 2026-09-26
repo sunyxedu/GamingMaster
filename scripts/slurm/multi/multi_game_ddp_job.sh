@@ -28,9 +28,11 @@
 # such as nvidia_h200_nvl_3g.71gb cannot run DDP: a process sees one instance):
 #   sinfo -p batch -N -h -O "NodeHost:20,Gres:40,GresUsed:50,StateCompact:10"
 #
-# generals: --data generals=DIR (gio records or `gmdata generals shard` output;
-# see multi_game_job.sh) with --game_max_len / --game_val_max_len /
-# --game_batch generals=... to bound its long sequences.
+# generals: --data generals=DIR (`gmdata generals shard` output, or gio
+# records for small corpora; see multi_game_job.sh) with --game_max_len /
+# --game_batch generals=... to bound its long sequences; teacher forcing
+# defaults to 0 for generals (--game_tf generals=0.4:0 anneals), and
+# --game_loss_weight generals=0.4 evens out its larger loss scale.
 #
 # Objective — choose the global batch explicitly:
 #   --global_games_per_step K   K micro-batches per optimizer step in total

@@ -16,13 +16,19 @@
 #
 #   MODULE=training.eval_multi_game RUN=eval-x ARGS="--ckpt ... --val ..." sbatch ...
 #
-# generals joins like any game: --data generals=DIR takes a gio record
-# directory (gmdata generals ladder|pipeline output, e.g. .../training) or,
-# much faster to load and ~10x smaller, its gm-shards
+# generals joins like any game: --data generals=DIR takes its gm-shards
+# (recommended: ~10x smaller than the JSON, ~200x faster to load, records
+# shuffled across shards)
 #   data_processing/target/release/gmdata generals shard --input DIR --out SHARDS
+# or, for small corpora, the gio record directory itself (gmdata generals
+# ladder|pipeline output, e.g. .../training; give it --num_workers 4+).
 # Its sequences are ~10x longer and 627 tokens per frame, and they are cut to
-# their FIRST frames: bound them with --game_max_len generals=512
-# --game_val_max_len generals=512 --game_batch generals=2.
+# their FIRST frames (a global --max_len is refused): bound them with
+# --game_max_len generals=512 --game_batch generals=2 (validation defaults to
+# the training crop).  Teacher forcing defaults to 0 for generals (train_il.py);
+# --game_tf generals=0.4:0 anneals like the production IL jobs.  Its loss is on
+# a ~2-3x larger scale than the other decoders': consider
+# --game_loss_weight generals=0.4.
 #
 # Paths live under $GM_HOME (default ~/gm-core) — not /scratch.
 set -euo pipefail

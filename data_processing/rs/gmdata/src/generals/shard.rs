@@ -19,11 +19,15 @@
 //! `next_visibility` (all zero) and the tick features (= frame index) are dropped.
 //! Shard meta: grid_h, grid_w, grid_channels, global_features, max_actions_per_tick.
 //!
-//! Inputs are searched recursively for `*.json` and taken in path order (the
-//! order of `GeneralsGioDataset`). Unreadable, empty or malformed records and
-//! records whose meta differs from the first one are skipped with a warning.
-//! Shard numbering continues after existing `generals_NNNNN` directories in
-//! `--out`, so convert into a fresh directory.
+//! Inputs are searched recursively for `*.json` (path order, the order of
+//! `GeneralsGioDataset`), then shuffled with `--seed` before writing: the
+//! trainers read a gm-shard directory at a time (`ShardLocalitySampler`), and
+//! in path order one shard would hold one player's games (`training/<player>/`)
+//! — consecutive batches of a single style. `--keep-order` writes path order.
+//! Unreadable, empty or malformed records and records whose meta differs from
+//! the first one are skipped with a warning. Shard numbering continues after
+//! existing `generals_NNNNN` directories in `--out`, so convert into a fresh
+//! directory.
 
 use anyhow::{bail, ensure, Context, Result};
 use gmshard::{Sample, ShardWriter};
@@ -185,13 +189,36 @@ fn convert_file(path: &Path) -> Result<(Sample, Value, usize)> {
     record_to_sample(&rec, &file)
 }
 
-/// Convert every record under `inputs` (in order) into shards under `out`.
-pub fn shard(inputs: &[PathBuf], out: &Path, shard_size: usize) -> Result<Value> {
+/// splitmix64 (Steele et al. 2014): a tiny deterministic generator, so the
+/// record order depends only on `--seed` (no RNG crate needed).
+fn splitmix64(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Fisher–Yates shuffle driven by splitmix64(seed).
+fn shuffle<T>(v: &mut [T], seed: u64) {
+    let mut st = seed;
+    for i in (1..v.len()).rev() {
+        let j = (splitmix64(&mut st) % (i as u64 + 1)) as usize;
+        v.swap(i, j);
+    }
+}
+
+/// Convert every record under `inputs` into shards under `out`: in input /
+/// path order with `seed` None, else shuffled with `seed`.
+pub fn shard(inputs: &[PathBuf], out: &Path, shard_size: usize, seed: Option<u64>) -> Result<Value> {
     let mut files = Vec::new();
     for inp in inputs {
         let f = find_records(inp)?;
         ensure!(!f.is_empty(), "no gio records (*.json) under {}", inp.display());
         files.extend(f);
+    }
+    if let Some(seed) = seed {
+        shuffle(&mut files, seed);
     }
     let mut writer: Option<ShardWriter> = None;
     let mut shard_meta: Option<Value> = None;
@@ -232,7 +259,7 @@ pub fn shard(inputs: &[PathBuf], out: &Path, shard_size: usize) -> Result<Value>
     ensure!(converted > 0, "none of the {} records could be converted", files.len());
     Ok(json!({"records": files.len(), "converted": converted, "failed": failed,
               "meta_mismatch": mismatched, "frames": n_frames, "shards": shards,
-              "meta": shard_meta}))
+              "shuffle_seed": seed, "meta": shard_meta}))
 }
 
 #[cfg(test)]
@@ -269,7 +296,7 @@ mod tests {
         std::fs::write(inp.join("c.json"), serde_json::to_vec(&record(2, 3, 3, 4)).unwrap()).unwrap(); // other grid
         std::fs::write(inp.join("d.json"), b"{not json").unwrap();
         std::fs::write(inp.join("notes.txt"), b"ignored").unwrap();
-        let s = shard(&[inp.clone()], &dir.join("out"), 8).unwrap();
+        let s = shard(&[inp.clone()], &dir.join("out"), 8, None).unwrap();
         assert_eq!(s["records"], 4);
         assert_eq!(s["converted"], 2);
         assert_eq!(s["meta_mismatch"], 1);
@@ -285,6 +312,43 @@ mod tests {
         assert_eq!(idx["samples"][0]["meta"]["file"], "a.json");
         assert_eq!(idx["samples"][1]["meta"]["file"], "b.json");
         assert_eq!(idx["samples"][1]["start"], 3);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn shuffles_records_deterministically() {
+        let dir = std::env::temp_dir().join(format!("gmdata-generals-shuffle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let inp = dir.join("in");
+        std::fs::create_dir_all(&inp).unwrap();
+        for i in 0..12 {
+            std::fs::write(inp.join(format!("r{i:02}.json")),
+                           serde_json::to_vec(&record(1 + i % 3, 2, 3, 4)).unwrap()).unwrap();
+        }
+        let order = |out: &str, seed: Option<u64>| -> Vec<String> {
+            let s = shard(&[inp.clone()], &dir.join(out), 5, seed).unwrap();
+            assert_eq!(s["converted"], 12);
+            let mut names = Vec::new();
+            for k in 0..s["shards"].as_u64().unwrap() {
+                let idx: Value = serde_json::from_slice(&std::fs::read(
+                    dir.join(out).join(format!("generals_{k:05}/index.json"))).unwrap()).unwrap();
+                for smp in idx["samples"].as_array().unwrap() {
+                    names.push(smp["meta"]["file"].as_str().unwrap().to_string());
+                }
+            }
+            names
+        };
+        let path_order = order("keep", None);
+        let a = order("a", Some(7));
+        let b = order("b", Some(7));
+        let c = order("c", Some(8));
+        assert_eq!(path_order, (0..12).map(|i| format!("r{i:02}.json")).collect::<Vec<_>>());
+        assert_eq!(a, b);
+        assert_ne!(a, path_order);
+        assert_ne!(a, c);
+        let mut sorted = a.clone();
+        sorted.sort();
+        assert_eq!(sorted, path_order);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
