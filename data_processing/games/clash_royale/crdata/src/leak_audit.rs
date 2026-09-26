@@ -31,7 +31,11 @@
 //! been played (171 of 18,913 real events). Version 3 replaced both (deck tokens
 //! with the causal belief, `hand::CycleBelief`; `replay::resolve_ability_sources`);
 //! the former `known_leak_*` pins are now the positive tests below. The causality
-//! tests fail as soon as any input column depends on the future. Real-data checks
+//! tests fail as soon as any input column depends on the future (measured on the 4973
+//! parseable replays of part-000000: no leaking column over 371,907 cut points; the
+//! played card never outside the belief's support in 361,961 play decisions; the deal
+//! prior at kickoff on all 9946 sides; 15,694 of 18,825 ability events attributed, the
+//! rest unknown). Real-data checks
 //! read `tests/fixtures/clash_royale/replays.jsonl` (skipped when absent);
 //! `CRDATA_AUDIT_PARQUET=<dir or part>` (+ `CRDATA_AUDIT_LIMIT`) runs the same checks
 //! on downloaded replays and prints the statistics

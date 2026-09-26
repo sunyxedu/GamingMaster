@@ -174,7 +174,7 @@ META_ARCH_KEYS = {
 # (apply_meta_arch_defaults only reads keys the meta actually has) — except
 # clash_royale: its converter_version <= 2 shards carry a hindsight hand (a
 # future leak), so a fresh default ("deck") net on them fails loudly instead;
-# --override cr_card_tokens=hand card_feature_dim=8 trains the legacy net.
+# --override cr_card_tokens=hand trains the legacy net on them.
 META_LEGACY = {
     "go": {"global_features": 0},
     "chess": {"global_features": 8},
