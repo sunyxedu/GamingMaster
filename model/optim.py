@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import copy
 import math
-from typing import Dict, Iterable
+from typing import AbstractSet, Dict, Iterable, Optional
 
 import torch
 import torch.nn as nn
@@ -123,13 +123,22 @@ def trm_lr_lambda(warmup_steps: int, total_steps: int, min_ratio: float):
 
 class ModelEMA:
     """Reference models/ema.py: shadow = mu·shadow + (1-mu)·param over the
-    trainable parameters, updated after every optimizer step."""
+    trainable parameters, updated after every optimizer step.
 
-    def __init__(self, model: nn.Module, mu: float = TRM_EMA_RATE):
+    ``only`` (a set of parameter ids) restricts the shadows to those
+    trainable parameters: a data-parallel rank's partition under ZeRO-1
+    sharding (training/zero.py), the other shadows living on their owner
+    ranks.  Such a PARTIAL EMA updates, saves and loads its own shadows
+    only; the whole-model views (:meth:`copy_to`, :meth:`ema_copy`,
+    :meth:`ema_model_state`) refuse it — gather the shadows first."""
+
+    def __init__(self, model: nn.Module, mu: float = TRM_EMA_RATE,
+                 only: Optional[AbstractSet[int]] = None):
         self.mu = mu
+        self.partial = only is not None
         self.shadow: Dict[str, torch.Tensor] = {
             n: p.detach().clone() for n, p in model.named_parameters()
-            if p.requires_grad
+            if p.requires_grad and (only is None or id(p) in only)
         }
         # modules shared under several names (multi-game core): every alias
         # of a shadowed parameter maps to its canonical (first) name
@@ -144,13 +153,20 @@ class ModelEMA:
             if n in self.shadow:
                 self.shadow[n].mul_(self.mu).add_(p.detach(), alpha=1.0 - self.mu)
 
+    def _whole(self, what: str) -> None:
+        if self.partial:
+            raise RuntimeError(f"ModelEMA.{what}: this EMA holds one rank's partition only "
+                               f"(ZeRO-1 sharding); gather the full EMA with training.zero")
+
     @torch.no_grad()
     def copy_to(self, model: nn.Module) -> None:
+        self._whole("copy_to")
         for n, p in model.named_parameters():
             if n in self.shadow:
                 p.copy_(self.shadow[n])
 
     def ema_copy(self, model: nn.Module) -> nn.Module:
+        self._whole("ema_copy")
         m = copy.deepcopy(model)
         self.copy_to(m)
         return m
@@ -166,6 +182,7 @@ class ModelEMA:
     def ema_model_state(self, model: nn.Module) -> Dict[str, torch.Tensor]:
         """``model.state_dict()`` with EMA values substituted for the
         trainable parameters (buffers are taken from ``model``)."""
+        self._whole("ema_model_state")
         sd = model.state_dict()
         out = {}
         for k, v in sd.items():

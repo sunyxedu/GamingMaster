@@ -64,6 +64,22 @@
 # run continues from it (--resume); RESUME=0 starts from scratch instead.
 # Size --steps to the wall anyway: a resume restarts the data order.
 #
+# Sharded optimizer state (ZeRO-1, training/zero.py): SHARD_OPTIMIZER=1 (or
+# --shard_optimizer in ARGS) makes every rank keep AdamATan2's two moments and
+# the EMA shadows of its 1/NGPU partition of the parameters only — 8 + 12/NGPU
+# instead of 20 bytes per parameter; weights and gradients stay full.  Training
+# is bit-identical to the unsharded run and the checkpoint format is the same,
+# so a run may switch the flag or NGPU across a resume.  SHARD_OPTIMIZER=1 is
+# ignored with NGPU=1 (the trainer refuses the flag there).  Cost: one extra
+# bucketed broadcast of the updated weights per step (about half the traffic of
+# the gradient all-reduce).  Per-rank numbers and expected peaks for a config:
+#   uv run python scripts/zero1_memory.py --experts 32 64 --world 12
+# e.g. the 64-expert core (~364M parameters) on 12 x 1g.18gb: ~11.4 GiB peak per
+# rank sharded vs ~15.1 GiB unsharded (extrapolated from the measured 11.9 GiB
+# of the 32-expert run):
+#   GPU_TYPE=nvidia_h200_nvl_1g.18gb NGPU=12 SHARD_OPTIMIZER=1 RUN=core-moe64 \
+#       ARGS="--override moe_experts=64 ..." bash scripts/slurm/multi/multi_game_ddp_job.sh
+#
 # Paths live under $GM_HOME (default ~/gm-core) — not /scratch.
 set -euo pipefail
 GPU_TYPE=${GPU_TYPE:-nvidia_h200_nvl}
@@ -108,6 +124,15 @@ if [ "$NGPU" -gt 1 ] && [[ "${CUDA_VISIBLE_DEVICES:-}" == *MIG-* ]]; then
     # every rank pins its own slice (training.distributed.pin_rank_device)
     echo "MIG slices: $NGPU ranks, one slice each, gloo (--dist_backend ${DIST_BACKEND:-auto})"
 fi
+SHARD_FLAG=""
+if [ "${SHARD_OPTIMIZER:-0}" != 0 ]; then
+    if [ "$NGPU" -gt 1 ]; then
+        SHARD_FLAG="--shard_optimizer"
+        echo "ZeRO-1: optimizer state + EMA sharded over $NGPU ranks (--shard_optimizer)"
+    else
+        echo "SHARD_OPTIMIZER=1 ignored: one rank, nothing to shard over"
+    fi
+fi
 mkdir -p "$OUT"
 RESUME_FROM=""
 if [ "${RESUME:-1}" != 0 ] && [ -f "$OUT/multi_latest.pt" ]; then
@@ -129,6 +154,6 @@ nvidia-smi -L 2>/dev/null | grep MIG || true
 # shellcheck disable=SC2086
 "$GM_HOME/.venv/bin/torchrun" --standalone --nproc_per_node="$NGPU" \
     -m training.train_multi_game --ckpt_every "${CKPT_EVERY:-500}" \
-    --dist_backend "${DIST_BACKEND:-auto}" ${ARGS:-} \
+    --dist_backend "${DIST_BACKEND:-auto}" ${SHARD_FLAG} ${ARGS:-} \
     ${RESUME_FROM:+--resume "$RESUME_FROM"} --save_dir "$OUT" 2>&1 | tee -a "$OUT/log.txt"
 echo "[$(date)] done"

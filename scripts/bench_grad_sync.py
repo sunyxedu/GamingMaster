@@ -15,7 +15,9 @@ it under torchrun like a trainer (same MIG pinning / --dist_backend logic):
         --params 208e6 --bucket_mb 0 5 25 100 400
 
 Rank 0 prints one line per bucket size: buckets, mean / min seconds per sync
-and the algorithm bandwidth (gradient bytes / time).
+and the algorithm bandwidth (gradient bytes / time).  ``--zero1`` adds, per
+bucket size, the extra per-step cost of ``--shard_optimizer`` (training/zero.py):
+the owners' broadcast of the updated weights (every parameter stepped).
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ import torch.nn as nn  # noqa: E402
 
 from model.rl_utils import _grad_buckets, sync_gradients  # noqa: E402
 from training.distributed import init_distributed  # noqa: E402
+from training.zero import Zero1  # noqa: E402
 
 
 def synthetic_params(n_params: float, width: int, small: int) -> nn.Module:
@@ -62,6 +65,8 @@ def main(argv=None) -> None:
     p.add_argument("--reps", type=int, default=3)
     p.add_argument("--device", default=None)
     p.add_argument("--dist_backend", choices=DIST_BACKENDS, default="auto")
+    p.add_argument("--zero1", action="store_true",
+                   help="also time --shard_optimizer's per-step weight broadcast")
     args = p.parse_args(argv)
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     env, device = init_distributed(device, 10.0, args.dist_backend)
@@ -85,6 +90,19 @@ def main(argv=None) -> None:
             torch.cuda.synchronize(device)
         return time.perf_counter() - t
 
+    opt = torch.optim.SGD(model.parameters(), lr=0.0)     # Zero1 reads its param order
+
+    def broadcast_once(bucket_mb: float) -> float:
+        zero = Zero1(model, opt, env.rank, env.world, bucket_mb=bucket_mb)
+        dist.barrier()
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        t = time.perf_counter()
+        zero._broadcast_params(range(len(zero.params)))
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        return time.perf_counter() - t
+
     if env.is_main:
         print(f"[bench] world={env.world} backend={dist.get_backend()} device={device} "
               f"params={n / 1e6:.1f}M ({nbytes / 2 ** 20:.0f} MiB fp32) "
@@ -98,6 +116,13 @@ def main(argv=None) -> None:
             print(f"[bench] bucket_mb={mb:g} buckets={n_buckets} mean={mean:.3f}s "
                   f"min={min(times):.3f}s algbw={nbytes / min(times) / 1e9:.2f} GB/s",
                   flush=True)
+        if args.zero1:
+            broadcast_once(mb)                          # warm-up
+            times = [broadcast_once(mb) for _ in range(args.reps)]
+            if env.is_main:
+                mean = sum(times) / len(times)
+                print(f"[bench] zero1_broadcast bucket_mb={mb:g} mean={mean:.3f}s "
+                      f"min={min(times):.3f}s", flush=True)
     env.barrier()
     env.destroy()
 
