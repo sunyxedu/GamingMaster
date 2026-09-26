@@ -35,8 +35,11 @@
 //!   hand + schneider ann. + schwarz ann. + ouvert [+ schneider (≥ 90) + schwarz
 //!   (10 tricks) when won]) × base value; won = ≥ 61 points incl. skat (≥ 90 with
 //!   schneider announced, all tricks with schwarz announced); a lost game counts
-//!   −2× and adds schneider (≤ 30) / schwarz (no trick) unless announced; overbid
-//!   (value < bid): −2 × the smallest multiple of the base value ≥ the bid.
+//!   −2×, with the announced schneider / schwarz levels, or else the declarer's own
+//!   schneider (≤ 30 points) and schwarz (no trick) once two tricks are complete;
+//!   overbid (value < bid): −2 × the smallest multiple of the base value ≥ the bid.
+//!   (These lost-game details are the ISS SERVER's, pinned by its records; the GPL
+//!   client code counts neither announced level and penalises from the first trick.)
 //!   Resignations / timeouts / leaving (ISS-only endings, not moves of this game) are
 //!   scored by [`Skat::iss_result`] for the converter.
 //!
@@ -749,14 +752,20 @@ impl Skat {
                 return gr;
             }
         } else {
-            if !con.schneider && all_tricks >= 1 && points <= 30 {
+            // (the ISS server, pinned by its records — its GPL client code differs): a
+            // lost game counts the announced schneider / schwarz levels too (without
+            // flagging them); otherwise the declarer's own schneider (<= 30 points) and
+            // schwarz (no trick) count only once two tricks are complete (no penalty
+            // for resigning / timing out / leaving in the first two tricks)
+            if con.schneider {
+                m += 1 + con.schwarz as u32;
+            } else if all_tricks >= 2 && points <= 30 {
                 m += 1;
                 gr.schneider = true;
-            }
-            if !con.schwarz && all_tricks >= 1 && tricks == 0 {
-                m += 1;
-                gr.schneider = true;
-                gr.schwarz = true;
+                if tricks == 0 {
+                    m += 1;
+                    gr.schwarz = true;
+                }
             }
             if m * bv >= self.max_bid {
                 gr.value = -2 * (m * bv) as i32;
@@ -1630,12 +1639,23 @@ mod tests {
         assert_eq!((r.value, r.overbid, r.matadors), (-72, true, 1));
         // won diamonds hand schneider announced (with 1): (2 + hand + S ann + S) x 9
         assert_eq!(st(DIAMONDS, true, true, false, false, mask("CJ"), 92, 7, 18, 10).value, 45);
-        // schneider announced but only 89: lost, no own-schneider bonus
-        assert_eq!(st(DIAMONDS, true, true, false, false, mask("CJ"), 89, 7, 18, 10).value, -2 * 36);
+        // schneider announced but only 89: lost, the announced schneider level counts
+        // (ISS server), not flagged
+        let r = st(DIAMONDS, true, true, false, false, mask("CJ"), 89, 7, 18, 10);
+        assert_eq!((r.value, r.schneider), (-2 * 45, false));
+        // ... and no extra schwarz level for a declarer without a trick
+        assert_eq!(st(DIAMONDS, true, true, false, false, mask("CJ"), 20, 0, 18, 2).value, -2 * 45);
+        // grand ouvert with 4 lost at once: 5 + hand + S ann + Z ann + ouvert + S + Z
+        let r = st(GRAND, true, true, true, true, mask("CJ.SJ.HJ.DJ"), 0, 0, 18, 0);
+        assert_eq!((r.value, r.schneider, r.schwarz), (-528, false, false));
         // grand ouvert with 4 won: 11 x 24 = 264
         assert_eq!(st(GRAND, true, true, true, true, mask("CJ.SJ.HJ.DJ"), 120, 10, 264, 10).value, 264);
-        // no schneider / schwarz penalty before the first trick (resigned early)
+        // no schneider / schwarz penalty before two tricks are complete (resigned /
+        // timed out early), then both
         assert_eq!(st(GRAND, false, false, false, false, with2, 0, 0, 18, 0).value, -144);
+        assert_eq!(st(GRAND, false, false, false, false, with2, 0, 0, 18, 1).value, -144);
+        let r = st(GRAND, false, false, false, false, with2, 0, 0, 18, 2);
+        assert_eq!((r.value, r.schneider, r.schwarz), (-240, true, true));
         // null values
         for (hand, ouvert, v) in [(false, false, 23), (true, false, 35), (false, true, 46), (true, true, 59)] {
             assert_eq!(st(NULL, hand, false, false, ouvert, 0, 0, 0, 18, 10).value, v);
