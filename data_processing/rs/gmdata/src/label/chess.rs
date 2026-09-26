@@ -1153,7 +1153,7 @@ mod tests {
             UciFake::new(|line: &str| {
                 let pos = parse_position(line)?;
                 let epd = Epd::from_position(&pos, EnPassantMode::Legal).to_string();
-                let won = fnv1a(&epd) % 2 == 0;
+                let won = fnv1a(&epd).is_multiple_of(2);
                 let (sign, wdl) = if won { (1, [1000, 0, 0]) } else { (-1, [0, 0, 1000]) };
                 Some(
                     pos.legal_moves()
@@ -1161,7 +1161,7 @@ mod tests {
                         .map(|m| {
                             let uci = m.to_uci(CastlingMode::Standard).to_string();
                             let h = fnv1a(&format!("{epd} {uci}")) >> 8;
-                            if h % 4 == 0 {
+                            if h.is_multiple_of(4) {
                                 FakeMove::mate(&uci, sign * (1 + (h % 8) as i32)).wdl(wdl)
                             } else {
                                 FakeMove::cp(&uci, sign * (200 + (h % 2800) as i32)).wdl(wdl)

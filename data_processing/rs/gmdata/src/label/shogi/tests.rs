@@ -417,7 +417,7 @@ fn mating_engine() -> EngineCommand {
         FakeYaneuraOu(crate::label::fake::UciFake::new(|pos: &str| {
             let b = parse_position(pos).ok()?;
             let h0 = fnv(pos);
-            let won = h0 % 2 == 0;
+            let won = h0.is_multiple_of(2);
             Some(
                 b.legal_moves()
                     .iter()
@@ -459,8 +459,7 @@ fn saturated_q_follows_the_secondary_utility_end_to_end() {
     let (mut won, mut lost, mut spread) = (0, 0, 0);
     for i in 0..4 {
         let v = data.view(i);
-        let tg = targets(&v).unwrap();
-        for t in 0..v.len {
+        for (t, gt) in targets(&v).unwrap().into_iter().enumerate() {
             let f = v.start + t;
             if !evm[f] {
                 continue;
@@ -476,7 +475,7 @@ fn saturated_q_follows_the_secondary_utility_end_to_end() {
             let z: f64 = e.iter().sum();
             let pi: Vec<f32> = e.iter().map(|x| (x / z) as f32).collect();
             spread += (pi[0] > pi[n - 1] * 1.05) as usize;
-            let want = expected_rows_of(&idx[f * 8..f * 8 + 8], &pi, tg[t]);
+            let want = expected_rows_of(&idx[f * 8..f * 8 + 8], &pi, gt);
             for (h, (vals, ids)) in heads.iter().enumerate() {
                 let got = stored_row(vals, f, ids.as_ref());
                 assert_eq!(got.len(), want[h].len(), "head {h} frame {f}");

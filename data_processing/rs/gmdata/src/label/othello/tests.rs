@@ -548,7 +548,7 @@ fn secondary_utility_of_disc_scores() {
 /// Every move of a position loses (or every move wins) by a different margin: in a "lost"
 /// position (hash parity) the scores are −1 … −40, in a "won" one +1 … +40.
 fn decided_score(pos: &OthPos, sq: i64) -> i32 {
-    let won = splitmix(pos.mine() ^ splitmix(pos.theirs())) % 2 == 0;
+    let won = splitmix(pos.mine() ^ splitmix(pos.theirs())).is_multiple_of(2);
     let m = 1 + (FakeEgaroucid::score(pos, sq) + 20);
     if won { m } else { -m }
 }
