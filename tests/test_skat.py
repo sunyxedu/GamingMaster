@@ -123,7 +123,8 @@ def test_every_fixture_record_verifies(gmdata):
     assert st["jump_bids"] > 0
     # every declaration type of ISS occurs
     games = set(st["games"])
-    assert {"D", "H", "S", "C", "G", "N", "NO", "NH", "NOH", "GH", "GHS", "GHZ", "GO", "CO"} <= games
+    assert {"D", "H", "S", "C", "G", "N", "NO", "NH", "NOH", "GH", "GHS", "GHZ", "GO",
+            "CO"} <= games
 
 
 def test_shards_schema_and_meta(shards):
@@ -243,7 +244,8 @@ def _cuts(line: str) -> List[str]:
 
 def _pick(pred, n=1) -> List[str]:
     """Converted fixture records (not ended by a timeout / a player leaving) matching."""
-    got = [line for line in _lines() if pred(line) and " w TI." not in line and " w LE." not in line]
+    got = [line for line in _lines()
+           if pred(line) and " w TI." not in line and " w LE." not in line]
     assert len(got) >= n
     return got[:n]
 
@@ -252,10 +254,10 @@ def test_converter_causality(gmdata, tmp_path):
     """Every stream of a record cut after any move is a frame-prefix of the full
     record's stream (no encoder looks ahead), for pickup / hand / null ouvert /
     resigned games."""
-    recs = (_pick(lambda l: re.search(r" \d [DHSCG]\.", l) and "R[d:" in l and " RE" not in l)
-            + _pick(lambda l: re.search(r" \d [DHSCG]H ", l) is not None)
-            + _pick(lambda l: re.search(r" \d NO\.", l) is not None)
-            + _pick(lambda l: " RE ]" in l))
+    recs = (_pick(lambda r: re.search(r" \d [DHSCG]\.", r) and "R[d:" in r and " RE" not in r)
+            + _pick(lambda r: re.search(r" \d [DHSCG]H ", r) is not None)
+            + _pick(lambda r: re.search(r" \d NO\.", r) is not None)
+            + _pick(lambda r: " RE ]" in r))
     for rec in recs:
         cuts = _cuts(rec)
         assert invariance.check_converter_causality(lambda ls: _convert(gmdata, tmp_path, ls), rec,
@@ -317,8 +319,10 @@ def test_quality_filters(gmdata, tmp_path):
     assert out["filtered_out"] > 0
     # explicit players, and the ISS ratings page (program instances count as the base name)
     (tmp_path / "r.html").write_text(
-        "<pre>  1 kermit       31216 Decl[ 33 87 13 ] Def[ 67 22 78 ] 30.79  16.77 1106.5  24.9\n</pre>")
-    for extra in (["--player", "kermit1"], ["--ratings", tmp_path / "r.html", "--min-rating", "1100"]):
+        "<pre>  1 kermit       31216 Decl[ 33 87 13 ] Def[ 67 22 78 ] 30.79  16.77 1106.5  24.9"
+        "\n</pre>")
+    for extra in (["--player", "kermit1"],
+                  ["--ratings", tmp_path / "r.html", "--min-rating", "1100"]):
         d = tmp_path / f"k{len(extra)}"
         _run(gmdata, "skat", "convert", "--input", FIXTURE, "--out", d, *extra)
         names = {s["meta"]["players"][s["meta"]["seat"]] for s in load_gm_samples(str(d))}
