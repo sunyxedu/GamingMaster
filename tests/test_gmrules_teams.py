@@ -39,3 +39,26 @@ def test_league_assigns_whole_teams():
     pinned = League(env, {"rand": RandomPolicy(env)}, mirror_prob=0.0, learner_seat=3)
     pinned.update(env.reset(seed=4))
     assert bool((pinned.learner_seats == torch.tensor([False, True, False, True])).all())
+
+
+def test_team_streams_act_for_the_team():
+    """Bridge: a row's stream_seats is its partnership (the declarer's stream plays
+    dummy's cards: to_play = declarer, never dummy, during the play)."""
+    env = GmSimVecEnv("bridge", 3, seed=0)
+    assert env.teams == (0, 1, 0, 1)
+    obs = env.reset(seed=5)
+    team = torch.tensor([[True, False, True, False], [False, True, False, True]] * 2 * 3)
+    gen = torch.Generator().manual_seed(1)
+    dummy_plays = 0
+    while bool(obs.active.any()):
+        assert torch.equal(obs.stream_seats, team)
+        assert bool(obs.stream_seats.gather(1, obs.to_play.view(-1, 1)).all())
+        rows = obs.active.nonzero().squeeze(1)
+        for r in rows.tolist():
+            assert int(obs.to_play[r]) == r % 4          # a row only ever acts as its seat
+            glob = obs.obs["globals"][r]
+            dummy_plays += int(glob[3] == 1)             # G_FOR_DUMMY: dummy's card, declarer's row
+        obs, _, _, _ = env.step(env.random_actions(obs, generator=gen))
+    passed_out = [gmsim.replay("bridge", None, env.trajectory(e))["returns"] == [0.0] * 4
+                  for e in range(3)]
+    assert dummy_plays == 13 * sum(not p for p in passed_out)
