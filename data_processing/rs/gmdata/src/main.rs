@@ -31,6 +31,7 @@ mod othello;
 mod pokemon;
 mod rules;
 mod shogi;
+mod xiangqi;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -94,6 +95,11 @@ enum Game {
         #[command(subcommand)]
         cmd: kuhn_poker::Cmd,
     },
+    /// Xiangqi (CCPD PGN records; gmrules rules and frames)
+    Xiangqi {
+        #[command(subcommand)]
+        cmd: xiangqi::Cmd,
+    },
     /// Generic tools for every gmrules game: list, check, random-play / JSONL → shards
     Rules {
         #[command(subcommand)]
@@ -118,6 +124,7 @@ fn main() -> Result<()> {
         Game::Pokemon { cmd } => pokemon::run(cmd),
         Game::Shogi { cmd } => shogi::run(cmd),
         Game::KuhnPoker { cmd } => kuhn_poker::run(cmd),
+        Game::Xiangqi { cmd } => xiangqi::run(cmd),
         Game::Rules { cmd } => rules::run(cmd),
         Game::Label { cmd } => label::run(cmd),
     }
