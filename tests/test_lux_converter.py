@@ -68,9 +68,11 @@ def test_sap_offsets(converted):
     assert lux_sap_delta(112, SAP_R) == (0, 0)
 
 
-def test_v2_shards_train_the_sap_head(converted):
+@pytest.mark.parametrize("head", ["mlp", "pointer"])
+def test_v2_shards_train_the_sap_head(converted, head):
     """A net configured from the shard meta (lux_global_features 11,
-    lux_sap_range 7) consumes the v2 batch and trains the sap head."""
+    lux_sap_range 7) consumes the v2 batch and trains the sap head (both
+    heads; the pointer reads the unit cells from the real units_seq)."""
     from model.game_network import GameNetwork
     from model.games.lux import LuxDecoder, LuxEncoder
 
@@ -81,7 +83,7 @@ def test_v2_shards_train_the_sap_head(converted):
     cfg = LuxConfig(d_model=32, n_heads=4, d_ff=64, n_st_layers=1, core_type="trm",
                     trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1, halt_max_steps=1,
                     encoder_channels=8, lux_global_features=meta["global_features"],
-                    lux_sap_range=meta["sap_range"])
+                    lux_sap_range=meta["sap_range"], lux_sap_head=head)
     torch.manual_seed(0)
     net = GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg))
     fm = batch["meta"]["frame_mask"]
@@ -89,4 +91,5 @@ def test_v2_shards_train_the_sap_head(converted):
     out = net.action_decoder.il_loss(pred, batch["tgt"], fm)
     assert torch.isfinite(out["loss"]) and out["sap_loss"] > 0
     out["loss"].backward()
-    assert net.action_decoder.sap_head.net[0].weight.grad.abs().sum() > 0
+    assert all(p.grad is not None and p.grad.abs().sum() > 0
+               for p in net.action_decoder.sap_head.parameters())
