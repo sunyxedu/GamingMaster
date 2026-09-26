@@ -15,6 +15,8 @@ mod elixir;
 mod fetch;
 mod frames;
 mod hand;
+#[cfg(test)]
+mod leak_audit;
 mod replay;
 
 use anyhow::{Context, Result};
