@@ -35,7 +35,8 @@
 //!   clear) unless overridden with `--engine-option NAME=VALUE` (`Threads` > 1 makes
 //!   the labels nondeterministic; `SyzygyPath=DIR` adds tablebases — the meta records
 //!   only the directory name); `MultiPV = K` and `UCI_ShowWDL = true` are always set
-//!   last (the labels need them).
+//!   last (the labels need them; a conflicting `--engine-option` for either is an
+//!   error, [`check_engine_options`]).
 //! * `--workers` = all hardware threads. One single-threaded Stockfish per worker.
 //!
 //! Query per labelled frame: `ucinewgame`, `isready` (clears hash and history tables,
@@ -323,6 +324,22 @@ pub fn reencode(frames: &[ChessPos]) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, Ve
     Ok((planes, globals, lf, lt, lp))
 }
 
+/// Reject `--engine-option`s the labeller overrides: `MultiPV` is always `--max-moves`
+/// and `UCI_ShowWDL` always `true` (set last), so a different value would be silently
+/// ignored while `meta.teacher.engine_options` recorded it. UCI option names are case
+/// insensitive.
+pub fn check_engine_options(cfg: &EngineConfig) -> Result<()> {
+    for (k, v) in &cfg.options {
+        if k.eq_ignore_ascii_case("MultiPV") && v.trim() != cfg.max_moves.to_string() {
+            bail!("--engine-option {k}={v}: MultiPV is set from --max-moves ({}); use --max-moves {v}", cfg.max_moves);
+        }
+        if k.eq_ignore_ascii_case("UCI_ShowWDL") && !v.trim().eq_ignore_ascii_case("true") {
+            bail!("--engine-option {k}={v}: the chess labeller needs UCI_ShowWDL=true (Q comes from the WDL)");
+        }
+    }
+    Ok(())
+}
+
 /// The `go` command of resolved limits.
 pub fn go_command(limits: &Limits) -> Result<String> {
     let nodes = limits.u64_or("nodes", DEFAULT_NODES)?;
@@ -428,6 +445,7 @@ impl Labeller for ChessLabeller {
     }
 
     fn open_session(&self, cfg: &EngineConfig) -> Result<UciSession> {
+        check_engine_options(cfg)?;
         let mut opts: Vec<(String, String)> = DEFAULT_OPTIONS.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         opts.extend(cfg.options.iter().cloned());
         opts.push(("MultiPV".into(), cfg.max_moves.to_string()));
@@ -1086,6 +1104,28 @@ mod tests {
         assert!(ChessLabeller::default().resolve_limits(&Limits::parse(&["nodes=0".into()]).unwrap()).is_err());
         assert!(ChessLabeller::default().resolve_limits(&Limits::parse(&["movetime=10".into()]).unwrap()).is_err());
         assert_eq!(go_command(&Limits::parse(&["nodes=0".into(), "depth=9".into()]).unwrap()).unwrap(), "go depth 9");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// `--engine-option MultiPV=16` used to be overridden by `--max-moves` (8) while the
+    /// teacher meta recorded `engine_options.MultiPV = "16"`; conflicting values of the
+    /// options the labeller sets are now an error before any engine work.
+    #[test]
+    fn overridden_engine_options_are_rejected() {
+        let root = tmpdir("chess-opts");
+        convert_games(&root, &GAMES[..1], 4);
+        for (k, v, ok) in [("MultiPV", "16", false), ("multipv", "4", false), ("UCI_ShowWDL", "false", false), ("MultiPV", "8", true), ("uci_showwdl", "true", true)] {
+            let mut o = fake_opts(&root, fake_engine_command());
+            o.engine_options = vec![(k.to_string(), v.to_string())];
+            o.out = root.join(format!("out-{k}-{v}"));
+            let r = run(ChessLabeller::default(), &o);
+            assert_eq!(r.is_ok(), ok, "{k}={v}: {:?}", r.as_ref().err());
+            if !ok {
+                let msg = format!("{:#}", r.unwrap_err());
+                assert!(msg.contains(&format!("--engine-option {k}={v}")), "{msg}");
+                assert!(!o.out.exists(), "nothing written");
+            }
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 
