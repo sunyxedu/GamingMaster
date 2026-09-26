@@ -124,7 +124,8 @@ class _Gm:
         rp = self.tmp / f"r{self.n}.json"
         out = self.tmp / f"o{self.n}.json"
         rp.write_text(json.dumps(replay))
-        res = subprocess.run([self.exe, "generals", cmd, "--replay", str(rp), "--player", player,
+        # --player=NAME: ladder usernames may start with '-'
+        res = subprocess.run([self.exe, "generals", cmd, "--replay", str(rp), f"--player={player}",
                               "--out", str(out), *extra], capture_output=True, text=True)
         rp.unlink()
         if res.returncode != 0:
@@ -541,7 +542,9 @@ _OBS_FIELDS = ("grid", "globals", "legal_mask", "capture_label", "capture_mask")
 def _replay_frames(replay: Dict, **vec_kw):
     """Replay a recorded 1v1 through GeneralsVecEnv on its own map (seat i =
     usernames[i]), yielding ``(t, vec, obs)`` at every frame before stepping
-    the recorded moves of turn t (with the replay's move-order tiebreak)."""
+    the recorded moves of turn t (with the replay's move-order tiebreak) —
+    the simulator's frames: up to the capture, or up to the frame after the
+    last recorded move (a game ended by surrender has no capture)."""
     from env.vec_generals import (
         GeneralsVecEnv,
         map_from_replay,
@@ -552,8 +555,9 @@ def _replay_frames(replay: Dict, **vec_kw):
     obs = vec.reset(maps=[map_from_replay(replay)])
     by_step = replay_actions_by_step(replay, vec.grid_w)
     tiebreak = replay_tiebreak_by_step(replay)
+    end = max(m["turn"] for m in replay["moves"]) + 2
     t = 0
-    while bool(obs.active.all()):
+    while bool(obs.active.all()) and t < end:
         yield t, vec, obs
         acts = {"source_idx": torch.zeros(2, dtype=torch.long),
                 "direction": torch.zeros(2, dtype=torch.long),
@@ -640,7 +644,7 @@ def test_env_obs_invariant_to_fogged_city_ownership():
 
 def test_env_obs_invariant_to_opponent_private_state_real_replays():
     for i, replay in enumerate(_real_replays(N_REAL)):
-        checked, changed = _replay_env_privacy(replay, memory_vision=True, every=7, seed=i)
+        checked, changed = _replay_env_privacy(replay, memory_vision=True, every=3, seed=i)
         assert checked > 20 and changed > 0
 
 
