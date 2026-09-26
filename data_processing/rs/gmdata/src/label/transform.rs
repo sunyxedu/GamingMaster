@@ -22,12 +22,15 @@
 //! never converted (the failure of DeepMind's searchless chess agent). u(a) ∈ [−1, 1] is
 //! the game's secondary utility of the move ([`super::game::Labeller::secondary`]: mate
 //! distance and centipawns, discs), a strictly increasing function of the engine's
-//! native score `tgt.teacher_raw`. Q is an increasing function of the same score, so
-//! the two agree on every pair of moves: the effective score `Q/τ + w·u` orders the
-//! moves by Q and, among equal Q, by u (lexicographic by construction — the term never
-//! overturns a Q difference), and within a class of equal Q the secondary preference
-//! ratio is at most `e^{2w}` (u spans [−1, 1]). Near equality u only adds a small
-//! slope (a few % of Q/τ's; see each game). w = 0 (and games without a secondary
+//! native score `tgt.teacher_raw`. Within a position Q is a non-decreasing function of
+//! the same score (WDL permille, logistic cp, exact W/D/L), so the two never disagree
+//! on a pair of moves: the effective score `Q/τ + w·u` orders the moves by Q and, among
+//! equal Q, by u (lexicographic by construction — the term never overturns a Q
+//! difference, it only splits ties; were an engine to break the monotonicity, e.g.
+//! othello rows of one position scored partly exactly and partly by the midgame search,
+//! a Q gap below 2wτ could be overturned), and within a class of equal Q the secondary
+//! preference ratio is at most `e^{2w}` (u spans [−1, 1]). Near equality u only adds a
+//! small slope (a few % of Q/τ's; see each game). w = 0 (and games without a secondary
 //! utility, e.g. go) give `π ∝ exp(Q/τ)` bit for bit. τ ≤ 0 is the limit τ → 0: all
 //! mass on the arg-max-Q moves, weighted `exp(w·u)` (uniform when w = 0). The driver
 //! sorts, truncates to `--max-moves` and computes π from the same scores
