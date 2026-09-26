@@ -30,7 +30,21 @@
 //! follow-suit) — and the recorded result `R[...]` must be reproduced EXACTLY by
 //! `Skat::iss_result` (declarer, win / loss, value, matadors, overbid, card points,
 //! tricks, schneider, schwarz, penalties, leave / timeout, resignation): the parity
-//! proof of the rules on real data (`gmdata skat verify` reports it for any corpus).
+//! proof of the rules on real data (`gmdata skat verify` reports it for any corpus;
+//! `--dump-rejected FILE` keeps the rejected lines). Moves are read as the ISS server
+//! reads them: a pickup declaration may come as a half-move (`D`, then `DK.D8`); the
+//! cards shown with an ouvert declaration are not checked (the server shows the
+//! defenders the declarer's actual hand, as the frames do; 43 records of 2024 show
+//! wrong ones).
+//!
+//! The full archive (`verify --input https://skatgame.net/iss/iss-games-07-2024.sgf.bz2`,
+//! streamed, ~2.5 min, bound by the bzip2 stream): 9,094,699 records, 9,094,590 verified — 6,139,697
+//! finished, 354,574 passed in, 2,492,924 resigned, 107,395 aborted (timeout / a player
+//! leaving) — and 0 result mismatches; 109 rejected: 75 bids off the bid list (the ISS
+//! code takes any number, real Skat does not), 23 truncated lines, 7 deals of 29 cards,
+//! 1 line holding two records, 3 card moves (`DH`) the server's lossy card parser took
+//! for some card. The rules are also pinned to the ISS engine itself by randomized
+//! differential tests (tests/test_skat_reference.py).
 //!
 //! Conversion (one sample per seat stream, per-seat layout; see gmrules skat for the
 //! frames): games that end normally (incl. games passed in: three pass frames, value
@@ -50,13 +64,16 @@
 //! score per game, covers every year); a seat is kept when ANY given filter keeps it;
 //! program instances `name:2` count as `name`. `--hq` = `--min-games 2000 --min-money
 //! 5 --min-rating 1050 --max-rc 60` with the given `--players` / `--ratings` files.
+//! `--split train|val` takes the games with ISS id % `--val-mod` (100) != 0 / == 0;
+//! `--count-only` reports what a conversion would write (same filters) without writing.
+//! Every `--input` may also be the archive's URL (streamed, nothing stored).
 //!
 //! ```sh
 //! gmdata skat fetch   --out data/skat/raw                    # 545 MiB + iss-ratings.html
 //! gmdata skat fetch   --out ~/gm-data/skat --sample 20000    # the first 20k games only
-//! gmdata skat verify  --input data/skat/raw
+//! gmdata skat verify  --input data/skat/raw --dump-rejected data/skat/rejected.sgf
 //! gmdata skat stats   --input data/skat/raw --out data/skat/players.json
-//! gmdata skat convert --input data/skat/raw --out data/skat/train --hq \
+//! gmdata skat convert --input data/skat/raw --out data/skat/train --hq --split train \
 //!                     --players data/skat/players.json --ratings data/skat/raw/iss-ratings.html
 //! gmdata skat render  --input trajectories.jsonl --out games.sgf   # gmrules → ISS records
 //! ```
@@ -184,6 +201,10 @@ pub struct Replayed {
     pub jump_bids: usize,
     /// `SC` moves / non-final resignations dropped
     pub dropped: usize,
+    /// pickup declarations sent as half-moves (declaration, then the discards)
+    pub half_moves: usize,
+    /// declarations whose shown cards are not the declarer's hand (unchecked by ISS)
+    pub shown_mismatch: usize,
 }
 
 fn seat_of(s: &str) -> std::result::Result<Seat, String> {
@@ -199,12 +220,43 @@ fn cards_mask(parts: &[&str]) -> std::result::Result<u32, String> {
     parts.iter().try_fold(0u32, |m, p| parse_card(p).map(|c| m | (1 << c)).ok_or(format!("card {p:?}")))
 }
 
-/// The gmrules actions of ISS move `mv` of `seat` in state `g`.
-fn move_actions(g: &Skat, seat: Seat, mv: &str) -> std::result::Result<Vec<u32>, String> {
+/// An ISS move as gmrules actions (+ its oddities, counted by `verify`).
+struct MoveActions {
+    actions: Vec<u32>,
+    /// a declaration after the pickup without its discards (they follow as a move)
+    half: bool,
+    /// cards shown with a declaration that are not the declarer's hand: the ISS server
+    /// does not check them (it shows the defenders the declarer's actual hand, as the
+    /// frames do)
+    shown_mismatch: bool,
+}
+
+fn acts(actions: Vec<u32>) -> MoveActions {
+    MoveActions { actions, half: false, shown_mismatch: false }
+}
+
+/// The two discards `parts[0..2]` of a declaration.
+fn discards(parts: &[&str]) -> std::result::Result<(u32, u32), String> {
+    let d1 = parse_card(parts[0]).ok_or(format!("discard {:?}", parts[0]))?;
+    let d2 = parse_card(parts[1]).ok_or(format!("discard {:?}", parts[1]))?;
+    Ok((d1, d2))
+}
+
+/// Do the cards shown with a declaration (`shown`, maybe none) differ from `hand`?
+fn shown_mismatch(shown: &[&str], ouvert: bool, hand: u32) -> bool {
+    !shown.is_empty() && (!ouvert || shown.len() != 10 || cards_mask(shown).ok() != Some(hand))
+}
+
+/// The gmrules actions of ISS move `mv` of `seat` in state `g` — the ISS server's
+/// acceptance rules (`SimpleState.makeMove`): bid-list values only (real Skat; the ISS
+/// code takes any number, 75 archive records hold other values), declarations with
+/// their bid limits, the pickup declaration with both discards or as a half-move
+/// (declaration, then `<card>.<card>`), shown cards unchecked.
+fn move_actions(g: &Skat, seat: Seat, mv: &str) -> std::result::Result<MoveActions, String> {
     match g.phase() {
         Phase::Bid => {
             if mv == "p" {
-                return Ok(vec![PASS]);
+                return Ok(acts(vec![PASS]));
             }
             let v: u32 = mv.parse().map_err(|_| format!("bid expected, got {mv:?}"))?;
             let i = bid_index(v).ok_or(format!("bid {v} is not in the bid list"))?;
@@ -214,53 +266,70 @@ fn move_actions(g: &Skat, seat: Seat, mv: &str) -> std::result::Result<Vec<u32>,
             }
             let mut out = vec![MORE; (i - n) / BID_WINDOW];
             out.push(BID0 + i as u32);
-            Ok(out)
+            Ok(acts(out))
         }
         Phase::Answer => match mv {
-            "y" => Ok(vec![YES]),
-            "p" => Ok(vec![PASS]),
+            "y" => Ok(acts(vec![YES])),
+            "p" => Ok(acts(vec![PASS])),
             _ => Err(format!("answer y / p expected, got {mv:?}")),
         },
         Phase::SkatOrHand => {
             if mv == "s" {
-                return Ok(vec![PICKUP]);
+                return Ok(acts(vec![PICKUP]));
             }
             let parts: Vec<&str> = mv.split('.').collect();
             let c = Contract::parse_iss(parts[0]).ok_or(format!("game declaration {mv:?}"))?;
             if !c.hand {
                 return Err(format!("{mv:?} before the pickup must be a hand game"));
             }
-            if parts.len() > 1 && (!c.ouvert || cards_mask(&parts[1..])? != g.hand(seat)) {
-                return Err(format!("{mv:?}: the shown cards are not the declarer's hand"));
-            }
             let m = if c.ty == NULL {
                 if c.ouvert { MOD_OUVERT } else { MOD_PLAIN }
             } else {
                 c.hand_modifier()
             };
-            Ok(vec![HAND0 + c.ty as u32, MOD0 + m])
+            Ok(MoveActions {
+                actions: vec![HAND0 + c.ty as u32, MOD0 + m],
+                half: false,
+                shown_mismatch: shown_mismatch(&parts[1..], c.ouvert, g.hand(seat)),
+            })
         }
         Phase::Declare => {
             let parts: Vec<&str> = mv.split('.').collect();
-            if parts.len() < 3 {
-                return Err(format!("<game>.<card>.<card> expected after the pickup, got {mv:?}"));
-            }
             let c = Contract::parse_iss(parts[0]).ok_or(format!("game declaration {mv:?}"))?;
             if c.hand {
                 return Err(format!("{mv:?}: hand game after the pickup"));
             }
-            let d1 = parse_card(parts[1]).ok_or(format!("discard {:?}", parts[1]))?;
-            let d2 = parse_card(parts[2]).ok_or(format!("discard {:?}", parts[2]))?;
-            if parts.len() > 3 {
-                let rest = g.hand(seat) & !(1 << d1) & !(1 << d2);
-                if !c.ouvert || parts.len() != 13 || cards_mask(&parts[3..])? != rest {
-                    return Err(format!("{mv:?}: the shown cards are not the declarer's hand"));
-                }
+            let d = DECLARE0 + if c.ty == NULL && c.ouvert { DECL_NULL_OUVERT } else { c.ty as u32 };
+            if parts.len() == 1 {
+                return Ok(MoveActions { actions: vec![d], half: true, shown_mismatch: false });
             }
-            let d = if c.ty == NULL && c.ouvert { DECL_NULL_OUVERT } else { c.ty as u32 };
-            Ok(vec![DECLARE0 + d, DISCARD0 + d1, DISCARD0 + d2])
+            if parts.len() < 3 {
+                return Err(format!("<game>.<card>.<card> expected after the pickup, got {mv:?}"));
+            }
+            let (d1, d2) = discards(&parts[1..3])?;
+            let rest = g.hand(seat) & !(1 << d1) & !(1 << d2);
+            Ok(MoveActions {
+                actions: vec![d, DISCARD0 + d1, DISCARD0 + d2],
+                half: false,
+                shown_mismatch: shown_mismatch(&parts[3..], c.ouvert, rest),
+            })
         }
-        Phase::Play => Ok(vec![PLAY0 + parse_card(mv).ok_or(format!("card expected, got {mv:?}"))?]),
+        Phase::Discard1 => {
+            // the discards after a half-move declaration
+            let parts: Vec<&str> = mv.split('.').collect();
+            if parts.len() < 2 {
+                return Err(format!("<card>.<card> expected after the declaration, got {mv:?}"));
+            }
+            let (d1, d2) = discards(&parts[..2])?;
+            let rest = g.hand(seat) & !(1 << d1) & !(1 << d2);
+            let ouvert = g.contract().is_some_and(|c| c.ouvert);
+            Ok(MoveActions {
+                actions: vec![DISCARD0 + d1, DISCARD0 + d2],
+                half: false,
+                shown_mismatch: shown_mismatch(&parts[2..], ouvert, rest),
+            })
+        }
+        Phase::Play => Ok(acts(vec![PLAY0 + parse_card(mv).ok_or(format!("card expected, got {mv:?}"))?])),
         p => Err(format!("move {mv:?} in phase {p:?}")),
     }
 }
@@ -288,7 +357,7 @@ pub fn replay_record(rec: &IssRecord) -> std::result::Result<Replayed, String> {
     }
     let mut ending = IssEnding::default();
     let (mut over, mut resigned_end, mut awaiting_skat) = (false, false, false);
-    let (mut jump_bids, mut dropped) = (0, 0);
+    let (mut jump_bids, mut dropped, mut half_moves, mut shown_bad) = (0, 0, 0, 0);
     for (k, (who, mv)) in it.enumerate() {
         let at = |m: String| format!("move {} ({who} {mv}): {m}", k + 1);
         if over {
@@ -339,11 +408,13 @@ pub fn replay_record(rec: &IssRecord) -> std::result::Result<Replayed, String> {
         if g.turn() != Turn::Act(gmrules::SeatSet::single(s)) {
             return Err(at(format!("seat {s} is not to move ({:?}, to move {})", g.phase(), g.to_move())));
         }
-        let acts = move_actions(&g, s, mv).map_err(at)?;
+        let m = move_actions(&g, s, mv).map_err(at)?;
+        half_moves += m.half as usize;
+        shown_bad += m.shown_mismatch as usize;
         // a bid above the next bid value
-        let bid = acts.last().copied().filter(|a| (BID0..MORE).contains(a));
+        let bid = m.actions.last().copied().filter(|a| (BID0..MORE).contains(a));
         jump_bids += bid.is_some_and(|a| (a - BID0) as usize > next_bid_index(g.max_bid())) as usize;
-        for a in acts {
+        for a in m.actions {
             g.apply_action(s, a).map_err(|e| at(e.0))?;
             events.push(Event::Act(s, a));
         }
@@ -359,7 +430,7 @@ pub fn replay_record(rec: &IssRecord) -> std::result::Result<Replayed, String> {
         EndKind::Truncated
     };
     let result = (kind != EndKind::Truncated).then(|| g.iss_result(&ending));
-    Ok(Replayed { events, state: g, ending, kind, result, jump_bids, dropped })
+    Ok(Replayed { events, state: g, ending, kind, result, jump_bids, dropped, half_moves, shown_mismatch: shown_bad })
 }
 
 fn card_str_mask(m: u32) -> String {
@@ -560,6 +631,8 @@ pub struct VerifyStats {
     pub verified: usize,
     pub jump_bids: usize,
     pub dropped_moves: usize,
+    pub half_moves: usize,
+    pub shown_mismatch: usize,
     pub games: BTreeMap<String, usize>,
     pub errors: Vec<String>,
 }
@@ -615,6 +688,8 @@ fn tally(st: &mut VerifyStats, c: &Checked, show: usize) {
             }
             st.jump_bids += r.jump_bids;
             st.dropped_moves += r.dropped;
+            st.half_moves += r.half_moves;
+            st.shown_mismatch += r.shown_mismatch;
             let g = r.state.contract().map_or("-".to_string(), |c| c.iss_string());
             *st.games.entry(g).or_insert(0) += 1;
         }
@@ -633,16 +708,27 @@ fn tally(st: &mut VerifyStats, c: &Checked, show: usize) {
     }
 }
 
-/// Verify every record (parallel chunks).
-pub fn verify(input: &Path, max_records: Option<usize>, show: usize) -> Result<VerifyStats> {
+/// Verify every record (parallel chunks); `rejected`: write the rejected lines there.
+pub fn verify(input: &Path, max_records: Option<usize>, show: usize, rejected: Option<&Path>) -> Result<VerifyStats> {
     let mut st = VerifyStats::default();
+    let mut dump = match rejected {
+        Some(p) => Some(std::io::BufWriter::new(std::fs::File::create(p).with_context(|| format!("create {}", p.display()))?)),
+        None => None,
+    };
     let mut lines = record_lines(input)?.take(max_records.unwrap_or(usize::MAX)).peekable();
     while lines.peek().is_some() {
         let chunk: Vec<(String, String)> = lines.by_ref().take(1 << 14).collect::<Result<_>>()?;
         let checked: Vec<Option<Checked>> = chunk.par_iter().map(|(id, l)| check_line(id, l)).collect();
-        for c in checked.iter().flatten() {
+        for ((_, line), c) in chunk.iter().zip(&checked) {
+            let Some(c) = c else { continue };
             tally(&mut st, c, show);
+            if let (Some(w), false) = (dump.as_mut(), matches!(c, Checked::Ok(..))) {
+                writeln!(w, "{}", line.trim_end())?;
+            }
         }
+    }
+    if let Some(mut w) = dump {
+        w.flush()?;
     }
     Ok(st)
 }
@@ -707,10 +793,23 @@ pub fn player_stats(input: &Path, max_records: Option<usize>) -> Result<(BTreeMa
 // conversion
 // ---------------------------------------------------------------------------
 
+/// Which records a conversion takes (deterministic by ISS game id).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum Split {
+    #[default]
+    All,
+    /// ids not divisible by `val_mod`
+    Train,
+    /// ids divisible by `val_mod`
+    Val,
+}
+
 /// The conversion's ISS-side counters (the traj driver counts the rest).
 #[derive(Default)]
 pub struct ConvertCtx {
     pub filter: Filter,
+    pub split: Split,
+    pub val_mod: u64,
     pub allow_truncated: bool,
     pub st: RefCell<VerifyStats>,
     /// finished / resigned games whose seats were all filtered out
@@ -720,6 +819,13 @@ pub struct ConvertCtx {
 /// The traj record of a verified replay (None: not converted — aborted, truncated
 /// without --allow-truncated, every seat filtered out).
 pub fn to_record(ctx: &ConvertCtx, id: &str, rec: &IssRecord, r: Replayed) -> Option<Record> {
+    if ctx.split != Split::All {
+        // ids are integers on ISS; anything else is hashed
+        let n = rec.id.parse::<u64>().unwrap_or_else(|_| rec.id.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64)));
+        if (n % ctx.val_mod.max(1) == 0) != (ctx.split == Split::Val) {
+            return None;
+        }
+    }
     match r.kind {
         EndKind::Aborted => return None,
         EndKind::Truncated if !ctx.allow_truncated => return None,
@@ -771,6 +877,33 @@ pub fn records<'a>(input: &Path, ctx: &'a ConvertCtx, max_records: Option<usize>
             Checked::Unparseable(e) | Checked::Illegal(e) | Checked::Mismatch(e) => Some(Err(anyhow::anyhow!(e))),
         }
     }))
+}
+
+/// What a conversion of the records would write (`convert --count-only`).
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct Counts {
+    pub converted: usize,
+    pub conceded: usize,
+    pub samples: usize,
+    pub frames: usize,
+    /// records the rules reject (by reason in the ISS counters)
+    pub rejected: usize,
+}
+
+pub fn count(records: impl Iterator<Item = Result<Record>>) -> Counts {
+    let mut c = Counts::default();
+    for r in records {
+        let Ok(rec) = r else {
+            c.rejected += 1;
+            continue;
+        };
+        let keep = |s: Seat| rec.seats.as_ref().is_none_or(|v| v.contains(&s));
+        c.converted += 1;
+        c.conceded += rec.conceded.is_some() as usize;
+        c.samples += (0..3).filter(|&s| keep(s)).count();
+        c.frames += rec.events.iter().filter(|e| matches!(e, Event::Act(s, _) if keep(*s))).count();
+    }
+    c
 }
 
 // ---------------------------------------------------------------------------
@@ -870,6 +1003,9 @@ pub enum Cmd {
         /// rejection reasons to print
         #[arg(long, default_value_t = 20)]
         show: usize,
+        /// write the rejected record lines to this file
+        #[arg(long)]
+        dump_rejected: Option<PathBuf>,
     },
     /// Per-player statistics of the corpus (the --players file of convert)
     Stats {
@@ -907,6 +1043,11 @@ pub enum Cmd {
         /// high-quality preset (see the module docs); needs --players and/or --ratings
         #[arg(long)]
         hq: bool,
+        /// all records, or the train / val split by ISS game id (id % --val-mod == 0 → val)
+        #[arg(long, value_enum, default_value_t = Split::All)]
+        split: Split,
+        #[arg(long, default_value_t = 100)]
+        val_mod: u64,
         #[arg(long, default_value_t = 1024)]
         shard_size: usize,
         #[arg(long)]
@@ -917,6 +1058,10 @@ pub enum Cmd {
         /// keep records that stop before the end (tgt.value_mask false on them)
         #[arg(long)]
         allow_truncated: bool,
+        /// count the records / samples / frames the conversion would write (same
+        /// filters and split), write nothing — sizes a full-scale run
+        #[arg(long)]
+        count_only: bool,
     },
     /// gmrules skat trajectories (JSONL, as `gmdata rules convert` reads) → ISS records
     Render {
@@ -1000,8 +1145,8 @@ pub fn run(cmd: Cmd) -> Result<()> {
             println!("{info}");
             Ok(())
         }
-        Cmd::Verify { input, max_records, show } => {
-            let st = verify(&input, max_records, show)?;
+        Cmd::Verify { input, max_records, show, dump_rejected } => {
+            let st = verify(&input, max_records, show, dump_rejected.as_deref())?;
             println!("{}", serde_json::to_string(&st)?);
             Ok(())
         }
@@ -1015,10 +1160,18 @@ pub fn run(cmd: Cmd) -> Result<()> {
             println!("{}", json!({"players": n, "records": st.records, "verified": st.verified, "out": out}));
             Ok(())
         }
-        Cmd::Convert { input, out, player, ratings, min_rating, max_rc, players, min_games, min_money, hq, shard_size,
-                       max_records, store_events, allow_truncated } => {
+        Cmd::Convert { input, out, player, ratings, min_rating, max_rc, players, min_games, min_money, hq, split,
+                       val_mod, shard_size, max_records, store_events, allow_truncated, count_only } => {
             let filter = build_filter(player, ratings, min_rating, max_rc, players, min_games, min_money, hq)?;
-            let ctx = ConvertCtx { filter, allow_truncated, ..Default::default() };
+            let ctx = ConvertCtx { filter, split, val_mod, allow_truncated, ..Default::default() };
+            if count_only {
+                let c = count(records(&input, &ctx, max_records)?);
+                let mut v = serde_json::to_value(&c)?;
+                v["iss"] = serde_json::to_value(&*ctx.st.borrow())?;
+                v["filtered_out"] = json!(*ctx.filtered.borrow());
+                println!("{v}");
+                return Ok(());
+            }
             let opts = ConvertOptions { shard_size, store_events, allow_truncated, ..Default::default() };
             let st = traj::convert::<Skat>(&SkatConfig {}, records(&input, &ctx, max_records)?, &out, &opts)?;
             let mut v = serde_json::to_value(&st)?;
@@ -1106,16 +1259,33 @@ mod tests {
         // one defender's resignation does not end the game
         let r = replay_record(&rec(&format!("{base} 0 RE"))).unwrap();
         assert_eq!((r.kind, r.dropped), (EndKind::Truncated, 1));
+        // a pickup declaration as a half-move (declaration, then the discards); the
+        // discards alone need two cards
+        let pick = "1 18 0 p 2 p 1 s w SJ.D8";
+        let r = replay_record(&rec(&format!("{pick} 1 G 1 HQ.DK"))).unwrap();
+        let full = replay_record(&rec(&format!("{pick} 1 G.HQ.DK"))).unwrap();
+        assert_eq!((r.half_moves, full.half_moves, r.events.clone()), (1, 0, full.events));
+        assert!(replay_record(&rec(&format!("{pick} 1 G 1 HQ"))).is_err());
+        assert!(replay_record(&rec(&format!("{pick} 1 G 1 CA.DT"))).is_err());
+        // shown cards are not checked (as on the ISS server), only counted
+        let r = replay_record(&rec(&format!("{pick} 1 NO.HQ.DK.SJ.D8.H9.DJ.HK.HJ.C9.DQ.HA.H8"))).unwrap();
+        assert_eq!((r.shown_mismatch, r.state.contract().unwrap().iss_string()), (0, "NO".to_string()));
+        let r = replay_record(&rec(&format!("{pick} 1 NO.HQ.DK.HQ.DK.H9.DJ.HK.HJ.C9.DQ.HA.H8"))).unwrap();
+        assert_eq!(r.shown_mismatch, 1);
+        let r = replay_record(&rec("1 18 0 p 2 p 1 NOH.HQ.DK.H9.DJ.HK.HJ.C9.DQ.HA.H8")).unwrap();
+        assert_eq!((r.shown_mismatch, r.state.contract().unwrap().iss_string()), (0, "NOH".to_string()));
     }
 
     /// Every record of the committed real-data fixture replays and reproduces its
     /// recorded result exactly.
     #[test]
     fn fixture_records_verify() {
-        let st = verify(&fixture(), None, 5).unwrap();
+        let st = verify(&fixture(), None, 5, None).unwrap();
         assert_eq!((st.unparseable, st.illegal, st.result_mismatch), (0, 0, 0), "{:?}", st.errors);
         assert_eq!(st.verified, st.records);
         assert!(st.finished > 0 && st.passed > 0 && st.resigned > 0 && st.aborted > 0, "{st:?}");
+        // pinned oddities: half-move declarations, unchecked shown cards
+        assert!(st.half_moves >= 5 && st.shown_mismatch >= 2, "{st:?}");
         // every rendered trajectory parses back to the same trajectory
         for (id, line) in record_lines(&fixture()).unwrap().map(Result::unwrap) {
             let rec = parse_line(&line).unwrap().unwrap();
@@ -1147,6 +1317,27 @@ mod tests {
         assert_eq!(sh.meta()["schema"], "candidate.v1");
         assert_eq!(sh.meta()["max_actions"], 12);
         std::fs::remove_dir_all(&dir).unwrap();
+        // --count-only predicts what the conversion writes, also with a seat filter
+        let c = count(records(&fixture(), &ConvertCtx::default(), None).unwrap());
+        assert_eq!((c.converted, c.conceded, c.samples, c.frames), (st.converted, st.conceded, st.samples, st.frames));
+        let ctx = ConvertCtx { filter: Filter { names: vec!["kermit".into()], ..Default::default() }, ..Default::default() };
+        let c = count(records(&fixture(), &ctx, None).unwrap());
+        let ctx = ConvertCtx { filter: Filter { names: vec!["kermit".into()], ..Default::default() }, ..Default::default() };
+        let s = traj::convert::<Skat>(&SkatConfig {}, records(&fixture(), &ctx, None).unwrap(), &dir, &ConvertOptions::default()).unwrap();
+        assert!(c.samples > 0 && c.samples < c.converted * 3);
+        assert_eq!((c.converted, c.samples, c.frames), (s.converted, s.samples, s.frames));
+        std::fs::remove_dir_all(&dir).unwrap();
+        // the train / val split partitions the converted games
+        let mut n = 0;
+        for split in [Split::Train, Split::Val] {
+            let ctx = ConvertCtx { split, val_mod: 7, ..Default::default() };
+            let d = dir.with_extension(format!("{split:?}"));
+            let s = traj::convert::<Skat>(&SkatConfig {}, records(&fixture(), &ctx, None).unwrap(), &d, &ConvertOptions::default()).unwrap();
+            assert!(s.converted > 0);
+            n += s.converted;
+            std::fs::remove_dir_all(&d).unwrap();
+        }
+        assert_eq!(n, st.converted);
     }
 
     #[test]
