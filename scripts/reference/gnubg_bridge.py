@@ -9,10 +9,11 @@ external program, never linked into or vendored by this repository)::
 
 One JSON request per stdin line, one JSON reply per stdout line (gnubg's own output
 is sent to /dev/null).  Moves are read from gnubg's `hint` listing (gnubg's move
-notation, parsed here): in gnubg 1.1.0a16 the bindings' move tuples are cut at the
-first bear-off and ``gnubg.hint()`` crashes.  Positions are from the point of view of the player on roll,
-in gnubg's convention: ``board = [opponent[25], mover[25]]``, each side in its own
-numbering (index i = point i+1, index 24 = the bar) — exactly gmrules' ``Side``.
+notation, parsed here): in gnubg 1.1.0a16 the bindings' findbestmoves tuples are cut
+at the first bear-off and ``gnubg.hint()`` crashes.  Positions are from the point of
+view of the player on roll, in gnubg's convention: ``board = [opponent[25],
+mover[25]]``, each side in its own numbering (index i = point i+1, index 24 = the bar)
+— exactly gmrules' ``Side``.
 
   {"op": "hello"}
       -> {"ok": true, "engine": "gnubg <version>", "plies": P}
