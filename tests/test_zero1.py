@@ -108,7 +108,7 @@ def _assert_same(a, b, path=""):
 #: checkpoint entries that must agree bit for bit ("args", "world_size" differ)
 CKPT_KEYS = ("games", "configs", "core_config", "core_state", "model_state",
              "train_model_state", "mixture", "step", "optimizer_state", "scheduler_state",
-             "ema_state")
+             "ema_state", "optimizer_param_names")
 
 
 def _assert_same_checkpoint(a, b, what=""):

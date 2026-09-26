@@ -199,6 +199,11 @@ from training.train_il_game import (
 )
 from training.zero import Zero1
 
+#: resumable checkpoints: the canonical names of the optimizer's parameters,
+#: per param group in ``optimizer.state_dict()`` index order — what a resume
+#: can match the saved optimizer state by
+OPT_NAMES_KEY = "optimizer_param_names"
+
 
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -421,6 +426,19 @@ def game_checkpoint(ck: Dict, game: str) -> Dict:
     if "train_model_state" in ck:
         out["train_model_state"] = part(ck["train_model_state"])
     return out
+
+
+# ----------------------------------------------------------------------
+# resume, possibly with games added: everything matched by game and
+# parameter NAME, never by position
+# ----------------------------------------------------------------------
+
+def optimizer_param_names(model: torch.nn.Module,
+                          optimizer: torch.optim.Optimizer) -> List[List[str]]:
+    """Canonical names of ``optimizer``'s parameters per param group, in
+    ``optimizer.state_dict()`` index order (saved as :data:`OPT_NAMES_KEY`)."""
+    canon = {id(p): n for n, p in model.named_parameters()}
+    return [[canon[id(p)] for p in g["params"]] for g in optimizer.param_groups]
 
 
 EvalSums = Dict[str, Tuple[Dict[str, float], int]]
@@ -789,6 +807,8 @@ def main(argv=None) -> Dict[str, object]:
         if resumable:
             ck.update(step=step, optimizer_state=optimizer_state,
                       scheduler_state=scheduler.state_dict(), ema_state=ema_state)
+            # what a resume matches the optimizer state by (games may be added)
+            ck[OPT_NAMES_KEY] = optimizer_param_names(model, optimizer)
         # atomic: a job killed mid-write never leaves a truncated checkpoint
         torch.save(ck, f"{path}.tmp")
         os.replace(f"{path}.tmp", path)
