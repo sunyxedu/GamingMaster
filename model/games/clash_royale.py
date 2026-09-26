@@ -20,8 +20,12 @@ Card tokens (``ClashRoyaleConfig.cr_card_tokens``):
     (``data_processing/games/clash_royale/expand.py``).  The card head points
     over the deck tokens; ``card_slot`` (label / action) is the deck index,
     ``legal["card"]`` [.., 8] = P(in hand) > 0 and affordable.  Every deck
-    token shares one positional embedding: token order (by card id) carries
-    no meaning, the network is equivariant to it.
+    token shares one positional embedding, so the adapter gives the token
+    order (by card id, a function of the deck alone) no meaning: with the
+    transformer / TRM cores the network is equivariant to it.  The
+    recurrent-depth core is not exactly: its fixed inference state s_0 is
+    one draw per token index (training draws it afresh), so the order is
+    kept canonical — crdata and ``belief.deck_token_order`` sort the same way.
   - ``"hand"`` (legacy checkpoints; converter_version <= 2 shards): the 4
     reconstructed hand slots with per-slot embeddings.  Those shards inferred
     the hand from the whole match (the coming play marked "certainly in

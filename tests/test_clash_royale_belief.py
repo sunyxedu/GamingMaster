@@ -296,10 +296,21 @@ def _deck_net(**kw):
     from model.games import build_game_network
 
     torch.manual_seed(0)
-    return build_game_network("clash_royale", d_model=32, n_heads=4, d_ff=48, n_st_layers=1,
-                              dropout=0.0, encoder_channels=8, arena_h=8, arena_w=6,
-                              arena_channels=5, n_cards=20, core_type="transformer", core_layers=1,
-                              **kw)
+    arch = dict(d_model=32, n_heads=4, d_ff=48, n_st_layers=1, dropout=0.0, encoder_channels=8,
+                arena_h=8, arena_w=6, arena_channels=5, n_cards=20, core_type="transformer",
+                core_layers=1)
+    return build_game_network("clash_royale", **{**arch, **kw})
+
+
+#: cores whose computation treats tokens alike (no per-index state): exactly equivariant
+#: to the deck order.  The recurrent-depth core's fixed inference state s_0 is one draw
+#: per token index, so it is not; the order is canonical instead (by card id, the same in
+#: crdata and belief.deck_token_order — test_python_belief_matches_the_converter_bit_for_bit).
+_EQUIVARIANT_CORES = {
+    "transformer": dict(core_type="transformer", core_layers=1),
+    "trm": dict(core_type="trm", trm_H_cycles=2, trm_L_cycles=1, trm_block_layers=1,
+                halt_max_steps=2),
+}
 
 
 def _deck_obs(B=2, T=4, seed=0):
@@ -312,11 +323,12 @@ def _deck_obs(B=2, T=4, seed=0):
             "globals_seq": torch.rand(B, T, 6, generator=g)}
 
 
+@pytest.mark.parametrize("core", sorted(_EQUIVARIANT_CORES))
 @pytest.mark.parametrize("mixer", ["attention", "recurrent"])
-def test_deck_tokens_carry_no_order_semantics(mixer):
+def test_deck_tokens_carry_no_order_semantics(mixer, core):
     """The deck index is only a pointer: permuting the deck tokens permutes the card
     logits (the label follows its card) and leaves wait / placement / value alone."""
-    net = _deck_net(temporal_mixer=mixer).eval()
+    net = _deck_net(temporal_mixer=mixer, **_EQUIVARIANT_CORES[core]).eval()
     assert net.cfg.cr_card_tokens == "deck" and net.obs_encoder.n_tokens == 48 + 8
     obs = _deck_obs()
     labels = torch.randint(0, 8, (2, 4), generator=torch.Generator().manual_seed(1))
@@ -324,8 +336,8 @@ def test_deck_tokens_carry_no_order_semantics(mixer):
     inv = torch.argsort(perm)
     pobs = {k: (v[:, :, perm] if k.startswith("deck_") else v) for k, v in obs.items()}
     with torch.no_grad():
-        a = net(obs, labels={"card_slot": labels}, act_steps=1)
-        b = net(pobs, labels={"card_slot": inv[labels]}, act_steps=1)
+        a = net(obs, labels={"card_slot": labels}, act_steps=2)
+        b = net(pobs, labels={"card_slot": inv[labels]}, act_steps=2)
     close = dict(rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(b["card_logits"], a["card_logits"][:, :, perm], **close)
     for k in ("wait_logits", "placement_logits", "value"):
