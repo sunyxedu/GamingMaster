@@ -55,15 +55,22 @@
 //!
 //! Re-conversion (v1 shards are obsolete: different frames, targets and field width; shard
 //! meta `{"field_features": 22, "move_buckets": 1024, "species_buckets": 512}`) — on the
-//! cluster from the checkout root (`cargo build --release -p gmdata` in data_processing/;
-//! the fetch is resumable and skips replays already on disk):
+//! cluster from the checkout root (`cargo build --release -p gmdata` in data_processing/; the
+//! fetch is resumable and skips replays already on disk — without internet access on the
+//! nodes, fetch elsewhere and rsync the raw directory), then every 5th shard → val:
 //!
-//!   G=data_processing/target/release/gmdata
+//!   G=$PWD/data_processing/target/release/gmdata; D=$HOME/gm-data/v4
 //!   $G pokemon fetch --format gen9ou --min-rating 1500 --max-replays 2000 --sleep-ms 500 \
 //!       --out $HOME/gm-data/raw/pokemon
-//!   $G pokemon convert --hq --input $HOME/gm-data/raw/pokemon --out $HOME/gm-data/v4/shards/pokemon
+//!   $G pokemon convert --hq --input $HOME/gm-data/raw/pokemon --out $D/shards/pokemon
+//!   mkdir -p $D/split/pokemon/train $D/split/pokemon/val; i=0
+//!   for s in $D/shards/pokemon/pokemon_*; do
+//!     [ $((i % 5)) -eq 4 ] && v=val || v=train; ln -s $s $D/split/pokemon/$v/; i=$((i + 1)); done
 //!
-//! then split the shards into train/val as for the other games (every 5th shard → val).
+//! Train on `--data pokemon=$D/split/pokemon/train --val pokemon=$D/split/pokemon/val`; fresh
+//! runs take pokemon_field_features / pokemon_move_buckets from the shard meta.  A checkpoint
+//! with a v1 pokemon adapter (20 field features, the slot head) is refused on v2 shards by
+//! check_meta_arch: its pokemon adapter must be rebuilt (a fresh adapter on the trained core).
 //!
 //! Spectator logs are third-person: the converter can only show what the log reveals, so a
 //! side's own moves, items, abilities, stats and tera type — all known to the player — appear
