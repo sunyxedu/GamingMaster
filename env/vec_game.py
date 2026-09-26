@@ -22,8 +22,10 @@ Row ``r`` belongs to env ``r // rows_per_env`` (a fixed layout: rows never move,
 so step caches stay aligned).  A row is one temporal STREAM of the network —
 the sequence of frames whose Stage-1 state carries over:
 
-  * simultaneous games (generals): ``rows_per_env = n_seats``; row
+  * simultaneous games (generals, lux): ``rows_per_env = n_seats``; row
     ``(env, seat)`` is that seat's own fog-of-war view, one frame per turn.
+    (Lux: one episode = one match — the IL sample — and ``reset`` continues
+    the 5-match game; see env/vec_lux.py.)
   * alternating games (othello, gomoku, ``interleaved = True``): ``rows_per_env = 1``;
     the row is ONE interleaved stream holding both movers' frames, each from
     the side-to-move perspective, forced pass frames included — exactly the
@@ -305,11 +307,18 @@ def _make_gomoku(n_envs: int = 1, **kw) -> VecGameEnv:
     return GomokuVecEnv(n_envs, **kw)
 
 
+def _make_lux(n_envs: int = 1, **kw) -> VecGameEnv:
+    """Needs the ``lux`` extra (the official luxai-s3 env, JAX)."""
+    from env.vec_lux import LuxVecEnv
+    return LuxVecEnv(n_envs, **kw)
+
+
 #: games with a simulator (the others train on their IL replay stream only)
 VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
     "generals": _make_generals,
     "othello": _make_othello,
     "gomoku": _make_gomoku,
+    "lux": _make_lux,
 }
 
 
@@ -343,6 +352,9 @@ def __getattr__(name: str):
     if name == "GomokuVecEnv":
         from env.vec_gomoku import GomokuVecEnv
         return GomokuVecEnv
+    if name == "LuxVecEnv":
+        from env.vec_lux import LuxVecEnv
+        return LuxVecEnv
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

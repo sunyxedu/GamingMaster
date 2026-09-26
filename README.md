@@ -55,6 +55,7 @@ entrypoint migration, and [Slurm jobs](scripts/slurm/README.md) for cluster usag
 
 ```bash
 uv sync
+uv sync --extra lux   # optional: the Lux AI S3 simulator (official luxai-s3 env, JAX)
 
 # (Node.js is NOT required — .gior decompression is pure Python)
 ```
@@ -127,7 +128,9 @@ uv run python -m training.train_rl \
 > Environment: `env/generals_env.py` provides a two-player simultaneous-move Gym-like environment with fog of war.
 > Stage-2 (mixed multi-game) RL: `env/vec_game.py` defines the `VecGameEnv` protocol — N games stepped at once,
 > observations in each game's gm-shard obs schema (pinned bit-for-bit to the IL data by
-> `tests/test_vec_game_golden.py`; adapters for generals, othello and gomoku) — and `env/league.py` the seat / opponent
+> `tests/test_vec_game_golden.py`; adapters for generals, othello and gomoku, and Lux AI S3 in `env/vec_lux.py` — the
+> official luxai-s3 env batched with `jax.vmap`, one match per episode, reproducing Kaggle replays and the
+> `gmdata lux convert` shards exactly, `tests/test_vec_lux_golden.py`) — and `env/league.py` the seat / opponent
 > interface (mirror self-play, callables, network snapshots).
 > `training/train_rl_joint.py` is the Stage-2 trainer: PPO with decoupled ratios on the WHOLE multi-game model
 > (a `train_multi_game` checkpoint is the initial policy and the frozen KL reference), mixing every simulator
