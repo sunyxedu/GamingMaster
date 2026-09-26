@@ -24,8 +24,12 @@
 //! scripts/fetch_hunl.sh ~/gm-data/hunl                    # HQ=1: winning bots' seats
 //! #   ≈ 160 M hands → ≈ 420 M frames, ≈ 0.7 TB (train/<year>, val/<year>: 0.5 %)
 //! HQ=0 scripts/fetch_hunl.sh ~/gm-data/hunl               # both seats: ≈ 890 M frames, ≈ 1.5 TB
-//! KEEP_PER_MILLE=250 scripts/fetch_hunl.sh ~/gm-data/hunl # a uniform quarter: ≈ 105 M frames
+//! KEEP_PER_MILLE=100 scripts/fetch_hunl.sh ~/gm-data/hunl # a uniform tenth: ≈ 42 M frames, ≈ 70 GB
 //! ```
+//!
+//! The tenth is plenty for joint IL pretraining and keeps the trainers' in-memory
+//! per-sample index small (GameShardDataset: ~120 B per sample and process, ~20 GB
+//! for the full HQ corpus's ~160 M samples).
 //!
 //! By hand:
 //!

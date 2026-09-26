@@ -13,7 +13,8 @@ stacks = 200 big blinds, stacks reset every hand), through every layer:
                       replayed and verified with its recorded payoffs); full scale:
                       ``scripts/fetch_hunl.sh ~/gm-data/hunl`` = 160.6 M unique hands,
                       the winning bots' seats (HQ=1) ≈ 420 M frames ≈ 0.7 TB
-                      (HQ=0 ≈ 890 M / 1.5 TB; KEEP_PER_MILLE=250 a quarter), then
+                      (HQ=0 ≈ 890 M / 1.5 TB; KEEP_PER_MILLE=100, enough for IL
+                      pretraining: ≈ 42 M frames ≈ 70 GB), then
                       ``--data hunl=~/gm-data/hunl/train --val hunl=~/gm-data/hunl/val``
     simulator         gmsim.Sim("hunl") → env/vec_gmsim.py: 2 seats, per-seat streams
                       (hidden cards), alternating, deck dealt from the episode seed
