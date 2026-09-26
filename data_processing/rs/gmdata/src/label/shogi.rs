@@ -56,8 +56,9 @@
 //!   reference's own scores the 1M choice loses only 0.003 Q (≈ 8 cp) on average. The two
 //!   teacher policies differ by a total-variation distance of 0.17 (250k: 0.25, 100k: 0.28).
 //!   On 12 real floodgate games (1455 labelled frames) the 1M-node teacher's best move is the
-//!   move played 53% of the time, the played move is among its 8 scored moves 96% of the
-//!   time, and the sign of its value matches the game result on 87% of the frames. 1M labels
+//!   move played 54% of the time (53% before stale lines were capped), the played move is
+//!   among its 8 scored moves 96% of the time, and the sign of its value matches the game
+//!   result on 87% of the frames. (The budget comparison above predates the cap.) 1M labels
 //!   the whole floodgate split in a few node-hours (below); `--limit nodes=4000000` buys a
 //!   stronger, 4× slower teacher.
 //! * `--max-moves 8` = MultiPV 8: at the recommended τ a move 100 cp behind the best (near
@@ -67,7 +68,10 @@
 //!   (mean top-move probability 0.37, entropy 1.6 nats). The likelihood of the moves actually
 //!   played on floodgate peaks for τ between 0.02 and 0.03 (mean log-probability −1.54, vs
 //!   −1.61 at 0.05), where the teacher is also calibrated (mean top probability 0.48 ≈ its 53%
-//!   top-1 agreement with the played move): use `--tau 0.025` for shogi. teacher_q /
+//!   top-1 agreement with the played move): use `--tau 0.025` for shogi. Re-measured with
+//!   capped stale lines on the 1455 real frames (log-probability floored at 10⁻⁶ for played
+//!   moves outside the 8): −1.80 at τ = 0.025, −1.81 at 0.02 / 0.03, −1.87 at 0.05 (uncapped:
+//!   −1.83 / −1.89) — the same optimum, a slightly better teacher. teacher_q /
 //!   teacher_raw keep the raw scores, so the policy can be re-derived with another τ.
 //! * Q = logistic(cp / 600) — the usual shogi-engine win-rate model (the "Ponanza constant"
 //!   600 of YaneuraOu's learner); mate for the mover → 1, mated → 0 ([`CP_SCALE`]). Note that
@@ -82,10 +86,12 @@
 //!   block). Such a score can be far too high: each MultiPV pass of the unfinished iteration
 //!   picks the best of the remaining moves, so it had already ranked them below its own,
 //!   deeper lines (at their depth, not at the old one). On 12 real floodgate
-//!   games at 1M nodes 9% of the labelled frames had a stale line above the first line,
+//!   games at 1M nodes 9% of the labelled frames had a stale line above the first line
+//!   (0 with the cap, which lowers some stale line on 39% of the frames),
 //!   e.g. `multipv 1 depth 10 cp −1270 upperbound G*7h` with `multipv 2 depth 9 cp +346
 //!   3h3d+` (an 8M-node search scores 3h3d+ ≤ −1235), which would give the refuted move
-//!   nearly all of the policy mass. So the Q and raw score of every line shallower than the
+//!   80% of the policy mass at τ = 0.05 (94% at 0.025) and the engine's choice G*7h none.
+//!   So the Q and raw score of every line shallower than the
 //!   deepest one are capped at the lowest Q / raw score among the deepest lines (the chess
 //!   labeller does the same): the teacher keeps the engine's own ranking.
 //!
