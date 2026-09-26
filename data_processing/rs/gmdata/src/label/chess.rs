@@ -19,10 +19,17 @@
 //!   performance core: 50k nodes 27.7 pos/s, 100k 13.9, 150k 8.0, 200k 6.2 (≈ 1.4 M
 //!   nodes/s; ≈ 2.5 ms fixed cost per position for `ucinewgame` + `isready`). A node
 //!   budget (not movetime) keeps labels reproducible and machine independent.
-//! * `--max-moves 8` = UCI `MultiPV` = the width K of the teacher columns. With
-//!   τ = 0.05 on Q ∈ [0,1] a move 0.15 below the best keeps e⁻³ ≈ 5% of the best
-//!   move's weight, so the 9th-best move rarely matters, while every extra PV line
-//!   costs search depth at a fixed node budget.
+//! * `--max-moves 8` = UCI `MultiPV` = the width K of the teacher columns (the task's
+//!   default; every extra PV line costs search depth at a fixed node budget). With
+//!   τ = 0.05 a move 0.15 below the best in Q keeps e⁻³ ≈ 5% of the best move's
+//!   weight — but WDL-based Q saturates: on real 2200+ games (default settings) 40% of
+//!   the labelled frames have |engine value| > 0.9, where many moves are equally won
+//!   (or lost), and the 8th move keeps > 20% of the best move's weight in 55% of the
+//!   frames (median 0.3). There π is flat over the 8 scored moves and moves beyond
+//!   them get 0. Raise `--max-moves`, lower `--tau`, or re-derive π from
+//!   `tgt.teacher_raw` (cp) for decided positions if that matters.
+//!   Measured on the same data: the human move is among the 8 scored moves in 90% of
+//!   the frames and is the engine's first choice in ≈ 40%.
 //! * `--tau 0.05`, `--policy softmax`: π(a) ∝ exp(Q(a)/τ) over the scored moves.
 //! * Engine options: `Threads=1`, `Hash=16` (MB; plenty for ~10⁵ nodes, and cheap to
 //!   clear) unless overridden with `--engine-option NAME=VALUE`; `MultiPV = K` and
@@ -34,8 +41,13 @@
 //! deterministic whatever the worker count or order), `position startpos moves <the
 //! game's moves before this frame>` (the full history, so repetitions and the 50-move
 //! counter are seen as in the game), `go nodes N`. Of each MultiPV line the final
-//! `info` line is used ([`super::uci::collect`]; at the node limit the last iteration
-//! may be partial, so a line can carry a bound — its score is used as is):
+//! `info` line is used ([`super::uci::collect`]). The node limit stops the search inside
+//! an iteration: a line can carry a bound (its score is used as is), and moves that
+//! failed low in the unfinished iteration are printed with their older, shallower score
+//! (depth below the final one), which can be far too high — on real 2200+ games at
+//! 2000 nodes 9% of the frames had such a line above the principal one. Those lines are
+//! capped at the lowest final-depth line's Q and cp ([`analysis`]), so the teacher
+//! keeps Stockfish's own ranking:
 //!
 //! ```text
 //! Q(move)            = (W + D/2) / 1000 of the line's `wdl` (mover POV; mate lines are
@@ -83,9 +95,11 @@
 //! labelled frames hit with one worker (one cache), 4.8% with 8 workers.
 //!
 //! Throughput: positions/s per process ≈ 1 / (nodes ÷ nodes-per-second + ≈ 3 ms fixed
-//! cost), ÷ (1 − cache hit rate). Measured end to end (`gmdata label chess` on a real
-//! shard, one worker, default settings, on a shared Apple M4 Pro): 11.0 pos/s, i.e.
-//! ≈ 0.09 s per position. One engine process needs ≈ 0.2–0.4 GB RSS (NNUE net + hash).
+//! cost), ÷ (1 − cache hit rate). Measured end to end (`gmdata label chess`, default
+//! settings, real 2200+ shards, an Apple M4 Pro shared with other jobs): one worker
+//! 11.0 pos/s (≈ 0.09 s per position); 8 workers 68–76 pos/s (8.5–9.6 per worker), a
+//! whole 20k-frame shard in 298 s with no engine error or verification failure. One
+//! engine process needs ≈ 0.2–0.4 GB RSS (NNUE net + hash).
 //! Expected on the cluster labelling nodes (AMD EPYC 9355, Zen 5, AVX-512 VNNI; the
 //! universal sf_19 binary selects its avx512 VNNI build at runtime): ≈ 1.0–1.3 M nodes/s
 //! per single-threaded process with every core busy, i.e. ≈ 8–11 pos/s per process,
@@ -416,6 +430,7 @@ impl Labeller for ChessLabeller {
             "action_id": "promotion*4096 + from*64 + to (POV squares row*8+file, row = 7-rank for white to move, rank for black; castling = king to g/c file; promotion 0 none 1 N 2 B 3 R 4 Q)",
             "q": "(W + D/2) / 1000 of each MultiPV line's final info (UCI_ShowWDL)",
             "value": "Q of the multipv 1 line",
+            "stale_lines": "lines shallower than the deepest line are capped at the deepest lines' lowest Q and raw score",
             "raw": "cp; mate in n = +-(100000 - |n|)",
             "query": "ucinewgame; position startpos moves <game history>; go",
             "go": go_command(&cfg.limits).unwrap_or_default(),
@@ -468,12 +483,19 @@ impl Labeller for ChessLabeller {
 }
 
 /// Engine lines → scored moves (flat ids of the frame's legal moves, Q from WDL, raw cp).
+///
+/// Stale lines: a search stopped by the node limit ends inside an iteration, and
+/// Stockfish then prints the moves that failed low in that iteration with their score
+/// from the previous, shallower iteration (depth − 1), ranked below the lines of the
+/// final depth. Such a score can be far too high (a move refuted at the final depth
+/// still shows its old, winning score) and would dominate the softmax, so the Q and raw
+/// score of every line shallower than the deepest one are capped at the lowest Q / raw
+/// score among the deepest lines: the teacher keeps Stockfish's own ranking.
 pub fn analysis(pos: &ChessPos, lines: &[super::uci::Info]) -> Result<Analysis> {
     if lines.is_empty() {
         bail!("the engine reported no scored line for {}", fen(&pos.pos));
     }
-    let mut moves = Vec::with_capacity(lines.len());
-    let mut value = None;
+    let mut scored = Vec::with_capacity(lines.len());
     for l in lines {
         let mv = &l.pv[0];
         let u: UciMove = mv.parse().with_context(|| format!("engine move {mv:?} is not UCI"))?;
@@ -485,11 +507,22 @@ pub fn analysis(pos: &ChessPos, lines: &[super::uci::Info]) -> Result<Analysis> 
             .with_context(|| format!("engine move {mv} is not legal in {}", fen(&pos.pos)))?;
         let [w, d, lo] = l.wdl.with_context(|| format!("line {} ({mv}) has no wdl: the engine must support UCI_ShowWDL", l.multipv))?;
         let score = l.score.context("line without score")?;
-        let q = q_from_wdl(w as f32, d as f32, lo as f32);
-        if l.multipv == 1 {
+        scored.push((l.multipv, l.depth.unwrap_or(0), action_id(target), q_from_wdl(w as f32, d as f32, lo as f32), raw_score(score)));
+    }
+    let deepest = scored.iter().map(|s| s.1).max().unwrap_or(0);
+    let final_lines = scored.iter().filter(|s| s.1 == deepest);
+    let (q_cap, raw_cap) = final_lines.fold((f32::INFINITY, f32::INFINITY), |(q, r), s| (q.min(s.3), r.min(s.4)));
+    let mut moves = Vec::with_capacity(scored.len());
+    let mut value = None;
+    for (multipv, depth, id, mut q, mut raw) in scored {
+        if depth < deepest {
+            q = q.min(q_cap);
+            raw = raw.min(raw_cap);
+        }
+        if multipv == 1 {
             value = Some(q);
         }
-        moves.push(ScoredMove::new(action_id(target), q).raw(raw_score(score)));
+        moves.push(ScoredMove::new(id, q).raw(raw));
     }
     Ok(Analysis { moves, value })
 }
@@ -1089,6 +1122,19 @@ mod tests {
         assert_eq!(a.moves[1].action, action_id(white.gt_target()));
         assert!((a.moves[1].q - 0.525).abs() < 1e-6 && a.moves[1].raw == 35.0);
         assert_eq!((a.moves[2].q, a.moves[2].raw), (0.0, -99_998.0));
+        // a stale line (depth below the final one) with an old, too-high score is capped at
+        // the lowest final-depth line (seen with Stockfish 19 at small node limits)
+        let mut s = canned_session(&[
+            "info depth 9 multipv 1 score cp 30 wdl 60 900 40 nodes 10 pv e1g1",
+            "info depth 9 multipv 2 score cp 10 upperbound wdl 30 930 40 nodes 10 pv d2d3",
+            "info depth 8 multipv 3 score cp 400 wdl 900 100 0 nodes 10 pv f3g5",
+            "info depth 8 multipv 4 score cp -50 wdl 10 900 90 nodes 10 pv h2h3",
+            "bestmove e1g1",
+        ]);
+        let a = lab.query(&mut s, white, &cfg()).unwrap();
+        let got: Vec<(f32, f32)> = a.moves.iter().map(|m| (m.q, m.raw)).collect();
+        assert_eq!(got, vec![(0.51, 30.0), (0.495, 10.0), (0.495, 10.0), (0.46, -50.0)]);
+        assert_eq!(a.value, Some(0.51));
         // an illegal engine move, a missing wdl and an empty answer are errors
         for bad in [
             vec!["info depth 1 multipv 1 score cp 5 wdl 1 998 1 pv e2e5", "bestmove e2e5"],
