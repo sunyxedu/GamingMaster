@@ -316,6 +316,21 @@ class ObservationEncoder(nn.Module, ABC):
     def positional_embedding(self) -> torch.Tensor:
         """Learnable positional embedding for the game tokens: [1, n_tokens, d]."""
 
+    def decode_context(
+        self, obs: Dict[str, torch.Tensor],
+    ) -> Optional[Dict[str, torch.Tensor]]:
+        """Observation-derived tensors the decoder needs next to the pondered
+        tokens (e.g. lux: each unit's map cell, for the egocentric sap
+        window), each shaped [B, T, ...] from the [B, T, ...] ``obs``.
+
+        ``GameNetwork`` computes it on every decode path (``forward`` and the
+        T=1 ``step``, hence also CUDA-graph replay) and passes it as
+        ``decode(..., ctx=...)`` ONLY when it is not None — decoders of
+        encoders that keep this default never see the argument.  Must be
+        pure tensor ops on ``obs`` (no host sync: the step is captured).
+        Default: None."""
+        return None
+
     # -- optional world-model support ------------------------------------
 
     @property
@@ -345,6 +360,10 @@ class ActionDecoder(nn.Module, ABC):
         prediction dict with leading dims restored to [B, T, ...].
       - ``legal`` and ``labels`` are game-specific dicts shaped [B, T, ...]
         (or None).  ``labels`` carries teacher-forcing targets during IL.
+      - A decoder whose encoder overrides
+        :meth:`ObservationEncoder.decode_context` also receives
+        ``decode(..., ctx=...)`` (a dict of [B, T, ...] tensors); the
+        others are called without it.
       - :meth:`sample` / :meth:`log_prob_entropy` consume that same
         prediction dict.
     """

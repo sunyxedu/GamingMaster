@@ -198,6 +198,21 @@ class GameNetwork(nn.Module):
                 .clone(memory_format=torch.contiguous_format)
                 for layer in self.st_layers]
 
+    def _decode_ctx(self, obs: Dict[str, torch.Tensor],
+                    step: bool = False) -> Dict[str, Dict[str, torch.Tensor]]:
+        """``decode()`` kwargs carrying the encoder's decode context
+        (:meth:`ObservationEncoder.decode_context`): ``{"ctx": ctx}``, or
+        ``{}`` when the encoder has none, so decoders that take no ``ctx``
+        are called exactly as before.  ``obs`` is [B, T, ...], or one frame
+        [B, ...] with ``step`` (viewed as T = 1, like the decode itself)."""
+        enc = self.obs_encoder
+        if type(enc).decode_context is ObservationEncoder.decode_context:
+            return {}                                  # the default: no context
+        if step:
+            obs = {k: v.unsqueeze(1) if torch.is_tensor(v) else v for k, v in obs.items()}
+        ctx = enc.decode_context(obs)
+        return {} if ctx is None else {"ctx": ctx}
+
     def _build_pe(self) -> torch.Tensor:
         """Game-token PE (from the encoder) + decision-token PE: [1, S+2, d]."""
         return torch.cat(
@@ -378,6 +393,7 @@ class GameNetwork(nn.Module):
 
         out = self.action_decoder.decode(
             game_out, hl_out, ll_out, B=B, T=T, t0=0, legal=legal, labels=labels,
+            **self._decode_ctx(obs),
         )
         if isinstance(self.value_head, HLGaussValueHead):
             # One MLP pass: expose the logits for the HL-Gauss CE loss and
@@ -493,6 +509,7 @@ class GameNetwork(nn.Module):
         pred = self.action_decoder.decode(
             game_out, hl_out, ll_out, B=B, T=1, t0=t_cur,
             legal=legal_seq, labels=None,
+            **self._decode_ctx(obs, step=True),
         )
         pred = {k: v.squeeze(1) for k, v in pred.items()}
 
