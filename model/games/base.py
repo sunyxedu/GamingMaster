@@ -20,7 +20,7 @@ is shared by all games and lives in ``model.game_network.GameNetwork``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -152,6 +152,63 @@ def bernoulli_log_prob_entropy(
     p = torch.sigmoid(logit)
     ent = -(p * F.logsigmoid(logit) + (1 - p) * F.logsigmoid(-logit))
     return lp, ent
+
+
+# ---------------------------------------------------------------------------
+# Soft (teacher-distribution) targets
+# ---------------------------------------------------------------------------
+
+def soft_cross_entropy(
+    logits: torch.Tensor, probs: torch.Tensor, mask: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """(cross-entropy −Σ p·log q, entropy −Σ p·log p) per row [...] of the
+    target distribution ``probs`` [..., N] against the categorical of
+    ``logits`` [..., N] (optionally legality-masked with ``mask`` [..., N]).
+
+    float32; the mask is applied with :func:`masked_log_prob`'s all-masked-row
+    guard (such rows fall back to index 0).  log q is clamped at −1e4 BEFORE
+    the product with p, so masked (−inf) entries give neither 0·(−inf) = NaN in
+    the forward nor NaN in the backward (see :func:`categorical_entropy`);
+    probability mass on a masked entry costs p·1e4 (callers drop it first).
+    The cross-entropy is differentiable w.r.t. ``logits``; the entropy of the
+    (constant) target is its minimum over ``logits``, so ``ce − entropy`` is
+    KL(p ‖ q) ≥ 0.  A row of zeros gives (0, 0)."""
+    logits = logits.float()
+    probs = probs.float()
+    if mask is not None:
+        safe = logits.masked_fill(~mask, float("-inf"))
+        all_masked = (safe.isinf() & (safe < 0)).all(dim=-1)
+        # Column-slice write — see safe_masked_logits (branch-free).
+        safe = safe.clone()
+        safe[..., 0] = safe[..., 0].masked_fill(all_masked, 0.0)
+    else:
+        safe = logits
+    log_q = F.log_softmax(safe, dim=-1).clamp_min(-1e4)
+    ce = -(probs * log_q).sum(-1)
+    with torch.no_grad():
+        ent = -torch.special.xlogy(probs, probs).sum(-1)
+    return ce, ent
+
+
+def densify_soft_target(idx: torch.Tensor, val: torch.Tensor, n: int) -> torch.Tensor:
+    """Sparse teacher distribution → dense [..., n] float32 probabilities.
+
+    ``idx`` [..., K] long class indices (−1 = padding, ignored), ``val``
+    [..., K] their probabilities; repeated indices add up (scatter_add).  An
+    index outside [0, n) other than the −1 pad raises ValueError (a converter
+    / model-size mismatch must not be clamped into a wrong class)."""
+    idx = idx.long()
+    if idx.shape != val.shape:
+        raise ValueError(f"soft-target idx {tuple(idx.shape)} and val "
+                         f"{tuple(val.shape)} shapes differ")
+    pad = idx == -1
+    bad = ~pad & ((idx < 0) | (idx >= n))
+    if bool(bad.any()):
+        raise ValueError(f"soft-target class indices outside [0, {n}) "
+                         f"(e.g. {idx[bad][:4].tolist()}); -1 is the only pad value")
+    dense = torch.zeros(*idx.shape[:-1], n, dtype=torch.float32, device=idx.device)
+    return dense.scatter_add_(-1, idx.clamp(min=0),
+                              val.float().masked_fill(pad, 0.0))
 
 
 # ---------------------------------------------------------------------------
@@ -362,3 +419,64 @@ class ActionDecoder(nn.Module, ABC):
         generals delegates to ``model.losses.ImitationLoss``
         (``model.games.generals.generals_il_loss``)."""
         raise NotImplementedError
+
+    def il_head_terms(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Per-head decomposition of :meth:`il_loss` — what the generic
+        trainer needs to add soft (teacher-distribution) targets to any
+        decoder (training/train_il_game.py ``batch_loss``).  Default: no
+        heads (a soft target for this decoder is then an error).
+
+        Returns ``{head_name: term}``, each term a plain dict:
+
+          ``logits``  raw head logits WITH grad: categorical [..., N],
+                      bernoulli [...] (leading dims [B, T] or [B, T, U])
+          ``kind``    ``"categorical"`` (default) | ``"bernoulli"``
+          ``ce``      the per-element hard loss il_loss actually uses for the
+                      head (after nan_to_num), shape of ``weight``, with
+                      grad; None = the head has no hard term here (a soft
+                      target is then purely additive)
+          ``weight``  detached float per-element weight il_loss applies
+                      (0 = unsupervised): logits.shape[:-1] (categorical) /
+                      logits.shape (bernoulli)
+          ``norm``    scalar tensor, the exact denominator il_loss divides
+                      the head's weighted sum by (e.g.
+                      ``weight.sum().clamp(min=1)``)
+          ``mask``    optional bool [..., N] legality mask il_loss applied to
+                      the logits (None = unmasked)
+          ``scale``   float multiplier of the head in il_loss (default 1.0)
+
+        Invariant (tests/test_il_contract.py): for decoders whose il_loss is
+        a pure weighted sum of heads,
+        ``il_loss["loss"] == Σ_h scale_h · (ce_h · weight_h).sum() / norm_h``.
+        Implementations share one code path with il_loss (a private
+        ``_il_parts``) so the two cannot drift.
+
+        Soft-target tgt naming (also in data_processing/games/dataset.py):
+        head ``h`` ↔ term key ``h``.
+
+          ``tgt[f"{h}_probs"]``       dense: categorical [..., N] teacher
+                                      distribution (rows of zeros = no teacher;
+                                      rows are renormalised), bernoulli [...]
+                                      = P(class 1)
+          ``tgt[f"{h}_probs_idx"]``   sparse categorical alternative: long
+          ``tgt[f"{h}_probs_val"]``   [..., K] class ids (−1 = pad) + float
+                                      [..., K] probabilities
+          ``tgt[f"{h}_probs_mask"]``  optional bool [...] teacher presence
+                                      (default: categorical rows with positive
+                                      mass, bernoulli every element)
+
+        Keys starting with ``legal_`` are never soft targets.  Engine values:
+        ``tgt["engine_value"]`` float [T] in [-1, 1] = the mover-POV expected
+        score 2·(W + D/2) − 1, optional ``tgt["engine_value_mask"]`` bool;
+        optional ``tgt["value_mask"]`` bool = frames whose outcome ``value``
+        is valid.  IL legality: ``tgt["legal_<key>"]`` (bool, or packed-bits
+        float {0, 1}) becomes the decoder's ``legal["<key>"]`` under the
+        trainers' ``--il_legal_mask``; each decoder documents its legal keys
+        (``X_of`` masks conditioned on a chosen index are valid for the
+        labelled — teacher-forced — conditioning path)."""
+        return {}

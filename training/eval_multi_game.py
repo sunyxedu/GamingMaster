@@ -47,13 +47,15 @@ def load_multi(path: str, device: torch.device, raw: bool = False) -> MultiGameN
 
 @torch.no_grad()
 def eval_game(net, game: str, loader: DataLoader, device, depth: Optional[int],
-              max_batches: int = 0, bf16: bool = False) -> Dict[str, float]:
+              max_batches: int = 0, bf16: bool = False,
+              il_legal_mask: bool = False) -> Dict[str, float]:
     agg: Dict[str, float] = {}
     n = 0
     for i, batch in enumerate(loader):
         if max_batches and i >= max_batches:
             break
-        mb = prepare_batch(game, batch, device, tf_prob=1.0, cfg=net.cfg)
+        mb = prepare_batch(game, batch, device, tf_prob=1.0, cfg=net.cfg,
+                           il_legal_mask=il_legal_mask)
         with greedy_decoding(net):
             _, stats, _ = batch_loss(net, mb, device, 0.0, Q_HALT_WEIGHT, bf16,
                                      act_steps=depth if depth is not None else net.default_depth)
@@ -81,6 +83,9 @@ def main(argv: Optional[List[str]] = None) -> None:
                         "trained) while the other games are evaluated in full")
     p.add_argument("--max_batches", type=int, default=0)
     p.add_argument("--raw", action="store_true", help="raw weights instead of EMA")
+    p.add_argument("--il_legal_mask", action="store_true",
+                   help="feed the shards' tgt legal_<key> masks to the decoders as "
+                        "legal[<key>] (as trained with train_multi_game --il_legal_mask)")
     p.add_argument("--json", default=None, help="write results here")
     p.add_argument("--device", default=None)
     a = p.parse_args(argv)
@@ -101,7 +106,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         loader = DataLoader(ds, batch_size=gb.get(g, a.batch_size),
                             collate_fn=collate_game_sequences)
         for depth in depths:
-            m = eval_game(model[g], g, loader, device, depth, a.max_batches, a.bf16)
+            m = eval_game(model[g], g, loader, device, depth, a.max_batches, a.bf16,
+                          il_legal_mask=a.il_legal_mask)
             key = str(depth if depth is not None else model[g].default_depth)
             results.setdefault(g, {})[key] = m
             acc = m.get("exact_acc", float("nan"))

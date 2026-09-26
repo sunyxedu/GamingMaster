@@ -374,24 +374,14 @@ class EntityActionDecoder(ActionDecoder):
     # Imitation loss
     # ------------------------------------------------------------------
 
-    def il_loss(
+    def _il_parts(
         self,
         pred: Dict[str, torch.Tensor],
         tgt: Dict[str, torch.Tensor],
         seq_mask: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        """Masked CE per head, restricted to frames whose GT action type
-        actually uses the argument, and condition-weighted by whether
-        decode()'s conditioning choices matched the ground truth — logits
-        computed from the wrong type/actor embedding are not a learning
-        signal (same discipline as ImitationLoss's cond_weight).
-
-        tgt keys: action_type / actor_idx / target_idx / position [B,T]
-        long.  Per-INSTANCE absent arguments are −1 (untargeted plays,
-        spell positions, untargeted hero powers): ARG_USES gating is per
-        TYPE, so validity is additionally gated on ``tgt >= 0`` — the
-        clamp in ``_ce`` is purely a crash guard, never a training label.
-        """
+        """Per-head targets, weights, denominators and per-element losses —
+        the one code path :meth:`il_loss` and :meth:`il_head_terms` share."""
         cfg = self.cfg
         B, T, S = pred["actor_logits"].shape
         seq_f = seq_mask.float()
@@ -423,16 +413,69 @@ class EntityActionDecoder(ActionDecoder):
             ).reshape(B, T).nan_to_num(0.0), safe_tgt
 
         type_loss_all, _ = _ce(pred["action_type_logits"], tgt_type, cfg.n_action_types)
-        type_loss = (type_loss_all * seq_f).sum() / n_seq
-
         actor_loss_all, safe_actor = _ce(pred["actor_logits"], tgt["actor_idx"], S)
-        actor_loss = (actor_loss_all * w_actor).sum() / n_actor
-
         target_loss_all, safe_target = _ce(pred["target_logits"], tgt["target_idx"], S)
-        target_loss = (target_loss_all * w_target).sum() / n_target
+        pos_loss_all, safe_pos = _ce(pred["position_logits"], tgt["position"],
+                                     cfg.board_slots + 1)
+        return dict(seq_f=seq_f, n_seq=n_seq, tgt_type=tgt_type, uses=uses,
+                    w_actor=w_actor, n_actor=n_actor, w_target=w_target, n_target=n_target,
+                    w_pos=w_pos, n_pos=n_pos, type_loss_all=type_loss_all,
+                    actor_loss_all=actor_loss_all, safe_actor=safe_actor,
+                    target_loss_all=target_loss_all, safe_target=safe_target,
+                    pos_loss_all=pos_loss_all, safe_pos=safe_pos)
 
-        pos_loss_all, safe_pos = _ce(pred["position_logits"], tgt["position"], cfg.board_slots + 1)
-        pos_loss = (pos_loss_all * w_pos).sum() / n_pos
+    def il_head_terms(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, Dict]:
+        """:meth:`il_loss` per head (``ActionDecoder.il_head_terms``):
+        categorical ``action_type`` / ``actor`` / ``target`` / ``position``
+        with il_loss's ARG_USES gating and conditioning-match weights (soft
+        targets: ``tgt["target_probs"]`` etc.)."""
+        p = self._il_parts(pred, tgt, seq_mask)
+        return {
+            "action_type": {"logits": pred["action_type_logits"], "ce": p["type_loss_all"],
+                            "weight": p["seq_f"], "norm": p["n_seq"]},
+            "actor": {"logits": pred["actor_logits"], "ce": p["actor_loss_all"],
+                      "weight": p["w_actor"], "norm": p["n_actor"]},
+            "target": {"logits": pred["target_logits"], "ce": p["target_loss_all"],
+                       "weight": p["w_target"], "norm": p["n_target"]},
+            "position": {"logits": pred["position_logits"], "ce": p["pos_loss_all"],
+                         "weight": p["w_pos"], "norm": p["n_pos"]},
+        }
+
+    def il_loss(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Masked CE per head, restricted to frames whose GT action type
+        actually uses the argument, and condition-weighted by whether
+        decode()'s conditioning choices matched the ground truth — logits
+        computed from the wrong type/actor embedding are not a learning
+        signal (same discipline as ImitationLoss's cond_weight).
+
+        tgt keys: action_type / actor_idx / target_idx / position [B,T]
+        long.  Per-INSTANCE absent arguments are −1 (untargeted plays,
+        spell positions, untargeted hero powers): ARG_USES gating is per
+        TYPE, so validity is additionally gated on ``tgt >= 0`` — the
+        clamp in ``_ce`` is purely a crash guard, never a training label.
+        """
+        p = self._il_parts(pred, tgt, seq_mask)
+        seq_f, n_seq = p["seq_f"], p["n_seq"]
+        w_actor, n_actor = p["w_actor"], p["n_actor"]
+        w_target, n_target = p["w_target"], p["n_target"]
+        w_pos, n_pos = p["w_pos"], p["n_pos"]
+        tgt_type, uses = p["tgt_type"], p["uses"]
+        safe_actor, safe_target, safe_pos = p["safe_actor"], p["safe_target"], p["safe_pos"]
+
+        type_loss = (p["type_loss_all"] * seq_f).sum() / n_seq
+        actor_loss = (p["actor_loss_all"] * w_actor).sum() / n_actor
+        target_loss = (p["target_loss_all"] * w_target).sum() / n_target
+        pos_loss = (p["pos_loss_all"] * w_pos).sum() / n_pos
 
         loss = type_loss + actor_loss + target_loss + pos_loss
 

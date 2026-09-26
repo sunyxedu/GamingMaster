@@ -681,8 +681,8 @@ def test_multi_game_generals_recipe_defaults(gio_dir, tmp_path, capsys, monkeypa
     monkeypatch.setattr(tmg, "open_dataset",
                         lambda g, d, ml=None: crops.append((g, ml)) or real_open(g, d, ml))
     monkeypatch.setattr(tmg, "prepare_rows",
-                        lambda g, b, dev, tf, cfg=None: tfs.append((g, tf))
-                        or real_prep(g, b, dev, tf, cfg=cfg))
+                        lambda g, b, dev, tf, cfg=None, **kw: tfs.append((g, tf))
+                        or real_prep(g, b, dev, tf, cfg=cfg, **kw))
     (tmp_path / "othello").mkdir()
     save_shard(str(tmp_path / "othello" / "a.pt"), "othello", _board_samples("othello", 4, 6))
     tmg.main(base + ["--data", f"othello={tmp_path / 'othello'}", "--val", f"generals={gio_dir}",

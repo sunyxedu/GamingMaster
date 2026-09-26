@@ -10,7 +10,8 @@ replay and IL teacher forcing all match the original implementation.
 
 The module also holds the generals pieces of the generic IL contract used
 by the multi-game trainers (training/train_il_game.py, train_multi_game.py):
-:func:`generals_il_loss` (both decoders' ``il_loss``), the teacher-forcing
+:func:`generals_il_loss` (both decoders' ``il_loss``) and
+:func:`generals_il_head_terms` (their ``il_head_terms``), the teacher-forcing
 labels derived from the stored targets (:func:`source_labels`), the legality
 dict read from the observation (:func:`legal_from_obs`) and the
 ``turn_globals`` features for recorded games (:func:`append_turn_globals`).
@@ -109,6 +110,22 @@ def generals_il_loss(
     res["answer_correct"] = out["answer_correct"]
     res["answer_mask"] = out["answer_mask"]
     return res
+
+
+def generals_il_head_terms(
+    cfg: ModelConfig,
+    pred: Dict[str, torch.Tensor],
+    tgt: Dict[str, torch.Tensor],
+    seq_mask: torch.Tensor,
+) -> Dict[str, Dict]:
+    """``ActionDecoder.il_head_terms`` for generals: ImitationLoss's policy
+    terms per head (:meth:`model.losses.ImitationLoss.head_terms`, the same
+    code as :func:`generals_il_loss`) — ``source`` (focal CE, scale 3.0),
+    ``direction`` / ``split`` (conditional CE, 1.5 / 0.3) and the ``pass``
+    Bernoulli (1.0).  Soft targets: ``tgt["source_probs"]`` [B, T, H·W],
+    ``tgt["direction_probs"]`` [B, T, 4] (for the conditioning source),
+    ``tgt["split_probs"]`` [B, T, 2], ``tgt["pass_probs"]`` [B, T]."""
+    return ImitationLoss(grid_w=cfg.grid_w).head_terms(pred, tgt, frame_mask=seq_mask)
 
 
 class GeneralsEncoder(ObservationEncoder):
@@ -552,6 +569,15 @@ class GeneralsDecoder(ActionDecoder):
         """See :func:`generals_il_loss` (ImitationLoss, frame-mask aware)."""
         return generals_il_loss(self.cfg, pred, tgt, seq_mask)
 
+    def il_head_terms(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, Dict]:
+        """See :func:`generals_il_head_terms`."""
+        return generals_il_head_terms(self.cfg, pred, tgt, seq_mask)
+
 
 class JointGeneralsDecoder(ActionDecoder):
     """AverageJoe-style flat joint-action decoder.
@@ -879,3 +905,13 @@ class JointGeneralsDecoder(ActionDecoder):
         """ImitationLoss on the factorized views (:func:`generals_il_loss`) —
         what training/train_il.py optimises for a joint_decoder config."""
         return generals_il_loss(self.cfg, pred, tgt, seq_mask)
+
+    def il_head_terms(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, Dict]:
+        """:func:`generals_il_head_terms` on the factorized views (soft
+        targets supervise the views — the joint categorical's marginals)."""
+        return generals_il_head_terms(self.cfg, pred, tgt, seq_mask)

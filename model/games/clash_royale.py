@@ -350,20 +350,14 @@ class CardPlacementDecoder(ActionDecoder):
     # Imitation loss
     # ------------------------------------------------------------------
 
-    def il_loss(
+    def _il_parts(
         self,
         pred: Dict[str, torch.Tensor],
         tgt: Dict[str, torch.Tensor],
         seq_mask: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        """Masked CE per head.  Placement conditions on the chosen card, so
-        its loss is weighted by (decode's conditioning card == GT card) —
-        the same discipline as ImitationLoss's cond_weight: a placement
-        computed from the wrong card embedding is not a learning signal.
-
-        tgt keys: waited [B,T] bool, card_slot [B,T] long, place_idx [B,T]
-        long (card/place ignored — may be −1 — on waited frames).
-        """
+        """Per-head targets, weights, denominators and per-element losses —
+        the one code path :meth:`il_loss` and :meth:`il_head_terms` share."""
         B, T, hand = pred["card_logits"].shape
         n_arena = pred["placement_logits"].shape[-1]
         seq_f = seq_mask.float()
@@ -380,13 +374,11 @@ class CardPlacementDecoder(ActionDecoder):
         wait_loss_all = F.binary_cross_entropy_with_logits(
             pred["wait_logits"], waited.float(), reduction="none",
         ).nan_to_num(0.0)
-        wait_loss = (wait_loss_all * seq_f).sum() / n_seq
 
         card_loss_all = F.cross_entropy(
             pred["card_logits"].reshape(-1, hand), tgt_card.reshape(-1),
             reduction="none",
         ).reshape(B, T).nan_to_num(0.0)
-        card_loss = (card_loss_all * play_f).sum() / n_play
 
         with torch.no_grad():
             cond = (pred["card_slot"] == tgt_card).float() * play_f
@@ -396,7 +388,54 @@ class CardPlacementDecoder(ActionDecoder):
             pred["placement_logits"].reshape(-1, n_arena), tgt_place.reshape(-1),
             reduction="none",
         ).reshape(B, T).nan_to_num(0.0)
-        place_loss = (place_loss_all * cond).sum() / n_cond
+        return dict(seq_f=seq_f, n_seq=n_seq, waited=waited, play_f=play_f, n_play=n_play,
+                    tgt_card=tgt_card, tgt_place=tgt_place, cond=cond, n_cond=n_cond,
+                    wait_loss_all=wait_loss_all, card_loss_all=card_loss_all,
+                    place_loss_all=place_loss_all)
+
+    def il_head_terms(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, Dict]:
+        """:meth:`il_loss` per head (``ActionDecoder.il_head_terms``):
+        ``wait`` Bernoulli on every frame, ``card`` on play frames,
+        ``placement`` on play frames whose conditioning card matched
+        (soft targets: ``tgt["placement_probs"]`` etc.)."""
+        p = self._il_parts(pred, tgt, seq_mask)
+        return {
+            "wait": {"logits": pred["wait_logits"], "kind": "bernoulli",
+                     "ce": p["wait_loss_all"], "weight": p["seq_f"], "norm": p["n_seq"]},
+            "card": {"logits": pred["card_logits"], "ce": p["card_loss_all"],
+                     "weight": p["play_f"], "norm": p["n_play"]},
+            "placement": {"logits": pred["placement_logits"], "ce": p["place_loss_all"],
+                          "weight": p["cond"], "norm": p["n_cond"]},
+        }
+
+    def il_loss(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Masked CE per head.  Placement conditions on the chosen card, so
+        its loss is weighted by (decode's conditioning card == GT card) —
+        the same discipline as ImitationLoss's cond_weight: a placement
+        computed from the wrong card embedding is not a learning signal.
+
+        tgt keys: waited [B,T] bool, card_slot [B,T] long, place_idx [B,T]
+        long (card/place ignored — may be −1 — on waited frames).
+        """
+        p = self._il_parts(pred, tgt, seq_mask)
+        seq_f, n_seq = p["seq_f"], p["n_seq"]
+        play_f, n_play = p["play_f"], p["n_play"]
+        cond, n_cond = p["cond"], p["n_cond"]
+        waited, tgt_card, tgt_place = p["waited"], p["tgt_card"], p["tgt_place"]
+
+        wait_loss = (p["wait_loss_all"] * seq_f).sum() / n_seq
+        card_loss = (p["card_loss_all"] * play_f).sum() / n_play
+        place_loss = (p["place_loss_all"] * cond).sum() / n_cond
 
         loss = wait_loss + card_loss + place_loss
 
