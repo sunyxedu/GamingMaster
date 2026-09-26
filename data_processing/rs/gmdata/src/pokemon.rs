@@ -644,7 +644,14 @@ fn parse_log(log: &str) -> Parse {
                 continue;
             }
             "cant" if !args.is_empty() => {
-                // |cant|POKEMON|REASON[|MOVE]: MOVE = the chosen move it could not use
+                // |cant|POKEMON|REASON[|MOVE]: MOVE = the chosen move it could not use.  With an
+                // `[of] SOURCE` kwarg (Armor Tail, Dazzling, Queenly Majesty, Damp) POKEMON is the
+                // ability holder that blocked SOURCE's move: MOVE is SOURCE's choice (already
+                // labelled and revealed by SOURCE's `|move|..|[still]` line) and POKEMON has not
+                // acted — neither its label nor its moveset may take the foe's move.
+                if args[1..].iter().any(|x| x.trim_start().starts_with("[of]")) {
+                    continue;
+                }
                 let (pos, nick) = ident(a(0));
                 if let Some(pi) = side_idx(&pos) {
                     let mv = a(2);
@@ -1238,6 +1245,26 @@ mod tests {
         assert_eq!(p.records[1][3].action_type, -1, "no visible choice");
         assert_eq!(p.stats["unlabelled_cant"], 1);
         assert_eq!(p.stats["unlabelled_locked"], 1);
+    }
+
+    #[test]
+    fn a_foe_blocked_by_an_ability_is_not_the_holders_choice() {
+        // Armor Tail / Dazzling / Queenly Majesty / Damp: `|cant|HOLDER|ability: X|MOVE|[of] USER`
+        // names the ability holder; MOVE is the user's (blocked) choice, logged by its own
+        // `|move|..|[still]` line.  The holder acts later in the turn (or already did).
+        let p = parse(&["|turn|1", "|move|p2a: Gholdengo|Sucker Punch|p1a: Garchomp|[still]",
+            "|cant|p1a: Garchomp|ability: Armor Tail|Sucker Punch|[of] p2a: Gholdengo",
+            "|move|p1a: Garchomp|Earthquake|p2a: Gholdengo", "|upkeep", "|turn|2",
+            "|move|p1a: Garchomp|Swords Dance|p1a: Garchomp", "|move|p2a: Gholdengo|Explosion|p1a: Garchomp|[still]",
+            "|cant|p1a: Garchomp|ability: Damp|Explosion|[of] p2a: Gholdengo", "|upkeep", "|turn|3"]);
+        let (r, o) = (&p.records[0], &p.records[1]);
+        assert_eq!((r[1].action_type, r[1].move_name.as_str()), (0, "Earthquake"), "the holder's own move");
+        assert_eq!((o[1].action_type, o[1].move_name.as_str()), (0, "Sucker Punch"));
+        assert_eq!((r[2].move_name.as_str(), o[2].move_name.as_str()), ("Swords Dance", "Explosion"));
+        let moves = |x: &Rec| x.frame.moves.iter().filter(|m| !m.is_empty()).cloned().collect::<Vec<_>>();
+        assert_eq!(moves(&r[3]), ["Earthquake", "Swords Dance"], "no foe move in the holder's moveset");
+        assert_eq!(moves(&o[3]), ["Sucker Punch", "Explosion"]);
+        assert!(!p.stats.contains_key("unlabelled_cant"));
     }
 
     #[test]
