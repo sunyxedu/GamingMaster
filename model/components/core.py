@@ -295,15 +295,23 @@ class MoEFFN(nn.Module):
 
     def _sparse_experts(self, xf: torch.Tensor, top_i: torch.Tensor,
                         gates: torch.Tensor) -> torch.Tensor:
-        """Σ_selected g·FFN_e(x), each expert on its routed tokens only."""
+        """Σ_selected g·FFN_e(x), each expert on its routed tokens only.
+
+        The expert weights are cast once and ``unbind``-ed into per-expert
+        views: indexing ``w[e]`` in the loop instead makes autograd build a
+        full-size zero gradient per expert and add the E of them up (memory
+        traffic ∝ E² per layer).  Each element still receives exactly one
+        gradient contribution (or none), so the result is unchanged."""
         out = xf.new_zeros(xf.shape)
+        w_gate_up = self.w_gate_up.to(xf.dtype).unbind(0)
+        w_down = self.w_down.to(xf.dtype).unbind(0)
         for e in range(self.n_experts):
             rows, slot = (top_i == e).nonzero(as_tuple=True)
             if rows.numel() == 0:
                 continue
             h = xf.index_select(0, rows)
-            g, u = (h @ self.w_gate_up[e].to(h.dtype)).chunk(2, dim=-1)
-            h = (F.silu(g) * u) @ self.w_down[e].to(h.dtype)
+            g, u = (h @ w_gate_up[e]).chunk(2, dim=-1)
+            h = (F.silu(g) * u) @ w_down[e]
             out.index_add_(0, rows, h * gates[rows, slot].unsqueeze(-1))
         return out
 

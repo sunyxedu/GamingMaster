@@ -184,8 +184,15 @@ class ModelEMA:
         trainable parameters (buffers are taken from ``model``)."""
         self._whole("ema_model_state")
         sd = model.state_dict()
-        out = {}
+        out, copies = {}, {}
         for k, v in sd.items():
             c = self.alias.get(k)
-            out[k] = self.shadow[c].detach().clone() if c is not None else v
+            if c is None:
+                out[k] = v
+                continue
+            # one copy per shadow, shared by all its aliases (a shared core
+            # appears once per game in the state dict)
+            if c not in copies:
+                copies[c] = self.shadow[c].detach().clone()
+            out[k] = copies[c]
         return out

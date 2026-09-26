@@ -304,3 +304,40 @@ def test_bias_centring_is_routing_neutral_and_clip_bounds():
         m.update_balance(0.01)
     assert m.balance_bias.abs().max() <= 0.05 + 1e-7
     assert abs(m.balance_bias.mean().item()) < 0.05
+
+
+def _sparse_experts_indexed(moe, xf, top_i, gates):
+    """The pre-unbind reference: per-expert ``w[e]`` indexing in the loop."""
+    import torch.nn.functional as F
+    out = xf.new_zeros(xf.shape)
+    for e in range(moe.n_experts):
+        rows, slot = (top_i == e).nonzero(as_tuple=True)
+        if rows.numel() == 0:
+            continue
+        h = xf.index_select(0, rows)
+        g, u = (h @ moe.w_gate_up[e].to(h.dtype)).chunk(2, dim=-1)
+        h = (F.silu(g) * u) @ moe.w_down[e].to(h.dtype)
+        out.index_add_(0, rows, h * gates[rows, slot].unsqueeze(-1))
+    return out
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_sparse_experts_unbind_matches_indexed_reference(dtype):
+    """unbind-ed expert weights give bit-identical outputs and weight
+    gradients (incl. experts that received no token) to w[e] indexing."""
+    from model.components.core import MoEFFN
+
+    torch.manual_seed(0)
+    moe = MoEFFN(32, 8, 2, 1, 2.0, 0.02, 0.02)
+    xf = torch.randn(40, 32).to(dtype)
+    top_i = torch.randint(0, 6, (40, 2))           # experts 6, 7 get no token
+    gates = torch.rand(40, 2).to(dtype)
+    grads = []
+    for fn in (moe._sparse_experts, lambda x, t, g: _sparse_experts_indexed(moe, x, t, g)):
+        moe.zero_grad(set_to_none=True)
+        out = fn(xf, top_i, gates)
+        (out.float() * torch.linspace(-1, 1, out.numel()).reshape(out.shape)).sum().backward()
+        grads.append((out.detach().clone(), moe.w_gate_up.grad.clone(), moe.w_down.grad.clone()))
+    for a, b in zip(*grads):
+        assert torch.equal(a, b)
+    assert not grads[0][1][6:].any()
