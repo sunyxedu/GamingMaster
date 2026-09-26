@@ -704,7 +704,8 @@ def _reference_slot_il(pred, tgt, seq_mask):
     tera = F.binary_cross_entropy_with_logits(pred["tera_logit"], tgt["tera"].float().clamp(0, 1),
                                               reduction="none").nan_to_num(0.0)
     return ((ce(pred["action_type_logits"], tgt_type, 2) * seq_f).sum() / n_seq
-            + (ce(pred["move_logits"], tgt["move_idx"], 4) * w_move).sum() / w_move.sum().clamp(min=1)
+            + (ce(pred["move_logits"], tgt["move_idx"], 4) * w_move).sum()
+            / w_move.sum().clamp(min=1)
             + (ce(pred["switch_logits"], tgt["switch_idx"], 6) * w_switch).sum()
             / w_switch.sum().clamp(min=1)
             + (tera * w_tera).sum() / w_tera.sum().clamp(min=1))

@@ -20,6 +20,12 @@ PRIVACY              a side's frames must not depend on what is private to the o
                      chat/timer lines) never reaches obs, and that without team preview the
                      opponent's team grows only as its Pokémon are switched in.
 VALUE                ``tgt.value`` (the hindsight outcome) never reaches obs / other targets.
+FRAMES               (converter v2) one frame per request the player answers: the team-preview
+                     lead, every turn (whatever its outcome — an unseen choice is a masked
+                     label, not a missing frame), every forced switch, snapshotted when the
+                     request is issued (simultaneous replacements never see each other); every
+                     move label names its move (tgt.move_id), and legal masks are functions of
+                     the frame's state.
 MODEL                the pokemon network is causal over frames, including the ``move_ids``
                      (LEGAL_FROM_OBS) and ``active_idx`` (state label) decode paths.
 
@@ -218,7 +224,8 @@ def _assert_prefix(
     ):
         return
     for i in range(n):
-        skip = {f"tgt.{k}" for k in ACTION_LABELS} if unknown_ok and not _labelled(part, i) else set()
+        open_ = unknown_ok and not _labelled(part, i)
+        skip = {f"tgt.{k}" for k in ACTION_LABELS} if open_ else set()
         d = [k for k in _diff(full, i, part, i, tgt) if k not in skip]
         assert not d, f"{what}: frame {i} differs in {d}"
 
@@ -296,7 +303,11 @@ def test_every_line_truncation_is_a_prefix(gmdata, replays, full, tmp_path):
             if last:
                 assert _n(part) == _n(whole), (cid, side)
                 recovered += 1
-    assert compared > 1000 and recovered >= len(replays) and opened > 100, (compared, recovered, opened)
+    assert compared > 1000 and recovered >= len(replays) and opened > 100, (
+        compared,
+        recovered,
+        opened,
+    )
 
 
 def _synthetic_turn_cut(lines: List[str], i: int, p1: str) -> str:
@@ -360,7 +371,8 @@ def test_turn_frame_is_a_function_of_the_log_through_the_turn_line(gmdata, repla
             assert not d, f"{rid}/{side}: turn-{t} frame depends on turn-{t} events ({d})"
             # the synthetic Splash labels the cut's turn-t frame by its identity (never revealed
             # before, so no obs.move_ids slot)
-            assert int(part["tgt"]["move_id"][k]) == move_bucket("Splash", MOVE_BUCKETS), (rid, side, t)
+            splash = move_bucket("Splash", MOVE_BUCKETS)
+            assert int(part["tgt"]["move_id"][k]) == splash, (rid, side, t)
             assert int(part["tgt"]["move_idx"][k]) == -1, (rid, side, t)
             checked_t += 1
     assert checked_t > 500, checked_t
@@ -742,14 +754,13 @@ def test_forced_switches_are_never_labelled_as_the_turns_choice(gmdata, replays,
             assert bool(s["tgt"]["legal_switch"][f, slot]), cid
             act = int(s["tgt"]["active_idx"][f])
             fainted = float(s["obs"]["poke_feats"][f, act, POKE_FEAT_FAINTED])
-            assert fainted == float(ko_seen), f"{cid}: the forced frame is not the request-time state"
+            assert fainted == float(ko_seen), f"{cid}: not the request-time state"
 
 
 def _fresh(lines: List[str], i: int, side: int) -> List[str]:
     """The side's previewed species not switched in before line i (no hidden-form ``*``)."""
-    preview = [
-        ln.split("|")[3].split(",")[0].strip() for ln in lines if ln.startswith(f"|poke|p{side + 1}|")
-    ]
+    tag = f"|poke|p{side + 1}|"
+    preview = [ln.split("|")[3].split(",")[0].strip() for ln in lines if ln.startswith(tag)]
     seen = {
         ln.split("|")[3].split(",")[0].strip()
         for ln in lines[:i]
