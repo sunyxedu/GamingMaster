@@ -1,13 +1,14 @@
-"""env/vec_game.py (VecGameEnv protocol + registry), the othello / generals
-adapters (env/vec_othello.py, env/vec_generals.py) and the league interface
-(env/league.py).  Frame-by-frame equality with the IL data produced by the
-Rust converters lives in test_vec_game_golden.py."""
+"""env/vec_game.py (VecGameEnv protocol + registry), the othello / generals /
+gomoku adapters (env/vec_othello.py, env/vec_generals.py, env/vec_gomoku.py)
+and the league interface (env/league.py).  Frame-by-frame equality with the
+IL data produced by the Rust converters lives in test_vec_game_golden.py."""
 
 from __future__ import annotations
 
 import os
 import random
 
+import numpy as np
 import pytest
 import torch
 
@@ -33,6 +34,7 @@ from env.vec_game import (
     register_vec_env,
 )
 from env.vec_generals import GeneralsVecEnv, full_state_grids, replay_tiebreak_by_step
+from env.vec_gomoku import GomokuVecEnv
 from env.vec_othello import OthelloVecEnv
 from model.games import build_game_network
 
@@ -62,7 +64,7 @@ def _check_schema(env, obs: VecObs):
 # protocol / registry
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("game", ["othello", "generals"])
+@pytest.mark.parametrize("game", ["othello", "generals", "gomoku"])
 def test_registry_and_protocol(game):
     env = make_vec_env(game, 3)
     assert isinstance(env, VecGameEnv) and env.game == game and has_simulator(game)
@@ -91,7 +93,7 @@ def test_registry_and_protocol(game):
 
 
 def test_registry_lists_the_simulator_games():
-    assert set(VEC_ENV_REGISTRY) >= {"generals", "othello"}
+    assert set(VEC_ENV_REGISTRY) >= {"generals", "othello", "gomoku"}
 
 
 def test_replay_actions_normalisation():
@@ -124,7 +126,7 @@ def test_env_rng_state_roundtrip():
     assert not torch.equal(a, env.reset().obs["grid_seq"])
 
 
-@pytest.mark.parametrize("game", ["othello", "generals"])
+@pytest.mark.parametrize("game", ["othello", "generals", "gomoku"])
 def test_random_actions_without_generator_follow_the_env_seed(game):
     """random_actions(generator=None) draws from the env's own torch RNG:
     seeded by the env seed, restored by load_state_dict, and independent of
@@ -136,7 +138,7 @@ def test_random_actions_without_generator_follow_the_env_seed(game):
         out = []
         for _ in range(k):
             a = env.random_actions(obs)
-            key = "place_idx" if game == "othello" else "source_idx"
+            key = "source_idx" if game == "generals" else "place_idx"
             out.append(a[key].clone())
             torch.manual_seed(next(noise))          # a different global RNG every call
             obs, *_ = env.step(a)
@@ -150,15 +152,15 @@ def test_random_actions_without_generator_follow_the_env_seed(game):
     st = env.state_dict()
     first = draws(env)
     env.load_state_dict(st)
-    if game == "othello":
+    if game != "generals":                     # one start position
         assert torch.equal(draws(env), first)
     else:       # the restored episode RNG deals the fresh env's second episodes
         env.reset()
         fresh = make_vec_env(game, 4, seed=5, **kw)
         fresh.reset()
         assert torch.equal(draws(env), draws(fresh))
-    if game == "othello":                      # reset(seed) reseeds it too
-        e = OthelloVecEnv(4, seed=1)
+    if game != "generals":                     # reset(seed) reseeds it too
+        e = make_vec_env(game, 4, seed=1)
         e.reset(seed=5)
         assert torch.equal(draws(e), a)
 
@@ -270,6 +272,277 @@ def test_othello_autoreset():
             assert torch.equal(rew[done, 0], -rew[done, 1])     # zero-sum outcome
             assert (rew[~done] == 0).all()
     assert ended >= 4 and not env.finished.any()
+
+
+# ---------------------------------------------------------------------------
+# gomoku
+# ---------------------------------------------------------------------------
+
+def _gomoku_has_five(own: np.ndarray, exact: bool) -> bool:
+    """Brute force over the WHOLE board (not incremental): does ``own``
+    [H, W] bool hold five in a row — exactly five (a run of 5 not extended
+    at either end) with ``exact``?"""
+    H, W = own.shape
+    o = np.pad(own, 6)
+
+    def shift(k, dr, dc):                     # own at (r + k·dr, c + k·dc), False off-board
+        return o[6 + k * dr:6 + k * dr + H, 6 + k * dc:6 + k * dc + W]
+
+    for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
+        win = shift(0, dr, dc) & shift(1, dr, dc) & shift(2, dr, dc) & shift(3, dr, dc) \
+            & shift(4, dr, dc)
+        if exact:
+            win = win & ~shift(-1, dr, dc) & ~shift(5, dr, dc)
+        if win.any():
+            return True
+    return False
+
+
+def _play_gomoku(env, moves):
+    """Feed env 0 the (row, col) moves (the other envs: their first empty
+    point); returns the last step's outputs."""
+    out = None
+    for r, c in moves:
+        acts = env.observe().legal["place"].to(torch.uint8).argmax(-1)
+        acts[0] = r * env.board_w + c
+        out = env.step({"place_idx": acts})
+    return out
+
+
+@pytest.mark.parametrize("board_size,rule", [(20, "freestyle"), ((7, 9), "freestyle"),
+                                             ((7, 9), "standard"), (4, "freestyle")])
+def test_gomoku_matches_bruteforce_rules_on_random_games(board_size, rule):
+    """Batched incremental play == a whole-board brute-force scan step by
+    step: planes (mover / opponent / empty), legal = empty points, pass never
+    legal, termination (five / full board), rewards, winner, episode length."""
+    G = 24
+    env = GomokuVecEnv(G, board_size=board_size, rule=rule, seed=0)
+    H, W = env.board_h, env.board_w
+    gen = torch.Generator().manual_seed(3)
+    boards = [np.zeros((H, W), dtype=np.int8) for _ in range(G)]
+    plies = [0] * G
+    finished = [False] * G
+    obs = env.reset()
+    _check_schema(env, obs)
+    assert env.obs_schema() == {"board_seq": ((3, H, W), torch.float32)}
+    outcomes = set()
+    while bool(obs.active.any()):
+        acts = env.random_actions(obs, generator=gen)
+        for i in range(G):
+            assert bool(obs.active[i]) == (not finished[i])
+            if finished[i]:
+                assert not obs.legal["place"][i].any()
+                continue
+            m = plies[i] % 2
+            b = boards[i]
+            want = torch.from_numpy(np.stack([b == m + 1, b == 2 - m, b == 0]).astype(np.float32))
+            assert int(obs.to_play[i]) == m and int(obs.step_idx[i]) == plies[i]
+            assert torch.equal(obs.obs["board_seq"][i], want)
+            assert torch.equal(obs.legal["place"][i], torch.from_numpy(b.reshape(-1) == 0))
+        assert not obs.legal["pass"].any() and not obs.forced.any()
+        assert obs.stream_seats.all()
+        obs, rew, done, info = env.step(acts)
+        for i in range(G):
+            if finished[i]:
+                assert not info["acted"][i] and not done[i] and (rew[i] == 0).all()
+                continue
+            sq = int(acts["place_idx"][i])
+            assert int(info["applied"]["place_idx"][i]) == sq
+            m = plies[i] % 2
+            b = boards[i]
+            assert b.flat[sq] == 0
+            b.flat[sq] = m + 1
+            plies[i] += 1
+            five = _gomoku_has_five(b == m + 1, exact=rule == "standard")
+            full = bool((b != 0).all())
+            assert bool(done[i]) == (five or full), (i, plies[i])
+            assert bool(info["terminated"][i]) == (five or full)
+            assert not info["truncated"][i]
+            if five:
+                assert rew[i].tolist() == ([1.0, -1.0] if m == 0 else [-1.0, 1.0])
+                assert int(info["winner"][i]) == m
+                outcomes.add(m)
+            else:
+                assert rew[i].tolist() == [0.0, 0.0] and int(info["winner"][i]) == -1
+                if full:
+                    outcomes.add(-1)
+            if done[i]:
+                finished[i] = True
+                assert int(info["episode_len"][i]) == plies[i]
+    assert all(finished) and env.finished.all()
+    if H * W <= 16:
+        assert outcomes == {-1}                  # no five fits: every game is a draw
+    else:
+        assert {0, 1} <= outcomes
+
+
+def test_gomoku_overline_wins_freestyle_only():
+    """Six in a row (a gap filled between three and two) wins freestyle, not
+    standard; standard then wins with exactly five."""
+    overline = [(5, 3), (12, 0), (5, 4), (12, 2), (5, 5), (12, 4), (5, 7), (12, 6), (5, 8),
+                (12, 8), (5, 6)]
+    free = GomokuVecEnv(1, rule="freestyle")
+    _, rew, done, info = _play_gomoku(free, overline)
+    assert done.all() and rew[0].tolist() == [1.0, -1.0] and int(info["winner"][0]) == 0
+    std = GomokuVecEnv(1, rule="standard")
+    _, rew, done, _ = _play_gomoku(std, overline)
+    assert not done.any() and (rew == 0).all()
+    five = [(14, 14), (8, 3), (14, 16), (8, 4), (14, 18), (8, 5), (16, 14), (8, 6), (16, 16),
+            (8, 7)]                              # white stones first: it is white's turn
+    _, rew, done, info = _play_gomoku(std, five[:-1])
+    assert not done.any()
+    _, rew, done, info = _play_gomoku(std, five[-1:])
+    assert done.all() and rew[0].tolist() == [1.0, -1.0] and int(info["winner"][0]) == 0
+    assert int(info["episode_len"][0]) == len(overline) + len(five)
+
+
+def test_gomoku_draw_truncation_and_max_moves():
+    # a full board without five: a (terminated) draw
+    env = GomokuVecEnv(3, board_size=4, seed=0)
+    gen = torch.Generator().manual_seed(0)
+    obs = env.reset()
+    for t in range(16):
+        assert obs.active.all()
+        obs, rew, done, info = env.step(env.random_actions(obs, generator=gen))
+        assert bool(done.all()) == (t == 15)
+    assert info["terminated"].all() and not info["truncated"].any()
+    assert (rew == 0).all() and (info["winner"] == -1).all() and (info["episode_len"] == 16).all()
+    assert not obs.active.any() and not obs.legal["place"].any()
+    # max_moves: a soft terminal scored as a draw ...
+    env = GomokuVecEnv(2, max_moves=10, seed=0)
+    obs = env.reset()
+    for t in range(10):
+        obs, rew, done, info = env.step(env.random_actions(obs, generator=gen))
+        assert bool(done.all()) == (t == 9)
+    assert info["truncated"].all() and not info["terminated"].any()
+    assert (rew == 0).all() and (info["winner"] == -1).all() and (info["episode_len"] == 10).all()
+    assert env.finished.all()
+    # ... unless the last allowed move wins
+    env = GomokuVecEnv(1, max_moves=9)
+    fastest = [(0, 15), (5, 5), (0, 16), (6, 6), (0, 17), (7, 7), (0, 18), (8, 8), (0, 19)]
+    _, rew, done, info = _play_gomoku(env, fastest)
+    assert done.all() and info["terminated"].all() and not info["truncated"].any()
+    assert rew[0].tolist() == [1.0, -1.0]
+    with pytest.raises(ValueError):
+        GomokuVecEnv(1, max_moves=0)
+    with pytest.raises(ValueError):
+        GomokuVecEnv(1, rule="renju")
+
+
+def test_gomoku_no_wraparound_across_row_ends():
+    """Five consecutive point indices across a row end (or a diagonal that
+    would wrap) are no line."""
+    env = GomokuVecEnv(1, board_size=20)
+    # black 3,17 3,18 3,19 4,0 4,1 = indices 77..81; white far apart
+    moves = [(3, 17), (10, 10), (3, 18), (12, 5), (3, 19), (15, 15), (4, 0), (8, 3), (4, 1)]
+    _, _, done, _ = _play_gomoku(env, moves)
+    assert not done.any()
+    # diagonal wrap (index step 21): 0,18 1,19 3,0 4,1 5,2
+    env = GomokuVecEnv(1, board_size=20)
+    moves = [(0, 18), (15, 7), (1, 19), (16, 9), (3, 0), (17, 11), (4, 1), (18, 13), (5, 2)]
+    _, _, done, _ = _play_gomoku(env, moves)
+    assert not done.any()
+
+
+def test_gomoku_illegal_placement_raises_and_pass_is_ignored():
+    env = GomokuVecEnv(2, board_size=9)
+    obs = env.reset()
+    assert obs.legal["place"].all() and not obs.legal["pass"].any()
+    obs, *_ = env.step({"action_place": torch.tensor([40, 0]),
+                        "action_pass": torch.tensor([True, True])})     # pass flag ignored
+    assert not obs.legal["place"][0, 40] and not obs.legal["place"][1, 0]
+    assert obs.obs["board_seq"][0, 1, 4, 4] == 1                        # opponent stone now
+    with pytest.raises(ValueError, match="illegal"):
+        env.step({"place_idx": torch.tensor([40, 1])})                  # occupied
+    with pytest.raises(ValueError, match="illegal"):
+        env.step({"place_idx": torch.tensor([81, 1])})                  # off the board
+    with pytest.raises(KeyError, match="place_idx"):
+        env.step({"passed": torch.zeros(2, dtype=torch.bool)})
+    # a finished env ignores whatever is sent on its row
+    env = GomokuVecEnv(2, max_moves=1)
+    env.step({"place_idx": torch.tensor([0, 0])})
+    _, rew, done, info = env.step({"place_idx": torch.tensor([0, 0])})
+    assert not info["acted"].any() and not done.any() and (rew == 0).all()
+
+
+def test_gomoku_action_shape_is_one_point_per_row():
+    """[N] or [N, 1] place_idx is one point per row; an [N, k>1] tensor (e.g.
+    a batched decode's [B, T] actions) is refused instead of silently
+    applying its first column."""
+    env = GomokuVecEnv(2, board_size=9)
+    env.step({"place_idx": torch.tensor([[40], [3]])})
+    assert env.board[0, 40] == 1 and env.board[1, 3] == 1
+    with pytest.raises(ValueError, match="place_idx must be"):
+        env.step({"place_idx": torch.tensor([[41, 7], [0, 5]])})
+    assert env.ply.tolist() == [1, 1] and (env.board != 0).sum() == 2    # nothing applied
+
+
+def test_gomoku_rectangular_board_and_rng_state():
+    env = GomokuVecEnv(2, board_size=(6, 11), seed=4)
+    obs = env.observe()
+    assert obs.obs["board_seq"].shape == (2, 3, 6, 11) and obs.legal["place"].shape == (2, 66)
+    # a vertical five needs 5 of the 6 rows, a horizontal one fits anywhere
+    _, rew, done, _ = _play_gomoku(env, [(1, 10), (0, 0), (2, 10), (0, 2), (3, 10), (0, 4),
+                                         (4, 10), (0, 6), (5, 10)])
+    assert bool(done[0]) and not done[1] and rew[0].tolist() == [1.0, -1.0]
+    st = env.state_dict()
+    a = env.random_actions(env.reset())["place_idx"]
+    env.load_state_dict(st)
+    assert torch.equal(env.random_actions(env.reset())["place_idx"], a)
+
+
+def test_gomoku_random_actions_uniform_over_legal_points():
+    env = GomokuVecEnv(4, board_size=5, max_moves=2, seed=0)
+    obs = env.reset()
+    obs, *_ = env.step({"place_idx": torch.tensor([0, 1, 2, 3])})
+    gen = torch.Generator().manual_seed(1)
+    counts = torch.zeros(4, 25)
+    for _ in range(2000):
+        a = env.random_actions(obs, generator=gen)["place_idx"]
+        assert obs.legal["place"][torch.arange(4), a].all()
+        counts[torch.arange(4), a] += 1
+    legal = obs.legal["place"]
+    assert (counts[~legal] == 0).all()
+    p = counts[legal] / 2000
+    assert ((p - 1 / 24).abs() < 0.02).all()                  # 24 legal points per row
+    obs, *_ = env.step(env.random_actions(obs, generator=gen))
+    assert not obs.active.any()                               # max_moves=2: all done
+    a = env.random_actions(obs, generator=gen)["place_idx"]   # inactive rows: in range
+    assert ((a >= 0) & (a < 25)).all()
+
+
+def test_gomoku_autoreset_and_partial_reset():
+    env = GomokuVecEnv(3, board_size=6, autoreset=True, seed=0)
+    gen = torch.Generator().manual_seed(2)
+    obs = env.reset()
+    ended = 0
+    for _ in range(300):
+        obs, rew, done, info = env.step(env.random_actions(obs, generator=gen))
+        assert obs.active.all()
+        if done.any():
+            ended += int(done.sum())
+            assert torch.equal(obs.new_episode, done)
+            assert (obs.step_idx[done] == 0).all() and (obs.to_play[done] == 0).all()
+            assert (obs.obs["board_seq"][done][:, 2] == 1).all()          # empty board
+            assert torch.equal(rew[done, 0], -rew[done, 1])
+            assert (rew[~done] == 0).all()
+    assert ended >= 3 and not env.finished.any()
+    obs = env.reset(env_ids=[1])
+    assert obs.new_episode.tolist() == [False, True, False]
+    assert int(obs.step_idx[1]) == 0 and (obs.obs["board_seq"][1, 2] == 1).all()
+
+
+def test_gomoku_network_sample_steps_the_env():
+    """The gomoku decoder has no pass head: its sample() output steps the env
+    directly (action_pass is always False), via a NetworkPolicy."""
+    torch.manual_seed(0)
+    net = build_game_network("gomoku", **TINY, board_h=9, board_w=9).eval()
+    assert net.action_decoder.pass_head is None
+    env = GomokuVecEnv(3, board_size=9, max_moves=30, seed=0)
+    league = League(env, {"net": NetworkPolicy(net)}, mirror_prob=0.0, seed=0)
+    res = play_episodes(env, league, NetworkPolicy(net))
+    assert env.finished.all() and (res["episode_len"] > 0).all()
+    assert (res["episode_len"] <= 30).all()
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +860,7 @@ def test_league_seat_randomisation_and_state():
     assert torch.equal(a[0], league.learner_seats) and a[1] == league.opponent_of
 
 
-@pytest.mark.parametrize("game", ["othello", "generals"])
+@pytest.mark.parametrize("game", ["othello", "generals", "gomoku"])
 def test_play_episodes_random_vs_random(game):
     kw = {"max_turns": 60} if game == "generals" else {}
     env = make_vec_env(game, 6, seed=0, **kw)

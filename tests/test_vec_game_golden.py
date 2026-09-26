@@ -1,5 +1,5 @@
 """Golden tests: real recorded games replayed through the VecGameEnv adapters
-(env/vec_othello.py, env/vec_generals.py) reproduce, frame by frame and bit
+(env/vec_othello.py, env/vec_generals.py, env/vec_gomoku.py) reproduce, frame by frame and bit
 for bit, the IL data of the converters — observations (the gm-shard obs
 schema: keys, dtypes, shapes, values), the actions the rules applied (as IL
 targets) and the outcome.  So the IL-pretrained encoder sees in-distribution
@@ -17,21 +17,38 @@ generals  the .gior fixture replayed on its own map, one stream per seat, vs
           simulator; the env's own rule (seat 0 first) gives the same boards
           but flips executed / dropped on those ticks (a head-on swap of
           equal armies: about one game in ten of real 1v1 replays).
+gomoku    Gomocup .psq records replayed as ONE interleaved stream per game
+          (side-to-move planes, no pass) vs the pinned digests of ``gmdata
+          gomoku convert`` on the 20x20 fixture games (always), vs the checked-in
+          gm-shards of hand-written games (tests/fixtures/gomoku_env: edge /
+          corner fives in all four directions, a gap fill, an overline, the
+          9-move win, row-wrap traps, a 15x15 board; always), vs fresh gmdata
+          conversions (cargo) and vs the real Gomocup shards
+          ($GOMOKU_SHARDS, default ~/gm-data/gomoku/shards20; skipped when
+          absent; a spread of shards, all with GOMOKU_GOLDEN_ALL=1).
 """
 
 from __future__ import annotations
 
+import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
 import pytest
 import torch
 
-from data_processing.games.dataset import GameShardDataset, load_gm_samples
+from data_processing.games.dataset import (
+    GameShardDataset,
+    GmShard,
+    find_gm_shards,
+    load_gm_samples,
+)
 from data_processing.games.generals import SAMPLE_OBS_KEYS, SAMPLE_TGT_KEYS, GeneralsGioDataset
 from env.vec_generals import (
     GeneralsVecEnv,
@@ -39,6 +56,7 @@ from env.vec_generals import (
     replay_actions_by_step,
     replay_tiebreak_by_step,
 )
+from env.vec_gomoku import GomokuVecEnv
 from env.vec_othello import OthelloVecEnv
 from model.games.generals import append_turn_globals
 
@@ -321,3 +339,310 @@ def test_generals_replay_matches_gmdata_shards(gmdata, tmp_path):
     ours = replay_generals(replay, T)
     _assert_generals_equal(ours, il, "generals (gmdata)")
     assert ours["winner"] == _winner_seat(replay, il[0])
+
+
+# ---------------------------------------------------------------------------
+# gomoku
+# ---------------------------------------------------------------------------
+
+GOMOKU_FIX = os.path.join(FIX, "gomoku")               # real Gomocup games, 20x20
+GOMOKU_ENV_FIX = os.path.join(FIX, "gomoku_env")       # hand-written games + their shards
+GOMOKU_PSQ = os.path.join(GOMOKU_ENV_FIX, "psq")
+#   regenerate the checked-in shards (N = 20, 15):
+#   gmdata gomoku convert --input tests/fixtures/gomoku_env/psq \
+#       --out tests/fixtures/gomoku_env/shards<N> --board-size <N> --rule freestyle
+GOMOKU_ENV_SHARDS = {20: os.path.join(GOMOKU_ENV_FIX, "shards20"),
+                     15: os.path.join(GOMOKU_ENV_FIX, "shards15")}
+GOMOKU_SHARDS = os.path.expanduser(os.environ.get("GOMOKU_SHARDS", "~/gm-data/gomoku/shards20"))
+GOMOKU_META = ("source", "plies", "winner")
+GOMOKU_MIN_MOVES = 9                                   # gmdata gomoku convert --min-moves default
+_PSQ_MOVE = re.compile(r"^\s*(\d+),(\d+)(?:,(-?\d+))?\s*$", re.ASCII)
+_PSQ_DIMS = re.compile(r"(?<![0-9])([0-9]+)x([0-9]+)")
+
+
+def parse_psq(text: str) -> Tuple[int, int, List[Tuple[int, int]]]:
+    """(width, height, 0-based (row, col) moves) of a Piskvorky record,
+    as gomoku.rs ``parse_psq``: the header's first ``<W>x<H>``, then the
+    ``x,y[,time]`` lines (1-based column, row) up to the first other line."""
+    lines = [ln[:-1] if ln.endswith("\r") else ln for ln in text.split("\n")]
+    dims = _PSQ_DIMS.search(lines[0])
+    assert dims, f"unrecognized header {lines[0]!r}"
+    moves: List[Tuple[int, int]] = []
+    for ln in lines[1:]:
+        m = _PSQ_MOVE.match(ln.strip())
+        if m:
+            moves.append((int(m.group(2)) - 1, int(m.group(1)) - 1))
+        elif moves:
+            break
+    return int(dims.group(1)), int(dims.group(2)), moves
+
+
+def replay_gomoku(games: Sequence[Sequence[int]], board_size: int, *,
+                  on_frame: Optional[Callable[[int, torch.Tensor, torch.Tensor], None]] = None
+                  ) -> List[Optional[Dict]]:
+    """Replay recorded move lists (place_idx = row · N + col, −1 = off the
+    board) through ONE batched GomokuVecEnv, one interleaved stream per game,
+    feeding each game's recorded move on its frames.  Per game: the IL sample
+    (obs.board_seq, tgt.place_idx / passed = the applied actions, tgt.value =
+    the seat's final reward, meta.plies / winner) or None where the converter
+    drops the record (fewer than 9 moves, an illegal move, moves after the
+    win, no five after the last move).  A dropped record's env keeps stepping
+    on its first legal point until it ends.  ``on_frame(t, rows, board_seq)``
+    takes the frames of the replayed rows instead of storing them."""
+    G = len(games)
+    env = GomokuVecEnv(G, board_size=board_size)
+    P = env.n_points
+    lens = torch.tensor([len(g) for g in games], dtype=torch.long)
+    moves = torch.full((G, int(lens.max()) + 1), -1, dtype=torch.long)
+    for i, g in enumerate(games):
+        moves[i, :len(g)] = torch.from_numpy(np.array(g, dtype=np.int64))
+    bad = lens < GOMOKU_MIN_MOVES
+    frames: List[List[torch.Tensor]] = [[] for _ in range(G)]
+    applied: List[List[int]] = [[] for _ in range(G)]
+    ended_at = torch.full((G,), -1, dtype=torch.long)
+    final = torch.zeros(G, 2)
+    winner = torch.full((G,), -1, dtype=torch.long)
+    obs = env.reset()
+    t = 0
+    while bool(obs.active.any()):
+        act = obs.active
+        assert (obs.step_idx[act] == t).all() and (obs.to_play[act] == t % 2).all()
+        assert not obs.forced.any() and not obs.legal["pass"].any()
+        legal = obs.legal["place"]
+        assert torch.equal(legal, act[:, None] & (obs.obs["board_seq"][:, 2] > 0).flatten(1))
+        want = moves[:, min(t, moves.shape[1] - 1)]
+        ok = (want >= 0) & (want < P)
+        ok &= legal.gather(1, want.clamp(0, P - 1)[:, None]).squeeze(1)
+        bad |= act & ~ok
+        rows = torch.nonzero(act & ~bad).squeeze(1)
+        if on_frame is not None:
+            on_frame(t, rows, obs.obs["board_seq"][rows])
+        else:
+            for i in rows.tolist():
+                frames[i].append(obs.obs["board_seq"][i])
+        send = torch.where(bad, legal.to(torch.uint8).argmax(-1), want.clamp(0, P - 1))
+        obs, rew, done, info = env.step({"action_place": send})
+        assert not info["applied"]["passed"].any() and not info["truncated"].any()
+        for i in rows.tolist():
+            applied[i].append(int(info["applied"]["place_idx"][i]))
+        ended_at = torch.where(done, torch.full_like(ended_at, t), ended_at)
+        final[done] = rew[done]
+        winner = torch.where(done, info["winner"], winner)
+        t += 1
+    out: List[Optional[Dict]] = []
+    for i in range(G):
+        T = int(lens[i])
+        if bool(bad[i]) or int(ended_at[i]) != T - 1 or int(winner[i]) < 0:
+            out.append(None)
+            continue
+        assert applied[i] == [int(x) for x in games[i]]
+        seat = torch.arange(T) % 2
+        s = {"tgt": {"place_idx": torch.tensor(applied[i], dtype=torch.int64),
+                     "passed": torch.zeros(T, dtype=torch.bool),
+                     # the seat's final reward is the IL value target of its frames
+                     "value": final[i][seat]},
+             "meta": {"plies": T, "winner": ("black", "white")[int(winner[i])]}}
+        if on_frame is None:
+            s["obs"] = {"board_seq": torch.stack(frames[i])}
+        out.append(s)
+    return out
+
+
+def replay_psq_dir(directory: str, board_size: int) -> List[Dict]:
+    """Every ``board_size`` record under ``directory`` (gmdata's file order)
+    replayed; the samples the converter keeps, meta.source = the file name."""
+    names, games = [], []
+    for f in sorted(glob.glob(os.path.join(directory, "**", "*.psq"), recursive=True)):
+        with open(f, "rb") as fh:
+            w, h, moves = parse_psq(fh.read().decode("utf-8", errors="replace"))
+        if (w, h) != (board_size, board_size) or not moves:
+            continue
+        names.append(os.path.basename(f))
+        games.append([r * board_size + c if 0 <= r < board_size and 0 <= c < board_size else -1
+                      for r, c in moves])
+    out = []
+    for name, s in zip(names, replay_gomoku(games, board_size)):
+        if s is not None:
+            s["meta"]["source"] = name
+            out.append(s)
+    return out
+
+
+def _assert_gomoku_samples_equal(ours: List[Dict], il: List[Dict], board_size: int) -> None:
+    assert [s["meta"]["source"] for s in ours] == [s["meta"]["source"] for s in il]
+    schema = GomokuVecEnv(1, board_size=board_size).obs_schema()
+    for a, b in zip(ours, il):
+        what = f"gomoku {b['meta']['source']}"
+        for k, (shape, dtype) in schema.items():
+            assert b["obs"][k].shape[1:] == shape and b["obs"][k].dtype == dtype, what
+        _assert_frames_equal(a["obs"], b["obs"], what)
+        _assert_frames_equal(a["tgt"], b["tgt"], what)
+        assert a["meta"]["winner"] == b["meta"]["winner"], what
+
+
+def test_gomoku_replay_matches_golden_digests():
+    """The 20x20 Gomocup fixture games: bit-identical to `gmdata gomoku
+    convert --board-size 20` (its pinned per-tensor digests)."""
+    with open(os.path.join(FIX, "golden", "gomoku_freestyle.json")) as fh:
+        golden = json.load(fh)
+    assert golden["shard_meta"] == {"board_size": 20}
+    ours = replay_psq_dir(GOMOKU_FIX, 20)
+    got = sample_digests(ours, GOMOKU_META)
+    assert len(got) == len(golden["samples"]) > 30
+    for g, w in zip(got, golden["samples"]):
+        assert g == w, f"{w['meta']['source']} differs from the converter"
+    assert {s["meta"]["winner"] for s in ours} == {"black", "white"}
+
+
+@pytest.mark.parametrize("board_size", [20, 15])
+def test_gomoku_replay_matches_fixture_shards(board_size):
+    """The hand-written records vs their checked-in gm-shards, frame by
+    frame: every direction, board edges and corners, a gap fill, a freestyle
+    overline, the fastest (9-move) win, and row-wrap traps (five consecutive
+    point indices across a row end, which must not win); the undecided and
+    moves-after-win records are dropped like the converter drops them."""
+    il = load_gm_samples(GOMOKU_ENV_SHARDS[board_size])
+    ours = replay_psq_dir(GOMOKU_PSQ, board_size)
+    assert len(ours) == len(il) == {20: 5, 15: 2}[board_size]
+    _assert_gomoku_samples_equal(ours, il, board_size)
+
+
+def test_gomoku_replay_matches_gmdata_frame_by_frame(gmdata, tmp_path):
+    """Fresh `gmdata gomoku convert` output: the Gomocup fixtures frame by
+    frame, and the hand-written records == their checked-in shards."""
+    out = tmp_path / "gomocup"
+    subprocess.run([gmdata, "gomoku", "convert", "--input", GOMOKU_FIX, "--out", str(out),
+                    "--board-size", "20", "--rule", "freestyle"], check=True, capture_output=True)
+    _assert_gomoku_samples_equal(replay_psq_dir(GOMOKU_FIX, 20), load_gm_samples(str(out)), 20)
+    for n, checked_in in GOMOKU_ENV_SHARDS.items():
+        fresh = tmp_path / f"env{n}"
+        subprocess.run([gmdata, "gomoku", "convert", "--input", GOMOKU_PSQ, "--out", str(fresh),
+                        "--board-size", str(n), "--rule", "freestyle"],
+                       check=True, capture_output=True)
+        a, b = load_gm_samples(str(fresh)), load_gm_samples(checked_in)
+        assert len(a) == len(b) > 0
+        for x, y in zip(a, b):
+            assert x["meta"] == y["meta"]
+            _assert_frames_equal(x["obs"], y["obs"], f"fixture {y['meta']['source']}")
+            _assert_frames_equal(x["tgt"], y["tgt"], f"fixture {y['meta']['source']}")
+
+
+def _play_random_gomoku(n: int, rule: str, games: int, seed: int, band: int) -> List[Dict]:
+    """Random games played BY the env (``rule``), the moves preferring the
+    ``band`` outermost rows / columns (edge and corner lines, overlines on
+    small boards): per game its moves, frames, winner and final rewards."""
+    env = GomokuVecEnv(games, board_size=n, rule=rule, seed=seed)
+    gen = torch.Generator().manual_seed(seed)
+    r, c = torch.arange(n * n) // n, torch.arange(n * n) % n
+    edge = (r < band) | (c < band) | (r >= n - band) | (c >= n - band)
+    rec = [{"moves": [], "frames": []} for _ in range(games)]
+    obs = env.reset()
+    while bool(obs.active.any()):
+        legal = obs.legal["place"]
+        biased = legal & edge
+        legal = torch.where(biased.any(-1, keepdim=True), biased, legal)
+        # uniform over the (biased) legal points: the k-th legal point
+        cum = legal.long().cumsum(-1)
+        k = (torch.rand(games, generator=gen) * cum[:, -1]).long()
+        act = (cum <= k[:, None]).sum(-1).clamp(max=n * n - 1)
+        live = obs.active.nonzero().squeeze(1).tolist()
+        for i in live:
+            rec[i]["moves"].append(int(act[i]))
+            rec[i]["frames"].append(obs.obs["board_seq"][i])
+        obs, rew, done, info = env.step({"place_idx": act})
+        for i in live:
+            if done[i]:
+                rec[i]["winner"], rec[i]["reward"] = int(info["winner"][i]), rew[i]
+    return rec
+
+
+@pytest.mark.parametrize("rule", ["freestyle", "standard"])
+def test_gomoku_rules_match_gmdata_on_random_edge_games(gmdata, tmp_path, rule):
+    """Both rules vs fresh `gmdata gomoku convert --rule <rule>` on random
+    games played by the env (edge-biased: fives along the edges and corners,
+    overlines, which only `standard` refuses, and full-board draws, which the
+    converter drops as undecided): the converter keeps exactly the games the
+    env scored as decisive, with the same winner, frames, moves and value
+    targets (= the seats' final rewards)."""
+    for n, band, games in ((6, 1, 48), (7, 2, 48), (15, 2, 16)):
+        rec = _play_random_gomoku(n, rule, games, seed=100 * n + band, band=band)
+        d = tmp_path / f"psq_{rule}_{n}"
+        d.mkdir()
+        for i, g in enumerate(rec):
+            lines = [f"Piskvorky {n}x{n}, 11:11, 0"]
+            lines += [f"{m % n + 1},{m // n + 1},0" for m in g["moves"]]     # x = col, y = row
+            (d / f"g{i:03d}.psq").write_text("\n".join(lines + ["A.zip", "B.zip", "-1", ""]))
+        out = tmp_path / f"shards_{rule}_{n}"
+        subprocess.run([gmdata, "gomoku", "convert", "--input", str(d), "--out", str(out),
+                        "--board-size", str(n), "--rule", rule, "--min-moves", "1"],
+                       check=True, capture_output=True)
+        il = {s["meta"]["source"]: s for s in load_gm_samples(str(out))} if out.is_dir() else {}
+        decisive = [i for i, g in enumerate(rec) if g["winner"] >= 0]
+        assert sorted(il) == [f"g{i:03d}.psq" for i in decisive], (rule, n)
+        assert 0 < len(decisive) and (n > 7 or len(decisive) < games)      # draws occur
+        for i in decisive:
+            g, s = rec[i], il[f"g{i:03d}.psq"]
+            T = len(g["moves"])
+            what = f"gomoku {rule} {n}x{n} game {i}"
+            assert s["meta"]["plies"] == T and s["meta"]["winner"] == ("black", "white")[g["winner"]]
+            assert torch.equal(torch.stack(g["frames"]), s["obs"]["board_seq"]), what
+            assert s["tgt"]["place_idx"].tolist() == g["moves"], what
+            assert torch.equal(g["reward"][torch.arange(T) % 2], s["tgt"]["value"]), what
+
+
+def _replay_real_shard(path: str) -> Tuple[int, int]:
+    """Replay every game of one real gm-shard (its recorded place_idx) and
+    compare every frame's planes with the shard's packed bits; returns
+    (games, frames)."""
+    sh = GmShard(path)
+    n = int(sh.index["meta"]["board_size"])
+    arr = sh.arrays()
+    bits = arr["obs.board_seq"]
+    info = sh.index["tensors"]["obs.board_seq"]
+    assert info["storage"] == "packbits" and info["frame_shape"] == [3, n, n]
+    assert info["dtype"] == "float32"
+    place = np.asarray(arr["tgt.place_idx"])
+    value = np.asarray(arr["tgt.value"])
+    assert not np.asarray(arr["tgt.passed"]).any()
+    samples = sh.index["samples"]
+    starts = torch.tensor([s["start"] for s in samples], dtype=torch.long)
+    games = [place[s["start"]:s["start"] + s["length"]] for s in samples]
+    per = 3 * n * n
+
+    def on_frame(t: int, rows: torch.Tensor, board_seq: torch.Tensor) -> None:
+        ours = board_seq.reshape(rows.numel(), per)
+        assert ((ours == 0) | (ours == 1)).all()
+        il = np.unpackbits(np.asarray(bits[(starts[rows] + t).numpy()]), axis=1, count=per)
+        diff = (torch.from_numpy(il).bool() != ours.bool()).any(1)
+        if diff.any():
+            src = samples[int(rows[diff][0])]["meta"]["source"]
+            raise AssertionError(f"{path}: {src} obs.board_seq differs at frame {t}")
+
+    out = replay_gomoku(games, n, on_frame=on_frame)
+    for s, o in zip(samples, out):
+        where = f"{path}: {s['meta'].get('source')}"
+        assert o is not None, f"{where}: the env does not end the game on its last move"
+        assert o["meta"]["winner"] == s["meta"]["winner"] and o["meta"]["plies"] == s["length"]
+        v = torch.from_numpy(value[s["start"]:s["start"] + s["length"]].copy())
+        assert torch.equal(o["tgt"]["value"], v), where
+    return len(samples), sum(s["length"] for s in samples)
+
+
+@pytest.mark.skipif(not os.path.isdir(GOMOKU_SHARDS),
+                    reason=f"no real gomoku shards at {GOMOKU_SHARDS} (set GOMOKU_SHARDS)")
+def test_gomoku_replay_matches_real_gomocup_shards():
+    """The real Gomocup gm-shards (read-only): every game of a spread of
+    shards (all of them with GOMOKU_GOLDEN_ALL=1) replayed through the env —
+    every frame's planes equal, the game ends exactly on its last move with
+    the recorded winner, and the seats' rewards are the value targets."""
+    shards = find_gm_shards(GOMOKU_SHARDS)
+    if not shards:
+        pytest.skip(f"no gm-shards under {GOMOKU_SHARDS}")
+    if os.environ.get("GOMOKU_GOLDEN_ALL") != "1":
+        shards = shards[::max(1, len(shards) // 8)]
+    games = frames = 0
+    for d in shards:
+        g, f = _replay_real_shard(d)
+        games += g
+        frames += f
+    assert games > 0 and frames > games

@@ -461,6 +461,35 @@ class ForcedPassPlacementSpec(RLGameSpec):
         return terms
 
 
+class GomokuSpec(ForcedPassPlacementSpec):
+    """gomoku: pure placement, the othello spec without forced frames (the
+    env never passes, ``forced`` is all False).  LABEL_KEYS["gomoku"] is
+    empty and the registry builds the decoder without a pass head
+    (``allow_pass=False``), so the generic spec would already be exact; this
+    one adds (1) the env built on the network's board (``board_h`` /
+    ``board_w``: a 15x15 net on the env's 20x20 default would fail) and
+    checked against it, (2) the full-head KL (exact over every legal point,
+    not the sampled k3 estimate of the taken one), and (3) a placement-only
+    μ / π when a checkpoint does carry a pass head: the env applies the
+    placement whatever pass flag is sampled, so the pass Bernoulli is not
+    part of the action (the full-head KL keeps it near the reference's pass
+    head, which IL trained on all-False targets)."""
+
+    def env_kwargs(self, cfg):
+        return {"board_size": (int(cfg.board_h), int(cfg.board_w))}
+
+    def check_env(self, env, net):
+        have = tuple(env.obs_schema()["board_seq"][0])
+        cfg = net.cfg
+        want = (cfg.piece_channels, cfg.board_h, cfg.board_w)
+        if have != want:
+            raise SystemExit(f"gomoku env emits board_seq {have}, the network expects {want} "
+                             f"(piece_channels, board_h, board_w)")
+        if getattr(cfg, "board_global_features", 0):
+            raise SystemExit(f"gomoku env emits no globals_seq, the network expects "
+                             f"{cfg.board_global_features} board_global_features")
+
+
 class GeneralsSpec(RLGameSpec):
     """generals: the decoder's hierarchical log-prob (μ = ``action_log_prob``),
     the replay teacher-forces the stored source (direction / split condition
@@ -506,6 +535,7 @@ class GeneralsSpec(RLGameSpec):
 GAME_SPECS: Dict[str, RLGameSpec] = {
     "generals": GeneralsSpec(),
     "othello": ForcedPassPlacementSpec(),
+    "gomoku": GomokuSpec(),
 }
 
 
