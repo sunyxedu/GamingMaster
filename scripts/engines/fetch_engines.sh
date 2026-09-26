@@ -28,10 +28,14 @@
 #              per-arch builds, chosen here from the CPU flags (STOCKFISH_ARCH overrides).
 #   Egaroucid  GPL-3.0. Built from source, github.com/Nyanyan/Egaroucid; its evaluation file
 #              (bin/resources/eval.egev2) ships in the same repository under the same licence.
-#   YaneuraOu  GPL-3.0. Built from source, github.com/yaneurao/YaneuraOu, standard NNUE
-#              edition (halfkp_256x2-32-32). Eval: "Háo" (tanuki- project, release
-#              tanuki-.halfkp_256x2-32-32.2023-05-08 at github.com/nodchip/tanuki-; the
-#              project is GPL-3.0; recommended USI option FV_SCALE=20).
+#   YaneuraOu  GPL-3.0. Built from source, github.com/yaneurao/YaneuraOu (tag v9.40 with two
+#              small source patches, see yaneuraou_patch: the upstream macOS isready-deadlock
+#              fix f129339a, and a ~12 ms instead of ~150 ms isready), standard NNUE edition
+#              (halfkp_256x2-32-32). Eval: "Háo" (tanuki- project, release
+#              tanuki-.halfkp_256x2-32-32.2023-05-08 at github.com/nodchip/tanuki-, a free
+#              download; the archive ships gpl-3.0.txt: GPL-3.0; about as strong as tanuki-'s
+#              WCSC33 eval "Lí" per its authors; needs the USI option FV_SCALE=20, which
+#              `gmdata label shogi` sets by default).
 #   KataGo     Engine: github.com/lightvector/KataGo (see its LICENSE: MIT-style, with
 #              separately licensed third-party parts). Networks from katagotraining.org
 #              under the "KataGo Neural Network License" (MIT-style,
@@ -43,7 +47,8 @@
 #   STOCKFISH_TAG          release tag (default: latest, e.g. sf_19)
 #   STOCKFISH_ARCH         per-arch build for pre-universal tags (x86-64-avx512icl, ...)
 #   EGAROUCID_REF          git tag / branch (default: latest release tag)
-#   YANEURAOU_REF          git tag / branch (default: latest release tag)
+#   YANEURAOU_REF          git tag / branch (default: v9.40, pinned: labels record the engine
+#                          version, and later versions may drop the halfkp_256x2-32-32 edition)
 #   YANEURAOU_TARGET_CPU   Makefile TARGET_CPU (default: from the CPU flags)
 #   YANEURAOU_EVAL_URL     .7z / .zip archive containing nn.bin (default: Háo)
 #   KATAGO_TAG             release tag (default: v1.18.1 for CPU/OpenCL builds — later
@@ -300,7 +305,9 @@ yaneuraou_target_cpu() {
     case "$OS-$ARCH" in
         Darwin-arm64) echo APPLEM1 ;;
         Darwin-x86_64) if has_flag avx2; then echo APPLEAVX2; else echo APPLESSE42; fi ;;
-        Linux-aarch64 | Linux-arm64) if has_flag asimddp; then echo ARMV8_DOTPROD; else echo ARMV8; fi ;;
+        # GRAVITON2 = -march=armv8.2-a+fp16+rcpc+dotprod+crypto; OTHER = portable C++
+        Linux-aarch64 | Linux-arm64)
+            if has_flag asimddp && has_flag asimdhp && has_flag lrcpc && has_flag aes; then echo GRAVITON2; else echo OTHER; fi ;;
         *)
             if has_flag avx512_vnni && has_flag avx512bw; then echo AVX512VNNI
             elif has_flag avx512bw && has_flag avx512f; then echo AVX512
@@ -311,26 +318,79 @@ yaneuraou_target_cpu() {
     esac
 }
 
+# Source fixes applied before building (each a no-op when its pattern is absent):
+#  * v9.40 prints "shared memory: fallback to local memory (…)" with two nested sync_cout
+#    (a non-recursive output mutex) and deadlocks in `isready` wherever POSIX shared memory
+#    is unavailable — always on macOS, on Linux without /dev/shm. Upstream removed the
+#    message in f129339a (2026-06-05, after v9.40); here the inner writes go to std::cout.
+#  * every `isready` runs through Engine::run_heavy_job, whose keep-alive thread is polled
+#    in 100 ms sleeps: ~150 ms per isready. `gmdata label shogi` sends isready before every
+#    position (it clears the hash, so labels do not depend on search order); 1 ms polling
+#    makes that ~12 ms. Keep-alive newlines still go out every 5 s.
+yaneuraou_patch() {
+    local shm="$1/shm.h" eng="$1/engine.cpp"
+    if [ -f "$shm" ]; then
+        LC_ALL=C sed -e 's/^\( *\)sync_cout << " (" << \*error_message << ")";/\1std::cout << " (" << *error_message << ")";/' \
+            -e 's/^\( *\)sync_cout << sync_endl;/\1std::cout << sync_endl;/' "$shm" > "$shm.gm" && mv "$shm.gm" "$shm"
+    fi
+    if [ -f "$eng" ]; then
+        LC_ALL=C sed -e 's|std::this_thread::sleep_for(std::chrono::milliseconds(100));|std::this_thread::sleep_for(std::chrono::milliseconds(1));|' \
+            -e 's|if (++count >= 50 /\* 5秒 \*/)|if (++count >= 5000 /* 5秒 */)|' \
+            -e 's|^\( *\)Tools::sleep(100);|\1Tools::sleep(1);|' "$eng" > "$eng.gm" && mv "$eng.gm" "$eng"
+    fi
+}
+
+# USI handshake + isready (eval load) within 120 s; prints the engine's `id name`.
+yaneuraou_smoke() {
+    local exe="$1" tmp pid i
+    tmp="$(mktemp -d)"
+    printf 'usi\nsetoption name Threads value 1\nsetoption name USI_Hash value 16\nsetoption name USI_OwnBook value false\nsetoption name BookFile value no_book\nsetoption name FV_SCALE value 20\nisready\nquit\n' > "$tmp/in"
+    "$exe" < "$tmp/in" > "$tmp/out" 2>&1 &
+    pid=$!
+    for i in $(seq 1 120); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        grep -v '^option' "$tmp/out" >&2 || true
+        rm -rf "$tmp"
+        die "$exe: no readyok within 120 s (hangs in isready)"
+    fi
+    wait "$pid" 2>/dev/null || true
+    if ! grep -q '^readyok' "$tmp/out"; then
+        grep -v '^option' "$tmp/out" >&2 || true
+        rm -rf "$tmp"
+        die "$exe: isready failed (eval file missing / unreadable?)"
+    fi
+    awk '/^id name/{sub(/^id name /,""); print; exit}' "$tmp/out"
+    rm -rf "$tmp"
+}
+
 install_yaneuraou() {
     have git || die "yaneuraou needs git"
     have make || die "yaneuraou needs make"
     local ref dir cpu cxx exe url arch
-    ref="${YANEURAOU_REF:-$(latest_tag yaneurao/YaneuraOu || echo master)}"
+    ref="${YANEURAOU_REF:-v9.40}"
     cpu="$(yaneuraou_target_cpu)"
-    dir="$ROOT/yaneuraou/$ref-$cpu"
+    # -gm1: this script's build recipe (source patches); bump it when yaneuraou_patch changes
+    dir="$ROOT/yaneuraou/$ref-$cpu-gm1"
     if [ -x "$dir/YaneuraOu" ]; then
         log "YaneuraOu $ref ($cpu) already built"
     else
         rm -rf "$dir.tmp"
-        git clone --depth 1 --branch "$ref" https://github.com/yaneurao/YaneuraOu.git "$dir.tmp"
+        git -c advice.detachedHead=false clone -q --depth 1 --branch "$ref" https://github.com/yaneurao/YaneuraOu.git "$dir.tmp"
+        yaneuraou_patch "$dir.tmp/source"
         if [ "$OS" = Darwin ] || ! have g++; then cxx=clang++; else cxx=g++; fi
-        log "building YaneuraOu $ref NNUE edition, TARGET_CPU=$cpu, $cxx"
+        log "building YaneuraOu $ref NNUE edition, TARGET_CPU=$cpu, $cxx (log: $dir/build.log)"
         make -C "$dir.tmp/source" -j"$(jobs)" normal TARGET_CPU="$cpu" \
-            YANEURAOU_EDITION=YANEURAOU_ENGINE_NNUE COMPILER="$cxx" >/dev/null
+            YANEURAOU_EDITION=YANEURAOU_ENGINE_NNUE COMPILER="$cxx" > "$dir.tmp/build.log" 2>&1 \
+            || { tail -30 "$dir.tmp/build.log" >&2; die "YaneuraOu build failed (see $dir.tmp/build.log)"; }
         exe="$(find "$dir.tmp/source" -maxdepth 1 -type f -name 'YaneuraOu*' -perm -u+x | head -1)"
         [ -n "$exe" ] || die "YaneuraOu build produced no executable"
         mkdir -p "$dir.tmp/eval"
         mv "$exe" "$dir.tmp/YaneuraOu"
+        rm -rf "$dir.tmp/obj"
         rm -rf "$dir"
         mv "$dir.tmp" "$dir"
     fi
@@ -350,8 +410,8 @@ install_yaneuraou() {
     fi
     wrap_bin yaneuraou "$dir" ./YaneuraOu
     local id
-    id="$(printf 'usi\nquit\n' | "$BIN/yaneuraou" 2>/dev/null | awk '/^id name/{sub(/^id name /,""); print; exit}')" || true
-    echo "yaneuraou: $BIN/yaneuraou -> $dir/YaneuraOu (${id:-no USI answer?}; eval $dir/eval/nn.bin -> $(readlink "$dir/eval/nn.bin"); use --engine-option FV_SCALE=20 for Háo; GPL-3.0)"
+    id="$(yaneuraou_smoke "$BIN/yaneuraou")"
+    echo "yaneuraou: $BIN/yaneuraou -> $dir/YaneuraOu ($id; eval $dir/eval/nn.bin -> $(readlink "$dir/eval/nn.bin"), FV_SCALE=20 for Háo; GPL-3.0)"
 }
 
 # ------------------------------------------------------------------ KataGo
