@@ -14,12 +14,13 @@
 #   1. the DDP equivalence tests, whose CUDA variants now run gloo on CUDA
 #      tensors with every rank pinned to its own slice (tests/test_mig_ddp.py,
 #      test_grad_sync, test_multi_game_ddp, test_rl_joint_dist,
-#      test_rl_joint_trainer);
+#      test_rl_joint_trainer) — a skipped CUDA variant fails the job;
 #   2. scripts/bench_grad_sync.py: gradient sync time per bucket size for a
 #      208M-parameter model (gloo between two slices);
 #   3. a short real `torchrun -m training.train_multi_game` run on synthetic
 #      othello + chess shards with --dist_backend auto (the multi_game_ddp_job.sh
-#      command line); the log must show one gloo rank per slice.
+#      command line); the log must show NGPU gloo ranks on cuda:0, each pinned
+#      to a different MIG instance, and a final checkpoint.
 #
 #   sbatch scripts/slurm/multi/mig_ddp_smoke_job.sh          # 2 x 1g.18gb
 #   GPU_TYPE=nvidia_h200_nvl_1g.18gb NGPU=3 bash scripts/slurm/multi/mig_ddp_smoke_job.sh
@@ -59,6 +60,11 @@ echo "=== 1/3 DDP equivalence tests (gloo on CUDA tensors, one slice per rank)"
 "$PY" -m pytest -q -rs tests/test_mig_ddp.py tests/test_grad_sync.py \
     tests/test_multi_game_ddp.py tests/test_rl_joint_dist.py tests/test_rl_joint_trainer.py \
     2>&1 | tee "$OUT/pytest.txt" || status=1
+# a skipped CUDA variant would pass silently: on this allocation all must run
+if grep -q "needs CUDA" "$OUT/pytest.txt"; then
+    echo "pytest: CUDA variants SKIPPED (torch.cuda.is_available() is false here)" >&2
+    status=1
+fi
 
 echo "=== 2/3 gradient-sync benchmark (208M parameters)"
 "$GM_HOME/.venv/bin/torchrun" --standalone --nproc_per_node="$NGPU" \
@@ -81,8 +87,13 @@ EOF
     --log_every 10 --eval_every 30 --ckpt_every 30 --save_dir "$OUT/ck" \
     2>&1 | tee "$OUT/train.txt" || status=1
 ranks=$(grep -c "^\[dist\] rank .*backend=gloo device=cuda:0" "$OUT/train.txt" || true)
-if [ "$ranks" != "$NGPU" ] || [ ! -f "$OUT/ck/multi_final.pt" ]; then
-    echo "train_multi_game: $ranks/$NGPU gloo ranks on cuda:0, final checkpoint" \
+# every rank must show ONE MIG instance of its own ("[MIG-...]" without a
+# comma): an unpinned rank would print the whole list, i.e. share slice 0
+slices=$(grep "^\[dist\] rank .*backend=gloo device=cuda:0" "$OUT/train.txt" |
+         grep -o '\[MIG-[^],]*\]$' | sort -u | wc -l | tr -d ' ' || true)
+if [ "$ranks" != "$NGPU" ] || [ "$slices" != "$NGPU" ] || [ ! -f "$OUT/ck/multi_final.pt" ]; then
+    echo "train_multi_game: $ranks/$NGPU gloo ranks on cuda:0, $slices distinct pinned" \
+         "slice(s), final checkpoint" \
          "$( [ -f "$OUT/ck/multi_final.pt" ] && echo present || echo MISSING )" >&2
     status=1
 fi
