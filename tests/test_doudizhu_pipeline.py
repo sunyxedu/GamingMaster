@@ -221,6 +221,25 @@ def test_teacher_soft_targets_from_douzero_q(gmdata, tmp_path):
     assert n == st["soft_frames"]
 
 
+def test_candidates_are_distinguishable(shards):
+    """Within a frame every legal candidate has its own feature vector (the pointer
+    head scores candidates by their features only: two identical rows would be one
+    action to the policy) — on the real records and on random games."""
+    root, _ = shards
+    frames = [s["obs"] for s in load_gm_samples(str(root / "train"))]
+    for seed in range(40):
+        r = gmsim.replay(GAME, CFG, gmsim.random_trajectory(GAME, CFG, seed))
+        frames.append({k: torch.from_numpy(np.ascontiguousarray(v)) for k, v in r["obs"].items()})
+    n = 0
+    for f in frames:
+        for t in range(f["actions"].shape[0]):
+            k = int(f["action_mask"][t].sum())
+            rows = f["actions"][t, :k]
+            assert torch.unique(rows, dim=0).shape[0] == k
+            n += 1
+    assert n > 6000
+
+
 def test_converter_frames_are_the_rules_frames(shards):
     """Golden: every sample == the replay stream of its record (gmrules encode_frame)."""
     root, _ = shards

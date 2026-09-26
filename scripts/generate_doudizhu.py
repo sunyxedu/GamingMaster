@@ -49,9 +49,11 @@ data_processing/rs/gmdata/src/doudizhu.rs)::
      "meta": {"bidding": "heuristic_v1", "generator": ..., "seed": ..., "index": ...}}
 
 Card ids are OpenSpiel's: ``c < 52`` rank ``c % 13`` (3 4 ... A 2), suit ``c // 13``;
-52 / 53 = black / coloured joker.  A game is a pure function of ``(--seed, index)``
-(its deal and agents), so the output does not depend on ``--workers``; output
-parts are written atomically and existing parts are skipped (resumable).
+52 / 53 = black / coloured joker.  A game's deal and agents are a pure function of
+``(--seed, index)`` and the play is greedy, so on one machine the output does not
+depend on ``--workers`` / ``--part_size`` (across CPU types the networks' float
+rounding may break a near-tie differently); output parts are written atomically and
+existing parts are skipped (resumable).
 Throughput (CPU, one torch thread per worker): ~22 games/s per worker on an Apple
 M-series core (~60 games/s with 4 workers); a game averages ~32 decision frames.
 
