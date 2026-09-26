@@ -86,6 +86,9 @@ exercises the whole pipeline with a built-in fake engine.
 scripts/engines/fetch_engines.sh stockfish
 $G label chess --input data/chess/train --out data/chess_sf/train \
    --engine ~/gm-engines/bin/stockfish --workers 32 --limit nodes=1000000
+scripts/engines/fetch_engines.sh egaroucid
+$G label othello --input data/othello/train --out data/othello_ega/train \
+   --engine ~/gm-engines/bin/egaroucid --workers 64   # Egaroucid level 15, exact <= 20 empties
 ```
 
 ## Tests
@@ -94,11 +97,13 @@ $G label chess --input data/chess/train --out data/chess_sf/train \
 cargo test --release                                   # Rust unit tests
 uv run pytest tests/test_rust_converters_parity.py \
               tests/test_rust_generals_parity.py tests/test_clash_royale_data.py \
-              tests/test_label_overlay.py tests/test_fetch_engines.py
+              tests/test_label_overlay.py tests/test_fetch_engines.py \
+              tests/test_label_othello.py
 ```
 
 Real-engine tests run only when the engine is installed (e.g. `STOCKFISH=path`
-or `~/gm-engines/bin/stockfish`); the label tests otherwise use fake engines.
+or `~/gm-engines/bin/stockfish`, `GM_EGAROUCID=path` or `~/gm-engines/bin/egaroucid`);
+the label tests otherwise use fake engines.
 
 The parity tests pin every converter to golden SHA-256 digests of the retired
 Python reference outputs on committed real-data fixtures (tests/fixtures/).

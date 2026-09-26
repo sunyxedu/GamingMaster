@@ -69,7 +69,9 @@ pub fn has_legal_move(b: &[u8; 64], player: u8) -> bool {
     (0..8).any(|r| (0..8).any(|c| !flips(b, player, r, c).is_empty()))
 }
 
-fn planes(b: &[u8; 64], mover: u8, out: &mut Vec<f32>) {
+/// obs.board_seq frame of `b` from `mover`'s perspective (mover / opponent / empty planes),
+/// appended to `out` (also used by `gmdata label othello` to verify shards).
+pub fn planes(b: &[u8; 64], mover: u8, out: &mut Vec<f32>) {
     let opp = opponent(mover);
     for want in [mover, opp, EMPTY] {
         out.extend(b.iter().map(|&v| (v == want) as u8 as f32));
