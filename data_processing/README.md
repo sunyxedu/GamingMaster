@@ -69,11 +69,14 @@ behaviour, which is what the golden parity tests pin.
 | Lux AI S3 | `$G lux fetch --top-teams 10` (Kaggle API) | only episodes where both agents are top-10 leaderboard teams | needs `KAGGLE_API_TOKEN` or `~/.kaggle/access_token` |
 | Clash Royale | `crdata fetch --out D` (RoyaleAPI replays, HF) | `crdata convert --hq`: Ranked + Grand Challenge, ≥ 60 s, ≥ 5 own plays; optional `--winner-only` | anonymised (no trophies); see games/clash_royale/README.md |
 | Kuhn poker (toy) | `$G kuhn-poker generate` (synthetic hand logs; `scripts/fetch_kuhn_poker.sh`) | `convert --hq`: the scripted expert's seats only | gmrules reference game (below); rules pinned to OpenSpiel |
+| contract bridge | `$G bridge fetch --source openspiel` (OpenSpiel's WBridge5 dataset, GCS: 1.16M deals) and `--source ben` (Ben's WBC play data, GitHub release: 1.89M boards); `scripts/fetch_bridge.sh` end to end | every board: robot play at world-championship level (WBridge5 at its strongest setting, SAYC; World Computer Bridge Championship robots); `convert --complete-only` drops records that stop without a result | gmrules game (below), rules pinned to OpenSpiel. Licences: the OpenSpiel dataset's README states none (DeepMind research data published with OpenSpiel, Apache-2.0); Ben's data is a release asset of lorserker/ben (GPL-3.0), with no separate data licence. BBO vugraph (LIN) is not fetched (pending a decision); `convert --format lin` reads it |
 
 Measured on real data (kept / seen): chess elite 2021-06 601k / 781k games;
 go KGS 2019-04 202 / 1255; shogi 2025-06-01 158 / 447; othello 2019–21
 1502 / 3559; gomoku Freestyle1 2023 658 / 2880; Clash Royale 5000 replays
-8456 / 9392 player sequences (4186 with `--winner-only`).
+8456 / 9392 player sequences (4186 with `--winner-only`); bridge WBridge5 test set
+10,000 / 10,000 deals, Ben WBC 1,883,853 / 1,887,139 boards (3,286 rejected by the
+verifying replay as data errors; 291 kept as auction-only records).
 
 ## Engine teacher labels
 
@@ -194,6 +197,14 @@ stream) and `breakthrough` (the custom-schema board game). `gmdata rules
 list|check|random|convert` work for every registered game without per-game code
 (conformance battery, random-play shards, trajectory JSONL → shards).
 
+Full games: `bridge` (contract bridge: the auction with doubles / redoubles, dummy
+exposed after the opening lead and played by declarer, duplicate scoring by
+vulnerability; 4 seats in two partnerships, `Game::teams`). Rules and frames are in
+`rs/gmrules/src/games/bridge.rs`, pinned to OpenSpiel by `tests/test_bridge_reference.py`.
+The converter is `gmdata bridge fetch|check|convert` (OpenSpiel WBridge5 lines, Ben
+Jack-format boards, PBN, BBO LIN; `rs/gmdata/src/bridge.rs`), end to end in
+`scripts/fetch_bridge.sh`; tests are in `tests/test_bridge_pipeline.py`.
+
 ### Adding a game
 
 1. Rules — `rs/gmrules/src/games/<game>.rs` implementing `gmrules::Game`:
@@ -218,7 +229,9 @@ list|check|random|convert` work for every registered game without per-game code
      state and actions); `outcome()` in [-1, 1] is both the IL value target and the
      RL reward; `returns()` the raw payoffs; `check_config` validates the config;
      hidden-information games implement `perturb_hidden` (re-deal what `seat` cannot
-     see, keep every recorded action legal);
+     see, keep every recorded action legal); partnership games return their
+     `teams` (teammates share one outcome: the simulator reports the winning team,
+     the league assigns whole teams, a team row's `stream_seats` is its team);
    - register: `pub mod <game>;` in `games/mod.rs` + one line in
      `registry::GAMES`;
    - unit tests: hand-checked rule examples + `invariance::check_game::<G>(&cfg, n,

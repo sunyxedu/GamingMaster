@@ -23,15 +23,23 @@ declarer's frames).  The value target / reward is the IMPs of the seat's side's 
 against 0, / 24.  The simulator draws the board (dealer + vulnerability) per deal;
 records carry theirs, so one network plays every board.
 
-Full scale (cluster; ~155 GB of shards for both sources, see data_processing/README.md
-"bridge")::
+Full scale (cluster; Mac + Linux, needs cargo — the script builds gmdata)::
 
-    scripts/fetch_bridge.sh ~/gm-data/bridge                    # OpenSpiel + Ben
-    SOURCES=openspiel scripts/fetch_bridge.sh ~/gm-data/bridge  # WBridge5 only (~60 GB)
-    uv run python -m training.train_multi_game --data bridge=~/gm-data/bridge/train \\
-        --val bridge=~/gm-data/bridge/val ...
+    scripts/fetch_bridge.sh $HOME/gm-data/bridge                    # both sources
+    SOURCES=openspiel scripts/fetch_bridge.sh $HOME/gm-data/bridge  # WBridge5 only
+    MAX_RECORDS=300 scripts/fetch_bridge.sh /tmp/bridge_smoke       # capped smoke run
+
+Expected corpus (downloads 0.38 GB + 0.15 GB; ~810 bytes per decision frame):
+OpenSpiel WBridge5 train 1,158,441 deals / 72.7M frames / ~59 GB, valid and test
+10,000 deals each (~0.63M frames, ~0.5 GB); Ben WBC 1,883,853 of 1,887,139 boards
+kept (the rest are data errors the verifying replay rejects), 117.9M frames / ~95 GB,
+1 in 100 deals routed to val by a hash of the deal.  Layout: OUT/train/{openspiel,ben},
+OUT/val/{openspiel,ben}, OUT/test/openspiel — one shard family, so one root per split::
+
+    uv run python -m training.train_multi_game --data bridge=$HOME/gm-data/bridge/train \\
+        --val bridge=$HOME/gm-data/bridge/val --game_frame_cap bridge=1e8 ...
     uv run python -m training.train_rl_joint --init <multi_final.pt> --rl bridge \\
-        --data bridge=~/gm-data/bridge/train --actor stream ...
+        --data bridge=$HOME/gm-data/bridge/train ...
 """
 
 from model.games.gmrules import RulesGame
