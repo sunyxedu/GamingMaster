@@ -136,6 +136,13 @@ HALT_FRAC=${HALT_FRAC:-0.25}
 # a wasted turn; dir-validity aux loss supervises) so the network must
 # internalize terrain. Source mask and eval masking stay on.
 DIR_MASK=${DIR_MASK:-1}
+# Sighted-mountain memory in the observation (cfg.memory_vision). Run-4
+# has played with it ON since its launch (2026-08-11: GeneralsEnv's then
+# default); resumes of its own checkpoints keep it via the legacy rule
+# (model.config.legacy_memory_vision), and this flag keeps a FRESH launch
+# from the pre-memory run-3 seed on the same recipe. 0 = pure fog (the IL
+# records' encoding, the default for new lineages).
+MEMORY_VISION=${MEMORY_VISION:-1}
 # Opening anchor (off by default): set OPENING_ANCHOR to the IL
 # checkpoint to teach the first OPENING_TURNS turns the human opening —
 # mirror self-play cannot punish shared opening habits and the magnet
@@ -203,6 +210,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --halt_ref_depth "$HALT_REF" \
         --halt_frac "$HALT_FRAC" \
         --dir_mask "$DIR_MASK" \
+        --memory_vision "$MEMORY_VISION" \
         --ppo_epochs 1 \
         --accum_episodes "$ACCUM_EPISODES" \
         --target_kl 0.02 \

@@ -307,3 +307,36 @@ def test_rl_joint_generals_env_follows_the_network():
         other = make_vec_env("generals", 1, seed=0, **{**kw, "memory_vision": not mv})
         with pytest.raises(SystemExit, match="memory_vision"):
             spec.check_env(other, net)
+
+
+def test_train_il_batches_follow_the_network(grids, monkeypatch):
+    """training/train_il.py (the dedicated generals IL trainer) feeds a
+    memory_vision network the derived memory too."""
+    import training.train_il as train_il
+    from model.losses import ImitationLoss
+    from training.deep_supervision import BatchCarry
+    fed = []
+    real = train_il.apply_memory_vision
+    monkeypatch.setattr(train_il, "apply_memory_vision", lambda g: fed.append(g) or real(g))
+    fog = grids[False][:1, :8]
+    T = fog.shape[1]
+    zeros = torch.zeros(1, T, 4, dtype=torch.long)
+    batch = {"obs": {"grid_seq": fog, "globals_seq": torch.zeros(1, T, 4),
+                     "legal_source_mask_seq": fog[:, :, 5:8].sum(2, keepdim=True) > 0},
+             "tgt": {"count": torch.zeros(1, T, dtype=torch.long), "src_y": zeros,
+                     "src_x": zeros, "dir_id": zeros, "ratio_id": zeros,
+                     "value": torch.zeros(1, T)},
+             "meta": {"lengths": [T]}}
+    args = types.SimpleNamespace(log_interval=100, grad_accum=1, world_model_weight=0.0,
+                                 grad_clip=1.0, moe_balance_rate=0.0, save_steps=10 ** 9)
+    for mv in (False, True):
+        fed.clear()
+        net = GeneralsNetwork(ModelConfig(memory_vision=mv, **TINY))
+        opt = torch.optim.SGD(net.parameters(), lr=0.0)
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 1.0)
+        carries = [BatchCarry(net.supervision_steps, net.cfg.halt_exploration_prob)]
+        train_il.train_epoch(net, [batch], ImitationLoss(grid_w=25), opt, sched, CPU, 1, args,
+                             rank0=False, tf_ratio=0.0, carries=carries)
+        assert len(fed) == int(mv)
+        if mv:
+            assert torch.equal(real(fed[0]), grids[True][:1, :8])
