@@ -10,6 +10,9 @@ with AXF chasing).
   set, whether the side to move is in check (the frame's globals), and at the end on
   the game end and its result (repetition with perpetual check / chase, move limit,
   checkmate, stalemate, insufficient material);
+- real games (tests/fixtures/xiangqi/ffish_ccpd_sample.json.gz): the converted CCPD
+  records of tests/fixtures/xiangqi/ccpd_sample.zip as Fairy-Stockfish replays them
+  (``ffish_xiangqi_dump.py --replay``), compared the same way;
 - live (``GM_REFERENCE=1``, needs uv + network the first time): fresh Fairy-Stockfish
   playouts, AND gmrules' own random playouts replayed through Fairy-Stockfish — the
   randomized differential test in both directions.
@@ -30,6 +33,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "xiangqi" / "ffish_reference.json.gz"
+REAL = ROOT / "tests" / "fixtures" / "xiangqi" / "ffish_ccpd_sample.json.gz"
 DUMP = ROOT / "scripts" / "reference" / "ffish_xiangqi_dump.py"
 START = "rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1"
 #: gmrules end reasons → the reference dump's labels
@@ -77,6 +81,30 @@ with gzip.open(FIXTURE, "rt") as _fh:
 def test_fixture_matches_fairy_stockfish():
     n = sum(compare_trajectory(t) for t in _FIXTURE["trajectories"])
     assert n > 5000
+
+
+def test_real_games_match_fairy_stockfish():
+    """Real master / computer games (the converted records of tests/fixtures/xiangqi/
+    ccpd_sample.zip, CCPD CC BY 4.0) replayed by Fairy-Stockfish: every move legal
+    there, and at every position the same FEN, legal move set, check flag — and the
+    same game end: checkmate, stalemate, perpetual check / chase, repetition draw,
+    move limit; games ended by resignation / agreement run on for both engines.
+    (tests/test_xiangqi_pipeline.py checks that the converter still produces exactly
+    these move lists.)"""
+    with gzip.open(REAL, "rt") as fh:
+        data = json.load(fh)
+    reasons = Counter()
+    n = 0
+    for traj in data["trajectories"]:
+        assert not traj["reason"].startswith("illegal"), traj["record"]
+        n += compare_trajectory(traj)
+        reasons[(traj["reason"], traj["result"])] += 1
+    assert n > 2000
+    assert reasons[("running", None)] >= 8                           # resignations / draws agreed
+    assert reasons[("checkmate", 1)] + reasons[("checkmate", -1)] >= 4
+    assert reasons[("stalemate", -1)] >= 1 and reasons[("move_limit", 0)] >= 2
+    assert reasons[("repetition", 0)] >= 2                            # plain repetition draws
+    assert reasons[("repetition", 1)] >= 2 and reasons[("repetition", -1)] >= 2   # perpetuals
 
 
 def test_fixture_covers_the_rules():

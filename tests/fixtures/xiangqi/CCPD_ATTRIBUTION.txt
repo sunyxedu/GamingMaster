@@ -1,0 +1,74 @@
+ccpd_sample.zip -- 31 verbatim files (original paths and Big5 bytes) of the Chinese Chess
+Practical Dataset, used by tests/test_xiangqi_pipeline.py (and, as the move lists
+Fairy-Stockfish replayed, ffish_ccpd_sample.json.gz by tests/test_xiangqi_reference.py).
+
+Yu-Han Tseng and Bo-Nian Chen (2026). Chinese Chess Practical Dataset (CCPD).
+Retrieved from https://github.com/Yvonne761/Chinese-Chess-Practical-Dataset
+(commit 368a47a947773dd8692c026e286dd19b6277b993, the archive `gmdata xiangqi fetch`
+downloads). Licence: Creative Commons Attribution 4.0 International (CC BY 4.0),
+https://creativecommons.org/licenses/by/4.0/ -- the files are unmodified; only a
+selection is included, repacked (entries sorted, fixed timestamps).
+
+Entries (below Chinese-Chess-Practical-Dataset-368a47a947773dd8692c026e286dd19b6277b993/):
+  Dataset/全盤戰術/00000103.pgn
+      [Result] 1-0 vs [Event] 先負: unknown, dropped (its copy below is kept)
+  Dataset/對局/大師對局/以棋手分類/吳貴臨/00000002.pgn
+      resignation, 1-0
+  Dataset/對局/大師對局/以棋手分類/吳貴臨/00000003.pgn
+      resignation, 1-0
+  Dataset/對局/大師對局/以棋手分類/吳貴臨/00000009.pgn
+      goes on after a repetition: cut there
+  Dataset/對局/大師對局/以棋手分類/呂欽/00000006.pgn
+      319-ply draw
+  Dataset/對局/大師對局/以棋手分類/呂欽/00000029.pgn
+      goes on after a perpetual chase: cut there
+  Dataset/對局/大師對局/以棋手分類/呂欽/00000072.pgn
+      goes on after a perpetual check: cut there
+  Dataset/對局/大師對局/以棋手分類/呂欽/00000193.pgn
+      ends in checkmate
+  Dataset/對局/大師對局/以棋手分類/呂欽/00000227.pgn
+      ends at a repetition draw
+  Dataset/對局/大師對局/以棋手分類/呂欽/00000381.pgn
+      goes on after the move limit: cut there
+  Dataset/對局/大師對局/以棋手分類/呂欽/00000570.pgn
+      ends in checkmate
+  Dataset/對局/大師對局/以棋手分類/呂欽/00002674.pgn
+      no moves: rejected
+  Dataset/對局/大師對局/以棋手分類/李來群/00001400.pgn
+      [Result] 1/2-1/2 vs [Event] 先勝: the checkmate decides
+  Dataset/對局/大師對局/以棋手分類/楊官璘/00000643.pgn
+      [Result "*"]: the checkmate decides
+  Dataset/對局/大師對局/以棋手分類/楊官璘/00000686.pgn
+      [Result "*"], the result from [Event] (先負)
+  Dataset/對局/大師對局/以棋手分類/胡榮華/00000463.pgn
+      ends in stalemate (loses)
+  Dataset/對局/大師對局/以棋手分類/胡榮華/00001826.pgn
+      copy of the conflicting 全盤戰術 record (0-1): kept
+  Dataset/對局/大師對局/以棋手分類/許銀川/00000461.pgn
+      ends at an AXF perpetual chase (the chaser loses; the players drew)
+  Dataset/對局/大師對局/以賽事分類/世界智力運動會/00000011.pgn
+      resignation, 0-1
+  Dataset/對局/大師對局/以賽事分類/世界智力運動會/00000012.pgn
+      resignation, 0-1
+  Dataset/對局/大師對局/以賽事分類/世界盃/00000143.pgn
+      [Result] 0-1 contradicts Red's checkmate: rejected
+  Dataset/對局/大師對局/以賽事分類/五羊杯/00000103.pgn
+      ends at the move limit
+  Dataset/對局/大師對局/以賽事分類/全國賽對局譜/00001873.pgn
+      ends at a perpetual check (the checker loses)
+  Dataset/對局/大師對局/以賽事分類/全國賽對局譜/00011767.pgn
+      copy of a kept game: duplicate
+  Dataset/對局/大師對局/以賽事分類/其他/00000753.pgn
+      transcription error at ply 70 (士６進５ leaves the king in check): unparseable
+  Dataset/對局/大師對局/以開局分類/中炮局/00000027.pgn
+      agreed draw
+  Dataset/對局/大師對局/以開局分類/中炮局/00000029.pgn
+      agreed draw
+  Dataset/對局/電腦對局/人機賽/00000002.pgn
+      man-machine game
+  Dataset/對局/電腦對局/電腦對局競賽/00000011.pgn
+      computer game with moves after the mate: cut; result from [Event]
+  Dataset/殘局/00000001.pgn
+      endgame start position: skipped
+  Dataset/開局/00000001.pgn
+      opening line without a result: dropped
