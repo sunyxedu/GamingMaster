@@ -125,6 +125,21 @@ class GmSimVecEnv(VecEnvBase):
         self._sim.reset(ids.tolist(), self._episode_seeds(len(ids), seed))
         return self.observe()
 
+    def reset_from(self, prefixes: Sequence[Any], *, env_ids: Optional[Sequence[int]] = None,
+                   seed: Optional[int] = None) -> VecObs:
+        """New episodes for ``env_ids`` (default: every env) that first play the
+        recorded trajectory ``prefixes`` (one per env, :meth:`trajectory` format;
+        every event verified), then go on with chance from the episode seeds.  The
+        rows' frames are the converter's frames of the records' next decisions
+        (golden tests on real records; RL from recorded positions)."""
+        if seed is not None:
+            self._seed_rngs(seed)
+        ids = self._env_ids(env_ids)
+        if len(prefixes) != len(ids):
+            raise ValueError(f"{len(prefixes)} prefixes for {len(ids)} envs")
+        self._sim.reset_from(ids.tolist(), self._episode_seeds(len(ids), seed), list(prefixes))
+        return self.observe()
+
     def obs_schema(self) -> Dict[str, Tuple[Tuple[int, ...], torch.dtype]]:
         return {t["name"]: (tuple(t["shape"]), _TORCH[t["dtype"]]) for t in self.spec["obs"]}
 

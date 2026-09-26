@@ -260,6 +260,8 @@ pub trait DynVecSim: Send + Sync {
     fn rows_per_env(&self) -> usize;
     fn resize(&mut self, n: usize);
     fn reset(&mut self, env_ids: &[usize], seeds: &[u64]) -> Result<(), String>;
+    /// New episodes that first play recorded trajectory prefixes ([`VecSim::reset_from`]).
+    fn reset_from(&mut self, env_ids: &[usize], seeds: &[u64], prefixes: &[Vec<Event>]) -> Result<(), String>;
     /// Action keys of every row, `[R * K]` row-major.
     fn step(&mut self, keys: &[i64]) -> Result<StepInfo, String>;
     /// Action keys `[R * K]` of uniformly random legal actions of the acting rows.
@@ -292,6 +294,9 @@ impl<G: Game> DynVecSim for VecSim<G> {
     }
     fn reset(&mut self, env_ids: &[usize], seeds: &[u64]) -> Result<(), String> {
         VecSim::reset(self, env_ids, seeds)
+    }
+    fn reset_from(&mut self, env_ids: &[usize], seeds: &[u64], prefixes: &[Vec<Event>]) -> Result<(), String> {
+        VecSim::reset_from(self, env_ids, seeds, prefixes)
     }
     fn step(&mut self, keys: &[i64]) -> Result<StepInfo, String> {
         VecSim::step(self, keys)

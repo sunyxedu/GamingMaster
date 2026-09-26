@@ -292,6 +292,23 @@ impl Sim {
         py.detach(|| guard(|| inner.reset(&env_ids, &seeds)))
     }
 
+    /// Start new episodes in `env_ids` that first play recorded trajectory prefixes
+    /// (one per env, each flat int64 `[seat, id, seat, id, ...]`), then go on with
+    /// chance from `seeds`.
+    fn reset_from(&mut self, py: Python<'_>, env_ids: Vec<usize>, seeds: Vec<u64>, prefixes: Vec<Vec<i64>>) -> PyResult<()> {
+        let pre = prefixes
+            .iter()
+            .map(|p| {
+                if p.len() % 2 != 0 {
+                    return Err(PyValueError::new_err("prefix: flat (seat, id) pairs expected"));
+                }
+                p.chunks_exact(2).map(|c| Event::from_pair(c[0], c[1]).map_err(PyValueError::new_err)).collect()
+            })
+            .collect::<PyResult<Vec<Vec<Event>>>>()?;
+        let inner = &mut self.inner;
+        py.detach(|| guard(|| inner.reset_from(&env_ids, &seeds, &pre)))
+    }
+
     /// Apply the action keys of every row (int64 bytes, [R, K] row-major); returns the
     /// step info.
     fn step<'py>(&mut self, py: Python<'py>, keys: &[u8]) -> PyResult<Bound<'py, PyDict>> {
