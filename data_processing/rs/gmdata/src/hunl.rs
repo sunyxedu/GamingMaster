@@ -5,17 +5,36 @@
 //!
 //! Source: "A Dataset of Poker Hand Histories" (Kim et al., Zenodo record 10796885 →
 //! 17136841, `poker-hand-histories.zip`, 20.3 GB, CC-BY-4.0). Its raw ACPC heads-up
-//! no-limit logs: 58 380 `.phhs` files (4.85 GB compressed, 60.6 GB of text), about
-//! 175 M hands of which about 160.5 M are unique (the 2016 logs are archived twice:
-//! `logs_2pn_2016` = `logs_2pn_2016_0_99` + `logs_2pn_2016_100_199`); the
+//! no-limit logs: 58 380 `.phhs` match logs of 3 000 hands each (4.85 GB compressed,
+//! 60.6 GB of text) = 175 M hands, 160.6 M unique (the 2016 logs are archived twice:
+//! `logs_2pn_2016` = `logs_2pn_2016_0_99` + `logs_2pn_2016_100_199`, 4 855 logs); the
 //! `processed_logs*` / `2pn_processed_logs` copies (the same hands with all-in EV
-//! results) are never read.
+//! results) and the limit / 3-player logs are never read. No 2015 competition.
+//!
+//! Unique hands per year (M): 2009 3.6 (1 / 2 / 400: `--rescale`), 2010 16.8, 2011
+//! 16.2, 2012 17.4, 2013 19.8, 2014 24.0, 2016 17.0, 2017 45.75. Measured on 72 000
+//! hands (3 logs per year): 0 illegal actions, 0 payoff mismatches, 5.56 decision
+//! frames per hand (both seats), 1.67 KB per frame on disk (index included), about
+//! 45 000 hands / s on 12 cores.
+//!
+//! Full scale (the cluster; `scripts/fetch_hunl.sh` does fetch + convert end to end,
+//! per year, train + val, resumable):
+//!
+//! ```sh
+//! scripts/fetch_hunl.sh ~/gm-data/hunl                    # HQ=1: winning bots' seats
+//! #   ≈ 160 M hands → ≈ 420 M frames, ≈ 0.7 TB (train/<year>, val/<year>: 0.5 %)
+//! HQ=0 scripts/fetch_hunl.sh ~/gm-data/hunl               # both seats: ≈ 890 M frames, ≈ 1.5 TB
+//! KEEP_PER_MILLE=250 scripts/fetch_hunl.sh ~/gm-data/hunl # a uniform quarter: ≈ 105 M frames
+//! ```
+//!
+//! By hand:
 //!
 //! ```sh
 //! gmdata hunl fetch   --out ~/gm-data/hunl/raw              # 4.85 GB of range requests
 //! gmdata hunl fetch   --out /tmp/hunl-sample --max-files-per-year 1 --max-hands 50
-//! gmdata hunl convert --input ~/gm-data/hunl/raw --years 2017 --out data/hunl/train/2017 --hq
+//! gmdata hunl convert --input ~/gm-data/hunl/raw --years 2017 --out data/hunl/train/2017 --hq --split train
 //! gmdata hunl convert --input poker-hand-histories.zip --out data/hunl/train   # the zip itself
+//! gmdata hunl stats   --input ~/gm-data/hunl/raw --years 2017                  # bb/100 per bot
 //! ```
 //!
 //! PHH (a TOML subset; `.phhs` = `[n]` sections, one hand each; `.gz` read on the fly):
@@ -30,11 +49,14 @@
 //! Filters (all counted in the printed stats): the game definition must be the config's
 //! (default 50 / 100 blinds, 20000 stacks = 200 big blinds; `--rescale` also takes
 //! hands of the same depth at another chip scale — the 2009 logs, 1 / 2 / 400 —
-//! multiplying every amount by the integer factor); duplicates (same players,
-//! stacks, blinds, actions and hand number) are dropped; `--split train|val` keeps the hands whose
-//! content hash falls outside / inside the `--val-per-mille` bucket; `--hq` keeps only
-//! the seats of WINNING bots (a first pass over the same input measures every player's
-//! big blinds per 100 hands; `--min-bb100`), `--player NAME` only the named ones.
+//! multiplying every amount by the integer factor); duplicates (same players, stacks,
+//! blinds, actions and hand number) are dropped; `--split train|val` keeps the hands
+//! whose key hash falls outside / inside the `--val-per-mille` bucket;
+//! `--keep-per-mille K` a uniform hash-based subsample of K / 1000 of the hands; `--hq`
+//! keeps only the seats of WINNING bots (a first pass over the same input measures
+//! every player's big blinds per 100 hands; `--min-bb100`), `--player NAME` only the
+//! named ones. The hash ([`StableHash`]) is platform- and release-independent, so the
+//! split and the subsample are the same on every machine.
 
 use crate::traj::{self, ConvertOptions, Record};
 use crate::common;
@@ -47,7 +69,6 @@ use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -74,8 +95,41 @@ pub struct PhhHand {
     /// Hash of variant, antes, blinds, stacks, players, actions and the hand number (not
     /// the results): the same hand archived twice shares it; two different hands that
     /// happen to repeat a deal and its action line (a few per match: 1.6 M deals,
-    /// deterministic bots) differ in their hand numbers.
+    /// deterministic bots) differ in their hand numbers. [`StableHash`]: the same on
+    /// every machine and Rust release, so the train / val split (`key % 1000`) and the
+    /// subsample (`key / 1000 % 1000`) of a hand never change.
     pub key: u64,
+}
+
+/// FNV-1a 64 over the fed bytes + the murmur3 finaliser: a platform- and
+/// release-independent hash (std's `DefaultHasher` may change between Rust releases).
+pub struct StableHash(u64);
+
+impl StableHash {
+    pub fn new() -> Self {
+        StableHash(0xcbf2_9ce4_8422_2325)
+    }
+
+    pub fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    pub fn finish(&self) -> u64 {
+        let mut h = self.0;
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        h ^ (h >> 33)
+    }
+}
+
+impl Default for StableHash {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// A TOML literal of the subset PHH uses: strings, numbers, booleans, arrays.
@@ -177,7 +231,7 @@ fn strings(v: &Value) -> Option<Vec<String>> {
 
 fn hand_from_fields(fields: &[(String, String)]) -> Result<PhhHand> {
     let mut h = PhhHand::default();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = StableHash::new();
     let mut finishing = None;
     for (k, raw) in fields {
         let v = parse_value(raw).with_context(|| format!("key {k}"))?;
@@ -196,8 +250,10 @@ fn hand_from_fields(fields: &[(String, String)]) -> Result<PhhHand> {
             _ => {}
         }
         if matches!(k.as_str(), "variant" | "antes" | "blinds_or_straddles" | "min_bet" | "starting_stacks" | "actions" | "players" | "hand") {
-            k.hash(&mut hasher);
-            v.to_string().hash(&mut hasher);
+            hasher.write(k.as_bytes());
+            hasher.write(&[0xff]);
+            hasher.write(v.to_string().as_bytes());
+            hasher.write(&[0xfe]);
         }
     }
     if h.results.is_none() {
@@ -316,9 +372,9 @@ pub fn scale_of(h: &PhhHand, cfg: &HunlConfig, rescale: bool) -> std::result::Re
     if (sb, bb, s0) == (cfg.small_blind, cfg.big_blind, cfg.stack) {
         return Ok(1);
     }
-    if rescale && cfg.big_blind % bb == 0 {
+    if rescale && cfg.big_blind.is_multiple_of(bb) {
         let k = cfg.big_blind / bb;
-        if sb * k == cfg.small_blind && s0 * k == cfg.stack {
+        if sb.checked_mul(k) == Some(cfg.small_blind) && s0.checked_mul(k) == Some(cfg.stack) {
             return Ok(k);
         }
     }
@@ -379,7 +435,11 @@ pub fn hand_events(h: &PhhHand, cfg: &HunlConfig, k: u32) -> Result<Vec<Event>> 
                     }
                     ["cbr", x] => {
                         let amount: f64 = x.parse().with_context(|| format!("{}: amount", err()))?;
-                        let to = base + int(amount, "amount").with_context(err)? * k;
+                        let to = int(amount, "amount")
+                            .with_context(err)?
+                            .checked_mul(k)
+                            .and_then(|x| x.checked_add(base))
+                            .with_context(|| format!("{}: amount out of range", err()))?;
                         if to < 2 {
                             bail!("{}: raise to {to}", err());
                         }
@@ -541,12 +601,16 @@ pub struct Filter {
     pub dedup: bool,
     pub split: Split,
     pub val_per_mille: u64,
+    /// A uniform subsample: keep the hands whose `key / 1000 % 1000` is below this
+    /// (1000 = every hand; independent of the split bucket `key % 1000`).
+    pub keep_per_mille: u64,
     /// Non-empty: emit only these players' seats (hands without them are dropped).
     pub keep_players: HashSet<String>,
     // counters
     pub other_variant: Cell<usize>,
     pub duplicates: Cell<usize>,
     pub split_skipped: Cell<usize>,
+    pub subsampled: Cell<usize>,
     pub no_kept_seat: Cell<usize>,
     pub rescaled: Cell<usize>,
     pub first_other: RefCell<Vec<String>>,
@@ -561,10 +625,12 @@ impl Filter {
             dedup,
             split,
             val_per_mille,
+            keep_per_mille: 1000,
             keep_players: keep,
             other_variant: Cell::new(0),
             duplicates: Cell::new(0),
             split_skipped: Cell::new(0),
+            subsampled: Cell::new(0),
             no_kept_seat: Cell::new(0),
             rescaled: Cell::new(0),
             first_other: RefCell::new(Vec::new()),
@@ -572,8 +638,15 @@ impl Filter {
         }
     }
 
-    /// The chip scale of a hand that passes the variant / de-duplication / split
-    /// filters (None: skipped, counted).
+    /// Keep only a uniform `keep_per_mille` / 1000 of the hands (hash-based: the same
+    /// hands on every run and machine, all matchups alike).
+    pub fn subsample(mut self, keep_per_mille: u64) -> Self {
+        self.keep_per_mille = keep_per_mille;
+        self
+    }
+
+    /// The chip scale of a hand that passes the variant / split / subsample /
+    /// de-duplication filters (None: skipped, counted).
     fn admit(&self, h: &PhhHand) -> Option<u32> {
         let k = match scale_of(h, &self.cfg, self.rescale) {
             Ok(k) => k,
@@ -589,6 +662,10 @@ impl Filter {
         let val = h.key % 1000 < self.val_per_mille;
         if (self.split == Split::Train && val) || (self.split == Split::Val && !val) {
             self.split_skipped.set(self.split_skipped.get() + 1);
+            return None;
+        }
+        if h.key / 1000 % 1000 >= self.keep_per_mille {
+            self.subsampled.set(self.subsampled.get() + 1);
             return None;
         }
         if self.dedup && !self.seen.borrow_mut().insert(h.key) {
@@ -614,7 +691,7 @@ impl Filter {
         if k != 1 {
             self.rescaled.set(self.rescaled.get() + 1);
         }
-        let id = format!("{src}#{}", h.hand.map_or(idx as i64, |x| x));
+        let id = format!("{src}#{}", h.hand.unwrap_or(idx as i64));
         let events = match hand_events(&h, &self.cfg, k) {
             Ok(e) => e,
             Err(e) => return Some(Err(e.context(id))),
@@ -639,6 +716,7 @@ impl Filter {
             "other_variant_examples": *self.first_other.borrow(),
             "duplicates": self.duplicates.get(),
             "split_skipped": self.split_skipped.get(),
+            "subsampled": self.subsampled.get(),
             "no_kept_seat": self.no_kept_seat.get(),
             "rescaled": self.rescaled.get(),
         })
@@ -654,14 +732,14 @@ pub fn player_stats(srcs: Vec<Source>, cfg: &HunlConfig, rescale: bool, split: S
     for (_, _, h) in hands(srcs) {
         let Ok(h) = h else { continue };
         let Some(k) = f.admit(&h) else { continue };
-        let Some(r) = &h.results else {
+        let Some(r) = h.results.as_ref().filter(|r| r.len() == 2) else {
             no_results += 1;
             continue;
         };
-        for s in 0..2 {
-            let e = stats.entry(h.players[s].clone()).or_default();
+        for (player, won) in h.players.iter().zip(r) {
+            let e = stats.entry(player.clone()).or_default();
             e.0 += 1;
-            e.1 += r[s] * k as f64;
+            e.1 += won * k as f64;
         }
     }
     let mut c = f.counters();
@@ -967,6 +1045,10 @@ pub enum Cmd {
         split: Split,
         #[arg(long, default_value_t = 5)]
         val_per_mille: u64,
+        /// a uniform hash-based subsample: keep this many hands per 1000 (all matchups
+        /// alike; unlike --max-records, which takes the first hands in file order)
+        #[arg(long, default_value_t = 1000)]
+        keep_per_mille: u64,
         /// keep duplicate hands
         #[arg(long)]
         no_dedup: bool,
@@ -1021,8 +1103,9 @@ pub fn run(cmd: Cmd) -> Result<()> {
             println!("{}", json!({"players": stats_json(&stats, cfg.big_blind), "filters": counters}));
             Ok(())
         }
-        Cmd::Convert { input, out, config, years, rescale, hq, min_bb100, player, split, val_per_mille, no_dedup, max_records, shard_size, store_events, allow_truncated } => {
+        Cmd::Convert { input, out, config, years, rescale, hq, min_bb100, player, split, val_per_mille, keep_per_mille, no_dedup, max_records, shard_size, store_events, allow_truncated } => {
             let cfg = parse_config(&config)?;
+            anyhow::ensure!(val_per_mille <= 1000 && (1..=1000).contains(&keep_per_mille), "--val-per-mille must be <= 1000, --keep-per-mille in 1..=1000");
             let srcs = sources(&input, &years)?;
             anyhow::ensure!(!srcs.is_empty(), "no .phh / .phhs inputs under {input:?} (years {years:?})");
             let mut keep: HashSet<String> = player.into_iter().collect();
@@ -1036,7 +1119,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 keep.extend(winners.into_iter().cloned());
                 hq_info = json!({"min_bb100": min_bb100, "players": stats_json(&stats, cfg.big_blind), "kept": keep.len()});
             }
-            let filter = Filter::new(cfg.clone(), rescale, !no_dedup, split, val_per_mille, keep);
+            let filter = Filter::new(cfg.clone(), rescale, !no_dedup, split, val_per_mille, keep).subsample(keep_per_mille);
             let recs = hands(srcs).filter_map(|(src, i, h)| filter.record(&src, i, h)).take(max_records.unwrap_or(usize::MAX));
             let opts = ConvertOptions { shard_size, store_events, allow_truncated, ..Default::default() };
             let st = traj::convert::<Hunl>(&cfg, recs, &out, &opts)?;
@@ -1114,6 +1197,11 @@ _results = [-5, 5]
         assert_eq!(b.actions.len(), 15, "multi-line array with a trailing comma");
         assert_eq!((a.hand, b.results.clone()), (Some(3), Some(vec![-950.0, 950.0])));
         assert_ne!(a.key, b.key);
+        // the key (dedup, split, subsample) is pinned: the same on every machine / release
+        assert_eq!(a.key, 12524262783637424732);
+        let mut h = StableHash::new();
+        h.write(b"a");
+        assert_eq!(h.finish(), 9413272369427828315, "FNV-1a 64 (0xaf63dc4c8601ec8c) + fmix64");
         let cfg = HunlConfig::default();
         assert_eq!(scale_of(a, &cfg, false), Ok(1));
         let ev = hand_events(a, &cfg, 1).unwrap();
@@ -1180,6 +1268,11 @@ _results = [-5, 5]
         // splits partition the hands
         let (tr, va) = (Filter::new(cfg.clone(), true, true, Split::Train, 500, HashSet::new()), Filter::new(cfg.clone(), true, true, Split::Val, 500, HashSet::new()));
         assert_eq!(run(&tr).converted + run(&va).converted, 3);
+        // the uniform subsample: all or nothing at the extremes, counted
+        let f = Filter::new(cfg.clone(), true, true, Split::All, 5, HashSet::new()).subsample(0);
+        assert_eq!((run(&f).converted, f.subsampled.get()), (0, 5));
+        let f = Filter::new(cfg.clone(), true, true, Split::All, 5, HashSet::new()).subsample(1000);
+        assert_eq!((run(&f).converted, f.subsampled.get()), (3, 0));
         // --hq: Slumbot won 600 - 950 < 0 over two hands, Rembrant6 won
         let (stats, _) = player_stats(sources(&[dir.join("raw")], &[2017]).unwrap(), &cfg, false, Split::All, 0);
         assert_eq!(stats["Slumbot_2pn_2017"], (2, -1550.0));

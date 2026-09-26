@@ -442,7 +442,7 @@ pub fn encode_frame(g: &Hunl, seat: Seat, f: &mut FrameMut<'_>) {
                         suits[suit_of(c) as usize] += 1;
                         ranks |= 1 << rank_of(c);
                     }
-                    let flush_draw = cat < eval::FLUSH && suits.iter().any(|&n| n == 4);
+                    let flush_draw = cat < eval::FLUSH && suits.contains(&4);
                     gl[GLOBAL_FLUSH_DRAW] = flush_draw as u8 as f32;
                     gl[GLOBAL_STRAIGHT_DRAW] = (cat < eval::STRAIGHT && straight_draw(ranks)) as u8 as f32;
                 }
