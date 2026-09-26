@@ -12,8 +12,8 @@ import pytest
 import torch
 
 from env.league import League, NetworkPolicy, RandomPolicy, play_episodes
-from env.vec_gmsim import CandidateVecEnv
 from env.vec_game import VecGameEnv, has_simulator, make_vec_env
+from env.vec_gmsim import CandidateVecEnv
 from model.games import build_game_network
 
 TINY = dict(d_model=32, n_heads=4, d_ff=64, n_st_layers=1, dropout=0.0,

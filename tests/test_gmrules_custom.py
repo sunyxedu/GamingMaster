@@ -70,7 +70,8 @@ def test_spec_and_registrations():
     assert [(t["name"], t["shape"], t["dtype"], t["bits"]) for t in spec["obs"]] == [
         ("board_seq", [3, 6, 5], "f32", True), ("globals_seq", [2], "f32", False)]
     assert [t["name"] for t in spec["legal"]] == ["from", "to_cond"]
-    assert [t["name"] for t in spec["target"]] == ["from_idx", "to_idx", "legal_from", "legal_to_of"]
+    assert [t["name"] for t in spec["target"]] == ["from_idx", "to_idx", "legal_from",
+                                                   "legal_to_of"]
     assert spec["action_keys"] == ["from_idx", "to_idx"]
     assert spec["meta"] == {"board_h": 6, "board_w": 5, "piece_channels": 3, "global_features": 2}
     entry = rules_games()["breakthrough"]
@@ -115,10 +116,11 @@ def _play(env: GmSimVecEnv, gen: torch.Generator, net=None):
             acts["action_to"][rows] = out["action_to"].cpu()
         prev = obs
         obs, rew, done, info = env.step(acts)
+        applied = info["applied"]
         for r in rows.tolist():
             seen[r].append(({k: v[r].clone() for k, v in prev.obs.items()},
                             {k: v[r].clone() for k, v in prev.legal.items()},
-                            (int(info["applied"]["from_idx"][r]), int(info["applied"]["to_idx"][r]))))
+                            (int(applied["from_idx"][r]), int(applied["to_idx"][r]))))
         assert bool(info["acted"][rows].all())
     return seen
 
@@ -131,7 +133,8 @@ def test_env_frames_legality_and_replay():
     assert env.ACTION_KEYS == {"from_idx": "from_idx", "to_idx": "to_idx",
                                "action_from": "from_idx", "action_to": "to_idx"}
     obs = env.reset(seed=3)
-    assert obs.obs["board_seq"].shape == (4, 3, 6, 5) and obs.obs["board_seq"].dtype == torch.float32
+    board = obs.obs["board_seq"]
+    assert board.shape == (4, 3, 6, 5) and board.dtype == torch.float32
     assert obs.legal["to_cond"].shape == (4, N, N) and obs.legal["to_cond"].dtype == torch.bool
     # the from mask is exactly the rows of the to-table with a legal destination
     assert torch.equal(obs.legal["from"], obs.legal["to_cond"].any(-1))
@@ -149,7 +152,8 @@ def test_env_frames_legality_and_replay():
                 assert torch.equal(lg[k], torch.from_numpy(r["legal"][k][d].copy())), (e, j, k)
             assert keys == (int(r["target"]["from_idx"][d]), int(r["target"]["to_idx"][d]))
             # the IL masks are the legality tables at the taken from-square
-            assert np.array_equal(r["target"]["legal_from"][d], r["legal"]["from"][d].astype(np.float32))
+            assert np.array_equal(r["target"]["legal_from"][d],
+                                  r["legal"]["from"][d].astype(np.float32))
             assert np.array_equal(r["target"]["legal_to_of"][d],
                                   r["legal"]["to_cond"][d][keys[0]].astype(np.float32))
     # keys that are no legal move raise before anything is applied
@@ -199,7 +203,8 @@ def test_converter_writes_the_custom_tensors(shards):
     s = ds[0]
     assert set(s["obs"]) == {"board_seq", "globals_seq"}
     assert set(s["tgt"]) == {"from_idx", "to_idx", "legal_from", "legal_to_of", "value"}
-    assert s["obs"]["board_seq"].dtype == torch.float32 and s["obs"]["board_seq"].shape[1:] == (3, 6, 5)
+    board = s["obs"]["board_seq"]
+    assert board.dtype == torch.float32 and board.shape[1:] == (3, 6, 5)
     for smp in load_gm_samples(str(root / "bt"))[:6]:
         r = gmsim.replay("breakthrough", CFG, smp["meta"]["events"])
         for k in r["obs"]:

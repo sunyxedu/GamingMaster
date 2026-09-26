@@ -573,8 +573,9 @@ def _conditioned_on_sample(game: str, key: str) -> bool:
     """Heads conditioned on an earlier head's SAMPLED index (differs between
     two independent draws, not an information difference)."""
     first = {"generals": ("source_logits",),
-             "chess": ("from_logits",), "breakthrough": ("from_logits",), "shogi": ("mode_logit", "mode_logits", "from_logits",
+             "chess": ("from_logits",), "shogi": ("mode_logit", "mode_logits", "from_logits",
                                                   "piece_logits"),
+             "breakthrough": ("from_logits",),
              "starcraft": ("type_logits",), "hearthstone": ("type_logits",),
              "clash_royale": ("wait_logits", "card_logits"), "mahjong": ("type_logits",),
              "pokemon": ("type_logits",)}

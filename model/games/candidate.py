@@ -288,6 +288,8 @@ def build_candidate_network(game: Optional[str] = None, **overrides) -> nn.Modul
     cfg_cls = (resolve(spec.config_class) if spec is not None and spec.config_class is not None
                else CandidateConfig)
     cfg = cfg_cls(**kw)
-    enc = resolve(spec.encoder) if spec is not None and spec.encoder is not None else CandidateEncoder
-    dec = resolve(spec.decoder) if spec is not None and spec.decoder is not None else CandidateDecoder
+    enc = (resolve(spec.encoder) if spec is not None and spec.encoder is not None
+           else CandidateEncoder)
+    dec = (resolve(spec.decoder) if spec is not None and spec.decoder is not None
+           else CandidateDecoder)
     return GameNetwork(cfg, enc(cfg), dec(cfg))

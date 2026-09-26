@@ -64,7 +64,8 @@ def test_dims_default_to_the_simulator_spec():
     spec = gmsim.game_info("goofspiel")["spec"]
     for meta_key, (field,) in CANDIDATE_META_ARCH.items():
         assert getattr(net.cfg, field) == spec["meta"][meta_key]
-    assert net.obs_encoder.n_tokens == spec["meta"]["max_entities"] + 1 + spec["meta"]["max_actions"]
+    meta = spec["meta"]
+    assert net.obs_encoder.n_tokens == meta["max_entities"] + 1 + meta["max_actions"]
 
 
 def test_token_layout_and_masking():
