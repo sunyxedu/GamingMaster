@@ -196,9 +196,15 @@ bit-packed (`FrameSpec::bits_*`).
    `scripts/fetch_<game>.sh`), a parser from the source format to `cand::Record`s
    (events, meta, optional seat filter for the high-quality recipe, the recorded
    payoffs), `cand::convert::<G>`; flags `--hq`, `--store-events` (golden tests) and
-   `--allow-truncated` (causality tests); one `Game` variant in `main.rs`. Template:
+   `--allow-truncated` (causality tests); one `Game` variant in `main.rs`. Records
+   are streamed (the converter consumes an iterator; a parse error is counted, not
+   fatal), converted in parallel and written in input order. Engine / solver teacher
+   labels: `Record::soft_targets` (canonical action ids per Act event) with
+   `ConvertOptions::soft_k` become `tgt.action_probs_idx/val` over candidate indices
+   (also `"soft"` in the JSONL of `gmdata rules convert --soft-k K`). Template:
    `kuhn_poker.rs` and `scripts/fetch_kuhn_poker.sh`. Record the data licence in the
-   table above.
+   table above. Prefer frame dims that do not depend on the game config (one network
+   plays every variant).
 4. Python — `model/games/candidates/<game>.py` with
    `GAME = CandidateGame(name="<game>", sim_config={...})`. Discovery does the rest:
    `build_game_network`, train_il_game `LABEL_KEYS` / `META_ARCH_KEYS`,

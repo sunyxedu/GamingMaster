@@ -22,6 +22,10 @@
 //! - [`registry`]: type-erased access by game name (gmsim, the Python side).
 //! - [`rng::Rng`]: the deterministic RNG.
 //!
+//! Games: `kuhn_poker` (the toy reference game: hidden cards, chance, 2-4 players,
+//! implemented through every layer), `goofspiel` (simultaneous moves) and `pig`
+//! (perfect information + dice: the interleaved layout) — all pinned to OpenSpiel.
+//!
 //! Adding a game: `src/games/<game>.rs` implementing [`game::Game`] (+ its unit test
 //! calling `invariance::check_game`), `pub mod <game>;` in `games/mod.rs`, one line in
 //! [`registry::GAMES`]. See data_processing/README.md "Adding a game" for the
