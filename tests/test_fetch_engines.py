@@ -66,3 +66,24 @@ def test_old_x86_and_macos_picks(tmp_path):
     assert mac == ["stockfish-macos-universal.tar.gz", "stockfish-macos-m1-apple-silicon.tar", "APPLEM1"]
     forced = _host("STOCKFISH_ARCH=x86-64-avx2; stockfish_x86_arches", tmp_path, flags=EPYC_9355)
     assert forced == ["avx2"]
+
+
+def test_katago_backend_and_tag(tmp_path):
+    """KataGo release picks: CUDA when an NVIDIA GPU plus cuDNN 9 / cuBLAS 12 are loadable
+    without root (LD_LIBRARY_PATH, e.g. `module load` or pip wheels), else the static CPU
+    builds; the CPU / OpenCL / TensorRT assets live on v1.18.1 (v1.18.2 is CUDA-only)."""
+    fake_bin, libs = tmp_path / "bin", tmp_path / "libs"
+    fake_bin.mkdir()
+    libs.mkdir()
+    smi = fake_bin / "nvidia-smi"
+    smi.write_text("#!/bin/sh\necho 'GPU 0: Fake GPU'\n")
+    smi.chmod(0o755)
+    path = f"{fake_bin}:{os.environ.get('PATH', '')}"
+    probe = f'PATH="{path}"; LD_LIBRARY_PATH="{libs}"; katago_backend'
+    assert _host(probe, tmp_path, flags=EPYC_9355) == ["eigenavx2"], "GPU without cuDNN → CPU build"
+    (libs / "libcudnn.so.9").write_text("")
+    (libs / "libcublas.so.12").write_text("")
+    assert _host(probe, tmp_path, flags=EPYC_9355) == ["cuda12.8-cudnn9.8.0"]
+    assert _host("katago_tag eigenavx2; katago_tag opencl; katago_tag trt10.9.0-cuda12.8", tmp_path) == ["v1.18.1"] * 3
+    assert _host("KATAGO_TAG=v1.17.1; katago_tag cuda12.8-cudnn9.8.0", tmp_path) == ["v1.17.1"]
+    assert _host("KATAGO_BACKEND=trt10.9.0-cuda12.8; katago_backend", tmp_path) == ["trt10.9.0-cuda12.8"]
