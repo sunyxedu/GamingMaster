@@ -69,11 +69,14 @@ behaviour, which is what the golden parity tests pin.
 | Lux AI S3 | `$G lux fetch --top-teams 10` (Kaggle API) | only episodes where both agents are top-10 leaderboard teams | needs `KAGGLE_API_TOKEN` or `~/.kaggle/access_token` |
 | Clash Royale | `crdata fetch --out D` (RoyaleAPI replays, HF) | `crdata convert --hq`: Ranked + Grand Challenge, ≥ 60 s, ≥ 5 own plays; optional `--winner-only` | anonymised (no trophies); see games/clash_royale/README.md |
 | Kuhn poker (toy) | `$G kuhn-poker generate` (synthetic hand logs; `scripts/fetch_kuhn_poker.sh`) | `convert --hq`: the scripted expert's seats only | gmrules reference game (below); rules pinned to OpenSpiel |
+| heads-up no-limit hold'em | `$G hunl fetch --out D` (ACPC 2009-2017 logs in PHH, Zenodo 10796885, CC-BY-4.0: range requests for the 4.85 GB of heads-up no-limit logs); end to end `scripts/fetch_hunl.sh D` | `convert --hq`: the seats of the year's winning bots (bb/100 ≥ `--min-bb100`); the 200 bb game only (`--rescale`: 2009's 1/2/400 ×50); duplicates dropped; `--keep-per-mille` uniform subsample | 160.6 M unique hands of bot play; gmrules rules pinned to PokerKit; see `rs/gmdata/src/hunl.rs` |
 
 Measured on real data (kept / seen): chess elite 2021-06 601k / 781k games;
 go KGS 2019-04 202 / 1255; shogi 2025-06-01 158 / 447; othello 2019–21
 1502 / 3559; gomoku Freestyle1 2023 658 / 2880; Clash Royale 5000 replays
-8456 / 9392 player sequences (4186 with `--winner-only`).
+8456 / 9392 player sequences (4186 with `--winner-only`); heads-up no-limit
+hold'em 72 000 / 72 000 hands of 24 logs (3 per year; 0 illegal actions, 0 payoff
+mismatches), 400 k decision frames.
 
 ## Engine teacher labels
 
@@ -194,6 +197,15 @@ stream) and `breakthrough` (the custom-schema board game). `gmdata rules
 list|check|random|convert` work for every registered game without per-game code
 (conformance battery, random-play shards, trajectory JSONL → shards).
 
+`hunl` (heads-up no-limit hold'em, the ACPC rules, pinned to PokerKit by
+`tests/test_hunl_reference.py`) is the ABSTRACTED-action example: exact chip amounts
+in the rules and the records, 15 candidates for the policy (fold, check / call,
+all-in, min-raise, 11 pot fractions; `candidate_abstract.v1` = the candidate layout,
+so the candidate adapter and `CandidateSpec` play it), IL target = the nearest
+candidate plus the exact size (`tgt.raise_to`, `tgt.raise_frac`). Converter `gmdata
+hunl` (ACPC logs), `scripts/fetch_hunl.sh`, optional evaluation against Slumbot
+`scripts/slumbot_client.py`, tests `tests/test_hunl_pipeline.py`.
+
 ### Adding a game
 
 1. Rules — `rs/gmrules/src/games/<game>.rs` implementing `gmrules::Game`:
@@ -286,6 +298,8 @@ uv run pytest tests/test_rust_converters_parity.py \
               tests/test_label_shogi.py tests/test_label_go.py
 uv run pytest tests/test_candidate_*.py tests/test_gmrules_*.py   # gmrules / gmsim / adapters
 GM_REFERENCE=1 uv run pytest tests/test_gmrules_reference.py   # + live OpenSpiel diff
+uv run pytest tests/test_hunl_*.py tests/test_slumbot_client.py   # hold'em end to end
+GM_REFERENCE=1 uv run pytest tests/test_hunl_reference.py      # + live PokerKit diff
 ```
 
 Real-engine tests run only when the engine is installed (e.g. `STOCKFISH=path`
