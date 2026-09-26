@@ -187,7 +187,7 @@ fn kicker_decisions_paths_and_strings() {
 }
 
 #[test]
-fn openspiel_variant_differs_exactly_by_four_with_two_and_the_chain_head_rule() {
+fn openspiel_variant_differs_by_four_with_two_and_the_chain_head_rule() {
     let os = DouDizhuConfig { rules: "openspiel".into(), ..cfg() };
     // kitty A 2 (BWJ): no 8, so the only chain from the 3333 is 34567
     let hands = ["33334567TTJJQQKK2", "445678899TJQKAA22", "45566778899TJQKA(CJ)"];

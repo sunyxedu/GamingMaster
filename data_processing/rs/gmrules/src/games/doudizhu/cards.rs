@@ -225,8 +225,8 @@ pub enum Variant {
     /// pairs), and a chain may start at a rank the player holds four of.
     Standard,
     /// Exactly OpenSpiel's `dou_dizhu` (no four-with-two; no solo / pair chain or
-    /// kicker-free airplane starts at a rank of which the player holds four) — for
-    /// the bit-exact differential tests.
+    /// kicker-free airplane starts at a rank of which the player holds four; any bomb
+    /// may follow the rocket) — for the bit-exact differential tests.
     OpenSpiel,
 }
 
@@ -237,6 +237,12 @@ impl Variant {
 
     /// OpenSpiel's `SearchChainOnlyActions` skips chain heads the hand holds four of.
     fn chain_head_quirk(self) -> bool {
+        self == Variant::OpenSpiel
+    }
+
+    /// OpenSpiel's `SearchForLegalActions` offers every bomb after the rocket (only
+    /// after a bomb does it require a higher one); in the real game nothing beats it.
+    fn bomb_beats_rocket(self) -> bool {
         self == Variant::OpenSpiel
     }
 }
@@ -343,9 +349,11 @@ impl Play {
 
 /// Does a play of `kind` / `head` / `len` beat `prev`? Rocket beats everything, a
 /// bomb everything but the rocket and higher bombs; otherwise the same kind and
-/// length with a higher main (kickers never matter).
-pub fn beats(kind: Kind, head: u8, len: u8, prev: &Play) -> bool {
+/// length with a higher main (kickers never matter). (OpenSpiel variant: any bomb
+/// also "beats" the rocket.)
+pub fn beats(variant: Variant, kind: Kind, head: u8, len: u8, prev: &Play) -> bool {
     match (kind, prev.kind) {
+        (Kind::Bomb, Kind::Rocket) => variant.bomb_beats_rocket(),
         (_, Kind::Rocket) => false,
         (Kind::Rocket, _) => true,
         (Kind::Bomb, Kind::Bomb) => head > prev.head,
@@ -463,10 +471,7 @@ pub fn completable(hand: &Counts, main: &Main) -> bool {
 /// Kicker-free plays and mains `hand` may choose (canonical ids, unsorted): every one
 /// when leading (`prev` None), else those beating `prev` (the caller adds pass).
 pub fn main_options(hand: &Counts, prev: Option<&Play>, variant: Variant, out: &mut Vec<u32>) {
-    if matches!(prev, Some(p) if p.kind == Kind::Rocket) {
-        return;
-    }
-    let ok = |kind: Kind, head: u8, len: u8| prev.is_none_or(|p| beats(kind, head, len, p));
+    let ok = |kind: Kind, head: u8, len: u8| prev.is_none_or(|p| beats(variant, kind, head, len, p));
     // single-rank plays and the rocket
     for r in 0..N_RANKS as u8 {
         let c = hand[r as usize];
@@ -599,7 +604,7 @@ pub fn is_legal_play(hand: &Counts, prev: Option<&Play>, variant: Variant, play:
     if (0..N_RANKS).any(|r| c[r] > hand[r]) {
         return false;
     }
-    prev.is_none_or(|p| beats(play.kind, play.head, play.len, p))
+    prev.is_none_or(|p| beats(variant, play.kind, play.head, play.len, p))
 }
 
 /// The static constraints of a play (no hand, no previous play).
@@ -1138,6 +1143,8 @@ mod tests {
         let ps: Vec<String> = legal_plays(&hand("44447777(BWJ)(CJ)"), Some(&bomb), Variant::Standard).iter().map(play_str).collect();
         assert_eq!(ps, ["7777", "(BWJ)(CJ)"]);
         assert!(legal_plays(&hand("2222"), Some(&Play::rocket()), Variant::Standard).is_empty());
+        let ps: Vec<String> = legal_plays(&hand("22223"), Some(&Play::rocket()), Variant::OpenSpiel).iter().map(play_str).collect();
+        assert_eq!(ps, ["2222"], "OpenSpiel: any bomb after the rocket");
     }
 
     /// The factored decisions (mains, then kicker options) reach exactly the legal full

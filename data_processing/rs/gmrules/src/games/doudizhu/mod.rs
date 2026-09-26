@@ -30,9 +30,11 @@
 //! clipped to [-1, 1]; "wp" = ±1 for the winning / losing side (0 without landlord).
 //!
 //! Rules variants (config `rules`): "standard" (default: the above) and "openspiel"
-//! (exactly OpenSpiel: no four+2, and no solo / pair chain or kicker-free airplane
-//! starting at a rank the player holds four of — OpenSpiel's `SearchChainOnlyActions`
-//! skips such heads). The frame schema is the same for both.
+//! (exactly OpenSpiel's three differences: no four+2; no solo / pair chain or
+//! kicker-free airplane starting at a rank the player holds four of — its
+//! `SearchChainOnlyActions` skips such heads; and any bomb may follow the rocket — its
+//! `SearchForLegalActions` only restricts what follows a bomb). The frame schema is
+//! the same for both.
 //!
 //! Decisions. A combination with kickers is chosen in several consecutive decisions
 //! of the same seat: its main part first, then one kicker unit per decision in
