@@ -10,6 +10,13 @@ IL sample frame.  Othello passes are rules-forced (the game has no
 voluntary pass): when :meth:`legal_mask` is all-False the only step is
 ``step(None)``, and the trainer excludes that frame from the policy loss.
 
+Stream convention (shared by IL and RL, see training/train_rl_game.py):
+a game is ONE interleaved sequence — every ply (forced passes included) is
+a frame from :attr:`to_play`'s perspective, both movers' frames in play
+order, which is how every board IL converter lays out its samples.  The
+RL trainer streams all of them through one model cache (step index = ply)
+and puts the loss on the learner seats' frames only.
+
 Winner encoding: 0 = draw / in progress, else the rules engine's player
 id (1 = black/first mover, 2 = white).
 """
@@ -67,6 +74,12 @@ class BoardSelfPlayEnv:
 
     # ------------------------------------------------------------------
 
+    @property
+    def to_play(self) -> int:
+        """Seat to move (1 = black / first mover, 2 = white) — the owner of
+        the current frame; read-only view of :attr:`mover`."""
+        return self.mover
+
     def obs(self) -> Dict[str, torch.Tensor]:
         """Mover-POV observation, same keys/planes as the IL shards."""
         planes = (othello_planes(self.board, self.mover)
@@ -88,6 +101,13 @@ class BoardSelfPlayEnv:
             board = torch.tensor(list(self.board), dtype=torch.uint8)
             mask = board == 0
         return mask
+
+    def legal(self) -> Optional[Dict[str, torch.Tensor]]:
+        """The decoder legality dict ``{"place": [size²] bool}`` for the
+        mover, or ``None`` when there is no placement to choose: a forced
+        pass (othello; the only step is ``step(None)``) or a finished game."""
+        mask = self.legal_mask()
+        return {"place": mask} if bool(mask.any()) else None
 
     # ------------------------------------------------------------------
 
