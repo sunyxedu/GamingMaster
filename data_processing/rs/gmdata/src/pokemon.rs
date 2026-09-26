@@ -11,11 +11,13 @@
 //!                  before turn t's simultaneous choices, whatever happens during the turn (so
 //!                  which frames exist never depends on the turn's outcome).  Labelled with the
 //!                  side's first visible choice of the turn: its `|move|` (also `|cant|..|MOVE`,
-//!                  a chosen move that could not be used) or a voluntary `|switch|`.  Turns whose
-//!                  choice is not visible — KO'd / flinched / asleep / paralysed before moving,
-//!                  a locked move (`[from]lockedmove`) or recharge turn (no choice at all),
-//!                  Struggle, forced out first, the battle ended — keep their frame with the label
-//!                  masked: tgt.action_known 0, action_type −1.
+//!                  a chosen move that could not be used; `|cant|HOLDER|..|MOVE|[of] USER` is an
+//!                  Armor Tail / Dazzling / Queenly Majesty / Damp holder blocking USER's move,
+//!                  no choice of HOLDER) or a voluntary `|switch|`.  Turns whose choice is not
+//!                  visible — KO'd / flinched / asleep / paralysed before moving, a locked move
+//!                  (`[from]lockedmove`) or recharge turn (no choice at all), Struggle, forced
+//!                  out first, the battle ended — keep their frame with the label masked:
+//!                  tgt.action_known 0, action_type −1.
 //!   forced switch  phase 1 — every other in-battle `|switch|` of the side: KO replacements,
 //!                  pivots (U-turn, Volt Switch, Flip Turn, Parting Shot, Chilly Reception,
 //!                  Teleport, Baton Pass, Shed Tail), Eject Button / Eject Pack, Emergency Exit /
@@ -24,7 +26,10 @@
 //!                  end-of-turn request (after `|upkeep|`, sent at once to every side with a
 //!                  fainted active or a pending eject) the state before the FIRST switch line of
 //!                  that block, so a side never sees the other side's simultaneous replacement.
-//!                  A request left unanswered (forfeit at the prompt) yields no frame.
+//!                  A request left unanswered (forfeit at the prompt) yields no frame — nor does
+//!                  a simultaneous end-of-turn request the OTHER player forfeited at (neither
+//!                  switch is logged).  Revival Blessing's choice of a fainted Pokémon logs no
+//!                  `|switch|` and has no frame.
 //!
 //!   obs.species_ids [T,12] i64 (crc32 hash buckets)   obs.move_ids [T,4] i64
 //!   obs.poke_feats [T,12,17] f32   obs.slot_mask [T,12] bool   obs.field_seq [T,22] f32
