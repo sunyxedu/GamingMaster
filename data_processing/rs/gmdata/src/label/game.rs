@@ -298,6 +298,20 @@ pub trait Labeller: Send + Sync + 'static {
         PolicyKind::Softmax
     }
 
+    /// A game-specific teacher policy replacing `--policy` / `--tau` (e.g. othello
+    /// `--disc-tau`: a softmax over the engine's native disc scores). Called with the
+    /// kept moves (sorted, truncated to `--max-moves`); returns one non-negative weight
+    /// per move (normalised by the driver), or `None` for the default transform.
+    fn custom_policy(&self, _moves: &[ScoredMove]) -> Option<Vec<f32>> {
+        None
+    }
+
+    /// The teacher meta `policy` entry when [`Labeller::custom_policy`] is active
+    /// (`None` = the driver's `{"kind": "softmax", "tau": …}` / `{"kind": "visits"}`).
+    fn custom_policy_meta(&self) -> Option<Value> {
+        None
+    }
+
     /// Moves scored per position when `--max-moves` is not given.
     fn default_max_moves(&self) -> usize;
 
