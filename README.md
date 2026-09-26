@@ -125,6 +125,10 @@ uv run python -m training.train_rl \
 
 > RL training uses PPO self-play with joint IL regularisation (AlphaStar-style).
 > Environment: `env/generals_env.py` provides a two-player simultaneous-move Gym-like environment with fog of war.
+> Stage-2 (mixed multi-game) RL: `env/vec_game.py` defines the `VecGameEnv` protocol — N games stepped at once,
+> observations in each game's gm-shard obs schema (pinned bit-for-bit to the IL data by
+> `tests/test_vec_game_golden.py`; adapters for generals and othello) — and `env/league.py` the seat / opponent
+> interface (mirror self-play, callables, network snapshots).
 > Model-side support: `model.step()` single-step inference with KV cache, `ValueHead`, `RLLoss` (PPO), `rl_utils.py` (GAE, RolloutBuffer, KL regularisation).
 
 ## Development and documentation

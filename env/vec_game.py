@@ -1,0 +1,310 @@
+"""Vectorised game environments for Stage-2 RL (mixed multi-game PPO).
+
+A :class:`VecGameEnv` steps ``N`` games of one game at once and speaks the
+tensor language of the IL-pretrained :class:`~model.multi_game.MultiGameNetwork`:
+
+  observations  one frame per ROW, keyed and typed exactly like that game's
+                gm-shard ``obs`` schema (``obs_schema()``; the per-frame slice of
+                an IL sample), so the pretrained encoder sees in-distribution
+                inputs.  Pinned frame by frame to the Rust converters' IL data
+                by tests/test_vec_game_golden.py.
+  legal         the decoder's ``legal`` dict (conditional masks, e.g. generals
+                source + per-cell direction), plus ``"pass"`` (bool [R], pass
+                is legal) for pass-gated placement games.
+  actions       ``step`` takes the decoder's ``sample()`` output (``action_*``
+                keys) or its ``log_prob_entropy`` replay format
+                (``replay_actions``); ``info["applied"]`` reports the action
+                the rules actually applied, in replay format.
+
+Rows, streams, seats
+--------------------
+Row ``r`` belongs to env ``r // rows_per_env`` (a fixed layout: rows never move,
+so step caches stay aligned).  A row is one temporal STREAM of the network —
+the sequence of frames whose Stage-1 state carries over:
+
+  * simultaneous games (generals): ``rows_per_env = n_seats``; row
+    ``(env, seat)`` is that seat's own fog-of-war view, one frame per turn.
+  * alternating games (othello, ``interleaved = True``): ``rows_per_env = 1``;
+    the row is ONE interleaved stream holding both movers' frames, each from
+    the side-to-move perspective, forced pass frames included — exactly the
+    IL sample of a whole game.  ``to_play`` says whose frame it is (the loss
+    goes on learner seats only; see env/league.py).
+
+``VecObs.stream_seats`` [R, n_seats] marks the seats acting on a row's stream:
+a controller of any of them must run its network on EVERY frame of that stream
+(also the frames where it does not act) to keep its temporal state in
+distribution.
+
+Rewards are per seat (``[N, n_seats]``, earned on the step); ``done`` marks
+episodes that ended on the step (``info["terminated"]`` / ``["truncated"]``;
+truncation is a soft terminal the env scores itself — do not bootstrap).
+With ``autoreset`` an ended env restarts immediately (its rows come back with
+``new_episode``); without it its rows go inactive until ``reset``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field, fields
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    runtime_checkable,
+)
+
+import numpy as np
+import torch
+
+#: step() return: (next obs, rewards [N, n_seats], done [N], info)
+StepResult = Tuple["VecObs", torch.Tensor, torch.Tensor, Dict[str, Any]]
+
+
+@dataclass
+class VecObs:
+    """One decision frame per row (tensors are fresh every step: safe to keep).
+
+    obs           {key: [R, ...]}  the game's gm-shard obs schema, one frame
+    legal         {key: [R, ...]}  the decoder's legal dict (+ "pass" [R] bool
+                                   for pass-gated placement decoders)
+    to_play       [R] long   seat acting on the row's current frame (its
+                             perspective: every row is seen by its mover)
+    env_id        [R] long   env of the row
+    stream_id     [R] long   temporal stream of the row (= row index)
+    step_idx      [R] long   frame index of the current frame in its stream
+                             (the ``step_idx`` / decoder ``t0`` of GameNetwork.step)
+    new_episode   [R] bool   first frame of a new episode (reset temporal state)
+    active        [R] bool   the row needs an action (False: episode over, no autoreset)
+    forced        [R] bool   the rules leave no choice (othello pass frame,
+                             generals with no movable army): the env applies
+                             the forced action whatever is sent
+    stream_seats  [R, S] bool seats acting on the row's stream
+    privileged    optional {key: [R, ...]} critic-only information (full state)
+    aux           {key: [R, ...]} per-row auxiliary labels (e.g. generals capture labels)
+    """
+
+    obs: Dict[str, torch.Tensor]
+    legal: Dict[str, torch.Tensor]
+    to_play: torch.Tensor
+    env_id: torch.Tensor
+    stream_id: torch.Tensor
+    step_idx: torch.Tensor
+    new_episode: torch.Tensor
+    active: torch.Tensor
+    forced: torch.Tensor
+    stream_seats: torch.Tensor
+    privileged: Optional[Dict[str, torch.Tensor]] = None
+    aux: Dict[str, torch.Tensor] = field(default_factory=dict)
+
+    @property
+    def n_rows(self) -> int:
+        return int(self.to_play.shape[0])
+
+    def select(self, rows: torch.Tensor) -> "VecObs":
+        """The rows ``rows`` (LongTensor or bool mask) as a smaller VecObs."""
+        out = {}
+        for f in fields(self):
+            v = getattr(self, f.name)
+            if isinstance(v, dict):
+                out[f.name] = {k: t[rows] for k, t in v.items()}
+            elif v is None:
+                out[f.name] = None
+            else:
+                out[f.name] = v[rows]
+        return VecObs(**out)
+
+    def to(self, device) -> "VecObs":
+        out = {}
+        for f in fields(self):
+            v = getattr(self, f.name)
+            if isinstance(v, dict):
+                out[f.name] = {k: t.to(device) for k, t in v.items()}
+            elif v is None:
+                out[f.name] = None
+            else:
+                out[f.name] = v.to(device)
+        return VecObs(**out)
+
+
+@runtime_checkable
+class VecGameEnv(Protocol):
+    """N games of one game stepped together (see the module docstring)."""
+
+    game: str
+    n_seats: int
+    rows_per_env: int
+    interleaved: bool
+    autoreset: bool
+
+    @property
+    def num_envs(self) -> int: ...
+
+    @property
+    def num_rows(self) -> int: ...
+
+    @property
+    def finished(self) -> torch.Tensor:
+        """[N] bool: episode over and not restarted (autoreset off)."""
+
+    def reset(self, n: Optional[int] = None, *, seed: Optional[int] = None,
+              env_ids: Optional[Sequence[int]] = None) -> VecObs:
+        """Start new episodes: all ``n`` envs (resizing), or only ``env_ids``."""
+
+    def step(self, actions: Mapping[str, torch.Tensor]) -> StepResult:
+        """Apply one action per row (inactive rows ignored)."""
+
+    def observe(self) -> VecObs:
+        """The current frame of every row, without stepping."""
+
+    def obs_schema(self) -> Dict[str, Tuple[Tuple[int, ...], torch.dtype]]:
+        """Per-frame {obs key: (shape, dtype)} — the gm-shard obs schema."""
+
+    def replay_actions(self, actions: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Decoder ``sample()`` output → its ``log_prob_entropy`` action format."""
+
+    def random_actions(self, obs: VecObs,
+                       generator: Optional[torch.Generator] = None) -> Dict[str, torch.Tensor]:
+        """A uniformly random legal action for every row (replay format)."""
+
+
+class VecEnvBase:
+    """Shared plumbing: row layout, action-key normalisation, the env RNG."""
+
+    game: str = ""
+    n_seats: int = 2
+    rows_per_env: int = 1
+    interleaved: bool = False
+    #: decoder sample() key → log_prob_entropy (replay) key
+    ACTION_KEYS: Dict[str, str] = {}
+
+    def __init__(self, n_envs: int, autoreset: bool, seed: Optional[int]):
+        if n_envs < 1:
+            raise ValueError(f"n_envs must be >= 1, got {n_envs}")
+        self.autoreset = bool(autoreset)
+        self._rng = np.random.default_rng(seed)
+        self._n = int(n_envs)
+
+    # -- layout ------------------------------------------------------------
+
+    @property
+    def num_envs(self) -> int:
+        return self._n
+
+    @property
+    def num_rows(self) -> int:
+        return self._n * self.rows_per_env
+
+    def _row_env(self) -> torch.Tensor:
+        return torch.arange(self.num_rows, dtype=torch.long) // self.rows_per_env
+
+    def _env_ids(self, env_ids: Optional[Sequence[int]]) -> np.ndarray:
+        if env_ids is None:
+            return np.arange(self._n)
+        ids = np.asarray(list(env_ids), dtype=np.int64)
+        if ids.size and (ids.min() < 0 or ids.max() >= self._n):
+            raise IndexError(f"env_ids {ids.tolist()} out of range for {self._n} envs")
+        return ids
+
+    def _episode_seeds(self, count: int, seed: Optional[int]) -> list:
+        """Per-episode seeds: ``seed + k`` when given, else from the env RNG."""
+        if seed is not None:
+            return [int(seed) + k for k in range(count)]
+        return [int(s) for s in self._rng.integers(0, 2**31 - 1, size=count)]
+
+    # -- actions -------------------------------------------------------------
+
+    def replay_actions(self, actions: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Map ``action_*`` sample keys to the replay keys; replay-format keys
+        pass through (a key given both ways must agree)."""
+        out: Dict[str, torch.Tensor] = {}
+        replay_keys = set(self.ACTION_KEYS.values())
+        for k, v in actions.items():
+            if k in self.ACTION_KEYS:
+                rk = self.ACTION_KEYS[k]
+            elif k in replay_keys:
+                rk = k
+            else:
+                continue            # log-probs, values, ... are not actions
+            v = torch.as_tensor(v).detach().reshape(-1).cpu()
+            if rk in out and not torch.equal(out[rk], v):
+                raise ValueError(f"action {rk!r} given twice with different values")
+            out[rk] = v
+        return out
+
+    def _require(self, acts: Dict[str, torch.Tensor], keys: Sequence[str]) -> None:
+        for k in keys:
+            if k not in acts:
+                raise KeyError(f"{self.game}: missing action {k!r} (give the decoder's sample() "
+                               f"output or its replay format {sorted(self.ACTION_KEYS.values())})")
+            if acts[k].shape[0] != self.num_rows:
+                raise ValueError(f"{self.game}: action {k!r} has {acts[k].shape[0]} rows, "
+                                 f"expected {self.num_rows}")
+
+    # -- checkpointing ---------------------------------------------------------
+
+    def state_dict(self) -> Dict[str, Any]:
+        """The env RNG (episodes restart at iteration boundaries, so the RNG
+        is the only state a full-state resume needs)."""
+        return {"rng": self._rng.bit_generator.state}
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        self._rng.bit_generator.state = state["rng"]
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+def _make_generals(n_envs: int = 1, **kw) -> VecGameEnv:
+    from env.vec_generals import GeneralsVecEnv
+    return GeneralsVecEnv(n_envs, **kw)
+
+
+def _make_othello(n_envs: int = 1, **kw) -> VecGameEnv:
+    from env.vec_othello import OthelloVecEnv
+    return OthelloVecEnv(n_envs, **kw)
+
+
+#: games with a simulator (the others train on their IL replay stream only)
+VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
+    "generals": _make_generals,
+    "othello": _make_othello,
+}
+
+
+def register_vec_env(game: str, builder: Callable[..., VecGameEnv]) -> None:
+    if game in VEC_ENV_REGISTRY:
+        raise ValueError(f"vec env {game!r} already registered")
+    VEC_ENV_REGISTRY[game] = builder
+
+
+def has_simulator(game: str) -> bool:
+    return game in VEC_ENV_REGISTRY
+
+
+def make_vec_env(game: str, n_envs: int = 1, **kwargs) -> VecGameEnv:
+    """``n_envs`` games of ``game`` (kwargs go to the adapter)."""
+    try:
+        builder = VEC_ENV_REGISTRY[game]
+    except KeyError:
+        raise KeyError(f"no simulator for {game!r}; have {sorted(VEC_ENV_REGISTRY)}") from None
+    return builder(n_envs, **kwargs)
+
+
+def __getattr__(name: str):
+    """Lazy re-exports of the adapters (importing one never pays for the other)."""
+    if name == "GeneralsVecEnv":
+        from env.vec_generals import GeneralsVecEnv
+        return GeneralsVecEnv
+    if name == "OthelloVecEnv":
+        from env.vec_othello import OthelloVecEnv
+        return OthelloVecEnv
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = ["VecObs", "VecGameEnv", "VecEnvBase", "StepResult", "VEC_ENV_REGISTRY",
+           "register_vec_env", "has_simulator", "make_vec_env"]
