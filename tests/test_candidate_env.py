@@ -6,11 +6,11 @@ errors, and the league / policy plumbing with per-seat streams."""
 
 from __future__ import annotations
 
+import gmsim
 import numpy as np
 import pytest
 import torch
 
-import gmsim
 from env.league import League, NetworkPolicy, RandomPolicy, play_episodes
 from env.vec_candidate import CandidateVecEnv
 from env.vec_game import VecGameEnv, has_simulator, make_vec_env
@@ -100,7 +100,8 @@ def test_frames_equal_the_replay_of_the_trajectory():
                 for k in seen[row][0]:
                     ours = torch.stack([f[k] for f in seen[row]])
                     theirs = torch.from_numpy(np.ascontiguousarray(r[k][idx]))
-                    assert ours.dtype == theirs.dtype and torch.equal(ours, theirs), (game, e, seat, k)
+                    assert ours.dtype == theirs.dtype, (game, k)
+                    assert torch.equal(ours, theirs), (game, e, seat, k)
 
 
 def test_goofspiel_simultaneous_rows():
@@ -120,8 +121,10 @@ def test_pig_interleaved_stream():
     the only candidate) apply their single candidate whatever is sent."""
     env = CandidateVecEnv("pig", 4, seed=0, players=3, winscore=8, diceoutcomes=3, horizon=40)
     obs = env.observe()
-    assert (env.layout, env.rows_per_env, env.interleaved, env.lockstep) == ("interleaved", 1, True, True)
-    assert bool(obs.stream_seats.all()) and bool(obs.active.all()) and obs.to_play.tolist() == [0] * 4
+    assert (env.layout, env.rows_per_env, env.interleaved, env.lockstep) \
+        == ("interleaved", 1, True, True)
+    assert bool(obs.stream_seats.all()) and bool(obs.active.all())
+    assert obs.to_play.tolist() == [0] * 4
     gen = torch.Generator().manual_seed(0)
     movers, forced_seen = {e: [] for e in range(4)}, 0
     while bool(obs.active.any()):
@@ -132,7 +135,8 @@ def test_pig_interleaved_stream():
         acts = env.random_actions(obs, generator=gen)["action_idx"]
         if bool(obs.forced.any()):
             forced_seen += 1
-            acts = torch.where(obs.forced, torch.full_like(acts, 1), acts)   # garbage on forced rows
+            # garbage on forced rows (the env applies their single candidate)
+            acts = torch.where(obs.forced, torch.full_like(acts, 1), acts)
         obs, _, _, info = env.step({"action_idx": acts})
     for e in range(4):
         r = gmsim.replay("pig", env.config, env.trajectory(e))

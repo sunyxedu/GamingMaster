@@ -27,10 +27,9 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
+import gmsim
 import numpy as np
 import torch
-
-import gmsim
 
 #: tgt tensors that are part of a frame (compared); tgt.value is an outcome
 TGT_KEYS = ("action_idx",)
@@ -65,8 +64,7 @@ def _decision_frames(r: Dict[str, Any], idx: Sequence[int]) -> Dict[str, Any]:
     out = {k: r[k][idx] for k in gmsim.FRAME_KEYS}
     out["action_idx"] = r["action_idx"][idx]
     out["seat"] = r["seat"][idx]
-    out["legal"] = np.asarray([np.asarray(r["legal"][i], dtype=np.int64) for i in idx], dtype=object) \
-        if len(idx) else np.zeros(0, dtype=object)
+    out["legal"] = [np.asarray(r["legal"][i], dtype=np.int64) for i in idx]
     return out
 
 

@@ -24,9 +24,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 import gmsim
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "candidate" / "openspiel_reference.json"
@@ -69,7 +68,8 @@ with open(FIXTURE) as _fh:
     _FIXTURE = json.load(_fh)
 
 
-@pytest.mark.parametrize("key,variant", _variants(_FIXTURE), ids=[k for k, _ in _variants(_FIXTURE)])
+@pytest.mark.parametrize("key,variant", _variants(_FIXTURE),
+                         ids=[k for k, _ in _variants(_FIXTURE)])
 def test_fixture_trajectories_match_openspiel(key, variant):
     n = 0
     for traj in variant["trajectories"]:

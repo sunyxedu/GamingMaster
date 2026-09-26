@@ -27,11 +27,11 @@ import subprocess
 from pathlib import Path
 from typing import List
 
+import gmsim
 import numpy as np
 import pytest
 import torch
 
-import gmsim
 from data_processing.games.dataset import GameShardDataset, load_gm_samples
 from env.vec_candidate import CandidateVecEnv
 from tests import invariance
@@ -94,7 +94,8 @@ def test_shards_schema_and_meta(data):
     assert len(ds) == st["samples"] == 800 and ds.total_frames() == st["frames"]
     spec = gmsim.game_info("kuhn_poker", {"players": 2})["spec"]
     m = ds.shard_meta
-    assert m["schema"] == "candidate.v1" and m["layout"] == "per_seat" and m["config"] == {"players": 2}
+    assert m["schema"] == "candidate.v1" and m["layout"] == "per_seat"
+    assert m["config"] == {"players": 2}
     for k in ("max_entities", "entity_features", "entity_types", "global_features",
               "max_actions", "action_features", "n_seats"):
         assert m[k] == spec[k], k
@@ -200,7 +201,8 @@ def test_simulator_frames_are_the_converter_frames(gmdata, tmp_path):
 
 def test_simulator_invariance_battery():
     for players in (2, 3, 4):
-        st = invariance.check_sim_battery("kuhn_poker", {"players": players}, n_games=30, seed=players)
+        st = invariance.check_sim_battery("kuhn_poker", {"players": players}, n_games=30,
+                                          seed=players)
         assert st["privacy"] > 30
     invariance.check_sim_battery("goofspiel", {"num_cards": 5, "players": 3}, n_games=10)
     for players in (2, 4):
@@ -213,7 +215,8 @@ def test_privacy_check_catches_a_leak():
     'perturbation' that changes it must fail the privacy comparison."""
     ev = [[-1, 0], [-1, 1], [-1, 2], [0, 0], [1, 1], [2, 1], [0, 1]]
     leak = [[-1, 3], [-1, 1], [-1, 2], [0, 0], [1, 1], [2, 1], [0, 1]]      # seat 0's card
-    a, b = gmsim.replay("kuhn_poker", {"players": 3}, ev), gmsim.replay("kuhn_poker", {"players": 3}, leak)
+    a = gmsim.replay("kuhn_poker", {"players": 3}, ev)
+    b = gmsim.replay("kuhn_poker", {"players": 3}, leak)
     with pytest.raises(AssertionError, match="entities"):
         invariance.assert_frames_prefix({"entities": a["entities"][a["seat"] == 0]},
                                         {"entities": b["entities"][b["seat"] == 0]}, 2, "leak")
@@ -321,10 +324,12 @@ def test_train_rl_joint_on_candidate_games(stage1):
     from training.train_rl_joint import Diag, JointRLTrainer, parse_args
 
     out, root, _ = stage1
-    args = ["--init", str(out / "ck" / "multi_final.pt"), "--rl", "kuhn_poker", "--rl", "goofspiel",
+    args = ["--init", str(out / "ck" / "multi_final.pt"),
+            "--rl", "kuhn_poker", "--rl", "goofspiel",
             "--rl", "pig", "--data", f"kuhn_poker={root / 'train'}", "--replay_batch_size", "4",
             "--tokens_per_iter", "120", "--envs", "kuhn_poker=6", "--envs", "goofspiel=4",
-            "--envs", "pig=3", "--env_kw", "kuhn_poker:players=3", "--env_kw", "goofspiel:num_cards=4",
+            "--envs", "pig=3", "--env_kw", "kuhn_poker:players=3",
+            "--env_kw", "goofspiel:num_cards=4",
             *[x for k, v in PIG.items() for x in ("--env_kw", f"pig:{k}={v}")],
             "--mirror_prob", "kuhn_poker=0.5", "--mirror_prob", "pig=0.5", "--snapshot_every", "1",
             "--epochs", "1", "--minibatches", "2", "--snapshot_dir", "memory", "--device", "cpu",

@@ -38,10 +38,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
+import gmsim
 import numpy as np
 import torch
 
-import gmsim
 from env.vec_game import StepResult, VecEnvBase, VecObs
 
 

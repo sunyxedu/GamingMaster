@@ -6,10 +6,10 @@ step, and the shard-meta architecture keys."""
 
 from __future__ import annotations
 
+import gmsim
 import pytest
 import torch
 
-import gmsim
 from model.games import build_game_network
 from model.games.candidate import CandidateConfig, CandidateDecoder, CandidateEncoder
 from model.games.candidates import CANDIDATE_META_ARCH, candidate_games
@@ -125,8 +125,8 @@ def test_il_loss_is_the_sum_of_head_terms_and_soft_targets():
                                 [[0.6, 0.4], [0.5, 0.5], [1.0, 0.0]]])
     dense = torch.zeros(2, 3, 5)
     dense.scatter_add_(-1, teacher_idx.clamp(min=0), teacher_val * (teacher_idx >= 0))
-    ls, _, _ = batch_loss(net, {**mb, "tgt": {**tgt, "action_probs_idx": teacher_idx,
-                                                "action_probs_val": teacher_val}}, CPU, 0.2, 0.0, False)
+    sparse = {**tgt, "action_probs_idx": teacher_idx, "action_probs_val": teacher_val}
+    ls, _, _ = batch_loss(net, {**mb, "tgt": sparse}, CPU, 0.2, 0.0, False)
     ld, _, _ = batch_loss(net, {**mb, "tgt": {**tgt, "action_probs": dense}}, CPU, 0.2, 0.0, False)
     assert torch.allclose(ls, ld, atol=1e-6) and not torch.allclose(ls, hard)
     ls.backward()
@@ -181,7 +181,8 @@ def test_meta_arch_from_shards():
             "max_actions": 7, "action_features": 2, "n_seats": 2, "layout": "per_seat"}
     kw = apply_meta_arch_defaults("kuhn_poker", dict(TINY), meta)
     net = build_game_network("kuhn_poker", **kw)
-    assert (net.cfg.cand_max_entities, net.cfg.cand_max_actions, net.cfg.cand_entity_types) == (6, 7, 0)
+    cfg = net.cfg
+    assert (cfg.cand_max_entities, cfg.cand_max_actions, cfg.cand_entity_types) == (6, 7, 0)
     assert net.obs_encoder.type_embed is None
     check_meta_arch("kuhn_poker", net.cfg, meta)
     with pytest.raises(ValueError, match="max_actions=9"):

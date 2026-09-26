@@ -54,7 +54,8 @@ def turn_of(state, n: int) -> Dict:
     if state.is_terminal():
         return {"kind": "terminal"}
     if state.is_chance_node():
-        return {"kind": "chance", "outcomes": [[int(a), float(p)] for a, p in state.chance_outcomes()]}
+        return {"kind": "chance",
+                "outcomes": [[int(a), float(p)] for a, p in state.chance_outcomes()]}
     if state.is_simultaneous_node():
         seats = [p for p in range(n) if state.legal_actions(p)]
     else:
