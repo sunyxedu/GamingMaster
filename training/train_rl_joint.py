@@ -88,8 +88,9 @@ every rank's simulator state (lux waves continue the envs' 5-match games) and
 a fingerprint of the frozen reference (a resume against a different --init is
 refused, and so is one that would switch the generals observation: an
 ``--env_kw generals:memory_vision=`` is adopted into the network's recorded
-cfg.memory_vision, the setting a resume must keep).  Randomness is re-derived from (seed, rank, iteration) at every
-iteration start (rollouts, league, opponent draws, replay data order), so
+cfg.memory_vision, the setting a resume must keep).  Randomness is re-derived
+from (seed, rank, iteration) at every iteration start (rollouts, league,
+opponent draws, replay data order), so
 ``--resume rl_latest.pt`` reproduces the next iteration exactly on the same
 world size: evicted pool files are deleted only after the next rl_latest.pt is
 written (older rl_iter<N>.pt files may refer to deleted snapshots, which a
