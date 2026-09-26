@@ -98,15 +98,14 @@
 //!   0.26–0.29 to 0.33–0.35. The scale 16 keeps the margin informative across the
 //!   decided range (u = 0.24 / 0.46 / 0.73 / 0.93 at 4 / 8 / 15 / 26 discs — the 10 / 25 /
 //!   50 / 75th percentiles of |best score| over real frames with Q ≥ 0.97 — and 0.995 at
-//!   48). Near Q = 0.5 the disc
-//!   temperature is 4·s·τ ≈ 0.46 discs (a move one disc worse gets e^−2.2 ≈ 0.11 of the
-//!   weight; the tie-break adds 6% to that slope, w/16 = 0.125 vs 2.2 per disc); mean
-//!   teacher entropy on WTHOR frames is 1.2 nats. `--tie-weight 0` gives π ∝ exp(Q/τ)
-//!   exactly (the labeller-v1 teacher). Softer: a larger `--tau`, or `--disc-tau T`:
-//!   π ∝ exp(discs / T) in every position — margin-maximising, like the WTHOR
-//!   "theoretical score" — recorded as policy `{"kind": "softmax_discs", "disc_tau": T}`
-//!   (it replaces the softmax, so it takes no `--tau` / `--tie-weight`); Q and
-//!   engine_value are the same either way.
+//!   48). Near Q = 0.5 the disc temperature is 4·s·τ ≈ 0.46 discs (a move one disc worse
+//!   gets e^−2.2 ≈ 0.11 of the weight; the tie-break adds 6% to that slope, w/16 = 0.125
+//!   vs 2.2 per disc); mean teacher entropy on WTHOR frames is 1.2 nats. `--tie-weight 0`
+//!   gives π ∝ exp(Q/τ) exactly (the labeller-v1 teacher). Softer: a larger `--tau`, or
+//!   `--disc-tau T`: π ∝ exp(discs / T) in every position — margin-maximising, like the
+//!   WTHOR "theoretical score" — recorded as policy `{"kind": "softmax_discs",
+//!   "disc_tau": T}` (it replaces the softmax, so it takes no `--tau` / `--tie-weight`);
+//!   Q and engine_value are the same either way.
 //! * `--disc-scale 2.3`: fitted with `--fit-disc-scale 1000` at the defaults (level 15,
 //!   exact ≤ 20 empties) on 1000 distinct positions with 21–60 empties from two
 //!   2000+ WTHOR shards: the maximum-likelihood s of P(the side to move wins the
