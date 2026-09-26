@@ -340,14 +340,15 @@ yaneuraou_patch() {
     fi
 }
 
-# USI handshake + isready (eval load) within 120 s; prints the engine's `id name`.
+# USI handshake + isready (eval load) within ${YANEURAOU_SMOKE_TIMEOUT:-120} s; prints the
+# engine's `id name`.
 yaneuraou_smoke() {
-    local exe="$1" tmp pid i
+    local exe="$1" tmp pid i limit="${YANEURAOU_SMOKE_TIMEOUT:-120}"
     tmp="$(mktemp -d)"
     printf 'usi\nsetoption name Threads value 1\nsetoption name USI_Hash value 16\nsetoption name USI_OwnBook value false\nsetoption name BookFile value no_book\nsetoption name FV_SCALE value 20\nisready\nquit\n' > "$tmp/in"
     "$exe" < "$tmp/in" > "$tmp/out" 2>&1 &
     pid=$!
-    for i in $(seq 1 120); do
+    for i in $(seq 1 "$limit"); do
         kill -0 "$pid" 2>/dev/null || break
         sleep 1
     done
@@ -355,7 +356,7 @@ yaneuraou_smoke() {
         kill "$pid" 2>/dev/null || true
         grep -v '^option' "$tmp/out" >&2 || true
         rm -rf "$tmp"
-        die "$exe: no readyok within 120 s (hangs in isready)"
+        die "$exe: no readyok within $limit s (hangs in isready)"
     fi
     wait "$pid" 2>/dev/null || true
     if ! grep -q '^readyok' "$tmp/out"; then
