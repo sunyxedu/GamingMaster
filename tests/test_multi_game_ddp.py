@@ -29,7 +29,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from data_processing.games.dataset import collate_game_sequences, save_shard
-from tests.gloo_devices import DEVICES, local_ranks, needs_cuda
+from tests.gloo_devices import DEVICES, hide_gpus_if_cpu, local_ranks, needs_cuda
 from tests.test_core_moe import CORE, _board_samples
 
 WORLD = 2
@@ -62,6 +62,7 @@ def _tag(mode: str, kind: str) -> str:
 def _worker(rank: int, port: int, root: str, mode: str, kind: str = "cpu",
             lrs=(0, 1)) -> None:
     # main() itself pins a MIG slice per LOCAL_RANK before touching CUDA
+    hide_gpus_if_cpu(kind)
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank),
                       LOCAL_RANK=str(lrs[rank]), WORLD_SIZE=str(WORLD))
     torch.set_num_threads(1)

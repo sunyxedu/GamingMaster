@@ -49,7 +49,7 @@ import torch
 import torch.nn as nn
 
 from data_processing.games.dataset import save_shard
-from tests.gloo_devices import DEVICES, local_ranks, needs_cuda
+from tests.gloo_devices import DEVICES, hide_gpus_if_cpu, local_ranks, needs_cuda
 from tests.test_core_moe import _board_samples
 
 #: the production core type (transformer + MoE), tiny
@@ -428,6 +428,7 @@ def _common(data: str, save_dir: str, kind: str):
 
 
 def _train_worker(rank, world, port, root, tag, argv, kind, lrs, poison, scripted):
+    hide_gpus_if_cpu(kind)
     if world > 1:
         os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank),
                           LOCAL_RANK=str(lrs[rank]), WORLD_SIZE=str(world))

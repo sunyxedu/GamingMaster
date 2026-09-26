@@ -50,12 +50,22 @@ def local_ranks(world: int, kind: str):
     return [r if n >= world else 0 for r in range(world)]
 
 
+def hide_gpus_if_cpu(kind: str) -> None:
+    """In a spawned CPU-variant rank: hide every GPU before anything can
+    touch CUDA, so the trainer's MIG pin (training.distributed) never sees a
+    MIG allocation it would have to split (LOCAL_RANK may exceed the slice
+    count when a 3-rank CPU test runs inside a 2-slice allocation)."""
+    if kind == "cpu":
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+
 def worker_device(kind: str, local_rank: int) -> torch.device:
     """In a spawned rank, BEFORE anything touches CUDA: export LOCAL_RANK, pin
     this rank's MIG slice (training.distributed.pin_rank_device) and return
     its device (made current)."""
     os.environ["LOCAL_RANK"] = str(local_rank)
     if kind == "cpu":
+        hide_gpus_if_cpu(kind)
         return torch.device("cpu")
     pin_rank_device()
     device = torch.device("cuda", 0 if visible_mig() else local_rank)

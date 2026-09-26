@@ -730,6 +730,7 @@ def test_rl_trainers_balance_moe_experts(gio_dir):
 # ---------------------------------------------------------------------------
 
 def _ddp_worker(rank: int, port: int, gio: str, othello: str, out: str) -> None:
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""            # a CPU run (see tests/gloo_devices.py)
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank),
                       LOCAL_RANK=str(rank), WORLD_SIZE="2")
     torch.set_num_threads(1)

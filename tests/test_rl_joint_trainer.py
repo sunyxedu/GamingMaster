@@ -39,7 +39,7 @@ from data_processing.games.dataset import save_shard
 from model.components.core import moe_layers, moe_load_counting
 from model.multi_game import is_core_key
 from tests.generals_gio import write_gio_dir
-from tests.gloo_devices import DEVICES, local_ranks
+from tests.gloo_devices import DEVICES, hide_gpus_if_cpu, local_ranks
 from tests.test_core_moe import CORE, _board_samples
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -523,6 +523,7 @@ def _ddp_save(kind: str) -> str:
 
 def _ddp_worker(rank: int, port: int, root: str, kind: str = "cpu", lrs=(0, 1)) -> None:
     # the trainer pins a MIG slice per LOCAL_RANK before touching CUDA
+    hide_gpus_if_cpu(kind)
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank),
                       LOCAL_RANK=str(lrs[rank]), WORLD_SIZE=str(WORLD))
     torch.set_num_threads(1)
