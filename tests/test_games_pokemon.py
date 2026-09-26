@@ -625,6 +625,14 @@ def test_legal_from_request():
     assert tp["action_type"].tolist() == [[False, True]]
     assert tp["switch"].tolist() == [[True, True, True, False, False, False]]
     assert tp["active_idx"].tolist() == [0]
+    # Revival Blessing: the forceSwitch of a `reviving` active takes a FAINTED Pokémon
+    # (Showdown's side.ts rejects any other choice)
+    rb = _request(forceSwitch=[True])
+    rb["side"]["pokemon"][0]["reviving"] = True
+    lg = legal_from_request(rb, slot_of, V)
+    assert lg["action_type"].tolist() == [[False, True]] and not lg["move_id"].any()
+    assert lg["switch"].tolist() == [[False, False, True, False, False, False]]   # Ditto
+    assert lg["active_idx"].tolist() == [1]
 
 
 def test_request_masks_drive_step_sampling():

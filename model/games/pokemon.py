@@ -833,24 +833,35 @@ def legal_from_request(
     Keys: ``action_type`` [move, switch] (team preview / ``forceSwitch``:
     switch only), ``move_id`` (the request's usable moves; empty on switch
     requests), ``switch`` (alive, not active; nothing while ``trapped``
-    outside a forced switch), ``tera`` (``canTerastallize``), ``active_idx``
-    (0 at team preview) and ``move_ids`` when given.  The obs of the same
-    request must carry field_seq[FIELD_FORCED_SWITCH] = 1 for a
+    outside a forced switch; the FAINTED slots on the ``forceSwitch`` a
+    Revival Blessing issues — its active is ``reviving`` and Showdown only
+    accepts a fainted Pokémon), ``tera`` (``canTerastallize``),
+    ``active_idx`` (0 at team preview) and ``move_ids`` when given.  The obs
+    of the same request must carry field_seq[FIELD_FORCED_SWITCH] = 1 for a
     ``forceSwitch`` request and field_seq[FIELD_TEAM_PREVIEW] = 1 at team
-    preview.  ``wait`` requests are no decision."""
+    preview.  ``wait`` requests are no decision.  (The converter has no
+    frame for the Revival Blessing choice — it logs no ``|switch|`` — so that
+    request is outside the IL data.)"""
     preview = bool(request.get("teamPreview"))
     forced = any(bool(x) for x in (request.get("forceSwitch") or []))
     alive = [False] * n_slots
+    fainted = [False] * n_slots
     active: Optional[int] = None
+    reviving = False
     for p in (request.get("side") or {}).get("pokemon", []):
         k = slot_of.get(p.get("ident", ""))
         if k is None or not 0 <= k < n_slots:
             continue
-        alive[k] = not str(p.get("condition", "")).strip().endswith("fnt")
+        fainted[k] = str(p.get("condition", "")).strip().endswith("fnt")
+        alive[k] = not fainted[k]
         if p.get("active") and not preview:
             active = k
+            reviving = reviving or bool(p.get("reviving"))
     act = (request.get("active") or [{}])[0] if not (preview or forced) else {}
-    switch = [alive[k] and (preview or k != active) for k in range(n_slots)]
+    if forced and reviving:
+        switch = list(fainted)
+    else:
+        switch = [alive[k] and (preview or k != active) for k in range(n_slots)]
     if act.get("trapped"):
         switch = [False] * n_slots
     moves = [m.get("id") or m.get("move", "") for m in act.get("moves", [])
