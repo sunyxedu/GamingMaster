@@ -99,7 +99,7 @@ impl DType {
 /// `i / 8`, each frame padded to whole bytes with zero bits). Errors on any other value.
 pub fn pack_bits(frame_len: usize, data: &[f32]) -> Result<Vec<u8>> {
     let per = frame_len.max(1);
-    if data.len() % per != 0 {
+    if !data.len().is_multiple_of(per) {
         bail!("bit tensor length {} is not a multiple of the frame size {per}", data.len());
     }
     let nb = per.div_ceil(8);
@@ -341,7 +341,7 @@ impl Tensor {
     /// Bits columns the unpacked {0,1} values. The error names the first mismatch.
     pub fn check_rows_f32(&self, start: usize, expected: &[f32]) -> Result<()> {
         let per = self.frame_len();
-        if expected.len() % per != 0 {
+        if !expected.len().is_multiple_of(per) {
             bail!("{}: {} re-encoded values are not whole frames of {per}", self.name, expected.len());
         }
         let stored = self.rows_f32(start, expected.len() / per)?;

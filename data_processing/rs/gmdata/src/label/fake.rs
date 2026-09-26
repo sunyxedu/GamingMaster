@@ -14,13 +14,14 @@
 //! process through the hidden CLI (`gmdata label fake-engine toy`,
 //! `gmdata label fake-engine canned --script FILE`; [`run_stdio`]) for end-to-end tests.
 //!
-//! Canned script format — one rule per line, fields separated by TABs:
+//! Canned script format — one rule per line, fields separated by TAB characters
+//! (written `⇥` here):
 //!
 //! ```text
 //! # comment
-//! uci	id name Canned 1.0	uciok          exact input line → two reply lines
-//! go *	info depth 1 multipv 1 score cp 12 pv e2e4	bestmove e2e4
-//! quit	<exit>                             <exit> = terminate (simulated crash if unexpected)
+//! uci⇥id name Canned 1.0⇥uciok                   exact input line → two reply lines
+//! go *⇥info depth 1 multipv 1 score cp 12 pv e2e4⇥bestmove e2e4
+//! quit⇥<exit>                                    <exit> = terminate (a crash if unexpected)
 //! ```
 //!
 //! A pattern ending in `*` matches by prefix (the text before `*`); the first matching

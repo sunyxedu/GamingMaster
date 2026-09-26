@@ -66,7 +66,7 @@ pub fn legal_moves(state: u64) -> Vec<(i64, i64, i64)> {
         if to == from || !seen.insert((from, to)) {
             continue;
         }
-        if (x >> 20) % 4 == 0 {
+        if (x >> 20).is_multiple_of(4) {
             out.extend((1..N_PROMO).map(|p| (from, to, p)));
         } else {
             out.push((from, to, 0));

@@ -276,7 +276,7 @@ impl<L: Labeller> Worker<L> {
         let selected = self.max_samples.map(|m| job.sample < m).unwrap_or(true);
         let phase = phase_of(job.phase_key, job.sample, self.every);
         for (t, pos) in positions.iter().enumerate() {
-            if !selected || (t + phase) % self.every != 0 {
+            if !selected || !(t + phase).is_multiple_of(self.every) {
                 out.stats.sampled_out += 1;
                 continue;
             }

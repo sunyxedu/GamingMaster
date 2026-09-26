@@ -125,7 +125,7 @@ impl OverlayWriter {
                 bail!("{}: bit column frame size {per} != frame shape {:?}", t.name, t.frame_shape);
             }
         }
-        if t.col.len() % t.frame_len() != 0 || t.frames() != self.n_frames {
+        if !t.col.len().is_multiple_of(t.frame_len()) || t.frames() != self.n_frames {
             bail!("{}: {} elements = {} frames of {:?}, the shard has {} frames", t.name, t.col.len(),
                   t.col.len() as f64 / t.frame_len() as f64, t.frame_shape, self.n_frames);
         }
@@ -182,11 +182,11 @@ impl OverlayWriter {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let tmp = parent.join(format!(".{name}.tmp-{}-{nanos}", std::process::id()));
         std::fs::create_dir(&tmp).with_context(|| format!("create {}", tmp.display()))?;
-        let guard = TmpGuard(Some(tmp.clone()));
+        let mut guard = TmpGuard(Some(tmp.clone()));
         let mode = self.fill(&tmp)?;
         sync_dir(&tmp);
         std::fs::rename(&tmp, out).with_context(|| format!("rename {} -> {}", tmp.display(), out.display()))?;
-        std::mem::forget(guard);
+        guard.0 = None; // renamed into place: nothing to clean up
         sync_dir(&parent);
         Ok(mode)
     }
