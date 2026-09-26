@@ -25,6 +25,7 @@ mod go;
 mod lux;
 mod mahjong;
 mod gomoku;
+mod hunl;
 mod kuhn_poker;
 mod label;
 mod othello;
@@ -94,6 +95,11 @@ enum Game {
         #[command(subcommand)]
         cmd: kuhn_poker::Cmd,
     },
+    /// Heads-up no-limit hold'em (ACPC 2009-2017 hand histories, PHH; gmrules hunl)
+    Hunl {
+        #[command(subcommand)]
+        cmd: hunl::Cmd,
+    },
     /// Generic tools for every gmrules game: list, check, random-play / JSONL → shards
     Rules {
         #[command(subcommand)]
@@ -118,6 +124,7 @@ fn main() -> Result<()> {
         Game::Pokemon { cmd } => pokemon::run(cmd),
         Game::Shogi { cmd } => shogi::run(cmd),
         Game::KuhnPoker { cmd } => kuhn_poker::run(cmd),
+        Game::Hunl { cmd } => hunl::run(cmd),
         Game::Rules { cmd } => rules::run(cmd),
         Game::Label { cmd } => label::run(cmd),
     }
