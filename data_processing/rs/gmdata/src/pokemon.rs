@@ -77,12 +77,12 @@
 //! only once revealed, and an Illusion switch is filed under the disguise.  First-person
 //! trajectories remove that gap: Metamon (github.com/UT-Austin-RPL/metamon, MIT) rebuilds each
 //! player's own view from Showdown replays (the player's team filled in from what the battle
-//! reveals, the rest estimated), one step per decision with the action taken.  A future
-//! `gmdata pokemon convert-metamon` could emit this schema from those trajectories: their
-//! per-decision steps line up with the frames here (turn / forced switch / team preview), the
-//! own-team slots and obs.move_ids could carry the full sets, and legal_* would follow from the
-//! known own team.  Only the player's own side may be filled in that way — the opponent stays
-//! revealed-only, and estimated fields are a train/deploy gap (a live bot knows its exact set).
+//! reveals, the rest estimated), with the action taken at each step.  A future `gmdata pokemon
+//! convert-metamon` could emit this schema from those trajectories: map their steps onto the
+//! frames here (turn / forced switch, team preview where present), fill the own-team slots and
+//! obs.move_ids with the full sets, and derive legal_* from the known own team.  Only the
+//! player's own side may be filled in that way — the opponent stays revealed-only, and
+//! estimated fields are a train/deploy gap (a live bot knows its exact set).
 
 use crate::common;
 use anyhow::Result;
