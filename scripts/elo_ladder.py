@@ -26,9 +26,13 @@ load_model_state.
 Every net plays on the observation it was trained on: the globals width
 per net (WidthAdapter) and the sighted-mountain memory per seat (its
 cfg.memory_vision, legacy checkpoints resolved by
-model.config.checkpoint_config).  h2h records cached before 2026-09-26
-were played with the memory ON for every net (GeneralsEnv's old default):
-delete the cache to replay them under the per-net rule.
+model.config.checkpoint_config).  Each h2h record stores the setting each
+net played with (``"memory_vision": [a, b]``) and is reused only while
+both nets still resolve to it.  Records written before 2026-09-26 carry
+none and cannot be dated — the ladder played every net with the memory ON
+from 2026-08-11 (GeneralsEnv's then default) and with none before — so
+they stay in the cache file but are neither fitted nor reused: their
+pairings are replayed (the ref-vs-ref ones with --play_refs).
 """
 
 from __future__ import annotations
@@ -145,6 +149,17 @@ class WidthAdapter:
         return self.net.step_rl(grid, glb[..., :self.g], **kw)
 
 
+def checkpoint_memory_vision(path) -> bool:
+    """The cfg.memory_vision ``path``'s network plays with (what load_net
+    resolves), from its config alone: the tensors are memory-mapped, not
+    read."""
+    try:
+        ckpt = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
+    except RuntimeError:                   # not a zipfile checkpoint: no mmap
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    return bool(checkpoint_config(ckpt).memory_vision)
+
+
 def load_net(path, device):
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
     cfg = checkpoint_config(ckpt)
@@ -197,7 +212,6 @@ def main():
     records = []
     if os.path.exists(h2h_path):
         records = json.load(open(h2h_path))
-    have = {tuple(sorted((r["a"], r["b"]))) for r in records}
 
     refs = sorted(glob.glob(os.path.join(args.refs_dir, "*.pt")))
     if not refs:
@@ -210,6 +224,32 @@ def main():
     for c in args.candidates:
         paths[name(c)] = c
         cand_names.append(name(c))
+
+    # A cached record counts only if it was played on the observation its
+    # nets have now (nets no longer in the ladder cannot be checked: their
+    # recorded setting stands).  Records without one predate the per-net
+    # rule and cannot be dated (see the module docstring).
+    settings = {}
+
+    def memory_vision(n):
+        if n not in settings:
+            settings[n] = checkpoint_memory_vision(paths[n])
+        return settings[n]
+
+    def reusable(r):
+        played = r.get("memory_vision")
+        return played is not None and all(
+            n not in paths or memory_vision(n) == bool(p)
+            for n, p in zip((r["a"], r["b"]), played))
+
+    valid = [r for r in records if reusable(r)]
+    if len(valid) < len(records):
+        print(f"[note] {len(records) - len(valid)} h2h record(s) in {h2h_path} were not "
+              f"played on the observation their nets have now (records written before "
+              f"2026-09-26 carry none: from 2026-08-11 every net played with the "
+              f"sighted-mountain memory ON, before with none) — kept in the file but "
+              f"not reused: their pairings are replayed (ref-vs-ref ones with --play_refs)")
+    have = {tuple(sorted((r["a"], r["b"]))) for r in valid}
 
     pairings = []
     if args.play_refs:
@@ -251,15 +291,20 @@ def main():
         wa, wb, dr = play_pairing(net_a, net_b, env, device, args.games,
                                   seed_base, args.rollout_steps,
                                   args.act_steps or None)
-        rec = {"a": a, "b": b, "wins_a": wa, "wins_b": wb, "draws": dr}
+        # the observation each net played with (collect_selfplay_episode
+        # sets it per seat from the net's config)
+        rec = {"a": a, "b": b, "wins_a": wa, "wins_b": wb, "draws": dr,
+               "memory_vision": [bool(net_a.cfg.memory_vision),
+                                 bool(net_b.cfg.memory_vision)]}
         records.append(rec)
+        valid.append(rec)
         print(f"{a} vs {b}: {wa}-{wb}-{dr}")
         json.dump(records, open(h2h_path + ".tmp", "w"), indent=1)
         os.replace(h2h_path + ".tmp", h2h_path)
 
-    if not records:
+    if not valid:
         raise SystemExit("no head-to-head records to fit")
-    elo = fit_elo(records)
+    elo = fit_elo(valid)
     best_ref = max((elo[r] for r in ref_names if r in elo), default=1500.0)
     print(f"\n{'model':40s} {'elo':>7s} {'vs_best_ref':>12s}")
     for n, e in sorted(elo.items(), key=lambda kv: -kv[1]):

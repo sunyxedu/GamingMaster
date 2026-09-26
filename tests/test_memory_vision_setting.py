@@ -184,6 +184,56 @@ def test_ladder_loader_resolves_legacy_train_rl_checkpoints(tmp_path):
         assert c.memory_vision is want and net_memory_vision(net) is want, name
 
 
+def test_ladder_h2h_cache_reuses_records_of_the_same_observation_only(tmp_path, monkeypatch,
+                                                                      capsys):
+    """scripts/elo_ladder: an h2h record stores the observation each net played
+    with (its cfg.memory_vision) and is reused only while that is still the
+    nets' setting.  Records written before the per-net rule carry none and
+    cannot be dated (the ladder played every net with the memory ON from
+    2026-08-11, with none before): they stay in the file but are not reused,
+    so a ladder never fits games played on another observation."""
+    import json
+    import re
+    import sys
+
+    from scripts import elo_ladder
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    cfg = ModelConfig(**TINY)
+    sd = GeneralsNetwork(cfg).state_dict()
+    base = {k: v for k, v in cfg.__dict__.items() if k != "memory_vision"}
+    for name, mv in (("A", True), ("B", False), ("C", False)):
+        torch.save({"iteration": 1, "ema": True, "config": {**base, "memory_vision": mv},
+                    "model_state": sd}, refs / f"{name}.pt")
+    old = [{"a": "A", "b": "B", "wins_a": 5, "wins_b": 0, "draws": 0},           # undated
+           {"a": "B", "b": "C", "wins_a": 1, "wins_b": 1, "draws": 0,
+            "memory_vision": [False, False]},                                    # still valid
+           {"a": "A", "b": "C", "wins_a": 0, "wins_b": 3, "draws": 0,
+            "memory_vision": [False, False]}]                                    # A changed
+    (refs / "h2h.json").write_text(json.dumps(old))
+    monkeypatch.setattr(sys, "argv", [
+        "elo_ladder.py", "--refs_dir", str(refs), "--play_refs", "--games", "2",
+        "--rollout_steps", "3", "--act_steps", "1", "--device", "cpu"])
+    fitted = []
+    real_fit = elo_ladder.fit_elo
+    monkeypatch.setattr(elo_ladder, "fit_elo", lambda recs: fitted.extend(recs) or real_fit(recs))
+    elo_ladder.main()
+    out = capsys.readouterr().out
+    recs = json.loads((refs / "h2h.json").read_text())
+    assert recs[:3] == old                               # kept, nothing rewritten
+    new = recs[3:]
+    assert sorted((r["a"], r["b"]) for r in new) == [("A", "B"), ("A", "C")]
+    assert all(r["memory_vision"] == [True, False] for r in new)
+    assert "2 h2h record(s)" in out and "not reused" in out
+    assert "B vs C" not in out                           # the valid record: not replayed
+    assert fitted == [old[1]] + new                      # A's cached 5-0 over B is gone
+    # a second run reuses everything it recorded
+    fitted.clear()
+    elo_ladder.main()
+    assert not re.search(r"^\w+ vs \w+: ", capsys.readouterr().out, re.M)   # nothing played
+    assert json.loads((refs / "h2h.json").read_text()) == recs and fitted == [old[1]] + new
+
+
 # ---------------------------------------------------------------------------
 # recorded games: the memory derived from the frames
 # ---------------------------------------------------------------------------
