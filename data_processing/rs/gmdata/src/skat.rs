@@ -861,20 +861,39 @@ pub fn to_record(ctx: &ConvertCtx, id: &str, rec: &IssRecord, r: Replayed) -> Op
     })
 }
 
-/// The converter's records, streamed (a record the rules reject comes out as `Err`,
-/// counted by the traj driver as unparseable and in `ctx.st` by reason).
+/// The converter's records, streamed in input order (lines verified in parallel
+/// chunks; a record the rules reject comes out as `Err`, counted by the traj driver
+/// as unparseable and in `ctx.st` by reason).
 pub fn records<'a>(input: &Path, ctx: &'a ConvertCtx, max_records: Option<usize>)
     -> Result<impl Iterator<Item = Result<Record>> + 'a> {
-    Ok(record_lines(input)?.take(max_records.unwrap_or(usize::MAX)).filter_map(move |l| {
-        let (id, line) = match l {
-            Ok(x) => x,
-            Err(e) => return Some(Err(e)),
-        };
-        let c = check_line(&id, &line)?;
-        tally(&mut ctx.st.borrow_mut(), &c, 10);
-        match c {
-            Checked::Ok(rec, r) => to_record(ctx, &id, &rec, r).map(Ok),
-            Checked::Unparseable(e) | Checked::Illegal(e) | Checked::Mismatch(e) => Some(Err(anyhow::anyhow!(e))),
+    let mut lines = record_lines(input)?.take(max_records.unwrap_or(usize::MAX)).peekable();
+    let mut pending: std::collections::VecDeque<Result<Record>> = Default::default();
+    Ok(std::iter::from_fn(move || loop {
+        if let Some(r) = pending.pop_front() {
+            return Some(r);
+        }
+        lines.peek()?;
+        let chunk: Vec<Result<(String, String)>> = lines.by_ref().take(1 << 14).collect();
+        let checked: Vec<Result<Option<(String, Checked)>>> = chunk
+            .into_par_iter()
+            .map(|l| l.map(|(id, line)| check_line(&id, &line).map(|c| (id, c))))
+            .collect();
+        for c in checked {
+            let (id, c) = match c {
+                Ok(Some(x)) => x,
+                Ok(None) => continue,
+                Err(e) => {
+                    pending.push_back(Err(e));
+                    continue;
+                }
+            };
+            tally(&mut ctx.st.borrow_mut(), &c, 10);
+            match c {
+                Checked::Ok(rec, r) => pending.extend(to_record(ctx, &id, &rec, r).map(Ok)),
+                Checked::Unparseable(e) | Checked::Illegal(e) | Checked::Mismatch(e) => {
+                    pending.push_back(Err(anyhow::anyhow!(e)))
+                }
+            }
         }
     }))
 }
