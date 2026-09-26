@@ -60,6 +60,7 @@ CORE = ["d_model=32", "n_heads=4", "d_ff=64", "n_st_layers=1", "dropout=0.0",
 SOURCES = {"openspiel": ("openspiel", FIX / "openspiel_test_sample.txt"),
            "jack": ("jack", FIX / "ben_wbc_sample.txt"),
            "pbn": ("pbn", FIX / "sample.pbn"),
+           "bba": ("pbn", FIX / "bba_sample.pbn"),
            "lin": ("lin", FIX)}
 SEATS = "NESW"
 SUITS = "CDHS"
@@ -144,7 +145,7 @@ def test_registration_everywhere():
 
 def test_converter_verdicts_on_the_real_samples(shards):
     _, st = shards
-    os_, jack, pbn, lin = st["openspiel"], st["jack"], st["pbn"], st["lin"]
+    os_, jack, pbn, bba, lin = st["openspiel"], st["jack"], st["pbn"], st["bba"], st["lin"]
     # WBridge5 (OpenSpiel dataset): every deal verified
     assert (os_["records"], os_["converted"], os_["illegal"], os_["returns_mismatch"]) == \
         (50, 50, 0, 0)
@@ -155,6 +156,8 @@ def test_converter_verdicts_on_the_real_samples(shards):
     assert all("is illegal for seat" in e for e in jack["errors"])
     # PBN: a whole deal, an auction without the play, a passed-out deal, a claim
     assert (pbn["records"], pbn["converted"], pbn["adjudicated"]) == (4, 4, 1)
+    # Ben's BBA bidding set: auctions with the deal's result (no play), all adjudicated
+    assert (bba["records"], bba["converted"], bba["adjudicated"], bba["illegal"]) == (20, 20, 20, 0)
     # LIN: a hand record + a 3-board vugraph file (one claim, one passed out)
     assert (lin["records"], lin["converted"], lin["adjudicated"]) == (4, 4, 1)
 
@@ -210,6 +213,23 @@ def test_claims_and_unfinished_records(shards):
         # same deal, auction and result: the claim keeps the finished deal's value
         assert claimed_pbn[seat]["meta"]["outcome"] == whole[seat]["meta"]["outcome"]
         assert claimed_pbn[seat]["meta"]["adjudicated"] is True
+
+
+def test_bidding_sets_take_the_recorded_result(shards):
+    """Ben's BBA set: the auction frames' value is the recorded result (board 1: 3NT
+    by E making 10, everybody vulnerable, E/W +630 = 12 IMPs); the systems are kept."""
+    root, _ = shards
+    recs = _by_record(_samples(root, "bba"))
+    assert len(recs) == 20
+    first = recs["bba_sample.pbn:3"]
+    for seat, s in first.items():
+        m = s["meta"]
+        assert m["adjudicated"] is True and m["contract"] == "3NT by E" and m["tricks"] == 10
+        assert m["systems"] == ["Sayc - Standard American Yellow Card"] * 2
+        sign = 1 if seat % 2 == 1 else -1
+        assert m["outcome"][seat] == pytest.approx(sign * imps(630) / 24)
+        assert bool(s["tgt"]["value_mask"].all())
+        assert not bool((s["obs"]["actions"][:, 0, A_CARD] == 1).any())      # calls only
 
 
 def imps(score: int) -> int:
@@ -286,7 +306,7 @@ def test_env_frames_are_the_converter_frames_on_real_records(shards):
                 if ended:
                     assert float(rew[seat]) == pytest.approx(float(s["tgt"]["value"][0]))
             n_records += 1
-    assert n_records == 50 + 45 + 4 + 4 and n_frames > 5000
+    assert n_records == 50 + 45 + 4 + 20 + 4 and n_frames > 5000
 
 
 def _lin_hand(cards: Sequence[int]) -> str:

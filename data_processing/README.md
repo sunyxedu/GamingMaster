@@ -69,14 +69,15 @@ behaviour, which is what the golden parity tests pin.
 | Lux AI S3 | `$G lux fetch --top-teams 10` (Kaggle API) | only episodes where both agents are top-10 leaderboard teams | needs `KAGGLE_API_TOKEN` or `~/.kaggle/access_token` |
 | Clash Royale | `crdata fetch --out D` (RoyaleAPI replays, HF) | `crdata convert --hq`: Ranked + Grand Challenge, ≥ 60 s, ≥ 5 own plays; optional `--winner-only` | anonymised (no trophies); see games/clash_royale/README.md |
 | Kuhn poker (toy) | `$G kuhn-poker generate` (synthetic hand logs; `scripts/fetch_kuhn_poker.sh`) | `convert --hq`: the scripted expert's seats only | gmrules reference game (below); rules pinned to OpenSpiel |
-| contract bridge | `$G bridge fetch --source openspiel` (OpenSpiel's WBridge5 dataset, GCS: 1.16M deals) and `--source ben` (Ben's WBC play data, GitHub release: 1.89M boards); `scripts/fetch_bridge.sh` end to end | every board: robot play at world-championship level (WBridge5 at its strongest setting, SAYC; World Computer Bridge Championship robots); `convert --complete-only` drops records that stop without a result | gmrules game (below), rules pinned to OpenSpiel. Licences: the OpenSpiel dataset's README states none (DeepMind research data published with OpenSpiel, Apache-2.0); Ben's data is a release asset of lorserker/ben (GPL-3.0), with no separate data licence. BBO vugraph (LIN) is not fetched (pending a decision); `convert --format lin` reads it |
+| contract bridge | `$G bridge fetch --source openspiel` (OpenSpiel's WBridge5 dataset, GCS: 1.16M deals) and `--source ben` (Ben's WBC play data, GitHub release: 1.89M boards); optional `--source bba` (Ben's BBA bidding sets: ~1.15M EPBot auctions + results per set, no play); `scripts/fetch_bridge.sh` end to end | every board: robot play at world-championship level (WBridge5 at its strongest setting, SAYC; World Computer Bridge Championship robots); `convert --complete-only` drops records that stop without a result | gmrules game (below), rules pinned to OpenSpiel. Licences: the OpenSpiel dataset's README states none (DeepMind research data published with OpenSpiel, Apache-2.0); Ben's data is a release asset of lorserker/ben (GPL-3.0), with no separate data licence. BBO vugraph (LIN) is not fetched (pending a decision); `convert --format lin` reads it |
 
 Measured on real data (kept / seen): chess elite 2021-06 601k / 781k games;
 go KGS 2019-04 202 / 1255; shogi 2025-06-01 158 / 447; othello 2019–21
 1502 / 3559; gomoku Freestyle1 2023 658 / 2880; Clash Royale 5000 replays
 8456 / 9392 player sequences (4186 with `--winner-only`); bridge WBridge5 test set
 10,000 / 10,000 deals, Ben WBC 1,883,853 / 1,887,139 boards (3,286 rejected by the
-verifying replay as data errors; 291 kept as auction-only records).
+verifying replay as data errors; 291 kept as auction-only records), Ben BBA
+WBridge5-Sayc set 1,154,937 / 1,154,937 auctions.
 
 ## Engine teacher labels
 

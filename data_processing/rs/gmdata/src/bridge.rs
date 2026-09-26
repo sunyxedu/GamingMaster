@@ -21,7 +21,9 @@
 //!            checked; the declarer and the doubling come from the auction)
 //! pbn        Portable Bridge Notation: [Deal] [Dealer] [Vulnerable] [Auction] (+ AP),
 //!            [Play] (tricks as seat columns from the opening leader), [Contract],
-//!            [Declarer], [Result]
+//!            [Declarer], [Result] — e.g. Ben's BBA bidding sets (release
+//!            "training-data", `<set>-8730-OK_boards.zip`: ~1.15M EPBot auctions per
+//!            set with the deal's result and no play; `fetch --source bba`)
 //! lin        BBO LIN (hand records, vugraph files with several boards): md (dealer digit
 //!            1=S 2=W 3=N 4=E + hands S,W,N,E), sv (o / n / e / b), mb calls (alerts `!`
 //!            ignored), pc cards, mc claims; boards split at qx / md
@@ -53,6 +55,7 @@
 //! ```sh
 //! gmdata bridge fetch --source openspiel --out data/bridge/raw/openspiel
 //! gmdata bridge fetch --source ben --out data/bridge/raw/ben
+//! gmdata bridge fetch --source bba --out data/bridge/raw/bba     # --sets BEN-sayc,...
 //! gmdata bridge convert --format openspiel --input data/bridge/raw/openspiel/train.txt --out data/bridge/train/openspiel
 //! gmdata bridge convert --format jack --input data/bridge/raw/ben/play_jackformat.zip --split train --out data/bridge/train/ben
 //! ```
@@ -73,7 +76,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const OPENSPIEL_URL: &str = "https://storage.googleapis.com/openspiel-data/bridge";
+pub const BEN_RELEASE_URL: &str = "https://github.com/lorserker/ben/releases/download/training-data";
 pub const BEN_PLAY_URL: &str = "https://github.com/lorserker/ben/releases/download/training-data/play_jackformat.zip";
+/// Ben's BBA bidding sets (`<set>-8730-OK_boards.zip`: PBN, ~1.15M EPBot auctions each
+/// with the deal's result, no play), named by the convention card EPBot plays.
+pub const BBA_SETS: [&str; 10] = ["BEN-21GF", "BEN-sayc", "GIB-BBO", "Lia-21GF", "Meadowlark", "QPlus-21GF",
+                                  "Robo-Sayc", "Shark-Sayc", "WBridge5-21GF", "WBridge5-Sayc"];
+/// The SAYC sets (the WBridge5 dataset's system): the default of `fetch --source bba`.
+pub const BBA_SAYC: &str = "BEN-sayc,Robo-Sayc,Shark-Sayc,WBridge5-Sayc";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Format {
@@ -108,6 +118,8 @@ pub enum Source {
     Openspiel,
     /// Ben's WBC play data: play_jackformat.zip
     Ben,
+    /// Ben's BBA bidding sets (PBN auctions + results, no play): `--sets`
+    Bba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -521,6 +533,9 @@ pub fn pbn_deal(text: &str, id: &str) -> Result<Option<Deal>> {
     }
     let players: Vec<Option<&str>> = ["North", "East", "South", "West"].iter().map(|s| tag(s)).collect();
     d.meta = json!({"source": "pbn", "board_tag": tag("Board"), "event": tag("Event"), "players": players});
+    if let (Some(ns), Some(ew)) = (tag("BidSystemNS"), tag("BidSystemEW")) {
+        d.meta["systems"] = json!([ns, ew]);
+    }
     Ok(Some(d))
 }
 
@@ -852,12 +867,16 @@ fn hands_of(events: &[Event]) -> [Vec<u8>; 4] {
 #[derive(Subcommand)]
 pub enum Cmd {
     /// Download raw data (openspiel: the WBridge5 dataset train / valid / test from GCS;
-    /// ben: Ben's WBC play data, play_jackformat.zip). BBO vugraph is not fetched.
+    /// ben: Ben's WBC play data, play_jackformat.zip; bba: Ben's BBA bidding sets).
+    /// BBO vugraph is not fetched.
     Fetch {
         #[arg(long, value_enum)]
         source: Source,
         #[arg(long)]
         out: PathBuf,
+        /// --source bba: comma-separated set names (BBA_SETS; default the SAYC sets)
+        #[arg(long, default_value = BBA_SAYC)]
+        sets: String,
     },
     /// Replay and verify every record without writing shards (a whole corpus in
     /// minutes): counts of legal / illegal / truncated / result-mismatch records
@@ -1008,7 +1027,7 @@ fn client() -> Result<reqwest::blocking::Client> {
 
 pub fn run(cmd: Cmd) -> Result<()> {
     match cmd {
-        Cmd::Fetch { source, out } => {
+        Cmd::Fetch { source, out, sets } => {
             let c = client()?;
             let files: Vec<(String, PathBuf)> = match source {
                 Source::Openspiel => ["README.txt", "train.txt", "valid.txt", "test.txt"]
@@ -1016,6 +1035,16 @@ pub fn run(cmd: Cmd) -> Result<()> {
                     .map(|f| (format!("{OPENSPIEL_URL}/{f}"), out.join(f)))
                     .collect(),
                 Source::Ben => vec![(BEN_PLAY_URL.to_string(), out.join("play_jackformat.zip"))],
+                Source::Bba => sets
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|x| !x.is_empty())
+                    .map(|set| {
+                        ensure!(BBA_SETS.contains(&set), "unknown BBA set {set:?} (one of {BBA_SETS:?})");
+                        let f = format!("{set}-8730-OK_boards.zip");
+                        Ok((format!("{BEN_RELEASE_URL}/{f}"), out.join(f)))
+                    })
+                    .collect::<Result<_>>()?,
             };
             for (url, dest) in &files {
                 ensure!(common::download(&c, url, dest)?, "{url}: not found");

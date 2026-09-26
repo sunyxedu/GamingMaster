@@ -28,13 +28,16 @@ Full scale (cluster; Mac + Linux, needs cargo — the script builds gmdata)::
     scripts/fetch_bridge.sh $HOME/gm-data/bridge                    # both sources
     SOURCES=openspiel scripts/fetch_bridge.sh $HOME/gm-data/bridge  # WBridge5 only
     MAX_RECORDS=300 scripts/fetch_bridge.sh /tmp/bridge_smoke       # capped smoke run
+    SOURCES="openspiel ben bba" scripts/fetch_bridge.sh $HOME/gm-data/bridge   # + bidding sets
 
 Expected corpus (downloads 0.38 GB + 0.15 GB; ~810 bytes per decision frame):
 OpenSpiel WBridge5 train 1,158,441 deals / 72.7M frames / ~59 GB, valid and test
 10,000 deals each (~0.63M frames, ~0.5 GB); Ben WBC 1,883,853 of 1,887,139 boards
 kept (the rest are data errors the verifying replay rejects), 117.9M frames / ~95 GB,
-1 in 100 deals routed to val by a hash of the deal.  Layout: OUT/train/{openspiel,ben},
-OUT/val/{openspiel,ben}, OUT/test/openspiel — one shard family, so one root per split::
+1 in 100 deals routed to val by a hash of the deal; optional Ben BBA bidding sets
+(auctions + results, no play; the 4 SAYC sets by default) ~1.15M auctions / ~12.3M
+frames / ~10 GB per set.  Layout: OUT/train/{openspiel,ben,bba}, OUT/val/{openspiel,
+ben,bba}, OUT/test/openspiel — one shard family, so one root per split::
 
     uv run python -m training.train_multi_game --data bridge=$HOME/gm-data/bridge/train \\
         --val bridge=$HOME/gm-data/bridge/val --game_frame_cap bridge=1e8 ...
