@@ -4,7 +4,10 @@
 //!     gmdata chess convert --input lichess.pgn.zst --out data/chess
 //!     ...
 //!
-//! Converters write `gm-shard.v1` directories (see the `gmshard` crate);
+//!     gmdata label chess --input data/chess --out data/chess_sf --engine ~/gm-engines/bin/stockfish
+//!
+//! Converters write `gm-shard.v1` directories (see the `gmshard` crate); `gmdata label`
+//! adds engine teacher columns to existing shards as overlay shards (see `label/mod.rs`);
 //! `python -m data_processing.games.rs_shards` turns them into `.pt` shards
 //! for `GameShardDataset`. generals keeps its historical per-replay JSON
 //! training records (read by `SeqReplayDataset`); `gmdata generals shard`
@@ -17,6 +20,7 @@ mod go;
 mod lux;
 mod mahjong;
 mod gomoku;
+mod label;
 mod othello;
 mod pokemon;
 mod shogi;
@@ -78,6 +82,11 @@ enum Game {
         #[command(subcommand)]
         cmd: gomoku::Cmd,
     },
+    /// Engine teacher labels for existing gm-shards (overlay shards; see label/mod.rs)
+    Label {
+        #[command(subcommand)]
+        cmd: label::Cmd,
+    },
 }
 
 fn main() -> Result<()> {
@@ -91,5 +100,6 @@ fn main() -> Result<()> {
         Game::Mahjong { cmd } => mahjong::run(cmd),
         Game::Pokemon { cmd } => pokemon::run(cmd),
         Game::Shogi { cmd } => shogi::run(cmd),
+        Game::Label { cmd } => label::run(cmd),
     }
 }
