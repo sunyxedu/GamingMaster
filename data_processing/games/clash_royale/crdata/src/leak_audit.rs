@@ -17,9 +17,13 @@
 //!   plays and their catalog costs). Test: an independent integrator that sees only
 //!   `(tick, cost)` of the opponent's visible events reproduces `opp_elixir`.
 //!
+//! * SEMANTIC (synthetic matches with a known true cycle and a uniformly random
+//!   policy): no input may predict the coming play better than the TRUE hand does
+//!   (chance); the hindsight hand does, in the opening.
+//!
 //! Known leaks are pinned in [`KNOWN_FUTURE_LEAKS`]: the causality tests fail both
 //! when a new column starts leaking and when a listed one is fixed (then shrink the
-//! list). Real-data checks read `tests/fixtures/clash_royale/replays.jsonl` (skipped
+//! list); likewise the `known_leak_*` / `known_latent_leak_*` tests. Real-data checks read `tests/fixtures/clash_royale/replays.jsonl` (skipped
 //! when absent); `CRDATA_AUDIT_PARQUET=<dir or part>` (+ `CRDATA_AUDIT_LIMIT`) runs
 //! the same checks on downloaded replays and prints leak statistics
 //! (`cargo test --release -p crdata leak_audit -- --nocapture`).
@@ -322,6 +326,12 @@ fn random_deck(pool: &[String], rng: &mut Rng) -> Vec<String> {
 /// timing, placements and the occasional champion ability; up to 5 minutes so
 /// double / triple elixir and overtime are covered.
 fn random_spec(cat: &Catalog, rng: &mut Rng) -> Spec {
+    random_spec_with_truth(cat, rng).0
+}
+
+/// [`random_spec`] plus each side's TRUE initial cycle (team, opponent), as deck
+/// indices into that side's `SideSpec::deck`.
+fn random_spec_with_truth(cat: &Catalog, rng: &mut Rng) -> (Spec, [HandState; 2]) {
     let pool = card_pool(cat);
     let decks = [random_deck(&pool, rng), random_deck(&pool, rng)];
     // deck keys as the dataset writes them: two evolution-owning cards per deck
@@ -339,6 +349,7 @@ fn random_spec(cat: &Catalog, rng: &mut Rng) -> Spec {
             HandState::new([order[0], order[1], order[2], order[3]], [order[4], order[5], order[6], order[7]])
         })
         .collect();
+    let initial = [cycles[0].clone(), cycles[1].clone()];
     let duration = 60.0 + rng.below(240) as f64 + 0.35;
     let mut events = Vec::new();
     let mut tick = 0u32;
@@ -366,7 +377,7 @@ fn random_spec(cat: &Catalog, rng: &mut Rng) -> Spec {
         crowns: 1,
         final_hp: [4000.0, 0.0, 2000.0],
     };
-    Spec { team: side(&deck_keys[0]), opp: side(&deck_keys[1]), events, duration, result: "victory" }
+    (Spec { team: side(&deck_keys[0]), opp: side(&deck_keys[1]), events, duration, result: "victory" }, initial)
 }
 
 /// Change everything `who` knows and the other side does not: deck cards `who`
@@ -683,6 +694,39 @@ fn real_fixture_causality_privacy_and_opp_elixir() {
     // the pinned hand leak is visible on real data too (fails once the inference is causal)
     assert!(c.leaking.contains_key("hand_ids") && c.leaking.contains_key("hand_prob"), "{:?}", c.leaking);
     assert!(c.hindsight_prob_marks_played > 0);
+    // ... and so is its semantic form: the kickoff hand is the set of the first 4 plays
+    let (n, hits) = first4_stat(&replays, &cat, &tl, &cfg);
+    eprintln!("[leak_audit] fixture: frame-0 hand == set of the first 4 own plays in {hits}/{n} sides");
+    assert!(n > 0 && hits * 10 >= n * 9, "kickoff hand no longer the first 4 plays ({hits}/{n}) — leak fixed? update this pin");
+}
+
+/// Frame 0's hand equals the set of the side's first 4 in-deck plays: (sides with >= 4
+/// such plays, sides where it holds). About 6/64 for a random policy's true hand (see
+/// `known_leak_hindsight_hand_predicts_opening_plays_beyond_the_true_hand`).
+fn first4_stat(replays: &[Replay], cat: &Catalog, tl: &Timeline, cfg: &FrameConfig) -> (usize, usize) {
+    let (mut n, mut hits) = (0usize, 0usize);
+    for r in replays {
+        for me in [SideId::Team, SideId::Opp] {
+            let Some(s) = build_side(r, me, cat, tl, cfg) else { continue };
+            let deck: Vec<u16> = if me == SideId::Team { &r.team } else { &r.opp }.deck.iter().map(|c| c.id).collect();
+            let first4: BTreeSet<u16> = r
+                .events
+                .iter()
+                .filter(|e| e.side == me)
+                .filter_map(|e| match e.kind {
+                    EventKind::Play { card, .. } if deck.contains(&card) => Some(card),
+                    _ => None,
+                })
+                .take(4)
+                .collect();
+            if first4.len() < 4 {
+                continue;
+            }
+            n += 1;
+            hits += (s.cols.hand_ids[..HAND].iter().copied().collect::<BTreeSet<_>>() == first4) as usize;
+        }
+    }
+    (n, hits)
 }
 
 /// Large-sample statistics on downloaded replays; no-op unless CRDATA_AUDIT_PARQUET is set.
@@ -715,7 +759,193 @@ fn real_parquet_leak_statistics() {
          max |opp_elixir - public reference| = {worst_opp:.2e}, own = {worst_own:.2e}",
         100.0 * n_consistent_1 as f64 / n_samples.max(1) as f64
     );
+    let (n4, hits4) = first4_stat(&replays, &cat, &tl, &cfg);
+    eprintln!(
+        "[leak_audit] frame-0 hand == set of the first 4 own plays in {:.1}% of {n4} sides (random-policy truth: 9.4%)",
+        100.0 * hits4 as f64 / n4.max(1) as f64
+    );
     let public: BTreeSet<&str> = INPUT_FIELDS.iter().copied().filter(|f| !KNOWN_FUTURE_LEAKS.contains(f)).collect();
     assert!(c.leaking_set().is_disjoint(&public), "FUTURE LEAK in public columns: {:?}", c.leaking);
     assert!(worst_opp < 1e-4 && worst_own < 1e-4);
+}
+
+// ---- semantic checks against the TRUE hand (independent verification) -------------------
+
+/// "Choose uniformly among `set`; credit if `slot` is in it" (all 4 slots when `set` is empty).
+fn set_credit(set: &[usize], slot: usize) -> f64 {
+    let all: Vec<usize> = (0..HAND).collect();
+    let s = if set.is_empty() { &all[..] } else { set };
+    if s.contains(&slot) {
+        1.0 / s.len() as f64
+    } else {
+        0.0
+    }
+}
+
+/// The truncation test shows the hand columns depend on the future, but the player
+/// really does see their exact hand, so the semantic question is whether the
+/// converter's hand says MORE about the coming play than the true hand does. Synthetic
+/// matches know the true cycle, and under their uniformly random policy the card about
+/// to be played is uniform over the true hand: no function of what the player has at
+/// the decision (true hand, next card, the past) predicts it better than 1/4. On the
+/// converter's inputs, in the opening (before the 4th own play):
+///  * argmax of `hand_prob` picks the played card almost always;
+///  * "a card held since kickoff" (hand_ids history only) scores about 1/4, 1/3, 1/2, 1
+///    at the 1st..4th play: the canonical initial hand is, almost always, exactly the
+///    set of the first 4 plays (only the first 4 plays constrain the cycle's hand
+///    membership; after them the hand is deck minus the last 4 played, whatever the
+///    start), so a card that came from the queue is never played in the opening;
+///  * frame 0's hand equals the set of the first 4 plays in ~100% of sides vs 6/64 for
+///    the true hand (the 2nd, 3rd and 4th plays must avoid the refills: 3/4 * 2/4 * 1/4).
+/// The same predictors on the true hand score chance (checked, as a control). Pinned as
+/// known leaks: once the hand representation is causal, flip the converter assertions
+/// to `<= 0.29` / `< 0.2`.
+#[test]
+fn known_leak_hindsight_hand_predicts_opening_plays_beyond_the_true_hand() {
+    let (cat, tl) = load();
+    let cfg = FrameConfig { step_ticks: 10, recent: 8 };
+    let mut rng = Rng(0x0DD5_1DE0_F7E5_7ACE);
+    let (mut n_dec, mut conv_prob, mut conv_held, mut true_held) = (0usize, 0.0f64, 0.0f64, 0.0f64);
+    let (mut n_sides, mut conv_first4, mut true_first4) = (0usize, 0usize, 0usize);
+    for _ in 0..300 {
+        let (spec, truth) = random_spec_with_truth(&cat, &mut rng);
+        let r = parse_payload("synthetic", &payload(&spec), &cat).unwrap();
+        for (s, me) in [SideId::Team, SideId::Opp].into_iter().enumerate() {
+            let side = if s == 0 { &spec.team } else { &spec.opp };
+            let id_of = |i: u16| cat.resolve(&side.deck[i as usize].0).0;
+            let full = build_side(&r, me, &cat, &tl, &cfg).expect("hand inference");
+            let own: Vec<(u32, u16)> = r
+                .events
+                .iter()
+                .filter(|e| e.side == me)
+                .filter_map(|e| match e.kind {
+                    EventKind::Play { card, .. } => Some((e.tick, card)),
+                    _ => None,
+                })
+                .collect();
+            let true_hand_after = |n: usize| {
+                let mut st = truth[s].clone();
+                for &(_, card) in &own[..n] {
+                    let idx = st.hand.iter().position(|&i| id_of(i) == card).expect("synthetic plays come from the true hand");
+                    st.play(st.hand[idx]);
+                }
+                st.hand.map(id_of)
+            };
+            if own.len() >= 4 {
+                n_sides += 1;
+                let first4: BTreeSet<u16> = own[..4].iter().map(|&(_, c)| c).collect();
+                conv_first4 += (full.cols.hand_ids[..HAND].iter().copied().collect::<BTreeSet<_>>() == first4) as usize;
+                true_first4 += (true_hand_after(0).iter().copied().collect::<BTreeSet<_>>() == first4) as usize;
+            }
+            let conv0 = &full.cols.hand_ids[..HAND];
+            let true0 = true_hand_after(0);
+            for f in 0..full.cols.len() {
+                if full.cols.card_slot[f] < 0 {
+                    continue;
+                }
+                let t = f as u32 * cfg.step_ticks;
+                let n = own.iter().filter(|&&(tick, _)| tick < t).count();
+                if n >= 4 {
+                    continue;
+                }
+                n_dec += 1;
+                let h = &full.cols.hand_ids[f * HAND..(f + 1) * HAND];
+                let slot = full.cols.card_slot[f] as usize;
+                let played = h[slot];
+                conv_prob += argmax_credit(&full.cols.hand_prob[f * HAND..(f + 1) * HAND], slot).0;
+                // before the 4th play a card that left the hand cannot be back, so "in the
+                // frame-0 hand and in the current hand" = held continuously since kickoff
+                let held: Vec<usize> = (0..HAND).filter(|&j| conv0.contains(&h[j])).collect();
+                conv_held += set_credit(&held, slot);
+                let th = true_hand_after(n);
+                let tslot = th.iter().position(|&c| c == played).expect("the played card is in the true hand");
+                let theld: Vec<usize> = (0..HAND).filter(|&j| true0.contains(&th[j])).collect();
+                true_held += set_credit(&theld, tslot);
+            }
+        }
+    }
+    let d = n_dec as f64;
+    let (cp, ch, th) = (conv_prob / d, conv_held / d, true_held / d);
+    let (cf, tf) = (conv_first4 as f64 / n_sides as f64, true_first4 as f64 / n_sides as f64);
+    eprintln!(
+        "[leak_audit] random policy, {n_dec} opening decisions: P(played card) by argmax hand_prob {cp:.3}, by 'held since \
+         kickoff' on the converter hand {ch:.3} vs on the TRUE hand {th:.3} (chance 0.25); frame-0 hand == first 4 plays in \
+         {cf:.3} (converter) vs {tf:.3} (truth, 6/64 = 0.094) of {n_sides} sides"
+    );
+    // controls: the harness is right (the true hand carries no information beyond chance)
+    assert!((th - 0.25).abs() < 0.04, "control: the true hand predicts a random policy's play at {th}");
+    assert!((tf - 6.0 / 64.0).abs() < 0.04, "control: true frame-0 hand == first 4 plays at {tf}");
+    // pinned known leaks (hand_prob, hand_ids): fail once the representation is causal
+    assert!(cp > 0.9, "hand_prob no longer marks the coming opening play ({cp}) — leak fixed? update this pin");
+    assert!(ch > 0.4, "hand_ids history no longer predicts the opening plays ({ch}) — leak fixed? update this pin");
+    assert!(cf > 0.9, "frame-0 hand is no longer the set of the first 4 plays ({cf}) — leak fixed? update this pin");
+}
+
+/// Champion / hero ability events: RoyaleAPI's `ability_source_candidates` is the acting
+/// side's ability-capable DECK cards, sorted by key, and constant over the match (checked
+/// on 18,913 real ability events: always in that side's deck, always sorted, one list per
+/// side). `parse_payload` takes the first one as the ability's card, so with two such
+/// cards in the deck the opponent's ability event can name one they have not played yet
+/// (171 of 18,913 real events). That id lands in `raw.recent_card` of the other side's
+/// frames: perturbing only an UNPLAYED opponent deck card changes them. Latent today:
+/// `expand.py` never reads `recent_card`, and ability events have no cell so they are
+/// skipped in the arena planes (pinned by the Python test
+/// `test_expand_ignores_recent_card_ids`), but the column is stored as a per-frame input.
+/// Pinned: fails once the source is resolved to an on-field card (or unknown).
+#[test]
+fn known_latent_leak_ability_card_names_an_unplayed_opponent_card() {
+    let (cat, tl) = load();
+    let cfg = FrameConfig { step_ticks: 10, recent: 4 };
+    let team: Vec<String> = ["hog-rider", "ice-spirit", "ice-golem", "skeletons", "cannon", "musketeer", "fireball", "the-log"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let opp_deck = |unplayed_hero: &str| -> Vec<String> {
+        ["giant", unplayed_hero, "musketeer-hero", "archers", "zap", "minions", "fireball", "tornado"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    };
+    let side = |d: &[String]| SideSpec {
+        deck: d.iter().map(|k| (k.clone(), 16)).collect(),
+        tower: "tower-princess".into(),
+        crowns: 0,
+        final_hp: [0.0; 3],
+    };
+    // the opponent plays its musketeer hero at 5 s and activates its ability at 7 s
+    let spec_with = |unplayed_hero: &str| Spec {
+        team: side(&team),
+        opp: side(&opp_deck(unplayed_hero)),
+        events: vec![
+            Ev { side: "opponent", key: "musketeer".into(), deck_key: "musketeer-hero".into(), tick: 100, x: 9, y: 20, ability: false },
+            Ev { side: "opponent", key: "musketeer".into(), deck_key: "musketeer-hero".into(), tick: 140, x: 0, y: 0, ability: true },
+        ],
+        duration: 10.0,
+        result: "draw",
+    };
+    // RoyaleAPI's candidate list: the side's ability-capable deck cards, sorted
+    let build_with = |unplayed_hero: &str| {
+        let mut v: serde_json::Value = serde_json::from_str(&payload(&spec_with(unplayed_hero))).unwrap();
+        let mut cands = vec![unplayed_hero.to_string(), "musketeer-hero".to_string()];
+        cands.sort();
+        for e in v["events"].as_array_mut().unwrap() {
+            if e["kind"] == "activate_ability" {
+                e["ability_source_candidates"] = json!(cands);
+            }
+        }
+        build(&v.to_string(), SideId::Team, &cat, &tl, &cfg)
+    };
+    let a = build_with("ice-golem-hero"); // candidates [ice-golem-hero, musketeer-hero]
+    let b = build_with("wizard-hero"); // candidates [musketeer-hero, wizard-hero]
+    let f = 16; // tick 160: the newest recent entry is the ability event
+    assert_eq!(a.cols.recent_side[f * cfg.recent], 1);
+    assert_eq!(a.cols.recent_x[f * cfg.recent], -1, "ability events carry no cell");
+    let never_played = cat.resolve("ice-golem-hero").0;
+    assert_eq!(a.cols.recent_card[f * cfg.recent], never_played, "the ability is attributed to the unplayed ice golem");
+    let d = column_diffs(&a.cols, &b.cols, a.cols.len(), true);
+    assert_eq!(
+        d.keys().copied().collect::<Vec<_>>(),
+        vec!["recent_card"],
+        "only recent_card may move with the opponent's unplayed deck card (known latent leak): {d:?}"
+    );
 }

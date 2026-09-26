@@ -147,6 +147,30 @@ class _Recording(dict):
         return super().get(key, default)
 
 
+def test_expand_ignores_recent_card_ids():
+    """``raw.recent_card`` must not reach the observation: for champion / hero ability
+    events crdata stores RoyaleAPI's first ``ability_source_candidates`` entry, which
+    can name an opponent deck card that was never played (171 of 18,913 real ability
+    events; pinned in leak_audit.rs
+    ``known_latent_leak_ability_card_names_an_unplayed_opponent_card``).  Only the cost
+    of plays with a cell reaches the arena planes; ability events (x = y = -1) do not.
+    Wiring card ids of recent events in requires resolving the ability source first."""
+    raw = _raw(seed=3)
+    other = dict(raw)
+    other["recent_card"] = torch.from_numpy((raw["recent_card"].numpy() % 97 + 5).astype(np.uint16))
+    assert not torch.equal(raw["recent_card"], other["recent_card"])
+    a, b = expand(raw, SHARD_META), expand(other, SHARD_META)
+    _assert_obs_equal(a, b, raw["elixir"].shape[0])
+    # an ability entry (no cell) with any cost leaves the arena planes untouched
+    abil = {k: v.clone() for k, v in raw.items()}
+    abil["recent_side"][:, 0] = 1
+    abil["recent_x"][:, 0] = -1
+    abil["recent_y"][:, 0] = -1
+    abil2 = {k: v.clone() for k, v in abil.items()}
+    abil2["recent_cost"][:, 0] = abil["recent_cost"][:, 0] + 3.0
+    _assert_obs_equal(expand(abil, SHARD_META), expand(abil2, SHARD_META), raw["elixir"].shape[0])
+
+
 def test_expand_reads_only_decision_time_inputs():
     """expand() must not read the label columns (the frame window's own action) and
     only static, dataset-level shard meta — never per-sample facts."""
@@ -216,5 +240,19 @@ def test_network_outputs_are_causal_in_time_eval():
 def test_network_outputs_are_causal_in_time_train_mode():
     net, obs, labels = _net_and_obs()
     net.train()
+    change = _max_past_change(net, obs, labels, k=4)
+    assert all(v == 0.0 for v in change.values()), change
+
+
+def test_train_mode_time_mixing_comes_only_from_batchnorm():
+    """Scope of the xfail above: with every BatchNorm layer on running statistics and
+    the rest of the network in train mode, outputs at t ignore frames > t again, so
+    the arena encoder's BatchNorm is the only non-causal path in training."""
+    net, obs, labels = _net_and_obs()
+    net.train()
+    bns = [m for m in net.modules() if isinstance(m, torch.nn.modules.batchnorm._BatchNorm)]
+    assert bns and all(n.startswith("obs_encoder.arena_encoder") for n, m in net.named_modules() if m in bns)
+    for m in bns:
+        m.eval()
     change = _max_past_change(net, obs, labels, k=4)
     assert all(v == 0.0 for v in change.values()), change
