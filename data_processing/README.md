@@ -91,6 +91,27 @@ $G label othello --input data/othello/train --out data/othello_ega/train \
    --engine ~/gm-engines/bin/egaroucid --workers 64   # Egaroucid level 15, exact <= 20 empties
 ```
 
+The teacher policy is `π ∝ exp(Q/τ + w·u)` over the scored moves (`--tau`,
+default 0.05; `--tie-weight` w, default 2.0). Q (expected score) saturates in
+decided positions — mates and big advantages give Q = 1 (or 0) for every move,
+exact othello solves Q ∈ {0, ½, 1} — where `exp(Q/τ)` alone is uniform and a move
+that allows mate counts as much as the best defence. u ∈ [−1, 1] is a secondary
+utility of the engine's native score (`tgt.teacher_raw`), increasing like Q, so
+moves are ordered by Q and, among equal Q, by u:
+
+| game | u |
+|---|---|
+| chess | mate in n moves: ±(0.5 + 0.5·5/(n + 4)); else 0.5·tanh(cp / 1000) |
+| shogi | mate in p plies → n = (p + 1)/2 (mating) or p/2 (mated) moves, same mate formula; else 0.5·tanh(cp / 3000) |
+| othello | tanh(discs / 16) (exact and midgame scores) |
+| go | none (the default policy is KataGo's visits) |
+
+Every mate ranks above every non-mate score; within one Q class the preference
+ratio is at most e^(2w). `--tie-weight 0` gives `π ∝ exp(Q/τ)` exactly; the
+teacher meta records `policy.tie_weight` and `policy.secondary`, so resumed runs
+with other settings are refused. Details and measurements: `rs/gmdata/src/label/transform.rs`
+and the per-game module docs.
+
 Per-game defaults, action-id encodings and measured throughput are in the
 module docs of `rs/gmdata/src/label/<game>.rs` (chess: `tests/test_label_chess.py`
 runs the CLI end to end with a fake engine, and with Stockfish when installed).
@@ -102,12 +123,13 @@ cargo test --release                                   # Rust unit tests
 uv run pytest tests/test_rust_converters_parity.py \
               tests/test_rust_generals_parity.py tests/test_clash_royale_data.py \
               tests/test_label_overlay.py tests/test_fetch_engines.py \
-              tests/test_label_othello.py
+              tests/test_label_chess.py tests/test_label_othello.py \
+              tests/test_label_shogi.py tests/test_label_go.py
 ```
 
 Real-engine tests run only when the engine is installed (e.g. `STOCKFISH=path`
-or `~/gm-engines/bin/stockfish`, `GM_EGAROUCID=path` or `~/gm-engines/bin/egaroucid`);
-the label tests otherwise use fake engines.
+or `~/gm-engines/bin/stockfish`, `GM_EGAROUCID=path` or `~/gm-engines/bin/egaroucid`,
+`GM_YANEURAOU`, `GM_KATAGO`); the label tests otherwise use fake engines.
 
 The parity tests pin every converter to golden SHA-256 digests of the retired
 Python reference outputs on committed real-data fixtures (tests/fixtures/).
