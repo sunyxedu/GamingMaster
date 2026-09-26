@@ -412,8 +412,10 @@ def main() -> None:
         if args.opponent_act_steps <= 0:
             args.opponent_act_steps = opponent.default_depth
 
-    # Eval mode for rollout AND update: masked BatchNorm statistics must
-    # not drift between the two or the PPO ratio is not exact.
+    # Eval mode for rollout AND update: no dropout, and a legacy BatchNorm
+    # encoder (encoder_norm="batch") normalises with its running statistics
+    # instead of batch statistics, so the PPO ratio is exact (the default
+    # per-frame GroupNorm computes the same in both modes).
     net.eval()
     if args.freeze_encoder:
         freeze_encoder(net)

@@ -1113,8 +1113,9 @@ def ppo_update(
     collectives across different steps and silently corrupts them.
     """
     # eval mode: rollout log-probs were collected in eval mode, so the update
-    # must disable dropout and use BatchNorm running stats — otherwise
-    # old/new log-probs come from different policies and the ratio is invalid.
+    # must disable dropout and, in a legacy BatchNorm encoder
+    # (encoder_norm="batch"), use its running stats — otherwise old/new
+    # log-probs come from different policies and the ratio is invalid.
     # Gradients still flow in eval mode.
     model.eval()
     optimizer.zero_grad()
@@ -2348,10 +2349,11 @@ def main():
             )
             il_weight = max(il_weight * args.il_decay, args.il_weight_min)
 
-            # The IL forward runs in train mode: BatchNorm running stats
-            # chase each rank's own IL batch, and buffers are NOT covered
-            # by gradient sync. Realign so EMA/eval/pool snapshots stay
-            # rank-identical (mirrors the startup broadcast).
+            # The IL forward runs in train mode: a legacy BatchNorm encoder's
+            # (encoder_norm="batch") running stats chase each rank's own IL
+            # batch, and buffers are NOT covered by gradient sync. Realign so
+            # EMA/eval/pool snapshots stay rank-identical (mirrors the
+            # startup broadcast).
             if dist.is_initialized():
                 for b in model.buffers():
                     dist.broadcast(b, src=0)
