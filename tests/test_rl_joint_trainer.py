@@ -19,7 +19,8 @@ A tiny Stage-1 checkpoint is trained with the real train_multi_game (generals
   iteration 2 bit for bit; metrics.jsonl is cut back; a different --init is
   refused; a file-backed pool survives a resume with opponents off;
 - data parallel: 2 gloo ranks with different rollouts keep parameters,
-  buffers and EMA bit-identical.
+  buffers and EMA bit-identical — on the CPU and, where CUDA is available,
+  with the model on CUDA over gloo (the MIG-slice mode).
 """
 
 import math
@@ -38,6 +39,7 @@ from data_processing.games.dataset import save_shard
 from model.components.core import moe_layers, moe_load_counting
 from model.multi_game import is_core_key
 from tests.generals_gio import write_gio_dir
+from tests.gloo_devices import DEVICES, local_ranks
 from tests.test_core_moe import CORE, _board_samples
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -515,16 +517,23 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _ddp_worker(rank: int, port: int, root: str) -> None:
+def _ddp_save(kind: str) -> str:
+    return "rl_ddp" if kind == "cpu" else f"rl_ddp_{kind}"
+
+
+def _ddp_worker(rank: int, port: int, root: str, kind: str = "cpu", lrs=(0, 1)) -> None:
+    # the trainer pins a MIG slice per LOCAL_RANK before touching CUDA
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank),
-                      LOCAL_RANK=str(rank), WORLD_SIZE=str(WORLD))
+                      LOCAL_RANK=str(lrs[rank]), WORLD_SIZE=str(WORLD))
     torch.set_num_threads(1)
     from training import train_rl_joint
 
     rootp = Path(root)
-    out = train_rl_joint.main(_args(rootp, "rl_ddp", "--iterations", "2",
-                                    "--snapshot_dir", str(rootp / "rl_ddp" / "snaps"),
-                                    "--dist_timeout", "3"))
+    save = _ddp_save(kind)
+    dev = [] if kind == "cpu" else ["--device", kind, "--dist_backend", "gloo"]
+    out = train_rl_joint.main(_args(rootp, save, "--iterations", "2",
+                                    "--snapshot_dir", str(rootp / save / "snaps"),
+                                    "--dist_timeout", "3", *dev))
     model, ema, tr = out["model"], out["ema"], out["trainer"]
     torch.save({
         "params": {n: p.detach().clone() for n, p in model.named_parameters()},
@@ -535,13 +544,17 @@ def _ddp_worker(rank: int, port: int, root: str) -> None:
         "pool": tr.pool.ids(),
         "rl": {"popart": tr.popart.state_dict(), "klb": tr.klb.state_dict(),
                "entc": tr.entc.state_dict(), "sched": tr.sched.state_dict()},
-    }, os.path.join(root, f"ddp_rank{rank}.pt"))
+        "device": str(next(model.parameters()).device),
+    }, os.path.join(root, f"{save}_rank{rank}.pt"))
 
 
-def test_two_gloo_ranks_stay_identical(stage1):
+@pytest.mark.parametrize("kind", DEVICES)
+def test_two_gloo_ranks_stay_identical(stage1, kind):
     ctx = torch.multiprocessing.get_context("spawn")
     port = _free_port()
-    procs = [ctx.Process(target=_ddp_worker, args=(r, port, str(stage1))) for r in range(WORLD)]
+    lrs = local_ranks(WORLD, kind)
+    procs = [ctx.Process(target=_ddp_worker, args=(r, port, str(stage1), kind, lrs))
+             for r in range(WORLD)]
     for p in procs:
         p.start()
     deadline = time.monotonic() + TIMEOUT_S
@@ -556,7 +569,10 @@ def test_two_gloo_ranks_stay_identical(stage1):
             if p.is_alive():
                 p.terminate()
             p.join(timeout=10)
-    r0, r1 = (torch.load(stage1 / f"ddp_rank{r}.pt", weights_only=False) for r in range(WORLD))
+    save = _ddp_save(kind)
+    r0, r1 = (torch.load(stage1 / f"{save}_rank{r}.pt", weights_only=False, map_location="cpu")
+              for r in range(WORLD))
+    assert r0["device"].startswith(kind) and r1["device"].startswith(kind)
     for key in ("params", "buffers", "ema"):
         assert r0[key].keys() == r1[key].keys()
         for n in r0[key]:
@@ -565,7 +581,7 @@ def test_two_gloo_ranks_stay_identical(stage1):
     assert r0["mu"] != r1["mu"]                         # the ranks rolled out different games
     for h0, h1 in zip(r0["history"], r1["history"]):   # logs are global statistics
         assert _same(h0["games"], h1["games"]) and _same(h0["gnorm"], h1["gnorm"])
-    ck = torch.load(stage1 / "rl_ddp" / "rl_final.pt", weights_only=False)
+    ck = torch.load(stage1 / save / "rl_final.pt", weights_only=False, map_location="cpu")
     assert ck["world_size"] == WORLD
-    assert sorted(os.listdir(stage1 / "rl_ddp" / "snaps")) == [
+    assert sorted(os.listdir(stage1 / save / "snaps")) == [
         f"snapshot_{i:06d}.pt" for i in range(3)]

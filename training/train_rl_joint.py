@@ -11,7 +11,7 @@ is no per-game post-training.
         --data generals=data/generals/shards --data othello=data/othello/train \\
         --data chess=data/chess/train --tokens_per_iter 65536 --iterations 2000
 
-    # data parallel (NCCL; gloo on CPU)
+    # data parallel (NCCL; gloo on CPU and on MIG slices, --dist_backend)
     uv run torchrun --standalone --nproc_per_node=4 -m training.train_rl_joint ...
 
 Iteration (synchronous; weights AND the MoE routing bias frozen from the first
@@ -76,7 +76,8 @@ batch (the replay : RL balance), and the replay IL loss with its drift since
 the first iteration (the forgetting canary of simulator-less games).
 
 Multi-GPU: torchrun, training.distributed (manual rank-invariant gradient
-sync, collective clipping).  Every collective is posted identically on every
+sync, collective clipping; on MIG slices every rank pins itself to its own
+slice and the ranks use gloo).  Every collective is posted identically on every
 rank: per-epoch count all-reduce, per-step gradient sync + norm, per-iteration
 statistics / diagnostics / MoE-load all-reduces.  Rollouts are rank-local.
 
@@ -132,9 +133,11 @@ from model.multi_game import MultiGameNetwork, core_config_overrides, is_core_ke
 from model.optim import TRM_BETAS, AdamATan2, ModelEMA
 from model.rl_utils import sync_gradients
 from training.distributed import (
+    DIST_BACKENDS,
     broadcast_module_state,
     collective_clip_grad_norm_,
     init_distributed,
+    pin_rank_device,
 )
 from training.eval_multi_game import load_multi
 from training.rl_joint import (
@@ -321,8 +324,13 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="print every N iterations (rank 0 appends every record to <save_dir>/metrics.jsonl)")
     a("--seed", type=int, default=0)
     a("--device", default=None)
-    a("--bucket_mb", type=float, default=25.0)
+    a("--bucket_mb", type=float, default=25.0,
+      help="gradient all-reduce bucket size in MiB (0 = per tensor); 25 suits gloo / MIG "
+           "slices too (scripts/bench_grad_sync.py)")
     a("--dist_timeout", type=float, default=30.0)
+    a("--dist_backend", choices=DIST_BACKENDS, default="auto",
+      help="process-group backend; auto = NCCL on full GPUs, gloo on MIG slices (every "
+           "rank pinned to its own slice) and on the CPU")
     return p.parse_args(argv)
 
 
@@ -946,8 +954,11 @@ class GameRL:
 class JointRLTrainer:
     def __init__(self, args: argparse.Namespace):
         self.args = args
+        # MIG slices: this rank's own instance only — before pick_device() touches CUDA
+        pin_rank_device()
         device = torch.device(args.device) if args.device else pick_device()
-        self.dist_env, self.device = init_distributed(device, args.dist_timeout)
+        self.dist_env, self.device = init_distributed(device, args.dist_timeout,
+                                                      args.dist_backend)
         self.rank, self.world = self.dist_env.rank, self.dist_env.world
         self.rank0 = self.dist_env.is_main
         seed_all(derive_seed(args.seed, self.rank, 0, 0))

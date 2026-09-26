@@ -12,15 +12,29 @@ cores sample their depth per forward, and a step is several micro-batches of
 different games — the reducer's fixed bucket order / ``find_unused_parameters``
 machinery fits none of that.  One explicit, rank-invariant gradient sync per
 optimizer step (:func:`model.rl_utils.sync_gradients`) is correct for any graph.
+
+MIG slices.  A CUDA process can use ONE MIG instance only, and NCCL refuses
+two ranks on instances of the same physical GPU ("Duplicate GPU detected").
+So on a MIG allocation (CUDA_VISIBLE_DEVICES=MIG-<uuid>,MIG-<uuid>,...) every
+torchrun rank first narrows CUDA_VISIBLE_DEVICES to its own entry
+(:func:`pin_rank_device`, before anything initialises CUDA — the trainers
+call it first thing), uses ``cuda:0``, and the ranks talk over gloo, which
+runs every collective of the trainers on CUDA tensors (staged through pinned
+host memory) — ``--dist_backend auto`` picks it.  Collectives in use, all
+gloo-capable: all_reduce SUM / MAX of float32/float64/int tensors (CUDA or
+CPU), broadcast (module state, a 1-element flag), all_gather_object /
+broadcast_object_list (pickled, always on the CPU), barrier; no ReduceOp.AVG,
+reduce_scatter, coalesced or async collectives, so no op needs a fallback.
 """
 
 from __future__ import annotations
 
+import ctypes
 import os
 from dataclasses import dataclass
 from datetime import timedelta
 from itertools import chain
-from typing import Iterable, Tuple
+from typing import Iterable, List, MutableMapping, Optional, Sequence, Tuple
 
 import torch
 import torch.distributed as dist
@@ -75,28 +89,178 @@ def dist_env_from_environ() -> DistEnv:
     return DistEnv(rank=rank, local_rank=int(os.environ.get("LOCAL_RANK", rank)), world=world)
 
 
-def init_distributed(device: torch.device, timeout_min: float = 30.0
-                     ) -> Tuple[DistEnv, torch.device]:
+# ----------------------------------------------------------------------
+# MIG slices and the backend choice
+# ----------------------------------------------------------------------
+
+#: CUDA_VISIBLE_DEVICES entry prefix of a MIG instance ("MIG-<uuid>", or the
+#: legacy "MIG-GPU-<gpu uuid>/<gi>/<ci>")
+MIG_PREFIX = "MIG-"
+#: --dist_backend choices (auto: gloo on MIG slices or without CUDA, else NCCL)
+DIST_BACKENDS = ("auto", "nccl", "gloo")
+#: set by :func:`pin_rank_device`: the allocation's full CUDA_VISIBLE_DEVICES
+MIG_ALL_DEVICES_ENV = "GM_MIG_VISIBLE_DEVICES"
+
+
+def visible_devices(value: Optional[str]) -> List[str]:
+    """The entries of a CUDA_VISIBLE_DEVICES value (unset or empty: [])."""
+    return [e.strip() for e in (value or "").split(",") if e.strip()]
+
+
+def is_mig(entries: Sequence[str]) -> bool:
+    """True when a CUDA_VISIBLE_DEVICES entry list names a MIG instance."""
+    return any(e.startswith(MIG_PREFIX) for e in entries)
+
+
+def rank_visible_devices(cvd: Optional[str], local_rank: Optional[str]) -> Optional[str]:
+    """The CUDA_VISIBLE_DEVICES value torchrun rank ``local_rank`` must use,
+    or None to keep ``cvd`` as it is.
+
+    Only a list of MORE than one device with a MIG instance among them is
+    narrowed, to entry ``local_rank`` (a process can use one MIG instance:
+    left alone, every rank would run on the first).  Unset / empty values,
+    plain GPU indices, GPU UUIDs, a single MIG instance (already narrowed:
+    the call is idempotent) or no ``local_rank`` (not a torchrun rank) are
+    kept.  A ``local_rank`` that is not an index of the list raises
+    ValueError."""
+    entries = visible_devices(cvd)
+    if local_rank is None or not local_rank.strip() or len(entries) <= 1 or not is_mig(entries):
+        return None
+    try:
+        r = int(local_rank)
+    except ValueError:
+        raise ValueError(f"LOCAL_RANK={local_rank!r} is not an integer") from None
+    if not 0 <= r < len(entries):
+        raise ValueError(
+            f"LOCAL_RANK={r} but CUDA_VISIBLE_DEVICES lists {len(entries)} device(s) with "
+            f"MIG instances ({cvd}): a process can use one MIG instance, so run at most "
+            f"{len(entries)} rank(s) (torchrun --nproc_per_node) on this allocation")
+    return entries[r]
+
+
+def _cuda_driver_initialised() -> bool:
+    """Best effort: True if this process already ran cuInit (then the driver
+    has read CUDA_VISIBLE_DEVICES for good).  Side-effect free: libcuda is
+    only inspected if something already loaded it (RTLD_NOLOAD), and
+    cuDeviceGetCount returns CUDA_ERROR_NOT_INITIALIZED until cuInit."""
+    if not hasattr(os, "RTLD_NOLOAD"):
+        return False
+    for name in ("libcuda.so.1", "libcuda.so"):
+        try:
+            lib = ctypes.CDLL(name, mode=os.RTLD_NOLOAD | os.RTLD_LAZY)
+        except OSError:
+            continue                    # never loaded: nothing initialised it
+        count = ctypes.c_int(0)
+        try:
+            return lib.cuDeviceGetCount(ctypes.byref(count)) == 0
+        except AttributeError:
+            return False
+    return False
+
+
+def cuda_initialised() -> Optional[str]:
+    """Why changing CUDA_VISIBLE_DEVICES can no longer take effect in this
+    process, or None while it still can."""
+    if torch.cuda.is_initialized():
+        return "torch.cuda is already initialised"
+    if _cuda_driver_initialised():
+        return ("the CUDA driver is already initialised (cuInit ran, e.g. through "
+                "torch.cuda.is_available() / device_count() on MIG devices)")
+    return None
+
+
+def pin_rank_device(environ: Optional[MutableMapping[str, str]] = None) -> Optional[str]:
+    """Narrow CUDA_VISIBLE_DEVICES to this torchrun rank's own MIG instance
+    (:func:`rank_visible_devices` of CUDA_VISIBLE_DEVICES and LOCAL_RANK);
+    returns the entry it pinned, or None when nothing changes.
+
+    Call it before anything touches CUDA — the trainers do, first thing in
+    ``main`` (``import torch`` alone does not initialise CUDA; the first
+    ``torch.cuda.is_available()`` does).  Too late, the rewrite would be
+    silently ignored and every rank would share the first slice, so that
+    raises instead.  The full list stays in ``$GM_MIG_VISIBLE_DEVICES``.
+    ``environ`` (tests) replaces ``os.environ`` and skips the CUDA check."""
+    env = os.environ if environ is None else environ
+    cvd = env.get("CUDA_VISIBLE_DEVICES")
+    local_rank = env.get("LOCAL_RANK")
+    try:
+        new = rank_visible_devices(cvd, local_rank)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
+    if new is None:
+        return None
+    if environ is None:
+        why = cuda_initialised()
+        if why is not None:
+            raise RuntimeError(
+                f"cannot pin LOCAL_RANK={local_rank} to its MIG instance: {why} with "
+                f"CUDA_VISIBLE_DEVICES={cvd}, so every rank would run on the first slice. "
+                f"Call training.distributed.pin_rank_device() before anything touches CUDA.")
+    env[MIG_ALL_DEVICES_ENV] = cvd
+    env["CUDA_VISIBLE_DEVICES"] = new
+    return new
+
+
+def visible_mig(environ: Optional[MutableMapping[str, str]] = None) -> bool:
+    """True when this process's CUDA devices are MIG instances (pinned or not)."""
+    env = os.environ if environ is None else environ
+    return is_mig(visible_devices(env.get("CUDA_VISIBLE_DEVICES")))
+
+
+def resolve_backend(requested: str, device_type: str, mig: bool) -> str:
+    """The process-group backend for ``--dist_backend requested`` on a
+    ``device_type`` device: ``auto`` is NCCL on CUDA — unless the devices are
+    MIG instances (NCCL refuses two ranks on one physical GPU) — and gloo on
+    the CPU; ``gloo`` also runs on CUDA tensors; ``nccl`` needs CUDA."""
+    if requested not in DIST_BACKENDS:
+        raise SystemExit(f"--dist_backend {requested!r}: expected one of {DIST_BACKENDS}")
+    if device_type not in ("cuda", "cpu"):
+        raise SystemExit(f"data-parallel training runs on cuda or cpu, not {device_type}; "
+                         f"pass --device cpu or cuda")
+    if requested == "auto":
+        return "nccl" if device_type == "cuda" and not mig else "gloo"
+    if requested == "nccl" and device_type != "cuda":
+        raise SystemExit("--dist_backend nccl needs CUDA (--device cuda); use gloo on the CPU")
+    return requested
+
+
+def init_distributed(device: torch.device, timeout_min: float = 30.0,
+                     backend: str = "auto") -> Tuple[DistEnv, torch.device]:
     """Join the torchrun job, if any.
 
     ``device`` is the device the caller would use single-process; with a
-    process group it becomes ``cuda:LOCAL_RANK`` (NCCL) or stays ``cpu``
-    (gloo).  Other device types cannot run a process group here.
+    process group it becomes ``cuda:LOCAL_RANK`` — ``cuda:0`` on MIG
+    instances, where every rank sees only its own (:func:`pin_rank_device`)
+    — or stays ``cpu``.  ``backend`` is ``--dist_backend``
+    (:func:`resolve_backend`).  Other device types cannot run a process
+    group here.
     """
     env = dist_env_from_environ()
     if not env.enabled:
         return env, device
+    pin_rank_device()           # a no-op when the caller pinned already (it should)
+    mig = visible_mig()
+    name = resolve_backend(backend, device.type, mig)
     if device.type == "cuda":
-        device = torch.device("cuda", env.local_rank)
+        index = 0 if mig else env.local_rank
+        count = torch.cuda.device_count()
+        if index >= count:
+            raise SystemExit(f"rank {env.rank} (LOCAL_RANK {env.local_rank}) needs cuda:{index} "
+                             f"but sees {count} CUDA device(s) "
+                             f"(CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')})")
+        device = torch.device("cuda", index)
         torch.cuda.set_device(device)
-        backend = "nccl"
-    elif device.type == "cpu":
-        backend = "gloo"
-    else:
-        raise SystemExit(f"data-parallel training runs on cuda (NCCL) or cpu (gloo), "
-                         f"not {device.type}; pass --device cpu or cuda")
-    dist.init_process_group(backend, timeout=timedelta(minutes=timeout_min),
-                            device_id=device if device.type == "cuda" else None)
+    if name == "nccl" and mig:
+        # BEFORE init_process_group: with device_id NCCL connects eagerly and
+        # raises right there — this line must already be in the log
+        print("[dist] WARNING: NCCL on MIG instances fails with 'Duplicate GPU detected' when "
+              "two ranks share a physical GPU; --dist_backend auto (gloo) works", flush=True)
+    dist.init_process_group(name, timeout=timedelta(minutes=timeout_min),
+                            device_id=device if name == "nccl" else None)
+    what = (f" {torch.cuda.get_device_name(device)} "
+            f"[{os.environ.get('CUDA_VISIBLE_DEVICES')}]" if device.type == "cuda" else "")
+    print(f"[dist] rank {env.rank}/{env.world} (local {env.local_rank}): backend={name} "
+          f"device={device}{what}", flush=True)
     return env, device
 
 

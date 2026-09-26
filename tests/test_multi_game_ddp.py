@@ -11,7 +11,11 @@ state, no weight decay — its value is untouched); and a non-finite gradient
 norm on ONE rank must drop the step on BOTH.  A second run resumes a
 single-process checkpoint on 2 ranks with a global micro-batch count (3 =
 2 + 1, unequal per rank).  Validation (batches split over the ranks) must
-match single-process validation of the same weights.
+match single-process validation of the same weights.  Where CUDA is
+available the first run is repeated on CUDA tensors over gloo (the MIG-slice
+mode: --device cuda --dist_backend gloo, every rank pinned to its own slice
+when the allocation has one per rank), with the same assertions, and so is
+the BatchNorm statistics merge.
 """
 
 import math
@@ -25,6 +29,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from data_processing.games.dataset import collate_game_sequences, save_shard
+from tests.gloo_devices import DEVICES, local_ranks, needs_cuda
 from tests.test_core_moe import CORE, _board_samples
 
 WORLD = 2
@@ -40,18 +45,25 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _common_args(root: str, save_dir: str):
+def _common_args(root: str, save_dir: str, kind: str = "cpu"):
+    dev = ["--device", "cpu"] if kind == "cpu" else ["--device", "cuda", "--dist_backend", "gloo"]
     return ["--data", f"othello={root}/othello", "--data", f"chess={root}/chess",
             "--val", f"othello={root}/othello", "--batch_size", "2",
             "--warmup_steps", "1", "--eval_every", "2", "--log_every", "2",
             "--ema_rate", "0.9", "--moe_balance_rate", "0.01", "--clip_grad", "0.5",
-            "--seed", "3", "--device", "cpu", "--save_dir", save_dir,
+            "--seed", "3", *dev, "--save_dir", save_dir,
             "--override", *[f"{k}={v}" for k, v in CORE.items()]]
 
 
-def _worker(rank: int, port: int, root: str, mode: str) -> None:
+def _tag(mode: str, kind: str) -> str:
+    return mode if kind == "cpu" else f"{mode}_{kind}"
+
+
+def _worker(rank: int, port: int, root: str, mode: str, kind: str = "cpu",
+            lrs=(0, 1)) -> None:
+    # main() itself pins a MIG slice per LOCAL_RANK before touching CUDA
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank),
-                      LOCAL_RANK=str(rank), WORLD_SIZE=str(WORLD))
+                      LOCAL_RANK=str(lrs[rank]), WORLD_SIZE=str(WORLD))
     torch.set_num_threads(1)
     from training import train_multi_game as tmg
 
@@ -99,7 +111,8 @@ def _worker(rank: int, port: int, root: str, mode: str) -> None:
     else:
         extra = ["--steps", str(STEPS), "--global_games_per_step", "3",
                  "--resume", f"{root}/sp/multi_latest.pt"]
-    out = tmg.main([*_common_args(root, f"{root}/ck_{mode}"), *extra,
+    tag = _tag(mode, kind)
+    out = tmg.main([*_common_args(root, f"{root}/ck_{tag}", kind), *extra,
                     "--dist_timeout", "2"])
     model, ema, opt = out["model"], out["ema"], out["optimizer"]
     probe = model["chess"].ddp_probe if probe_on else None
@@ -114,13 +127,16 @@ def _worker(rank: int, port: int, root: str, mode: str) -> None:
         "probe_in_optimizer": any(p is probe for g in opt.param_groups for p in g["params"]),
         "probe_state": dict(opt.state.get(probe, {})) if probe_on else {},
         "core_steps": opt.state[core_p]["step"],
-    }, os.path.join(root, f"{mode}_rank{rank}.pt"))
+        "device": str(next(model.parameters()).device),
+    }, os.path.join(root, f"{tag}_rank{rank}.pt"))
 
 
-def _spawn(root, mode):
+def _spawn(root, mode, kind="cpu"):
     ctx = torch.multiprocessing.get_context("spawn")
     port = _free_port()
-    procs = [ctx.Process(target=_worker, args=(r, port, str(root), mode)) for r in range(WORLD)]
+    lrs = local_ranks(WORLD, kind)
+    procs = [ctx.Process(target=_worker, args=(r, port, str(root), mode, kind, lrs))
+             for r in range(WORLD)]
     for p in procs:
         p.start()
     deadline = time.monotonic() + TIMEOUT_S
@@ -137,8 +153,11 @@ def _spawn(root, mode):
             if p.is_alive():
                 p.terminate()
             p.join(timeout=10)
-    out = [torch.load(root / f"{mode}_rank{r}.pt", weights_only=False) for r in range(WORLD)]
-    ck = torch.load(root / f"ck_{mode}" / "multi_final.pt", weights_only=False)
+    tag = _tag(mode, kind)
+    out = [torch.load(root / f"{tag}_rank{r}.pt", weights_only=False, map_location="cpu")
+           for r in range(WORLD)]
+    ck = torch.load(root / f"ck_{tag}" / "multi_final.pt", weights_only=False,
+                    map_location="cpu")
     return out, ck
 
 
@@ -154,6 +173,12 @@ def shards(tmp_path_factory):
 @pytest.fixture(scope="module")
 def ranks(shards):
     return _spawn(shards, "k1")
+
+
+@pytest.fixture(scope="module")
+def cuda_ranks(shards):
+    """The ``ranks`` run on CUDA tensors over gloo."""
+    return _spawn(shards, "k1", "cuda")
 
 
 @pytest.fixture(scope="module")
@@ -235,6 +260,26 @@ def test_sharded_validation_matches_single_process(ranks):
     _assert_eval_matches_single_process(r0, r1, n_evals=3)       # steps 2, 4, 5
 
 
+@needs_cuda
+def test_cuda_tensors_over_gloo_keep_every_guarantee(cuda_ranks):
+    """--device cuda --dist_backend gloo: the whole contract of the CPU run —
+    different draws, bit-identical parameters / buffers / EMA, grad-None
+    unused parameter, collective step drop, rank-0 checkpoint, sharded
+    validation equal to single-process validation."""
+    (r0, r1), ck = cuda_ranks
+    assert r0["device"].startswith("cuda") and r1["device"].startswith("cuda")
+    local0 = [loc for loc, _ in r0["record"]]
+    local1 = [loc for loc, _ in r1["record"]]
+    assert len(local0) == STEPS and any(a != b for a, b in zip(local0, local1))
+    _assert_rank_identical(r0, r1)
+    for r in (r0, r1):
+        assert all(none for _, none in r["record"]) and r["probe_state"] == {}
+        assert torch.equal(r["params"]["nets.chess.ddp_probe"], torch.full((3,), 2.0))
+    assert r0["core_steps"] == r1["core_steps"] == STEPS - 1
+    assert ck["world_size"] == WORLD
+    _assert_eval_matches_single_process(r0, r1, n_evals=3)
+
+
 def test_global_micro_batch_count_splits_over_ranks(resumed):
     (r0, r1), _ = resumed
     n = STEPS - RESUME_AT
@@ -250,20 +295,22 @@ def test_resume_on_more_ranks_continues_and_stays_identical(resumed):
     _assert_eval_matches_single_process(r0, r1, n_evals=2)       # steps 4, 5
 
 
-def _bn_worker(rank: int, init_file: str, root: str) -> None:
+def _bn_worker(rank: int, init_file: str, root: str, kind: str = "cpu", lrs=(0, 1)) -> None:
     import torch.distributed as dist
 
+    from tests.gloo_devices import worker_device
     from training.distributed import BatchNormStatSync
 
+    dev = worker_device(kind, lrs[rank])
     dist.init_process_group("gloo", init_method=f"file://{init_file}", rank=rank,
                             world_size=WORLD)
     try:
         torch.manual_seed(0)
         bns = torch.nn.ModuleList([torch.nn.BatchNorm2d(3), torch.nn.BatchNorm2d(3),
                                    torch.nn.BatchNorm2d(3),
-                                   torch.nn.BatchNorm2d(3, momentum=None)])
+                                   torch.nn.BatchNorm2d(3, momentum=None)]).to(dev)
         for m in bns:                  # a non-trivial step-start state P
-            m(torch.randn(8, 3, 2, 2, generator=torch.Generator().manual_seed(7)) + 2)
+            m(torch.randn(8, 3, 2, 2, generator=torch.Generator().manual_seed(7)).to(dev) + 2)
         prev = [(m.running_mean.clone(), m.running_var.clone()) for m in bns]
         sync = BatchNormStatSync(bns)
         g = torch.Generator().manual_seed(100 + rank)
@@ -271,25 +318,26 @@ def _bn_worker(rank: int, init_file: str, root: str) -> None:
         inputs = {1: [], 3: []}
         if rank == 0:                  # layer 0: two forwards on rank 0 only
             for _ in range(2):
-                bns[0](torch.randn(4, 3, 2, 2, generator=g) * 3 + 1)
+                bns[0]((torch.randn(4, 3, 2, 2, generator=g) * 3 + 1).to(dev))
         x = torch.randn(4, 3, 2, 2, generator=g) * (rank + 1)
-        bns[1](x)                      # layer 1: both ranks, one forward each
+        bns[1](x.to(dev))              # layer 1: both ranks, one forward each
         inputs[1].append(x)
         for _ in range(2 - rank):      # layer 2: the same batch, 2 + 1 forwards
-            bns[2](same)
+            bns[2](same.to(dev))
         for _ in range(1 + rank):      # layer 3 (cumulative): 1 + 2 forwards
             x = torch.randn(4, 3, 2, 2, generator=g) + rank
-            bns[3](x)
+            bns[3](x.to(dev))
             inputs[3].append(x)
         local = [(m.running_mean.clone(), m.running_var.clone()) for m in bns]
         sync()
         after = [(m.running_mean.clone(), m.running_var.clone()) for m in bns]
         sync()                         # nothing new since: a no-op
-        torch.save({"prev": prev, "local": local, "inputs": inputs, "same": same,
+        cpu = [[tuple(t.cpu() for t in pair) for pair in stats] for stats in (prev, local)]
+        torch.save({"prev": cpu[0], "local": cpu[1], "inputs": inputs, "same": same,
                     "noop": all(torch.equal(a[0], m.running_mean)
                                 and torch.equal(a[1], m.running_var)
                                 for a, m in zip(after, bns)),
-                    "synced": [(m.running_mean.clone(), m.running_var.clone(),
+                    "synced": [(m.running_mean.cpu(), m.running_var.cpu(),
                                 int(m.num_batches_tracked)) for m in bns]},
                    os.path.join(root, f"bn{rank}.pt"))
     finally:
@@ -313,14 +361,18 @@ def _batch_stats(x):
     return x.mean((0, 2, 3)).double(), x.var((0, 2, 3), unbiased=True).double()
 
 
-def test_batchnorm_stat_sync(tmp_path):
+@pytest.mark.parametrize("kind", DEVICES)
+def test_batchnorm_stat_sync(tmp_path, kind):
     """One updating rank: exactly its statistics.  Several: the step-start
     statistics keep the single-process weight (1-m)^N for the N forwards of
     all ranks, the batches share the rest — exact when the batches coincide
     or for the (order-free) cumulative average.  num_batches_tracked counts
-    every rank's forwards; a sync with nothing new changes nothing."""
+    every rank's forwards; a sync with nothing new changes nothing.  (CUDA:
+    the CPU references allow for the CUDA kernels' float32 rounding.)"""
     ctx = torch.multiprocessing.get_context("spawn")
-    procs = [ctx.Process(target=_bn_worker, args=(r, str(tmp_path / "store"), str(tmp_path)))
+    lrs = local_ranks(WORLD, kind)
+    procs = [ctx.Process(target=_bn_worker,
+                         args=(r, str(tmp_path / "store"), str(tmp_path), kind, lrs))
              for r in range(WORLD)]
     for p in procs:
         p.start()
@@ -333,6 +385,7 @@ def test_batchnorm_stat_sync(tmp_path):
         for p in procs:
             if p.is_alive():
                 p.terminate()
+    tol = {} if kind == "cpu" else {"rtol": 1e-5, "atol": 1e-6}
     r0, r1 = (torch.load(tmp_path / f"bn{r}.pt") for r in range(WORLD))
     assert r0["noop"] and r1["noop"]
     assert all(torch.equal(a, b) for x, y in zip(r0["synced"], r1["synced"])
@@ -346,18 +399,18 @@ def test_batchnorm_stat_sync(tmp_path):
     pm, pv = (t.double() for t in r0["prev"][1])
     (m_a, v_a), (m_b, v_b) = _batch_stats(r0["inputs"][1][0]), _batch_stats(r1["inputs"][1][0])
     mean1, var1, _ = r0["synced"][1]
-    torch.testing.assert_close(mean1.double(), 0.81 * pm + 0.19 * (m_a + m_b) / 2)
-    torch.testing.assert_close(var1.double(), 0.81 * pv + 0.19 * (v_a + v_b) / 2)
+    torch.testing.assert_close(mean1.double(), 0.81 * pm + 0.19 * (m_a + m_b) / 2, **tol)
+    torch.testing.assert_close(var1.double(), 0.81 * pv + 0.19 * (v_a + v_b) / 2, **tol)
     # layer 2: the same batch 2 + 1 times -> what one process holds after 3
     prev2 = (*r0["prev"][2], 1)
     want = _bn_reference(0.1, prev2, [r0["same"]] * 3)
-    torch.testing.assert_close(r0["synced"][2][0], want[0])
-    torch.testing.assert_close(r0["synced"][2][1], want[1])
+    torch.testing.assert_close(r0["synced"][2][0], want[0], **tol)
+    torch.testing.assert_close(r0["synced"][2][1], want[1], **tol)
     # layer 3 (momentum=None): the cumulative average over all 1 + 2 batches
     prev3 = (*r0["prev"][3], 1)
     want = _bn_reference(None, prev3, r0["inputs"][3] + r1["inputs"][3])
-    torch.testing.assert_close(r0["synced"][3][0], want[0])
-    torch.testing.assert_close(r0["synced"][3][1], want[1])
+    torch.testing.assert_close(r0["synced"][3][0], want[0], **tol)
+    torch.testing.assert_close(r0["synced"][3][1], want[1], **tol)
 
 
 @pytest.mark.parametrize("world", [1, 2, 3, 4])

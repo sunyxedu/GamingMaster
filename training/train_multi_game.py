@@ -11,7 +11,9 @@ and adaptation of a trained brain to a new game.
     uv run python -m training.train_multi_game --data go=data/go/train \\
         --init_core checkpoints/multi/multi_final.pt --freeze_core --train_core_norms
 
-    # the same on 4 GPUs of one node (data parallel, see below)
+    # the same on 4 GPUs of one node (data parallel, see below) — or on 4 MIG
+    # slices (CUDA_VISIBLE_DEVICES=MIG-...,MIG-...: every rank pins its own
+    # slice, --dist_backend auto picks gloo)
     uv run torchrun --standalone --nproc_per_node=4 -m training.train_multi_game ...
 
     # generals next to the others: its `gmdata generals shard` gm-shards
@@ -72,7 +74,9 @@ supervision only if the core is the legacy TRM.  With a MoE core the
 aux-loss-free balance bias is updated once per optimizer step from the
 loads of ALL K micro-batches, i.e. balanced on the game mixture.
 
-Data parallelism (torchrun; NCCL on CUDA, gloo on CPU).  Every rank draws its
+Data parallelism (torchrun; NCCL on CUDA, gloo on CPU and on MIG slices —
+``--dist_backend``, training.distributed: on a MIG allocation every rank pins
+itself to its own slice and runs on cuda:0).  Every rank draws its
 own micro-batches with its own RNG streams (training.distributed.rank_seed:
 game draws, data order, crops), so a step averages i.i.d. micro-batches of
 all ranks — the single-GPU objective with K' = the global count.  How many:
@@ -151,10 +155,12 @@ from model.rl_utils import qk_norm_param_ids, sync_gradients
 from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry
 from training.diagnostics import attention_probe, format_attention, logit_lse_absmax, qk_caps
 from training.distributed import (
+    DIST_BACKENDS,
     BatchNormStatSync,
     broadcast_module_state,
     collective_clip_grad_norm_,
     init_distributed,
+    pin_rank_device,
     rank_seed,
 )
 from training.train_il_game import (
@@ -275,10 +281,16 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="data-parallel rank r uses rank_seed(seed, r) for its game draws "
                         "and data order (rank 0: seed)")
     p.add_argument("--bucket_mb", type=float, default=25.0,
-                   help="data parallel: gradient all-reduce bucket size in MiB (0 = per tensor)")
+                   help="data parallel: gradient all-reduce bucket size in MiB (0 = per tensor); "
+                        "25 suits gloo / MIG slices too (sync time flat from 1 to 400 MiB, "
+                        "scripts/bench_grad_sync.py)")
     p.add_argument("--dist_timeout", type=float, default=10.0,
                    help="data parallel: collective timeout in minutes (the other ranks "
                         "wait while rank 0 writes a checkpoint)")
+    p.add_argument("--dist_backend", choices=DIST_BACKENDS, default="auto",
+                   help="data parallel: process-group backend; auto = NCCL on full GPUs, "
+                        "gloo on MIG slices (NCCL refuses two ranks on one physical GPU; "
+                        "every rank is pinned to its own slice) and on the CPU")
     return p.parse_args(argv)
 
 
@@ -506,8 +518,10 @@ def main(argv=None) -> Dict[str, object]:
     """Train; returns the live objects (``model``, ``ema``, ``optimizer``,
     ``dist``) for callers that drive the trainer in-process (tests)."""
     args = parse_args(argv)
+    # MIG slices: this rank's own instance only — before pick_device() touches CUDA
+    pin_rank_device()
     device = torch.device(args.device) if args.device else pick_device()
-    dist_env, device = init_distributed(device, args.dist_timeout)
+    dist_env, device = init_distributed(device, args.dist_timeout, args.dist_backend)
     rank0, rank, world = dist_env.is_main, dist_env.rank, dist_env.world
     # rank-specific streams (game draws, data order, crops); rank 0 == single-process
     random.seed(rank_seed(args.seed, rank))
