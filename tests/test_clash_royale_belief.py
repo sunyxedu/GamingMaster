@@ -176,7 +176,7 @@ def test_python_belief_matches_the_converter_bit_for_bit(fixture_shards):
         if line.strip():
             row = json.loads(line)
             replays[row["tag"]] = row["payload"]
-    n_sides = n_frames = n_determined = 0
+    n_sides = n_frames = n_determined = n_labels = 0
     for d in find_gm_shards(fixture_shards):
         sh = GmShard(d)
         assert sh.index["converter_version"] == 3
@@ -194,6 +194,7 @@ def test_python_belief_matches_the_converter_bit_for_bit(fixture_shards):
             belief, j = CycleBelief(tokens), 0
             got_h = np.asarray(arr["raw.deck_in_hand"][a:a + n])
             got_n = np.asarray(arr["raw.deck_next"][a:a + n])
+            slots = np.asarray(arr["tgt.card_slot"][a:a + n])
             for f in range(n):
                 while j < len(plays) and plays[j][0] < f * 10:
                     assert belief.observe(plays[j][1]) != INCONSISTENT
@@ -201,10 +202,14 @@ def test_python_belief_matches_the_converter_bit_for_bit(fixture_shards):
                 where = (meta["tag"], meta["side"], f)
                 assert got_h[f].tobytes() == belief.in_hand.tobytes(), where
                 assert got_n[f].tobytes() == belief.next.tobytes(), where
+                if slots[f] >= 0:
+                    # the label is a card the belief (hence legal_card) lets the player hold
+                    assert tokens[slots[f]] == plays[j][1] and belief.in_hand[slots[f]] > 0, where
+                    n_labels += 1
                 n_determined += belief.determined
             n_sides += 1
             n_frames += n
-    assert n_sides == 26 and n_frames > 10_000 and 0 < n_determined < n_frames
+    assert n_sides == 26 and n_frames > 10_000 and 0 < n_determined < n_frames and n_labels > 500
 
 
 # ======================================================================
