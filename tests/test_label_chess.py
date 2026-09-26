@@ -6,7 +6,8 @@ labelled through the real CLI and driver with a fake UCI engine child process
 real UCI protocol), so no engine binary is needed. The overlays must load with
 GameShardDataset, keep every base tensor bit-identical, carry the documented teacher
 columns (flat action id = promotion·4096 + from·64 + to in POV squares), re-derive
-from the raw columns exactly as FromToDecoder.il_head_terms defines the soft targets,
+from the raw columns (π ∝ exp(Q/τ + w·u), u = the secondary utility of teacher_raw) exactly
+as FromToDecoder.il_head_terms defines the soft targets,
 and train the real chess network through training.train_il_game.batch_loss with the
 teacher KL and the engine-value term active. With Stockfish installed
 (scripts/engines/fetch_engines.sh stockfish, or STOCKFISH=/path) the same loss check
@@ -28,6 +29,22 @@ from tests.test_rust_converters_parity import PGN, gmdata  # noqa: F401  (fixtur
 
 K = 8                   # --max-moves default of the chess labeller (= MultiPV)
 TAU = 0.05
+W = 2.0                 # --tie-weight default
+
+
+def _u(raw):
+    """Secondary utility of teacher_raw (label/chess.rs `secondary_of_raw`): a mate in n
+    moves (|raw| > 50000, n = 100000 - |raw|) -> ±(0.5 + 0.5·5/(n + 4)), else 0.5·tanh(cp/1000)."""
+    raw = np.asarray(raw, np.float64)
+    n = np.maximum(100000.0 - np.abs(raw), 1.0)
+    return np.where(np.abs(raw) > 50000, np.sign(raw) * (0.5 + 2.5 / (n + 4.0)), 0.5 * np.tanh(raw / 1000.0))
+
+
+def _policy(q, raw):
+    """The teacher π ∝ exp(Q/τ + w·u) over one frame's scored moves."""
+    s = (np.asarray(q, np.float64) - np.max(q)) / TAU + W * _u(raw)
+    e = np.exp(s - s.max())
+    return e / e.sum()
 
 
 def _convert(gmdata, out, games=6, shard_size=3):  # noqa: F811
@@ -71,7 +88,9 @@ def test_summary_and_meta(labelled):
     assert set(st["skipped"]) <= {"forced"}
     t = summary["teacher"]
     assert t["engine"] == "FakeUci 1.0" and t["labeller"] == "gmdata label chess"
-    assert t["policy"] == {"kind": "softmax", "tau": TAU} and t["max_moves"] == K
+    assert t["policy"]["kind"] == "softmax" and t["policy"]["tau"] == TAU and t["max_moves"] == K
+    assert t["policy"]["tie_weight"] == W and t["policy"]["secondary"]["of"] == "teacher_raw"
+    assert t["labeller_version"] == 2 and t["core_version"] == 2
     assert t["limits"] == {"nodes": "1000"} and t["raw_unit"] == "cp"
     assert t["heads"]["from"]["storage"] == t["heads"]["to"]["storage"] == "sparse"
     assert t["heads"]["promotion"]["storage"] == "dense"
@@ -128,13 +147,14 @@ def test_loader_sees_teacher_columns(labelled):
 
 
 def test_soft_targets_rederive_from_raw_columns(labelled):
-    """from = marginal of softmax(Q/τ) over from-squares; to = p(to | from = tgt.from_idx);
-    promotion = p(promo | tgt.from_idx, tgt.to_idx) — FromToDecoder.il_head_terms."""
+    """from = marginal of π ∝ exp(Q/τ + w·u) over from-squares; to = p(to | from =
+    tgt.from_idx); promotion = p(promo | tgt.from_idx, tgt.to_idx) — FromToDecoder.il_head_terms.
+    The moves are stored best first: by Q, among equal Q by the raw score."""
     root, _ = labelled
-    n_to = n_promo = 0
+    n_to = n_promo = n_tied = 0
     for name in _shards(root / "lab"):
         a = GmShard(str(root / "lab" / name)).arrays()
-        idx, q = np.asarray(a["tgt.teacher_idx"]), np.asarray(a["tgt.teacher_q"])
+        idx, q, raw = np.asarray(a["tgt.teacher_idx"]), np.asarray(a["tgt.teacher_q"]), np.asarray(a["tgt.teacher_raw"])
         gf, gt = np.asarray(a["tgt.from_idx"]), np.asarray(a["tgt.to_idx"])
         fi, fv = np.asarray(a["tgt.from_probs_idx"]), np.asarray(a["tgt.from_probs_val"])
         ti, tv = np.asarray(a["tgt.to_probs_idx"]), np.asarray(a["tgt.to_probs_val"])
@@ -143,8 +163,10 @@ def test_soft_targets_rederive_from_raw_columns(labelled):
             ok = idx[f] >= 0
             if not ok.any():
                 continue
-            e = np.exp((q[f][ok].astype(np.float64) - q[f][ok].max()) / TAU)
-            pi = e / e.sum()
+            qs, rs = q[f][ok], raw[f][ok]
+            assert all(qs[j - 1] > qs[j] or (qs[j - 1] == qs[j] and rs[j - 1] >= rs[j]) for j in range(1, len(qs)))
+            n_tied += any(qs[j - 1] == qs[j] and rs[j - 1] != rs[j] for j in range(1, len(qs)))
+            pi = _policy(qs, rs)
             frm, to, pro = _decode(idx[f][ok])
             want = {int(s): pi[frm == s].sum() for s in np.unique(frm)}
             got = {int(c): float(p) for c, p in zip(fi[f], fv[f]) if c >= 0}
@@ -164,7 +186,7 @@ def test_soft_targets_rederive_from_raw_columns(labelled):
                 for c in range(5):
                     want_p[c] = pi[sel2 & (pro == c)].sum() / pi[sel2].sum()
             assert np.allclose(pp[f], want_p, atol=1e-5)
-    assert n_to > 0 and n_promo > 0
+    assert n_to > 0 and n_promo > 0 and n_tied > 0
 
 
 def _train_step(ds, n=4, **weights):

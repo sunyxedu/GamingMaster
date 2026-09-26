@@ -24,16 +24,40 @@
 //!   τ = 0.05 a move 0.15 below the best in Q keeps e⁻³ ≈ 5% of the best move's
 //!   weight — but WDL-based Q saturates: on real 2200+ games (default settings) 40% of
 //!   the labelled frames have |engine value| > 0.9, where many moves are equally won
-//!   (or lost), and the 8th move keeps > 20% of the best move's weight in 55% of the
-//!   frames (median 0.3). There π is flat over the 8 scored moves and moves beyond
-//!   them get 0. Raise `--max-moves`, lower `--tau`, or re-derive π from
-//!   `tgt.teacher_raw` (cp) for decided positions if that matters.
+//!   (or lost), and without the secondary tie-break (below) the 8th move keeps > 20% of
+//!   the best move's weight in 55% of the frames (median 0.3): π would be flat over the
+//!   8 scored moves, a move that allows mate as heavy as the best defence.
 //!   Measured on the same data: the human move is among the 8 scored moves in 90% of
 //!   the frames and is the engine's first choice in ≈ 40%. At most the engine's
 //!   announced MultiPV maximum (Stockfish: 256 ≥ 218, the most legal moves of any chess
 //!   position); a larger value is an error, since Stockfish would silently keep
 //!   MultiPV 1 ([`super::uci::check_option_values`]).
-//! * `--tau 0.05`, `--policy softmax`: π(a) ∝ exp(Q(a)/τ) over the scored moves.
+//! * `--tau 0.05`, `--policy softmax`, `--tie-weight 2`: π(a) ∝ exp(Q(a)/τ + w·u(a)) over
+//!   the scored moves, u = the secondary utility of `tgt.teacher_raw` ([`secondary_of_raw`],
+//!   [`super::transform`] module docs), which orders the moves Q cannot tell apart:
+//!
+//!   ```text
+//!   mate in n moves (|raw| > 50000, n = 100000 − |raw|, at least 1):
+//!       u = ±(0.5 + 0.5·5/(n + 4))     mate in 1 = ±1, in 6 = ±0.75, long mates → ±0.5⁺
+//!   otherwise (cp):  u = 0.5·tanh(cp / 1000)                       |u| < 0.5
+//!   ```
+//!
+//!   so every mate ranks above every non-mate score, mating faster is preferred and being
+//!   mated slower is preferred to faster, and big-but-not-mating advantages stay ordered.
+//!   The cp scale 1000 keeps the decided range unsaturated: the WDL saturates from
+//!   ≈ 200–800 cp (a real Lichess shard labelled at the defaults, 256 games / 20k frames:
+//!   18% of the frames have Q = 1 on line 1; line 1's cp is 203 / 418 / 764 at the 10th /
+//!   50th / 90th percentile of the non-mate frames with Q ≥ 0.97, and 99% of all non-mate
+//!   scores are below 1100 cp), where u ∈ [0.1, 0.33], still
+//!   strictly increasing up to ±5000 cp (f32; tablebase wins, cp ±(20000 − plies) with a
+//!   `SyzygyPath`, are all ≈ ±0.5: Q and the mate scores still order them). Near
+//!   equality u adds ≈ 2% to the slope of Q/τ (0.001 vs ≈ 0.05 per cp at τ = 0.05).
+//!   Re-derived from that shard's columns: 28% of its frames share Q = 0 or 1 among their
+//!   top moves; in lost frames (every Q = 0) with a move that allows mate within 2
+//!   moves (163 frames) those moves' mass falls from 0.40 to 0.26, and where a mate in 1
+//!   is one of several Q = 1 moves (51 frames) its mass rises from 0.19 to 0.30; a larger
+//!   `--tie-weight` sharpens this. `--tie-weight 0` gives π ∝ exp(Q/τ) exactly (the
+//!   labeller-v1 teacher).
 //! * Engine options: `Threads=1`, `Hash=16` (MB; plenty for ~10⁵ nodes, and cheap to
 //!   clear) unless overridden with `--engine-option NAME=VALUE` (`Threads` > 1 makes
 //!   the labels nondeterministic; `SyzygyPath=DIR` adds tablebases — the meta records
@@ -59,7 +83,7 @@
 //! Q(move)            = (W + D/2) / 1000 of the line's `wdl` (mover POV; mate lines are
 //!                      1000 0 0 / 0 0 1000); a line without `wdl` is an engine error
 //! tgt.engine_value   = 2·Q(multipv 1) − 1   (the engine's root evaluation)
-//! tgt.teacher_idx    [T,K] i64  promotion·4096 + from·64 + to, best (highest Q) first,
+//! tgt.teacher_idx    [T,K] i64  promotion·4096 + from·64 + to, best first (Q, then u),
 //!                               −1 pad; from / to = POV squares row·8 + file, row = 7 −
 //!                               rank for white to move and rank for black (ranks / files
 //!                               0-based from a1: the FromToDecoder labels), castling =
@@ -138,7 +162,7 @@
 
 use super::fake::{FakeMove, UciFake};
 use super::game::{Analysis, EngineConfig, HeadKind, HeadRow, HeadSpec, Labeller, Limits, SampleView, ScoredMove};
-use super::transform::{conditional, marginal, q_from_wdl};
+use super::transform::{conditional, marginal, q_from_wdl, u_cp, u_mate};
 use super::uci::{Flavor, Score, UciSession};
 use super::LabelArgs;
 use crate::chess::{encode_position, legal_masks, move_target, result_white, Repetitions, CONVERTER_VERSION, GLOBAL_FEATURES, N_PROMOTIONS, PLANE_LEN};
@@ -151,7 +175,8 @@ use shakmaty::{CastlingMode, Chess, Color, EnPassantMode, Move, Position};
 use std::sync::Arc;
 
 /// Bump when the meaning of a chess label changes (recorded in the teacher meta).
-pub const LABELLER_VERSION: u32 = 1;
+/// 2: the softmax teacher's secondary tie-break ([`secondary_of_raw`]).
+pub const LABELLER_VERSION: u32 = 2;
 /// `--limit nodes` default (≈ 0.1 s per position, see the module docs).
 pub const DEFAULT_NODES: u64 = 120_000;
 /// `--max-moves` default (= UCI MultiPV).
@@ -160,6 +185,11 @@ pub const DEFAULT_MAX_MOVES: usize = 8;
 pub const DEFAULT_OPTIONS: [(&str, &str); 2] = [("Threads", "1"), ("Hash", "16")];
 /// `tgt.teacher_raw` of a mate in n: ±(MATE_RAW − |n|).
 pub const MATE_RAW: f32 = 100_000.0;
+/// |teacher_raw| above this is a mate (Stockfish's cp stay within ±20000, its tablebase
+/// band; a mate is at most a few hundred moves from MATE_RAW).
+pub const MATE_THRESHOLD: f32 = 50_000.0;
+/// cp scale of the secondary utility `0.5·tanh(cp / TIE_CP_SCALE)` (see the module docs).
+pub const TIE_CP_SCALE: f32 = 1000.0;
 
 /// POV (from, to, promotion) of a move — the FromToDecoder labels.
 pub type Target = (i64, i64, i64);
@@ -181,6 +211,20 @@ pub fn raw_score(s: Score) -> f32 {
         Score::Mate(n) if n > 0 => MATE_RAW - n as f32,
         Score::Mate(n) => -MATE_RAW - n as f32,
     }
+}
+
+/// Secondary utility u ∈ [−1, 1] of a `tgt.teacher_raw` (the softmax tie-break, see the
+/// module docs): a mate in n moves → ±(0.5 + 0.5·5/(n + 4)), else 0.5·tanh(cp / 1000);
+/// `None` for a non-finite raw.
+pub fn secondary_of_raw(raw: f32) -> Option<f32> {
+    if !raw.is_finite() {
+        return None;
+    }
+    if raw.abs() > MATE_THRESHOLD {
+        // n = 100000 − |raw| moves (Score::Mate(0), mated at the root, → 1)
+        return Some(raw.signum() * u_mate(MATE_RAW - raw.abs()));
+    }
+    Some(u_cp(raw, TIE_CP_SCALE))
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -437,6 +481,18 @@ impl Labeller for ChessLabeller {
         Some("cp")
     }
 
+    fn secondary(&self, m: &ScoredMove) -> Option<f32> {
+        secondary_of_raw(m.raw)
+    }
+
+    fn secondary_meta(&self) -> Option<Value> {
+        Some(json!({
+            "of": "teacher_raw",
+            "mate": "|raw| > 50000: mate in n = max(100000 - |raw|, 1) moves, u = sign(raw) * (0.5 + 0.5*5/(n + 4))",
+            "cp": "u = 0.5 * tanh(raw / 1000)",
+        }))
+    }
+
     fn default_max_moves(&self) -> usize {
         self.max_moves
     }
@@ -631,7 +687,7 @@ mod tests {
     use crate::label::engine::EngineCommand;
     use crate::label::fake::Canned;
     use crate::label::testkit::{engine_path, overlay_tensor, quiet_opts, tmpdir};
-    use crate::label::transform::softmax_q;
+    use crate::label::transform::{softmax_q_tie, tie_scores, DEFAULT_TIE_WEIGHT};
     use gmshard::{Column, DType};
     use shakmaty::san::San;
     use std::path::{Path, PathBuf};
@@ -922,8 +978,9 @@ mod tests {
         assert!(parse_position("position fen 8/8/8/8/8/8/8/8 w - - 0 1").is_none());
     }
 
-    /// Check every teacher column of a labelled shard against a replay of the base.
-    fn check_labelled(base: &ShardReader, out: &ShardReader, k: usize, tau: f32) -> (usize, usize) {
+    /// Check every teacher column of a labelled shard against a replay of the base (π
+    /// re-derived from teacher_q / teacher_raw with tie weight `w`).
+    fn check_labelled(base: &ShardReader, out: &ShardReader, k: usize, tau: f32, w: f32) -> (usize, usize) {
         let idx = overlay_tensor(out, "tgt.teacher_idx", DType::I64, &[k]);
         let q = overlay_tensor(out, "tgt.teacher_q", DType::F32, &[k]);
         let raw = overlay_tensor(out, "tgt.teacher_raw", DType::F32, &[k]);
@@ -960,6 +1017,9 @@ mod tests {
                 assert!(row[..n].iter().all(|&a| targets.contains(&decode_action(a))), "teacher moves are legal");
                 assert!(row[n..].iter().all(|&a| a == -1) && qs[n..].iter().all(|x| x.is_nan()));
                 assert!(qs[..n].windows(2).all(|w| w[0] >= w[1]), "sorted by Q");
+                let u: Vec<f32> = raw[f * k..f * k + n].iter().map(|&r| secondary_of_raw(r).unwrap()).collect();
+                let s = tie_scores(&qs[..n], &u, tau, w);
+                assert!(s.windows(2).all(|w| w[0] >= w[1]), "sorted by the effective score Q/τ + w·u");
                 // the fake's multipv 1 line is its best move → engine value = 2·Q[0] − 1
                 assert!((ev[f] - (2.0 * qs[0] - 1.0)).abs() < 1e-6);
                 for j in 0..n {
@@ -969,7 +1029,7 @@ mod tests {
                         assert_eq!(qs[j], 1.0);
                     }
                 }
-                let pi = softmax_q(&qs[..n], tau);
+                let pi = softmax_q_tie(&qs[..n], &u, tau, w);
                 let dist: Vec<(Target, f32)> = row[..n].iter().zip(&pi).map(|(&a, &p)| (decode_action(a), p)).collect();
                 let got_from: Vec<(i64, f32)> = (0..k).filter(|&j| fi[f * k + j] >= 0).map(|j| (fi[f * k + j], fv[f * k + j])).collect();
                 let want_from = marginal(&dist, |a| a.0);
@@ -1016,6 +1076,10 @@ mod tests {
         assert_eq!(s.teacher["heads"]["from"], json!({"kind": "categorical", "n": 64, "k": 8, "storage": "sparse"}));
         assert_eq!(s.teacher["heads"]["promotion"]["storage"], "dense");
         assert_eq!(s.teacher["game"]["go"], "go nodes 1000");
+        assert_eq!((s.teacher["labeller_version"].as_u64(), s.teacher["core_version"].as_u64()), (Some(2), Some(2)));
+        assert_eq!((&s.teacher["policy"]["kind"], &s.teacher["policy"]["tau"]), (&json!("softmax"), &json!(0.05)));
+        assert_eq!(s.teacher["policy"]["tie_weight"], 2.0);
+        assert_eq!(s.teacher["policy"]["secondary"], ChessLabeller::default().secondary_meta().unwrap());
         let (mut labelled, mut forced) = (0, 0);
         for name in ["chess_00000", "chess_00001"] {
             let base = shard(&root.join("base"), name);
@@ -1024,7 +1088,7 @@ mod tests {
             for (t, info) in &base.tensors {
                 assert_eq!(out.tensors[t], *info);
             }
-            let (l, f) = check_labelled(&base, &out, 8, 0.05);
+            let (l, f) = check_labelled(&base, &out, 8, 0.05, DEFAULT_TIE_WEIGHT as f32);
             labelled += l;
             forced += f;
         }
@@ -1036,6 +1100,150 @@ mod tests {
         let (gf, gt) = (out.read_i64("tgt.from_idx").unwrap(), out.read_i64("tgt.to_idx").unwrap());
         let some = (0..out.n_frames).find(|&f| idx[f * 8..f * 8 + 8].contains(&action_id((gf[f], gt[f], 0)))).unwrap();
         assert_eq!(&pd[some * 5..some * 5 + 5], &[1.0, 0.0, 0.0, 0.0, 0.0]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Secondary utility of a raw score, written out independently of the implementation.
+    fn u_ref(raw: f32) -> f64 {
+        let r = raw as f64;
+        if r.abs() > 50_000.0 {
+            let n = (100_000.0 - r.abs()).max(1.0);
+            r.signum() * (0.5 + 0.5 * 5.0 / (n + 4.0))
+        } else {
+            0.5 * (r / 1000.0).tanh()
+        }
+    }
+
+    #[test]
+    fn secondary_utility_of_raw_scores() {
+        let u = |s: Score| secondary_of_raw(raw_score(s)).unwrap();
+        assert_eq!((u(Score::Mate(1)), u(Score::Mate(-1)), u(Score::Mate(6)), u(Score::Mate(-6))), (1.0, -1.0, 0.75, -0.75));
+        assert_eq!(u(Score::Mate(0)), -1.0, "mate 0 (mated at the root) = mated in 1");
+        assert_eq!(u(Score::Cp(0)), 0.0);
+        assert!((u(Score::Cp(1000)) - 0.5 * 1f32.tanh()).abs() < 1e-7);
+        // strictly increasing in the raw score, every mate above every cp (incl. the
+        // tablebase band ±20000) and every defeat below
+        let mut scores: Vec<Score> = (1..=250).rev().map(|n| Score::Mate(-n)).collect();
+        scores.push(Score::Mate(0));
+        scores.sort_by(|a, b| raw_score(*a).total_cmp(&raw_score(*b)));
+        scores.extend((-5000..=5000).map(Score::Cp));
+        scores.extend((1..=250).rev().map(Score::Mate));
+        let raws: Vec<f32> = scores.iter().map(|s| raw_score(*s)).collect();
+        assert!(raws.windows(2).all(|w| w[0] < w[1]));
+        let us: Vec<f32> = scores.iter().map(|s| u(*s)).collect();
+        // scores[0] = mate 0, [1] = mated in 1, …, [250] = mated in 250, then cp, then mates
+        assert_eq!((us[0], us[1]), (-1.0, -1.0), "mate 0 is clamped to mated in 1");
+        assert!(us.windows(2).skip(1).all(|w| w[0] < w[1]), "strictly increasing from mated-in-1 on");
+        assert!(us.iter().all(|x| (-1.0..=1.0).contains(x)));
+        for cp in [-20_000, -9_000, 9_000, 20_000] {
+            assert!(u(Score::Cp(cp)).abs() < 0.5 && u(Score::Cp(cp)).abs() < u(Score::Mate(250)).abs());
+        }
+        for x in [-100_000.0, -99_990.0, -1234.0, 0.0, 777.0, 99_999.0] {
+            assert!((secondary_of_raw(x).unwrap() as f64 - u_ref(x)).abs() < 1e-7, "{x}");
+        }
+        assert!(secondary_of_raw(f32::NAN).is_none());
+    }
+
+    /// A chess fake whose moves are all decided: in a "won" position (hash parity) every
+    /// legal move scores wdl 1000 0 0 — cp 200 … 2999, or (1 in 4) a mate in 1 … 8 — in a
+    /// "lost" one wdl 0 0 1000 with cp −200 … −2999 or a mate against in 1 … 8. All Q are
+    /// equal (1 or 0): only the secondary utility tells the moves apart.
+    fn decided_engine() -> EngineCommand {
+        EngineCommand::in_process("chess-decided", || {
+            UciFake::new(|line: &str| {
+                let pos = parse_position(line)?;
+                let epd = Epd::from_position(&pos, EnPassantMode::Legal).to_string();
+                let won = fnv1a(&epd) % 2 == 0;
+                let (sign, wdl) = if won { (1, [1000, 0, 0]) } else { (-1, [0, 0, 1000]) };
+                Some(
+                    pos.legal_moves()
+                        .iter()
+                        .map(|m| {
+                            let uci = m.to_uci(CastlingMode::Standard).to_string();
+                            let h = fnv1a(&format!("{epd} {uci}")) >> 8;
+                            if h % 4 == 0 {
+                                FakeMove::mate(&uci, sign * (1 + (h % 8) as i32)).wdl(wdl)
+                            } else {
+                                FakeMove::cp(&uci, sign * (200 + (h % 2800) as i32)).wdl(wdl)
+                            }
+                        })
+                        .collect(),
+                )
+            })
+        })
+    }
+
+    /// Saturated Q (every move wins, or every move loses): π follows the secondary
+    /// utility, π ∝ exp(w·u), best first by u — faster mates and slower defeats first; with
+    /// `--tie-weight 0` it is uniform (the old teacher).
+    #[test]
+    fn saturated_q_follows_the_secondary_utility_end_to_end() {
+        let root = tmpdir("chess-tie");
+        convert_games(&root, &GAMES, 2);
+        let s = run(ChessLabeller::default(), &fake_opts(&root, decided_engine())).unwrap();
+        assert_eq!((s.stats.failed_samples(), s.stats.engine_errors, s.stats.bad_analysis), (0, 0, 0), "{:?}", s.stats.errors);
+        let mut o0 = fake_opts(&root, decided_engine());
+        o0.tie_weight = Some(0.0);
+        o0.out = root.join("w0");
+        let s0 = run(ChessLabeller::default(), &o0).unwrap();
+        assert_eq!(s0.teacher["policy"]["tie_weight"], 0.0);
+        let (mut frames, mut won, mut lost, mut mates) = (0, 0, 0, 0);
+        for name in ["chess_00000", "chess_00001"] {
+            let base = shard(&root.join("base"), name);
+            let (gf, gt, gp) = (base.read_i64("tgt.from_idx").unwrap(), base.read_i64("tgt.to_idx").unwrap(), base.read_i64("tgt.promotion").unwrap());
+            for (dir, w) in [("out", 2.0f64), ("w0", 0.0)] {
+                let out = shard(&root.join(dir), name);
+                let (idx, q, raw) = (out.read_i64("tgt.teacher_idx").unwrap(), out.read_f32("tgt.teacher_q").unwrap(), out.read_f32("tgt.teacher_raw").unwrap());
+                let (fi, fv) = (out.read_i64("tgt.from_probs_idx").unwrap(), out.read_f32("tgt.from_probs_val").unwrap());
+                let (ti, tv) = (out.read_i64("tgt.to_probs_idx").unwrap(), out.read_f32("tgt.to_probs_val").unwrap());
+                for sm in &base.samples {
+                    let r = sm.range();
+                    let fr = replay_moves(&gf[r.clone()], &gt[r.clone()], &gp[r.clone()]).unwrap();
+                    for (p, f) in fr.iter().zip(r) {
+                        if p.legal.len() == 1 {
+                            continue;
+                        }
+                        let n = p.legal.len().min(8);
+                        let (row, qs, rs) = (&idx[f * 8..f * 8 + n], &q[f * 8..f * 8 + n], &raw[f * 8..f * 8 + n]);
+                        assert!(qs.iter().all(|&x| x == qs[0]) && (qs[0] == 1.0 || qs[0] == 0.0), "all Q equal: {qs:?}");
+                        let u: Vec<f64> = rs.iter().map(|&x| u_ref(x)).collect();
+                        if w > 0.0 {
+                            frames += 1;
+                            won += (qs[0] == 1.0) as usize;
+                            lost += (qs[0] == 0.0) as usize;
+                            mates += rs.iter().filter(|x| x.abs() > 50_000.0).count();
+                            assert!(rs.windows(2).all(|x| x[0] >= x[1]), "best first by the raw score (= by u): {rs:?}");
+                        }
+                        // π ∝ exp(w·u) — every head row is its marginal / conditional
+                        let e: Vec<f64> = u.iter().map(|x| (w * x).exp()).collect();
+                        let z: f64 = e.iter().sum();
+                        let pi: Vec<(Target, f64)> = row.iter().zip(&e).map(|(&a, x)| (decode_action(a), x / z)).collect();
+                        let hi = pi.iter().map(|x| x.1).fold(0.0, f64::max);
+                        let lo = pi.iter().map(|x| x.1).fold(1.0, f64::min);
+                        assert!(hi / lo <= (2.0 * w).exp() * (1.0 + 1e-9), "within one Q class the ratio is at most e^(2w)");
+                        let mut from: std::collections::BTreeMap<i64, f64> = Default::default();
+                        for (t, p) in &pi {
+                            *from.entry(t.0).or_default() += p;
+                        }
+                        for (c, want) in from {
+                            let j = (0..8).find(|&j| fi[f * 8 + j] == c).unwrap();
+                            assert!((fv[f * 8 + j] as f64 - want).abs() < 1e-5, "frame {f} from {c}: {} vs {want}", fv[f * 8 + j]);
+                        }
+                        let (g0, _, _) = p.gt_target();
+                        let mut to: std::collections::BTreeMap<i64, f64> = Default::default();
+                        for (t, pp) in pi.iter().filter(|x| x.0 .0 == g0) {
+                            *to.entry(t.1).or_default() += pp; // promotions share a to-square
+                        }
+                        let tot: f64 = to.values().sum();
+                        for (c, pp) in to {
+                            let j = (0..8).find(|&j| ti[f * 8 + j] == c).unwrap();
+                            assert!((tv[f * 8 + j] as f64 - pp / tot).abs() < 1e-5, "frame {f} to {c}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(won > 5 && lost > 5 && mates > 5, "{frames} frames: {won} won, {lost} lost, {mates} mate lines");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1051,7 +1259,7 @@ mod tests {
         assert_eq!(s.teacher["heads"]["to"]["k"], 16);
         let base = shard(&root.join("base"), "chess_00000");
         let out = shard(&root.join("out"), "chess_00000");
-        check_labelled(&base, &out, 16, 0.05);
+        check_labelled(&base, &out, 16, 0.05, DEFAULT_TIE_WEIGHT as f32);
         let f = 27;
         let idx = out.read_i64("tgt.teacher_idx").unwrap();
         let promos = idx[f * 16..f * 16 + 16].iter().filter(|&&a| a >= 4096).count();
@@ -1103,7 +1311,7 @@ mod tests {
         assert_eq!(s.teacher["game"]["go"], "go nodes 120000 depth 3");
         let base = shard(&root.join("base"), "chess_00000");
         let out = shard(&root.join("out"), "chess_00000");
-        check_labelled(&base, &out, 2, 0.05);
+        check_labelled(&base, &out, 2, 0.05, DEFAULT_TIE_WEIGHT as f32);
         assert!(ChessLabeller::default().resolve_limits(&Limits::parse(&["nodes=0".into()]).unwrap()).is_err());
         assert!(ChessLabeller::default().resolve_limits(&Limits::parse(&["movetime=10".into()]).unwrap()).is_err());
         assert_eq!(go_command(&Limits::parse(&["nodes=0".into(), "depth=9".into()]).unwrap()).unwrap(), "go depth 9");
@@ -1262,6 +1470,55 @@ mod tests {
         assert_eq!((triples(&a), a.value), (triples(&b), b.value));
         assert_eq!((triples(&a), a.value), (triples(&a2), a2.value));
         assert_ne!(triples(&a), triples(&other));
+    }
+
+    /// Real Stockfish on a game where Black drops the queen at move 2 (skipped when not
+    /// installed): in the decided positions after it the WDL saturates (several moves share
+    /// Q = 1 or Q = 0 with different cp / mate scores), and the teacher orders them by the
+    /// secondary utility — best first by (Q, raw), π ∝ exp(Q/τ + w·u) as re-derived here
+    /// from the stored Q and raw columns with an independent formula.
+    #[test]
+    fn real_stockfish_orders_decided_positions_by_the_secondary_utility() {
+        let Some(sf) = engine_path("STOCKFISH", "stockfish") else {
+            eprintln!("skipping: stockfish not found");
+            return;
+        };
+        let root = tmpdir("chess-sf-tie");
+        convert_games(&root, &[("1-0", "e4 e5 Nf3 Qh4 Nxh4 Nc6 Nf3 d6 Bc4 Bg4 O-O Nf6 d3 Be7 Nc3 O-O Bg5 h6 Bxf6 Bxf6")], 4);
+        let mut o = fake_opts(&root, EngineCommand::process(sf, &[]));
+        o.limits = Limits::parse(&["nodes=20000".into()]).unwrap();
+        let s = run(ChessLabeller::default(), &o).unwrap();
+        assert_eq!((s.stats.failed_samples(), s.stats.engine_errors, s.stats.bad_analysis), (0, 0, 0), "{:?}", s.stats);
+        let out = shard(&root.join("out"), "chess_00000");
+        let (idx, q, raw) = (out.read_i64("tgt.teacher_idx").unwrap(), out.read_f32("tgt.teacher_q").unwrap(), out.read_f32("tgt.teacher_raw").unwrap());
+        let (fi, fv) = (out.read_i64("tgt.from_probs_idx").unwrap(), out.read_f32("tgt.from_probs_val").unwrap());
+        let evm = out.read_bool("tgt.engine_value_mask").unwrap();
+        let (mut tied, mut split) = (0, 0);
+        for f in (0..out.n_frames).filter(|&f| evm[f]) {
+            let n = idx[f * 8..f * 8 + 8].iter().filter(|&&a| a >= 0).count();
+            let (row, qs, rs) = (&idx[f * 8..f * 8 + n], &q[f * 8..f * 8 + n], &raw[f * 8..f * 8 + n]);
+            // best first: by Q, among equal Q by the raw score
+            for j in 1..n {
+                assert!(qs[j - 1] > qs[j] || (qs[j - 1] == qs[j] && rs[j - 1] >= rs[j]), "frame {f}: {qs:?} {rs:?}");
+            }
+            let e: Vec<f64> = qs.iter().zip(rs).map(|(&x, &r)| ((x as f64 - qs[0] as f64) / 0.05 + 2.0 * u_ref(r)).exp()).collect();
+            let z: f64 = e.iter().sum();
+            let mut from: std::collections::BTreeMap<i64, f64> = Default::default();
+            for (&a, x) in row.iter().zip(&e) {
+                *from.entry(decode_action(a).0).or_default() += x / z;
+            }
+            for (c, want) in from {
+                let j = (0..8).find(|&j| fi[f * 8 + j] == c).unwrap();
+                assert!((fv[f * 8 + j] as f64 - want).abs() < 1e-5, "frame {f} from {c}");
+            }
+            // a Q tie between moves of different raw scores: the tie-break splits it
+            let ties = (1..n).filter(|&j| qs[j] == qs[j - 1] && rs[j] != rs[j - 1]).count();
+            tied += (ties > 0) as usize;
+            split += (ties > 0 && (qs[0] == 1.0 || qs[0] == 0.0)) as usize;
+        }
+        eprintln!("{tied} labelled frames with Q ties between different raw scores ({split} saturated at Q = 0 / 1)");
+        assert!(split >= 3, "the queen-down positions saturate the WDL");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// Real Stockfish on converted fixture games (skipped when not installed).
