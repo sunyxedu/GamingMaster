@@ -111,6 +111,26 @@ class ModelConfig:
 
     # Spatial encoder
     encoder_channels: int = 192
+    # Normalisation of the conv observation encoders (generals SpatialEncoder,
+    # board / shogi / lux / clash_royale / starcraft), one factory:
+    # model.components.encoder.make_encoder_norm.
+    #   "group" — per-frame GroupNorm with encoder_norm_groups groups: each
+    #             frame is normalised on its own, identically in train and
+    #             eval mode, so frame t of a training sequence never sees
+    #             statistics of its later frames or of other samples
+    #   "batch" — BatchNorm2d: in train mode its statistics pool every frame
+    #             of every sequence of the batch (a future / cross-sample
+    #             channel, and a train/eval mismatch); padded frames are kept
+    #             out of them and DDP merges the running statistics
+    # Checkpoints saved before this field existed load as "batch".
+    encoder_norm: str = "batch"
+    # GroupNorm groups of encoder_norm="group"; must divide encoder_channels
+    # and d_model.  1 = LayerNorm over (C, H, W) per frame (per-channel
+    # affine), the default: it keeps board-wide totals (counts, material) that
+    # smaller groups normalise away (rationale and numbers in
+    # model/components/encoder.py).  Changing it changes what a "group"
+    # checkpoint computes (it is read from the saved config).
+    encoder_norm_groups: int = 1
 
     # Action space
     n_directions: int = 4
@@ -164,6 +184,8 @@ LEGACY_CONFIG_DEFAULTS = {
     "trm_arch": "legacy",
     "halt_exploration_prob": 0.0,
     "qk_norm": False,
+    # conv observation encoders: BatchNorm2d (model/components/encoder.py)
+    "encoder_norm": "batch",
     # Lux adapter (model/games/lux.py): no unit-cell PE, the MLP sap head
     "lux_unit_cell_pe": False,
     "lux_sap_head": "mlp",

@@ -23,7 +23,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.components.encoder import ResBlock
+from model.components.encoder import conv_stack, encode_frames, encoder_norm_of, uses_batch_stats
 from model.components.transformer import _pe_from_positions, sinusoidal_pe_rows
 from model.config import ModelConfig
 from model.games.base import (
@@ -106,19 +106,11 @@ class ClashRoyaleEncoder(ObservationEncoder):
         self.n_arena_tokens = cfg.arena_h * cfg.arena_w
         self.n_tokens = self.n_arena_tokens + cfg.hand_size
 
-        # Arena conv encoder — mirrors SpatialEncoder's Conv→BN→ReLU→Res
-        # structure so masked-BatchNorm frame handling transfers unchanged.
-        c_mid = cfg.encoder_channels
-        self.arena_encoder = nn.Sequential(
-            nn.Conv2d(cfg.arena_channels, c_mid, 3, padding=1, bias=False),
-            nn.BatchNorm2d(c_mid),
-            nn.ReLU(inplace=True),
-            ResBlock(c_mid),
-            nn.Conv2d(c_mid, cfg.d_model, 3, padding=1, bias=False),
-            nn.BatchNorm2d(cfg.d_model),
-            nn.ReLU(inplace=True),
-            ResBlock(cfg.d_model),
-        )
+        # Arena conv encoder: SpatialEncoder's Conv→Norm→ReLU→Res stack
+        # (model.components.encoder.conv_stack, cfg.encoder_norm).
+        self.arena_encoder = conv_stack(cfg.arena_channels, cfg.encoder_channels, cfg.d_model,
+                                        encoder_norm_of(cfg))
+        self.batch_stats = uses_batch_stats(cfg)
 
         # Hand tokens: card identity + card scalars, summed.
         self.card_embed = nn.Embedding(cfg.n_cards, cfg.d_model)
@@ -146,21 +138,12 @@ class ClashRoyaleEncoder(ObservationEncoder):
     # ------------------------------------------------------------------
 
     def _encode_frames(self, arena_seq, frame_mask):
-        """Run the arena conv encoder, excluding padded frames from
-        BatchNorm statistics when ``frame_mask`` ([B, T] bool, True = real
-        frame) is given — same discipline as GeneralsEncoder: padded frames
-        get zero features and, being tail-padding under causal mixers,
-        cannot influence real frames."""
+        """Run the arena conv encoder over every frame (a BatchNorm stack
+        keeps padded frames out of its statistics:
+        ``model.components.encoder.encode_frames``)."""
         B, T, C, H, W = arena_seq.shape
-        BT = B * T
-        flat = arena_seq.reshape(BT, C, H, W)
-        if frame_mask is None or bool(frame_mask.all()):
-            return self.arena_encoder(flat).reshape(B, T, -1, H, W)
-        fm = frame_mask.reshape(BT)
-        enc = self.arena_encoder(flat[fm])
-        feat = enc.new_zeros(BT, enc.shape[1], H, W)
-        feat[fm] = enc
-        return feat.reshape(B, T, -1, H, W)
+        return encode_frames(self.arena_encoder, arena_seq.reshape(B * T, C, H, W), B, T,
+                             frame_mask, self.batch_stats)
 
     def forward(
         self,
