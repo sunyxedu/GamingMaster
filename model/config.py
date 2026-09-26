@@ -1,6 +1,8 @@
 """Model configuration for the Generals.io neural network."""
 
+import ast
 from dataclasses import dataclass
+from typing import Any, Mapping, Optional
 
 
 @dataclass
@@ -31,6 +33,15 @@ class ModelConfig:
     #     otherwise cannot see the 50-tick production cycle at all.
     derive_army_channels: bool = False
     turn_globals: bool = False
+    # Generals observation, sighted-mountain memory: True = a mountain the
+    # player has seen stays encoded as a mountain (state 4) after vision
+    # moves on (env.generals_env memory_vision; recorded games get it
+    # causally from their frames, model.games.generals.apply_memory_vision);
+    # False = pure instantaneous fog, the IL records' own encoding.  Which
+    # observation the network was trained on — sticky in checkpoints like
+    # turn_globals, and every env builder sets the env from it.  Configs
+    # saved before this field existed: legacy_memory_vision below.
+    memory_vision: bool = False
 
     # Core model dimensions
     d_model: int = 384
@@ -164,6 +175,12 @@ LEGACY_CONFIG_DEFAULTS = {
     "trm_arch": "legacy",
     "halt_exploration_prob": 0.0,
     "qk_norm": False,
+    # Generals sighted-mountain memory: off for a config dict on its own —
+    # the IL records have none and GeneralsVecEnv / train_rl_joint defaulted
+    # off.  The training/train_rl.py checkpoints that played with it on are
+    # recognised from the whole checkpoint (legacy_memory_vision, applied by
+    # checkpoint_config / checkpoint_config_dict).
+    "memory_vision": False,
     # Lux adapter (model/games/lux.py): no unit-cell PE, the MLP sap head
     "lux_unit_cell_pe": False,
     "lux_sap_head": "mlp",
@@ -200,3 +217,82 @@ def config_from_dict(d: dict, cls=None):
     cls = cls or ModelConfig
     d = upgrade_config_dict(d)
     return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+
+# ----------------------------------------------------------------------
+# Legacy rules that need the whole checkpoint, not just its config dict
+# ----------------------------------------------------------------------
+
+#: the config field that landed 24 minutes after GeneralsEnv's sighted-
+#: mountain memory went in, ON by default (2026-08-11: memory c56c5e2 at
+#: 21:07, joint_decoder 164e37d at 21:32).  training/train_rl.py never set
+#: the env's memory_vision, so a train_rl config dict carrying this key was
+#: written by code whose env had the memory on; one without it predates the
+#: memory (phases 1-7).
+MEMORY_VISION_ERA_FIELD = "joint_decoder"
+
+
+def is_train_rl_checkpoint(ckpt: Mapping[str, Any]) -> bool:
+    """A training/train_rl.py checkpoint (``rl_checkpoint_iter*.pt``,
+    ``rl_ema_iter*.pt``) or a scripts/distill_joint_head.py seed (distilled
+    in the same env): one ``config`` next to an ``iteration`` counter — IL
+    checkpoints count ``epoch`` / ``step``, train_rl_game ``iter``, the
+    multi-game trainers write ``configs`` and single-game exports ``game``."""
+    return ("config" in ckpt and "iteration" in ckpt
+            and "game" not in ckpt and "games" not in ckpt)
+
+
+def legacy_memory_vision(ckpt: Mapping[str, Any]) -> bool:
+    """cfg.memory_vision of a generals checkpoint written before the field
+    existed: the observation it was actually trained on.
+
+    * training/train_rl.py checkpoints (:func:`is_train_rl_checkpoint`)
+      whose config carries :data:`MEMORY_VISION_ERA_FIELD`: True —
+      GeneralsEnv defaulted to the memory from 2026-08-11 until this field
+      existed, and train_rl.py never switched it off.  Older train_rl
+      configs predate the memory: False.
+    * train_rl_joint checkpoints: what ``--env_kw generals:memory_vision=``
+      gave the env (parsed as the trainer parsed it), else False —
+      GeneralsVecEnv defaulted off and GeneralsSpec never set it.
+    * everything else — the IL checkpoints (train_il, train_il_game,
+      train_multi_game and their exports): False, the IL records have no
+      memory.
+
+    A blanket legacy True (GeneralsEnv's old default) would feed every
+    IL-only network an observation it never saw; a blanket False would take
+    the memory away from the train_rl lineages that trained with it."""
+    if is_train_rl_checkpoint(ckpt):
+        return MEMORY_VISION_ERA_FIELD in ckpt["config"]
+    if ckpt.get("stage") == "rl_joint":
+        on = False
+        for item in (ckpt.get("args") or {}).get("env_kw") or ():
+            game, _, kv = str(item).partition(":")
+            key, sep, raw = kv.partition("=")
+            if game == "generals" and key == "memory_vision" and sep:
+                try:
+                    val = ast.literal_eval(raw)
+                except (ValueError, SyntaxError):
+                    val = raw                    # the trainer kept the string
+                on = bool(val)                   # the last one wins, as there
+        return on
+    return False
+
+
+def checkpoint_config_dict(ckpt: Mapping[str, Any], game: Optional[str] = None) -> dict:
+    """A checkpoint's config dict — ``config`` of a single-game checkpoint,
+    ``configs[game]`` of a multi-game one — upgraded like
+    :func:`upgrade_config_dict`, plus the legacy rules that need the whole
+    checkpoint (a generals network's memory_vision:
+    :func:`legacy_memory_vision`)."""
+    d = dict(ckpt["config"] if game is None else ckpt["configs"][game])
+    if "memory_vision" not in d and game in (None, "generals"):
+        d["memory_vision"] = legacy_memory_vision(ckpt)
+    return upgrade_config_dict(d)
+
+
+def checkpoint_config(ckpt: Mapping[str, Any], cls=None):
+    """``cls`` (default ModelConfig) from a single-game checkpoint dict:
+    :func:`config_from_dict` of its ``config`` with the checkpoint-level
+    legacy rules (:func:`checkpoint_config_dict`) — what every loader of a
+    network that will play in an env must use."""
+    return config_from_dict(checkpoint_config_dict(ckpt), cls)
