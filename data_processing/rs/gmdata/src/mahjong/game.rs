@@ -108,11 +108,11 @@ fn response(evs: &[Value], i: usize, d: usize) -> R<Response> {
     Ok(Response { ronners, call, draw })
 }
 
-/// Label and loss weight of seat `s`'s claim decision on a discard, from the table's
-/// `resp`.  A recorded pass is the seat's choice unless another seat's call pre-empted an
-/// option it had: a ron pre-empts chi / pon / kan (a second ron is not pre-empted: Tenhou
-/// allows the double ron), a pon / daiminkan pre-empts chi.  Such passes get weight 0, and
-/// so do all claims on a discard followed by an `unexplained_draw`.
+/// Label and loss weight of seat `s`'s claim decision on a discard (or a kakan), from the
+/// table's `resp`.  A recorded pass is the seat's choice unless another seat's call
+/// pre-empted an option it had: a ron pre-empts chi / pon / kan (a second ron is not
+/// pre-empted: Tenhou allows the double ron), a pon / daiminkan pre-empts chi.  Such passes
+/// get weight 0, and so do all claims followed by an `unexplained_draw` (the triple ron).
 fn claim_label(s: usize, legal: &Legal, resp: &Response, unexplained_draw: bool) -> ((i64, i64), f32) {
     if resp.ronners.contains(&s) {
         return ((HORA, 0), 1.0);
@@ -231,12 +231,15 @@ pub(super) fn walk_game(evs: &[Value], visit: &mut dyn FnMut(&Decision)) -> R<(u
                 let a = seat(ev, "actor")?;
                 let kk = k.kakan(ev)?;
                 let resp = response(evs, i, a)?;
+                // nothing but a triple chankan (三家和) ends the kyoku right at a kakan (an
+                // abortive four-kan draw waits for the rinshan discard): outcome unknown
+                let unexplained_draw = resp.draw;
                 for rel in 1..4 {
                     let sidx = (a + rel) % 4;
                     let ctx = Ctx::Claim { kind: kk, discarder: a, chankan: true };
                     let legal = k.legal(sidx, &ctx);
-                    let label = if resp.ronners.contains(&sidx) { (HORA, 0) } else { (PASS, 0) };
-                    visit(&Decision { st: k, seat: sidx, ctx: &ctx, legal: &legal, label: Some(label), weight: 1.0, focus: Some(kk),
+                    let (label, weight) = claim_label(sidx, &legal, &resp, unexplained_draw);
+                    visit(&Decision { st: k, seat: sidx, ctx: &ctx, legal: &legal, label: Some(label), weight, focus: Some(kk),
                                       own: false, focus_actor: Some(a), event: i });
                 }
                 for rel in 1..4 {
@@ -377,4 +380,81 @@ pub(super) fn convert_game(evs: &[Value], name: &str, min_frames: usize) -> R<(V
         out.push((smp, f.stats));
     }
     Ok((out, mismatch))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mahjong::tests::fixture_games;
+
+    fn legal_with(types: &[i64]) -> Legal {
+        let mut l = Legal::none();
+        l.allow(PASS, [true; NK]);
+        for &t in types {
+            l.allow(t, [true; NK]);
+        }
+        l
+    }
+
+    fn resp(ronners: &[usize], call: Option<(usize, i64, i64)>, draw: bool) -> Response {
+        Response { ronners: ronners.to_vec(), call, draw }
+    }
+
+    #[test]
+    fn pre_empted_passes_get_weight_zero() {
+        let (chi, chi_pon) = (legal_with(&[CHI]), legal_with(&[CHI, PON]));
+        let (ron, chi_ron) = (legal_with(&[HORA]), legal_with(&[CHI, HORA]));
+        let pass = |w: f32| ((PASS, 0), w);
+        // the seat's own ron / call: its label, weight 1
+        assert_eq!(claim_label(1, &ron, &resp(&[1, 2], None, false), false), ((HORA, 0), 1.0));
+        assert_eq!(claim_label(1, &chi_pon, &resp(&[], Some((1, CHI, 3)), false), false), ((CHI, 3), 1.0));
+        // nobody took the tile: every pass is the seat's choice
+        for l in [&chi, &chi_pon, &ron, &chi_ron] {
+            assert_eq!(claim_label(1, l, &resp(&[], None, false), false), pass(1.0));
+        }
+        // another seat's ron pre-empts chi / pon / kan, never a second ron (the double ron)
+        assert_eq!(claim_label(1, &chi, &resp(&[2], None, false), false), pass(0.0));
+        assert_eq!(claim_label(1, &chi_ron, &resp(&[2], None, false), false), pass(0.0));
+        assert_eq!(claim_label(1, &ron, &resp(&[2], None, false), false), pass(1.0));
+        // a pon / daiminkan pre-empts chi; nothing pre-empts a ron or a pon
+        assert_eq!(claim_label(1, &chi, &resp(&[], Some((3, PON, 5)), false), false), pass(0.0));
+        assert_eq!(claim_label(1, &chi, &resp(&[], Some((2, KAN, 5)), false), false), pass(0.0));
+        assert_eq!(claim_label(1, &ron, &resp(&[], Some((3, PON, 5)), false), false), pass(1.0));
+        assert_eq!(claim_label(2, &legal_with(&[PON]), &resp(&[], Some((1, CHI, 3)), false), false), pass(1.0));
+        // a draw no public event explains (the triple ron): no claim outcome is known
+        for l in [&chi, &ron] {
+            assert_eq!(claim_label(1, l, &resp(&[], None, true), true), pass(0.0));
+        }
+    }
+
+    /// The triple ron (三家和), which the logs write as a bare ryukyoku after a discard: all
+    /// three other seats had a legal ron (Tenhou aborts only on three declared rons), and
+    /// none of their claim frames has a known label (weight 0).
+    #[test]
+    fn triple_ron_claims_are_legal_rons_with_weight_zero() {
+        let mut found = 0;
+        for (name, evs) in fixture_games() {
+            let mut seen: Vec<(usize, usize, bool, i64, f32)> = Vec::new();
+            walk_game(&evs, &mut |d: &Decision| {
+                if d.own || ty(&evs[d.event]) != "dahai" || d.st.wall == 0 || d.st.abortive_pending() {
+                    return;
+                }
+                let mut j = d.event + 1;
+                while j < evs.len() && matches!(ty(&evs[j]), "dora" | "reach_accepted") {
+                    j += 1;
+                }
+                if evs.get(j).map(ty) == Some("ryukyoku") {
+                    seen.push((d.event, d.seat, d.legal.types[HORA as usize], d.label.unwrap().0, d.weight));
+                }
+            })
+            .ok()
+            .unwrap();
+            assert_eq!(seen.len() % 3, 0, "{name}");
+            for (event, seat, ron_legal, label, weight) in seen {
+                assert!(ron_legal && label == PASS && weight == 0.0, "{name}: event {event} seat {seat}");
+                found += 1;
+            }
+        }
+        assert!(found >= 3, "{found}");
+    }
 }

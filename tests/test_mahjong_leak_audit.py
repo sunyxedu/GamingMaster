@@ -36,10 +36,11 @@ A discard decision point includes a dora event the log writes right after the da
 open kan's new dora together with the following discard, and one spelling of the Houou corpus (the
 akochan-reviewer converter's) logs it just after that dahai, the other just before it.
 
-Data: tests/fixtures/mahjong (the golden set) and tests/fixtures/mahjong_audit, six Tenhou Houou
+Data: tests/fixtures/mahjong (the golden set) and tests/fixtures/mahjong_audit, seven Tenhou Houou
 games of the same public HF mirror (hhim8826/tenhou-houou-mjai) chosen for rinshan kaihou after a
 kakan / daiminkan, rons on a riichi declaration tile, a pending open-kan dora flipped by a second
-kan, and legal rons declined by a riichi and a dama seat.  GM_MAHJONG_AUDIT_RAW=<directory of
+kan, legal rons declined by a riichi and a dama seat, and a triple ron (三家和, logged as a bare
+ryukyoku after the discard).  GM_MAHJONG_AUDIT_RAW=<directory of
 .mjson> repeats every test on more games (skipped when unset; GM_MAHJONG_AUDIT_MAX_GAMES /
 _SPECIAL / _PLAIN size the sweep).
 """

@@ -8,7 +8,9 @@ tgt.legal_tile_of [T, 34] the legal tile arguments of the ground-truth type
 must lie inside its masks (the converter's `mask_mismatch` stat is 0), the
 masks must actually constrain, and they must drive the decoder's IL legality
 path (tgt.legal_<key> → legal[<key>]).  tgt.il_weight [T] is 0 only on claim
-frames whose recorded pass was pre-empted by another seat's call."""
+frames whose recorded pass does not show the seat's choice: pre-empted by
+another seat's call, or a triple ron (logged as a bare draw; none in the golden
+set, see the Rust test triple_ron_claims_are_legal_rons_with_weight_zero)."""
 from __future__ import annotations
 
 import json
@@ -128,7 +130,8 @@ def test_masks_constrain(converted):
 
 def test_il_weight_marks_only_pre_empted_passes(converted):
     """Weight 0 only on claim frames labelled pass whose chi / pon / kan was pre-empted by a
-    higher-priority call; own-turn frames and every other claim keep weight 1."""
+    higher-priority call (the golden set holds no triple ron); own-turn frames and every other
+    claim keep weight 1."""
     samples = load_gm_samples(converted[0])
     types = _frames(samples, "legal_action_type").bool()
     at = _frames(samples, "action_type")

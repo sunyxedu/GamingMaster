@@ -36,8 +36,9 @@
 //!     (Tenhou allows the double ron).  The label stays pass; the mahjong decoder's il_loss
 //!     honours the weight (older shards have none: weight 1);
 //!   * a draw straight after a discard with live-wall tiles left and no abortive draw
-//!     pending can only be the triple ron (三家和), which the logs write as a bare ryukyoku:
-//!     the claim frames on that discard get weight 0 (their outcome is unknown).
+//!     pending (or straight after a kakan) can only be the triple ron (三家和), which the
+//!     logs write as a bare ryukyoku: the claim frames on that tile get weight 0 (their
+//!     outcome is unknown).
 //!
 //! Legality, exact under Tenhou's rules (https://tenhou.net/man/): `legal_action_type` = the
 //! action types legal at the frame, `legal_tile_of` = the legal tile arguments of the
