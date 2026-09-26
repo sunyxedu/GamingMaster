@@ -1753,7 +1753,7 @@ class JointRLTrainer:
         but a lux wave CONTINUES the envs' 5-match games (env/vec_lux.py), so
         their state is part of what a resume must restore."""
         mine = {g: {"num_envs": r.env.num_envs, "state": r.env.state_dict()}
-                for g, r in self.rl.items()}
+                for g, r in self.rl.items() if callable(getattr(r.env, "state_dict", None))}
         if not self.dist_env.enabled:
             return [mine]
         out: List[Optional[Dict[str, Any]]] = [None] * self.world
@@ -1772,7 +1772,7 @@ class JointRLTrainer:
             return
         for g, r in self.rl.items():
             ent = states[self.rank].get(g)
-            if ent is None:
+            if ent is None or not callable(getattr(r.env, "load_state_dict", None)):
                 continue
             if int(ent["num_envs"]) != r.env.num_envs:
                 self.log(f"[resume] note: {g} saved with {ent['num_envs']} envs, running with "
