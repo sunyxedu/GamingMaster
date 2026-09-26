@@ -257,6 +257,8 @@ pub enum Cmd {
 pub enum FakeKind {
     /// the toy game's UCI engine
     Toy,
+    /// a chess UCI engine scoring every legal move (label/chess.rs `fake_engine`)
+    Chess,
     /// rule-table engine (see label/fake.rs for the script format)
     Canned {
         #[arg(long)]
@@ -290,6 +292,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
         }
         Cmd::FakeEngine { kind } => match kind {
             FakeKind::Toy => fake::run_stdio(&mut toy::fake_engine()),
+            FakeKind::Chess => fake::run_stdio(&mut chess::fake_engine()),
             FakeKind::Canned { script } => {
                 let text = std::fs::read_to_string(&script).with_context(|| format!("read {}", script.display()))?;
                 fake::run_stdio(&mut fake::Canned::parse(&text)?)

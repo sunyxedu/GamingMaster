@@ -85,8 +85,12 @@ exercises the whole pipeline with a built-in fake engine.
 ```sh
 scripts/engines/fetch_engines.sh stockfish
 $G label chess --input data/chess/train --out data/chess_sf/train \
-   --engine ~/gm-engines/bin/stockfish --workers 32 --limit nodes=1000000
+   --engine ~/gm-engines/bin/stockfish --workers 32     # defaults: nodes=120000, MultiPV 8
 ```
+
+Per-game defaults, action-id encodings and measured throughput are in the
+module docs of `rs/gmdata/src/label/<game>.rs` (chess: `tests/test_label_chess.py`
+runs the CLI end to end with a fake engine, and with Stockfish when installed).
 
 ## Tests
 
