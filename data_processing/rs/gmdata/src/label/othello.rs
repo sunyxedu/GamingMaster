@@ -39,8 +39,10 @@
 //!                                found" on stdout: the end-of-answer marker
 //! ```
 //!
-//! so every move is scored by its own full-window search (its disc score is exact
-//! alpha-beta at the search depth, not a bound). Scores are final disc differences from
+//! so every move is scored by its own full-window search (a value, not a bound: exact
+//! results at ≤ E empties; above, Egaroucid's midgame estimate, which it reports as the
+//! rounded blend (0.9·v(d−1) + 1.1·v(d)) / 2 of its last two iterative-deepening depths).
+//! Scores are final disc differences from
 //! the side to move (`tgt.teacher_raw`, unit "discs": exact results, or the evaluation's
 //! estimate of the final difference). The engine identity recorded in the teacher meta
 //! is "Egaroucid for Console <version>" without the build flavour (OS / SIMD / compiler),
@@ -135,7 +137,14 @@
 //!   script moves the transposition table from a fixed 2^25-entry static array to the
 //!   heap (1.5 GB per process otherwise), so 64 workers need ~35–50 GB.
 //! * `clearcache` per position costs ~5% throughput and makes every answer independent of
-//!   the worker's history (two processes gave identical rows on 180 positions).
+//!   the worker's history. Reproducible across processes needs the fetch_engines.sh build:
+//!   a stock Egaroucid draws its transposition-table hash codes from an RNG seeded with
+//!   the start-up time whenever no code file ships for the `-hash` level (only 25–27 do),
+//!   so each process searched a little differently (two runs of 8 WTHOR games at the
+//!   defaults: 7 of 472 positions got a move scored 1–3 discs apart). The script seeds
+//!   that RNG with a constant, and its smoke test and
+//!   `real_egaroucid_is_deterministic_across_processes` compare two processes' searches
+//!   node for node.
 //!
 //! # Expected cluster throughput
 //!

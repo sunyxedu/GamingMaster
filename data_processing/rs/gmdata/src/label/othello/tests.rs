@@ -625,6 +625,52 @@ fn real_egaroucid_matches_an_exact_solver() {
     assert!(checked >= 20 && white > 0, "{checked} positions checked, {white} with white to move");
 }
 
+/// Two fresh processes search identically (the labels are reproducible across workers,
+/// runs and nodes): the raw hint rows — depth, move, score and node count — of midgame
+/// positions agree. A stock Egaroucid build fails this (its transposition-table hash codes
+/// come from a time-seeded RNG at -hash levels without a shipped code file); the build of
+/// fetch_engines.sh seeds it with a constant.
+#[test]
+fn real_egaroucid_is_deterministic_across_processes() {
+    let Some(engine) = real_engine() else { return };
+    let lab = OthelloLabeller::default();
+    // a small table makes index collisions (hence any hash-code difference) visible at once
+    let cfg = EngineConfig { options: vec![("hash".into(), "12".into())], ..real_cfg(&engine, &["level=11", "exact_empties=14"]) };
+    let positions: Vec<OthPos> = (0..3u64)
+        .filter_map(|seed| {
+            let g = random_game(splitmix(seed ^ 0xde7e));
+            let mut pos = OthPos::start();
+            for &(r, c) in &g {
+                if pos.empties() <= 40 && pos.n_legal() >= 3 {
+                    return Some(pos);
+                }
+                pos = pos.after((r * 8 + c) as i64)?;
+            }
+            None
+        })
+        .collect();
+    assert!(!positions.is_empty());
+    let rows = |s: &mut EgaSession| -> Vec<Vec<String>> {
+        let mut out = Vec::new();
+        for p in &positions {
+            let cmds = ["clearcache".to_string(), format!("setboard {}", p.to_egaroucid()), "hint 3".to_string()];
+            for l in s.exchange(&cmds, cfg.timeout).unwrap() {
+                // |level|depth|move|score|time|nodes|nps|: all but time and nps
+                let f: Vec<String> = l.trim().trim_matches('|').split('|').map(|x| x.trim().to_string()).collect();
+                if f.len() >= 7 && f[0] != "Level" {
+                    out.push(vec![f[1].clone(), f[2].clone(), f[3].clone(), f[5].clone()]);
+                }
+            }
+        }
+        out
+    };
+    let a = rows(&mut lab.open_session(&cfg).unwrap());
+    std::thread::sleep(Duration::from_millis(5)); // a time-seeded RNG would now differ
+    let b = rows(&mut lab.open_session(&cfg).unwrap());
+    assert_eq!(a.len(), 3 * positions.len());
+    assert_eq!(a, b, "two Egaroucid processes searched differently: rebuild with scripts/engines/fetch_engines.sh egaroucid");
+}
+
 /// Real games × real engine: Egaroucid's exact solve of the position with D empties (D =
 /// the WTHOR header's theoretical-score depth, 24 for WTH_2021) reproduces the database's
 /// perfect-play ("theoretical") black score, for the first games of the committed fixture.

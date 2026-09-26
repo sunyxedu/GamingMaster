@@ -79,3 +79,42 @@ def test_egaroucid_build_flags(tmp_path):
     assert _host("egaroucid_cpu_flags", tmp_path, flags=EPYC_9355) == ["-march=native", "-mtune=native"]
     assert _host("VENDOR=AuthenticAMD; egaroucid_flavor", tmp_path, flags=EPYC_9355) == ["x86_64-avx512-amd"]
     assert _host("egaroucid_flavor", tmp_path, os_="Darwin", arch="arm64") == ["arm64-generic"]
+
+
+def _bash(snippet, tmp_path, check=True):
+    r = subprocess.run([BASH, "-c", f'source "{SCRIPT}"; {snippet}'], capture_output=True, text=True,
+                       env={**os.environ, "GM_ENGINES": str(tmp_path)})
+    if check:
+        assert r.returncode == 0, r.stderr
+    return r
+
+
+def test_egaroucid_source_patches(tmp_path):
+    """The labelling patches: heap transposition table + a fixed RNG seed (without the
+    seed the table's hash codes, and so the searches, differ between processes)."""
+    eng = tmp_path / "src" / "src" / "engine"
+    eng.mkdir(parents=True)
+    (eng / "setting.hpp").write_text("// x\n#define TT_USE_STACK true\n#define OTHER true\n")
+    (eng / "common.hpp").write_text("inline uint64_t tim();\nstd::mt19937 raw_myrandom(tim());\nint y;\n")
+    r = _bash(f'egaroucid_patch "{tmp_path / "src"}"; echo "$EGAROUCID_SEED"', tmp_path)
+    assert "warning" not in r.stderr, r.stderr
+    seed = r.stdout.split()[-1]
+    assert seed.isdigit()
+    assert (eng / "setting.hpp").read_text() == "// x\n#define TT_USE_STACK false\n#define OTHER true\n"
+    assert (eng / "common.hpp").read_text() == f"inline uint64_t tim();\nstd::mt19937 raw_myrandom({seed});\nint y;\n"
+    # a source the patch does not match is reported, not silently accepted
+    (eng / "common.hpp").write_text("std::mt19937 raw_myrandom(std::random_device{}());\n")
+    assert "RNG seed patch did not apply" in _bash(f'egaroucid_patch "{tmp_path / "src"}"', tmp_path).stderr
+
+
+def test_egaroucid_probe_parses_hint_rows(tmp_path):
+    """The determinism probe keeps depth, move, score and node count of each hint row."""
+    fake = tmp_path / "fake-egaroucid"
+    fake.write_text(
+        "#!/bin/sh\ncat >/dev/null\n"
+        "echo '|          Level|          Depth|           Move|          Score|           Time|          Nodes|            NPS|'\n"
+        "echo '|             11|         11@74%|             d6|            +13|  000:00:00.013|         111651|        8588538|'\n"
+        "echo '[ERROR] something else on stdout'\n")
+    fake.chmod(0o755)
+    rows = _bash(f'egaroucid_probe "{fake}"', tmp_path).stdout.splitlines()
+    assert [r.split() for r in rows] == [["Depth", "Move", "Score", "Nodes"], ["11@74%", "d6", "+13", "111651"]]

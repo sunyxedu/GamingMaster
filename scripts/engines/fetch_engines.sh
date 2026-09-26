@@ -28,7 +28,9 @@
 #              per-arch builds, chosen here from the CPU flags (STOCKFISH_ARCH overrides).
 #   Egaroucid  GPL-3.0. Built from source, github.com/Nyanyan/Egaroucid (console engine, one
 #              translation unit; AVX-512 / AVX2 / generic build by CPU flags, generic on ARM;
-#              transposition table on the heap: TT_USE_STACK=false). Its evaluation file
+#              patched for labelling: transposition table on the heap (TT_USE_STACK=false)
+#              and a fixed RNG seed, so every process searches identically — see
+#              egaroucid_patch; the smoke test checks both). Its evaluation file
 #              (bin/resources/eval.egev2) ships in the same repository under the same licence.
 #   YaneuraOu  GPL-3.0. Built from source, github.com/yaneurao/YaneuraOu, standard NNUE
 #              edition (halfkp_256x2-32-32). Eval: "Háo" (tanuki- project, release
@@ -298,11 +300,46 @@ egaroucid_flavor() {
     echo "$ARCH-$f"
 }
 
+# Revision of the source patches below: part of the install directory name, so a changed
+# patch set rebuilds instead of reusing an older build of the same tag.
+EGAROUCID_PATCH_REV=gm1
+# Fixed seed of Egaroucid's RNG (see egaroucid_patch).
+EGAROUCID_SEED=20260926
+
+# Source patches for labelling, applied to a checkout at $1 (both keep the search itself):
+#  * TT_USE_STACK=false: the transposition table lives on the heap, sized by -hash (the
+#    default build also constructs a static 2^25-entry table at start-up: ~1 GB resident
+#    per process whatever -hash says; heap tables are a supported configuration).
+#  * a fixed RNG seed: the repository ships transposition-table hash codes only for -hash
+#    25-27 (resources/hash/hashNN.eghs); at any other level Egaroucid draws them from an
+#    RNG seeded with the start-up time in ms, so every process indexes its table
+#    differently and searches differ slightly (measured at the labeller defaults, -hash 20
+#    level 15: ~1.5% of positions got a 1-3 disc different score, node counts differ on
+#    almost every search). With a fixed seed the codes are identical in every process
+#    and labels are reproducible across workers, runs and nodes. The RNG is otherwise only
+#    used by features the labeller does not call (book randomness, self-play, tuning).
+egaroucid_patch() {
+    local e="$1/src/engine"
+    sed -i.orig 's/^#define TT_USE_STACK true/#define TT_USE_STACK false/' "$e/setting.hpp"
+    grep -q '^#define TT_USE_STACK false' "$e/setting.hpp" \
+        || log "warning: TT_USE_STACK patch did not apply (expect ~1 GB more memory per process)"
+    sed -i.orig "s/^std::mt19937 raw_myrandom(tim());/std::mt19937 raw_myrandom($EGAROUCID_SEED);/" "$e/common.hpp"
+    grep -q "^std::mt19937 raw_myrandom($EGAROUCID_SEED);" "$e/common.hpp" \
+        || log "warning: RNG seed patch did not apply (searches would differ between processes)"
+}
+
+# The probe of the determinism smoke test: raw hint rows (depth, move, score, nodes) of a
+# 44-empties WTHOR position; identical node counts <=> identical searches.
+egaroucid_probe() {
+    printf 'setboard ------------O-----XXOOX---XXXXO---OOXOX---O-OO------O-----------X\nhint 3\nquit\n' \
+        | "$1" -quiet -nobook -thread 1 -hash 16 -level 11 2>/dev/null | awk -F'|' '/^[|]/ {print $3, $4, $5, $7}'
+}
+
 install_egaroucid() {
     have git || die "egaroucid needs git"
     local ref dir exe src cxx cpu defs out
     ref="${EGAROUCID_REF:-v7.8.3}"
-    dir="$ROOT/egaroucid/$ref-$(egaroucid_flavor)"
+    dir="$ROOT/egaroucid/$ref-$(egaroucid_flavor)-$EGAROUCID_PATCH_REV"
     exe="$dir/bin/Egaroucid_for_Console.out"
     if [ -x "$exe" ]; then
         log "Egaroucid $ref already built"
@@ -310,12 +347,7 @@ install_egaroucid() {
         src="$dir.src"
         rm -rf "$src" "$dir.tmp"
         git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" https://github.com/Nyanyan/Egaroucid.git "$src"
-        # Heap transposition table sized by -hash: the default build also constructs a static
-        # 2^25-entry table at start-up (~1 GB resident per process whatever -hash says).
-        # TT_USE_STACK=false is a supported configuration of the same search.
-        sed -i.orig 's/^#define TT_USE_STACK true/#define TT_USE_STACK false/' "$src/src/engine/setting.hpp"
-        grep -q '^#define TT_USE_STACK false' "$src/src/engine/setting.hpp" \
-            || log "warning: TT_USE_STACK patch did not apply (expect ~1 GB more memory per process)"
+        egaroucid_patch "$src"
         cxx="${EGAROUCID_CXX:-}"
         if [ -z "$cxx" ]; then
             if [ "$OS" = Linux ] && have g++; then cxx=g++; elif have clang++; then cxx=clang++; else cxx=c++; fi
@@ -345,6 +377,16 @@ install_egaroucid() {
         | "$BIN/egaroucid" -quiet -nobook -thread 1 -hash 16 -level 5 2>/dev/null | grep -c -E '[|][[:space:]]+(c4|d3|e6|f5)[|]')" || true
     if [ -z "$ver" ] || [ "$n" != 4 ]; then
         die "$BIN/egaroucid failed its smoke test (version: ${ver:-none}; $n of 4 opening moves)"
+    fi
+    # determinism: two processes must search identically (see egaroucid_patch)
+    local p1 p2
+    p1="$(egaroucid_probe "$BIN/egaroucid")" || true
+    p2="$(egaroucid_probe "$BIN/egaroucid")" || true
+    if [ "$(printf '%s\n' "$p1" | grep -c .)" != 4 ] || [ "$p1" != "$p2" ]; then
+        die "$BIN/egaroucid is not deterministic across processes (the RNG seed patch is missing?):
+$p1
+---
+$p2"
     fi
     echo "egaroucid: $BIN/egaroucid -> $exe ($ver; eval $dir/bin/resources/eval.egev2; GPL-3.0)"
 }
