@@ -674,11 +674,16 @@ def _decoder_cases():
            "poke_feats": torch.randn(B, T, S, cfg.pokemon_feature_dim, generator=g),
            "slot_mask": torch.rand(B, T, S, generator=g) < 0.7,
            "field_seq": torch.randn(B, T, cfg.pokemon_field_features, generator=g)}
+    # converter v2 targets: move identity (−1 = none), unlabelled frames
     tgt = {"action_type": torch.randint(0, 2, (B, T), generator=g),
            "move_idx": torch.randint(-1, 4, (B, T), generator=g),
+           "move_id": torch.randint(-1, cfg.pokemon_move_buckets, (B, T), generator=g),
            "switch_idx": torch.randint(0, 6, (B, T), generator=g),
            "tera": torch.randint(0, 2, (B, T), generator=g),
-           "active_idx": torch.randint(0, 6, (B, T), generator=g)}
+           "active_idx": torch.randint(0, 6, (B, T), generator=g),
+           "action_known": torch.rand(B, T, generator=g) < 0.8}
+    tgt["action_type"][0, 1] = -1
+    pk_obs, pk_tgt = obs, tgt
     pred = net(obs, labels={"action_type": drop(tgt["action_type"]),
                             "active_idx": tgt["active_idx"]})
     out.append(("pokemon", net, pred, tgt, mask))
@@ -764,6 +769,13 @@ def _decoder_cases():
     pred = net(obs, legal={"unit": unit_mask})
     out.append(("lux", net, pred, tgt, mask))
 
+    # the legacy pokemon slot head (configs saved before pokemon_move_head)
+    torch.manual_seed(0)
+    cfg = _small(PokemonConfig, pokemon_species_buckets=64, pokemon_move_head="slot")
+    net = GameNetwork(cfg, PokemonEncoder(cfg), PokemonDecoder(cfg))
+    pred = net(pk_obs, labels={"action_type": drop(pk_tgt["action_type"]),
+                               "active_idx": pk_tgt["active_idx"]})
+    out.append(("pokemon_slot", net, pred, pk_tgt, mask))
     return out
 
 
@@ -786,10 +798,10 @@ HEADS = {
 }
 
 
-@pytest.mark.parametrize("case", range(7))
+@pytest.mark.parametrize("case", range(8))
 def test_owned_decoders_reconstruct_il_loss(case):
     name, net, pred, tgt, mask = _decoder_cases()[case]
-    key = "generals" if name.startswith("generals") else name
+    key = name.split("_")[0] if name.startswith(("generals", "pokemon")) else name
     dec = net.action_decoder
     il = dec.il_loss(pred, tgt, mask)
     terms = dec.il_head_terms(pred, tgt, mask)

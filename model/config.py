@@ -169,6 +169,8 @@ LEGACY_CONFIG_DEFAULTS = {
     "lux_sap_head": "mlp",
     # Clash Royale adapter (model/games/clash_royale.py): frame-index wait PE
     "cr_wait_time": "frame",
+    # Pokémon adapter (model/games/pokemon.py): the revealed-move slot head
+    "pokemon_move_head": "slot",
 }
 
 #: LEGACY_CONFIG_DEFAULTS keys of ONE game's config class → a marker field
@@ -179,6 +181,8 @@ LEGACY_CONFIG_SCOPE = {
     "lux_unit_cell_pe": "n_unit_actions",
     "lux_sap_head": "n_unit_actions",
     "cr_wait_time": "cr_global_features",
+    # every loadable pokemon config: the slot head needs pokemon_move_buckets
+    "pokemon_move_head": "pokemon_move_buckets",
 }
 
 

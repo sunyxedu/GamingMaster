@@ -30,7 +30,9 @@ the single source of truth shared with the converter via the
     15     revealed                 has entered battle at least once
     16     tera                     is terastallized
 
-Field-token features (``pokemon_field_features = 20``):
+Field-token features (``pokemon_field_features``: 20 for converter v1
+shards and legacy configs, 22 for converter v2 — the trainers take it from
+the shard meta ``field_features``):
 
     0-4    weather one-hot          sun/rain/sand/snow/other (all 0 = clear)
     5-8    terrain one-hot          electric/grassy/misty/psychic
@@ -39,12 +41,26 @@ Field-token features (``pokemon_field_features = 20``):
                                     sticky web, screens/3 (reflect + light
                                     screen + aurora veil count)
     15-19  opponent side conditions (same layout)
+    20     forced-switch request    (v2) KO replacement / pivot / eject
+    21     team-preview request     (v2) the lead choice
 
 obs keys:
     species_ids [B, T, 12] long     hash-bucket species ids (0 = unknown)
     poke_feats  [B, T, 12, F]       numeric features above
     slot_mask   [B, T, 12] bool     True = species known (slot exists)
-    field_seq   [B, T, 20]          field features above
+    field_seq   [B, T, 20 | 22]     field features above
+    move_ids    [B, T, 4] long      hash ids of the first four moves the
+                                    active Pokémon REVEALED before the frame
+                                    (0 = none yet) — state for the decoder,
+                                    forwarded as ``legal["move_ids"]``
+                                    (training.train_il_game.LEGAL_FROM_OBS)
+
+Frames (converter v2, data_processing/rs/gmdata/src/pokemon.rs): one per
+request the player answers — the team-preview lead, every turn (with a
+masked label, ``tgt.action_known`` 0 / ``action_type`` −1, when the choice
+is not visible in the log) and every forced switch, snapshotted when the
+request is issued.  A live bot calls the network at every request with the
+same flags (field 20 on ``forceSwitch`` requests, 21 at team preview).
 
 ``frame_mask`` is intentionally a no-op: the encoder has no batch
 statistics (no BatchNorm — only per-frame pointwise Linear/Embedding),
@@ -54,16 +70,29 @@ contract.
 
 Action space:
 
-    type 0 = move    argument: categorical over 4 move slots.  Slot k is
-                     scored by the identity of the k-th REVEALED move of
-                     the active mon: the converter emits
-                     ``obs["move_ids"]`` [T, 4] hash-bucket ids (0 = not
-                     yet revealed) in the same revelation order the
-                     ``move_idx`` label indexes, the trainer forwards
-                     them via ``legal`` (LEGAL_FROM_OBS), and the head
-                     scores each slot's move embedding against
-                     (active_embed, type_embed, ll).  Plus an optional
-                     Bernoulli terastallize flag.
+    type 0 = move    argument (``pokemon_move_head``):
+                     "identity" (default): a categorical over the whole move
+                       vocabulary — the ``pokemon_move_buckets`` hash ids of
+                       move names (id 0 = no move, never chosen).  Move v is
+                       scored by its embedding (the table that also embeds
+                       ``move_ids``) against a query from (active_embed,
+                       type_embed, ll, the revealed moves), plus a learned
+                       bonus for the revealed moves.  IL target
+                       ``tgt.move_id`` (the used move, first uses included);
+                       IL scores the whole vocabulary — the moveset is
+                       private until revealed — and a live bot masks it to
+                       the moves of its request: ``legal["move_id"]``
+                       [.., V] bool, built by :func:`request_move_mask` /
+                       :func:`legal_from_request`.  Sampled / replayed as
+                       ``actions["move_id"]``.
+                     "slot" (legacy — configs saved before the field
+                       existed, model.config.LEGACY_CONFIG_DEFAULTS): a
+                       pointer over the 4 revealed-move slots of
+                       ``move_ids``, target ``tgt.move_idx`` (−1 = the move
+                       is not in obs: unsupervised), mask ``legal["move"]``,
+                       ``actions["move_idx"]``.  It cannot choose a move
+                       before it was revealed.
+                     Plus an optional Bernoulli terastallize flag.
     type 1 = switch  argument: pointer over the 6 own slot tokens.
 
 Because the acting Pokémon is state, not a decision, the decoder needs
@@ -71,15 +100,15 @@ its own-slot index from outside: ``decode`` reads ``active_idx`` [B, T]
 long from ``labels`` (IL: the converter stores it in ``tgt``) or from
 ``legal`` (rollout / PPO replay), defaulting to slot 0 if absent.
 ``move_ids`` travels the same way (legal or labels); without it every
-slot shares the id-0 embedding and the move head degrades to the old
-positional prior.
+revealed-move input is id 0 ("nothing revealed").
 """
 
 from __future__ import annotations
 
+import math
 import zlib
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -94,6 +123,7 @@ from model.games.base import (
     bernoulli_log_prob_entropy,
     categorical_entropy,
     masked_sample,
+    safe_masked_logits,
 )
 
 # Per-slot numeric feature indices (shared with the converter).
@@ -115,6 +145,13 @@ FIELD_FEATURE_DIM_V2 = 22
 
 N_MOVE_SLOTS = 4
 TEAM_SLOTS = 6
+
+#: the move argument heads (``PokemonConfig.pokemon_move_head``)
+MOVE_HEADS = ("identity", "slot")
+
+#: raw identity-head logit of id 0 ("no move"): finite, so mask-free consumers
+#: (z-loss, KL diagnostics) stay finite, and low enough to carry no mass
+NO_MOVE_LOGIT = -1e4
 
 
 def move_bucket(name: str, n_buckets: int) -> int:
@@ -138,15 +175,21 @@ class PokemonConfig(ModelConfig):
     pokemon_feature_dim: int = POKE_FEATURE_DIM
     #: hash buckets for the species embedding (id 0 = unknown)
     pokemon_species_buckets: int = 512
-    #: hash buckets for the revealed-move embedding (id 0 = unrevealed
-    #: slot) — the move head scores slots by their move identity, so the
-    #: within-battle revelation-order labels refer to observable content
+    #: hash buckets of the move vocabulary (id 0 = no move): embeds the
+    #: revealed moves (obs move_ids) and, with the identity head, is its
+    #: output space (converter v2 default: 1024, from the shard meta)
     pokemon_move_buckets: int = 256
-    #: field-token features (weather/terrain/turn/side conditions)
+    #: field-token features (weather/terrain/turn/side conditions [+ the v2
+    #: request flags]: 20 = converter v1 / legacy, 22 = v2 shard meta)
     pokemon_field_features: int = FIELD_FEATURE_DIM
     #: 0 = move, 1 = switch
     n_action_types: int = 2
     n_move_slots: int = N_MOVE_SLOTS
+    #: move argument head: "identity" = categorical over the move vocabulary
+    #: (target tgt.move_id, deploy mask legal["move_id"]); "slot" = the legacy
+    #: pointer over the 4 revealed-move slots (tgt.move_idx).  Configs saved
+    #: before the field existed load as "slot" (LEGACY_CONFIG_DEFAULTS).
+    pokemon_move_head: str = "identity"
 
 
 class PokemonEncoder(ObservationEncoder):
@@ -205,30 +248,40 @@ class PokemonEncoder(ObservationEncoder):
 
 
 class PokemonDecoder(ActionDecoder):
-    """Hierarchical Type → (Move slot + Tera | Switch target) decoder.
+    """Hierarchical Type → (Move + Tera | Switch target) decoder.
 
     legal keys (all optional):
         action_type [B, T, 2] bool
-        move        [B, T, 4] bool      legal move slots
+        move_id     [B, T, V] bool      identity head: usable moves (the
+                                        request's, :func:`request_move_mask`)
+        move        [B, T, 4] bool      slot head: legal revealed-move slots
         switch      [B, T, 6] bool      own bench slots (alive, not active)
         tera        [B, T] bool         may still terastallize
         active_idx  [B, T] long         own active slot (NOT a mask — the
                                         acting Pokémon is state)
+        move_ids    [B, T, 4] long      revealed-move ids (state, not a mask)
     labels keys (teacher forcing, −1 → sample):
         action_type [B, T] long
         active_idx  [B, T] long         conditioning state, never sampled
+
+    decode() echoes the masks it was given — ``action_type_mask``,
+    ``move_mask`` (the head's move mask), ``switch_mask`` — so il_loss
+    scores the legal-masked distributions under the trainers'
+    ``--il_legal_mask`` (converter v2 ``tgt.legal_action_type`` /
+    ``legal_switch``); without masks il_loss is the plain CE.
 
     Hierarchical log-prob: type_lp plus the move head + tera Bernoulli
     only on move frames, the switch pointer only on switch frames (the
     ARG_USES table, Hearthstone discipline).  The tera Bernoulli is
     additionally gated by ``legal["tera"]`` when provided: once tera is
     spent the flag is deterministic and contributes no log-prob/entropy.
-    Sampling, replay and entropy all gather the same flags.
+    Sampling, replay and entropy all gather the same flags.  ``greedy``
+    (evaluation) takes argmaxes instead of samples.
     """
 
     #: (uses_move, uses_switch, uses_tera) per action type
     ARG_USES_DEFAULT = [
-        (True, False, True),    # 0 move:   move slot + tera flag
+        (True, False, True),    # 0 move:   move + tera flag
         (False, True, False),   # 1 switch: target own slot
     ]
 
@@ -240,6 +293,15 @@ class PokemonDecoder(ActionDecoder):
                 f"n_action_types={cfg.n_action_types} but the ARG_USES table "
                 f"has {len(self.ARG_USES_DEFAULT)} rows"
             )
+        self.move_head_kind = getattr(cfg, "pokemon_move_head", "slot")
+        if self.move_head_kind not in MOVE_HEADS:
+            raise ValueError(f"pokemon_move_head must be one of {MOVE_HEADS}, "
+                             f"got {self.move_head_kind!r}")
+        identity = self.move_head_kind == "identity"
+        #: the action key / legal key / class count of the move argument
+        self.move_action_key = "move_id" if identity else "move_idx"
+        self.move_legal_key = "move_id" if identity else "move"
+        self.n_move_classes = cfg.pokemon_move_buckets if identity else cfg.n_move_slots
         self.register_buffer(
             "ARG_USES", torch.tensor(self.ARG_USES_DEFAULT, dtype=torch.bool)
         )
@@ -247,16 +309,30 @@ class PokemonDecoder(ActionDecoder):
         d = cfg.d_model
         self.type_head = MLPHead(d, cfg.n_action_types)
         self.type_embed = nn.Embedding(cfg.n_action_types, d)
-        # Move slots are scored by their revealed-move identity: slot k's
-        # hash-bucket move id (0 = not yet revealed, from legal/labels
-        # "move_ids") is embedded and scored against (active_embed, type,
-        # ll).  Without move_ids all slots share the id-0 embedding and
-        # the head degrades to a positional prior.
+        # One move embedding table: it embeds the revealed moves (move_ids,
+        # 0 = none) and, for the identity head, the candidate moves.
         self.move_embed = nn.Embedding(cfg.pokemon_move_buckets, d)
-        self.move_slot_embed = nn.Parameter(
-            torch.randn(1, cfg.n_move_slots, d) * 0.02,
-        )
-        self.move_head = PointerHead(d, n_queries=3)  # move slots ⊗ (active, type, ll)
+        if identity:
+            # query (active_embed, type, ll, mean revealed-move embedding) ·
+            # key(move embedding) + per-move bias + revealed-move bonus
+            self.move_query = MLPHead(4 * d, d, hidden=d)
+            self.move_key = nn.Linear(d, d, bias=False)
+            # −log(V − 1): the initial log-partition over the real moves is ≈ 0
+            # (softmax-neutral; keeps the z-loss of a large vocabulary small)
+            self.move_bias = nn.Parameter(
+                torch.full((cfg.pokemon_move_buckets,),
+                           -math.log(max(cfg.pokemon_move_buckets - 1, 1))))
+            self.move_revealed = nn.Parameter(torch.zeros(()))
+            no_move = torch.zeros(cfg.pokemon_move_buckets, dtype=torch.bool)
+            no_move[0] = True
+            self.register_buffer("no_move", no_move, persistent=False)
+        else:
+            # Legacy slot head: slot k is scored by its revealed-move identity
+            # (move_ids[k]) against (active_embed, type, ll).
+            self.move_slot_embed = nn.Parameter(
+                torch.randn(1, cfg.n_move_slots, d) * 0.02,
+            )
+            self.move_head = PointerHead(d, n_queries=3)  # move slots ⊗ (active, type, ll)
         # Switch target: pointer over the 6 own slot tokens ⊗ (type, ll).
         self.switch_head = PointerHead(d, n_queries=2)
         self.tera_head = MLPHead(d * 2, 1, hidden=d)
@@ -269,15 +345,34 @@ class PokemonDecoder(ActionDecoder):
     # Decode: tokens → logits
     # ------------------------------------------------------------------
 
+    def _sample(self, logits, mask):
+        """One index per row: masked sample, or the masked argmax when greedy."""
+        if self.greedy:
+            with torch.no_grad():
+                return safe_masked_logits(logits, mask).argmax(-1)
+        return masked_sample(logits, mask)
+
     def _pick(self, logits, label, mask, BT, n):
         """Teacher-forced (−1 rows → sampled) or fully sampled index [BT]."""
         if label is not None:
             gt = label.reshape(BT).long().clamp(0, n - 1)
             needs_sample = label.reshape(BT) < 0
             if needs_sample.any():
-                return torch.where(needs_sample, masked_sample(logits, mask), gt)
+                return torch.where(needs_sample, self._sample(logits, mask), gt)
             return gt
-        return masked_sample(logits, mask)
+        return self._sample(logits, mask)
+
+    def _identity_logits(self, move_ids, active_embed, te, ll):
+        """[BT, V] identity-head logits (id 0 at NO_MOVE_LOGIT)."""
+        present = move_ids > 0                                         # [BT, 4]
+        emb = self.move_embed(move_ids) * present.unsqueeze(-1)
+        revealed_ctx = emb.sum(1) / present.sum(1, keepdim=True).clamp(min=1)
+        q = self.move_query(torch.cat([active_embed, te, ll, revealed_ctx], dim=-1))
+        keys = self.move_key(self.move_embed.weight)                   # [V, d]
+        logits = (q @ keys.t()) * (q.shape[-1] ** -0.5) + self.move_bias
+        revealed = torch.zeros_like(logits).scatter(1, move_ids, present.to(logits.dtype))
+        logits = logits + self.move_revealed * revealed
+        return logits.masked_fill(self.no_move, NO_MOVE_LOGIT)
 
     def decode(
         self,
@@ -297,12 +392,13 @@ class PokemonDecoder(ActionDecoder):
 
         def _legal(key, n):
             m = legal.get(key) if legal else None
-            return m.reshape(BT, n) if m is not None else None
+            return m.reshape(BT, n).bool() if m is not None else None
 
+        type_mask = _legal("action_type", cfg.n_action_types)
         type_logits = self.type_head(ll)                               # [BT, 2] raw
         action_type = self._pick(
             type_logits, labels.get("action_type") if labels else None,
-            _legal("action_type", cfg.n_action_types), BT, cfg.n_action_types,
+            type_mask, BT, cfg.n_action_types,
         )
         te = self.type_embed(action_type)
 
@@ -333,21 +429,32 @@ class PokemonDecoder(ActionDecoder):
         else:
             move_ids = torch.zeros(BT, cfg.n_move_slots, dtype=torch.long,
                                    device=device)
-        move_tokens = self.move_embed(move_ids) + self.move_slot_embed
-        move_logits = self.move_head(move_tokens, active_embed, te, ll)
+        if self.move_head_kind == "identity":
+            move_logits = self._identity_logits(move_ids, active_embed, te, ll)
+        else:
+            move_tokens = self.move_embed(move_ids) + self.move_slot_embed
+            move_logits = self.move_head(move_tokens, active_embed, te, ll)
         switch_logits = self.switch_head(own_tokens, te, ll)           # [BT, 6]
         tera_logit = self.tera_head(
             torch.cat([active_embed, ll], dim=-1)
         ).squeeze(-1)                                                  # [BT]
 
-        return {
+        out = {
             "action_type_logits": type_logits.reshape(B, T, cfg.n_action_types),
-            "move_logits": move_logits.reshape(B, T, cfg.n_move_slots),
+            "move_logits": move_logits.reshape(B, T, self.n_move_classes),
             "switch_logits": switch_logits.reshape(B, T, cfg.team_slots),
             "tera_logit": tera_logit.reshape(B, T),
             "action_type_used": action_type.reshape(B, T),
             "active_idx_used": active_idx.reshape(B, T),
         }
+        # echo the masks decode() was given (il_loss has no legal dict)
+        for key, legal_key, n in (("action_type_mask", "action_type", cfg.n_action_types),
+                                  ("move_mask", self.move_legal_key, self.n_move_classes),
+                                  ("switch_mask", "switch", cfg.team_slots)):
+            m = type_mask if legal_key == "action_type" else _legal(legal_key, n)
+            if m is not None:
+                out[key] = m.reshape(B, T, n)
+        return out
 
     # ------------------------------------------------------------------
     # Shared lp/entropy core — one code path for sample() and
@@ -366,23 +473,32 @@ class PokemonDecoder(ActionDecoder):
             safe[..., 0] = safe[..., 0].masked_fill(all_masked, 0.0)
         return safe
 
+    def _masks(self, pred, legal):
+        """(type, move, switch) masks: the ``legal`` dict's, else decode()'s echoes."""
+        def get(legal_key, echo):
+            m = legal.get(legal_key) if legal else None
+            if m is None:
+                m = pred.get(echo)
+            return m.bool() if m is not None else None
+        return (get("action_type", "action_type_mask"), get(self.move_legal_key, "move_mask"),
+                get("switch", "switch_mask"))
+
     def _lp_ent(self, pred, actions, legal):
         """Hierarchical (log_prob, entropy, per-head entropies) for any
         leading shape ([B] rollout or [B, T] replay)."""
-        def _m(key):
-            return legal.get(key) if legal else None
+        type_mask, move_mask, switch_mask = self._masks(pred, legal)
 
-        type_masked = self._mask_logits(pred["action_type_logits"], _m("action_type"))
+        type_masked = self._mask_logits(pred["action_type_logits"], type_mask)
         type_lp = F.log_softmax(type_masked, dim=-1).gather(
             -1, actions["action_type"].unsqueeze(-1)).squeeze(-1)
         type_ent = categorical_entropy(type_masked)
 
-        move_masked = self._mask_logits(pred["move_logits"], _m("move"))
+        move_masked = self._mask_logits(pred["move_logits"], move_mask)
         move_lp = F.log_softmax(move_masked, dim=-1).gather(
-            -1, actions["move_idx"].unsqueeze(-1)).squeeze(-1)
+            -1, actions[self.move_action_key].unsqueeze(-1)).squeeze(-1)
         move_ent = categorical_entropy(move_masked)
 
-        switch_masked = self._mask_logits(pred["switch_logits"], _m("switch"))
+        switch_masked = self._mask_logits(pred["switch_logits"], switch_mask)
         switch_lp = F.log_softmax(switch_masked, dim=-1).gather(
             -1, actions["switch_idx"].unsqueeze(-1)).squeeze(-1)
         switch_ent = categorical_entropy(switch_masked)
@@ -392,7 +508,7 @@ class PokemonDecoder(ActionDecoder):
         )
 
         uses = self.ARG_USES[actions["action_type"]]                   # [..., 3]
-        tera_gate = _m("tera")
+        tera_gate = legal.get("tera") if legal else None
         use_move = uses[..., 0]
         use_switch = uses[..., 1]
         use_tera = uses[..., 2] if tera_gate is None else uses[..., 2] & tera_gate
@@ -436,24 +552,25 @@ class PokemonDecoder(ActionDecoder):
 
         All argument heads are sampled even when the type doesn't use
         them so the replay buffer always holds valid indices; the
-        ARG_USES gather zeroes their log-prob contribution.  A tera flag
-        sampled while ``legal["tera"]`` is False is forced to 0 — its
-        log-prob contribution is gated to zero on both the rollout and
-        replay paths, so the PPO ratio stays exact."""
+        ARG_USES gather zeroes their log-prob contribution.  The move
+        argument is ``move_id`` (identity head) or ``move_idx`` (slot head).
+        A tera flag sampled while ``legal["tera"]`` is False is forced to
+        0 — its log-prob contribution is gated to zero on both the rollout
+        and replay paths, so the PPO ratio stays exact."""
         with torch.no_grad():
-            move_idx = masked_sample(
-                pred["move_logits"], legal.get("move") if legal else None,
-            )
-            switch_idx = masked_sample(
-                pred["switch_logits"], legal.get("switch") if legal else None,
-            )
-            tera = torch.bernoulli(torch.sigmoid(pred["tera_logit"])).long()
+            _, move_mask, switch_mask = self._masks(pred, legal)
+            move = self._sample(pred["move_logits"], move_mask)
+            switch_idx = self._sample(pred["switch_logits"], switch_mask)
+            if self.greedy:
+                tera = (pred["tera_logit"] > 0).long()
+            else:
+                tera = torch.bernoulli(torch.sigmoid(pred["tera_logit"])).long()
             tera_gate = legal.get("tera") if legal else None
             if tera_gate is not None:
                 tera = tera * tera_gate.long()
             actions = {
                 "action_type": pred["action_type_used"],
-                "move_idx": move_idx,
+                self.move_action_key: move,
                 "switch_idx": switch_idx,
                 "tera": tera,
             }
@@ -481,26 +598,51 @@ class PokemonDecoder(ActionDecoder):
         pred: Dict[str, torch.Tensor],
         tgt: Dict[str, torch.Tensor],
         seq_mask: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Dict[str, Any]:
         """Per-head targets, weights, denominators and per-element losses —
-        the one code path :meth:`il_loss` and :meth:`il_head_terms` share."""
+        the one code path :meth:`il_loss` and :meth:`il_head_terms` share.
+
+        Frames without an observed choice (``tgt.action_type`` −1 /
+        ``tgt.action_known`` 0, converter v2) carry no policy loss and no
+        q_halt answer.  With decode() mask echoes (``--il_legal_mask``)
+        each head scores its masked logits; a target outside its mask gets
+        weight 0 (its CE would be +inf) and is counted in
+        ``illegal_target_frac``; the normalisers are unchanged.  Without
+        -1 labels, ``action_known`` and masks this is the historical loss,
+        bit for bit."""
         cfg = self.cfg
         B, T = pred["action_type_used"].shape
         seq_f = seq_mask.float()
-        n_seq = seq_f.sum().clamp(min=1)
 
+        known = tgt["action_type"] >= 0
+        if "action_known" in tgt:
+            known = known & tgt["action_known"].bool()
         tgt_type = tgt["action_type"].long().clamp(0, cfg.n_action_types - 1)
         uses = self.ARG_USES[tgt_type]                                 # [B, T, 3]
+        if self.move_head_kind == "identity":
+            if "move_id" not in tgt:
+                raise ValueError(
+                    "the identity move head (pokemon_move_head='identity') trains on "
+                    "tgt['move_id'], which pokemon shards have from gmdata converter v2 on: "
+                    "re-convert the data, or build pokemon_move_head='slot'")
+            move_tgt, move_ok = tgt["move_id"], tgt["move_id"] >= 1
+        else:
+            # move_idx −1 on a move frame is unsupervisable (the used move
+            # has no observed slot); _ce's clamp would otherwise silently
+            # train slot 0.
+            move_tgt, move_ok = tgt["move_idx"], tgt["move_idx"] >= 0
+        type_mask = pred.get("action_type_mask")
+        move_mask = pred.get("move_mask")
+        switch_mask = pred.get("switch_mask")
 
         with torch.no_grad():
+            known_f = known.float()
             type_match = (pred["action_type_used"] == tgt_type).float()
-            # move_idx −1 on a move frame is unsupervisable (the used
-            # move has no observed slot); _ce's clamp would otherwise
-            # silently train slot 0.
-            w_move = (uses[..., 0].float() * (tgt["move_idx"] >= 0).float()
-                      * type_match * seq_f)
-            w_switch = uses[..., 1].float() * type_match * seq_f
-            w_tera = uses[..., 2].float() * seq_f
+            w_type = seq_f * known_f
+            w_move = uses[..., 0].float() * move_ok.float() * type_match * w_type
+            w_switch = uses[..., 1].float() * type_match * w_type
+            w_tera = uses[..., 2].float() * w_type
+            n_type = w_type.sum().clamp(min=1)
             n_move = w_move.sum().clamp(min=1)
             n_switch = w_switch.sum().clamp(min=1)
             n_tera = w_tera.sum().clamp(min=1)
@@ -512,20 +654,41 @@ class PokemonDecoder(ActionDecoder):
                 reduction="none",
             ).reshape(B, T).nan_to_num(0.0), safe_tgt
 
-        type_loss_all, _ = _ce(pred["action_type_logits"], tgt_type, cfg.n_action_types)
-        move_loss_all, safe_move = _ce(pred["move_logits"], tgt["move_idx"], cfg.n_move_slots)
-        switch_loss_all, safe_switch = _ce(pred["switch_logits"], tgt["switch_idx"],
-                                           cfg.team_slots)
+        type_scored = self._mask_logits(pred["action_type_logits"], type_mask)
+        move_scored = self._mask_logits(pred["move_logits"], move_mask)
+        switch_scored = self._mask_logits(pred["switch_logits"], switch_mask)
+        type_loss_all, _ = _ce(type_scored, tgt_type, cfg.n_action_types)
+        move_loss_all, safe_move = _ce(move_scored, move_tgt, self.n_move_classes)
+        switch_loss_all, safe_switch = _ce(switch_scored, tgt["switch_idx"], cfg.team_slots)
         tgt_tera = tgt["tera"].float().clamp(0.0, 1.0)
         tera_loss_all = F.binary_cross_entropy_with_logits(
             pred["tera_logit"], tgt_tera, reduction="none",
         ).nan_to_num(0.0)
-        return dict(seq_f=seq_f, n_seq=n_seq, tgt_type=tgt_type, uses=uses,
-                    w_move=w_move, n_move=n_move, w_switch=w_switch, n_switch=n_switch,
-                    w_tera=w_tera, n_tera=n_tera, type_loss_all=type_loss_all,
+
+        def _legal_only(mask, target, ce, w):
+            """(ce, weight, illegal) with targets outside ``mask`` unsupervised."""
+            if mask is None:
+                return ce, w, None
+            ok = mask.bool().gather(-1, target.unsqueeze(-1)).squeeze(-1)
+            return torch.where(ok, ce, torch.zeros_like(ce)), w * ok.float(), ~ok & (w > 0)
+
+        type_loss_all, w_type, bad_type = _legal_only(type_mask, tgt_type, type_loss_all, w_type)
+        move_loss_all, w_move, bad_move = _legal_only(move_mask, safe_move, move_loss_all, w_move)
+        switch_loss_all, w_switch, bad_switch = _legal_only(switch_mask, safe_switch,
+                                                            switch_loss_all, w_switch)
+        illegal = None
+        for bad in (bad_type, bad_move, bad_switch):
+            if bad is not None:
+                illegal = bad if illegal is None else illegal | bad
+        return dict(seq_f=seq_f, known=known, tgt_type=tgt_type, uses=uses, move_ok=move_ok,
+                    w_type=w_type, n_type=n_type, w_move=w_move, n_move=n_move,
+                    w_switch=w_switch, n_switch=n_switch, w_tera=w_tera, n_tera=n_tera,
+                    type_scored=type_scored, move_scored=move_scored,
+                    switch_scored=switch_scored, type_mask=type_mask, move_mask=move_mask,
+                    switch_mask=switch_mask, type_loss_all=type_loss_all,
                     move_loss_all=move_loss_all, safe_move=safe_move,
                     switch_loss_all=switch_loss_all, safe_switch=safe_switch,
-                    tgt_tera=tgt_tera, tera_loss_all=tera_loss_all)
+                    tgt_tera=tgt_tera, tera_loss_all=tera_loss_all, illegal=illegal)
 
     def il_head_terms(
         self,
@@ -535,16 +698,19 @@ class PokemonDecoder(ActionDecoder):
     ) -> Dict[str, Dict]:
         """:meth:`il_loss` per head (``ActionDecoder.il_head_terms``):
         ``action_type`` / ``move`` / ``switch`` categorical, ``tera``
-        Bernoulli; weights include il_loss's ARG_USES gating and type-match
-        condition weights (soft targets: ``tgt["move_probs"]`` etc.)."""
+        Bernoulli; weights include il_loss's label mask, ARG_USES gating and
+        type-match condition weights (soft targets: ``tgt["move_probs"]``
+        over the move head's classes — the vocabulary for the identity
+        head — etc.)."""
         p = self._il_parts(pred, tgt, seq_mask)
         return {
             "action_type": {"logits": pred["action_type_logits"], "ce": p["type_loss_all"],
-                            "weight": p["seq_f"], "norm": p["n_seq"]},
+                            "weight": p["w_type"], "norm": p["n_type"], "mask": p["type_mask"]},
             "move": {"logits": pred["move_logits"], "ce": p["move_loss_all"],
-                     "weight": p["w_move"], "norm": p["n_move"]},
+                     "weight": p["w_move"], "norm": p["n_move"], "mask": p["move_mask"]},
             "switch": {"logits": pred["switch_logits"], "ce": p["switch_loss_all"],
-                       "weight": p["w_switch"], "norm": p["n_switch"]},
+                       "weight": p["w_switch"], "norm": p["n_switch"],
+                       "mask": p["switch_mask"]},
             "tera": {"logits": pred["tera_logit"], "kind": "bernoulli",
                      "ce": p["tera_loss_all"], "weight": p["w_tera"], "norm": p["n_tera"]},
         }
@@ -562,22 +728,27 @@ class PokemonDecoder(ActionDecoder):
         from the wrong type embedding are not a learning signal.  The
         tera head conditions only on state (active embed + ll), so it
         needs no condition weight; its BCE runs on all GT move frames.
+        Frames without an observed choice are left out entirely (and are
+        not q_halt answers); decode() mask echoes switch to masked CE
+        (:meth:`_il_parts`).
 
-        tgt keys: action_type / move_idx / switch_idx / tera [B, T] long
-        (unused arguments may be −1; a −1 ``move_idx`` on a move frame
-        marks an expert move outside the 4 observed slots — 5th+ reveal —
-        and contributes no move loss; extra keys like value / active_idx
-        are ignored).
+        tgt keys: action_type / switch_idx / tera [B, T] long (unused
+        arguments may be −1; action_type −1 = no observed choice), the
+        move target of the head — ``move_id`` (identity: the used move's
+        vocabulary id, ≥ 1) or ``move_idx`` (slot: −1 = the used move has
+        no observed slot, contributes no move loss) — and optional
+        ``action_known`` [B, T] bool; extra keys like value / active_idx /
+        legal_* are ignored.
         """
         p = self._il_parts(pred, tgt, seq_mask)
-        seq_f, n_seq = p["seq_f"], p["n_seq"]
+        w_type, n_type = p["w_type"], p["n_type"]
         w_move, n_move = p["w_move"], p["n_move"]
         w_switch, n_switch = p["w_switch"], p["n_switch"]
         w_tera, n_tera = p["w_tera"], p["n_tera"]
         tgt_type, uses = p["tgt_type"], p["uses"]
         safe_move, safe_switch, tgt_tera = p["safe_move"], p["safe_switch"], p["tgt_tera"]
 
-        type_loss = (p["type_loss_all"] * seq_f).sum() / n_seq
+        type_loss = (p["type_loss_all"] * w_type).sum() / n_type
         move_loss = (p["move_loss_all"] * w_move).sum() / n_move
         switch_loss = (p["switch_loss_all"] * w_switch).sum() / n_switch
         tera_loss = (p["tera_loss_all"] * w_tera).sum() / n_tera
@@ -585,20 +756,23 @@ class PokemonDecoder(ActionDecoder):
         loss = type_loss + move_loss + switch_loss + tera_loss
 
         with torch.no_grad():
-            type_acc = ((pred["action_type_logits"].argmax(-1) == tgt_type).float() * seq_f).sum() / n_seq
-            move_acc = ((pred["move_logits"].argmax(-1) == safe_move).float() * w_move).sum() / n_move
-            switch_acc = ((pred["switch_logits"].argmax(-1) == safe_switch).float() * w_switch).sum() / n_switch
-            tera_acc = (((pred["tera_logit"] > 0).float() == tgt_tera).float() * w_tera).sum() / n_tera
+            type_hit = p["type_scored"].argmax(-1) == tgt_type
+            move_hit = p["move_scored"].argmax(-1) == safe_move
+            switch_hit = p["switch_scored"].argmax(-1) == safe_switch
+            tera_hit = (pred["tera_logit"] > 0).float() == tgt_tera
+            type_acc = (type_hit.float() * w_type).sum() / n_type
+            move_acc = (move_hit.float() * w_move).sum() / n_move
+            switch_acc = (switch_hit.float() * w_switch).sum() / n_switch
+            tera_acc = (tera_hit.float() * w_tera).sum() / n_tera
             u = uses.bool()
-            answer_ok = ((pred["action_type_logits"].argmax(-1) == tgt_type)
-                         & ((pred["move_logits"].argmax(-1) == safe_move)
-                            | ~u[..., 0] | (tgt["move_idx"] < 0))
-                         & ((pred["switch_logits"].argmax(-1) == safe_switch) | ~u[..., 1])
-                         & (((pred["tera_logit"] > 0).float() == tgt_tera) | ~u[..., 2]))
+            answer_ok = (type_hit
+                         & (move_hit | ~u[..., 0] | ~p["move_ok"])
+                         & (switch_hit | ~u[..., 1])
+                         & (tera_hit | ~u[..., 2]))
 
-        return {
+        out = {
             "answer_correct": answer_ok,
-            "answer_mask": seq_mask.bool(),
+            "answer_mask": seq_mask.bool() & p["known"],
             "loss": loss,
             "type_loss": type_loss.detach(),
             "move_loss": move_loss.detach(),
@@ -609,3 +783,85 @@ class PokemonDecoder(ActionDecoder):
             "switch_acc": switch_acc,
             "tera_acc": tera_acc,
         }
+        if p["illegal"] is not None:
+            n_seq = p["seq_f"].sum().clamp(min=1)
+            out["illegal_target_frac"] = (p["illegal"].float() * p["seq_f"]).sum() / n_seq
+        return out
+
+
+# ----------------------------------------------------------------------
+# Deploy: the legal dict of a live Showdown request
+# ----------------------------------------------------------------------
+
+def request_move_mask(moves: Sequence[Sequence[str]], n_buckets: int,
+                      device: Optional[torch.device] = None) -> torch.Tensor:
+    """[B, n_buckets] bool identity-head mask of B requests: row b = the
+    usable moves of request b's active Pokémon (display names or Showdown
+    ids, e.g. ``[m["id"] for m in request["active"][0]["moves"] if not
+    m.get("disabled")]``), hashed like the converter (:func:`move_bucket`).
+    A row without moves (a switch-only request) is all False."""
+    mask = torch.zeros(len(moves), n_buckets, dtype=torch.bool, device=device)
+    for b, names in enumerate(moves):
+        for name in names:
+            v = move_bucket(name, n_buckets)
+            if v:
+                mask[b, v] = True
+    return mask
+
+
+def legal_from_request(
+    request: Mapping[str, Any],
+    slot_of: Mapping[str, int],
+    n_buckets: int,
+    move_ids: Optional[torch.Tensor] = None,
+    n_slots: int = TEAM_SLOTS,
+    device: Optional[torch.device] = None,
+) -> Dict[str, torch.Tensor]:
+    """The decoder ``legal`` dict (a batch of one: [1, ...]) for a Showdown
+    request JSON (the ``|request|`` message of a battle), for
+    ``GameNetwork.step(obs, legal=...)`` — the deploy-time mask hook of the
+    identity move head.
+
+    ``slot_of`` maps a request Pokémon's ``ident`` ("p1: Garchomp") to its
+    model slot, fixed at team preview: the team-preview request lists
+    ``side.pokemon`` in the ``|poke|`` order the converter's slots follow
+    (Showdown reorders ``side.pokemon`` on every switch later).
+    ``move_ids`` [4] (or [1, 4]): the revealed-move ids of the active
+    Pokémon from the bot's own battle-log tracker — the same causal state
+    as the converter's ``obs.move_ids``, NOT the request's moveset.
+
+    Keys: ``action_type`` [move, switch] (team preview / ``forceSwitch``:
+    switch only), ``move_id`` (the request's usable moves; empty on switch
+    requests), ``switch`` (alive, not active; nothing while ``trapped``
+    outside a forced switch), ``tera`` (``canTerastallize``), ``active_idx``
+    (0 at team preview) and ``move_ids`` when given.  The obs of the same
+    request must carry field_seq[FIELD_FORCED_SWITCH] = 1 for a
+    ``forceSwitch`` request and field_seq[FIELD_TEAM_PREVIEW] = 1 at team
+    preview.  ``wait`` requests are no decision."""
+    preview = bool(request.get("teamPreview"))
+    forced = any(bool(x) for x in (request.get("forceSwitch") or []))
+    alive = [False] * n_slots
+    active: Optional[int] = None
+    for p in (request.get("side") or {}).get("pokemon", []):
+        k = slot_of.get(p.get("ident", ""))
+        if k is None or not 0 <= k < n_slots:
+            continue
+        alive[k] = not str(p.get("condition", "")).strip().endswith("fnt")
+        if p.get("active") and not preview:
+            active = k
+    act = (request.get("active") or [{}])[0] if not (preview or forced) else {}
+    switch = [alive[k] and (preview or k != active) for k in range(n_slots)]
+    if act.get("trapped"):
+        switch = [False] * n_slots
+    moves = [m.get("id") or m.get("move", "") for m in act.get("moves", [])
+             if not m.get("disabled")]
+    legal = {
+        "action_type": torch.tensor([[bool(moves), any(switch)]], device=device),
+        "move_id": request_move_mask([moves], n_buckets, device=device),
+        "switch": torch.tensor([switch], device=device),
+        "tera": torch.tensor([bool(act.get("canTerastallize")) and bool(moves)], device=device),
+        "active_idx": torch.tensor([active if active is not None else 0], device=device),
+    }
+    if move_ids is not None:
+        legal["move_ids"] = torch.as_tensor(move_ids, device=device).long().reshape(1, -1)
+    return legal
