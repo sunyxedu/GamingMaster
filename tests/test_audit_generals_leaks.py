@@ -11,7 +11,12 @@ FUTURE (causality)
     frame t of a record is a function of the replay up to decision t only:
     cutting the replay's moves after turn t and reconverting reproduces frames
     0..t bit for bit (obs and action targets; ``tgt.value`` is hindsight by
-    design and excluded).
+    design and excluded).  That cut keeps the move of turn t itself, so a
+    second check pins the off-by-one direction: frame t's target is the
+    player's move of turn t, and deleting it (or the opponent's move of the
+    same tick) leaves frames 0..t unchanged.  The network is causal too, both
+    against replaced later frames and against a shorter sequence (no feature
+    normalised by the sequence length).
 
 PRIVACY (fog of war)
     player p's frames are invariant to everything p cannot see:
@@ -30,6 +35,11 @@ PRIVACY (fog of war)
     direction mask is a function of p's view at every cell that can be a legal
     source (a move's destination is always inside the 3x3 vision of an owned
     tile), while its entries at other cells never reach the policy.
+
+Known issues pinned as strict xfails (they flip to XPASS, i.e. fail, once
+fixed; drop the marker then): the direction mask off a seat's own cells reads
+never-seen terrain, and memory_vision is not one recorded setting across the
+IL data, GeneralsEnv (train_rl.py) and GeneralsVecEnv (rl_joint).
 
 Data: the committed .gior fixture always; the Rust tests need cargo (skipped
 otherwise); the real-replay variants read a few ladder replays from
@@ -209,6 +219,81 @@ def test_gio_record_is_causal_real_replays(gmdata, tmp_path):
     gm = _Gm(gmdata, tmp_path)
     for replay in _real_replays(N_REAL):
         assert _check_causal(gm, replay, k=4) >= 4
+
+
+def _move_target(rec: Dict, t: int, w: int):
+    """Frame ``t``'s action target as (start cell, direction, is50) in the
+    replay's flat indexing (None on a frame without an executed move)."""
+    if rec["count"][t] != 1:
+        return None
+    return rec["src_y"][t][0] * w + rec["src_x"][t][0], rec["dir_id"][t][0], rec["ratio_id"][t][0]
+
+
+def _replay_move_target(m: Dict, w: int):
+    from env.vec_generals import direction_of
+    sr, sc = divmod(m["start"], w)
+    er, ec = divmod(m["end"], w)
+    return m["start"], direction_of(er - sr, ec - sc), int(bool(m["is50"]))
+
+
+def _check_label_and_simultaneous_move(gm: _Gm, replay: Dict, k: int) -> int:
+    """The truncation check keeps the move of turn t, so it cannot see the
+    classic off-by-one leak where frame t already shows the effect of its own
+    labelled move.  Here, for ``k`` frames t per player where the player
+    moved: (1) frame t's target IS the player's replay move of turn t;
+    (2) deleting that move leaves frames 0..t bit-identical, turns frame t's
+    target into a pass and changes frame t+1 (positive control); (3)
+    deleting the OPPONENT's move of the same turn (executed in the same tick,
+    so unknowable at decision t) leaves the player's frames 0..t
+    bit-identical while the opponent's own frame t+1 changes."""
+    w = replay["mapWidth"]
+    last = max(m["turn"] for m in replay["moves"])
+    checked = 0
+    for p, player in enumerate(replay["usernames"]):
+        other = replay["usernames"][1 - p]
+        full = gm.convert(replay, player)
+        mine = [m for m in replay["moves"]
+                if m["index"] == p and m["turn"] < last and full["count"][m["turn"]] == 1]
+        assert mine, f"{replay['id']} {player}: no executed move"
+        idx = np.linspace(0, len(mine) - 1, min(k, len(mine))).round().astype(int)
+        for m in (mine[i] for i in sorted(set(idx))):
+            t = m["turn"]
+            what = f"{replay['id']} {player} turn {t}"
+            assert _move_target(full, t, w) == _replay_move_target(m, w), what
+            # (the game may now end differently: only frames 0..t+1 matter)
+            cut = gm.convert(dict(replay, moves=[x for x in replay["moves"] if x is not m]), player)
+            assert len(cut["count"]) >= t + 1, what
+            _assert_frames_equal(full, cut, t + 1, f"{what}: own move deleted", keys=OBS_KEYS)
+            _assert_frames_equal(full, cut, t, f"{what}: own move deleted", keys=ACTION_KEYS)
+            assert cut["count"][t] == 0, what
+            if len(cut["count"]) > t + 1:
+                assert cut["grid_seq"][t + 1] != full["grid_seq"][t + 1], what
+            theirs = [x for x in replay["moves"] if x["turn"] == t and x["index"] == 1 - p]
+            if theirs:
+                r2 = dict(replay, moves=[x for x in replay["moves"] if x is not theirs[0]])
+                mine2 = gm.convert(r2, player)
+                assert len(mine2["count"]) >= t + 1, what
+                _assert_frames_equal(full, mine2, t + 1,
+                                     f"{what}: opponent's simultaneous move deleted",
+                                     keys=OBS_KEYS)
+                a, b = gm.convert(replay, other), gm.convert(r2, other)
+                if min(len(a["count"]), len(b["count"])) > t + 1:
+                    assert a["grid_seq"][t + 1] != b["grid_seq"][t + 1], what
+            checked += 1
+    return checked
+
+
+def test_gio_frame_excludes_its_own_and_the_simultaneous_move_fixture(gmdata, tmp_path):
+    """Frame t pairs the state after tick t with the move executed in tick
+    t + 1: neither that move (the label) nor the opponent's move of the same
+    tick can show in frames 0..t (fixture, both players, 8 frames each)."""
+    assert _check_label_and_simultaneous_move(_Gm(gmdata, tmp_path), _fixture_replay(), k=8) >= 12
+
+
+def test_gio_frame_excludes_its_own_and_the_simultaneous_move_real_replays(gmdata, tmp_path):
+    gm = _Gm(gmdata, tmp_path)
+    for replay in _real_replays(N_REAL):
+        assert _check_label_and_simultaneous_move(gm, replay, k=3) >= 4
 
 
 def test_gm_shard_obs_is_causal(gmdata, tmp_path):
@@ -675,6 +760,117 @@ def test_env_direction_mask_is_observable_at_own_cells():
             assert torch.equal(dm[:, own], _dir_ok_from_view(grid)[:, own]), (t, p)
             n += int(own.sum())
     assert n > 1000
+
+
+def _env_rows(variant: str) -> List[Dict[str, torch.Tensor]]:
+    """Every frame of the synthetic replay ``variant`` played through
+    GeneralsVecEnv (memory_vision and turn_globals on): per frame, both seats'
+    rows of everything the learner is handed."""
+    out = []
+    for _t, _vec, obs in _replay_frames(_synthetic_replay(variant), memory_vision=True,
+                                        turn_globals=True):
+        out.append({"grid": obs.obs["grid_seq"].clone(), "globals": obs.obs["globals_seq"].clone(),
+                    "source": obs.legal["source"].clone(),
+                    "direction": obs.legal["direction"].clone(),
+                    "capture_label": obs.aux["capture_label"].clone(),
+                    "capture_mask": obs.aux["capture_mask"].clone(),
+                    "forced": obs.forced.clone()})
+    return out
+
+
+def test_env_obs_invariant_to_opponent_play_in_fog():
+    """The RL env's version of test_gio_invariant_to_opponent_play_in_fog:
+    seat 0's grid, globals, source mask, forced flag and capture aux labels
+    are identical at every frame whether the opponent expanded left or up,
+    stood on another fogged general tile, or had its never-seen city and
+    mountain swapped (equal leaderboard totals); seat 1's own rows differ."""
+    rows = {v: _env_rows(v) for v in "ABC"}
+    assert len(rows["A"]) > 60
+    keys = ("grid", "globals", "source", "capture_label", "capture_mask", "forced")
+    for v in "BC":
+        assert len(rows[v]) == len(rows["A"])
+        for t, (a, b) in enumerate(zip(rows["A"], rows[v])):
+            for k in keys:
+                assert torch.equal(a[k][0], b[k][0]), f"variant {v} frame {t}: seat 0 {k}"
+        assert any(not torch.equal(a["grid"][1], b["grid"][1])
+                   for a, b in zip(rows["A"], rows[v]))
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "confirmed leak (audit): GeneralsEnv.dir_valid is built from the true map, so "
+    "legal['direction'] off a seat's own cells tells a never-seen mountain from a "
+    "never-seen city; no action depends on it today (decoders read it only at legal "
+    "sources), fix = build it per seat from the seat's view"))
+def test_env_direction_mask_invariant_to_opponent_private_terrain():
+    """The decoder's direction mask is decision-time input, so it must obey
+    the same privacy invariance as the observation: seat 0's
+    legal['direction'] must not change when never-seen fog obstacles trade
+    places (variants A vs B: the fogged mountain (10, 5) and city (5, 10)
+    swap) or the opponent's general moves (C)."""
+    rows = {v: _env_rows(v) for v in "ABC"}
+    for v in "BC":
+        for t, (a, b) in enumerate(zip(rows["A"], rows[v])):
+            assert torch.equal(a["direction"][0], b["direction"][0]), \
+                f"variant {v} frame {t}: seat 0 direction mask reads fogged terrain"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "confirmed deploy mismatch (audit): GeneralsEnv defaults memory_vision=True "
+    "(training/train_rl.py never sets it), GeneralsVecEnv / rl_joint default False, "
+    "the IL records have no memory and ModelConfig does not record the setting"))
+def test_memory_vision_is_one_recorded_setting():
+    """Which observation a generals checkpoint expects (pure fog as in the IL
+    records, or fog + sighted-mountain memory) must be one setting: the same
+    default in both env entry points and recorded in the model config (like
+    turn_globals), so a live client can reproduce it."""
+    from env.generals_env import GeneralsEnv
+    from env.vec_generals import GeneralsVecEnv
+    from model.config import ModelConfig
+    assert GeneralsEnv().memory_vision == GeneralsVecEnv(1).memory_vision
+    assert "memory_vision" in ModelConfig().__dict__
+
+
+@pytest.mark.parametrize("mixer,joint,act_steps", [("attention", False, 1),
+                                                    ("recurrent", True, 1),
+                                                    ("attention", True, 3)])
+def test_network_prefix_run_equals_full_run(mixer, joint, act_steps):
+    """Complement to test_network_decision_at_t_ignores_later_frames, which
+    keeps the sequence length T: a feature normalised by T (the game length
+    in IL, where a record is the whole game) would pass it.  Running only the
+    prefix [0, t] must give frames 0..t exactly the outputs of the full run
+    (eval mode, teacher-forced sources, TRM pondering depth 1 and 3)."""
+    from model.config import ModelConfig
+    from model.network import GeneralsNetwork
+    torch.manual_seed(0)
+    cfg = ModelConfig(d_model=64, n_heads=4, core_type="trm", trm_H_cycles=1, trm_L_cycles=2,
+                      trm_block_layers=1, temporal_mixer=mixer, joint_decoder=joint,
+                      predict_next_obs=True, turn_globals=True, global_features=7)
+    net = GeneralsNetwork(cfg).eval()
+    B, T = 2, 9
+    g = torch.Generator().manual_seed(3)
+    grid = torch.randn(B, T, 12, 25, 25, generator=g)
+    glb = torch.randn(B, T, cfg.global_features, generator=g)
+    lm = torch.rand(B, T, 1, 25, 25, generator=g) > 0.8
+    lm.view(B, T, -1)[..., 0] = True
+    src = lm.view(B, T, -1).float().reshape(B * T, -1).multinomial(1, generator=g).view(B, T)
+    dm = torch.rand(B, T, 4, 25, 25, generator=g) > 0.3
+
+    def run(n):
+        return net(grid[:, :n], glb[:, :n], legal_mask=lm[:, :n], direction_mask=dm[:, :n],
+                   source_y=src[:, :n] // 25, source_x=src[:, :n] % 25, act_steps=act_steps)
+
+    with torch.no_grad():
+        full = run(T)
+        checked = 0
+        for t in (0, 3, 6):
+            part = run(t + 1)
+            for k, v in full.items():
+                if torch.is_tensor(v) and v.dim() >= 2 and v.shape[:2] == (B, T):
+                    assert part[k].shape[1] == t + 1, k
+                    assert torch.allclose(v[:, :t + 1].float(), part[k].float(),
+                                          atol=1e-5, rtol=0), (k, t)
+                    checked += 1
+    assert checked >= 15
 
 
 @pytest.mark.parametrize("mixer,joint", [("attention", False), ("recurrent", True)])
