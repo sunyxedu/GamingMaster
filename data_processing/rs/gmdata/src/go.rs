@@ -3,11 +3,25 @@
 //! Frame t = position BEFORE move t, from the side to move (own / opp / empty /
 //! simple-ko planes); label = that move. Every move is replayed with captures,
 //! suicide rejection and simple ko; a record with an illegal move is skipped.
+//! One sample = one game = both colours' frames interleaved in play order.
 //!
-//!   obs.board_seq [T,4,N,N] f32
-//!   tgt.place_idx [T] i64   row*N+col (0 on pass)
-//!   tgt.passed    [T] bool
-//!   tgt.value     [T] f32   ±1 from RE for the mover, 0 for draws / unknown
+//!   obs.board_seq   [T,4,N,N] f32
+//!   obs.globals_seq [T,6] f32     0 mover is black
+//!                                 1 komi from the mover's view / 20, clipped to [-1,1]
+//!                                   (+KM when white moves, -KM when black moves —
+//!                                   KataGo's convention; 0 when KM is missing/unparseable)
+//!                                 2 komi known (KM present, parseable, finite)
+//!                                 3 area scoring (RU chinese / aga / nz / new zealand /
+//!                                   area, case-insensitive; japanese / korean / other /
+//!                                   missing → 0)
+//!                                 4 min(HA, 9) / 9
+//!                                 5 the previous move (either colour) was a pass
+//!   tgt.place_idx   [T] i64   row*N+col (0 on pass)
+//!   tgt.passed      [T] bool
+//!   tgt.value       [T] f32   ±1 from RE for the mover, 0 for draws / unknown
+//!
+//! Shard meta: {global_features: 6, board_size: N}. Converter versions: 1 = planes
+//! only; 2 = + obs.globals_seq (planes and targets unchanged).
 //!
 //! SGF scope: main line only (first variation), multi-game collections,
 //! AB/AW/AE setup, `[]` and `[tt]` (≤19×19) passes, escaped values.
@@ -21,6 +35,11 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 type Point = (i32, i32);
+
+/// 2: + obs.globals_seq (side to move, komi, ruleset, handicap, last pass).
+pub const CONVERTER_VERSION: u32 = 2;
+/// Width of obs.globals_seq (shard meta `global_features`).
+pub const GLOBAL_FEATURES: usize = 6;
 
 // ---------------------------------------------------------------- SGF
 
@@ -50,6 +69,22 @@ impl SgfGame {
     pub fn komi(&self) -> Option<f64> {
         self.first("KM").filter(|r| !r.is_empty()).and_then(|r| py_float(r))
     }
+    /// RU names an area-scoring ruleset (Chinese / AGA / New Zealand);
+    /// territory rulesets (Japanese, Korean) and unknown / missing → false.
+    pub fn area_scoring(&self) -> bool {
+        self.first("RU")
+            .map(|r| matches!(r.trim().to_lowercase().as_str(), "chinese" | "aga" | "nz" | "new zealand" | "area"))
+            .unwrap_or(false)
+    }
+}
+
+/// The per-game constants of obs.globals_seq: (komi known, komi / 20 from white's
+/// view, area scoring, handicap / 9).
+fn game_globals(g: &SgfGame) -> (bool, f32, f32, f32) {
+    let komi = g.komi().filter(|k| k.is_finite());
+    let white_komi = komi.map(|k| (k / 20.0).clamp(-1.0, 1.0) as f32).unwrap_or(0.0);
+    let ha = g.handicap().clamp(0, 9) as f32 / 9.0;
+    (komi.is_some(), white_komi, g.area_scoring() as u8 as f32, ha)
 }
 
 /// Python `float()` on a string (surrounding whitespace allowed).
@@ -438,9 +473,18 @@ fn game_to_sample(g: &SgfGame, size: i32, allow_handicap: bool, allow_no_result:
     let t = g.moves.len();
     let nn = (size * size) as usize;
     let mut planes = vec![0f32; t * 4 * nn];
+    let mut globals = vec![0f32; t * GLOBAL_FEATURES];
+    let (komi_known, white_komi, area, ha_feat) = game_globals(g);
     let (mut idx, mut passed, mut value) = (vec![0i64; t], vec![false; t], vec![0f32; t]);
     for (k, (ch, p)) in g.moves.iter().enumerate() {
         let color = if *ch == 'B' { BLACK } else { WHITE };
+        let gl = &mut globals[k * GLOBAL_FEATURES..(k + 1) * GLOBAL_FEATURES];
+        gl[0] = (color == BLACK) as u8 as f32;
+        gl[1] = if color == BLACK { -white_komi } else { white_komi };
+        gl[2] = komi_known as u8 as f32;
+        gl[3] = area;
+        gl[4] = ha_feat;
+        gl[5] = (k > 0 && passed[k - 1]) as u8 as f32;
         let base = k * 4 * nn;
         for (i, &v) in b.g.iter().enumerate() {
             planes[base + i] = (v == color) as u8 as f32;
@@ -471,6 +515,7 @@ fn game_to_sample(g: &SgfGame, size: i32, allow_handicap: bool, allow_no_result:
     let s = size as usize;
     Ok(Sample::new(meta)
         .bits("obs.board_seq", &[4, s, s], &planes)
+        .f32("obs.globals_seq", &[GLOBAL_FEATURES], globals)
         .i64("tgt.place_idx", &[], idx)
         .bool("tgt.passed", &[], passed)
         .f32("tgt.value", &[], value))
@@ -545,7 +590,8 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, board_size: i32, max
                allow_handicap: bool, allow_no_result: bool, q: Quality) -> Result<Value> {
     let files = common::find_files(input, &[".sgf"])?;
     anyhow::ensure!(!files.is_empty(), "no .sgf files under {:?}", input);
-    let mut w = ShardWriter::new(out, "go", 1, json!({}), shard_size)?;
+    let mut w = ShardWriter::new(out, "go", CONVERTER_VERSION,
+                                 json!({"global_features": GLOBAL_FEATURES, "board_size": board_size}), shard_size)?;
     let mut stats: BTreeMap<&str, usize> = BTreeMap::new();
     for k in ["converted", "unparseable_files", "wrong_board_size", "handicap", "no_result", "too_short", "illegal_move", "low_quality"] {
         stats.insert(k, 0);
@@ -623,5 +669,42 @@ mod tests {
         assert_eq!(rank_value("1p"), Some(11));
         assert_eq!(rank_value("6d?"), Some(6));
         assert_eq!(rank_value("-"), None);
+    }
+
+    fn globals_of(sgf: &str) -> Vec<[f32; GLOBAL_FEATURES]> {
+        let games = parse_sgf(sgf).unwrap();
+        let s = game_to_sample(&games[0], 9, true, true, 1, "t").unwrap();
+        let t = s.tensors.iter().find(|t| t.name == "obs.globals_seq").unwrap();
+        assert_eq!(t.frame_shape, vec![GLOBAL_FEATURES]);
+        let gmshard::Column::F32(v) = &t.col else { panic!("globals_seq must be f32") };
+        v.chunks(GLOBAL_FEATURES).map(|c| c.try_into().unwrap()).collect()
+    }
+
+    #[test]
+    fn globals_side_komi_rules_pass() {
+        // B, W, B pass, W, B, W pass, W (a W move after W's own pass: colours come from
+        // the SGF, not from alternation)
+        let g = globals_of("(;GM[1]SZ[9]KM[6.5]RU[Chinese]HA[0]RE[W+R];B[cc];W[gg];B[];W[cg];B[gc];W[tt];W[ee])");
+        let k = 6.5f32 / 20.0;
+        let colour = [1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0];
+        let prev_pass = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0];
+        assert_eq!(g.len(), 7);
+        for (i, f) in g.iter().enumerate() {
+            assert_eq!(f[0], colour[i], "frame {i} mover");
+            assert_eq!(f[1], if colour[i] == 1.0 { -k } else { k }, "frame {i} komi sign");
+            assert_eq!((f[2], f[3], f[4]), (1.0, 1.0, 0.0), "frame {i}");
+            assert_eq!(f[5], prev_pass[i], "frame {i} previous pass");
+        }
+        // missing komi, territory rules, handicap (clipped at 9 stones), huge komi clipped
+        let g = globals_of("(;SZ[9]RU[Japanese]HA[2]AB[cc][gg];W[ee];B[cg])");
+        assert_eq!(g[0], [0.0, 0.0, 0.0, 0.0, 2.0 / 9.0, 0.0]);
+        assert_eq!(g[1], [1.0, 0.0, 0.0, 0.0, 2.0 / 9.0, 0.0]);
+        let g = globals_of("(;SZ[9]KM[50]RU[ nz ]HA[12]AB[aa][ba][ca][da][ea][fa][ga][ha][ia][ab][bb][cb];W[ee];B[cg])");
+        assert_eq!(g[0], [0.0, 1.0, 1.0, 1.0, 1.0, 0.0]);
+        assert_eq!(g[1], [1.0, -1.0, 1.0, 1.0, 1.0, 0.0]);
+        let g = globals_of("(;SZ[9]KM[?]RU[AGA];B[ee];W[cc])");
+        assert_eq!(g[1], [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        let g = globals_of("(;SZ[9]KM[-3.5]RU[korean];B[ee];W[cc])");
+        assert_eq!((g[0][1], g[1][1], g[0][3]), (3.5 / 20.0, -3.5 / 20.0, 0.0));
     }
 }

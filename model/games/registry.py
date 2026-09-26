@@ -43,6 +43,13 @@ def _build_go(**overrides) -> nn.Module:
     # own stones / opponent stones / empty / simple-ko forbidden point —
     # matches the SGF converter plane layout (gmdata go convert).
     overrides.setdefault("piece_channels", 4)
+    # Converter v2 also writes obs.globals_seq [T,6] (mover is black, komi
+    # from the mover's view, komi known, area scoring, handicap, previous
+    # move was a pass) and shard meta {global_features: 6, board_size: N}.
+    # The default stays 0 = the legacy (v1, planes-only) width: checkpoints
+    # saved board_global_features=0 explicitly, and fresh runs on v2 shards
+    # take 6 from the shard meta (train_il_game META_ARCH_KEYS); a net with
+    # 0 ignores globals_seq.
     overrides.setdefault("board_global_features", 0)
     overrides.setdefault("n_promotions", 0)
     cfg = BoardConfig(**overrides)
