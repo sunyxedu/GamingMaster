@@ -19,8 +19,14 @@ Hearthstone suite), for both move heads (``pokemon_move_head`` "identity"
      move_bucket) and legacy configs rebuilding the slot head
 
 Plus the ARG_USES invariant: the move head + tera Bernoulli contribute
-log-prob only on move frames, the switch pointer only on switch frames.
+log-prob only on move frames, the switch pointer only on switch frames,
+and an end-to-end run: gmdata pokemon convert (v2) → train_il_game → resume.
 """
+
+import os
+import shutil
+import subprocess
+import sys
 
 import pytest
 import torch
@@ -729,3 +735,58 @@ def test_slot_head_il_loss_is_the_legacy_objective():
     out = net.action_decoder.il_loss(pred, tgt, mask)
     assert torch.equal(out["loss"], _reference_slot_il(pred, tgt, mask))
     assert torch.equal(out["answer_mask"], mask)
+
+
+# ======================================================================
+# 8. End to end: gmdata pokemon convert (converter v2) → train_il_game
+# ======================================================================
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CARGO = shutil.which("cargo") or os.path.expanduser("~/.cargo/bin/cargo")
+
+
+@pytest.fixture(scope="module")
+def v2_shards(tmp_path_factory):
+    if not os.path.exists(CARGO):
+        pytest.skip("cargo not installed")
+    ws = os.path.join(ROOT, "data_processing")
+    b = subprocess.run([CARGO, "build", "--release", "-q", "-p", "gmdata"], cwd=ws,
+                       capture_output=True, text=True)
+    if b.returncode != 0:
+        pytest.skip(f"cargo build failed: {b.stderr[-500:]}")
+    out = tmp_path_factory.mktemp("pk_v2") / "shards"
+    subprocess.run([os.path.join(ws, "target", "release", "gmdata"), "pokemon", "convert",
+                    "--input", os.path.join(ROOT, "tests", "fixtures", "showdown"),
+                    "--out", str(out)], check=True, capture_output=True)
+    return out
+
+
+def test_train_il_game_on_converter_v2_shards(v2_shards, tmp_path, monkeypatch, capsys):
+    """A fresh run takes the v2 field width and move vocabulary from the shard
+    meta, trains the identity head with IL legality masks (no label outside
+    them) and passes --require_frozen_schema; its checkpoint resumes."""
+    from training import train_il_game
+
+    monkeypatch.setattr(train_il_game, "pick_device", lambda: torch.device("cpu"))
+    tiny = dict(d_model=32, n_heads=4, d_ff=64, n_st_layers=1, dropout=0.0,
+                core_type="transformer", core_layers=1)
+
+    def run(epochs, *extra):
+        monkeypatch.setattr(sys, "argv", [
+            "train_il_game", "--game", "pokemon", "--data_dir", str(v2_shards),
+            "--val_dir", str(v2_shards), "--epochs", str(epochs), "--batch_size", "2",
+            "--warmup_steps", "1", "--ema_rate", "0", "--il_legal_mask",
+            "--require_frozen_schema", "--save_dir", str(tmp_path / "ck"), *extra,
+            "--override", *[f"{k}={v}" for k, v in tiny.items()]])
+        train_il_game.main()
+        return capsys.readouterr().out
+
+    log = run(1)
+    ck = torch.load(tmp_path / "ck" / "pokemon_epoch0.pt", map_location="cpu", weights_only=False)
+    cfg = ck["config"]
+    assert (cfg["pokemon_field_features"], cfg["pokemon_move_buckets"],
+            cfg["pokemon_move_head"]) == (22, 1024, "identity")
+    val = next(ln for ln in log.splitlines() if ln.startswith("[e0 val]"))
+    assert "illegal_target_frac=0.0000" in val and "move_loss=" in val
+    log = run(2, "--resume", str(tmp_path / "ck" / "pokemon_epoch0.pt"))
+    assert "[resume]" in log and (tmp_path / "ck" / "pokemon_epoch1.pt").exists()
