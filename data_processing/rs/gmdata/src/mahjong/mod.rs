@@ -90,15 +90,17 @@
 //! Full-scale conversion (schema v3: every earlier mahjong shard must be regenerated).  One
 //! Houou hanchan gives ~660 frames of ~0.8 KB: the whole corpus (~2.04M hanchan after
 //! --dedup) is ~1.35e9 frames, ~1.1 TB of shards (~540 KB per game).  On the cluster (gmdata
-//! built with `cargo build --release` in data_processing/), holding out the most recent shard:
+//! built with `cargo build --release` in data_processing/), holding out the last shard:
 //!
 //!     G=data_processing/target/release/gmdata R=~/gm-data/mahjong/raw O=~/gm-data/mahjong-v3
 //!     $G mahjong fetch --out $R --all
-//!     $G mahjong convert --hq --shard-size 256 --out $O/val --input $R/tenhou-release-00005.parquet
-//!     $G mahjong convert --hq --shard-size 256 --out $O/train \
+//!     $G mahjong convert --hq --shard-size 1024 --out $O/val --input $R/tenhou-release-00005.parquet
+//!     $G mahjong convert --hq --shard-size 1024 --out $O/train \
 //!        --input $R/tenhou-0*.parquet $R/tenhou-new-*.parquet $R/tenhou-release-0000[0-4].parquet
 //!
-//! (`--max-games N` converts only the first N games of the inputs, e.g. to fit a quota.)
+//! (val: 21.7k tenhou_to_mjai games that no other shard repeats; 1024 samples per shard keep
+//! the file count NFS-friendly, ~8k shard directories; `--max-games N` converts only the
+//! first N games of the inputs, e.g. to fit a quota; `--stats-only` previews the counts.)
 
 mod game;
 #[cfg(test)]
