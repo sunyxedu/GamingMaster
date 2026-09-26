@@ -1,0 +1,92 @@
+"""`gmdata lux convert` v2 (frozen pre-training schema) on the committed fixture.
+
+obs.globals_seq grew 6 → 11 (env parameters: unit move / sap cost, sap range,
+sensor range, env_cfg_known), tgt.sap_offset [T, 16] holds the sap target
+class (dy+7)·15 + (dx+7) (−1 = none), and the shard meta announces
+{"global_features": 11, "sap_range": 7} for the trainers' config defaults.
+The fixture's env_cfg carries none of the unit parameters: Lux S3 defaults,
+env_cfg_known = 0."""
+from __future__ import annotations
+
+import json
+import subprocess
+
+import pytest
+import torch
+
+from data_processing.games.dataset import GameShardDataset, collate_game_sequences, load_gm_samples
+from model.games.lux import LuxConfig, lux_sap_delta
+from tests.test_rust_converters_parity import CASES, gmdata  # noqa: F401  (fixture)
+
+SAP_R = 7
+
+
+@pytest.fixture(scope="module")
+def converted(gmdata, tmp_path_factory):  # noqa: F811
+    out = tmp_path_factory.mktemp("lux") / "rs"
+    args, _ = CASES["lux"]
+    r = subprocess.run([gmdata, *args, "--out", str(out)], check=True, capture_output=True,
+                       text=True)
+    return str(out), json.loads(r.stdout)
+
+
+def test_meta_and_stats(converted):
+    out, stats = converted
+    assert stats["sap_out_of_range"] == 0 and stats["samples"] == 8
+    ds = GameShardDataset(out)
+    assert ds.converter_version == 2
+    assert ds.shard_meta == {"global_features": 11, "sap_range": 7}
+    for s in load_gm_samples(out):
+        assert s["meta"]["env_cfg"] == {"unit_move_cost": 2.0, "unit_sap_cost": 10.0,
+                                        "unit_sap_range": 4.0, "unit_sensor_range": 2.0,
+                                        "known": False}
+
+
+def test_globals_env_params(converted):
+    for s in load_gm_samples(converted[0]):
+        g = s["obs"]["globals_seq"]
+        T = s["tgt"]["unit_actions"].shape[0]
+        assert g.shape == (T, 11) and g.dtype == torch.float32
+        # defaults / normalisers: move 2/5, sap cost 10/50, sap range 4/8, sensor 2/8; unknown
+        want = torch.tensor([0.4, 0.2, 0.5, 0.25, 0.0])
+        assert torch.equal(g[:, 6:], want.expand(T, 5))
+
+
+def test_sap_offsets(converted):
+    samples = load_gm_samples(converted[0])
+    for s in samples:
+        so, ua = s["tgt"]["sap_offset"], s["tgt"]["unit_actions"]
+        assert so.shape == ua.shape and so.dtype == torch.int64
+        assert torch.equal(so >= 0, ua == 5)            # a target exactly on sap units
+        assert ((so >= -1) & (so < (2 * SAP_R + 1) ** 2)).all()
+        # slot 2 always plays the raw action [9, 2, -1]: clamped to sap, offset 99
+        assert (so[:, 2] == 99).all()
+        assert lux_sap_delta(99, SAP_R) == (2, -1)
+    # a raw [5, 0, 0] (sap on the own cell) appears once per (agent, match 1)
+    allv = torch.cat([s["tgt"]["sap_offset"].flatten() for s in samples])
+    assert set(allv.unique().tolist()) == {-1, 99, 112}
+    assert lux_sap_delta(112, SAP_R) == (0, 0)
+
+
+def test_v2_shards_train_the_sap_head(converted):
+    """A net configured from the shard meta (lux_global_features 11,
+    lux_sap_range 7) consumes the v2 batch and trains the sap head."""
+    from model.game_network import GameNetwork
+    from model.games.lux import LuxDecoder, LuxEncoder
+
+    samples = load_gm_samples(converted[0])
+    batch = collate_game_sequences([{"obs": s["obs"], "tgt": s["tgt"], "meta": s["meta"]}
+                                    for s in samples[:3]])
+    meta = GameShardDataset(converted[0]).shard_meta
+    cfg = LuxConfig(d_model=32, n_heads=4, d_ff=64, n_st_layers=1, core_type="trm",
+                    trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1, halt_max_steps=1,
+                    encoder_channels=8, lux_global_features=meta["global_features"],
+                    lux_sap_range=meta["sap_range"])
+    torch.manual_seed(0)
+    net = GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg))
+    fm = batch["meta"]["frame_mask"]
+    pred = net(batch["obs"], legal={"unit": batch["obs"]["unit_mask"].bool()}, frame_mask=fm)
+    out = net.action_decoder.il_loss(pred, batch["tgt"], fm)
+    assert torch.isfinite(out["loss"]) and out["sap_loss"] > 0
+    out["loss"].backward()
+    assert net.action_decoder.sap_head.net[0].weight.grad.abs().sum() > 0
