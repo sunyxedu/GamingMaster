@@ -549,6 +549,24 @@ def _vision(env, p: int):
     return own, near & inb
 
 
+def _full_map_dir_valid(env) -> torch.Tensor:
+    """[4, H, W] the env's static direction table (GeneralsEnv.reset's
+    dir_valid) recomputed from its current map: destination on the real map
+    and not a mountain, from every non-mountain cell."""
+    from env.generals_env import _DIR_DC, _DIR_DR, _MOUNTAIN
+    dv = torch.zeros(4, env.grid_h, env.grid_w, dtype=torch.bool)
+    for r in range(env.real_h):
+        for c in range(env.real_w):
+            if env.map[r][c].terrain == _MOUNTAIN:
+                continue
+            for d in range(4):
+                nr, nc = r + _DIR_DR[d], c + _DIR_DC[d]
+                if (0 <= nr < env.real_h and 0 <= nc < env.real_w
+                        and env.map[nr][nc].terrain != _MOUNTAIN):
+                    dv[d, r, c] = True
+    return dv
+
+
 def _perturb_private(env, p: int, never: np.ndarray, rng: random.Random):
     """A copy of ``env`` that differs only in what seat p cannot observe now
     (and, for static terrain, has never observed): the opponent's fogged
@@ -556,7 +574,9 @@ def _perturb_private(env, p: int, never: np.ndarray, rng: random.Random):
     and land unchanged), a fogged city of its own made neutral (its city
     count changes, army and land do not), its fogged never-seen general
     moved, fogged neutral garrisons changed, never-seen neutral cities /
-    mountains swapped."""
+    mountains swapped.  The static direction table is rebuilt from the
+    perturbed map (reset would have built it from that map), so a direction
+    mask read off the full-map table shows the swapped terrain."""
     from env.generals_env import _BLANK, _CITY, _GENERAL, _MOUNTAIN
     e = copy.deepcopy(env)
     q = 1 - p
@@ -621,10 +641,13 @@ def _perturb_private(env, p: int, never: np.ndarray, rng: random.Random):
             t.terrain, t.army = _CITY, rng.randint(40, 50)
             e.mountains.remove(i)
             e.cities.append(i)
+    e.dir_valid = _full_map_dir_valid(e)
     return e
 
 
-_OBS_FIELDS = ("grid", "globals", "legal_mask", "capture_label", "capture_mask")
+#: every per-seat tensor of GeneralsEnv._get_observation (dir_mask = the
+#: decoder's legal["direction"])
+_OBS_FIELDS = ("grid", "globals", "legal_mask", "capture_label", "capture_mask", "dir_mask")
 
 
 def _replay_frames(replay: Dict, **vec_kw):
@@ -663,10 +686,11 @@ def _replay_env_privacy(replay: Dict, memory_vision: bool, every: int = 1, seed:
     compare its observation (what the vec env hands the learner's row) with
     the observation of an opponent-private perturbation of the state.
     Returns (#frames checked, #frames where the perturbation changed the
-    opponent's own view)."""
+    opponent's own view, #frames where it changed the full-map direction
+    table, i.e. swapped a never-seen city and mountain)."""
     rng = random.Random(seed)
     seen: Optional[List[np.ndarray]] = None
-    checked = changed = 0
+    checked = changed = terrain = 0
     for t, vec, obs in _replay_frames(replay, memory_vision=memory_vision, turn_globals=True):
         env = vec.envs[0]
         if seen is None:
@@ -680,6 +704,7 @@ def _replay_env_privacy(replay: Dict, memory_vision: bool, every: int = 1, seed:
             assert torch.equal(obs.obs["grid_seq"][p], mine["grid"])
             assert torch.equal(obs.obs["globals_seq"][p], mine["globals"])
             assert torch.equal(obs.legal["source"][p], mine["legal_mask"])
+            assert torch.equal(obs.legal["direction"][p], mine["dir_mask"])
             pert = _perturb_private(env, p, ~seen[p], rng)
             theirs = pert._get_observation(p)
             for k in _OBS_FIELDS:
@@ -687,19 +712,23 @@ def _replay_env_privacy(replay: Dict, memory_vision: bool, every: int = 1, seed:
                     f"{replay['id']} frame {t} seat {p}: {k} depends on opponent-private state"
             changed += not torch.equal(pert._get_observation(1 - p)["grid"],
                                        vec._obs[0][1 - p]["grid"])
+            terrain += not torch.equal(pert.dir_valid, env.dir_valid)
             checked += 1
-    return checked, changed
+    return checked, changed, terrain
 
 
 @pytest.mark.parametrize("memory_vision", [False, True])
 def test_env_obs_invariant_to_opponent_private_state(memory_vision):
     """Every frame of the fixture, both seats: grid, globals (incl.
-    turn_globals), source mask and the capture aux labels are unchanged by
-    any opponent-private perturbation of the simulator state — with and
-    without the sighted-mountain memory."""
-    checked, changed = _replay_env_privacy(_fixture_replay(), memory_vision)
+    turn_globals), source and direction masks and the capture aux labels are
+    unchanged by any opponent-private perturbation of the simulator state —
+    with and without the sighted-mountain memory."""
+    checked, changed, terrain = _replay_env_privacy(_fixture_replay(), memory_vision)
     assert checked > 200
     assert changed > checked // 4        # the perturbations are real for the other seat
+    # ... and so are the never-seen terrain swaps a full-map direction mask
+    # would show (test_env_direction_mask_privacy_check_is_not_vacuous)
+    assert terrain > checked // 4
 
 
 def test_env_obs_invariant_to_fogged_city_ownership():
@@ -732,8 +761,24 @@ def test_env_obs_invariant_to_fogged_city_ownership():
 
 def test_env_obs_invariant_to_opponent_private_state_real_replays():
     for i, replay in enumerate(_real_replays(N_REAL)):
-        checked, changed = _replay_env_privacy(replay, memory_vision=True, every=3, seed=i)
+        checked, changed, _ = _replay_env_privacy(replay, memory_vision=True, every=3, seed=i)
         assert checked > 20 and changed > 0
+
+
+def test_env_direction_mask_privacy_check_is_not_vacuous(monkeypatch):
+    """Positive control for the dir_mask entry of _OBS_FIELDS: the old
+    observation (the full-map table GeneralsEnv.dir_valid at every cell) is
+    caught by the opponent-private perturbations — which only works because
+    _perturb_private rebuilds that table from the perturbed map."""
+    from env.generals_env import GeneralsEnv
+    real = GeneralsEnv._get_observation
+
+    def full_map_mask(self, player_id, arrays=None):
+        return {**real(self, player_id, arrays), "dir_mask": self.dir_valid}
+
+    monkeypatch.setattr(GeneralsEnv, "_get_observation", full_map_mask)
+    with pytest.raises(AssertionError, match="dir_mask depends on opponent-private state"):
+        _replay_env_privacy(_fixture_replay(), memory_vision=False)
 
 
 def _dir_ok_from_view(grid: torch.Tensor) -> torch.Tensor:
