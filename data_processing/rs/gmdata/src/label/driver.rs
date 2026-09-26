@@ -14,7 +14,9 @@
 //! * Per frame (see [`super::game`]): replay + verify per sample, frame selection
 //!   (`--max-samples` per shard, `--every-nth-frame` with a per-sample phase so both
 //!   sides' moves are covered), skip reasons, cache, engine query with one
-//!   restart-and-retry, policy transform, head rows.
+//!   restart-and-retry, policy transform (moves sorted and truncated by the policy's
+//!   score — softmax: `Q/τ + w·u` with the game's secondary tie-break, see
+//!   [`super::transform`] — then π), head rows.
 //! * Frames without a teacher (sampling, skips, engine failures, failed samples, frames
 //!   no sample covers) get pad rows: `teacher_idx` −1, `teacher_q/raw/visits/prior` NaN,
 //!   sparse `_probs_idx` −1 / `_probs_val` 0, dense `_probs` zeros, bernoulli
@@ -35,7 +37,9 @@ use super::cache::PositionCache;
 use super::engine::{is_timeout, EngineCommand};
 use super::game::{Analysis, EngineConfig, HeadKind, HeadRow, HeadSpec, Labeller, Limits, SampleView, ScoredMove, ShardData};
 use super::pool::Pool;
-use super::transform::{clean_row, normalise, softmax_q, value_from_q, DenseRows, Padded, PolicyKind, SparseRows};
+use super::transform::{
+    clean_row, normalise, softmax_q, softmax_scores, tie_scores, value_from_q, DenseRows, Padded, PolicyKind, SparseRows, DEFAULT_TIE_WEIGHT,
+};
 use anyhow::{bail, Context, Result};
 use gmshard::{LinkPolicy, OverlayWriter, ShardReader};
 use serde::Serialize;
@@ -47,7 +51,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Bump when the driver's output layout / semantics change (recorded in the teacher meta).
-pub const CORE_VERSION: u32 = 1;
+/// 2: the softmax teacher's secondary tie-break (`π ∝ exp(Q/τ + w·u)`, moves sorted and
+/// truncated by that score; `policy.tie_weight` / `policy.secondary` in the meta).
+pub const CORE_VERSION: u32 = 2;
 
 /// Error messages kept per shard in `teacher_stats.errors`.
 const MAX_NOTES: usize = 8;
@@ -62,6 +68,9 @@ pub struct RunOpts {
     pub limits: Limits,
     pub workers: usize,
     pub tau: f64,
+    /// `--tie-weight` (w of the secondary tie-break; `None` = [`DEFAULT_TIE_WEIGHT`] where
+    /// it applies: softmax policy, no custom policy, the game defines a secondary utility)
+    pub tie_weight: Option<f64>,
     pub policy: Option<PolicyKind>,
     pub max_moves: Option<usize>,
     pub max_samples: Option<usize>,
@@ -89,6 +98,7 @@ impl RunOpts {
             limits: Limits::default(),
             workers: 1,
             tau: 0.05,
+            tie_weight: None,
             policy: None,
             max_moves: None,
             max_samples: None,
@@ -218,6 +228,8 @@ struct Worker<L: Labeller> {
     cache: PositionCache<L::Key, Analysis>,
     policy: PolicyKind,
     tau: f32,
+    /// w of the secondary tie-break; 0 unless it applies (see [`run`])
+    tie_weight: f32,
     every: usize,
     max_samples: Option<usize>,
     stop: Arc<AtomicBool>,
@@ -394,21 +406,37 @@ impl<L: Labeller> Worker<L> {
                 bail!("Q {} of action {} is not in [0, 1]", m.q, m.action);
             }
         }
-        match self.policy {
-            PolicyKind::Softmax => moves.sort_by(|x, y| y.q.total_cmp(&x.q).then(x.action.cmp(&y.action))),
-            PolicyKind::Visits => moves.sort_by(|x, y| {
-                let (vx, vy) = (if x.visits.is_nan() { -1.0 } else { x.visits }, if y.visits.is_nan() { -1.0 } else { y.visits });
-                vy.total_cmp(&vx).then(y.q.total_cmp(&x.q)).then(x.action.cmp(&y.action))
-            }),
-        }
-        moves.truncate(self.cfg.max_moves);
-        let probs = match self.lab.custom_policy(&moves) {
-            Some(w) if w.len() != moves.len() => bail!("custom policy gave {} weights for {} moves", w.len(), moves.len()),
-            Some(w) => normalise(&w).context("custom policy has no positive weight")?,
-            None => match self.policy {
-                PolicyKind::Softmax => softmax_q(&moves.iter().map(|m| m.q).collect::<Vec<_>>(), self.tau),
-                PolicyKind::Visits => normalise(&moves.iter().map(|m| m.visits).collect::<Vec<_>>()).context("no move has visits")?,
-            },
+        let probs = if self.tie_weight > 0.0 {
+            // the softmax teacher with the secondary tie-break (only set when it applies:
+            // softmax policy, no custom policy, the game defines a secondary utility)
+            let u = moves
+                .iter()
+                .map(|m| match self.lab.secondary(m) {
+                    Some(u) if u.is_finite() && (-1.0..=1.0).contains(&u) => Ok(u),
+                    Some(u) => bail!("secondary utility {u} of action {} (raw {}) is outside [-1, 1]", m.action, m.raw),
+                    None => bail!("no secondary utility for action {} (raw {})", m.action, m.raw),
+                })
+                .collect::<Result<Vec<f32>>>()?;
+            let (kept, probs) = tie_break_teacher(moves, &u, self.tau, self.tie_weight, self.cfg.max_moves);
+            moves = kept;
+            probs
+        } else {
+            match self.policy {
+                PolicyKind::Softmax => moves.sort_by(|x, y| y.q.total_cmp(&x.q).then(x.action.cmp(&y.action))),
+                PolicyKind::Visits => moves.sort_by(|x, y| {
+                    let (vx, vy) = (if x.visits.is_nan() { -1.0 } else { x.visits }, if y.visits.is_nan() { -1.0 } else { y.visits });
+                    vy.total_cmp(&vx).then(y.q.total_cmp(&x.q)).then(x.action.cmp(&y.action))
+                }),
+            }
+            moves.truncate(self.cfg.max_moves);
+            match self.lab.custom_policy(&moves) {
+                Some(w) if w.len() != moves.len() => bail!("custom policy gave {} weights for {} moves", w.len(), moves.len()),
+                Some(w) => normalise(&w).context("custom policy has no positive weight")?,
+                None => match self.policy {
+                    PolicyKind::Softmax => softmax_q(&moves.iter().map(|m| m.q).collect::<Vec<_>>(), self.tau),
+                    PolicyKind::Visits => normalise(&moves.iter().map(|m| m.visits).collect::<Vec<_>>()).context("no move has visits")?,
+                },
+            }
         };
         let value = a.value.unwrap_or_else(|| moves.iter().map(|m| m.q).fold(0.0, f32::max));
         if !(value.is_finite() && (0.0..=1.0).contains(&value)) {
@@ -432,6 +460,22 @@ impl<L: Labeller> Worker<L> {
         }
         Ok(FrameOut { moves, value: value_from_q(value), heads })
     }
+}
+
+/// The softmax teacher with the secondary tie-break over `moves` with utilities `u` (one
+/// per move; [`super::transform`] module docs): the moves sorted best first by the score
+/// `(Q − Q*)/τ + w·u` of [`tie_scores`] (then Q, u, action id), truncated to `k`, and π
+/// over the kept moves from the same scores — so the order, the truncation and π agree.
+pub fn tie_break_teacher(moves: Vec<ScoredMove>, u: &[f32], tau: f32, w: f32, k: usize) -> (Vec<ScoredMove>, Vec<f32>) {
+    let q: Vec<f32> = moves.iter().map(|m| m.q).collect();
+    let s = tie_scores(&q, u, tau, w);
+    let mut order: Vec<usize> = (0..moves.len()).collect();
+    order.sort_by(|&i, &j| {
+        s[j].total_cmp(&s[i]).then(q[j].total_cmp(&q[i])).then(u[j].total_cmp(&u[i])).then(moves[i].action.cmp(&moves[j].action))
+    });
+    order.truncate(k);
+    let probs = softmax_scores(&order.iter().map(|&i| s[i]).collect::<Vec<_>>());
+    (order.iter().map(|&i| moves[i]).collect(), probs)
 }
 
 /// Column builders of one head.
@@ -683,6 +727,28 @@ pub fn run<L: Labeller>(lab: L, opts: &RunOpts) -> Result<Summary> {
     if policy == PolicyKind::Visits && !lab.has_visits() {
         bail!("--policy visits: the {game} labeller reports no visits");
     }
+    // the secondary tie-break applies to the default softmax transform of games that
+    // define a secondary utility; an explicit non-zero --tie-weight elsewhere is an error
+    let custom = lab.custom_policy_meta();
+    let secondary = lab.secondary_meta();
+    let tie_applies = policy == PolicyKind::Softmax && custom.is_none() && secondary.is_some();
+    if let Some(w) = opts.tie_weight {
+        // the workers compute in f32: a larger w would become inf there (NaN policies)
+        if !(w.is_finite() && w >= 0.0 && (w as f32).is_finite()) {
+            bail!("--tie-weight {w}: must be finite and >= 0 (at most f32::MAX = {:e})", f32::MAX);
+        }
+        if w > 0.0 && !tie_applies {
+            let why = if policy != PolicyKind::Softmax {
+                format!("--policy {} has no tie-break (it is a softmax option)", policy.as_str())
+            } else if custom.is_some() {
+                format!("the {game} labeller's custom policy {} replaces the softmax", custom.as_ref().unwrap())
+            } else {
+                format!("the {game} labeller defines no secondary utility")
+            };
+            bail!("--tie-weight {w}: {why}");
+        }
+    }
+    let tie_weight = if tie_applies { opts.tie_weight.unwrap_or(DEFAULT_TIE_WEIGHT) } else { 0.0 };
     let (raw, visits, prior) = (lab.raw_unit().is_some(), lab.has_visits(), lab.has_prior());
     let cfg = Arc::new(EngineConfig {
         command: opts.command.clone(),
@@ -723,9 +789,10 @@ pub fn run<L: Labeller>(lab: L, opts: &RunOpts) -> Result<Summary> {
             (h.name.to_string(), m)
         })
         .collect();
-    let policy_meta = lab.custom_policy_meta().unwrap_or_else(|| match policy {
-        PolicyKind::Softmax => json!({"kind": "softmax", "tau": opts.tau}),
-        PolicyKind::Visits => json!({"kind": "visits"}),
+    let policy_meta = custom.unwrap_or_else(|| match (policy, secondary) {
+        (PolicyKind::Softmax, Some(sec)) => json!({"kind": "softmax", "tau": opts.tau, "tie_weight": tie_weight, "secondary": sec}),
+        (PolicyKind::Softmax, None) => json!({"kind": "softmax", "tau": opts.tau}),
+        (PolicyKind::Visits, _) => json!({"kind": "visits"}),
     });
     let mut teacher = json!({
         "labeller": format!("gmdata label {game}"),
@@ -759,6 +826,7 @@ pub fn run<L: Labeller>(lab: L, opts: &RunOpts) -> Result<Summary> {
                 cache: PositionCache::new(opts.cache_size),
                 policy,
                 tau: opts.tau as f32,
+                tie_weight: tie_weight as f32,
                 every: opts.every_nth_frame,
                 max_samples: opts.max_samples,
                 stop: stop.clone(),
@@ -900,4 +968,75 @@ fn check_health(s: &Stats, opts: &RunOpts, last: bool) -> Result<()> {
               100.0 * opts.max_engine_error_frac, s.errors);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::label::testkit::{quiet_opts, tmpdir};
+    use crate::label::toy::{self, ToyLabeller};
+    use crate::label::transform::softmax_q_tie;
+
+    fn mv(action: i64, q: f32) -> ScoredMove {
+        ScoredMove::new(action, q)
+    }
+
+    #[test]
+    fn tie_break_teacher_truncates_and_orders_by_the_effective_score() {
+        // all moves win (Q = 1): the kept K are the ones with the largest u, best first
+        let moves = vec![mv(10, 1.0), mv(11, 1.0), mv(12, 1.0), mv(13, 1.0), mv(14, 1.0)];
+        let u = [0.1, 0.9, -0.4, 0.5, 0.9];
+        let (kept, p) = tie_break_teacher(moves, &u, 0.05, 2.0, 3);
+        assert_eq!(kept.iter().map(|m| m.action).collect::<Vec<_>>(), vec![11, 14, 13], "u desc, ties by action id");
+        let want = softmax_q_tie(&[1.0; 3], &[0.9, 0.9, 0.5], 0.05, 2.0);
+        assert!(p.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-7), "{p:?} vs {want:?}");
+        assert!(p[0] == p[1] && p[1] > p[2] && (p.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+        // Q classes first (u rises with Q, as the games' utilities do), u splits the ties
+        let moves = vec![mv(1, 0.3), mv(2, 1.0), mv(3, 0.9), mv(4, 1.0), mv(5, 0.0)];
+        let u = [-0.1, 0.4, 0.3, 0.45, -0.6];
+        let (kept, p) = tie_break_teacher(moves, &u, 0.05, 2.0, 4);
+        assert_eq!(kept.iter().map(|m| m.action).collect::<Vec<_>>(), vec![4, 2, 3, 1]);
+        assert!(p.windows(2).all(|w| w[0] > w[1]), "{p:?}");
+        // the moves keep their columns (Q, raw) unchanged
+        let moves = vec![mv(7, 0.5).raw(-3.0), mv(8, 0.5).raw(9.0)];
+        let (kept, _) = tie_break_teacher(moves, &[-0.2, 0.5], 0.05, 2.0, 8);
+        assert_eq!((kept[0].action, kept[0].q, kept[0].raw), (8, 0.5, 9.0));
+        // τ ≤ 0: the arg-max-Q moves by u, the others after them with no mass
+        let moves = vec![mv(1, 0.9), mv(2, 1.0), mv(3, 1.0)];
+        let (kept, p) = tie_break_teacher(moves, &[1.0, -0.5, 0.5], 0.0, 2.0, 3);
+        assert_eq!(kept.iter().map(|m| m.action).collect::<Vec<_>>(), vec![3, 2, 1]);
+        assert!(p[2] == 0.0 && (p[0] / p[1] - 2f32.exp()).abs() < 1e-5);
+    }
+
+    #[test]
+    fn tie_weight_is_validated_and_recorded() {
+        let root = tmpdir("driver-tie");
+        toy::write_shards(&root.join("base"), 1, 3, 5).unwrap();
+        let o = |w: Option<f64>, out: &str| {
+            let mut o = quiet_opts(&root, toy::fake_engine_command());
+            o.tie_weight = w;
+            o.out = root.join(out);
+            o
+        };
+        // the toy defines no secondary utility: the policy meta is the plain softmax, and an
+        // explicit non-zero weight is refused (0 = off is accepted)
+        let s = run(ToyLabeller::default(), &o(None, "a")).unwrap();
+        assert_eq!(s.teacher["policy"], json!({"kind": "softmax", "tau": 0.05}));
+        assert_eq!(s.teacher["core_version"], CORE_VERSION);
+        let s0 = run(ToyLabeller::default(), &o(Some(0.0), "b")).unwrap();
+        assert_eq!(s0.teacher["policy"], s.teacher["policy"]);
+        let err = run(ToyLabeller::default(), &o(Some(1.0), "c")).unwrap_err().to_string();
+        assert!(err.contains("--tie-weight 1") && err.contains("defines no secondary utility"), "{err}");
+        let mut v = o(Some(2.0), "d");
+        v.policy = Some(PolicyKind::Visits);
+        let err = run(ToyLabeller { visits: true, ..Default::default() }, &v).unwrap_err().to_string();
+        assert!(err.contains("--policy visits"), "{err}");
+        // 1e39 is a finite f64 but inf as the workers' f32
+        for bad in [-1.0, f64::NAN, f64::INFINITY, 1e39, f64::MAX] {
+            let err = run(ToyLabeller::default(), &o(Some(bad), "e")).unwrap_err().to_string();
+            assert!(err.contains("must be finite and >= 0"), "{err}");
+        }
+        assert!(!root.join("c").exists() && !root.join("d").exists() && !root.join("e").exists(), "nothing written");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

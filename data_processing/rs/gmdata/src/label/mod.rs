@@ -20,8 +20,9 @@
 //! Teacher columns (`[T, …]`, T = the shard's frames; K = `--max-moves`):
 //!
 //! ```text
-//! tgt.teacher_idx        [T,K] i64   flat action ids of the scored moves, best first, −1 pad
-//!                                    (the encoding is documented per game)
+//! tgt.teacher_idx        [T,K] i64   flat action ids of the scored moves, best first (by the
+//!                                    policy's score: softmax Q/τ + w·u, i.e. by Q and among
+//!                                    equal Q by u; visits), −1 pad (encoding documented per game)
 //! tgt.teacher_q          [T,K] f32   mover-POV expected score W + D/2 ∈ [0,1] per move, NaN pad
 //! tgt.teacher_raw        [T,K] f32   engine-native score (cp, discs, score lead), NaN pad —
 //!                                    games whose native unit is not Q (meta.teacher.raw_unit)
@@ -39,8 +40,18 @@
 //!
 //! Heads and their meaning follow the decoder's `il_head_terms` docstring (marginals,
 //! conditionals on the ground-truth prefix; an all-zero row = no teacher). The policy
-//! is `π ∝ exp(Q/τ)` over the scored moves (`--tau`, default 0.05) or normalised visits
-//! (`--policy visits`); the raw columns allow re-deriving it later without relabelling.
+//! is `π ∝ exp(Q/τ + w·u)` over the scored moves (`--tau`, default 0.05) or normalised
+//! visits (`--policy visits`). `w·u` is the secondary tie-break (`--tie-weight` w, default
+//! 2.0; details in [`transform`]): Q saturates in decided positions (every move mates or
+//! wins: Q = 1; exact othello solves: Q ∈ {0, ½, 1}), where `exp(Q/τ)` alone is uniform —
+//! a move that allows mate counts as much as the best defence. u ∈ [−1, 1] is the game's
+//! secondary utility of the engine's native score (`tgt.teacher_raw`: chess / shogi mate
+//! distance and centipawns, othello discs; [`game::Labeller::secondary`]), increasing
+//! like Q, so moves are ordered by Q and, among equal Q, by u; within a class of equal Q
+//! the preference ratio is at most e^(2w). w = 0, and games without a secondary utility
+//! (go), give `π ∝ exp(Q/τ)` exactly. The meta records it (`policy.tie_weight`,
+//! `policy.secondary`). The raw columns allow re-deriving π later without relabelling
+//! ([`transform::softmax_q_tie`] with the game's `secondary` of `teacher_raw`).
 //! Frames without a teacher (sampling, forced moves, engine failures, samples failing
 //! replay verification) carry pad rows and mask false.
 //!
@@ -120,6 +131,12 @@ pub struct LabelArgs {
     /// softmax temperature over the expected score Q ∈ [0,1]
     #[arg(long, default_value_t = 0.05)]
     pub tau: f64,
+    /// weight w of the secondary tie-break π ∝ exp(Q/τ + w·u), u ∈ [−1, 1] = the game's
+    /// utility of the engine's native score (mate distance / cp, discs), which orders the
+    /// moves of decided positions where Q saturates [default 2.0 for chess, shogi, othello;
+    /// 0 = off: π ∝ exp(Q/τ)]
+    #[arg(long)]
+    pub tie_weight: Option<f64>,
     /// teacher policy (default: the game's — softmax for alpha-beta engines, visits for KataGo)
     #[arg(long, value_enum)]
     pub policy: Option<PolicyKind>,
@@ -194,6 +211,7 @@ impl LabelArgs {
         o.limits = Limits::parse(&self.limits)?;
         o.workers = self.workers.max(1);
         o.tau = self.tau;
+        o.tie_weight = self.tie_weight;
         o.policy = self.policy;
         o.max_moves = self.max_moves;
         o.max_samples = self.max_samples;
@@ -342,12 +360,23 @@ mod tests {
         let cli = Cli::try_parse_from([
             "gmdata", "chess", "--input", "in", "--out", "out", "--engine", "/bin/sh", "--engine-arg", "-x",
             "--engine-option", "Hash=16", "--limit", "nodes=1000", "--workers", "3", "--tau", "0.1", "--policy",
-            "visits", "--max-moves", "8", "--every-nth-frame", "2", "--part", "1/4", "--link", "copy",
+            "visits", "--max-moves", "8", "--every-nth-frame", "2", "--part", "1/4", "--link", "copy", "--tie-weight", "0.5",
         ])
         .unwrap();
         let Cmd::Chess(a) = cli.cmd else { panic!() };
         let o = a.common.to_opts().unwrap();
         assert_eq!((o.workers, o.tau, o.max_moves, o.every_nth_frame, o.part), (3, 0.1, Some(8), 2, Some((1, 4))));
+        assert_eq!(o.tie_weight, Some(0.5));
+        // othello --disc-tau replaces the softmax: it takes no --tau / --tie-weight
+        let oth = |extra: &[&str]| {
+            let mut v = vec!["gmdata", "othello", "--input", "i", "--out", "o", "--engine", "/bin/sh"];
+            v.extend_from_slice(extra);
+            Cli::try_parse_from(v).map(|c| match c.cmd { Cmd::Othello(a) => a, _ => unreachable!() })
+        };
+        assert_eq!(oth(&["--tie-weight", "0"]).unwrap().common.tie_weight, Some(0.0));
+        assert_eq!(oth(&[]).unwrap().common.tie_weight, None, "default: the driver's 2.0 where it applies");
+        assert!(oth(&["--disc-tau", "2", "--tie-weight", "1"]).is_err() && oth(&["--disc-tau", "2", "--tau", "0.1"]).is_err());
+        assert!(oth(&["--disc-tau", "2"]).is_ok());
         assert_eq!(o.engine_options, vec![("Hash".to_string(), "16".to_string())]);
         assert_eq!(o.limits.get("nodes"), Some("1000"));
         assert_eq!((o.policy, o.link), (Some(PolicyKind::Visits), LinkPolicy::Copy));

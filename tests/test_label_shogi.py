@@ -5,7 +5,8 @@ convert` and labelled with `gmdata label shogi`, the gmdata binary itself servin
 USI engine child process (`gmdata label shogi fake-usi`: the converter's legal moves with
 hashed scores, some of them mates) — no engine binary needed. The overlays must load with
 GameShardDataset, keep every base tensor, carry the documented teacher columns (heads of
-ShogiDecoder.il_head_terms), re-derive from the raw columns, and feed
+ShogiDecoder.il_head_terms), re-derive from the raw columns (π ∝ exp(Q/τ + w·u), u = the
+secondary utility of teacher_raw), and feed
 training/train_il_game.batch_loss's soft-target and engine-value terms through a small
 shogi network. With YaneuraOu installed (scripts/engines/fetch_engines.sh yaneuraou, or
 GM_YANEURAOU=/path), the last test repeats the pipeline with the real engine.
@@ -27,6 +28,7 @@ from tests.test_rust_converters_parity import FIX, gmdata  # noqa: F401  (fixtur
 
 K = 8                 # --max-moves default (MultiPV 8)
 TAU = 0.05
+W = 2.0               # --tie-weight default
 N_BOARD = 81 * 81 * 2
 HEADS = {  # dense heads: (tgt key, frame shape)
     "mode": ("mode_probs", (2,)),
@@ -60,10 +62,23 @@ def _decode(a):
     return ("drop", r // 81, r % 81)
 
 
-def _expected(idx, q, dropped, gf, gt, gp):
-    """The six head rows of one frame from its raw columns (ShogiDecoder.il_head_terms)."""
+def _u(raw):
+    """Secondary utility of teacher_raw (label/shogi.rs `secondary_of_raw`): a mate in p
+    plies (|raw| > 90000, p = 100000 - |raw|) -> the chess mate utility ±(0.5 + 0.5·5/(n + 4))
+    of n = (p + 1)/2 moves (the mover mates) or p/2 (it is mated), at least 1; else
+    0.5·tanh(cp/3000)."""
+    raw = np.asarray(raw, np.float64)
+    p = 100000.0 - np.abs(raw)
+    n = np.maximum(np.where(raw > 0, (p + 1) / 2, p / 2), 1.0)
+    return np.where(np.abs(raw) > 90000, np.sign(raw) * (0.5 + 2.5 / (n + 4.0)), 0.5 * np.tanh(raw / 3000.0))
+
+
+def _expected(idx, q, raw, dropped, gf, gt, gp):
+    """The six head rows of one frame from its raw columns (ShogiDecoder.il_head_terms;
+    π ∝ exp(Q/τ + w·u))."""
     ok = idx >= 0
-    e = np.exp((q[ok].astype(np.float64) - q[ok].max()) / TAU)
+    s = (q[ok].astype(np.float64) - q[ok].max()) / TAU + W * _u(raw[ok])
+    e = np.exp(s - s.max())
     pi = e / e.sum()
     acts = [_decode(int(a)) for a in idx[ok]]
     rows = {h: {} for h in ("mode", "from", "to", "promo", "piece", "drop_to")}
@@ -95,7 +110,8 @@ def test_summary_and_meta(labelled):
     t = summary["teacher"]
     assert t["engine"] == "FakeUsi 1.0" and t["labeller"] == "gmdata label shogi"
     assert t["limits"] == {"nodes": "1000000"} and t["max_moves"] == K and t["raw_unit"] == "cp"
-    assert t["policy"] == {"kind": "softmax", "tau": TAU}
+    assert t["policy"]["kind"] == "softmax" and t["policy"]["tau"] == TAU and t["policy"]["tie_weight"] == W
+    assert t["policy"]["secondary"]["of"] == "teacher_raw" and t["labeller_version"] == 3 and t["core_version"] == 2
     assert t["game"]["cp_scale"] == 600 and t["game"]["usi_options"]["Threads"] == "1"
     for name in sorted(os.listdir(out)):
         idx = json.load(open(out / name / "index.json"))
@@ -158,12 +174,16 @@ def test_soft_targets_rederive_from_raw_columns(labelled):
     checked = 0
     for name in sorted(os.listdir(out)):
         a = GmShard(str(out / name)).arrays()
-        idx, q = np.asarray(a["tgt.teacher_idx"]), np.asarray(a["tgt.teacher_q"])
+        idx, q, raw = (np.asarray(a[f"tgt.teacher_{k}"]) for k in ("idx", "q", "raw"))
         gt = {k: np.asarray(a[f"tgt.{k}"]) for k in ("dropped", "from_idx", "to_idx", "piece_idx")}
         for f in range(idx.shape[0]):
             if idx[f, 0] < 0:
                 continue
-            want = _expected(idx[f], q[f], gt["dropped"][f], gt["from_idx"][f], gt["to_idx"][f], gt["piece_idx"][f])
+            ok = idx[f] >= 0
+            qs, rs = q[f][ok], raw[f][ok]
+            # best first: by Q, among equal Q by the raw score (mates: faster first)
+            assert all(qs[j - 1] > qs[j] or (qs[j - 1] == qs[j] and rs[j - 1] >= rs[j]) for j in range(1, len(qs)))
+            want = _expected(idx[f], q[f], raw[f], gt["dropped"][f], gt["from_idx"][f], gt["to_idx"][f], gt["piece_idx"][f])
             for h in ("mode", "promo", "piece"):
                 row = np.asarray(a[f"tgt.{h}_probs"])[f]
                 got = {c: float(p) for c, p in enumerate(row) if p > 0}
