@@ -25,8 +25,9 @@
 //!    [`super::transform::conditional`]).
 //!
 //! Flat action ids (`tgt.teacher_idx`) are per game and must be documented in the
-//! game's module docs. Suggested encodings: chess `(from·64 + to)·5 + promotion` in
-//! the frame's POV squares (the FromToDecoder labels), othello / go
+//! game's module docs. Chess (implemented, [`super::chess`]; also recorded in
+//! `meta.teacher.game.action_id`): `promotion·4096 + from·64 + to` in the frame's POV
+//! squares (the FromToDecoder labels). Suggested for the others: othello / go
 //! `row·N + col` with pass = N², shogi board moves `(from·81 + to)·2 + promote` and
 //! drops `81·81·2 + piece·81 + to`.
 

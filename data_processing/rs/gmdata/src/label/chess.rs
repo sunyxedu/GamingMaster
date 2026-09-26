@@ -75,6 +75,17 @@
 //! (model/games/board.py). Head widths are K, so the sparse rows are lossless.
 //! Frames with a single legal move are skipped (`"forced"`: no teacher, no engine value).
 //!
+//! Bound lines (review measurement, 400 real 2200+ frames at the defaults): about half
+//! the frames end with one `upperbound` line below line 1, the line being searched when
+//! the node limit hit, printed at its aspiration bound (true score ≤ printed). Usually
+//! the bound is within a few cp, but in ≈ 2.5% of the frames such a line gets > 20% of
+//! π and can be far too high (seen: +174 cp printed, 0 cp at 1 M nodes). The
+//! alternatives tried (capping it at the next line's Q, or using the last completed
+//! iteration, one ply shallower) were not closer to a 1.5 M-node reference on average
+//! (300 frames: mean total variation of π 0.170 and 0.176 vs 0.164 as implemented), and
+//! a bound on line 1 (≈ 4% of the frames) moved the engine value by only 0.06 on average
+//! from a 1 M-node reference (0.03 for exact lines), so bounds are used as printed.
+//!
 //! Replay and verification: each sample is replayed from the standard start position,
 //! decoding tgt.from_idx / to_idx / promotion (POV) to the unique legal move with that
 //! label ([`crate::chess::move_target`]); the positions are then re-encoded with the
@@ -824,10 +835,16 @@ mod tests {
 
     /// Real converter shards (read-only): every sample of every shard under
     /// `GM_CHESS_SHARDS` (else `${GM_DATA_SHARDS:-$HOME/gm-data/shards}/chess`) replays
-    /// and verifies bit-exactly. Skipped when the directory does not exist.
+    /// and verifies bit-exactly. Skipped when the default directory does not exist; an
+    /// explicit `GM_CHESS_SHARDS` must hold at least one readable chess v3 shard (a typo
+    /// or a directory of other shards fails instead of passing without checking anything).
     #[test]
     fn real_shards_replay_and_verify() {
-        let root = std::env::var_os("GM_CHESS_SHARDS").map(PathBuf::from).or_else(|| {
+        let explicit = std::env::var_os("GM_CHESS_SHARDS").map(PathBuf::from);
+        if let Some(dir) = &explicit {
+            assert!(dir.is_dir(), "GM_CHESS_SHARDS={} is not a directory", dir.display());
+        }
+        let root = explicit.clone().or_else(|| {
             std::env::var_os("GM_DATA_SHARDS")
                 .map(PathBuf::from)
                 .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("gm-data").join("shards")))
@@ -841,7 +858,7 @@ mod tests {
         let lab = ChessLabeller::default();
         let (mut samples, mut frames_n, mut checked) = (0usize, 0usize, 0usize);
         for (dir, _) in shards.iter().take(4) {
-            let Ok(r) = ShardReader::open(dir) else { continue };
+            let r = ShardReader::open(dir).unwrap_or_else(|e| panic!("{}: {e:#}", dir.display()));
             if lab.check_shard(&r).is_err() {
                 eprintln!("skipping {} (not a chess v{CONVERTER_VERSION} shard)", dir.display());
                 continue;
@@ -857,6 +874,9 @@ mod tests {
             checked += 1;
         }
         eprintln!("real chess shards: {checked} shard(s), {samples} games, {frames_n} frames replayed and verified");
+        if explicit.is_some() {
+            assert!(checked > 0 && frames_n > 0, "GM_CHESS_SHARDS={}: no chess v{CONVERTER_VERSION} shard was verified", root.display());
+        }
     }
 
     fn fake_opts(root: &Path, cmd: EngineCommand) -> RunOpts {
