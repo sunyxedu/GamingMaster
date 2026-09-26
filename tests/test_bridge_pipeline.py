@@ -642,6 +642,32 @@ def test_train_rl_joint_bridge(stage1):
         assert torch.allclose(s.lp_old, s.mu, atol=1e-4)
 
 
+def test_evaluation_network_team_vs_random_team():
+    """play_episodes (env/league.py): the network plays one partnership, a random
+    policy the other; the winner is a team (its lowest seat) and the score counts it."""
+    from env.league import League, NetworkPolicy, RandomPolicy, play_episodes
+
+    torch.manual_seed(0)
+    net = build_game_network("bridge", **TINY).eval()
+    env = GmSimVecEnv("bridge", 8, seed=0)
+    # random actions of a row subset (what a RandomPolicy opponent gets) are aligned
+    # with the subset and equal the full call's on those rows
+    obs = env.reset(seed=4)
+    rows = obs.active.nonzero().squeeze(1)
+    full = env.random_actions(obs, generator=torch.Generator().manual_seed(9))
+    sub = env.random_actions(obs.select(rows), generator=torch.Generator().manual_seed(9))
+    assert torch.equal(sub["action_idx"], full["action_idx"][rows])
+    league = League(env, {"random": RandomPolicy(env, seed=1)}, mirror_prob=0.0, seed=2)
+    res = play_episodes(env, league, NetworkPolicy(net))
+    for row in res["learner_seats"].tolist():
+        assert row in ([True, False, True, False], [False, True, False, True])
+    assert set(res["winner"].tolist()) <= {-1, 0, 1}
+    for w, seats, score in zip(res["winner"].tolist(), res["learner_seats"].tolist(),
+                               res["score"].tolist()):
+        assert score == (0.5 if w < 0 else float(seats[w]))
+    assert bool((res["episode_len"] >= 4).all())
+
+
 def test_fetch_script_is_valid_bash():
     script = ROOT / "scripts" / "fetch_bridge.sh"
     assert script.exists() and os.access(script, os.X_OK)
