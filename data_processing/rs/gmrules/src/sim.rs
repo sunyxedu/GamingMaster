@@ -154,6 +154,12 @@ impl<G: Game> Ctx<'_, G> {
     }
 
     fn start(&self, env: &mut Env<G>, seed: u64) -> Result<(), String> {
+        self.start_from(env, seed, &[])
+    }
+
+    /// A new episode that first plays the recorded `prefix` (every event verified as
+    /// in `trajectory::replay`; whole simultaneous turns), then goes on from the RNG.
+    fn start_from(&self, env: &mut Env<G>, seed: u64, prefix: &[Event]) -> Result<(), String> {
         env.state = G::new_game(self.cfg);
         env.rng = Rng::new(seed);
         env.done = false;
@@ -161,6 +167,56 @@ impl<G: Game> Ctx<'_, G> {
         env.frames.iter_mut().for_each(|f| *f = 0);
         env.events.clear();
         env.fresh = true;
+        let (mut outcomes, mut legal) = (Vec::new(), Vec::new());
+        let mut i = 0;
+        while i < prefix.len() {
+            match env.state.turn() {
+                Turn::Terminal => return Err(format!("prefix event {i}: the game is over")),
+                Turn::Chance => {
+                    let Event::Chance(o) = prefix[i] else {
+                        return Err(format!("prefix event {i}: chance node, got {:?}", prefix[i]));
+                    };
+                    outcomes.clear();
+                    env.state.chance_outcomes(&mut outcomes);
+                    if !outcomes.iter().any(|&(id, p)| id == o && p > 0.0) {
+                        return Err(format!("prefix event {i}: chance outcome {o} impossible here"));
+                    }
+                    env.state.apply_chance(o).map_err(|e| format!("prefix event {i}: {e}"))?;
+                }
+                Turn::Act(seats) => {
+                    if i + seats.len() > prefix.len() {
+                        return Err(format!("prefix ends inside a turn of {} seats", seats.len()));
+                    }
+                    if env.turns >= self.max_turns {
+                        return Err(format!("prefix longer than max_turns = {}", self.max_turns));
+                    }
+                    for (k, s) in seats.iter().enumerate() {
+                        let ok = match prefix[i + k] {
+                            Event::Act(es, a) if es == s => {
+                                legal.clear();
+                                env.state.legal_actions(s, &mut legal);
+                                legal.binary_search(&a).is_ok()
+                            }
+                            _ => false,
+                        };
+                        if !ok {
+                            return Err(format!("prefix event {}: {:?} is no legal action of seat {s}", i + k, prefix[i + k]));
+                        }
+                    }
+                    for (k, s) in seats.iter().enumerate() {
+                        let Event::Act(_, a) = prefix[i + k] else { unreachable!() };
+                        env.state.apply_action(s, a).map_err(|e| format!("prefix event {}: {e}", i + k))?;
+                        env.events.push(prefix[i + k]);
+                        env.frames[s] += 1;
+                    }
+                    env.turns += 1;
+                    i += seats.len();
+                    continue;
+                }
+            }
+            env.events.push(prefix[i]);
+            i += 1;
+        }
         resolve_chance(env)
     }
 
@@ -531,6 +587,59 @@ impl<G: Game> VecSim<G> {
         first_err(res, "reset")
     }
 
+    /// Start new episodes in `env_ids` from recorded trajectory prefixes (one per env):
+    /// each env plays its prefix — every event verified (possible chance outcomes, the
+    /// acting seats' legal actions, whole simultaneous turns) — then continues like a
+    /// fresh episode (chance from its seed's RNG); per-seat `step_idx` counts the
+    /// seat's decisions in the prefix. A real record's prefix up to a decision gives
+    /// exactly the converter's frame of that decision (golden tests on real records,
+    /// RL episodes from recorded positions). Other envs keep their state.
+    pub fn reset_from(&mut self, env_ids: &[usize], seeds: &[u64], prefixes: &[Vec<Event>]) -> Result<(), String> {
+        if env_ids.len() != seeds.len() || env_ids.len() != prefixes.len() {
+            return Err(format!("reset_from: {} env ids, {} seeds, {} prefixes", env_ids.len(), seeds.len(), prefixes.len()));
+        }
+        let n = self.envs.len();
+        let mut plan: Vec<Option<(u64, &[Event])>> = vec![None; n];
+        for ((&e, &seed), p) in env_ids.iter().zip(seeds).zip(prefixes) {
+            if e >= n {
+                return Err(format!("reset_from: env {e} out of range ({n} envs)"));
+            }
+            plan[e] = Some((seed, p.as_slice()));
+        }
+        let ctx = Ctx::<G> {
+            cfg: &self.cfg,
+            spec: &self.spec,
+            layout: self.layout,
+            rpe: self.rows_per_env(),
+            n_keys: self.spec.action_keys.len(),
+            max_turns: self.max_turns(),
+            autoreset: self.opts.autoreset,
+        };
+        let rows = split_rows(&mut self.buf, &mut self.legal, &self.spec, n, ctx.rpe);
+        let envs = &mut self.envs;
+        let res: Vec<Result<(), String>> = Self::run(&self.pool, self.opts.threads, |par| {
+            let one = |((env, mut rows), p): ((&mut Env<G>, Rows<'_>), &Option<(u64, &[Event])>)| -> Result<(), String> {
+                match p {
+                    Some((seed, prefix)) => {
+                        ctx.start_from(env, *seed, prefix)?;
+                        ctx.refresh(env, &mut rows)
+                    }
+                    None => {
+                        env.fresh = false;
+                        rows.new_episode.fill(0);
+                        Ok(())
+                    }
+                }
+            };
+            if par {
+                envs.par_iter_mut().zip(rows).zip(&plan).map(one).collect()
+            } else {
+                envs.iter_mut().zip(rows).zip(&plan).map(one).collect()
+            }
+        });
+        first_err(res, "reset_from")
+    }
+
     /// Apply the action keys of every row (`[R * K]`, row-major; rows that do not act
     /// are ignored, forced rows take their single legal action whatever is sent).
     /// Errors on keys that are no legal action of an acting row — before anything is
@@ -637,5 +746,77 @@ pub fn winner(outcome: &[f32]) -> i64 {
         -1
     } else {
         best as i64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame::Frame;
+    use crate::games::goofspiel::{Goofspiel, GoofspielConfig};
+    use crate::games::kuhn_poker::{KuhnConfig, KuhnPoker};
+    use crate::games::pig::{Pig, PigConfig};
+    use crate::invariance::random_trajectory;
+    use crate::trajectory::replay;
+
+    /// `reset_from(the events before decision d's turn)`: d's row holds exactly d's
+    /// replay frame, with step_idx = its position in its stream; the env's trajectory
+    /// is the prefix; the env steps on.
+    fn check<G: Game>(cfg: G::Config, seed: u64) {
+        let spec = G::spec(&cfg);
+        let mut rng = Rng::new(seed);
+        for _ in 0..10 {
+            let ev = random_trajectory::<G>(&cfg, &mut rng, 100_000);
+            let r = replay::<G>(&cfg, &ev).unwrap();
+            let streams = r.streams(&spec);
+            let n = r.decisions.len();
+            let mut sim = VecSim::<G>::new(cfg.clone(), n, SimOptions { threads: 2, ..SimOptions::default() }).unwrap();
+            let first_of_turn = |t: usize| r.decisions.iter().find(|x| x.turn == t).unwrap().event;
+            let prefixes: Vec<Vec<Event>> = r.decisions.iter().map(|d| ev[..first_of_turn(d.turn)].to_vec()).collect();
+            let seeds: Vec<u64> = (0..n as u64).collect();
+            sim.reset_from(&(0..n).collect::<Vec<_>>(), &seeds, &prefixes).unwrap();
+            let rpe = sim.rows_per_env();
+            for (e, d) in r.decisions.iter().enumerate() {
+                let row = e * rpe + if rpe > 1 { d.seat } else { 0 };
+                let b = sim.buffers();
+                assert_eq!(b.active[row], 1);
+                assert_eq!(b.new_episode[row], 1);
+                let st = streams.iter().find(|s| s.seat.is_none() || s.seat == Some(d.seat)).unwrap();
+                let pos = st.decisions.iter().position(|&i| i == e).unwrap();
+                assert_eq!(b.step_idx[row] as usize, pos);
+                let mut f = Frame::new(&spec);
+                for (i, t) in spec.obs.iter().enumerate() {
+                    f.obs[i].view_mut().copy_from(b.obs[i].range(row * t.numel()..(row + 1) * t.numel()));
+                }
+                for (i, t) in spec.legal.iter().enumerate() {
+                    f.legal[i].view_mut().copy_from(b.legal[i].range(row * t.numel()..(row + 1) * t.numel()));
+                }
+                f.legal_ids = sim.legal(row).to_vec();
+                d.frame.check_equal(&f, &spec).unwrap();
+                assert_eq!(sim.trajectory(e), &prefixes[e][..]);
+            }
+            let acts = sim.random_actions(1).unwrap();
+            sim.step(&acts).unwrap();
+        }
+        // a broken prefix is refused
+        let mut sim = VecSim::<G>::new(cfg.clone(), 1, SimOptions::default()).unwrap();
+        let ev = random_trajectory::<G>(&cfg, &mut rng, 100_000);
+        let a = ev.iter().position(|e| matches!(e, Event::Act(..))).unwrap();
+        let mut bad = ev[..=a].to_vec();
+        bad[a] = Event::Act(31, 0);
+        assert!(sim.reset_from(&[0], &[0], &[bad]).is_err());
+    }
+
+    #[test]
+    fn reset_from_recorded_prefixes() {
+        check::<KuhnPoker>(KuhnConfig { players: 3 }, 1);
+        check::<Pig>(PigConfig { players: 2, winscore: 10, diceoutcomes: 6, horizon: 40 }, 2);
+        check::<Goofspiel>(GoofspielConfig { num_cards: 4, players: 3, points_order: "random".into() }, 3);
+        // a prefix ending inside a simultaneous turn is refused
+        let cfg = GoofspielConfig { num_cards: 4, players: 2, points_order: "descending".into() };
+        let ev = random_trajectory::<Goofspiel>(&cfg, &mut Rng::new(4), 1000);
+        let a = ev.iter().position(|e| matches!(e, Event::Act(..))).unwrap();
+        let mut sim = VecSim::<Goofspiel>::new(cfg, 1, SimOptions::default()).unwrap();
+        assert!(sim.reset_from(&[0], &[0], &[ev[..=a].to_vec()]).unwrap_err().contains("inside a turn"));
     }
 }
