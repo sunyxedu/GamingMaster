@@ -16,7 +16,8 @@
 #      test_grad_sync, test_multi_game_ddp, test_rl_joint_dist,
 #      test_rl_joint_trainer, test_zero1) — a skipped CUDA variant fails the job;
 #   2. scripts/bench_grad_sync.py: gradient sync time per bucket size for a
-#      208M-parameter model (gloo between two slices);
+#      208M-parameter model (gloo between two slices), and --shard_optimizer's
+#      extra per-step weight broadcast (--zero1);
 #   3. a short real `torchrun -m training.train_multi_game` run on synthetic
 #      othello + chess shards with --dist_backend auto (the multi_game_ddp_job.sh
 #      command line); the log must show NGPU gloo ranks on cuda:0, each pinned
@@ -71,7 +72,7 @@ fi
 
 echo "=== 2/4 gradient-sync benchmark (208M parameters)"
 "$GM_HOME/.venv/bin/torchrun" --standalone --nproc_per_node="$NGPU" \
-    scripts/bench_grad_sync.py --params 208e6 --bucket_mb 0 5 25 100 400 \
+    scripts/bench_grad_sync.py --params 208e6 --bucket_mb 0 5 25 100 400 --zero1 \
     2>&1 | tee "$OUT/bench.txt" || status=1
 
 echo "=== 3/4 train_multi_game under torchrun on synthetic shards"
