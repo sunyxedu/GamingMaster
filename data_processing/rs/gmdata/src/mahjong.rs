@@ -9,7 +9,27 @@
 //!
 //!   obs.tiles_seq   [T,34,16] f32   obs.players_seq [T,4,12] f32   obs.table_seq [T,12] f32
 //!   tgt.action_type [T] i64         tgt.tile_idx [T] i64           tgt.value [T] f32
+//!   tgt.legal_action_type [T,8]     tgt.legal_tile_of [T,34]       (packed bits → f32 {0,1})
 //! value = final placement 1st +1, 2nd +1/3, 3rd −1/3, 4th −1 (ties → lower seat).
+//!
+//! Legality (converter_version 2): `legal_action_type` = the action types legal at the
+//! frame, `legal_tile_of` = the legal tile arguments of the GROUND-TRUTH action type
+//! (all true when that type takes no tile: hora / ryukyoku / pass).
+//!   own draw      dahai always (in riichi: only the drawn kind); riichi when closed, not
+//!                 yet in riichi, score ≥ 1000, wall ≥ 4 and some discard leaves tenpai
+//!                 (tiles = those discards); kan = ankan (4 in hand) / kakan (own pon + 1
+//!                 in hand) kinds while the wall is not empty; hora = the concealed tiles
+//!                 plus the fixed melds form a winning shape; ryukyoku = kyushu kyuhai
+//!                 (first own discard not made, no call yet, ≥ 9 distinct terminal/honor
+//!                 kinds).
+//!   after chi/pon dahai only, minus kuikae (the called kind; for chi also the suji
+//!                 kind at the other end of the run).
+//!   claim         pass always; chi (shimocha: run bases with both partners in hand),
+//!                 pon (≥ 2), kan (≥ 3) when not in riichi and the wall is not empty;
+//!                 hora = concealed + the discard form a winning shape.
+//! Exact for dahai / riichi (tenpai) / chi / pon / kan / pass; hora and ryukyoku are
+//! supersets (yaku, furiten and kan limits are not checked). A frame whose ground truth
+//! falls outside its masks keeps all-true masks and is counted as `mask_mismatch`.
 //!
 //! Input: a .zip of .mjson(.gz) files, a directory of .mjson(.gz), one file, or a
 //! Parquet file/directory with an `events` column (one mjai game per row).
@@ -33,6 +53,10 @@ const HORA: i64 = 5;
 const RYUKYOKU: i64 = 6;
 const PASS: i64 = 7;
 const ACTION_NAMES: [&str; 8] = ["dahai", "riichi", "chi", "pon", "kan", "hora", "ryukyoku", "pass"];
+/// Whether an action type takes a tile argument (the decoder's ARG_USES table).
+const USES_TILE: [bool; 8] = [true, true, true, true, true, false, false, false];
+const N_TYPES: usize = 8;
+const CONVERTER_VERSION: u32 = 2;
 const NK: usize = 34;
 const WALL: i64 = 70;
 const PLACEMENT: [f32; 4] = [1.0, (1.0f64 / 3.0) as f32, (-1.0f64 / 3.0) as f32, -1.0];
@@ -85,6 +109,115 @@ fn is_terminal_or_honor(k: usize) -> bool {
     k >= 27 || k % 9 == 0 || k % 9 == 8
 }
 
+/// Remove sets (triplets, runs inside one suit) from `c` until empty: the lowest
+/// remaining kind must start a triplet or a run, so the search only branches there.
+fn only_sets(c: &mut [i64; NK]) -> bool {
+    let Some(i) = c.iter().position(|&x| x > 0) else { return true };
+    if c[i] >= 3 {
+        c[i] -= 3;
+        let ok = only_sets(c);
+        c[i] += 3;
+        if ok {
+            return true;
+        }
+    }
+    if i < 27 && i % 9 <= 6 && c[i + 1] > 0 && c[i + 2] > 0 {
+        for d in 0..3 {
+            c[i + d] -= 1;
+        }
+        let ok = only_sets(c);
+        for d in 0..3 {
+            c[i + d] += 1;
+        }
+        if ok {
+            return true;
+        }
+    }
+    false
+}
+
+/// `c` = `sets` sets + one pair.
+fn regular_agari(c: &[i64; NK], sets: i64) -> bool {
+    if sets < 0 || c.iter().sum::<i64>() != 3 * sets + 2 {
+        return false;
+    }
+    let mut w = *c;
+    for p in 0..NK {
+        if w[p] >= 2 {
+            w[p] -= 2;
+            if only_sets(&mut w) {
+                return true;
+            }
+            w[p] += 2;
+        }
+    }
+    false
+}
+
+/// Seven distinct pairs (a quad is not two pairs).
+fn chiitoitsu(c: &[i64; NK]) -> bool {
+    c.iter().all(|&x| x == 0 || x == 2) && c.iter().filter(|&&x| x == 2).count() == 7
+}
+
+/// All 13 terminal/honor kinds, one of them paired, nothing else.
+fn kokushi(c: &[i64; NK]) -> bool {
+    (0..NK).all(|k| if is_terminal_or_honor(k) { c[k] >= 1 } else { c[k] == 0 }) && c.iter().sum::<i64>() == 14
+}
+
+/// Winning shape of the concealed tiles `c` next to `meld_n` fixed melds (yaku not checked).
+fn is_agari(c: &[i64; NK], meld_n: i64) -> bool {
+    if c.iter().any(|&x| x < 0) || c.iter().sum::<i64>() != 14 - 3 * meld_n {
+        return false;
+    }
+    regular_agari(c, 4 - meld_n) || (meld_n == 0 && (chiitoitsu(c) || kokushi(c)))
+}
+
+/// Some tile completes the 13-tile-equivalent concealed hand `c` (any kind, so a wait
+/// on kinds the hand already holds four of — karaten — still counts: a superset).
+fn is_tenpai(c: &[i64; NK], meld_n: i64) -> bool {
+    let mut w = *c;
+    (0..NK).any(|k| {
+        w[k] += 1;
+        let ok = is_agari(&w, meld_n);
+        w[k] -= 1;
+        ok
+    })
+}
+
+/// Decision context of a frame (what just happened to the acting seat).
+#[derive(Clone, Debug)]
+enum Ctx {
+    /// own draw of kind `drawn`
+    Draw { drawn: usize },
+    /// forced discard after a chi/pon of `called` with the `consumed` hand kinds
+    AfterCall { called: usize, consumed: Vec<usize>, is_chi: bool },
+    /// another seat's discard `kind` by `discarder`
+    Claim { kind: usize, discarder: usize },
+}
+
+/// Legal action types and, per type, legal tile arguments.
+struct Legal {
+    types: [bool; N_TYPES],
+    tiles: [[bool; NK]; N_TYPES],
+}
+
+impl Legal {
+    fn none() -> Self {
+        Legal { types: [false; N_TYPES], tiles: [[false; NK]; N_TYPES] }
+    }
+    fn allow(&mut self, t: i64, tiles: [bool; NK]) {
+        self.types[t as usize] = true;
+        self.tiles[t as usize] = tiles;
+    }
+    /// (type mask, tile mask of type `t`, whether (t, tile) is inside them)
+    fn frame(&self, t: i64, tile: i64) -> ([bool; N_TYPES], [bool; NK], bool) {
+        let ti = t as usize;
+        let row = if USES_TILE[ti] { self.tiles[ti] } else { [true; NK] };
+        let ok = self.types[ti] && (!USES_TILE[ti] || (0..NK as i64).contains(&tile) && row[tile as usize]);
+        (self.types, row, ok)
+    }
+}
+
 fn s<'a>(ev: &'a Value, k: &str) -> R<&'a str> {
     ev.get(k).and_then(|v| v.as_str()).ok_or(Skip)
 }
@@ -118,6 +251,12 @@ struct Kyoku {
     riichi: [bool; 4],
     pending: [bool; 4],
     wall: i64,
+    /// called chi / pon / daiminkan (an ankan keeps the hand closed)
+    open: [bool; 4],
+    /// kinds ponned (kakan candidates)
+    pon_kinds: [[bool; NK]; 4],
+    /// any chi / pon / kan this kyoku (ends the kyushu kyuhai window)
+    any_call: bool,
 }
 
 impl Kyoku {
@@ -145,6 +284,9 @@ impl Kyoku {
             riichi: [false; 4],
             pending: [false; 4],
             wall: WALL,
+            open: [false; 4],
+            pon_kinds: [[false; NK]; 4],
+            any_call: false,
         };
         let tehais = ev.get("tehais").and_then(|v| v.as_array()).ok_or(Skip)?;
         for (si, t) in tehais.iter().enumerate() {
@@ -213,9 +355,13 @@ impl Kyoku {
             self.melds[c][kk] += 1;
         }
         self.meld_n[c] += 1;
-        if s(ev, "type")? == "daiminkan" {
-            self.kan_n[c] += 1;
+        match s(ev, "type")? {
+            "daiminkan" => self.kan_n[c] += 1,
+            "pon" => self.pon_kinds[c][k] = true,
+            _ => {}
         }
+        self.open[c] = true;
+        self.any_call = true;
         Ok(())
     }
     fn ankan(&mut self, ev: &Value) -> R<()> {
@@ -226,6 +372,7 @@ impl Kyoku {
         }
         self.meld_n[c] += 1;
         self.kan_n[c] += 1;
+        self.any_call = true;
         Ok(())
     }
     fn kakan(&mut self, ev: &Value) -> R<()> {
@@ -233,6 +380,8 @@ impl Kyoku {
         let kk = self.remove(c, s(ev, "pai")?)?;
         self.melds[c][kk] += 1;
         self.kan_n[c] += 1;
+        self.pon_kinds[c][kk] = false;
+        self.any_call = true;
         Ok(())
     }
     fn can_pon(&self, s: usize, k: usize) -> bool {
@@ -245,6 +394,92 @@ impl Kyoku {
         let (r, base) = ((k % 9) as i64, k - k % 9);
         let has = |x: i64| self.hands[s][base + x as usize] > 0;
         (r >= 2 && has(r - 2) && has(r - 1)) || (r > 0 && r < 8 && has(r - 1) && has(r + 1)) || (r <= 6 && has(r + 1) && has(r + 2))
+    }
+
+    /// Legal action types / tile arguments of `seat` in context `ctx` (see the module doc).
+    fn legal(&self, seat: usize, ctx: &Ctx) -> Legal {
+        let h = &self.hands[seat];
+        let meld_n = self.meld_n[seat];
+        let in_hand: [bool; NK] = std::array::from_fn(|k| h[k] > 0);
+        let mut l = Legal::none();
+        match ctx {
+            Ctx::Draw { drawn } => {
+                if self.riichi[seat] {
+                    l.allow(DAHAI, std::array::from_fn(|k| k == *drawn && h[k] > 0));
+                } else {
+                    l.allow(DAHAI, in_hand);
+                }
+                if !self.riichi[seat] && !self.open[seat] && self.scores[seat] >= 1000 && self.wall >= 4 {
+                    let mut w = *h;
+                    let tenpai_discards: [bool; NK] = std::array::from_fn(|d| {
+                        if w[d] == 0 {
+                            return false;
+                        }
+                        w[d] -= 1;
+                        let ok = is_tenpai(&w, meld_n);
+                        w[d] += 1;
+                        ok
+                    });
+                    if tenpai_discards.iter().any(|&x| x) {
+                        l.allow(RIICHI, tenpai_discards);
+                    }
+                }
+                if self.wall > 0 {
+                    let kans: [bool; NK] = std::array::from_fn(|k| h[k] == 4 || (self.pon_kinds[seat][k] && h[k] >= 1));
+                    if kans.iter().any(|&x| x) {
+                        l.allow(KAN, kans);
+                    }
+                }
+                if is_agari(h, meld_n) {
+                    l.allow(HORA, [true; NK]);
+                }
+                let yaochu = (0..NK).filter(|&k| is_terminal_or_honor(k) && h[k] > 0).count();
+                if self.disc_n[seat] == 0 && !self.any_call && yaochu >= 9 {
+                    l.allow(RYUKYOKU, [true; NK]);
+                }
+            }
+            Ctx::AfterCall { called, consumed, is_chi } => {
+                let mut tiles = in_hand;
+                tiles[*called] = false;
+                if *is_chi {
+                    let r = consumed.iter().copied().chain(std::iter::once(*called)).min().unwrap_or(*called);
+                    if *called == r && r % 9 + 3 <= 8 {
+                        tiles[r + 3] = false;
+                    } else if *called == r + 2 && r % 9 >= 1 {
+                        tiles[r - 1] = false;
+                    }
+                }
+                l.allow(DAHAI, tiles);
+            }
+            Ctx::Claim { kind, discarder } => {
+                let c = *kind;
+                l.allow(PASS, [true; NK]);
+                if !self.riichi[seat] && self.wall > 0 {
+                    if self.can_chi(seat, *discarder, c) {
+                        let bases: [bool; NK] = std::array::from_fn(|b| {
+                            b < 27 && b / 9 == c / 9 && b % 9 <= 6 && b <= c && c <= b + 2
+                                && (b..b + 3).filter(|&x| x != c).all(|x| h[x] > 0)
+                        });
+                        if bases.iter().any(|&x| x) {
+                            l.allow(CHI, bases);
+                        }
+                    }
+                    let only_c: [bool; NK] = std::array::from_fn(|k| k == c);
+                    if h[c] >= 2 {
+                        l.allow(PON, only_c);
+                    }
+                    if h[c] >= 3 {
+                        l.allow(KAN, only_c);
+                    }
+                }
+                let mut w = *h;
+                w[c] += 1;
+                if is_agari(&w, meld_n) {
+                    l.allow(HORA, [true; NK]);
+                }
+            }
+        }
+        l
     }
 
     fn encode(&self, seat: usize, focus: Option<usize>, own_turn: bool, focus_actor: Option<usize>, out: &mut Frames) {
@@ -308,6 +543,9 @@ struct Frames {
     table: Vec<f32>,
     atype: Vec<i64>,
     tile: Vec<i64>,
+    legal_type: Vec<f32>,
+    legal_tile: Vec<f32>,
+    mismatch: usize,
 }
 
 fn ty(ev: &Value) -> &str {
@@ -398,15 +636,28 @@ fn add_deltas(st: &mut Kyoku, ev: &Value) -> R<()> {
     Ok(())
 }
 
-fn convert_game(evs: &[Value], name: &str, min_frames: usize) -> R<Vec<Sample>> {
+/// (sample, frames whose ground truth fell outside the computed legality masks)
+fn convert_game(evs: &[Value], name: &str, min_frames: usize) -> R<Vec<(Sample, usize)>> {
     let mut frames: Vec<Frames> = (0..4).map(|_| Frames::default()).collect();
     let mut st: Option<Kyoku> = None;
     let mut n_kyoku = 0;
     let mut consumed: HashSet<usize> = HashSet::new();
-    let emit = |st: &Kyoku, frames: &mut Vec<Frames>, seat: usize, label: (i64, i64), focus: Option<usize>, own: bool, fa: Option<usize>| {
-        st.encode(seat, focus, own, fa, &mut frames[seat]);
-        frames[seat].atype.push(label.0);
-        frames[seat].tile.push(label.1);
+    let emit = |st: &Kyoku, frames: &mut Vec<Frames>, seat: usize, label: (i64, i64), focus: Option<usize>, own: bool, fa: Option<usize>,
+                ctx: Ctx| {
+        let f = &mut frames[seat];
+        st.encode(seat, focus, own, fa, f);
+        f.atype.push(label.0);
+        f.tile.push(label.1);
+        let (types, tiles, ok) = st.legal(seat, &ctx).frame(label.0, label.1);
+        if ok {
+            f.legal_type.extend(types.iter().map(|&b| b as u8 as f32));
+            f.legal_tile.extend(tiles.iter().map(|&b| b as u8 as f32));
+        } else {
+            // never drop data silently: keep the frame unconstrained and count it
+            f.legal_type.extend([1.0f32; N_TYPES]);
+            f.legal_tile.extend([1.0f32; NK]);
+            f.mismatch += 1;
+        }
     };
     for (i, ev) in evs.iter().enumerate() {
         if consumed.contains(&i) {
@@ -429,7 +680,7 @@ fn convert_game(evs: &[Value], name: &str, min_frames: usize) -> R<Vec<Sample>> 
                     j += 1;
                 }
                 if let Some(label) = own_turn_label(evs, i, a)? {
-                    emit(k, &mut frames, a, label, Some(drawn), true, None);
+                    emit(k, &mut frames, a, label, Some(drawn), true, None, Ctx::Draw { drawn });
                 }
             }
             "dahai" => {
@@ -443,10 +694,11 @@ fn convert_game(evs: &[Value], name: &str, min_frames: usize) -> R<Vec<Sample>> 
                 let calls = discard_calls(evs, i, a)?;
                 for rel in 1..4 {
                     let sidx = (a + rel) % 4;
+                    let ctx = Ctx::Claim { kind: kk, discarder: a };
                     if let Some(&c) = calls.get(&sidx) {
-                        emit(k, &mut frames, sidx, c, Some(kk), false, Some(a));
+                        emit(k, &mut frames, sidx, c, Some(kk), false, Some(a), ctx);
                     } else if !k.riichi[sidx] && k.wall > 0 && (k.can_pon(sidx, kk) || k.can_chi(sidx, a, kk)) {
-                        emit(k, &mut frames, sidx, (PASS, 0), Some(kk), false, Some(a));
+                        emit(k, &mut frames, sidx, (PASS, 0), Some(kk), false, Some(a), ctx);
                     }
                 }
             }
@@ -456,7 +708,12 @@ fn convert_game(evs: &[Value], name: &str, min_frames: usize) -> R<Vec<Sample>> 
                 if let Some(nx) = evs.get(i + 1) {
                     if ty(nx) == "dahai" && actor(nx) == Some(a as i64) {
                         let lab = (DAHAI, tile_kind(s(nx, "pai")?)? as i64);
-                        emit(k, &mut frames, a, lab, None, true, None);
+                        let ctx = Ctx::AfterCall {
+                            called: tile_kind(s(ev, "pai")?)?,
+                            consumed: Kyoku::consumed(ev)?.iter().map(|p| tile_kind(p)).collect::<R<Vec<_>>>()?,
+                            is_chi: t == "chi",
+                        };
+                        emit(k, &mut frames, a, lab, None, true, None, ctx);
                     }
                 }
             }
@@ -492,14 +749,17 @@ fn convert_game(evs: &[Value], name: &str, min_frames: usize) -> R<Vec<Sample>> 
             continue;
         }
         let v = PLACEMENT[placement[sidx]];
-        out.push(Sample::new(json!({"name": name, "seat": sidx, "kyokus": n_kyoku, "placement": placement[sidx] + 1,
+        let smp = Sample::new(json!({"name": name, "seat": sidx, "kyokus": n_kyoku, "placement": placement[sidx] + 1,
                                      "final_score": st.scores[sidx]}))
             .f32("obs.tiles_seq", &[NK, 16], f.tiles)
             .f32("obs.players_seq", &[4, 12], f.players)
             .f32("obs.table_seq", &[12], f.table)
             .i64("tgt.action_type", &[], f.atype)
             .i64("tgt.tile_idx", &[], f.tile)
-            .f32("tgt.value", &[], vec![v; t]));
+            .f32("tgt.value", &[], vec![v; t])
+            .bits("tgt.legal_action_type", &[N_TYPES], &f.legal_type)
+            .bits("tgt.legal_tile_of", &[NK], &f.legal_tile);
+        out.push((smp, f.mismatch));
     }
     Ok(out)
 }
@@ -621,8 +881,8 @@ pub enum Cmd {
 
 pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<usize>, min_frames: usize, hanchan_only: bool,
                top_placements: Option<usize>) -> Result<Value> {
-    let mut w = ShardWriter::new(out, "mahjong", 1, json!({}), shard_size)?;
-    let (mut games, mut skipped, mut samples, mut frames) = (0usize, 0usize, 0usize, 0usize);
+    let mut w = ShardWriter::new(out, "mahjong", CONVERTER_VERSION, json!({}), shard_size)?;
+    let (mut games, mut skipped, mut samples, mut frames, mut mismatch) = (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut hist: BTreeMap<&str, usize> = ACTION_NAMES.iter().map(|&n| (n, 0)).collect();
     let mut low_quality = 0usize;
     iter_games(input, |name, text, hanchan| {
@@ -640,13 +900,14 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<us
         match evs.ok().and_then(|e| convert_game(&e, name, min_frames).ok()) {
             Some(ss) => {
                 games += 1;
-                for smp in ss {
+                for (smp, mm) in ss {
                     if let Some(k) = top_placements {
                         if smp.meta["placement"].as_u64().unwrap_or(4) as usize > k {
                             continue;
                         }
                     }
                     samples += 1;
+                    mismatch += mm;
                     if let Some(t) = smp.tensors.iter().find(|t| t.name == "tgt.action_type") {
                         if let gmshard::Column::I64(v) = &t.col {
                             frames += v.len();
@@ -664,7 +925,7 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<us
     })?;
     w.flush()?;
     Ok(json!({"games": games, "skipped": skipped, "low_quality": low_quality, "samples": samples, "frames": frames,
-              "shards": w.written_shards, "action_hist": hist}))
+              "shards": w.written_shards, "action_hist": hist, "mask_mismatch": mismatch}))
 }
 
 pub fn run(cmd: Cmd) -> Result<()> {
@@ -681,6 +942,235 @@ pub fn run(cmd: Cmd) -> Result<()> {
         Cmd::Convert { input, out, shard_size, max_games, min_frames, hanchan_only, top_placements, hq } => {
             println!("{}", convert(&input, &out, shard_size, max_games, min_frames, hanchan_only || hq, top_placements)?);
             Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// "123m456p789s1122z" → kind counts (z: 1..7 = E S W N P F C).
+    fn hand(s: &str) -> [i64; NK] {
+        let mut c = [0i64; NK];
+        let mut digits: Vec<usize> = Vec::new();
+        for ch in s.chars() {
+            match ch {
+                '0'..='9' => digits.push(ch.to_digit(10).unwrap() as usize),
+                'm' | 'p' | 's' | 'z' => {
+                    let base = match ch {
+                        'm' => 0,
+                        'p' => 9,
+                        's' => 18,
+                        _ => 27,
+                    };
+                    for d in digits.drain(..) {
+                        c[base + if d == 0 { 4 } else { d - 1 }] += 1;
+                    }
+                }
+                _ => panic!("bad hand {s}"),
+            }
+        }
+        c
+    }
+
+    fn waits(c: &[i64; NK], meld_n: i64) -> Vec<usize> {
+        let mut w = *c;
+        (0..NK)
+            .filter(|&k| {
+                w[k] += 1;
+                let ok = is_agari(&w, meld_n);
+                w[k] -= 1;
+                ok
+            })
+            .collect()
+    }
+
+    /// A kyoku whose seat 0 holds `h0` (the other seats: filler hands).
+    fn kyoku_with(h0: [i64; NK]) -> Kyoku {
+        let ev = json!({"type": "start_kyoku", "bakaze": "E", "dora_marker": "1m", "kyoku": 1, "honba": 0,
+                        "kyotaku": 0, "oya": 0, "scores": [25000, 25000, 25000, 25000],
+                        "tehais": [["1m","1m","1m","1m","2m","2m","2m","2m","3m","3m","3m","3m","4m"],
+                                   ["1p","1p","1p","1p","2p","2p","2p","2p","3p","3p","3p","3p","4p"],
+                                   ["1s","1s","1s","1s","2s","2s","2s","2s","3s","3s","3s","3s","4s"],
+                                   ["E","E","E","E","S","S","S","S","W","W","W","W","N"]]});
+        let mut k = Kyoku::new(&ev).ok().unwrap();
+        k.hands[0] = h0;
+        k
+    }
+
+    fn kinds(m: &[bool; NK]) -> Vec<usize> {
+        (0..NK).filter(|&k| m[k]).collect()
+    }
+
+    #[test]
+    fn agari_shapes() {
+        assert!(is_agari(&hand("123m456p789s11122z"), 0));
+        assert!(is_agari(&hand("11122233344455m"), 0)); // needs the triplet/run backtrack
+        assert!(is_agari(&hand("11123456789999m"), 0)); // chuuren shape
+        assert!(!is_agari(&hand("123m456p789s11123z"), 0));
+        // chiitoitsu: seven distinct pairs; a quad is not two pairs
+        assert!(is_agari(&hand("1199m2288p3377s11z"), 0));
+        assert!(!is_agari(&hand("1111m2288p3377s11z"), 0));
+        // kokushi (closed only)
+        assert!(is_agari(&hand("19m19p19s12345677z"), 0));
+        assert!(!is_agari(&hand("19m19p19s12345566z"), 0)); // no chun
+        // open melds: 2 melds → 8 concealed tiles = 2 sets + pair; no chiitoitsu with melds
+        assert!(is_agari(&hand("123m456p11z"), 2));
+        assert!(!is_agari(&hand("123m456p11z"), 0));
+        assert!(is_agari(&hand("55z"), 4));
+        assert!(!is_agari(&hand("99m2288p3377s11z"), 1));
+        // honors never form runs
+        assert!(!is_agari(&hand("123z456p789s11122z"), 0));
+        // wrong tile count for the meld count
+        assert!(!is_agari(&hand("123m456p789s11122z"), 1));
+    }
+
+    #[test]
+    fn tenpai_waits() {
+        // ryanmen 23m → 1m / 4m
+        assert_eq!(waits(&hand("23m456p789s11122z"), 0), vec![0, 3]);
+        // shanpon EE SS → E / S; EEE + S → S tanki only
+        assert_eq!(waits(&hand("123m456p789s1122z"), 0), vec![27, 28]);
+        assert_eq!(waits(&hand("123m456p789s1112z"), 0), vec![28]);
+        // nobetan 1234m → 1m / 4m
+        assert_eq!(waits(&hand("1234m456p789s111z"), 0), vec![0, 3]);
+        // chuuren: all nine kinds of the suit
+        assert_eq!(waits(&hand("1112345678999m"), 0), (0..9).collect::<Vec<_>>());
+        // chiitoitsu tanki
+        assert_eq!(waits(&hand("1199m2288p3377s1z"), 0), vec![27]);
+        // kokushi 13-sided
+        let all13: Vec<usize> = (0..NK).filter(|&k| is_terminal_or_honor(k)).collect();
+        assert_eq!(waits(&hand("19m19p19s1234567z"), 0), all13);
+        // 4 melds: a tanki on the last concealed tile
+        assert_eq!(waits(&hand("5z"), 4), vec![31]);
+        assert!(!is_tenpai(&hand("13579m2468p1357s"), 0));
+    }
+
+    #[test]
+    fn draw_frame_masks() {
+        // closed 14 tiles: 23m456p789s11122z + drawn 9m
+        let mut k = kyoku_with(hand("239m456p789s11122z"));
+        let l = k.legal(0, &Ctx::Draw { drawn: 8 });
+        assert!(l.types[DAHAI as usize] && l.types[RIICHI as usize] && !l.types[HORA as usize]);
+        assert!(!l.types[CHI as usize] && !l.types[PON as usize] && !l.types[PASS as usize]);
+        assert_eq!(kinds(&l.tiles[RIICHI as usize]), vec![8]); // only the 9m keeps tenpai
+        assert_eq!(kinds(&l.tiles[DAHAI as usize]).len(), 11);
+        // not enough points / too few wall tiles / open hand / already in riichi → no riichi
+        k.scores[0] = 900;
+        assert!(!k.legal(0, &Ctx::Draw { drawn: 8 }).types[RIICHI as usize]);
+        k.scores[0] = 1000;
+        k.wall = 3;
+        assert!(!k.legal(0, &Ctx::Draw { drawn: 8 }).types[RIICHI as usize]);
+        k.wall = 4;
+        assert!(k.legal(0, &Ctx::Draw { drawn: 8 }).types[RIICHI as usize]);
+        k.open[0] = true;
+        assert!(!k.legal(0, &Ctx::Draw { drawn: 8 }).types[RIICHI as usize]);
+        k.open[0] = false;
+        k.riichi[0] = true;
+        let l = k.legal(0, &Ctx::Draw { drawn: 8 });
+        assert!(!l.types[RIICHI as usize]);
+        assert_eq!(kinds(&l.tiles[DAHAI as usize]), vec![8]); // tsumogiri only
+        // tsumo shape → hora
+        let k = kyoku_with(hand("123m456p789s11122z"));
+        assert!(k.legal(0, &Ctx::Draw { drawn: 27 }).types[HORA as usize]);
+        // kyushu kyuhai: ≥ 9 distinct terminal/honor kinds before the first discard / any call
+        let mut k = kyoku_with(hand("19m19p19s1234z258m"));
+        assert!(k.legal(0, &Ctx::Draw { drawn: 0 }).types[RYUKYOKU as usize]);
+        k.any_call = true;
+        assert!(!k.legal(0, &Ctx::Draw { drawn: 0 }).types[RYUKYOKU as usize]);
+        let k = kyoku_with(hand("19m19p19s12z225588m"));
+        assert!(!k.legal(0, &Ctx::Draw { drawn: 0 }).types[RYUKYOKU as usize]); // 8 kinds
+    }
+
+    #[test]
+    fn kan_kinds() {
+        let mut k = kyoku_with(hand("1111m456p789s1122z"));
+        let l = k.legal(0, &Ctx::Draw { drawn: 0 });
+        assert_eq!(kinds(&l.tiles[KAN as usize]), vec![0]); // ankan
+        // kakan: an own pon of E + the 4th E in hand (11 concealed tiles)
+        k.hands[0] = hand("123m456p789s15z");
+        k.meld_n[0] = 1;
+        k.open[0] = true;
+        k.pon_kinds[0][27] = true;
+        let l = k.legal(0, &Ctx::Draw { drawn: 27 });
+        assert_eq!(kinds(&l.tiles[KAN as usize]), vec![27]);
+        k.wall = 0; // no kan off the last tile
+        assert!(!k.legal(0, &Ctx::Draw { drawn: 27 }).types[KAN as usize]);
+        // daiminkan claim needs three in hand
+        let k = kyoku_with(hand("111m456p789s1122z"));
+        let l = k.legal(0, &Ctx::Claim { kind: 0, discarder: 2 });
+        assert!(l.types[KAN as usize] && l.types[PON as usize] && l.types[PASS as usize]);
+        assert!(!l.types[CHI as usize] && !l.types[DAHAI as usize]); // seat 0 is not shimocha of 2
+        assert_eq!(kinds(&l.tiles[KAN as usize]), vec![0]);
+        assert_eq!(kinds(&l.tiles[PON as usize]), vec![0]);
+    }
+
+    #[test]
+    fn claim_masks() {
+        // seat 0 is shimocha of seat 3; discard 4m with 2m 3m 5m 6m in hand
+        let k = kyoku_with(hand("2356m456p789s112z"));
+        let l = k.legal(0, &Ctx::Claim { kind: 3, discarder: 3 });
+        assert!(l.types[CHI as usize] && !l.types[PON as usize] && !l.types[KAN as usize]);
+        assert_eq!(kinds(&l.tiles[CHI as usize]), vec![1, 2, 3]); // 234 / 345 / 456
+        // a riichi seat: pass (or ron) only
+        let mut k2 = kyoku_with(hand("2356m456p789s112z"));
+        k2.riichi[0] = true;
+        let l = k2.legal(0, &Ctx::Claim { kind: 3, discarder: 3 });
+        assert!(!l.types[CHI as usize] && l.types[PASS as usize]);
+        // ron shape
+        let k = kyoku_with(hand("23m456p789s11122z"));
+        let l = k.legal(0, &Ctx::Claim { kind: 0, discarder: 1 });
+        assert!(l.types[HORA as usize] && !l.types[CHI as usize]);
+    }
+
+    #[test]
+    fn kuikae() {
+        let k = kyoku_with(hand("1236789m456p11z"));
+        let dahai = |called: usize, consumed: Vec<usize>, is_chi: bool| {
+            kinds(&k.legal(0, &Ctx::AfterCall { called, consumed, is_chi }).tiles[DAHAI as usize])
+        };
+        let held = |skip: &[usize]| -> Vec<usize> { (0..NK).filter(|&x| k.hands[0][x] > 0 && !skip.contains(&x)).collect() };
+        // chi 3m with 45m (run 345, called at the low end) → no 3m, no 6m (suji)
+        assert_eq!(dahai(2, vec![3, 4], true), held(&[2, 5]));
+        // chi 6m with 45m (run 456, called at the high end) → no 6m, no 3m
+        assert_eq!(dahai(5, vec![3, 4], true), held(&[5, 2]));
+        // kanchan chi 5m with 46m → only 5m
+        assert_eq!(dahai(4, vec![3, 5], true), held(&[4]));
+        // run 789m called 7m: no suji beyond the suit edge
+        assert_eq!(dahai(6, vec![7, 8], true), held(&[6]));
+        // run 123m called 3m: no suji below the suit edge
+        assert_eq!(dahai(2, vec![0, 1], true), held(&[2]));
+        // pon: only the called kind
+        assert_eq!(dahai(27, vec![27, 27], false), held(&[27]));
+        let l = k.legal(0, &Ctx::AfterCall { called: 27, consumed: vec![27, 27], is_chi: false });
+        assert_eq!(l.types, [true, false, false, false, false, false, false, false]);
+    }
+
+    #[test]
+    fn frame_mask_fallback() {
+        let mut l = Legal::none();
+        l.allow(DAHAI, std::array::from_fn(|k| k == 3));
+        assert!(l.frame(DAHAI, 3).2);
+        assert!(!l.frame(DAHAI, 4).2);
+        assert!(!l.frame(HORA, 0).2);
+        l.allow(PASS, [true; NK]);
+        let (_, row, ok) = l.frame(PASS, 0);
+        assert!(ok && row.iter().all(|&x| x));
+    }
+
+    #[test]
+    fn fixture_game_has_no_mask_mismatch() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/mahjong/000fad71bb735a027861961e.mjson");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let evs: Vec<Value> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).unwrap()).collect();
+        let out = convert_game(&evs, "fixture", 1).ok().unwrap();
+        assert_eq!(out.len(), 4);
+        for (smp, mismatch) in &out {
+            assert_eq!(*mismatch, 0);
+            assert!(smp.frames().unwrap() > 0);
+            let names: Vec<&str> = smp.tensors.iter().map(|x| x.name.as_str()).collect();
+            assert!(names.contains(&"tgt.legal_action_type") && names.contains(&"tgt.legal_tile_of"));
         }
     }
 }

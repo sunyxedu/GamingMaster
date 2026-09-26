@@ -75,12 +75,19 @@ the 34 tile-kind tokens.
 The tile pointer conditions only on (type embedding, LL token), so the
 sole teacher-forcing label is ``action_type`` (−1 → sample); the chosen
 type is echoed as ``action_type_used``.
+
+Legality: ``action_type`` [..., 8] plus a tile mask conditioned on the
+committed type — ``tile_cond`` [..., 8, 34] (exact, RL: build it with
+:func:`mahjong_legal_tables`) or ``tile_of`` [..., 34] (valid for the
+labelled type: the converter's ``tgt.legal_tile_of``, IL legality via
+``tgt.legal_<key>`` → ``legal[<key>]``); the legacy unconditional ``tile``
+mask still works.  See :class:`MahjongDecoder`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -204,15 +211,69 @@ class MahjongEncoder(ObservationEncoder):
         return self.slot_embed
 
 
+def _as_mask(m: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+    """Legality masks may arrive as packed-bit float {0,1} (converter tgt.legal_*)."""
+    if m is None or m.dtype == torch.bool:
+        return m
+    return m.bool()
+
+
+def mahjong_legal_tables(
+    legal_actions: Sequence[Tuple[int, Optional[int]]],
+    device: Optional[torch.device] = None,
+) -> Dict[str, torch.Tensor]:
+    """Legal ``(action_type, tile | None)`` pairs of one decision point →
+    decoder legal masks ``{"action_type": [8], "tile_cond": [8, 34]}`` (bool).
+
+    ``tile_cond[t]`` lists the legal tile arguments of type ``t``; a type
+    that takes no tile (hora / ryukyoku / pass, or a pair given with
+    ``tile=None``) gets an all-True row, like the converter's
+    ``legal_tile_of`` — its tile is sampled but never scored (ARG_USES).
+    Stack per-frame tables along new leading dims for a batch."""
+    types = torch.zeros(N_ACTION_TYPES, dtype=torch.bool, device=device)
+    cond = torch.zeros(N_ACTION_TYPES, N_TILE_KINDS, dtype=torch.bool, device=device)
+    uses = MahjongDecoder.ARG_USES_DEFAULT
+    for t, tile in legal_actions:
+        if not 0 <= t < N_ACTION_TYPES:
+            raise ValueError(f"action type {t} outside [0, {N_ACTION_TYPES})")
+        types[t] = True
+        if tile is None or not uses[t]:
+            cond[t] = True
+        elif not 0 <= tile < N_TILE_KINDS:
+            raise ValueError(f"tile {tile} outside [0, {N_TILE_KINDS})")
+        else:
+            cond[t, tile] = True
+    return {"action_type": types, "tile_cond": cond}
+
+
 class MahjongDecoder(ActionDecoder):
     """Hierarchical Type → Tile decoder with per-type argument gating.
 
-    legal keys:   action_type [B, T, 8]  bool
-                  tile        [B, T, 34] bool
+    legal keys (all optional, bool or {0,1} float):
+        action_type [..., 8]      legal action types
+        tile        [..., 34]     legacy unconditional tile mask
+        tile_cond   [..., 8, 34]  exact: row t = legal tiles of type t
+                                  (RL; see :func:`mahjong_legal_tables`)
+        tile_of     [..., 34]     legal tiles of the type in
+                                  ``labels["action_type"]`` (the converter's
+                                  ``tgt.legal_tile_of``; RL replay of a
+                                  stored ``legal_tile``) — applied only where
+                                  the committed type equals the label; a −1 /
+                                  absent label leaves the tile unconstrained
+                                  (or on the legacy ``tile`` mask)
     labels keys:  action_type [B, T]     teacher forcing (−1 → sample) —
                   the tile pointer conditions on the type embedding, so
                   the type choice must be replayable; the tile pointer
                   itself needs no forcing (nothing conditions on it).
+
+    decode() resolves the tile mask of the COMMITTED type (tile_cond >
+    tile_of > tile) and echoes the masks it used — ``action_type_mask``
+    [B, T, 8] / ``tile_mask`` [B, T, 34], only when a mask was given — so
+    sample(), log_prob_entropy() and il_loss() all score the distribution
+    decode() committed to.  sample() also returns them as
+    ``legal_action_type`` / ``legal_tile``; replaying a rollout with
+    ``legal={"action_type": legal_action_type, "tile_of": legal_tile}`` and
+    ``labels={"action_type": stored type}`` reproduces its log-prob exactly.
 
     Hierarchical log-prob: type_lp plus the tile head's lp only where
     ``ARG_USES[action_type]`` says the type takes a tile — a pass must
@@ -269,6 +330,35 @@ class MahjongDecoder(ActionDecoder):
             return gt
         return masked_sample(logits, mask)
 
+    @staticmethod
+    def _resolve_tile_mask(
+        legal: Optional[Dict[str, torch.Tensor]],
+        types: torch.Tensor,
+        label: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        """Tile mask [..., 34] for the committed ``types`` [...]:
+        tile_cond row > tile_of (where types == label ≥ 0) > legacy tile."""
+        if not legal:
+            return None
+        cond = _as_mask(legal.get("tile_cond"))
+        if cond is not None:
+            cond = cond.reshape(*types.shape, -1, N_TILE_KINDS)
+            idx = types.long()[..., None, None].expand(*types.shape, 1, N_TILE_KINDS)
+            return cond.gather(-2, idx).squeeze(-2)
+        flat = _as_mask(legal.get("tile"))
+        flat = flat.reshape(*types.shape, N_TILE_KINDS) if flat is not None else None
+        of = _as_mask(legal.get("tile_of"))
+        if of is None:
+            return flat
+        of = of.reshape(*types.shape, N_TILE_KINDS)
+        if label is None:
+            applies = torch.zeros_like(types, dtype=torch.bool)
+        else:
+            lbl = label.reshape(types.shape).long()
+            applies = (lbl >= 0) & (types.long() == lbl)
+        base = flat if flat is not None else torch.ones_like(of)
+        return torch.where(applies.unsqueeze(-1), of, base)
+
     def decode(
         self,
         tokens: torch.Tensor,
@@ -283,42 +373,61 @@ class MahjongDecoder(ActionDecoder):
         cfg = self.cfg
         BT = B * T
 
-        def _legal(key, n):
-            m = legal.get(key) if legal else None
-            return m.reshape(BT, n) if m is not None else None
+        type_mask = _as_mask(legal.get("action_type")) if legal else None
+        if type_mask is not None:
+            type_mask = type_mask.reshape(BT, cfg.n_action_types)
 
         type_logits = self.type_head(ll)                     # [BT, n_types] raw
+        label = labels.get("action_type") if labels else None
         action_type = self._pick(
-            type_logits, labels.get("action_type") if labels else None,
-            _legal("action_type", cfg.n_action_types), BT, cfg.n_action_types,
+            type_logits, label, type_mask, BT, cfg.n_action_types,
+        )
+        tile_mask = self._resolve_tile_mask(
+            legal, action_type, label.reshape(BT) if label is not None else None,
         )
 
         tile_tokens = tokens[:, :N_TILE_KINDS]               # [BT, 34, d]
         tile_logits = self.tile_head(tile_tokens, self.type_embed(action_type), ll)
 
-        return {
+        out = {
             "action_type_logits": type_logits.reshape(B, T, cfg.n_action_types),
             "tile_logits": tile_logits.reshape(B, T, N_TILE_KINDS),
             "action_type_used": action_type.reshape(B, T),
         }
+        if type_mask is not None:
+            out["action_type_mask"] = type_mask.reshape(B, T, cfg.n_action_types)
+        if tile_mask is not None:
+            out["tile_mask"] = tile_mask.reshape(B, T, N_TILE_KINDS)
+        return out
 
     # ------------------------------------------------------------------
     # Shared lp/entropy core — one code path for sample() and
     # log_prob_entropy() is what makes the PPO ratio exact.
     # ------------------------------------------------------------------
 
+    def _masks(self, pred, types, legal):
+        """(type mask, tile mask) for scoring ``types``: decode()'s echoes,
+        else the ``legal`` dict (tile_cond gathered at ``types``, tile_of —
+        whose row is the stored type — or the legacy tile mask)."""
+        type_mask = pred.get("action_type_mask")
+        if type_mask is None and legal:
+            type_mask = _as_mask(legal.get("action_type"))
+        tile_mask = pred.get("tile_mask")
+        if tile_mask is None and legal:
+            tile_mask = self._resolve_tile_mask(legal, types, types)
+        return type_mask, tile_mask
+
     def _lp_ent(self, pred, actions, legal):
         """Hierarchical (log_prob, entropy, per-head entropies) for any
         leading shape ([B] rollout or [B, T] replay)."""
-        def _m(key):
-            return legal.get(key) if legal else None
+        type_mask, tile_mask = self._masks(pred, actions["action_type"], legal)
 
-        type_masked = _mask_logits(pred["action_type_logits"], _m("action_type"))
+        type_masked = _mask_logits(pred["action_type_logits"].float(), type_mask)
         type_lp = F.log_softmax(type_masked, dim=-1).gather(
             -1, actions["action_type"].unsqueeze(-1)).squeeze(-1)
         type_ent = categorical_entropy(type_masked)
 
-        tile_masked = _mask_logits(pred["tile_logits"], _m("tile"))
+        tile_masked = _mask_logits(pred["tile_logits"].float(), tile_mask)
         tile_lp = F.log_softmax(tile_masked, dim=-1).gather(
             -1, actions["tile_idx"].unsqueeze(-1)).squeeze(-1)
         tile_ent = categorical_entropy(tile_masked)
@@ -345,21 +454,25 @@ class MahjongDecoder(ActionDecoder):
         pred: Dict[str, torch.Tensor],
         legal: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
-        """Sample the tile (the type was sampled in decode()).
+        """Sample the tile (the type was sampled in decode()) under the
+        committed type's tile mask.
 
         The tile head is sampled even when the type doesn't use it so the
         replay buffer always holds valid indices; the ARG_USES gather
-        zeroes its log-prob contribution."""
+        zeroes its log-prob contribution.  Returns the masks used as
+        ``legal_action_type`` / ``legal_tile`` (when masked) for replay."""
         with torch.no_grad():
-            tile_idx = masked_sample(
-                pred["tile_logits"], legal.get("tile") if legal else None,
-            )
-            actions = {
-                "action_type": pred["action_type_used"],
-                "tile_idx": tile_idx,
-            }
+            types = pred["action_type_used"]
+            type_mask, tile_mask = self._masks(pred, types, legal)
+            tile_idx = masked_sample(pred["tile_logits"], tile_mask)
+            actions = {"action_type": types, "tile_idx": tile_idx}
             total_lp, _, _ = self._lp_ent(pred, actions, legal)
-        return {**actions, "action_log_prob": total_lp}
+        out = {**actions, "action_log_prob": total_lp}
+        if type_mask is not None:
+            out["legal_action_type"] = type_mask
+        if tile_mask is not None:
+            out["legal_tile"] = tile_mask
+        return out
 
     # ------------------------------------------------------------------
     # PPO log-prob replay
@@ -377,21 +490,14 @@ class MahjongDecoder(ActionDecoder):
     # Imitation loss
     # ------------------------------------------------------------------
 
-    def il_loss(
-        self,
-        pred: Dict[str, torch.Tensor],
-        tgt: Dict[str, torch.Tensor],
-        seq_mask: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
-        """Masked CE per head; the tile head is restricted to frames whose
-        GT action type actually uses a tile AND condition-weighted by
-        whether decode()'s type choice matched the ground truth — tile
-        logits computed from the wrong type embedding are not a learning
-        signal (same discipline as the Hearthstone adapter's cond_weight).
+    def _il_parts(self, pred, tgt, seq_mask) -> Dict[str, Any]:
+        """Per-element pieces shared by il_loss and il_head_terms.
 
-        tgt keys: action_type / tile_idx [B, T] long (tile_idx may be −1
-        or 0 on tile-less frames; either way the weight zeroes it out).
-        """
+        Without decode() mask echoes: plain CE (the historical loss,
+        bit-identical).  With them (IL legality via ``--il_legal_mask``):
+        CE over the masked logits (degenerate-row guard), a target outside
+        its mask gets weight 0 (its CE would be +inf) and is counted in
+        ``illegal_target_frac``; the normalisers are unchanged."""
         cfg = self.cfg
         B, T, _ = pred["tile_logits"].shape
         seq_f = seq_mask.float()
@@ -399,6 +505,8 @@ class MahjongDecoder(ActionDecoder):
 
         tgt_type = tgt["action_type"].long().clamp(0, cfg.n_action_types - 1)
         uses = self.ARG_USES[tgt_type]                        # [B, T]
+        type_mask = pred.get("action_type_mask")
+        tile_mask = pred.get("tile_mask")
 
         with torch.no_grad():
             type_match = pred["action_type_used"] == tgt_type
@@ -411,23 +519,69 @@ class MahjongDecoder(ActionDecoder):
                 logits.reshape(-1, n_classes), safe_tgt.reshape(-1), reduction="none",
             ).reshape(B, T).nan_to_num(0.0), safe_tgt
 
-        type_loss_all, _ = _ce(pred["action_type_logits"], tgt_type, cfg.n_action_types)
-        type_loss = (type_loss_all * seq_f).sum() / n_seq
+        type_logits = pred["action_type_logits"]
+        tile_logits = pred["tile_logits"]
+        type_scored = _mask_logits(type_logits, type_mask)
+        tile_scored = _mask_logits(tile_logits, tile_mask)
 
-        tile_loss_all, safe_tile = _ce(pred["tile_logits"], tgt["tile_idx"], N_TILE_KINDS)
-        tile_loss = (tile_loss_all * w_tile).sum() / n_tile
+        type_ce, _ = _ce(type_scored, tgt_type, cfg.n_action_types)
+        tile_ce, safe_tile = _ce(tile_scored, tgt["tile_idx"], N_TILE_KINDS)
+        w_type = seq_f
+        illegal = None
+        if type_mask is not None:
+            type_ok = type_mask.gather(-1, tgt_type.unsqueeze(-1)).squeeze(-1)
+            type_ce = torch.where(type_ok, type_ce, torch.zeros_like(type_ce))
+            w_type = seq_f * type_ok.float()
+            illegal = ~type_ok
+        if tile_mask is not None:
+            tile_ok = tile_mask.gather(-1, safe_tile.unsqueeze(-1)).squeeze(-1)
+            tile_ce = torch.where(tile_ok, tile_ce, torch.zeros_like(tile_ce))
+            bad_tile = ~tile_ok & (w_tile > 0)
+            w_tile = w_tile * tile_ok.float()
+            illegal = bad_tile if illegal is None else illegal | bad_tile
+        return {
+            "tgt_type": tgt_type, "safe_tile": safe_tile, "uses": uses,
+            "seq_f": seq_f, "n_seq": n_seq,
+            "type_logits": type_logits, "type_scored": type_scored, "type_ce": type_ce,
+            "w_type": w_type, "type_mask": type_mask,
+            "tile_logits": tile_logits, "tile_scored": tile_scored, "tile_ce": tile_ce,
+            "w_tile": w_tile, "n_tile": n_tile, "tile_mask": tile_mask,
+            "illegal": illegal,
+        }
 
+    def il_loss(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Masked CE per head; the tile head is restricted to frames whose
+        GT action type actually uses a tile AND condition-weighted by
+        whether decode()'s type choice matched the ground truth — tile
+        logits computed from the wrong type embedding are not a learning
+        signal (same discipline as the Hearthstone adapter's cond_weight).
+        With decode() mask echoes both heads score the legal-masked
+        distributions (see :meth:`_il_parts`).
+
+        tgt keys: action_type / tile_idx [B, T] long (tile_idx may be −1
+        or 0 on tile-less frames; either way the weight zeroes it out).
+        """
+        p = self._il_parts(pred, tgt, seq_mask)
+        seq_f, n_seq, n_tile = p["seq_f"], p["n_seq"], p["n_tile"]
+        tgt_type, safe_tile, uses = p["tgt_type"], p["safe_tile"], p["uses"]
+
+        type_loss = (p["type_ce"] * p["w_type"]).sum() / n_seq
+        tile_loss = (p["tile_ce"] * p["w_tile"]).sum() / n_tile
         loss = type_loss + tile_loss
 
         with torch.no_grad():
-            type_acc = ((pred["action_type_logits"].argmax(-1) == tgt_type).float()
-                        * seq_f).sum() / n_seq
-            tile_acc = ((pred["tile_logits"].argmax(-1) == safe_tile).float()
-                        * w_tile).sum() / n_tile
-            answer_ok = ((pred["action_type_logits"].argmax(-1) == tgt_type)
-                         & ((pred["tile_logits"].argmax(-1) == safe_tile) | ~uses.bool()))
+            type_hit = p["type_scored"].argmax(-1) == tgt_type
+            tile_hit = p["tile_scored"].argmax(-1) == safe_tile
+            type_acc = (type_hit.float() * seq_f).sum() / n_seq
+            tile_acc = (tile_hit.float() * p["w_tile"]).sum() / n_tile
+            answer_ok = type_hit & (tile_hit | ~uses.bool())
 
-        return {
+        out = {
             "answer_correct": answer_ok,
             "answer_mask": seq_mask.bool(),
             "loss": loss,
@@ -435,4 +589,34 @@ class MahjongDecoder(ActionDecoder):
             "tile_loss": tile_loss.detach(),
             "type_acc": type_acc,
             "tile_acc": tile_acc,
+        }
+        if p["illegal"] is not None:
+            out["illegal_target_frac"] = (p["illegal"].float() * seq_f).sum() / n_seq
+        return out
+
+    def il_head_terms(
+        self,
+        pred: Dict[str, torch.Tensor],
+        tgt: Dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Per-head decomposition of :meth:`il_loss` (ActionDecoder
+        contract): ``il_loss["loss"] == Σ_h (ce_h · weight_h).sum() / norm_h``.
+
+        Soft targets: ``tgt["action_type_probs"]`` [B, T, 8] and
+        ``tgt["tile_probs"]`` [B, T, 34] = p(tile | type = the labelled
+        type) — the tile head is scored where decode() committed to the
+        labelled type (``weight``), under the committed type's tile mask."""
+        p = self._il_parts(pred, tgt, seq_mask)
+        return {
+            "action_type": {
+                "logits": p["type_logits"], "kind": "categorical", "ce": p["type_ce"],
+                "weight": p["w_type"], "norm": p["n_seq"], "mask": p["type_mask"],
+                "scale": 1.0,
+            },
+            "tile": {
+                "logits": p["tile_logits"], "kind": "categorical", "ce": p["tile_ce"],
+                "weight": p["w_tile"], "norm": p["n_tile"], "mask": p["tile_mask"],
+                "scale": 1.0,
+            },
         }
