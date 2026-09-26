@@ -77,3 +77,5 @@ def test_egaroucid_build_flags(tmp_path):
     assert _host("egaroucid_defs; egaroucid_cpu_flags", tmp_path, os_="Darwin", arch="arm64") == [
         "-DHAS_NO_AVX2", "-DHAS_ARM_PROCESSOR", "-mcpu=native"]
     assert _host("egaroucid_cpu_flags", tmp_path, flags=EPYC_9355) == ["-march=native", "-mtune=native"]
+    assert _host("VENDOR=AuthenticAMD; egaroucid_flavor", tmp_path, flags=EPYC_9355) == ["x86_64-avx512-amd"]
+    assert _host("egaroucid_flavor", tmp_path, os_="Darwin", arch="arm64") == ["arm64-generic"]

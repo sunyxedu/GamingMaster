@@ -284,18 +284,32 @@ egaroucid_cpu_flags() {
     esac
 }
 
+# Install directory tag: arch + build flavour (the binary is built with -march=native, so
+# build it on the kind of node that runs the labelling; a shared home keeps one directory
+# per flavour, and bin/egaroucid points at the last one built).
+egaroucid_flavor() {
+    local f
+    case "$(egaroucid_defs)" in
+        *HAS_NO_AVX2*) f=generic ;;
+        *HAS_AVX512*) f=avx512 ;;
+        *) f=avx2 ;;
+    esac
+    if is_amd; then f="$f-amd"; fi
+    echo "$ARCH-$f"
+}
+
 install_egaroucid() {
     have git || die "egaroucid needs git"
     local ref dir exe src cxx cpu defs out
     ref="${EGAROUCID_REF:-v7.8.3}"
-    dir="$ROOT/egaroucid/$ref"
+    dir="$ROOT/egaroucid/$ref-$(egaroucid_flavor)"
     exe="$dir/bin/Egaroucid_for_Console.out"
     if [ -x "$exe" ]; then
         log "Egaroucid $ref already built"
     else
         src="$dir.src"
         rm -rf "$src" "$dir.tmp"
-        git clone --quiet --depth 1 --branch "$ref" https://github.com/Nyanyan/Egaroucid.git "$src"
+        git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ref" https://github.com/Nyanyan/Egaroucid.git "$src"
         # Heap transposition table sized by -hash: the default build also constructs a static
         # 2^25-entry table at start-up (~1 GB resident per process whatever -hash says).
         # TT_USE_STACK=false is a supported configuration of the same search.
@@ -313,7 +327,7 @@ install_egaroucid() {
         log "building Egaroucid $ref: $cxx -O2 $cpu -std=c++20 $defs"
         # the console engine is a single translation unit (what its CMakeLists builds)
         # shellcheck disable=SC2086  # $cpu / $defs are intentionally word-split flag lists
-        (cd "$src/src" && $cxx -O2 $cpu -pthread -std=c++20 $defs Egaroucid_for_Console.cpp -o "$out") \
+        (cd "$src/src" && $cxx -O2 $cpu -pthread -std=c++20 -w $defs Egaroucid_for_Console.cpp -o "$out") \
             || die "Egaroucid build failed (set EGAROUCID_CXX to try another compiler)"
         # keep the binary, its data files (evaluation, hash codes, book) and the licence
         cp -R "$src/bin/resources" "$dir.tmp/bin/resources"
