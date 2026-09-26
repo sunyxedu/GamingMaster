@@ -19,8 +19,9 @@ by position).  In-process, single process:
 - all of it also from a checkpoint without saved parameter names (an older
   one: the parameter order is rebuilt on the meta device), also for a frozen
   core with trainable norms; a reconstruction that does not reproduce the
-  saved optimizer is refused; the checkpoint's games alone in another
-  --data order load the same way;
+  saved optimizer is refused; the checkpoint's games alone load the same
+  way, in its --data order (an older checkpoint then is not rebuilt: its
+  layout is the run's own) or another;
 - refused: removing a game, an --override that contradicts the checkpoint's
   core, an added game whose built core differs, changed --freeze_core.
 
@@ -268,10 +269,17 @@ def test_resume_adds_a_game(source, shards, tmp_path, monkeypatch, where, fmt):
 
 
 @pytest.mark.parametrize("fmt", ["names", "old_format"])
-def test_resume_with_the_games_reordered(source, shards, tmp_path, fmt):
-    """No game added, the checkpoint's games in another --data order: the
-    same state, by name (the core's canonical names move under chess)."""
-    games = ["chess", "othello"]
+@pytest.mark.parametrize("games", [OLD, OLD[::-1]], ids=["same_order", "reordered"])
+def test_resume_without_added_games(source, shards, tmp_path, monkeypatch, games, fmt):
+    """No game added: the same state by name, also with the checkpoint's
+    games in another --data order (the core's canonical names move under
+    chess).  An older checkpoint of the same games in the same order is not
+    rebuilt: its layout is the run's own (what the resume always assumed)."""
+    if fmt == "old_format" and games == OLD:
+        def no_rebuild(*a, **kw):
+            raise AssertionError("rebuilt the layout of a same-order checkpoint")
+
+        monkeypatch.setattr(tmg, "checkpoint_param_names", no_rebuild)
     loaded = tmg.main(_args(shards, tmp_path, games, "--steps", str(STEPS),
                             "--resume", str(source[fmt])))
     _assert_loaded(loaded, source["ck"], games)
@@ -350,6 +358,10 @@ def test_changed_freeze_flags_are_refused(source, frozen_source, shards, tmp_pat
     with pytest.raises(SystemExit, match="not in its optimizer"):
         tmg.main(_args(shards, tmp_path / "b", games, "--steps", str(MORE),
                        "--resume", str(frozen_source["names"])))
+    # an older checkpoint of the same games, same order (not rebuilt)
+    with pytest.raises(SystemExit, match="does not fit this run's parameters"):
+        tmg.main(_args(shards, tmp_path / "c", OLD, "--steps", str(MORE),
+                       "--resume", str(frozen_source["old_format"])))
 
 
 # ----------------------------------------------------------------------

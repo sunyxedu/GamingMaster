@@ -502,6 +502,28 @@ def optimizer_param_names(model: torch.nn.Module,
     return [[canon[id(p)] for p in g["params"]] for g in optimizer.param_groups]
 
 
+def _layout_mismatch(ck: Dict, groups: List[List[torch.Tensor]],
+                     trainable: Optional[List[str]] = None) -> Optional[str]:
+    """Why ``groups`` (per param group, the parameters in index order) cannot
+    be the layout of the checkpoint's optimizer, or None: the group sizes and
+    the moment shapes must agree and, given ``trainable`` (the trainable
+    parameters' names in model order), the names of the checkpoint's EMA."""
+    opt = ck["optimizer_state"]
+    sizes = [len(g["params"]) for g in opt["param_groups"]]
+    if [len(g) for g in groups] != sizes:
+        return f"{[len(g) for g in groups]} parameters per group, the optimizer state has {sizes}"
+    shape = dict(zip((i for g in opt["param_groups"] for i in g["params"]),
+                     (tuple(p.shape) for g in groups for p in g)))
+    bad = [i for i, st in opt["state"].items()
+           if any(tuple(st[k].shape) != shape[i] for k in MOMENT_KEYS if k in st)]
+    if bad:
+        return f"moment shapes differ at optimizer indices {bad[:5]}"
+    ema = ck.get("ema_state")
+    if trainable is not None and ema is not None and list(ema) != trainable:
+        return "the EMA's parameter names differ from the trainable parameters'"
+    return None
+
+
 def checkpoint_param_names(ck: Dict, where: str = "checkpoint",
                            fallback_configs: Optional[Dict[str, Dict]] = None
                            ) -> List[List[str]]:
@@ -517,11 +539,10 @@ def checkpoint_param_names(ck: Dict, where: str = "checkpoint",
     :func:`multi_game_param_groups`.  The reconstruction must reproduce the
     saved group sizes and moment shapes, and with an EMA its names in model
     order (every trainable parameter), else the checkpoint is refused."""
-    opt = ck["optimizer_state"]
-    sizes = [len(g["params"]) for g in opt["param_groups"]]
     names = ck.get(OPT_NAMES_KEY)
     if names is not None:
         names = [list(n) for n in names]
+        sizes = [len(g["params"]) for g in ck["optimizer_state"]["param_groups"]]
         if [len(n) for n in names] != sizes:
             raise SystemExit(f"{where}: {OPT_NAMES_KEY} ({[len(n) for n in names]} names per "
                              f"group) does not match its optimizer state ({sizes})")
@@ -535,28 +556,14 @@ def checkpoint_param_names(ck: Dict, where: str = "checkpoint",
                                 for g in games})
     if run.get("freeze_core"):
         freeze_core(old[games[0]], train_norms=bool(run.get("train_core_norms")))
-    groups = multi_game_param_groups(old, 0.0)
-    canon = {id(p): n for n, p in old.named_parameters()}
-    names = [[canon[id(p)] for p in g["params"]] for g in groups]
-    why = None
-    if [len(n) for n in names] != sizes:
-        why = f"{[len(n) for n in names]} parameters per group, the optimizer state has {sizes}"
-    else:
-        shape = dict(zip((i for g in opt["param_groups"] for i in g["params"]),
-                         (tuple(p.shape) for g in groups for p in g["params"])))
-        bad = [i for i, st in opt["state"].items()
-               if any(tuple(st[k].shape) != shape[i] for k in MOMENT_KEYS if k in st)]
-        ema = ck.get("ema_state")
-        if bad:
-            why = f"moment shapes differ at optimizer indices {bad[:5]}"
-        elif ema is not None and list(ema) != [n for n, p in old.named_parameters()
-                                               if p.requires_grad]:
-            why = "the EMA's parameter names differ from the rebuilt model's trainable ones"
+    groups = [g["params"] for g in multi_game_param_groups(old, 0.0)]
+    why = _layout_mismatch(ck, groups, [n for n, p in old.named_parameters() if p.requires_grad])
     if why is not None:
         raise SystemExit(f"{where} predates saved optimizer parameter names ({OPT_NAMES_KEY}) "
                          f"and rebuilding its model from its saved configs does not reproduce "
                          f"its optimizer ({why}); resume it with its own games and code first")
-    return names
+    canon = {id(p): n for n, p in old.named_parameters()}
+    return [[canon[id(p)] for p in g] for g in groups]
 
 
 def load_resume_weights(model: MultiGameNetwork, state: Dict[str, torch.Tensor],
@@ -593,7 +600,9 @@ def resume_training_state(ck: Dict, model: MultiGameNetwork, optimizer: torch.op
     """The checkpoint's optimizer state and EMA shadows in THIS run's layout,
     matched by parameter NAME (the run's games are the checkpoint's plus any
     added ones, in any --data order): ``(optimizer state dict, EMA state,
-    fresh)``.
+    fresh)``.  The checkpoint's names are its saved ones, or rebuilt
+    (:func:`checkpoint_param_names`) — except for an older checkpoint of
+    exactly this run's games in this order, whose layout is this run's own.
 
     The optimizer state dict has the unsharded ``optimizer.state_dict()``
     format for ``optimizer.load_state_dict`` or ``Zero1.load_optimizer_state``
@@ -611,9 +620,20 @@ def resume_training_state(ck: Dict, model: MultiGameNetwork, optimizer: torch.op
     trainable parameter of an old game the checkpoint did not train (changed
     --freeze_core / --train_core_norms), mismatched shapes."""
     saved = ck["optimizer_state"]
-    names = checkpoint_param_names(
-        ck, where, fallback_configs={g: model[g].cfg.__dict__ for g in model.games})
     groups = optimizer.param_groups
+    if OPT_NAMES_KEY not in ck and list(ck["games"]) == model.games:
+        # an older checkpoint of exactly these games in this order: its
+        # optimizer layout is this run's own (as the resume assumed before the
+        # names were saved), no rebuild needed — sizes and shapes still checked
+        why = _layout_mismatch(ck, [g["params"] for g in groups])
+        if why is not None:
+            raise SystemExit(f"{where}: its optimizer state does not fit this run's parameters "
+                             f"({why}; resume with the checkpoint's --freeze_core / "
+                             f"--train_core_norms)")
+        names = optimizer_param_names(model, optimizer)
+    else:
+        names = checkpoint_param_names(
+            ck, where, fallback_configs={g: model[g].cfg.__dict__ for g in model.games})
     if len(groups) != len(saved["param_groups"]):
         raise SystemExit(f"{where}: {len(saved['param_groups'])} optimizer param group(s), this "
                          f"run has {len(groups)} (weight-decay grouping changed)")
