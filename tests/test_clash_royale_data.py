@@ -39,8 +39,12 @@ def _raw(T=6, K=4):
     return {k: torch.from_numpy(v) for k, v in r.items()}
 
 
-def test_expand_builds_adapter_obs():
+def test_expand_builds_legacy_hand_obs():
+    """converter_version <= 2 shards (raw.hand_*) still expand to the legacy hand
+    observation (legacy cr_card_tokens="hand" checkpoints)."""
     obs = expand(_raw(), {"arena_channels": 16, "card_feature_dim": 8, "tau_ticks": 60.0})
+    assert set(obs) == {"arena_seq", "hand_ids", "hand_feats", "hand_mask", "globals_seq", "legal_card",
+                        "legal_place"}
     assert obs["arena_seq"].shape == (6, 16, 32, 18) and obs["hand_feats"].shape == (6, 4, 8)
     heat = obs["arena_seq"][:, 0, 14, 9]
     assert heat[0] == 0 and heat[2] > heat[3] > 0
@@ -52,11 +56,47 @@ def test_expand_builds_adapter_obs():
     assert obs["hand_ids"].dtype == torch.int64
 
 
-@pytest.mark.skipif(not os.path.exists(CARGO), reason="cargo not installed")
-def test_rust_converter_end_to_end(tmp_path):
-    pa = pytest.importorskip("pyarrow")
-    import pyarrow.parquet as pq
+def _deck_raw(T=6, K=4):
+    r = {k: v for k, v in _raw(T, K).items() if not k.startswith("hand_") and k != "next_cost"}
+    tile = lambda row, dt: torch.from_numpy(np.tile(np.array(row, dt), (T, 1)))   # noqa: E731
+    r.update({
+        "deck_ids": tile([3, 7, 22, 26, 40, 51, 60, 88], np.uint16),
+        "deck_form": tile([0] * 8, np.uint8),
+        "deck_kind": tile([0, 2, 0, 1, 0, 0, 1, 2], np.uint8),
+        "deck_cost": tile([5, 4, 2, 3, 2, 6, 5, 2], np.float32),
+        # the deal prior, then card 22 (index 2) played between frames 1 and 2
+        "deck_in_hand": torch.tensor([[0.5] * 8] * 2 + [[4 / 7, 4 / 7, 0.0] + [4 / 7] * 5] * (T - 2)),
+        "deck_next": torch.tensor([[0.125] * 8] * 2 + [[1 / 7, 1 / 7, 0.0] + [1 / 7] * 5] * (T - 2)),
+    })
+    return r
 
+
+def test_expand_builds_deck_obs():
+    """converter_version 3: 8 deck tokens with the causal hand belief; legal card =
+    P(in hand) > 0 and affordable at the frame."""
+    raw = _deck_raw()
+    obs = expand(raw, {"arena_channels": 16, "card_feature_dim": 9, "tau_ticks": 60.0})
+    assert set(obs) == {"arena_seq", "deck_ids", "deck_feats", "deck_mask", "globals_seq", "legal_card",
+                        "legal_place"}
+    assert obs["deck_feats"].shape == (6, 8, 9) and obs["deck_ids"].dtype == torch.int64
+    assert obs["deck_mask"].all()
+    assert torch.equal(obs["deck_feats"][:, :, 7], raw["deck_in_hand"])
+    assert torch.equal(obs["deck_feats"][:, :, 8], raw["deck_next"])
+    # frame 0: elixir 5 → the 6-cost card (index 5) is unaffordable; every card may be in hand
+    assert obs["legal_card"][0].tolist() == [True, True, True, True, True, False, True, True]
+    # frame 5: elixir 2.0 affords the 2-cost cards, but card 22 (index 2) is known to be
+    # out of the hand
+    assert obs["legal_card"][5].tolist() == [False, False, False, False, True, False, False, True]
+    assert bool(obs["legal_place"][5].all())                      # a playable spell (index 7)
+    assert not obs["legal_place"][2, 16 * 18:].any()              # elixir 1.4: nothing playable
+    assert float(obs["globals_seq"][0, 5]) == pytest.approx(29 / 8 / 10)   # E[next cost] / 10
+    with pytest.raises(ValueError, match="card_feature_dim"):
+        expand(raw, {"arena_channels": 16, "card_feature_dim": 8, "tau_ticks": 60.0})
+
+
+@pytest.mark.skipif(not os.path.exists(CARGO), reason="cargo not installed")
+@pytest.mark.parametrize("fmt", ["jsonl", "parquet"])
+def test_rust_converter_end_to_end(tmp_path, fmt):
     def payload(plays):
         deck = lambda keys: [{"card_key": k, "level": 15, "name": k} for k in keys]
         team = ["hog-rider", "ice-spirit", "ice-golem", "skeletons-ev1", "cannon", "musketeer", "fireball", "the-log"]
@@ -78,9 +118,16 @@ def test_rust_converter_end_to_end(tmp_path):
     raw.mkdir(parents=True)
     rows = [("a" * 8, payload([("team", "hog-rider", 40, 9, 14), ("opponent", "giant", 65, 8, 20), ("team", "ice-spirit", 120, 3, 10)])),
             ("b" * 8, payload([("opponent", "knight", 30, 10, 25)]))]
-    table = pa.table({"replay_tag": [r[0] for r in rows], "game_mode": ["Ranked"] * 2,
-                      "payload_json": pa.array([r[1] for r in rows], pa.large_string())})
-    pq.write_table(table, raw / "part-000000.parquet")
+    if fmt == "parquet":
+        pa = pytest.importorskip("pyarrow")
+        import pyarrow.parquet as pq
+        table = pa.table({"replay_tag": [r[0] for r in rows], "game_mode": ["Ranked"] * 2,
+                          "payload_json": pa.array([r[1] for r in rows], pa.large_string())})
+        pq.write_table(table, raw / "part-000000.parquet")
+    else:                                     # JSON lines, the test fixture's format
+        with open(raw / "part-000000.jsonl", "w") as fh:
+            for tag, js in rows:
+                fh.write(json.dumps({"tag": tag, "payload": json.loads(js)}) + "\n")
     build = subprocess.run([CARGO, "build", "--release", "-q", "-p", "crdata"], cwd=WS, capture_output=True, text=True)
     if build.returncode != 0:
         pytest.skip(f"cargo build failed: {build.stderr[-500:]}")
@@ -90,15 +137,26 @@ def test_rust_converter_end_to_end(tmp_path):
                          capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
     ds = GameShardDataset(str(out), game="clash_royale")
-    assert len(ds) == 4 and ds.converter_version == 2 and ds.shard_meta["n_cards"] == 124
+    assert len(ds) == 4 and ds.converter_version == 3 and ds.shard_meta["n_cards"] == 124
+    meta = ds.shard_meta
+    assert (meta["card_tokens"], meta["deck_size"], meta["card_feature_dim"]) == ("deck", 8, 9)
     team = ds[0]
     assert team["meta"]["side"] == "team" and team["meta"]["result"] == 1
     obs, tgt = team["obs"], team["tgt"]
     assert obs["arena_seq"].shape == (61, 16, 32, 18)            # 30 s / 0.5 s + 1
-    # frame 4 (tick 40) labels the hog play at (9, 14) from the team's own perspective
+    assert obs["deck_ids"].shape == (61, 8) and bool((obs["deck_ids"][0].diff() > 0).all())  # by id
+    # frame 4 (tick 40) labels the hog play at (9, 14) from the team's own perspective;
+    # the label is the hog's deck token
     assert not bool(tgt["waited"][4]) and int(tgt["place_idx"][4]) == 14 * 18 + 9
     slot = int(tgt["card_slot"][4])
-    assert float(obs["hand_feats"][4, slot, 7]) == 1.0           # certainly in hand
+    # nothing was played before the decision: the causal belief is the deal prior (the
+    # converter_version 2 hand marked the coming hog "certainly in hand")
+    assert torch.all(obs["deck_feats"][4, :, 7] == 0.5) and torch.all(obs["deck_feats"][4, :, 8] == 0.125)
+    assert bool(obs["legal_card"][4, slot])
+    # once played, the hog is out of the hand; the ice spirit played at tick 120 had 4/7
+    assert float(obs["deck_feats"][5, slot, 7]) == 0.0 and not bool(obs["legal_card"][5, slot])
+    spirit = int(tgt["card_slot"][12])
+    assert spirit not in (-1, slot) and float(obs["deck_feats"][12, spirit, 7]) == pytest.approx(4 / 7)
     assert abs(float(obs["globals_seq"][4, 0]) * 10 - (6.0 + 2.0 / 2.8)) < 1e-4
     assert float(obs["arena_seq"][5, 0, 14, 9]) > 0              # own deployment heat after the play
     opp = ds[1]
