@@ -65,6 +65,7 @@ behaviour, which is what the golden parity tests pin.
 | othello | `$G othello fetch --first-year 2000` (WTHOR) | `convert --hq`: \|recorded − perfect-play score\| ≤ 4 discs, year ≥ 2000 | human tournament games; the score bound measures endgame error |
 | gomoku | Gomocup results zips (`https://gomocup.org/results/`) | `convert --top-engines 8` on one league (e.g. Freestyle1) | strength = win rate within the input |
 | riichi mahjong | `$G mahjong fetch --shards 0 1 2` (Tenhou Houou mjai, 2.1M games) | `convert --hq`: hanchan only; optional `--top-placements 2` | phoenix room = top players already |
+| Dou Dizhu | no public human data: DouZero self-play, `scripts/fetch_doudizhu.sh D GAMES` (`scripts/generate_doudizhu.py`: the public DouZero ADP / WP agents, Apache-2.0 — weights from the pinned Hugging Face mirror `palemoky/douzero-baselines`, code from kwai/DouZero at a pinned commit, SHA-256 checked — play under the gmrules standard rules) → `$G doudizhu convert` | `convert --hq`: the seats the ADP / WP agents played (every seat with the default mix) | auction by the documented `heuristic_v1` (marked in `meta.bidding`; RL learns bidding); fixture 150 / 150 games verified, 5554 frames; 1M games ≈ 32M frames ≈ 27 GB at ~22 games/s per CPU worker; records carry DouZero's Q values (`--soft-k`); see `rs/gmdata/src/doudizhu.rs` |
 | Pokémon | `$G pokemon fetch --format gen9ou --min-rating 1500` | `convert --hq`: rating ≥ 1500, ≥ 5 turns, no inactivity losses; optional `--winner-only` | forfeits are kept (concessions affect only the last turn) |
 | Lux AI S3 | `$G lux fetch --top-teams 10` (Kaggle API) | only episodes where both agents are top-10 leaderboard teams | needs `KAGGLE_API_TOKEN` or `~/.kaggle/access_token` |
 | Clash Royale | `crdata fetch --out D` (RoyaleAPI replays, HF) | `crdata convert --hq`: Ranked + Grand Challenge, ≥ 60 s, ≥ 5 own plays; optional `--winner-only` | anonymised (no trophies); see games/clash_royale/README.md |
@@ -185,6 +186,16 @@ decisions, so no temporal state ever carries another seat's private information)
 perfect-information alternating games use one interleaved stream per game (like the
 board games). f32 tensors whose values are all 0/1 can be stored bit-packed
 (`TensorSpec::bits`).
+
+`doudizhu` (3 players, OpenSpiel's auction, landlord vs two peasants; standard rules =
+OpenSpiel's `dou_dizhu` + four-with-two, `rules="openspiel"` = OpenSpiel exactly — pinned
+step for step by `tests/test_doudizhu_reference.py`, the play phase against DouZero's
+engine by `tests/test_doudizhu_douzero.py`) is the FACTORED-decision example: a
+combination with kickers is chosen as its main part, then one kicker per decision (only
+completable prefixes are offered), so every frame has at most 92 candidates (exact)
+where one hand can hold 521 full plays. Its corpus is DouZero self-play
+(`scripts/generate_doudizhu.py`; `gmdata doudizhu convert`, teacher soft targets from
+the records' Q values with `--soft-k K --soft-temp AGENT=T`).
 
 Test games (all pinned to OpenSpiel, `tests/test_gmrules_reference.py`):
 `kuhn_poker` (the toy reference game through every layer, 2-4 players, hidden
