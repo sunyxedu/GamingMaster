@@ -5,7 +5,9 @@
 //! - causality: truncating a trajectory right after decision t leaves the frames and
 //!   targets of decisions 0..=t bit-identical (no encoder may look ahead);
 //! - privacy (hidden-information games): perturbing information hidden from seat s
-//!   ([`Game::perturb_hidden`]) leaves every frame and target of s bit-identical;
+//!   ([`Game::perturb_hidden`]) leaves every frame and target of s bit-identical — on
+//!   whole records and on records cut after a decision (information revealed later,
+//!   like the cards of a bridge deal, is hidden only in a prefix);
 //! - conformance: the spec validates; finite f32 values, 0/1 in bit-stored and bool
 //!   tensors; candidate schema: legal ids within `max_actions`, the legality mask =
 //!   the first n slots, entity type ids below `entity_types`, absent entities zero;
@@ -295,6 +297,16 @@ pub fn check_game<G: Game>(cfg: &G::Config, n_games: usize, seed: u64) -> Result
         check_causality::<G>(cfg, &events).map_err(|e| format!("game {gi}: {e}"))?;
         if spec.hidden_info {
             rep.privacy_checks += check_privacy_random::<G>(cfg, &events, &mut rng, 2).map_err(|e| format!("game {gi}: {e}"))?;
+            // information revealed later in the game (bridge: every card is played by the
+            // end) is hidden only in a prefix: check the record cut after a random
+            // decision too (own RNG stream: the random games stay what they were)
+            if !r.decisions.is_empty() {
+                let mut prng = Rng::new(seed ^ (gi as u64 + 1).wrapping_mul(0xA24B_AED4_963E_E407));
+                let d = &r.decisions[prng.below(r.decisions.len() as u64) as usize];
+                let cut = &events[..=d.event];
+                rep.privacy_checks += check_privacy_random::<G>(cfg, cut, &mut prng, 2)
+                    .map_err(|e| format!("game {gi} (cut after event {}): {e}", d.event))?;
+            }
         }
     }
     if spec.hidden_info && n_games >= 20 && rep.privacy_checks == 0 {
