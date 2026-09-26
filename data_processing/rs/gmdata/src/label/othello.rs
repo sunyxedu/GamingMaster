@@ -852,7 +852,7 @@ pub fn fake_engine_command() -> EngineCommand {
 
 // ------------------------------------------------------------------ --fit-disc-scale
 
-/// A calibration point: engine score, exactness, empties, outcome for the mover.
+/// A calibration point: engine score, empties, outcome for the mover.
 #[derive(Debug, Clone, Copy)]
 struct FitPoint {
     discs: i32,
