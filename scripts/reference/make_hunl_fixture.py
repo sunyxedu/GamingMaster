@@ -18,6 +18,7 @@ import glob
 import gzip
 import os
 import re
+
 import tomllib
 
 PER_YEAR = {"preflop": 6, "postflop": 6, "showdown": 8, "allin": 5, "longest": 3}
@@ -88,7 +89,8 @@ def main() -> None:
                     want -= 1
         for member, body, _ in picked:
             n += 1
-            out.append(f"# source: data/annual-computer-poker-competition/competitions/{member}\n[{n}]\n{body}\n")
+            src = f"data/annual-computer-poker-competition/competitions/{member}"
+            out.append(f"# source: {src}\n[{n}]\n{body}\n")
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     with open(a.out, "w") as fh:
         fh.write("\n".join(out))

@@ -116,11 +116,13 @@ def reference_data(tmp: Path, hands: int, seed: int) -> Dict:
     """Both directions: PokerKit's hands, and ours replayed through PokerKit."""
     pk = run_reference(tmp / "pk.json", "--hands", str(hands), "--seed", str(seed))
     rng = random.Random(seed)
-    ours = {"variants": [{"key": k, "config": c, "trajectories": [our_hand(c, rng) for _ in range(hands)]}
+    ours = {"variants": [{"key": k, "config": c,
+                          "trajectories": [our_hand(c, rng) for _ in range(hands)]}
                          for k, c in VARIANTS.items()]}
     (tmp / "ours.json").write_text(json.dumps(ours))
     back = run_reference(tmp / "back.json", "--replay", str(tmp / "ours.json"))
-    return {"source": pk["source"], "pokerkit_hands": pk["variants"], "gmrules_hands_in_pokerkit": back["variants"]}
+    return {"source": pk["source"], "pokerkit_hands": pk["variants"],
+            "gmrules_hands_in_pokerkit": back["variants"]}
 
 
 def write_fixture(path: Path = FIXTURE, hands: int = 30, seed: int = 0) -> None:
