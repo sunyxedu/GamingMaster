@@ -6,7 +6,10 @@
 //! - [`pig`]: the perfect-information dice test game (interleaved layout, no converter).
 //! - [`breakthrough`]: the CUSTOM-schema reference game (a from-to board game for the
 //!   board adapter; the pattern for chess-like games).
+//! - [`backgammon`]: backgammon with the doubling cube (match / money play; full-move
+//!   candidates; gnubg-pinned).
 
+pub mod backgammon;
 pub mod breakthrough;
 pub mod goofspiel;
 pub mod kuhn_poker;

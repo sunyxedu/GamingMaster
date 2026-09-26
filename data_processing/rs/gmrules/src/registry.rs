@@ -19,6 +19,7 @@ pub static GAMES: &[&dyn DynGame] = &[
     &Entry::<games::goofspiel::Goofspiel>(PhantomData),
     &Entry::<games::pig::Pig>(PhantomData),
     &Entry::<games::breakthrough::Breakthrough>(PhantomData),
+    &Entry::<games::backgammon::Backgammon>(PhantomData),
 ];
 
 pub fn game_names() -> Vec<&'static str> {
