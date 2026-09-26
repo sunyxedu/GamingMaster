@@ -303,10 +303,76 @@ def test_rl_joint_generals_env_follows_the_network():
         env = make_vec_env("generals", 1, seed=0, **kw)
         assert env.memory_vision is mv and env.envs[0].memory_vision is mv
         spec.check_env(env, net)
-        # an --env_kw override contradicting the network is refused
+        # an env contradicting the network is refused (the trainer applies an
+        # --env_kw generals:memory_vision to the network's config first:
+        # test_rl_joint_env_kw_memory_vision_is_the_recorded_setting)
         other = make_vec_env("generals", 1, seed=0, **{**kw, "memory_vision": not mv})
         with pytest.raises(SystemExit, match="memory_vision"):
             spec.check_env(other, net)
+
+
+def _rl_joint_init(tmp_path, memory_vision=None):
+    """A generals-only train_multi_game-style checkpoint (the --init of
+    train_rl_joint); ``memory_vision=None`` = written before the field."""
+    from model.games import build_game_network
+    from model.multi_game import MultiGameNetwork
+    torch.manual_seed(0)
+    net = build_game_network("generals", **TINY)
+    cfg = {k: v for k, v in net.cfg.__dict__.items() if k != "memory_vision"}
+    if memory_vision is not None:
+        cfg["memory_vision"] = memory_vision
+    path = tmp_path / f"init_{memory_vision}.pt"
+    torch.save({"games": ["generals"], "configs": {"generals": cfg},
+                "model_state": MultiGameNetwork({"generals": net}).state_dict()}, path)
+    return path
+
+
+def _rl_joint(init, save_dir, *extra):
+    from training.train_rl_joint import JointRLTrainer, parse_args
+    return JointRLTrainer(parse_args([
+        "--init", str(init), "--rl", "generals", "--envs", "generals=1",
+        "--env_kw", "generals:max_turns=6", "--tokens_per_iter", "8", "--device", "cpu",
+        "--ckpt_minutes", "0", "--save_dir", str(save_dir), *extra]))
+
+
+def test_rl_joint_env_kw_memory_vision_is_the_recorded_setting(tmp_path):
+    """train_rl_joint: ``--env_kw generals:memory_vision=`` sets the observation
+    the run trains on — the network's cfg.memory_vision (so the env, the IL
+    replay batches and its checkpoints follow), like train_rl.py's
+    --memory_vision — instead of being refused: a run launched with it before
+    cfg.memory_vision existed (its checkpoints carry the setting only in their
+    args) must resume with its own arguments.  A resume that would switch the
+    observation (the override dropped) is refused."""
+    init = _rl_joint_init(tmp_path)                    # an IL init: memory off
+    on = ("--env_kw", "generals:memory_vision=True")
+    tr = _rl_joint(init, tmp_path / "run", *on)
+    net = tr.model["generals"]
+    assert net.cfg.memory_vision is True and tr.rl["generals"].env.memory_vision is True
+    assert all(e.memory_vision is True for e in tr.rl["generals"].env.envs)
+    assert tr.ref["generals"].cfg.memory_vision is False       # the frozen init as it was
+    path = tr.save("rl_latest.pt")
+    ck = torch.load(path, map_location="cpu", weights_only=False)
+    assert ck["configs"]["generals"]["memory_vision"] is True
+    assert checkpoint_config_dict(ck, "generals")["memory_vision"] is True
+    # the same arguments resume; dropping the override would switch the
+    # observation mid-run
+    assert _rl_joint(init, tmp_path / "run", *on, "--resume", path).iteration == 0
+    with pytest.raises(SystemExit, match="trained with memory_vision=True.*own arguments"):
+        _rl_joint(init, tmp_path / "run", "--resume", path)
+    # a checkpoint written before cfg.memory_vision: the setting is its --env_kw
+    del ck["configs"]["generals"]["memory_vision"]
+    legacy = tmp_path / "legacy.pt"
+    torch.save(ck, legacy)
+    assert legacy_memory_vision(torch.load(legacy, weights_only=False)) is True
+    _rl_joint(init, tmp_path / "run", *on, "--resume", str(legacy))
+    with pytest.raises(SystemExit, match="trained with memory_vision=True.*own arguments"):
+        _rl_joint(init, tmp_path / "run", "--resume", str(legacy))
+    # without the override the run keeps the --init network's own setting
+    off = _rl_joint(init, tmp_path / "off")
+    assert off.model["generals"].cfg.memory_vision is False
+    assert off.rl["generals"].env.memory_vision is False
+    mem_init = _rl_joint_init(tmp_path, memory_vision=True)
+    assert _rl_joint(mem_init, tmp_path / "mem").rl["generals"].env.memory_vision is True
 
 
 def test_train_il_batches_follow_the_network(grids, monkeypatch):
