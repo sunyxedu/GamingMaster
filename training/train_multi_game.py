@@ -276,7 +276,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="data-parallel rank r uses rank_seed(seed, r) for its game draws "
                         "and data order (rank 0: seed)")
     p.add_argument("--bucket_mb", type=float, default=25.0,
-                   help="data parallel: gradient all-reduce bucket size in MiB (0 = per tensor)")
+                   help="data parallel: gradient all-reduce bucket size in MiB (0 = per tensor); "
+                        "25 suits gloo / MIG slices too (sync time flat from 1 to 400 MiB, "
+                        "scripts/bench_grad_sync.py)")
     p.add_argument("--dist_timeout", type=float, default=10.0,
                    help="data parallel: collective timeout in minutes (the other ranks "
                         "wait while rank 0 writes a checkpoint)")

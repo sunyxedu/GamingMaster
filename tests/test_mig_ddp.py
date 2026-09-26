@@ -436,3 +436,18 @@ def test_every_trainer_collective_is_exact_under_gloo(tmp_path, kind):
     assert torch.equal(r0["bn"][0][1], r1["bn_local"][0][1])
     assert (r0["bn"][0][2], r0["bn"][1][2]) == (1, 0)
     assert torch.equal(r0["bn"][1][0], torch.zeros(3))
+
+
+def test_grad_sync_benchmark_runs_under_torchrun():
+    """scripts/bench_grad_sync.py (the cluster's MIG throughput check) on 2
+    CPU ranks: torchrun -> pin -> gloo -> one timing line per bucket size."""
+    res = subprocess.run(
+        [sys.executable, "-m", "torch.distributed.run", "--standalone", "--nproc_per_node=2",
+         str(ROOT / "scripts" / "bench_grad_sync.py"), "--device", "cpu", "--params", "2e5",
+         "--width", "64", "--small", "5", "--bucket_mb", "0", "0.5", "--reps", "1"],
+        cwd=ROOT, capture_output=True, text=True, timeout=180,
+        env={**os.environ, "PYTHONPATH": str(ROOT), "OMP_NUM_THREADS": "1"})
+    assert res.returncode == 0, res.stderr[-2000:]
+    lines = [ln for ln in res.stdout.splitlines() if ln.startswith("[bench] bucket_mb=")]
+    assert [ln.split()[1] for ln in lines] == ["bucket_mb=0", "bucket_mb=0.5"]
+    assert "backend=gloo" in res.stdout

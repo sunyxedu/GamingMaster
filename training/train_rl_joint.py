@@ -324,7 +324,9 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="print every N iterations (rank 0 appends every record to <save_dir>/metrics.jsonl)")
     a("--seed", type=int, default=0)
     a("--device", default=None)
-    a("--bucket_mb", type=float, default=25.0)
+    a("--bucket_mb", type=float, default=25.0,
+      help="gradient all-reduce bucket size in MiB (0 = per tensor); 25 suits gloo / MIG "
+           "slices too (scripts/bench_grad_sync.py)")
     a("--dist_timeout", type=float, default=30.0)
     a("--dist_backend", choices=DIST_BACKENDS, default="auto",
       help="process-group backend; auto = NCCL on full GPUs, gloo on MIG slices (every "
