@@ -55,7 +55,8 @@ depend on ``--workers`` / ``--part_size`` (across CPU types the networks' float
 rounding may break a near-tie differently); output parts are written atomically and
 existing parts are skipped (resumable).
 Throughput (CPU, one torch thread per worker): ~22 games/s per worker on an Apple
-M-series core (~60 games/s with 4 workers); a game averages ~32 decision frames.
+M-series core (~115 games/s with 6 workers); a game averages ~36 decision frames
+(2800 games: 100,127 frames, 78 MB of shards).
 
 Measured through this pipeline (seat 0 landlord, 300 random deals each): WP landlord
 vs random peasants wins 99.7%, random landlord vs WP peasants 0.3%; landlord win rate

@@ -15,7 +15,7 @@
 #
 # Compute nodes without internet: run `$PYTHON scripts/generate_doudizhu.py --fetch_only`
 # on a login node first (the downloads land in the cache).  Expected full scale (1M
-# games): ~32M frames (3M per-seat samples), ~27 GB of shards, ~22 games/s per worker.
+# games): ~36M frames (3M per-seat samples), ~28 GB of shards, ~22 games/s per worker.
 # Parts are written atomically and skipped when present: a rerun resumes.
 set -euo pipefail
 

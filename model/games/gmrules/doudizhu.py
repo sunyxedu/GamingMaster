@@ -34,11 +34,16 @@ under construction — 3 seat slots, the play to beat, the pending combination),
 frame).  Outcome (IL value target, RL reward): returns / 24 clipped to [-1, 1]
 (``scoring="wp"``: ±1 per side).
 
-Corpus (``scripts/fetch_doudizhu.sh``; DouZero self-play, ~32 frames and ~27 KB of
-shards per game on average, 3 per-seat samples): 1M games ≈ 32M frames ≈ 27 GB,
-generated at ~22 games/s per CPU worker.  Full scale on the cluster::
+Corpus (``scripts/fetch_doudizhu.sh``; DouZero self-play, ~36 frames and ~28 KB of
+shards per game on average, 3 per-seat samples): 1M games ≈ 36M frames ≈ 28 GB,
+generated at ~22 games/s per CPU worker (+ 20k validation games).  Full scale on the
+cluster (from the repository root)::
 
-    WORKERS=64 scripts/fetch_doudizhu.sh data/doudizhu 1000000
+    # login node (internet): DouZero sources + ADP / WP checkpoints → ~/.cache/gm-reference
+    .venv/bin/python scripts/generate_doudizhu.py --fetch_only
+    # a 64-core compute node: generate 1M + 20k games, convert both with --hq
+    WORKERS=64 PYTHON=.venv/bin/python scripts/fetch_doudizhu.sh data/doudizhu 1000000
+    # → data/doudizhu/train (~36M frames, ~28 GB), data/doudizhu/val (~0.7M frames)
 
 The auction frames of the corpus imitate the heuristic (``meta.bidding =
 "heuristic_v1"``); the RL phase plays the real auction.
