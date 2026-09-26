@@ -457,6 +457,33 @@ def _rollout_samples(n_envs: int, seed: int):
     return out
 
 
+def _lux_stage1(root, recurrent: bool = False):
+    """Converter-v2 shaped lux shards + a tiny Stage-1 checkpoint."""
+    from tests.test_core_moe import CORE
+    from training import train_multi_game
+
+    data = root / "lux"
+    save_shard(str(data / "a.pt"), "lux", _rollout_samples(2, 0) + _rollout_samples(2, 1),
+               converter_version=2, meta={"global_features": 11, "sap_range": SAP_WINDOW})
+    extra = {"temporal_mixer": "recurrent"} if recurrent else {}
+    core = [f"{k}={v}" for k, v in {**CORE, "encoder_channels": 8, **extra}.items()]
+    torch.manual_seed(0)
+    train_multi_game.main(["--data", f"lux={data}", "--steps", "1", "--batch_size", "2",
+                           "--game_max_len", "lux=6", "--warmup_steps", "1",
+                           "--save_dir", str(root / "ck"), "--device", "cpu",
+                           "--override", *core])
+    return data, root / "ck" / "multi_final.pt"
+
+
+def _lux_rl_args(data, init, save_dir, *extra):
+    return ["--init", str(init), "--rl", "lux",
+            "--data", f"lux={data}", "--replay_max_len", "lux=6", "--replay_batch_size", "2",
+            "--tokens_per_iter", "40", "--envs", "lux=2",
+            "--env_kw", "lux:env_params={'max_steps_in_match': 10}",
+            "--epochs", "1", "--minibatches", "2", "--seed", "3",
+            "--snapshot_dir", "memory", "--device", "cpu", "--save_dir", str(save_dir), *extra]
+
+
 @pytest.mark.parametrize("actor", ["stream", "fixed"])
 def test_train_rl_joint_on_lux(tmp_path, actor):
     """Stage 1 (train_multi_game on converter-v2 shaped lux data) → 2 Stage-2
@@ -464,27 +491,12 @@ def test_train_rl_joint_on_lux(tmp_path, actor):
     the actor's μ = π_old, the full-head KL anchor.  The fixed-batch actor
     (recurrent temporal mixer) checks the lockstep contract: every row's
     step_idx is the wave's frame count (a wave = one match)."""
-    from tests.test_core_moe import CORE
-    from training import train_multi_game, train_rl_joint
+    from training import train_rl_joint
 
-    data = tmp_path / "lux"
-    save_shard(str(data / "a.pt"), "lux", _rollout_samples(2, 0) + _rollout_samples(2, 1),
-               converter_version=2, meta={"global_features": 11, "sap_range": SAP_WINDOW})
-    extra = {"temporal_mixer": "recurrent"} if actor == "fixed" else {}
-    core = [f"{k}={v}" for k, v in {**CORE, "encoder_channels": 8, **extra}.items()]
+    data, init = _lux_stage1(tmp_path, recurrent=actor == "fixed")
     torch.manual_seed(0)
-    train_multi_game.main(["--data", f"lux={data}", "--steps", "1", "--batch_size", "2",
-                           "--game_max_len", "lux=6", "--warmup_steps", "1",
-                           "--save_dir", str(tmp_path / "ck"), "--device", "cpu",
-                           "--override", *core])
-    torch.manual_seed(0)
-    out = train_rl_joint.main([
-        "--init", str(tmp_path / "ck" / "multi_final.pt"), "--rl", "lux",
-        "--data", f"lux={data}", "--replay_max_len", "lux=6", "--replay_batch_size", "2",
-        "--tokens_per_iter", "40", "--envs", "lux=2", "--actor", actor,
-        "--env_kw", "lux:env_params={'max_steps_in_match': 10}",
-        "--epochs", "1", "--minibatches", "2", "--iterations", "2", "--seed", "3",
-        "--snapshot_dir", "memory", "--device", "cpu", "--save_dir", str(tmp_path / "rl")])
+    out = train_rl_joint.main(_lux_rl_args(data, init, tmp_path / "rl", "--actor", actor,
+                                           "--iterations", "2"))
     hist = out["history"]
     assert [r["iteration"] for r in hist] == [1, 2]
     for rec in hist:
@@ -497,3 +509,31 @@ def test_train_rl_joint_on_lux(tmp_path, actor):
         assert row["canary_log_ratio"] < 1e-5 and row["canary_log_old_mu"] < 1e-4
         assert row["kl"] >= 0.0
     assert out["trainer"].rl["lux"].spec.full_kl
+
+
+def test_train_rl_joint_lux_resume_continues_the_games(tmp_path):
+    """A lux wave continues the envs' games (one match per wave), so the env
+    state is part of the RL state: a run resumed from its iteration-1
+    checkpoint plays match 2 of the same games and reproduces iteration 2
+    bit for bit (without the saved env state the games restarted at match 1)."""
+    from training import train_rl_joint
+
+    data, init = _lux_stage1(tmp_path)
+    base = ("--iterations", "2", "--save_every", "1", "--mirror_prob", "lux=0.5",
+            "--snapshot_every", "1")
+    torch.manual_seed(0)
+    full = train_rl_joint.main(_lux_rl_args(data, init, tmp_path / "full", *base))
+    torch.manual_seed(0)
+    res = train_rl_joint.main(_lux_rl_args(data, init, tmp_path / "res", *base, "--resume",
+                                           str(tmp_path / "full" / "rl_iter1.pt")))
+    played = full["trainer"].rl["lux"].env.matches_played      # one match per wave
+    assert (played >= 2).all() and (played < 5).all()          # iteration 2 continued the games
+    assert torch.equal(res["trainer"].rl["lux"].env.matches_played, played)
+    a = torch.load(tmp_path / "full" / "rl_iter2.pt", weights_only=False)
+    b = torch.load(tmp_path / "res" / "rl_iter2.pt", weights_only=False)
+    for k, v in a["train_model_state"].items():
+        assert torch.equal(v, b["train_model_state"][k]), k
+    ea, eb = a["rl_state"]["envs"][0]["lux"], b["rl_state"]["envs"][0]["lux"]
+    assert ea["num_envs"] == eb["num_envs"] == 2
+    for x, y in zip(ea["state"]["games"]["state"], eb["state"]["games"]["state"]):
+        assert np.array_equal(x, y)

@@ -23,9 +23,9 @@ So here one EPISODE = one MATCH, and a row's stream is exactly one IL sample:
     the next step, as in the IL data).  Only a finished game (5 matches), a
     match abandoned mid-way, ``new_game=True`` or a resize starts a fresh game
     (seed, map, env params).  Lockstep rollouts therefore play one match per
-    wave and a fresh game every 5th wave.  (The trainer does not checkpoint
-    envs: after ``--resume`` the games restart at match 1; ``state_dict``
-    holds the game state for callers that want an exact continuation.)
+    wave and a fresh game every 5th wave.  (``state_dict`` holds the game
+    state; train_rl_joint checkpoints it, so ``--resume`` continues the
+    games exactly.)
 
 Observation (the gm-shard ``obs`` schema of converter v2, bit-identical to
 ``gmdata lux convert`` on the same game: tests/test_vec_lux_golden.py):
@@ -841,7 +841,7 @@ class LuxVecEnv(VecEnvBase):
 
     def state_dict(self) -> Dict[str, Any]:
         """The env RNGs plus every game's state (an exact continuation of
-        unfinished games; the trainer itself restarts games on resume)."""
+        unfinished games; train_rl_joint saves it in its checkpoints)."""
         jax = _lux().jax
         st = super().state_dict()
         st["games"] = {

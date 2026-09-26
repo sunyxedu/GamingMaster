@@ -567,5 +567,8 @@ def test_two_gloo_ranks_stay_identical(stage1):
         assert _same(h0["games"], h1["games"]) and _same(h0["gnorm"], h1["gnorm"])
     ck = torch.load(stage1 / "rl_ddp" / "rl_final.pt", weights_only=False)
     assert ck["world_size"] == WORLD
+    envs = ck["rl_state"]["envs"]                       # every rank's simulator state
+    assert len(envs) == WORLD and all(set(e) == {"generals", "othello"} for e in envs)
+    assert envs[0]["othello"]["state"]["rng"] != envs[1]["othello"]["state"]["rng"]
     assert sorted(os.listdir(stage1 / "rl_ddp" / "snaps")) == [
         f"snapshot_{i:06d}.pt" for i in range(3)]

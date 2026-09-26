@@ -82,7 +82,8 @@ statistics / diagnostics / MoE-load all-reduces.  Rollouts are rank-local.
 
 Resume: ``rl_latest.pt`` (every --ckpt_minutes minutes, every --ckpt_every
 iterations, and at the end) holds weights, EMA, optimizer, PopArt, advantage
-statistics, entropy / KL controllers, the quota ledger, the snapshot pool and
+statistics, entropy / KL controllers, the quota ledger, the snapshot pool,
+every rank's simulator state (lux waves continue the envs' 5-match games) and
 a fingerprint of the frozen reference (a resume against a different --init is
 refused).  Randomness is re-derived from (seed, rank, iteration) at every
 iteration start (rollouts, league, opponent draws, replay data order), so
@@ -1745,6 +1746,40 @@ class JointRLTrainer:
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
+    def _env_states(self) -> Optional[List[Dict[str, Any]]]:
+        """Every rank's ``{game: {"num_envs", "state": env.state_dict()}}``
+        (gathered on every rank: one collective, posted by every rank's
+        :meth:`save`).  Most games restart their episodes from the wave seed,
+        but a lux wave CONTINUES the envs' 5-match games (env/vec_lux.py), so
+        their state is part of what a resume must restore."""
+        mine = {g: {"num_envs": r.env.num_envs, "state": r.env.state_dict()}
+                for g, r in self.rl.items()}
+        if not self.dist_env.enabled:
+            return [mine]
+        out: List[Optional[Dict[str, Any]]] = [None] * self.world
+        dist.all_gather_object(out, mine)
+        return out if self.rank0 else None
+
+    def _load_env_states(self, states: Optional[Sequence[Mapping[str, Any]]],
+                         saved_world: int) -> None:
+        """Restore this rank's env states from a checkpoint (same world size
+        and env counts only: otherwise the games restart, with a note)."""
+        if not states:
+            return
+        if saved_world != self.world or len(states) != self.world:
+            self.log(f"[resume] note: env states saved with world={saved_world}, running with "
+                     f"{self.world}: the simulator games restart")
+            return
+        for g, r in self.rl.items():
+            ent = states[self.rank].get(g)
+            if ent is None:
+                continue
+            if int(ent["num_envs"]) != r.env.num_envs:
+                self.log(f"[resume] note: {g} saved with {ent['num_envs']} envs, running with "
+                         f"{r.env.num_envs}: its games restart")
+                continue
+            r.env.load_state_dict(ent["state"])
+
     def save(self, name: str) -> Optional[str]:
         """rank 0 writes ``name`` atomically (every rank must call: barrier).
 
@@ -1758,8 +1793,10 @@ class JointRLTrainer:
         tensors) and restored by :meth:`_load_resume`, so a resume stays
         bit-exact.  After ``rl_latest.pt`` the pool deletes the snapshot
         files evicted since the last one (no checkpoint a resume starts
-        from refers to them any more)."""
+        from refers to them any more).  ``rl_state["envs"]`` holds every
+        rank's simulator state (:meth:`_env_states`)."""
         path = None
+        envs = self._env_states()
         if self.rank0:
             live = self.model.state_dict()
             shadow = self.ema.state_dict() if self.ema is not None else None
@@ -1795,7 +1832,7 @@ class JointRLTrainer:
                 "stage": "rl_joint",
                 "optimizer_state": self.optimizer.state_dict(),
                 "ema_state": shadow,
-                "rl_state": {**self._rl_state(), "raw_heads": raw_heads},
+                "rl_state": {**self._rl_state(), "raw_heads": raw_heads, "envs": envs},
             }
             path = os.path.join(self.args.save_dir, name)
             torch.save(ck, f"{path}.tmp")
@@ -1839,6 +1876,7 @@ class JointRLTrainer:
         self.sched.load_state_dict(st["sched"])
         self.pool.load_state_dict(st["pool"])
         self.il_baseline = dict(st.get("il_baseline", {}))
+        self._load_env_states(st.get("envs"), int(ck.get("world_size", 1)))
         self.iteration = int(st["iteration"])
         self.log(f"[resume] {path}: iteration {self.iteration} (saved with world="
                  f"{ck.get('world_size', 1)}, pool={len(self.pool)})")
