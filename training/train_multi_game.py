@@ -512,10 +512,10 @@ def _layout_mismatch(ck: Dict, groups: List[List[torch.Tensor]],
     sizes = [len(g["params"]) for g in opt["param_groups"]]
     if [len(g) for g in groups] != sizes:
         return f"{[len(g) for g in groups]} parameters per group, the optimizer state has {sizes}"
-    shape = dict(zip((i for g in opt["param_groups"] for i in g["params"]),
+    shape = dict(zip((int(i) for g in opt["param_groups"] for i in g["params"]),
                      (tuple(p.shape) for g in groups for p in g)))
     bad = [i for i, st in opt["state"].items()
-           if any(tuple(st[k].shape) != shape[i] for k in MOMENT_KEYS if k in st)]
+           if any(tuple(st[k].shape) != shape[int(i)] for k in MOMENT_KEYS if k in st)]
     if bad:
         return f"moment shapes differ at optimizer indices {bad[:5]}"
     ema = ck.get("ema_state")
@@ -637,6 +637,7 @@ def resume_training_state(ck: Dict, model: MultiGameNetwork, optimizer: torch.op
     if len(groups) != len(saved["param_groups"]):
         raise SystemExit(f"{where}: {len(saved['param_groups'])} optimizer param group(s), this "
                          f"run has {len(groups)} (weight-decay grouping changed)")
+    saved_state = {int(i): st for i, st in saved["state"].items()}
     alias = dict(model.named_parameters(remove_duplicate=False))
     canon = canonical_names(model)
     slot: Dict[int, Tuple[int, int]] = {}            # id(p) -> (group, index here)
@@ -663,7 +664,7 @@ def resume_training_state(ck: Dict, model: MultiGameNetwork, optimizer: torch.op
             if jj != j:
                 raise SystemExit(f"{where}: {name} is in optimizer param group {j} there, "
                                  f"{jj} here (weight-decay grouping changed)")
-            st = saved["state"].get(i)
+            st = saved_state.get(int(i))
             if st is not None:
                 bad = [m for m in MOMENT_KEYS if tuple(st[m].shape) != tuple(p.shape)]
                 if bad:
