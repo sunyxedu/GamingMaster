@@ -1188,6 +1188,18 @@ mod tests {
         o0.out = root.join("w0");
         let s0 = run(ChessLabeller::default(), &o0).unwrap();
         assert_eq!(s0.teacher["policy"]["tie_weight"], 0.0);
+        // resuming an output tree needs the same tie weight: another one is refused, the
+        // default given explicitly is the same run (every shard already there)
+        for (w, out) in [(Some(0.0), "out"), (Some(0.5), "out"), (None, "w0"), (Some(2.0), "w0")] {
+            let mut r = fake_opts(&root, decided_engine());
+            (r.tie_weight, r.out) = (w, root.join(out));
+            let err = run(ChessLabeller::default(), &r).unwrap_err().to_string();
+            assert!(err.contains("different settings"), "{w:?} into {out}: {err}");
+        }
+        let mut same = fake_opts(&root, decided_engine());
+        same.tie_weight = Some(DEFAULT_TIE_WEIGHT);
+        let r = run(ChessLabeller::default(), &same).unwrap();
+        assert_eq!((r.shards_existing, r.shards_written), (2, 0));
         let (mut frames, mut won, mut lost, mut mates) = (0, 0, 0, 0);
         for name in ["chess_00000", "chess_00001"] {
             let base = shard(&root.join("base"), name);
