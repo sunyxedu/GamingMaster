@@ -236,6 +236,7 @@ def _import_probe(queue) -> None:
     import tests.test_multi_game_ddp  # noqa: F401
     import tests.test_rl_joint_dist  # noqa: F401
     import tests.test_rl_joint_trainer  # noqa: F401
+    import tests.test_zero1  # noqa: F401
     from training.distributed import cuda_initialised
 
     queue.put(cuda_initialised())

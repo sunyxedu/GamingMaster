@@ -22,7 +22,8 @@ call it first thing), uses ``cuda:0``, and the ranks talk over gloo, which
 runs every collective of the trainers on CUDA tensors (staged through pinned
 host memory) — ``--dist_backend auto`` picks it.  Collectives in use, all
 gloo-capable: all_reduce SUM / MAX of float32/float64/int tensors (CUDA or
-CPU), broadcast (module state, a 1-element flag), all_gather_object /
+CPU), broadcast (module state, a 1-element flag; with --shard_optimizer,
+training/zero.py, flat buckets from every source rank), all_gather_object /
 broadcast_object_list (pickled, always on the CPU), barrier; no ReduceOp.AVG,
 reduce_scatter, coalesced or async collectives, so no op needs a fallback.
 """

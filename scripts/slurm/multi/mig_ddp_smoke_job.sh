@@ -10,17 +10,19 @@
 #SBATCH --output=%x-%j.out
 #
 # Smoke test of data parallelism over MIG slices (training/distributed.py) on
-# NGPU (default 2) slices of one GPU, in three steps:
+# NGPU (default 2) slices of one GPU, in four steps:
 #   1. the DDP equivalence tests, whose CUDA variants now run gloo on CUDA
 #      tensors with every rank pinned to its own slice (tests/test_mig_ddp.py,
 #      test_grad_sync, test_multi_game_ddp, test_rl_joint_dist,
-#      test_rl_joint_trainer) — a skipped CUDA variant fails the job;
+#      test_rl_joint_trainer, test_zero1) — a skipped CUDA variant fails the job;
 #   2. scripts/bench_grad_sync.py: gradient sync time per bucket size for a
 #      208M-parameter model (gloo between two slices);
 #   3. a short real `torchrun -m training.train_multi_game` run on synthetic
 #      othello + chess shards with --dist_backend auto (the multi_game_ddp_job.sh
 #      command line); the log must show NGPU gloo ranks on cuda:0, each pinned
-#      to a different MIG instance, and a final checkpoint.
+#      to a different MIG instance, and a final checkpoint;
+#   4. that run resumed with --shard_optimizer (ZeRO-1) for 10 more steps:
+#      the log must show the [zero1] partition line and a final checkpoint.
 #
 #   sbatch scripts/slurm/multi/mig_ddp_smoke_job.sh          # 2 x 1g.18gb
 #   GPU_TYPE=nvidia_h200_nvl_1g.18gb NGPU=3 bash scripts/slurm/multi/mig_ddp_smoke_job.sh
@@ -56,9 +58,10 @@ echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 nvidia-smi -L || true
 status=0
 
-echo "=== 1/3 DDP equivalence tests (gloo on CUDA tensors, one slice per rank)"
+echo "=== 1/4 DDP equivalence tests (gloo on CUDA tensors, one slice per rank)"
 "$PY" -m pytest -q -rs tests/test_mig_ddp.py tests/test_grad_sync.py \
     tests/test_multi_game_ddp.py tests/test_rl_joint_dist.py tests/test_rl_joint_trainer.py \
+    tests/test_zero1.py \
     2>&1 | tee "$OUT/pytest.txt" || status=1
 # a skipped CUDA variant would pass silently: on this allocation all must run
 if grep -q "needs CUDA" "$OUT/pytest.txt"; then
@@ -66,12 +69,12 @@ if grep -q "needs CUDA" "$OUT/pytest.txt"; then
     status=1
 fi
 
-echo "=== 2/3 gradient-sync benchmark (208M parameters)"
+echo "=== 2/4 gradient-sync benchmark (208M parameters)"
 "$GM_HOME/.venv/bin/torchrun" --standalone --nproc_per_node="$NGPU" \
     scripts/bench_grad_sync.py --params 208e6 --bucket_mb 0 5 25 100 400 \
     2>&1 | tee "$OUT/bench.txt" || status=1
 
-echo "=== 3/3 train_multi_game under torchrun on synthetic shards"
+echo "=== 3/4 train_multi_game under torchrun on synthetic shards"
 "$PY" - "$OUT/data" <<'EOF'
 import os, sys
 from data_processing.games.dataset import save_shard
@@ -98,6 +101,18 @@ if [ "$ranks" != "$NGPU" ] || [ "$slices" != "$NGPU" ] || [ ! -f "$OUT/ck/multi_
     echo "train_multi_game: $ranks/$NGPU gloo ranks on cuda:0, $slices distinct pinned" \
          "slice(s), final checkpoint" \
          "$( [ -f "$OUT/ck/multi_final.pt" ] && echo present || echo MISSING )" >&2
+    status=1
+fi
+echo "=== 4/4 the same run resumed with --shard_optimizer (ZeRO-1)"
+"$GM_HOME/.venv/bin/torchrun" --standalone --nproc_per_node="$NGPU" \
+    -m training.train_multi_game --dist_backend "${DIST_BACKEND:-auto}" --shard_optimizer \
+    --data othello="$OUT/data/othello" --data chess="$OUT/data/chess" \
+    --val othello="$OUT/data/othello" --steps 40 --batch_size 4 --warmup_steps 5 \
+    --log_every 10 --eval_every 40 --ckpt_every 40 --save_dir "$OUT/ck_zero1" \
+    --resume "$OUT/ck/multi_latest.pt" 2>&1 | tee "$OUT/train_zero1.txt" || status=1
+if ! grep -q '\[zero1\] optimizer state' "$OUT/train_zero1.txt" \
+        || [ ! -f "$OUT/ck_zero1/multi_final.pt" ]; then
+    echo "train_multi_game --shard_optimizer: no [zero1] line or no final checkpoint" >&2
     status=1
 fi
 echo "[$(date)] done, status=$status (logs in $OUT)"
