@@ -20,6 +20,7 @@
 mod traj;
 mod chess;
 mod common;
+mod doudizhu;
 mod generals;
 mod go;
 mod lux;
@@ -89,6 +90,11 @@ enum Game {
         #[command(subcommand)]
         cmd: gomoku::Cmd,
     },
+    /// Dou Dizhu (DouZero self-play records; gmrules doudizhu)
+    Doudizhu {
+        #[command(subcommand)]
+        cmd: doudizhu::Cmd,
+    },
     /// Kuhn poker (the toy reference game of the gmrules / candidate-action framework)
     KuhnPoker {
         #[command(subcommand)]
@@ -112,6 +118,7 @@ fn main() -> Result<()> {
         Game::Othello { cmd } => othello::run(cmd),
         Game::Chess { cmd } => chess::run(cmd),
         Game::Gomoku { cmd } => gomoku::run(cmd),
+        Game::Doudizhu { cmd } => doudizhu::run(cmd),
         Game::Go { cmd } => go::run(cmd),
         Game::Lux { cmd } => lux::run(cmd),
         Game::Mahjong { cmd } => mahjong::run(cmd),
