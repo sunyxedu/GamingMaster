@@ -344,6 +344,10 @@ class TestTokenQuotaScheduler:
             TokenQuotaScheduler({})
         with pytest.raises(ValueError):
             TokenQuotaScheduler({"a": 1, "b": 1}, floor=0.7)
+        with pytest.raises(ValueError):
+            TokenQuotaScheduler({"a": 0, "b": 0})
+        with pytest.raises(ValueError):
+            LearningProgressBandit(["a"], warmup=0)
         with pytest.raises(TypeError):
             TokenQuotaScheduler({"a": 1}, bandit=object())
         sched = TokenQuotaScheduler({"a": 1})

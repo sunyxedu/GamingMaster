@@ -9,7 +9,8 @@ per iteration (weights and MoE routing bias frozen through rollouts + epochs)
     ... actors roll out; store behaviour log-probs μ and values ...
     V      = popart.denormalize(g, head_out)       reward units
     A, G   = gae(r, V, terminated, gamma=γ_g, lam=λ_g, truncated=..., bootstrap=...)
-    popart.update({g: (G, mask)}, mirrors=[ema])   Pop: head rescaled, outputs kept
+    popart.update({g: (G, mask)},                  Pop: heads (+ EMA shadow) rescaled,
+                  mirrors=[popart.mirror_tensors(model, ema.shadow)])   outputs kept
     advnorm.update({g: (A, mask)}); A = advnorm.normalize(g, A)
     keep   = top_q_mask(A, mask, q=0.25)           optional
     π_old  = learner recompute (same weights, frozen routing), before epoch 1

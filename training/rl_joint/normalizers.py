@@ -137,10 +137,13 @@ class AdvantageNormalizer:
 
     ``center=False`` only divides by the running std (keeps the sign of
     every advantage, e.g. before a top-|A| filter on sparse ±1 games).
+    ``eps`` floors the std: a game whose advantages collapse (a solved or
+    degenerate game, a perfect critic) must not have its noise amplified
+    into the shared core's gradient.
     """
 
     def __init__(self, games: Sequence[str], decay: object = 0.99, *,
-                 center: bool = True, eps: float = 1e-4, std_max: float = 1e6):
+                 center: bool = True, eps: float = 1e-3, std_max: float = 1e6):
         self.moments = RunningMoments(games, decay, std_min=eps, std_max=std_max)
         self.center = center
 

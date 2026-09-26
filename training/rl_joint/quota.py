@@ -84,7 +84,8 @@ def project_shares(weights: Mapping[str, float], floor: object = 0.0,
         rest = 1.0 - sum(p.values())
         room = {g: hi[g] - p[g] for g in games}
         total_room = sum(room.values())
-        p = {g: p[g] + rest * room[g] / total_room for g in games}
+        if total_room > 0:      # 0 only when Σ cap = 1 − rounding: renormalise below
+            p = {g: p[g] + rest * room[g] / total_room for g in games}
     s = sum(p.values())
     return {g: v / s for g, v in p.items()}
 
@@ -134,6 +135,8 @@ class LearningProgressBandit:
             raise ValueError(f"need 0 <= fast < slow < 1, got {fast}, {slow}")
         if not 0.0 <= eps <= 1.0:
             raise ValueError(f"eps must be in [0, 1], got {eps}")
+        if warmup < 1:
+            raise ValueError(f"warmup must be >= 1, got {warmup}")
         self.games = list(games)
         self.fast, self.slow, self.eps, self.warmup = float(fast), float(slow), float(eps), warmup
         self._f = {g: 0.0 for g in self.games}
@@ -208,6 +211,8 @@ class TokenQuotaScheduler:
         if not self.games:
             raise ValueError("no games")
         self.static = {g: float(v) for g, v in shares.items()}
+        if not sum(self.static.values()) > 0:
+            raise ValueError(f"static shares need a positive sum, got {self.static}")
         self.floor = _per_game(self.games, floor, "floor")
         self.cap = _per_game(self.games, cap, "cap")
         project_shares(self.static, self.floor, self.cap)   # validates the bounds

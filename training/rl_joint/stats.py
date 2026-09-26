@@ -46,14 +46,17 @@ def as_mask(x: torch.Tensor, mask: Optional[torch.Tensor]) -> torch.Tensor:
 
 def masked_sum(x: torch.Tensor, mask: Optional[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
     """(sum of ``x`` over valid entries, number of valid entries) — both
-    0-d tensors on ``x``'s device, the count in ``x``'s float dtype.
+    0-d tensors on ``x``'s device, in ``x``'s float dtype promoted to at
+    least float32 (a half-precision count would overflow at 65504 tokens).
 
     Masked entries are selected out (``torch.where``), never multiplied by
     zero, so a NaN / inf in a padded slot cannot leak into the sum or its
     gradient."""
     m = as_mask(x, mask)
-    total = torch.where(m, x, torch.zeros((), dtype=x.dtype, device=x.device)).sum()
-    return total, m.sum().to(x.dtype if x.is_floating_point() else torch.float32)
+    dt = torch.promote_types(x.dtype, torch.float32) if x.is_floating_point() else torch.float32
+    x = x.to(dt)
+    total = torch.where(m, x, torch.zeros((), dtype=dt, device=x.device)).sum()
+    return total, m.sum().to(dt)
 
 
 def masked_mean(x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:

@@ -121,12 +121,16 @@ class PopArt:
                  game); ``1 − decay`` is the paper's step size β
         modes:   optional game → "popart" | "passthrough"; default: HL-Gauss
                  heads pass through, everything else is PopArt
-        std_min / std_max: bounds on σ (the paper clamps σ to [1e-4, 1e6])
+        std_min / std_max: bounds on σ.  The paper clamps to [1e-4, 1e6]; the
+                 default floor here is 1e-2 (rewards in this repo are O(1)):
+                 degenerate early targets (every game timed out at 0) would
+                 otherwise scale the head by σ/σ' ~ 1e4 and send a huge
+                 normalised loss into the SHARED core
     """
 
     def __init__(self, heads: Mapping[str, nn.Module], decay: object = 0.99, *,
                  modes: Optional[Mapping[str, str]] = None,
-                 std_min: float = 1e-4, std_max: float = 1e6):
+                 std_min: float = 1e-2, std_max: float = 1e6):
         self.games = list(heads)
         self.heads = dict(heads)
         self.moments = RunningMoments(self.games, decay, std_min=std_min, std_max=std_max)
