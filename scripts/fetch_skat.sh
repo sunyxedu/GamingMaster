@@ -10,9 +10,12 @@
 #   scripts/fetch_skat.sh [OUT_DIR]          OUT_DIR default data/skat
 #   HQ=0 scripts/fetch_skat.sh ...           every seat (no quality filter)
 #   MAX_RECORDS=100000 scripts/fetch_skat.sh a quick partial run
+#   CONVERT_FLAGS="--min-money 10" ...       extra `gmdata skat convert` flags
 #
 # Output: OUT/raw (archive + ratings page), OUT/verify.json + OUT/rejected.sgf (the
-# parity report), OUT/players.json, OUT/train, OUT/val (gm-shards, game "skat").
+# parity report), OUT/players.json, OUT/train, OUT/val (gm-shards, game "skat"),
+# OUT/convert_{train,val}.json. Expected sizes: see the module docs of
+# data_processing/rs/gmdata/src/skat.rs ("Full scale"); re-runs skip the download.
 set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -20,6 +23,7 @@ OUT=${1:-data/skat}
 HQ=${HQ:-1}
 MAX=()
 if [ -n "${MAX_RECORDS:-}" ]; then MAX=(--max-records "$MAX_RECORDS"); fi
+read -r -a EXTRA <<< "${CONVERT_FLAGS:-}"
 
 # a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
 command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
@@ -43,6 +47,7 @@ if [ "$HQ" = 1 ]; then
 fi
 for split in train val; do
     "$G" skat convert --input "$OUT/raw" --out "$OUT/$split" --split "$split" \
-        ${FILTER[@]+"${FILTER[@]}"} ${MAX[@]+"${MAX[@]}"} | tee "$OUT/convert_$split.json"
+        ${FILTER[@]+"${FILTER[@]}"} ${EXTRA[@]+"${EXTRA[@]}"} ${MAX[@]+"${MAX[@]}"} \
+        | tee "$OUT/convert_$split.json"
 done
 echo "skat shards: $OUT/train $OUT/val"

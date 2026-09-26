@@ -15,6 +15,8 @@ candidate-action adapter:
                       32 cards + 3 seats, 149 globals, 12 candidates; all 0/1 features)
     RL                train_rl_joint's generic CandidateSpec (per-seat streams:
                       ``--actor stream``); reward = ISS's zero-sum money score / 1260
+    reference         the ISS rule engine itself (tests/test_skat_reference.py:
+                      randomized differential tests, both directions)
 
 Hidden information: a seat sees its own hand, the bids, the skat only after its own
 pickup (and its own discards), the declarer's hand in ouvert games and the played

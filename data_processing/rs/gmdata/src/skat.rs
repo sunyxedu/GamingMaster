@@ -38,13 +38,13 @@
 //! wrong ones).
 //!
 //! The full archive (`verify --input https://skatgame.net/iss/iss-games-07-2024.sgf.bz2`,
-//! streamed, ~2.5 min, bound by the bzip2 stream): 9,094,699 records, 9,094,590 verified — 6,139,697
-//! finished, 354,574 passed in, 2,492,924 resigned, 107,395 aborted (timeout / a player
-//! leaving) — and 0 result mismatches; 109 rejected: 75 bids off the bid list (the ISS
-//! code takes any number, real Skat does not), 23 truncated lines, 7 deals of 29 cards,
-//! 1 line holding two records, 3 card moves (`DH`) the server's lossy card parser took
-//! for some card. The rules are also pinned to the ISS engine itself by randomized
-//! differential tests (tests/test_skat_reference.py).
+//! streamed, ~2.5 min, bound by the bzip2 stream): 9,094,699 records, 9,094,590
+//! verified — 6,139,697 finished, 354,574 passed in, 2,492,924 resigned, 107,395 aborted
+//! (timeout / a player leaving) — and 0 result mismatches; 109 rejected: 75 bids off
+//! the bid list (the ISS code takes any number, real Skat does not), 23 truncated
+//! lines, 7 deals of 29 cards, 1 line holding two records, 3 card moves (`DH`) the
+//! server's lossy card parser took for some card. The rules are also pinned to the ISS
+//! engine itself by randomized differential tests (tests/test_skat_reference.py).
 //!
 //! Conversion (one sample per seat stream, per-seat layout; see gmrules skat for the
 //! frames): games that end normally (incl. games passed in: three pass frames, value
@@ -77,6 +77,24 @@
 //!                     --players data/skat/players.json --ratings data/skat/raw/iss-ratings.html
 //! gmdata skat render  --input trajectories.jsonl --out games.sgf   # gmrules → ISS records
 //! ```
+//!
+//! Full scale (the cluster; Mac or Linux with cargo): `scripts/fetch_skat.sh data/skat`
+//! — download (545 MiB + the ratings page), verify (~3 min, the parity report
+//! `verify.json` + `rejected.sgf`), corpus player stats (~3 min), `convert --hq` into
+//! `data/skat/train` (~20 min at ~8k games/s) and `data/skat/val` (~3 min). Measured
+//! with `convert --count-only` on the full archive (ratings page of 2026-09-20; ~418
+//! bytes per frame on disk, bit-packed; 35.0 frames per game, 11.7 per seat stream):
+//!
+//! | corpus                                 | games     | seat streams | frames      | disk     |
+//! |----------------------------------------|-----------|--------------|-------------|----------|
+//! | every seat (`HQ=0`, train + val)       | 8,987,195 | 26,961,585   | 314,830,960 | ~132 GB  |
+//! | `--hq --split train` (the recipe)      | 6,757,574 | 11,168,014   | 137,182,532 | ~57 GB   |
+//! | `--hq --split val` (id % 100 == 0)     | 68,225    | 113,023      | 1,388,058   | ~0.6 GB  |
+//!
+//! The recipe keeps 69 players by corpus strength (10.4M seat-games; the programs
+//! theCount, kermit and zoot hold 7.6M of them) plus the humans rated ≥ 1050 on the
+//! ratings page; the most frequent players, xskat (7.1M seat-games, −9.8 money per
+//! game) and bernie (2.9M, −8.2), are left out.
 
 use crate::common;
 use crate::traj::{self, Concession, ConvertOptions, Record};

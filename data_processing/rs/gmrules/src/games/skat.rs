@@ -5,7 +5,8 @@
 //! `GameDeclaration` were READ, not copied) and verified by replaying ISS records —
 //! every move checked, every recorded result string (`R[d:.. v:.. m:.. p:.. t:.. ..]`)
 //! reproduced by [`Skat::iss_result`] — and by randomized differential tests against
-//! the ISS engine itself and SkatZero's card play (tests/test_skat_reference.py).
+//! the ISS rule engine itself (its client package's classes, driven black-box: legal
+//! sets at every decision, transitions, results; tests/test_skat_reference.py).
 //!
 //! Seats: 0 = forehand, 1 = middlehand, 2 = rearhand (ISS `P0` / `P1` / `P2`; the
 //! dealer is not a player). Cards: id = suit·8 + rank, suits D, H, S, C (ISS order,
@@ -51,8 +52,7 @@
 //! MORE (the next 10 values, repeatable: every bid stays reachable); a hand game =
 //! its type (D H S C G N) then its modifier (plain / schneider / schwarz / ouvert;
 //! null: plain / ouvert); after pickup: the game (D H S C G N NO) then the two
-//! discards one card at a time (any order; the converter labels them in ascending card
-//! id order).
+//! discards one card at a time (any order; the converter keeps the recorded order).
 //!
 //! Canonical action ids (ascending = candidate order):
 //!
