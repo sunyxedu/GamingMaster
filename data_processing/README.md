@@ -137,8 +137,10 @@ The same code serves
 
 so IL frames and RL frames are identical by construction (and pinned by golden
 tests). The toy reference game `kuhn_poker` (`rs/gmrules/src/games/kuhn_poker.rs`,
-2-4 players, hidden cards) goes through every layer; `goofspiel` is the
-simultaneous-move test game. `gmdata rules list|check|random|convert` work for every
+2-4 players, hidden cards) goes through every layer; `goofspiel` (simultaneous
+moves) and `pig` (perfect information + dice, interleaved stream) are test games of
+the other two layouts; all three are pinned to OpenSpiel.
+`gmdata rules list|check|random|convert` work for every
 registered game without per-game code (conformance battery, random-play shards,
 trajectory JSONL → shards).
 

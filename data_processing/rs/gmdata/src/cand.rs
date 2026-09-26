@@ -20,6 +20,8 @@
 //! tgt.action_idx  [T] i64             index of the taken action among the candidates
 //! tgt.value       [T] f32             outcome of the frame's seat (Game::outcome, [-1, 1])
 //! tgt.value_mask  [T] bool            only with allow_truncated (false on unfinished records)
+//! tgt.action_probs_idx [T, K] i64     only with soft_k = K > 0: teacher distributions
+//! tgt.action_probs_val [T, K] f32     (Record::soft_targets) over candidate indices
 //! ```
 //!
 //! Shard meta: the frame spec (`FrameSpec::schema_meta`: the model's META_ARCH_KEYS),
@@ -40,7 +42,7 @@ use std::path::Path;
 pub const SCHEMA: &str = "candidate.v1";
 
 /// One source record as a gmrules trajectory.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Record {
     /// Provenance id (file:line, hand number, ...).
     pub id: String,
@@ -53,6 +55,11 @@ pub struct Record {
     /// Payoffs the source reports: the record is rejected when the replayed
     /// `Game::returns` differ (a desynchronised or corrupt record).
     pub expected_returns: Option<Vec<f64>>,
+    /// Teacher distributions (engine / solver labels): `(event index of the Act,
+    /// [(canonical action id, probability)])`, written as the soft targets
+    /// `tgt.action_probs_idx` / `action_probs_val` (candidate indices) when
+    /// `ConvertOptions::soft_k > 0`; decisions without an entry get no teacher.
+    pub soft_targets: Vec<(usize, Vec<(u32, f32)>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -63,11 +70,15 @@ pub struct ConvertOptions {
     pub store_events: bool,
     /// Keep records that stop before the end (value_mask false on their frames).
     pub allow_truncated: bool,
+    /// K > 0: write the records' teacher distributions as `tgt.action_probs_idx` [T, K]
+    /// i64 (candidate indices, −1 = pad) / `tgt.action_probs_val` [T, K] f32 — the
+    /// most probable K legal actions of each labelled decision.
+    pub soft_k: usize,
 }
 
 impl Default for ConvertOptions {
     fn default() -> Self {
-        ConvertOptions { shard_size: 1024, store_events: false, allow_truncated: false }
+        ConvertOptions { shard_size: 1024, store_events: false, allow_truncated: false, soft_k: 0 }
     }
 }
 
@@ -85,6 +96,10 @@ pub struct Stats {
     pub samples: usize,
     pub frames: usize,
     pub forced_frames: usize,
+    /// labelled decisions (soft targets written)
+    pub soft_frames: usize,
+    /// teacher probability mass on actions that are not legal candidates (dropped)
+    pub soft_illegal_mass: f64,
     pub shards: usize,
     /// The first rejection reasons (for the log).
     pub errors: Vec<String>,
@@ -112,8 +127,37 @@ pub fn shard_meta<G: Game>(cfg: &G::Config) -> Value {
     meta_of(&G::spec(cfg), G::VERSION, serde_json::to_value(cfg).unwrap_or(Value::Null))
 }
 
-fn stream_sample(spec: &FrameSpec, decisions: &[&Decision], outcome: Option<&[f32]>, meta: Value, allow_truncated: bool)
-    -> Sample {
+/// Candidate-index soft target of one decision: the most probable `k` legal actions
+/// of `dist` (canonical ids → candidate indices; −1 / 0 padding) and the probability
+/// mass that fell on illegal actions.
+pub fn soft_row(d: &Decision, dist: &[(u32, f32)], k: usize) -> (Vec<i64>, Vec<f32>, f64) {
+    let mut legal: Vec<(usize, f32)> = Vec::with_capacity(dist.len());
+    let mut illegal = 0.0f64;
+    for &(a, p) in dist {
+        match d.frame.index_of(a) {
+            Some(i) if p > 0.0 => legal.push((i, p)),
+            Some(_) => {}
+            None => illegal += p.max(0.0) as f64,
+        }
+    }
+    legal.sort_by(|x, y| y.1.total_cmp(&x.1).then(x.0.cmp(&y.0)));
+    legal.truncate(k);
+    let mut idx = vec![-1i64; k];
+    let mut val = vec![0.0f32; k];
+    for (j, &(i, p)) in legal.iter().enumerate() {
+        idx[j] = i as i64;
+        val[j] = p;
+    }
+    (idx, val, illegal)
+}
+
+struct Soft<'a> {
+    k: usize,
+    by_event: std::collections::HashMap<usize, &'a [(u32, f32)]>,
+}
+
+fn stream_sample(spec: &FrameSpec, decisions: &[&Decision], outcome: Option<&[f32]>, meta: Value, allow_truncated: bool,
+                 soft: Option<&Soft>, st: &mut (usize, f64)) -> Sample {
     let t = decisions.len();
     let mut entities = Vec::with_capacity(t * spec.entities_len());
     let mut entity_mask = Vec::with_capacity(t * spec.max_entities);
@@ -147,6 +191,25 @@ fn stream_sample(spec: &FrameSpec, decisions: &[&Decision], outcome: Option<&[f3
     if allow_truncated {
         s = s.bool("tgt.value_mask", &[], vec![outcome.is_some(); t]);
     }
+    if let Some(soft) = soft {
+        let (mut idx, mut val) = (Vec::with_capacity(t * soft.k), Vec::with_capacity(t * soft.k));
+        for d in decisions {
+            match soft.by_event.get(&d.event) {
+                Some(dist) => {
+                    let (i, v, bad) = soft_row(d, dist, soft.k);
+                    idx.extend(i);
+                    val.extend(v);
+                    st.0 += 1;
+                    st.1 += bad;
+                }
+                None => {
+                    idx.extend(std::iter::repeat_n(-1i64, soft.k));
+                    val.extend(std::iter::repeat_n(0.0f32, soft.k));
+                }
+            }
+        }
+        s = s.i64("tgt.action_probs_idx", &[soft.k], idx).f32("tgt.action_probs_val", &[soft.k], val);
+    }
     s
 }
 
@@ -167,8 +230,10 @@ fn replay_typed<G: Game>(cfg: &G::Config, events: &[Event]) -> std::result::Resu
 }
 
 /// The samples of one record (replayed and verified), with its frame counts.
+type Converted = (Vec<Sample>, usize, usize, (usize, f64));
+
 fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts: &ConvertOptions)
-    -> std::result::Result<(Vec<Sample>, usize, usize), Reject> {
+    -> std::result::Result<Converted, Reject> {
     let r = r.map_err(Reject::Illegal)?;
     let spec = &r.spec;
     if !r.terminal && !opts.allow_truncated {
@@ -183,6 +248,11 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
         let (s, i) = e.to_pair();
         json!([s, i])
     }).collect::<Vec<_>>()));
+    let soft = (opts.soft_k > 0).then(|| Soft {
+        k: opts.soft_k,
+        by_event: rec.soft_targets.iter().map(|(e, d)| (*e, d.as_slice())).collect(),
+    });
+    let mut soft_st = (0usize, 0.0f64);
     let mut out = Vec::new();
     let (mut frames, mut forced) = (0, 0);
     for st in &r.streams {
@@ -208,12 +278,13 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
         if let Some(ev) = &events_meta {
             meta["events"] = ev.clone();
         }
-        out.push(stream_sample(spec, &decisions, r.outcome.as_deref(), meta, opts.allow_truncated));
+        out.push(stream_sample(spec, &decisions, r.outcome.as_deref(), meta, opts.allow_truncated, soft.as_ref(),
+                               &mut soft_st));
     }
     if out.is_empty() {
         return Err(Reject::Empty);
     }
-    Ok((out, frames, forced))
+    Ok((out, frames, forced, soft_st))
 }
 
 /// Replay, verify and write `records` as gm-shards of game `G` under `out` (converted
@@ -268,10 +339,12 @@ where
         for (rec, res) in chunk.iter().zip(results) {
             st.records += 1;
             let reason = match res {
-                Ok((samples, frames, forced)) => {
+                Ok((samples, frames, forced, (soft_n, soft_bad))) => {
                     st.converted += 1;
                     st.frames += frames;
                     st.forced_frames += forced;
+                    st.soft_frames += soft_n;
+                    st.soft_illegal_mass += soft_bad;
                     st.samples += samples.len();
                     for s in samples {
                         w.push(s)?;
@@ -320,13 +393,13 @@ mod tests {
             e
         };
         let recs = vec![
-            Record { id: "a".into(), events: ev([1, 2], &[0, 1, 1]), meta: json!({"x": 1}), seats: None, expected_returns: Some(vec![-2.0, 2.0]) },
-            Record { id: "b".into(), events: ev([1, 2], &[0, 1]), meta: Value::Null, seats: None, expected_returns: None },
-            Record { id: "c".into(), events: ev([1, 1], &[]), meta: Value::Null, seats: None, expected_returns: None },
-            Record { id: "d".into(), events: ev([2, 0], &[1, 0]), meta: Value::Null, seats: Some(vec![1]), expected_returns: Some(vec![9.0, -1.0]) },
-            Record { id: "e".into(), events: ev([2, 0], &[1, 0]), meta: Value::Null, seats: Some(vec![1]), expected_returns: None },
+            Record { id: "a".into(), events: ev([1, 2], &[0, 1, 1]), meta: json!({"x": 1}), seats: None, expected_returns: Some(vec![-2.0, 2.0]), soft_targets: vec![(3, vec![(0, 0.25), (1, 0.75)]), (4, vec![(1, 1.0), (7, 0.5)])] },
+            Record { id: "b".into(), events: ev([1, 2], &[0, 1]), meta: Value::Null, seats: None, expected_returns: None, ..Default::default() },
+            Record { id: "c".into(), events: ev([1, 1], &[]), meta: Value::Null, seats: None, expected_returns: None, ..Default::default() },
+            Record { id: "d".into(), events: ev([2, 0], &[1, 0]), meta: Value::Null, seats: Some(vec![1]), expected_returns: Some(vec![9.0, -1.0]), ..Default::default() },
+            Record { id: "e".into(), events: ev([2, 0], &[1, 0]), meta: Value::Null, seats: Some(vec![1]), expected_returns: None, ..Default::default() },
         ];
-        let opts = ConvertOptions { store_events: true, ..Default::default() };
+        let opts = ConvertOptions { store_events: true, soft_k: 2, ..Default::default() };
         let st = convert::<KuhnPoker>(&cfg, recs.into_iter().map(Ok), &dir, &opts).unwrap();
         assert_eq!((st.records, st.converted, st.truncated, st.illegal, st.returns_mismatch), (5, 2, 1, 1, 1));
         assert_eq!(st.samples, 3);
@@ -342,6 +415,14 @@ mod tests {
         assert_eq!(sh.samples[0].meta["events"][2], json!([0, 0]));
         assert_eq!(sh.samples[0].meta["x"], 1);
         assert_eq!(sh.index["tensors"]["obs.actions"]["storage"], "packbits");
+        // soft targets: record a's seat-1 bet (event 3) and seat-0 call (event 4); the
+        // illegal id 7 is dropped and counted
+        assert_eq!((st.soft_frames, st.soft_illegal_mass), (2, 0.5));
+        let idx = sh.read_i64("tgt.action_probs_idx").unwrap();
+        let val = sh.read_f32("tgt.action_probs_val").unwrap();
+        // frames: [seat0 pass (event 2), seat0 call (event 4)], [seat1 bet (event 3)]
+        assert_eq!(idx[..6], [-1, -1, 1, -1, 1, 0]);
+        assert_eq!(val[..6], [0.0, 0.0, 1.0, 0.0, 0.75, 0.25]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

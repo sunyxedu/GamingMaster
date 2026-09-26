@@ -11,7 +11,9 @@
 //! Trajectory JSONL (one record per line, `.jsonl` / `.jsonl.gz`): `{"id": "...",
 //! "events": [[seat, id], ...] (seat −1 = chance), "returns": [...] (optional, checked
 //! against the replay), "seats": [...] (optional: only these seats' streams),
-//! "meta": {...} (optional)}` — e.g. what a reference implementation or a scripted
+//! "meta": {...} (optional), "soft": [[event index, [[action, p], ...]], ...] (optional
+//! teacher distributions of the Act events, written with `--soft-k K`)}` — e.g. what a
+//! reference implementation, a solver or a scripted
 //! bot writes; real sources get their own parser module (see `kuhn_poker.rs`).
 
 use crate::cand::{self, ConvertOptions, Record};
@@ -73,6 +75,10 @@ pub enum Cmd {
         /// keep records that stop before the end (tgt.value_mask false on them)
         #[arg(long)]
         allow_truncated: bool,
+        /// write the records' "soft" teacher distributions as tgt.action_probs_idx/val
+        /// with the K most probable legal actions per labelled decision (0 = none)
+        #[arg(long, default_value_t = 0)]
+        soft_k: usize,
     },
 }
 
@@ -98,6 +104,28 @@ pub fn parse_jsonl_record(line: &str, fallback_id: &str) -> Result<Record> {
         meta: v.get("meta").cloned().unwrap_or(Value::Null),
         seats: v.get("seats").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|s| s as usize).collect()),
         expected_returns: floats("returns"),
+        soft_targets: match v.get("soft") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(soft) => soft
+                .as_array()
+                .context("\"soft\" must be [[event index, [[action, p], ...]], ...]")?
+                .iter()
+                .map(|e| {
+                    let ev = e.get(0).and_then(Value::as_u64).context("soft entry: event index")?;
+                    let dist = e
+                        .get(1)
+                        .and_then(Value::as_array)
+                        .context("soft entry: [[action, p], ...]")?
+                        .iter()
+                        .map(|ap| match (ap.get(0).and_then(Value::as_u64), ap.get(1).and_then(Value::as_f64)) {
+                            (Some(a), Some(p)) => Ok((a as u32, p as f32)),
+                            _ => bail!("soft entry {ap}: [action, p] expected"),
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok((ev as usize, dist))
+                })
+                .collect::<Result<Vec<_>>>()?,
+        },
     })
 }
 
@@ -122,14 +150,14 @@ pub fn run(cmd: Cmd) -> Result<()> {
             let mut rng = Rng::new(seed);
             let recs = (0..episodes).map(|i| {
                 let ev = g.random_trajectory(&config, rng.next_u64(), usize::MAX).map_err(anyhow::Error::msg)?;
-                Ok(Record { id: format!("random:{seed}:{i}"), events: ev, meta: Value::Null, seats: None, expected_returns: None })
+                Ok(Record { id: format!("random:{seed}:{i}"), events: ev, ..Default::default() })
             });
             let opts = ConvertOptions { shard_size, store_events, ..Default::default() };
             let st = cand::convert_dyn(&game, &config, recs, &out, &opts)?;
             println!("{}", serde_json::to_string(&st)?);
             Ok(())
         }
-        Cmd::Convert { game, config, input, out, shard_size, store_events, allow_truncated } => {
+        Cmd::Convert { game, config, input, out, shard_size, store_events, allow_truncated, soft_k } => {
             let files = common::find_files(&input, &[".jsonl", ".jsonl.gz"])?;
             anyhow::ensure!(!files.is_empty(), "no .jsonl files under {}", input.display());
             // streamed file by file, line by line
@@ -152,7 +180,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
                     }
                 }))
             });
-            let opts = ConvertOptions { shard_size, store_events, allow_truncated };
+            let opts = ConvertOptions { shard_size, store_events, allow_truncated, soft_k };
             let st = cand::convert_dyn(&game, &config, recs, &out, &opts)?;
             println!("{}", serde_json::to_string(&st)?);
             Ok(())
@@ -166,7 +194,9 @@ mod tests {
 
     #[test]
     fn jsonl_records_convert_by_name() {
-        let r = parse_jsonl_record(r#"{"id":"x","events":[[-1,2],[-1,0],[0,1],[1,0]],"returns":[1,-1]}"#, "f:1").unwrap();
+        let r = parse_jsonl_record(r#"{"id":"x","events":[[-1,2],[-1,0],[0,1],[1,0]],"returns":[1,-1],"soft":[[2,[[1,0.9],[0,0.1]]]]}"#, "f:1").unwrap();
+        assert_eq!(r.soft_targets, vec![(2, vec![(1, 0.9), (0, 0.1)])]);
+        assert!(parse_jsonl_record(r#"{"events":[],"soft":[[2,[[1]]]]}"#, "f").is_err());
         assert_eq!(r.events[2], Event::Act(0, 1));
         assert_eq!(r.expected_returns, Some(vec![1.0, -1.0]));
         assert!(parse_jsonl_record(r#"{"events":[[0]]}"#, "f").is_err());

@@ -109,6 +109,39 @@ def test_shards_schema_and_meta(data):
     assert bool(s["obs"]["action_mask"].gather(1, s["tgt"]["action_idx"].unsqueeze(1)).all())
 
 
+def test_teacher_soft_targets_through_the_trainer(gmdata, tmp_path):
+    """Teacher distributions (JSONL "soft", `gmdata rules convert --soft-k`) land as
+    tgt.action_probs_idx/val over candidate indices and train through batch_loss."""
+    from data_processing.games.dataset import collate_game_sequences
+    from model.games import build_game_network
+    from training.train_il_game import batch_loss
+
+    recs = []
+    for i in range(6):
+        ev = gmsim.random_trajectory("kuhn_poker", None, i).tolist()
+        soft = [[k, [[0, 0.3], [1, 0.7], [5, 0.2]]] for k, (s, _) in enumerate(ev) if s >= 0]
+        recs.append(json.dumps({"id": f"r{i}", "events": ev, "soft": soft}))
+    (tmp_path / "in").mkdir()
+    (tmp_path / "in" / "t.jsonl").write_text("\n".join(recs) + "\n")
+    st = _run(gmdata, "rules", "convert", "--game", "kuhn_poker", "--input", tmp_path / "in",
+              "--out", tmp_path / "out", "--soft-k", "2")
+    assert st["converted"] == 6 and st["soft_frames"] == st["frames"]
+    assert st["soft_illegal_mass"] == pytest.approx(0.2 * st["frames"], rel=1e-5)
+    samples = load_gm_samples(str(tmp_path / "out"))
+    s = samples[0]
+    assert s["tgt"]["action_probs_idx"].tolist()[0] == [1, 0]
+    assert s["tgt"]["action_probs_val"][0].tolist() == pytest.approx([0.7, 0.3])
+    torch.manual_seed(0)
+    net = build_game_network("kuhn_poker", d_model=32, n_heads=4, d_ff=64, n_st_layers=1,
+                             core_type="transformer", core_layers=1)
+    b = collate_game_sequences(samples[:4])
+    mb = {"obs": b["obs"], "tgt": b["tgt"], "frame_mask": b["meta"]["frame_mask"],
+          "labels": None, "legal": None}
+    loss, stats, _ = batch_loss(net, mb, torch.device("cpu"), 0.2, 0.0, False)
+    assert torch.isfinite(loss) and stats["action_teacher_frac"] == pytest.approx(1.0)
+    assert stats["action_teacher_kl"] >= 0
+
+
 def test_hq_keeps_only_expert_seats(gmdata, data, tmp_path):
     root, _ = data
     st = _run(gmdata, "kuhn-poker", "convert", "--input", root / "raw", "--out", tmp_path / "hq",

@@ -70,6 +70,7 @@ pub fn parse_line(line: &str, id: &str) -> Result<Option<Record>> {
         meta: json!({"hand": parts[1], "players": names}),
         seats: None,
         expected_returns: returns,
+        ..Default::default()
     }))
 }
 
@@ -259,7 +260,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
             }
             let filter = Filter { players, keep_players: player, other_variant: Cell::new(0) };
             let recs = records(&input, &filter)?.take(max_records.unwrap_or(usize::MAX));
-            let opts = ConvertOptions { shard_size, store_events, allow_truncated };
+            let opts = ConvertOptions { shard_size, store_events, allow_truncated, ..Default::default() };
             let st = cand::convert::<KuhnPoker>(&KuhnConfig { players }, recs, &out, &opts)?;
             let mut v = serde_json::to_value(&st)?;
             v["other_variant"] = json!(filter.other_variant.get());

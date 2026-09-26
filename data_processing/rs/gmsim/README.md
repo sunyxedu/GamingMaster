@@ -45,7 +45,7 @@ is tested in gmrules (`cargo test --release -p gmrules`) and from Python
 
 ```python
 import gmsim
-gmsim.games()                                   # ['kuhn_poker', 'goofspiel', ...]
+gmsim.games()                                   # ['kuhn_poker', 'goofspiel', 'pig', ...]
 gmsim.game_info("kuhn_poker", {"players": 3})   # spec: frame shapes, layout, n_seats, ...
 sim = gmsim.Sim("kuhn_poker", {"players": 3}, n_envs=64)
 sim.reset(range(64), seeds)                     # per-episode seeds
