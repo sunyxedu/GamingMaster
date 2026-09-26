@@ -11,7 +11,9 @@ and adaptation of a trained brain to a new game.
     uv run python -m training.train_multi_game --data go=data/go/train \\
         --init_core checkpoints/multi/multi_final.pt --freeze_core --train_core_norms
 
-    # the same on 4 GPUs of one node (data parallel, see below)
+    # the same on 4 GPUs of one node (data parallel, see below) — or on 4 MIG
+    # slices (CUDA_VISIBLE_DEVICES=MIG-...,MIG-...: every rank pins its own
+    # slice, --dist_backend auto picks gloo)
     uv run torchrun --standalone --nproc_per_node=4 -m training.train_multi_game ...
 
     # generals next to the others: its `gmdata generals shard` gm-shards

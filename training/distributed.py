@@ -256,6 +256,9 @@ def init_distributed(device: torch.device, timeout_min: float = 30.0,
             f"[{os.environ.get('CUDA_VISIBLE_DEVICES')}]" if device.type == "cuda" else "")
     print(f"[dist] rank {env.rank}/{env.world} (local {env.local_rank}): backend={name} "
           f"device={device}{what}", flush=True)
+    if name == "nccl" and mig:
+        print("[dist] WARNING: NCCL on MIG instances fails with 'Duplicate GPU detected' when "
+              "two ranks share a physical GPU; --dist_backend auto (gloo) works", flush=True)
     return env, device
 
 
