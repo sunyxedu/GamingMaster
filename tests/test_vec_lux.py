@@ -289,6 +289,70 @@ def test_legal_masks_follow_the_rules():
     assert checked_legal > 50 and checked_masked > 10
 
 
+def test_legal_masks_are_exactly_the_actions_with_an_effect():
+    """Brute force against the official rules: from mid-match states, every
+    probe (one unit's move, or its sap at a sampled legal / masked target,
+    every other unit noop) is stepped next to the all-noop baseline from the
+    same state and RNG key.  A legal action always changes the next state, a
+    masked one never does — except a move off the map, which the env charges
+    energy for without moving (masked as useless)."""
+    M = 96                                          # copies per batched probe step
+    src = LuxVecEnv(2, seed=11)
+    probe = LuxVecEnv(M, seed=0)
+    g = _gen(1)
+    rng = np.random.default_rng(0)
+    obs = src.observe()
+    n = {"legal": 0, "masked": 0, "offmap": 0}
+    for step in range(45):
+        obs, *_ = src.step(src.random_actions(obs, g))
+        if step not in (20, 44):                    # mid-match (101-frame matches)
+            continue
+        st = src.state_dict()
+        lg = obs.legal
+        for i in range(2):
+            probes = []                             # (seat, unit, action, sap class, legal)
+            for p in (0, 1):
+                r = 2 * i + p
+                for u in np.flatnonzero(lg["unit"][r].numpy()):
+                    for a in (1, 2, 3, 4):
+                        probes.append((p, u, a, sap_class(0, 0), bool(lg["unit_action"][r, u, a])))
+                    ok = lg["sap"][r, u].numpy()
+                    for c in rng.choice(np.flatnonzero(ok), 2, replace=False):
+                        probes.append((p, u, 5, int(c), bool(lg["unit_action"][r, u, 5])))
+                    for c in rng.choice(np.flatnonzero(~ok), 2, replace=False):
+                        probes.append((p, u, 5, int(c), False))
+            assert probes
+            for k0 in range(0, len(probes), M - 1):
+                chunk = probes[k0:k0 + M - 1]
+                games = {
+                    key: (np.repeat(np.asarray(v)[i:i + 1], M, 0) if key in ("keys", "wins")
+                          else v) for key, v in st["games"].items()}
+                games["state"] = [np.repeat(x[i:i + 1], M, 0) for x in st["games"]["state"]]
+                games["params"] = {k: np.repeat(v[i:i + 1], M, 0)
+                                   for k, v in st["games"]["params"].items()}
+                for key, val in (("started", True), ("live", True), ("game_over", False),
+                                 ("new", False)):
+                    games[key] = np.full(M, val)
+                probe.load_state_dict({**probe.state_dict(), "games": games})
+                ua = torch.zeros(2 * M, 16, dtype=torch.long)
+                so = torch.full((2 * M, 16), sap_class(0, 0), dtype=torch.long)
+                for j, (p, u, a, c, _) in enumerate(chunk):   # copy 0: the baseline
+                    ua[2 * (j + 1) + p, u], so[2 * (j + 1) + p, u] = a, c
+                probe.step({"unit_actions": ua, "sap_offsets": so})
+                after = probe.state_dict()["games"]["state"]
+                for j, (p, u, a, c, legal) in enumerate(chunk):
+                    effect = any(not np.array_equal(x[j + 1], x[0]) for x in after)
+                    if a <= 4 and not legal:
+                        x, y = (obs.obs["units_seq"][2 * i + p, u, :2] * 24).round().long().tolist()
+                        dx, dy = MOVE_DELTAS[a - 1]
+                        if not (0 <= x + dx < 24 and 0 <= y + dy < 24):
+                            n["offmap"] += 1
+                            continue
+                    assert effect == legal, (step, i, p, u, a, c, legal)
+                    n["legal" if legal else "masked"] += 1
+    assert n["legal"] > 100 and n["masked"] > 100 and n["offmap"] > 0, n
+
+
 def test_env_sap_legal_is_the_il_rule_on_the_gated_units():
     """The IL batches' sap legality (model.games.lux.lux_legal_from_obs: unit
     cells from units_seq, the sap range from globals_seq) is the env's

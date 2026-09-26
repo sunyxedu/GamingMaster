@@ -14,7 +14,10 @@ agents' recorded actions:
     the match value = the env's match reward), frame t = ``match_steps`` t;
   * the obs builder on the replay's own recorded observations equals the
     shards too (the path for replays the env cannot replay: the synthetic
-    converter fixture with its 2-step matches and unknown env_cfg).
+    converter fixture with its 2-step matches and unknown env_cfg);
+  * the RL action path: the recorded actions sent in the decoder's format
+    (unit actions + sap target classes) reproduce the replay as well, from a
+    middle slot of a batched env.
 
 Always: tests/fixtures/lux_kaggle/episode-71896508.json.gz — a real Kaggle
 episode (sap-heavy, stacked units) stripped to what the env and the converter
@@ -50,6 +53,7 @@ from env.vec_lux import (  # noqa: E402
     kaggle_obs,
     kaggle_seed,
     load_kaggle_replay,
+    sap_class,
 )
 from tests.test_rust_converters_parity import gmdata  # noqa: E402,F401  (fixture)
 
@@ -173,6 +177,40 @@ def test_fixture_replays_exactly_in_the_official_env(kaggle_fixture):
     e = torch.cat([s["obs"]["map_seq"][:, 8:10] for s in ours.values()])
     c = torch.cat([s["obs"]["map_seq"][:, 6:8] for s in ours.values()])
     assert bool(((c >= 0.75) & (e > 0)).any())
+
+
+def test_decoder_actions_replay_the_fixture_in_a_batched_env():
+    """The RL action path: the recorded actions in the DECODER's format
+    (``unit_actions`` + sap target classes, as ``sample()`` emits them, not
+    raw env actions) reproduce the replay's official observations every step
+    and its result — with the game in the middle slot of a batched env whose
+    other games play random legal actions (so sap dx/dy, the class layout,
+    the move directions and the row ↔ (env, seat) layout are all pinned)."""
+    ep = load_kaggle_replay(KAGGLE_FIXTURE)
+    acts = kaggle_env_actions(ep)
+    N, slot = 5, 2
+    env = LuxVecEnv(N, seed=0)
+    obs = env.reset(seed=kaggle_seed(ep) - slot, new_game=True)     # env k: seed + k
+    g = torch.Generator().manual_seed(0)
+    rows = slice(2 * slot, 2 * slot + 2)
+    n_steps = len(ep["steps"])
+    for t in range(n_steps):
+        raw = env.raw_obs()
+        for p in (0, 1):
+            bad = _raw_equal(raw[p], kaggle_obs(ep, t, p), slot)
+            assert not bad, f"step {t} agent {p}: differs at {bad}"
+        if t == n_steps - 1:
+            break
+        ua = torch.from_numpy(acts[t][..., 0].astype(np.int64))
+        assert ((ua >= 0) & (ua <= 5)).all()
+        so = torch.from_numpy(np.where(ua.numpy() == 5, sap_class(acts[t][..., 1], acts[t][..., 2]),
+                                       sap_class(0, 0)).astype(np.int64))
+        a = {k: v.clone() for k, v in env.random_actions(obs, g).items()}
+        a["unit_actions"][rows], a["sap_offsets"][rows] = ua, so
+        obs, rew, done, info = env.step(a)
+        if bool(done[slot]) and not bool(info["game_over"][slot]):
+            obs = env.reset()
+    assert np.asarray(env.raw_obs()[0]["team_wins"][slot]).tolist() == list(ep["rewards"])
 
 
 def test_fixture_matches_gmdata_shards(kaggle_fixture, gmdata, tmp_path):  # noqa: F811
