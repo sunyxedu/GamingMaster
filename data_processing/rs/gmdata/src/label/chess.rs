@@ -1129,6 +1129,21 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    /// `--max-moves` above the engine's MultiPV maximum (Stockfish: 256, the fake: 500)
+    /// used to be ignored by the engine — one scored move per position, a one-hot
+    /// "teacher" — while the meta recorded max_moves; it now fails before any labelling.
+    #[test]
+    fn max_moves_beyond_the_engine_multipv_range_is_rejected() {
+        let root = tmpdir("chess-multipv-range");
+        convert_games(&root, &GAMES[..1], 4);
+        let mut o = fake_opts(&root, fake_engine_command());
+        o.max_moves = Some(501);
+        let msg = format!("{:#}", run(ChessLabeller::new(501), &o).unwrap_err());
+        assert!(msg.contains("MultiPV=501") && msg.contains("[1, 500]"), "{msg}");
+        assert!(!o.out.exists(), "nothing written");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn wrong_shards_are_rejected() {
         let root = tmpdir("chess-wrong");

@@ -23,7 +23,7 @@
 //! [`super::transform::q_from_wdl`], or cp with [`super::transform::q_from_cp`].
 
 use super::engine::{Engine, EngineCommand, EngineError};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::time::Duration;
 
 /// Which dialect a [`UciSession`] speaks.
@@ -164,14 +164,64 @@ pub struct UciSession {
     pub timeout: Duration,
 }
 
+/// An option announced in the `uci` / `usi` handshake:
+/// `option name <NAME> type <TYPE> [default D] [min A] [max B] [var …]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionSpec {
+    pub name: String,
+    pub kind: String,
+    pub min: Option<i64>,
+    pub max: Option<i64>,
+}
+
+/// Parse a handshake `option name …` line (`None` for other lines).
+pub fn parse_option(line: &str) -> Option<OptionSpec> {
+    let rest = line.trim().strip_prefix("option name ")?;
+    let (name, spec) = rest.split_once(" type ")?;
+    let toks: Vec<&str> = spec.split_whitespace().collect();
+    let num = |key: &str| toks.iter().position(|t| *t == key).and_then(|i| toks.get(i + 1)).and_then(|v| v.parse::<i64>().ok());
+    Some(OptionSpec { name: name.trim().to_string(), kind: toks.first()?.to_string(), min: num("min"), max: num("max") })
+}
+
+/// Reject option values the engine would silently ignore. Stockfish (and other UCI
+/// engines) drop a `setoption` whose `spin` value lies outside the announced
+/// `[min, max]` (or is not a number) and a `check` value other than `true` / `false`,
+/// and carry on with the previous value — e.g. `MultiPV 300` (Stockfish's maximum is
+/// 256) would leave MultiPV at 1 and every position would be labelled with a single
+/// move while the teacher meta claims 300. Options the engine does not announce are
+/// not checked (names are case-insensitive).
+pub fn check_option_values(hello: &[String], options: &[(String, String)]) -> Result<()> {
+    let specs: Vec<OptionSpec> = hello.iter().filter_map(|l| parse_option(l)).collect();
+    for (k, v) in options {
+        let Some(spec) = specs.iter().find(|s| s.name.eq_ignore_ascii_case(k.trim())) else { continue };
+        let v = v.trim();
+        match spec.kind.as_str() {
+            "spin" => {
+                let (lo, hi) = (spec.min.unwrap_or(i64::MIN), spec.max.unwrap_or(i64::MAX));
+                match v.parse::<i64>() {
+                    Ok(x) if (lo..=hi).contains(&x) => {}
+                    _ => bail!("option {k}={v}: the engine accepts integers in [{lo}, {hi}] for {} and would silently ignore this value", spec.name),
+                }
+            }
+            "check" if v != "true" && v != "false" => {
+                bail!("option {k}={v}: {} is a check option (true / false); the engine would silently ignore this value", spec.name)
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 impl UciSession {
-    /// Spawn, handshake, apply `options` (`setoption name K value V`), wait until ready.
+    /// Spawn, handshake, apply `options` (`setoption name K value V`; values the engine
+    /// would silently ignore are an error, [`check_option_values`]), wait until ready.
     pub fn open(cmd: EngineCommand, flavor: Flavor, options: &[(String, String)], timeout: Duration) -> Result<Self> {
         let engine = Engine::spawn(cmd)?;
         let mut s = UciSession { engine, flavor, id_name: String::new(), timeout };
         let (hello, ok, _) = flavor.hello();
         let lines = s.engine.request(hello, timeout, |l| l.trim() == ok)?;
         s.id_name = lines.iter().find_map(|l| l.strip_prefix("id name ")).unwrap_or("unknown engine").trim().to_string();
+        check_option_values(&lines, options).with_context(|| s.id_name.clone())?;
         for (k, v) in options {
             s.setoption(k, v)?;
         }
@@ -332,6 +382,62 @@ mod tests {
             moves.len() as f64 / secs,
             lines as f64 / moves.len() as f64
         );
+    }
+
+    /// Stockfish 19 ignores `setoption name MultiPV value 300` (its maximum is 256) and
+    /// searches with MultiPV 1: such values must fail before any labelling.
+    #[test]
+    fn option_values_the_engine_would_ignore_are_rejected() {
+        let hello: Vec<String> = [
+            "id name Stockfish 19",
+            "option name Debug Log File type string default <empty>",
+            "option name Threads type spin default 1 min 1 max 1024",
+            "option name Clear Hash type button",
+            "option name MultiPV type spin default 1 min 1 max 256",
+            "option name UCI_ShowWDL type check default false",
+            "uciok",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            parse_option(&hello[4]),
+            Some(OptionSpec { name: "MultiPV".into(), kind: "spin".into(), min: Some(1), max: Some(256) })
+        );
+        assert_eq!(parse_option(&hello[1]).unwrap().name, "Debug Log File");
+        assert_eq!(parse_option(&hello[3]).unwrap().kind, "button");
+        assert!(parse_option("id name x").is_none());
+        let opts = |kv: &[(&str, &str)]| kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        let ok = opts(&[("Threads", "1"), ("multipv", "256"), ("UCI_ShowWDL", "true"), ("Debug Log File", "x"), ("Unknown", "7")]);
+        check_option_values(&hello, &ok).unwrap();
+        for bad in [("MultiPV", "300"), ("MultiPV", "0"), ("Threads", "two"), ("UCI_ShowWDL", "1"), ("uci_showwdl", "True")] {
+            let e = check_option_values(&hello, &opts(&[bad])).unwrap_err().to_string();
+            assert!(e.contains(&format!("{}={}", bad.0, bad.1)) && e.contains("silently ignore"), "{e}");
+        }
+        // through the session: the fake announces MultiPV max 500
+        let cmd = crate::label::engine::EngineCommand::in_process("fake-uci", || UciFake::new(|_: &str| Some(vec![FakeMove::cp("e2e4", 1)])));
+        let e = UciSession::open(cmd.clone(), Flavor::Uci, &opts(&[("MultiPV", "501")]), Duration::from_secs(5)).err().unwrap();
+        assert!(format!("{e:#}").contains("[1, 500]"), "{e:#}");
+        assert!(UciSession::open(cmd, Flavor::Uci, &opts(&[("MultiPV", "500")]), Duration::from_secs(5)).is_ok());
+    }
+
+    /// The premise of [`check_option_values`] on the real engine (skipped when absent).
+    #[test]
+    fn real_stockfish_ignores_out_of_range_multipv() {
+        let Some(path) = crate::label::testkit::engine_path("STOCKFISH", "stockfish") else {
+            eprintln!("skipping: stockfish not found");
+            return;
+        };
+        let cmd = crate::label::engine::EngineCommand::process(path, &[]);
+        let opts = vec![("MultiPV".to_string(), "300".to_string())];
+        let e = UciSession::open(cmd.clone(), Flavor::Uci, &opts, Duration::from_secs(60)).err().expect("MultiPV 300 must be rejected");
+        assert!(format!("{e:#}").contains("[1, 256]"), "{e:#}");
+        // what the check prevents: the engine keeps MultiPV 1
+        let mut s = UciSession::open(cmd, Flavor::Uci, &[], Duration::from_secs(60)).unwrap();
+        s.setoption("MultiPV", "300").unwrap();
+        s.new_game().unwrap();
+        let r = s.search("position startpos", "go nodes 20000", Duration::from_secs(60)).unwrap();
+        assert_eq!(r.lines.len(), 1, "{r:?}");
     }
 
     #[test]
