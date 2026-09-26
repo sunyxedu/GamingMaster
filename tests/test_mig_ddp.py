@@ -505,3 +505,19 @@ def test_grad_sync_benchmark_runs_under_torchrun():
     lines = [ln for ln in res.stdout.splitlines() if ln.startswith("[bench] bucket_mb=")]
     assert [ln.split()[1] for ln in lines] == ["bucket_mb=0", "bucket_mb=0.5"]
     assert "backend=gloo" in res.stdout
+
+
+def test_spawned_children_never_probe_cuda(monkeypatch):
+    """tests/gloo_devices.py: once the pytest process has probed CUDA it
+    marks the environment, so a spawn child — which imports the test module
+    while unpickling its target, before multiprocessing sets its parent —
+    skips torch.cuda.is_available() (cuInit on the unpinned MIG list)."""
+    import tests.gloo_devices as gd
+
+    assert os.environ.get(gd._SPAWNED_ENV) == "1"         # set when the module was imported
+
+    def boom():
+        raise AssertionError("a spawned rank must not probe CUDA")
+
+    monkeypatch.setattr(torch.cuda, "is_available", boom)
+    assert gd._has_cuda() is False

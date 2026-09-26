@@ -13,14 +13,25 @@ import torch
 from training.distributed import is_mig, pin_rank_device, visible_devices, visible_mig
 
 
+#: set by the pytest process once it has probed CUDA; every rank it spawns
+#: afterwards inherits it
+_SPAWNED_ENV = "GM_GLOO_TEST_SPAWNED"
+
+
 def _has_cuda() -> bool:
     """Only the pytest process decides what to skip.  A spawned rank
     re-imports the test modules (and so this one), and
     torch.cuda.is_available() there would run cuInit on the unpinned MIG
-    list before the rank pins its slice (pin_rank_device then refuses)."""
-    if multiprocessing.parent_process() is not None:
+    list before the rank pins its slice (pin_rank_device then refuses).
+    multiprocessing.parent_process() alone cannot tell: a spawn child
+    unpickles its target — importing the test module — BEFORE
+    Process._bootstrap sets the parent, so the parent marks its children
+    through the environment instead."""
+    if os.environ.get(_SPAWNED_ENV) == "1" or multiprocessing.parent_process() is not None:
         return False
-    return torch.cuda.is_available()
+    has = torch.cuda.is_available()
+    os.environ[_SPAWNED_ENV] = "1"
+    return has
 
 
 HAS_CUDA = _has_cuda()

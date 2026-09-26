@@ -86,11 +86,14 @@ EOF
     --val othello="$OUT/data/othello" --steps 30 --batch_size 4 --warmup_steps 5 \
     --log_every 10 --eval_every 30 --ckpt_every 30 --save_dir "$OUT/ck" \
     2>&1 | tee "$OUT/train.txt" || status=1
-ranks=$(grep -c "^\[dist\] rank .*backend=gloo device=cuda:0" "$OUT/train.txt" || true)
+# ranks write to one stream: two [dist] lines can land on one text line, so
+# count the records (grep -o), not the lines
+DIST_RE='\[dist\] rank [0-9]+/[0-9]+ \(local [0-9]+\): backend=gloo device=cuda:0 [^[]*\[MIG-[^]]*\]'
+ranks=$(grep -oE "$DIST_RE" "$OUT/train.txt" | wc -l | tr -d ' ' || true)
 # every rank must show ONE MIG instance of its own ("[MIG-...]" without a
 # comma): an unpinned rank would print the whole list, i.e. share slice 0
-slices=$(grep "^\[dist\] rank .*backend=gloo device=cuda:0" "$OUT/train.txt" |
-         grep -o '\[MIG-[^],]*\]$' | sort -u | wc -l | tr -d ' ' || true)
+slices=$(grep -oE "$DIST_RE" "$OUT/train.txt" |
+         grep -oE '\[MIG-[^],]*\]$' | sort -u | wc -l | tr -d ' ' || true)
 if [ "$ranks" != "$NGPU" ] || [ "$slices" != "$NGPU" ] || [ ! -f "$OUT/ck/multi_final.pt" ]; then
     echo "train_multi_game: $ranks/$NGPU gloo ranks on cuda:0, $slices distinct pinned" \
          "slice(s), final checkpoint" \
