@@ -138,8 +138,11 @@ META_ARCH_KEYS = {
     "clash_royale": {k: (k,) for k in (
         "arena_h", "arena_w", "arena_channels", "hand_size", "n_cards",
         "card_feature_dim", "cr_global_features")},
+    # converter v2 records the field-token width (v1: 20; v2 appends the
+    # forced-switch / team-preview request flags → 22)
     "pokemon": {"move_buckets": ("pokemon_move_buckets",),
-                "species_buckets": ("pokemon_species_buckets",)},
+                "species_buckets": ("pokemon_species_buckets",),
+                "field_features": ("pokemon_field_features",)},
     # gio records (GeneralsGioDataset.shard_meta / `gmdata generals shard`);
     # with turn_globals the net has TURN_GLOBAL_FEATURES more globals than
     # the data (meta_arch_value), appended at batch time (OBS_HOOKS)
@@ -169,19 +172,23 @@ META_LEGACY = {
     "chess": {"global_features": 8},
     "shogi": {"global_features": 4},
     "lux": {"global_features": 6, "sap_range": 0},
+    "pokemon": {"field_features": 20},
 }
 
 # First converter generation of the frozen pre-training schema per game:
 # older shards still train (their META_LEGACY architecture), but they lack
 # the frozen inputs / targets, so the trainers warn (or, with
 # --require_frozen_schema, refuse).
-SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 2, "lux": 2}
+SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 2, "lux": 2,
+                                   "pokemon": 2}
 _SCHEMA_FREEZE_CONTENT = {
     "chess": "repetition flags + legal masks",
     "go": "side-to-move/komi globals",
     "shogi": "repetition + legal masks",
     "mahjong": "legal masks",
     "lux": "env-param globals + sap targets",
+    "pokemon": "move-identity targets, forced-switch / lead / unlabelled-turn frames, "
+               "request-phase flags + legal masks",
 }
 
 

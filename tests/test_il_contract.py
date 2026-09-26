@@ -517,6 +517,9 @@ def test_meta_registry_frozen_schema_keys():
     assert META_ARCH_KEYS["shogi"] == {"global_features": ("shogi_global_features",)}
     assert META_ARCH_KEYS["lux"] == {"global_features": ("lux_global_features",),
                                      "sap_range": ("lux_sap_range",)}
+    assert META_ARCH_KEYS["pokemon"] == {"move_buckets": ("pokemon_move_buckets",),
+                                         "species_buckets": ("pokemon_species_buckets",),
+                                         "field_features": ("pokemon_field_features",)}
 
 
 def test_meta_legacy_values_are_the_registry_defaults():
@@ -569,9 +572,30 @@ def test_go_and_lux_meta():
         check_meta_arch("lux", SimpleNamespace(lux_global_features=6, lux_sap_range=7), {})
 
 
+def test_pokemon_meta():
+    """converter v2 shards (field_features 22: + forced-switch / team-preview flags) build the
+    v2 field token in fresh runs; v1 shards (no key) are held to the legacy 20."""
+    v2 = {"field_features": 22, "move_buckets": 1024, "species_buckets": 512}
+    kw = apply_meta_arch_defaults("pokemon", dict(TINY), v2)
+    assert (kw["pokemon_field_features"], kw["pokemon_move_buckets"]) == (22, 1024)
+    net = build_game_network("pokemon", **kw)
+    check_meta_arch("pokemon", net.cfg, v2)
+    legacy = build_game_network("pokemon", **TINY).cfg
+    check_meta_arch("pokemon", legacy, {"move_buckets": 256, "species_buckets": 512})
+    with pytest.raises(ValueError, match="pokemon_field_features=20"):
+        check_meta_arch("pokemon", SimpleNamespace(pokemon_field_features=20,
+                                                   pokemon_move_buckets=1024,
+                                                   pokemon_species_buckets=512), v2)
+    with pytest.raises(ValueError, match="field_features=20 .implied"):
+        check_meta_arch("pokemon", net.cfg, {"move_buckets": 1024, "species_buckets": 512})
+
+
 def test_schema_freeze_warning():
     assert SCHEMA_FREEZE_CONVERTER_VERSION == {"chess": 3, "go": 2, "shogi": 2,
-                                               "mahjong": 2, "lux": 2}
+                                               "mahjong": 2, "lux": 2, "pokemon": 2}
+    assert "move-identity" in schema_freeze_warning("pokemon",
+                                                    SimpleNamespace(converter_version=1))
+    assert schema_freeze_warning("pokemon", SimpleNamespace(converter_version=2)) is None
     msg = schema_freeze_warning("chess", SimpleNamespace(converter_version=2))
     assert msg.startswith("chess shards have converter_version 2 < 3: they predate the "
                           "frozen pre-training schema")

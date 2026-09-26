@@ -42,6 +42,13 @@ import pytest
 import torch
 
 from data_processing.games.dataset import load_gm_samples
+from model.games.pokemon import (
+    FIELD_FORCED_SWITCH,
+    FIELD_TEAM_PREVIEW,
+    POKE_FEAT_ACTIVE,
+    POKE_FEAT_FAINTED,
+    move_bucket,
+)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WS = os.path.join(ROOT, "data_processing")
@@ -53,6 +60,7 @@ EXTRA_ENV = "GM_AUDIT_POKEMON_REPLAYS"
 EXTRA_MAX = 150
 CARGO = shutil.which("cargo") or os.path.expanduser("~/.cargo/bin/cargo")
 TURN_CLIP = 50  # obs.field_seq[..., 9] = min(turn / 50, 1): exact turn numbers below this
+MOVE_BUCKETS = 1024  # gmdata pokemon convert --move-buckets default (shard meta "move_buckets")
 
 Key = Tuple[str, str]
 
@@ -171,7 +179,33 @@ def _diff(a: Dict, i: int, b: Dict, j: int, tgt: bool = True) -> List[str]:
     return bad
 
 
-def _assert_prefix(full: Optional[Dict], part: Optional[Dict], n: int, what: str, tgt: bool = True):
+#: the targets that name the side's choice (hindsight: the choice is logged after its frame)
+ACTION_LABELS = ("action_type", "action_known", "move_id", "move_idx", "switch_idx", "tera")
+#: the targets that are functions of the frame's state (legal masks, the acting slot)
+STATE_TARGETS = ("active_idx", "legal_action_type", "legal_switch")
+
+
+def _forced(s: Dict, f: int) -> bool:
+    """Frame f answers a forced-switch request (KO replacement, pivot, eject)."""
+    return bool(s["obs"]["field_seq"][f, FIELD_FORCED_SWITCH] == 1)
+
+
+def _preview(s: Dict, f: int) -> bool:
+    """Frame f answers the team-preview request (the lead)."""
+    return bool(s["obs"]["field_seq"][f, FIELD_TEAM_PREVIEW] == 1)
+
+
+def _assert_prefix(
+    full: Optional[Dict],
+    part: Optional[Dict],
+    n: int,
+    what: str,
+    tgt: bool = True,
+    unknown_ok: bool = False,
+):
+    """The first n frames of ``part`` are those of ``full``: obs and (``tgt``) every target
+    but the hindsight value.  ``unknown_ok``: a frame whose choice ``part`` has not seen
+    (action_known 0 — its log ends before the choice) may differ in the action labels only."""
     assert _n(part) >= n and _n(full) >= n, (what, _n(full), _n(part), n)
     groups = ("obs", "tgt") if tgt else ("obs",)
     if n and full is not None and part is not None:
@@ -184,7 +218,8 @@ def _assert_prefix(full: Optional[Dict], part: Optional[Dict], n: int, what: str
     ):
         return
     for i in range(n):
-        d = _diff(full, i, part, i, tgt)
+        skip = {f"tgt.{k}" for k in ACTION_LABELS} if unknown_ok and not _labelled(part, i) else set()
+        d = [k for k in _diff(full, i, part, i, tgt) if k not in skip]
         assert not d, f"{what}: frame {i} differs in {d}"
 
 
@@ -232,7 +267,10 @@ def test_every_line_truncation_is_a_prefix(gmdata, replays, full, tmp_path):
     """Cut every log after every line (appending a ``|win|`` so the converter keeps it): the
     cut's frames — obs AND every non-value target — are the first frames of the full conversion.
     No obs/label of a decision may depend on anything logged after it (no whole-battle
-    normalisers, revealed-move sets, final team, number of turns, ...)."""
+    normalisers, revealed-move sets, final team, number of turns, ...).  The one exception is
+    the decision still open at the cut (a turn whose choice is not logged yet, the second side
+    of a simultaneous request): its frame exists — frames never wait for their outcome — with
+    the label masked (action_known 0), and only its action labels differ."""
     jobs, want = {}, {}
     for r in replays:
         lines = r["log"].split("\n")
@@ -243,18 +281,22 @@ def test_every_line_truncation_is_a_prefix(gmdata, replays, full, tmp_path):
             jobs[cid] = _rec(cid, "\n".join(lines[:i] + [f"|win|{p1}"]), r)
             want[cid] = (r["id"], i == len(lines))
     cut = _convert(gmdata, tmp_path, "lines", jobs)
-    compared = recovered = 0
+    compared = recovered = opened = 0
     for cid, (rid, last) in want.items():
         for side in ("p1", "p2"):
             part, whole = cut.get((cid, side)), full.get((rid, side))
             if part is None:
                 continue
-            _assert_prefix(whole, part, _n(part), f"{cid}/{side}")
+            _assert_prefix(whole, part, _n(part), f"{cid}/{side}", unknown_ok=True)
+            # labels never appear retroactively except for the decision open at the cut
+            late = [f for f in range(_n(part)) if not _labelled(part, f) and _labelled(whole, f)]
+            assert late in ([], [_n(part) - 1]), (cid, side, late, _n(part))
+            opened += len(late)
             compared += _n(part)
             if last:
                 assert _n(part) == _n(whole), (cid, side)
                 recovered += 1
-    assert compared > 1000 and recovered >= len(replays), (compared, recovered)
+    assert compared > 1000 and recovered >= len(replays) and opened > 100, (compared, recovered, opened)
 
 
 def _synthetic_turn_cut(lines: List[str], i: int, p1: str) -> str:
@@ -270,11 +312,18 @@ def _synthetic_turn_cut(lines: List[str], i: int, p1: str) -> str:
     return "\n".join(lines[: i + 1] + extra + [f"|win|{p1}"])
 
 
+def _state_diff(a: Dict, i: int, b: Dict, j: int) -> List[str]:
+    """STATE_TARGETS on which frame a[i] differs from b[j]."""
+    return [f"tgt.{k}" for k in STATE_TARGETS if not torch.equal(a["tgt"][k][i], b["tgt"][k][j])]
+
+
 def test_turn_frame_is_a_function_of_the_log_through_the_turn_line(gmdata, replays, full, tmp_path):
     """Decision-time alignment: for every ``|turn|t`` the frame of turn t equals the one computed
     from the log truncated right after that line (plus synthetic actions), i.e. it contains none
     of turn t's own events — not the simultaneous choices, not the ``|move|`` lines, not the
-    terastallization, not the damage.  Frames before turn t match obs + labels."""
+    terastallization, not the damage — and neither do its legal masks.  Frames before turn t
+    match obs + labels.  Every turn has its frame for both sides, followed only by the side's
+    forced-switch frames of that turn (the requests answered during it)."""
     jobs, meta = {}, {}
     for r in replays:
         lines = r["log"].split("\n")
@@ -300,14 +349,20 @@ def test_turn_frame_is_a_function_of_the_log_through_the_turn_line(gmdata, repla
             _assert_prefix(whole, part, k, f"{rid}/{side} before turn {t}")
             if t < TURN_CLIP:
                 assert _turns(part)[-1] == t, (rid, side, t, _turns(part))
+            assert not _forced(part, k) and not _preview(part, k), (rid, side, t)
             k_next = cuts[idx + 1][1] if idx + 1 < len(cuts) else _n(whole)
-            assert k_next - k in (0, 1), (rid, side, t, k, k_next)
-            if k_next > k:  # the full conversion has a turn-t frame for this side
-                d = _diff(whole, k, part, k, tgt=False)
-                assert not d, f"{rid}/{side}: turn-{t} frame depends on turn-{t} events ({d})"
-                if t < TURN_CLIP:
-                    assert _turns(whole)[k] == t
-                checked_t += 1
+            assert k_next > k, (rid, side, t, k, k_next)
+            between = list(range(k + 1, k_next))
+            assert all(_forced(whole, f) for f in between), (rid, side, t, k, k_next)
+            if t < TURN_CLIP:
+                assert _turns(whole)[k] == t and all(_turns(whole)[f] == t for f in between)
+            d = _diff(whole, k, part, k, tgt=False) + _state_diff(whole, k, part, k)
+            assert not d, f"{rid}/{side}: turn-{t} frame depends on turn-{t} events ({d})"
+            # the synthetic Splash labels the cut's turn-t frame by its identity (never revealed
+            # before, so no obs.move_ids slot)
+            assert int(part["tgt"]["move_id"][k]) == move_bucket("Splash", MOVE_BUCKETS), (rid, side, t)
+            assert int(part["tgt"]["move_idx"][k]) == -1, (rid, side, t)
+            checked_t += 1
     assert checked_t > 500, checked_t
 
 
@@ -356,7 +411,8 @@ def _scramble_turn(lines: List[str], a: int, b: int) -> List[str]:
 def test_turn_events_do_not_reach_their_own_decision_frame(gmdata, replays, full, tmp_path):
     """Scrambling everything that happens during turn t (both players' moves, damage, boosts,
     status, weather, tera) leaves every frame up to and including turn t's decision frame
-    unchanged: the frame is the state BEFORE the simultaneous choices."""
+    unchanged (its legal masks included): the frame is the state BEFORE the simultaneous
+    choices."""
     jobs, meta = {}, {}
     for r in replays:
         lines = r["log"].split("\n")
@@ -375,7 +431,7 @@ def test_turn_events_do_not_reach_their_own_decision_frame(gmdata, replays, full
             assert _n_upto(pert, t, strict=True) == k, (cid, side)
             _assert_prefix(whole, pert, k, f"{cid}/{side} before turn {t}")
             if _n_upto(whole, t) > k and _n_upto(pert, t) > k:
-                d = _diff(whole, k, pert, k, tgt=False)
+                d = _diff(whole, k, pert, k, tgt=False) + _state_diff(whole, k, pert, k)
                 assert not d, f"{cid}/{side}: turn-{t} frame sees turn-{t} events ({d})"
                 checked += 1
     assert checked > 300, checked
@@ -420,8 +476,10 @@ def _perturb_opponent_reveals(lines: List[str], start: int, opp: int) -> List[st
 
 def test_opponent_reveals_do_not_reach_earlier_frames(gmdata, replays, full, tmp_path):
     """Privacy/no-aggregation: rewriting every move, item, ability and tera type the opponent
-    reveals after the ``|turn|t`` line leaves the side's frames up to turn t bit-identical (obs and
-    labels) — nothing about the opponent's set is known before it is revealed."""
+    reveals after the ``|turn|t`` line leaves the side's frames through its turn-t decision
+    bit-identical (obs and labels) — nothing about the opponent's set is known before it is
+    revealed.  (The side's forced-switch frames of turn t are snapshots taken after some of turn
+    t's reveals, so they are not part of the comparison.)"""
     jobs, meta = {}, {}
     for r in replays:
         lines = r["log"].split("\n")
@@ -437,7 +495,8 @@ def test_opponent_reveals_do_not_reach_earlier_frames(gmdata, replays, full, tmp
     for cid, (rid, t, me) in meta.items():
         side = ("p1", "p2")[me]
         whole, pert = full.get((rid, side)), got.get((cid, side))
-        k = _n_upto(whole, t)
+        k = _n_upto(whole, t, strict=True) + 1  # through the turn-t decision frame
+        assert not _forced(whole, k - 1) and _turns(whole)[k - 1] == t, (cid, side)
         _assert_prefix(whole, pert, k, f"{cid}/{side} up to turn {t}")
         checked += k
     assert checked > 1000, checked
@@ -541,9 +600,11 @@ def test_without_team_preview_the_opponent_team_grows_only_by_switch_ins(
     gmdata, replays, full, tmp_path
 ):
     """Team-preview rules: gen9ou shows both teams' species before turn 1 (``|poke|`` lines), so
-    all 12 species are public from frame 0.  In a format without team preview (drop the ``|poke|``
-    / ``|teampreview|`` lines) the opponent's known slots at the turn-t frame must be exactly the
-    Pokémon switched in before the ``|turn|t`` line (no end-of-battle team aggregation)."""
+    all 12 species are public from frame 0 (the lead frame).  In a format without team preview
+    (drop the ``|poke|`` / ``|teampreview|`` lines) the lead is no decision (no turn-0 frame) and
+    the opponent's known slots at the turn-t frame must be exactly the Pokémon switched in before
+    the ``|turn|t`` line (no end-of-battle team aggregation); at a forced-switch frame of turn t,
+    between those and the ones switched in before the frame's own switch line."""
     jobs, meta = {}, {}
     for r in replays:
         lines = r["log"].split("\n")
@@ -553,14 +614,18 @@ def test_without_team_preview_the_opponent_team_grows_only_by_switch_ins(
         cid = f"{r['id']}~NP"
         jobs[cid] = _rec(cid, "\n".join(kept), r)
         seen: Dict[int, set] = {0: set(), 1: set()}
-        at_turn: Dict[int, Dict[int, int]] = {}
+        at_turn: Dict[int, Dict[int, int]] = {0: {0: 0, 1: 0}}
+        # side → the opponent-count before each of its |switch| lines
+        before_switch: Dict[int, List[Dict[int, int]]] = {0: [], 1: []}
         for ln in kept:
             p = ln.split("|")
+            if len(p) > 2 and p[1] == "switch" and _side(p[2]) is not None:
+                before_switch[_side(p[2])].append({s: len(v) for s, v in seen.items()})
             if len(p) > 2 and p[1] in ("switch", "drag", "replace") and _side(p[2]) is not None:
                 seen[_side(p[2])].add(p[2].split(":", 1)[1].strip())
             if len(p) > 2 and p[1] == "turn" and p[2].strip().isdigit():
                 at_turn[int(p[2])] = {s: len(v) for s, v in seen.items()}
-        meta[cid] = (r["id"], at_turn)
+        meta[cid] = (r["id"], at_turn, before_switch)
         # with preview: every frame knows every previewed species of both teams
         n_poke = [sum(1 for ln in lines if ln.startswith(f"|poke|p{s + 1}|")) for s in (0, 1)]
         for me, side in enumerate(("p1", "p2")):
@@ -572,20 +637,32 @@ def test_without_team_preview_the_opponent_team_grows_only_by_switch_ins(
                 )
                 assert bool((m == m[:1]).all()), (r["id"], side)
     got = _convert(gmdata, tmp_path, "nopreview", jobs)
-    checked = 0
-    for cid, (rid, at_turn) in meta.items():
+    checked = forced = 0
+    for cid, (rid, at_turn, before_switch) in meta.items():
         for me, side in enumerate(("p1", "p2")):
             s = got.get((cid, side))
             if s is None:
                 continue
+            # the side's switch-labelled frames answer its |switch| lines in order (the lead
+            # line has no frame without team preview)
+            sw_frames = [f for f in range(_n(s)) if int(s["tgt"]["action_type"][f]) == 1]
+            assert len(sw_frames) == len(before_switch[me]) - 1, (cid, side)
+            assert not any(_preview(s, f) for f in range(_n(s))), (cid, side)
             for f, t in enumerate(_turns(s)):
                 if t >= TURN_CLIP:
                     continue
                 n_opp = int(s["obs"]["slot_mask"][f, 6:].sum())
-                assert n_opp == min(6, at_turn[t][1 - me]), (cid, side, t, n_opp, at_turn[t])
+                lo = min(6, at_turn[t][1 - me])
+                if _forced(s, f):
+                    line = 1 + sw_frames.index(f) if f in sw_frames else None
+                    hi = 6 if line is None else min(6, before_switch[me][line][1 - me])
+                    assert lo <= n_opp <= hi, (cid, side, t, n_opp, lo, hi)
+                    forced += 1
+                else:
+                    assert n_opp == lo, (cid, side, t, n_opp, at_turn[t])
                 assert not bool(s["obs"]["poke_feats"][f, 6 + n_opp :].any()), (cid, side, t)
                 checked += 1
-    assert checked > 1000, checked
+    assert checked > 1000 and forced > 100, (checked, forced)
 
 
 # ----------------------------------------------------------------------------------------------
@@ -596,8 +673,12 @@ def test_without_team_preview_the_opponent_team_grows_only_by_switch_ins(
 def test_forced_switches_are_never_labelled_as_the_turns_choice(gmdata, replays, tmp_path):
     """A switch caused by something that happens during turn t (replacement after a KO, a pivot
     move, Eject Button) is not what the side chose at the turn-t frame: labelling it would train
-    the pre-turn state on a post-KO decision.  Positive control: a voluntary switch is labelled
-    with the previewed slot of the incoming Pokémon."""
+    the pre-turn state on a post-KO decision.  It is its own decision: a forced-switch frame of
+    turn t (obs flag, legal action types [switch only]) snapshotted when the request is issued
+    — after the KO / the pivot hit — and labelled with the incoming Pokémon's previewed slot.
+    The turn-t frame keeps the side's own choice (the move) or, when none was visible (KO'd
+    before acting, ejected before acting), an unlabelled frame.  Positive control: a voluntary
+    switch labels the turn-t frame with the previewed slot, and no forced frame appears."""
     jobs, meta = {}, {}
     for r in replays[:10]:
         lines = r["log"].split("\n")
@@ -630,30 +711,102 @@ def test_forced_switches_are_never_labelled_as_the_turns_choice(gmdata, replays,
                 f"|win|{p1}",
             ]
             ko = [f"|-damage|{me}|0 fnt", f"|faint|{me}"]
+            # name: (turn body, the turn-t frame's label, forced frame?, its active fainted?)
             cases = {
-                "ko_after_acting": ([m1, m2] + ko + nxt[:1] + [new] + nxt[1:], 0),
-                "ko_before_acting": ([m2] + ko + nxt[:1] + [new] + nxt[1:], None),
-                "pivot": ([f"|move|{me}|U-turn|{opp}", new, m2] + nxt, 0),
-                "eject_button": ([m2, f"|-enditem|{me}|Eject Button", new] + nxt, None),
-                "voluntary": ([new, m2] + nxt, 1),
+                "ko_after_acting": ([m1, m2] + ko + nxt[:1] + [new] + nxt[1:], 0, True, True),
+                "ko_before_acting": ([m2] + ko + nxt[:1] + [new] + nxt[1:], -1, True, True),
+                "pivot": ([f"|move|{me}|U-turn|{opp}", new, m2] + nxt, 0, True, False),
+                "eject_button": ([m2, f"|-enditem|{me}|Eject Button", new] + nxt, -1, True, False),
+                "voluntary": ([new, m2] + nxt, 1, False, False),
             }
-            for name, (body, want) in cases.items():
+            for name, (body, want, forced, ko_seen) in cases.items():
                 cid = f"{r['id']}~F{t}{name}"
                 jobs[cid] = _rec(cid, "\n".join(head + body), r)
-                meta[cid] = (t, want, slot)
+                meta[cid] = (t, want, forced, ko_seen, slot)
     assert len(meta) >= 5 * 20, len(meta)
     got = _convert(gmdata, tmp_path, "forced", jobs)
-    for cid, (t, want, slot) in meta.items():
+    for cid, (t, want, forced, ko_seen, slot) in meta.items():
         s = got.get((cid, "p1"))
         turns = _turns(s)
-        at_t = [f for f, x in enumerate(turns) if x == t]
+        at_t = [f for f, x in enumerate(turns) if x == t and not _forced(s, f)]
         types = [int(s["tgt"]["action_type"][f]) for f in at_t]
-        if want is None:
-            assert 1 not in types, f"{cid}: forced switch labelled as the turn-{t} choice"
-        else:
-            assert types == [want], (cid, types)
-            if want == 1:
-                assert int(s["tgt"]["switch_idx"][at_t[0]]) == slot, cid
+        assert types == [want], f"{cid}: the turn-{t} frame is labelled {types}, not {want}"
+        if want == 1:
+            assert int(s["tgt"]["switch_idx"][at_t[0]]) == slot, cid
+        fs = [f for f, x in enumerate(turns) if x == t and _forced(s, f)]
+        assert len(fs) == int(forced), (cid, fs)
+        for f in fs:
+            assert f > at_t[0], cid
+            assert int(s["tgt"]["action_type"][f]) == 1 and int(s["tgt"]["switch_idx"][f]) == slot
+            assert s["tgt"]["legal_action_type"][f].tolist() == [False, True], cid
+            assert bool(s["tgt"]["legal_switch"][f, slot]), cid
+            act = int(s["tgt"]["active_idx"][f])
+            fainted = float(s["obs"]["poke_feats"][f, act, POKE_FEAT_FAINTED])
+            assert fainted == float(ko_seen), f"{cid}: the forced frame is not the request-time state"
+
+
+def _fresh(lines: List[str], i: int, side: int) -> List[str]:
+    """The side's previewed species not switched in before line i (no hidden-form ``*``)."""
+    preview = [
+        ln.split("|")[3].split(",")[0].strip() for ln in lines if ln.startswith(f"|poke|p{side + 1}|")
+    ]
+    seen = {
+        ln.split("|")[3].split(",")[0].strip()
+        for ln in lines[:i]
+        if ln.split("|")[1:2]
+        and ln.split("|")[1] in ("switch", "drag", "replace")
+        and _side(ln.split("|")[2]) == side
+    }
+    return [sp for sp in preview if sp not in seen and "*" not in sp]
+
+
+def test_simultaneous_replacements_do_not_see_each_other(gmdata, replays, tmp_path):
+    """Both actives faint during turn t: Showdown asks both players for a replacement at once
+    (after ``|upkeep|``), so neither decision may see the other's choice.  The order in which the
+    two switch-ins are logged must not matter for any frame, and each forced frame shows both
+    fainted actives still in place."""
+    jobs, meta = {}, {}
+    for r in replays[:8]:
+        lines = r["log"].split("\n")
+        p1 = _names(lines)[0]
+        for i, t in _turn_lines(lines)[1:5]:
+            f1, f2 = _fresh(lines, i, 0), _fresh(lines, i, 1)
+            if t + 1 >= TURN_CLIP or not f1 or not f2:
+                continue
+            head, m1, m2, me, opp = _pieces(lines, i, p1)
+            ko = [
+                f"|move|{me}|Outrage|{opp}",
+                f"|-damage|{opp}|0 fnt",
+                f"|faint|{opp}",
+                f"|-damage|{me}|0 fnt|[from] item: Rocky Helmet",
+                f"|faint|{me}",
+                "|upkeep|",
+            ]
+            s1 = f"|switch|p1a: {f1[0]}|{f1[0]}|100/100"
+            s2 = f"|switch|p2a: {f2[0]}|{f2[0]}|100/100"
+            tail = [
+                f"|turn|{t + 1}",
+                f"|move|p1a: {f1[0]}|Splash|p1a: {f1[0]}",
+                f"|move|p2a: {f2[0]}|Splash|p2a: {f2[0]}",
+                f"|win|{p1}",
+            ]
+            for order, sw in (("a", [s1, s2]), ("b", [s2, s1])):
+                cid = f"{r['id']}~R{t}{order}"
+                jobs[cid] = _rec(cid, "\n".join(head + ko + sw + tail), r)
+            meta[(r["id"], t)] = (f"{r['id']}~R{t}a", f"{r['id']}~R{t}b")
+    assert len(meta) >= 10, len(meta)
+    got = _convert(gmdata, tmp_path, "simul", jobs)
+    for (rid, t), (a, b) in meta.items():
+        for side in ("p1", "p2"):
+            sa, sb = got[(a, side)], got[(b, side)]
+            assert _n(sa) == _n(sb), (rid, t, side)
+            _assert_prefix(sa, sb, _n(sa), f"{rid} turn {t} {side}: the switch-in order leaks")
+            fs = [f for f, x in enumerate(_turns(sa)) if x == t and _forced(sa, f)]
+            assert len(fs) == 1 and int(sa["tgt"]["action_type"][fs[0]]) == 1, (rid, t, side, fs)
+            feats = sa["obs"]["poke_feats"][fs[0]]
+            for lo in (0, 6):  # own and opposing active: both still the fainted Pokémon
+                act = feats[lo : lo + 6, POKE_FEAT_ACTIVE].nonzero().squeeze(1)
+                assert act.numel() == 1 and float(feats[lo + int(act), POKE_FEAT_FAINTED]) == 1.0
 
 
 # ----------------------------------------------------------------------------------------------
@@ -683,16 +836,12 @@ def test_value_target_never_reaches_obs_or_labels(gmdata, replays, full, tmp_pat
 
 
 # ----------------------------------------------------------------------------------------------
-# Known issue: frame existence is conditioned on the outcome of the turn
+# Frame existence is not conditioned on the outcome of the turn (converter v1 dropped the turn-t
+# frame when the side's choice was not visible: |cant|, KO'd / flinched before moving — fixed in
+# converter v2, which keeps it with a masked label)
 # ----------------------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="gmdata pokemon drops the turn-t frame when the side's choice is not "
-    "visible during turn t (|cant|, KO'd / flinched before moving): which decisions are "
-    "trained on is selected by post-decision events (switches are always visible)",
-)
 def test_frame_existence_does_not_depend_on_the_turns_outcome(gmdata, replays, tmp_path):
     """Two continuations of the same turn-t state — the side's Pokémon moves, or it cannot move
     (``|cant|...|flinch``) — must yield the same frames for turns ≤ t (a label mask can mark the
@@ -727,6 +876,10 @@ def test_frame_existence_does_not_depend_on_the_turns_outcome(gmdata, replays, t
             f"{rid} turn {t}: {na} frames up to turn {t} if p1 moves, {nb} if it cannot"
         )
         _assert_prefix(sa, sb, na, f"{rid} turn {t}", tgt=False)
+        # the turn-t frame differs in its label only: the Splash vs a masked label
+        k = na - 1
+        assert _labelled(sa, k) and not _labelled(sb, k), (rid, t)
+        assert not _state_diff(sa, k, sb, k), (rid, t)
 
 
 # ----------------------------------------------------------------------------------------------
@@ -798,8 +951,9 @@ def test_pokemon_network_is_causal_over_frames():
 
 
 # ----------------------------------------------------------------------------------------------
-# Independent verification (second pass): refutations pinned as regressions, confirmed
-# deploy mismatches pinned as strict xfails (they XPASS, and so fail, once the converter is fixed)
+# Independent verification (second pass): refutations pinned as regressions; the confirmed
+# deploy mismatches (strict xfails against converter v1) are fixed by converter v2 and pinned as
+# regressions too
 # ----------------------------------------------------------------------------------------------
 
 
@@ -961,24 +1115,28 @@ def test_private_exact_hp_of_an_omniscient_log_never_reaches_obs(gmdata, replays
             _assert_prefix(whole, pert, _n(whole), f"{cid}/{side}")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="deploy mismatch: tgt.move_idx is a slot in the revealed-move order; about half of the "
-    "move labels point at an unrevealed (id-0) slot, i.e. the move's identity is not in obs and "
-    "every first use collapses onto the first empty slot",
-)
 def test_every_move_label_names_a_move_in_obs(full):
     """A move label must identify WHICH move was used from what the policy sees (a live player
-    sees all 4 of its moves in the request): the labelled slot holds a real move id."""
-    bad = tot = 0
+    sees all 4 of its moves in the request): the labelled slot holds a real move id.  (Converter
+    v1 pointed about half of the labels at an unrevealed id-0 slot — every first use collapsed
+    onto the first empty slot.  v2: the target is the move identity tgt.move_id over the move
+    vocabulary; the legacy slot label tgt.move_idx exists only for moves revealed before the
+    frame, and then names the same move.)"""
+    bad = tot = n_move = 0
     for s in full.values():
-        mv = (s["tgt"]["action_type"] == 0) & (s["tgt"]["move_idx"] >= 0)
+        at, mi, mid = s["tgt"]["action_type"], s["tgt"]["move_idx"], s["tgt"]["move_id"]
+        mv = (at == 0) & (mi >= 0)
         idx = mv.nonzero().squeeze(1)
-        ids = s["obs"]["move_ids"][idx, s["tgt"]["move_idx"][idx]]
+        ids = s["obs"]["move_ids"][idx, mi[idx]]
         bad += int((ids == 0).sum())
         tot += int(idx.numel())
+        assert torch.equal(ids, mid[idx]), "the slot label and the identity name different moves"
+        assert bool((mid[at == 0] >= 1).all()) and bool((mid[at != 0] == -1).all())
+        assert bool((mi[at != 0] == -1).all())
+        n_move += int((at == 0).sum())
     assert tot > 500, tot
     assert bad == 0, f"{bad}/{tot} move labels point at an unrevealed slot"
+    assert n_move > tot + 300, (n_move, tot)  # first uses: identity only
 
 
 def _switch_lines(log: str) -> Dict[int, List[Tuple[int, str]]]:
@@ -995,15 +1153,12 @@ def _switch_lines(log: str) -> Dict[int, List[Tuple[int, str]]]:
     return out
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="deploy mismatch: KO replacements and pivot / eject switches (U-turn, Volt Switch, "
-    "Flip Turn, Parting Shot, Chilly Reception, Teleport, Eject Button/Pack) get no frame; the "
-    "forceSwitch state (own active fainted) never occurs in training",
-)
 def test_every_in_battle_switch_decision_has_a_frame(replays, full):
     """Every in-battle ``|switch|`` of a side answers a request its live bot must also answer (a
-    move/switch request or a forceSwitch request): one switch-labelled frame per such line."""
+    move/switch request or a forceSwitch request): one switch-labelled frame per such line.
+    (Converter v1 gave KO replacements and pivot / eject switches — U-turn, Volt Switch, Flip
+    Turn, Parting Shot, Chilly Reception, Teleport, Eject Button/Pack — no frame, so the
+    forceSwitch state never occurred in training.)"""
     short = []
     for r in replays:
         sw = _switch_lines(r["log"])
@@ -1032,14 +1187,10 @@ def _preview_slot(preview: List[str], species: str) -> Optional[int]:
     return None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="deploy mismatch: the lead (the team-preview choice) is never labelled, is_choice "
-    "requires turn > 0",
-)
 def test_the_lead_choice_has_a_frame(replays, full):
     """The lead is chosen at team preview: each side has a turn-0 frame labelled with a switch to
-    the lead's team-preview slot."""
+    the lead's team-preview slot (converter v1 never labelled it), flagged as the team-preview
+    request, with no active Pokémon on either side (both leads are chosen simultaneously)."""
     checked = 0
     for r in replays:
         lines = r["log"].split("\n")
@@ -1058,18 +1209,17 @@ def test_the_lead_choice_has_a_frame(replays, full):
             assert f0, f"{r['id']}/{side}: no turn-0 (lead) frame"
             assert int(s["tgt"]["action_type"][f0[0]]) == 1, (r["id"], side)
             assert int(s["tgt"]["switch_idx"][f0[0]]) == slot, (r["id"], side, preview)
+            assert f0[0] == 0 and _preview(s, 0) and not _forced(s, 0), (r["id"], side)
+            assert s["tgt"]["legal_action_type"][0].tolist() == [False, True], (r["id"], side)
+            assert not bool(s["obs"]["poke_feats"][0, :, POKE_FEAT_ACTIVE].any()), (r["id"], side)
             checked += 1
     assert checked, "no replay with team preview and a turn-0 lead"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="gmdata pokemon ignores |-swapsideconditions| (Court Change): hazards and screens stay "
-    "on the wrong side for the rest of the battle",
-)
 def test_court_change_swaps_the_side_conditions(gmdata, replays, tmp_path):
     """Court Change swaps every side condition: after p2's Stealth Rock lands on p1's side and p1
-    uses Court Change, p1's frame shows the rock on the opponent's side and p2's on its own."""
+    uses Court Change, p1's frame shows the rock on the opponent's side and p2's on its own
+    (converter v1 ignored ``|-swapsideconditions|``)."""
     jobs, meta = {}, {}
     for r in replays[:6]:
         lines = r["log"].split("\n")

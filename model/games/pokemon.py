@@ -77,6 +77,7 @@ positional prior.
 
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
@@ -105,10 +106,26 @@ POKE_FEAT_REVEALED = 15
 POKE_FEAT_TERA = 16
 POKE_FEATURE_DIM = 17
 
+#: field-token width of converter v1 shards (the config default: legacy nets)
 FIELD_FEATURE_DIM = 20
+#: converter v2 appends the decision-phase flags (shard meta "field_features")
+FIELD_FORCED_SWITCH = 20      # the frame answers a forced-switch request
+FIELD_TEAM_PREVIEW = 21       # the frame answers the team-preview (lead) request
+FIELD_FEATURE_DIM_V2 = 22
 
 N_MOVE_SLOTS = 4
 TEAM_SLOTS = 6
+
+
+def move_bucket(name: str, n_buckets: int) -> int:
+    """The converter's hash id of a move (or species) name — gmdata pokemon
+    ``bucket``: 0 for the empty name, else crc32 of the lowercase
+    alphanumerics mod (n_buckets − 1), plus 1.  Request move names ("Earthquake")
+    and ids ("earthquake") give the same id."""
+    if not name:
+        return 0
+    key = "".join(c for c in name.lower() if c.isalnum())
+    return zlib.crc32(key.encode("utf-8")) % (n_buckets - 1) + 1
 
 
 @dataclass
