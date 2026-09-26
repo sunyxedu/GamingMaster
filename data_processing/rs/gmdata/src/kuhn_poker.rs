@@ -29,7 +29,8 @@ use clap::Subcommand;
 use gmrules::games::kuhn_poker::{KuhnConfig, KuhnPoker, BET, PASS};
 use gmrules::{Event, Game, Rng, Seat, Turn};
 use serde_json::json;
-use std::io::Write;
+use std::cell::Cell;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 /// Parse one log line into a record (None for comments / blank lines).
@@ -72,40 +73,66 @@ pub fn parse_line(line: &str, id: &str) -> Result<Option<Record>> {
     }))
 }
 
-/// Records of every `.log` file under `input` (sorted), for `players`-player hands;
-/// with `keep_players` only the seats those names played are emitted (a hand with none
-/// of them is dropped). Counts lines of other variants in `other`.
-pub fn read_records(input: &Path, players: usize, keep_players: &[String], max: Option<usize>, other: &mut usize)
-    -> Result<Vec<Record>> {
+/// The lines of a log file, streamed (`.gz` decompressed on the fly).
+fn open_lines(path: &Path) -> Result<Box<dyn Iterator<Item = std::io::Result<String>>>> {
+    let f = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let gz = path.to_string_lossy().to_lowercase().ends_with(".gz");
+    let r: Box<dyn Read> = if gz { Box::new(flate2::read::MultiGzDecoder::new(f)) } else { Box::new(f) };
+    Ok(Box::new(BufReader::new(r).lines()))
+}
+
+/// Which hands / seats to keep.
+pub struct Filter {
+    /// hands with another player count are skipped (counted in `other_variant`)
+    pub players: usize,
+    /// non-empty: emit only the seats these names played (hands without them dropped)
+    pub keep_players: Vec<String>,
+    pub other_variant: Cell<usize>,
+}
+
+impl Filter {
+    fn apply(&self, mut rec: Record) -> Option<Record> {
+        let names: Vec<&str> = rec.meta["players"].as_array()?.iter().filter_map(|v| v.as_str()).collect();
+        if names.len() != self.players {
+            self.other_variant.set(self.other_variant.get() + 1);
+            return None;
+        }
+        if !self.keep_players.is_empty() {
+            let seats: Vec<Seat> = (0..self.players).filter(|&s| self.keep_players.iter().any(|k| k == names[s])).collect();
+            if seats.is_empty() {
+                return None;
+            }
+            rec.seats = Some(seats);
+        }
+        Some(rec)
+    }
+}
+
+/// The records of every `.log` / `.log.gz` file under `input` (sorted), streamed line
+/// by line and filtered by `filter`; unreadable lines come out as `Err` (counted by
+/// the converter as unparseable).
+pub fn records<'a>(input: &Path, filter: &'a Filter) -> Result<impl Iterator<Item = Result<Record>> + 'a> {
     let files = common::find_files(input, &[".log", ".log.gz"])?;
     anyhow::ensure!(!files.is_empty(), "no .log files under {}", input.display());
-    let mut out = Vec::new();
-    for path in files {
-        let text = String::from_utf8(common::read_maybe_gz(std::fs::read(&path)?)?)?;
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-        for (ln, line) in text.lines().enumerate() {
-            if max.is_some_and(|m| out.len() >= m) {
-                return Ok(out);
+    Ok(files
+        .into_iter()
+        .flat_map(|path| -> Box<dyn Iterator<Item = Result<Record>>> {
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            match open_lines(&path) {
+                Ok(lines) => Box::new(lines.enumerate().filter_map(move |(ln, line)| {
+                    let id = format!("{name}:{}", ln + 1);
+                    match line {
+                        Ok(l) => parse_line(&l, &id).with_context(|| id.clone()).transpose(),
+                        Err(e) => Some(Err(anyhow::Error::from(e).context(id))),
+                    }
+                })),
+                Err(e) => Box::new(std::iter::once(Err(e))),
             }
-            let Some(mut rec) = parse_line(line, &format!("{name}:{}", ln + 1)).with_context(|| format!("{name}:{}", ln + 1))? else {
-                continue;
-            };
-            let names: Vec<String> = rec.meta["players"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
-            if names.len() != players {
-                *other += 1;
-                continue;
-            }
-            if !keep_players.is_empty() {
-                let seats: Vec<Seat> = (0..players).filter(|&s| keep_players.contains(&names[s])).collect();
-                if seats.is_empty() {
-                    continue;
-                }
-                rec.seats = Some(seats);
-            }
-            out.push(rec);
-        }
-    }
-    Ok(out)
+        })
+        .filter_map(move |r| match r {
+            Ok(rec) => filter.apply(rec).map(Ok),
+            Err(e) => Some(Err(e)),
+        }))
 }
 
 /// A scripted near-equilibrium player ("expert"): bet the best card, bluff the worst
@@ -230,12 +257,12 @@ pub fn run(cmd: Cmd) -> Result<()> {
             if hq && !player.iter().any(|p| p == "expert") {
                 player.push("expert".into());
             }
-            let mut other = 0;
-            let recs = read_records(&input, players, &player, max_records, &mut other)?;
+            let filter = Filter { players, keep_players: player, other_variant: Cell::new(0) };
+            let recs = records(&input, &filter)?.take(max_records.unwrap_or(usize::MAX));
             let opts = ConvertOptions { shard_size, store_events, allow_truncated };
-            let st = cand::convert::<KuhnPoker>(&KuhnConfig { players }, recs.into_iter(), &out, &opts)?;
+            let st = cand::convert::<KuhnPoker>(&KuhnConfig { players }, recs, &out, &opts)?;
             let mut v = serde_json::to_value(&st)?;
-            v["other_variant"] = json!(other);
+            v["other_variant"] = json!(filter.other_variant.get());
             println!("{v}");
             Ok(())
         }
@@ -256,16 +283,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gmdata-kuhn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         generate(&dir.join("raw/h.log"), 200, 3, 5, 0.5).unwrap();
-        let mut other = 0;
-        let recs = read_records(&dir.join("raw"), 3, &[], None, &mut other).unwrap();
-        assert_eq!((recs.len(), other), (200, 0));
-        let st = cand::convert::<KuhnPoker>(&KuhnConfig { players: 3 }, recs.into_iter(), &dir.join("out"), &ConvertOptions::default()).unwrap();
-        assert_eq!((st.converted, st.illegal, st.returns_mismatch), (200, 0, 0));
-        assert_eq!(st.samples, 600);
-        // --hq keeps only the expert seats
-        let recs = read_records(&dir.join("raw"), 3, &["expert".into()], None, &mut other).unwrap();
-        let st = cand::convert::<KuhnPoker>(&KuhnConfig { players: 3 }, recs.into_iter(), &dir.join("hq"), &ConvertOptions::default()).unwrap();
+        let all = Filter { players: 3, keep_players: vec![], other_variant: Cell::new(0) };
+        let st = cand::convert::<KuhnPoker>(&KuhnConfig { players: 3 }, records(&dir.join("raw"), &all).unwrap(), &dir.join("out"), &ConvertOptions::default()).unwrap();
+        assert_eq!((st.records, st.converted, st.illegal, st.returns_mismatch, st.unparseable), (200, 200, 0, 0, 0));
+        assert_eq!((st.samples, all.other_variant.get()), (600, 0));
+        // --hq keeps only the expert seats; other variants are counted, broken lines skipped
+        std::fs::write(dir.join("raw/x.log"), "STATE:1:pp:0|1:1|-1:expert|random\nSTATE:2:zz\n").unwrap();
+        let hq = Filter { players: 3, keep_players: vec!["expert".into()], other_variant: Cell::new(0) };
+        let st = cand::convert::<KuhnPoker>(&KuhnConfig { players: 3 }, records(&dir.join("raw"), &hq).unwrap(), &dir.join("hq"), &ConvertOptions::default()).unwrap();
         assert!(st.samples < 600 && st.samples > 150, "{st:?}");
+        assert_eq!((st.unparseable, hq.other_variant.get()), (1, 1));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

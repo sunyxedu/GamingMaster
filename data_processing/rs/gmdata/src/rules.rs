@@ -21,6 +21,7 @@ use clap::Subcommand;
 use gmrules::registry;
 use gmrules::{Event, Rng};
 use serde_json::{json, Value};
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 
 #[derive(Subcommand)]
@@ -119,33 +120,40 @@ pub fn run(cmd: Cmd) -> Result<()> {
         Cmd::Random { game, config, episodes, seed, out, shard_size, store_events } => {
             let g = registry::lookup(&game).map_err(anyhow::Error::msg)?;
             let mut rng = Rng::new(seed);
-            let mut recs = Vec::with_capacity(episodes);
-            for i in 0..episodes {
+            let recs = (0..episodes).map(|i| {
                 let ev = g.random_trajectory(&config, rng.next_u64(), usize::MAX).map_err(anyhow::Error::msg)?;
-                recs.push(Record { id: format!("random:{seed}:{i}"), events: ev, meta: Value::Null, seats: None, expected_returns: None });
-            }
+                Ok(Record { id: format!("random:{seed}:{i}"), events: ev, meta: Value::Null, seats: None, expected_returns: None })
+            });
             let opts = ConvertOptions { shard_size, store_events, ..Default::default() };
-            let st = cand::convert_dyn(&game, &config, recs.into_iter(), &out, &opts)?;
+            let st = cand::convert_dyn(&game, &config, recs, &out, &opts)?;
             println!("{}", serde_json::to_string(&st)?);
             Ok(())
         }
         Cmd::Convert { game, config, input, out, shard_size, store_events, allow_truncated } => {
             let files = common::find_files(&input, &[".jsonl", ".jsonl.gz"])?;
             anyhow::ensure!(!files.is_empty(), "no .jsonl files under {}", input.display());
-            let mut recs = Vec::new();
-            for path in files {
-                let text = String::from_utf8(common::read_maybe_gz(std::fs::read(&path)?)?)?;
+            // streamed file by file, line by line
+            let recs = files.into_iter().flat_map(|path| -> Box<dyn Iterator<Item = Result<Record>>> {
                 let name = path.file_name().unwrap().to_string_lossy().to_string();
-                for (ln, line) in text.lines().enumerate() {
-                    if line.trim().is_empty() {
-                        continue;
+                let lines = match std::fs::File::open(&path) {
+                    Ok(f) => {
+                        let gz = name.to_lowercase().ends_with(".gz");
+                        let r: Box<dyn Read> = if gz { Box::new(flate2::read::MultiGzDecoder::new(f)) } else { Box::new(f) };
+                        BufReader::new(r).lines()
                     }
+                    Err(e) => return Box::new(std::iter::once(Err(anyhow::Error::from(e).context(name)))),
+                };
+                Box::new(lines.enumerate().filter_map(move |(ln, line)| {
                     let id = format!("{name}:{}", ln + 1);
-                    recs.push(parse_jsonl_record(line, &id).with_context(|| id.clone())?);
-                }
-            }
+                    match line {
+                        Ok(l) if l.trim().is_empty() => None,
+                        Ok(l) => Some(parse_jsonl_record(&l, &id).with_context(|| id.clone())),
+                        Err(e) => Some(Err(anyhow::Error::from(e).context(id))),
+                    }
+                }))
+            });
             let opts = ConvertOptions { shard_size, store_events, allow_truncated };
-            let st = cand::convert_dyn(&game, &config, recs.into_iter(), &out, &opts)?;
+            let st = cand::convert_dyn(&game, &config, recs, &out, &opts)?;
             println!("{}", serde_json::to_string(&st)?);
             Ok(())
         }
@@ -164,7 +172,7 @@ mod tests {
         assert!(parse_jsonl_record(r#"{"events":[[0]]}"#, "f").is_err());
         let dir = std::env::temp_dir().join(format!("gmdata-rules-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let st = cand::convert_dyn("kuhn_poker", "", vec![r].into_iter(), &dir, &ConvertOptions::default()).unwrap();
+        let st = cand::convert_dyn("kuhn_poker", "", vec![Ok(r)].into_iter(), &dir, &ConvertOptions::default()).unwrap();
         assert_eq!((st.converted, st.samples, st.frames), (1, 2, 2));
         let sh = gmshard::ShardReader::open(&dir.join("kuhn_poker_00000")).unwrap();
         assert_eq!(sh.meta()["config"]["players"], 2);

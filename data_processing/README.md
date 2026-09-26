@@ -8,8 +8,12 @@ else is needed at conversion time. Training reads the output from Python.
 data_processing/
 ├── Cargo.toml                 workspace
 ├── rs/gmshard/                gm-shard.v1 writer / reader / overlay writer (.npy + index.json)
+├── rs/gmrules/                rules + observation / candidate encoders of the gmrules games,
+│                              shared by converters and simulators (no I/O; see "Adding a game")
+├── rs/gmsim/                  PyO3 extension: gmrules simulators / replay for Python (uv sync)
 ├── rs/gmdata/                 `gmdata <game> fetch|convert|…` for every game below,
-│                              `gmdata label <game>` engine teacher labels (src/label/)
+│                              `gmdata label <game>` engine teacher labels (src/label/),
+│                              `gmdata rules …` generic tools for every gmrules game
 ├── games/clash_royale/crdata/ `crdata` (Clash Royale replays)
 ├── games/dataset.py           GameShardDataset: reads gm-shard directories (and .pt)
 ├── games/clash_royale/        card catalog + load-time observation expansion
@@ -64,6 +68,7 @@ behaviour, which is what the golden parity tests pin.
 | Pokémon | `$G pokemon fetch --format gen9ou --min-rating 1500` | `convert --hq`: rating ≥ 1500, ≥ 5 turns, no inactivity losses; optional `--winner-only` | forfeits are kept (concessions affect only the last turn) |
 | Lux AI S3 | `$G lux fetch --top-teams 10` (Kaggle API) | only episodes where both agents are top-10 leaderboard teams | needs `KAGGLE_API_TOKEN` or `~/.kaggle/access_token` |
 | Clash Royale | `crdata fetch --out D` (RoyaleAPI replays, HF) | `crdata convert --hq`: Ranked + Grand Challenge, ≥ 60 s, ≥ 5 own plays; optional `--winner-only` | anonymised (no trophies); see games/clash_royale/README.md |
+| Kuhn poker (toy) | `$G kuhn-poker generate` (synthetic hand logs; `scripts/fetch_kuhn_poker.sh`) | `convert --hq`: the scripted expert's seats only | gmrules reference game (below); rules pinned to OpenSpiel |
 
 Measured on real data (kept / seen): chess elite 2021-06 601k / 781k games;
 go KGS 2019-04 202 / 1255; shogi 2025-06-01 158 / 447; othello 2019–21
@@ -116,6 +121,100 @@ Per-game defaults, action-id encodings and measured throughput are in the
 module docs of `rs/gmdata/src/label/<game>.rs` (chess: `tests/test_label_chess.py`
 runs the CLI end to end with a fake engine, and with Stockfish when installed).
 
+## gmrules games: one rule engine for converter and simulator
+
+New games are written ONCE, in Rust, in `rs/gmrules` (a `Game` trait: turns, chance
+events, canonical action ids, outcome, and the observation / candidate encoders).
+The same code serves
+
+- the converter (`gmdata <game> convert`): source records are parsed into
+  trajectories (chance outcomes + seat actions as canonical ids) and REPLAYED by
+  the rules — every event verified, recorded payoffs checked — and every decision
+  frame is encoded by `gmrules::encode_frame` (generic driver `rs/gmdata/src/cand.rs`);
+- the simulator (`gmsim`, a PyO3 extension built by `uv sync`, see
+  `rs/gmsim/README.md`): `env/vec_candidate.py` wraps its batched `VecSim` as the
+  RL `VecGameEnv` — it encodes with the same `encode_frame`,
+
+so IL frames and RL frames are identical by construction (and pinned by golden
+tests). The toy reference game `kuhn_poker` (`rs/gmrules/src/games/kuhn_poker.rs`,
+2-4 players, hidden cards) goes through every layer; `goofspiel` is the
+simultaneous-move test game. `gmdata rules list|check|random|convert` work for every
+registered game without per-game code (conformance battery, random-play shards,
+trajectory JSONL → shards).
+
+Candidate-action schema (`candidate.v1`; model: `model/games/candidate.py`): the
+legal actions of a decision are enumerated as candidates with their own features.
+
+```text
+obs.entities    [T, E, Fe] f32      obs.entity_mask [T, E] bool   obs.entity_type [T, E] i32 (optional)
+obs.globals     [T, G] f32
+obs.actions     [T, A, Fa] f32      obs.action_mask [T, A] bool   (legal candidates, ascending ids)
+tgt.action_idx  [T] i64             index of the taken action among the candidates
+tgt.value       [T] f32             outcome of the frame's seat in [-1, 1]
+```
+
+Shard meta = the game's `FrameSpec` (E, Fe, entity types, G, A, Fa, n_seats,
+layout) + the game config + `rules_version` (= `converter_version`); a fresh
+training run takes the model's frame dims from it. Layout: hidden-information and
+simultaneous games use PER-SEAT streams (one sample / RL row per seat holding only
+that seat's own decisions, so no temporal state ever carries another seat's private
+information); perfect-information alternating games use one interleaved stream
+per game (like the board games). Tensors whose values are all 0/1 can be stored
+bit-packed (`FrameSpec::bits_*`).
+
+### Adding a game
+
+1. Rules — `rs/gmrules/src/games/<game>.rs` implementing `gmrules::Game`:
+   - canonical `u32` action / chance-outcome ids (take the reference
+     implementation's ids when there is one: differential tests compare them
+     directly); `legal_actions` strictly ascending (= the candidate order);
+   - a `FrameSpec` with fixed maxima (entities, candidates — size `max_actions` for
+     the worst legal position of the game — `max_decisions`); keep entity slots
+     stable across frames (slot = identity: card, seat, zone);
+   - `encode_obs(seat)` reads ONLY what the seat knows now (public state, its own
+     private state and actions); `outcome()` in [-1, 1] is both the IL value target
+     and the RL reward; `returns()` the raw payoffs; `check_config` validates the
+     config; hidden-information games implement `perturb_hidden` (re-deal what
+     `seat` cannot see, keep every recorded action legal);
+   - register: `pub mod <game>;` in `games/mod.rs` + one line in
+     `registry::GAMES`;
+   - unit tests: hand-checked rule examples + `invariance::check_game::<G>(&cfg, n,
+     seed)` for every variant (causality, privacy, frame conformance, simulator
+     replay — see `games/kuhn_poker.rs`).
+2. Parity with an independent reference (OpenSpiel, PokerKit, gnubg, DouZero,
+   Fairy-Stockfish, ...): a dump script run in a throw-away environment (pattern:
+   `scripts/reference/openspiel_dump.py`, `uv run --no-project --with open_spiel`)
+   recording per step the turn, every acting seat's legal actions, the chance
+   outcomes + probabilities and the final returns; a small committed fixture plus a
+   live test (`GM_REFERENCE=1`) in both directions — reference playouts stepped
+   through `gmsim.State`, and gmrules' random playouts replayed through the
+   reference (`tests/test_candidate_reference.py`). Real records replayed by the
+   converter are the second proof: `illegal` / `returns_mismatch` must stay ~0.
+3. Converter — `rs/gmdata/src/<game>.rs`: `fetch` (download; or a
+   `scripts/fetch_<game>.sh`), a parser from the source format to `cand::Record`s
+   (events, meta, optional seat filter for the high-quality recipe, the recorded
+   payoffs), `cand::convert::<G>`; flags `--hq`, `--store-events` (golden tests) and
+   `--allow-truncated` (causality tests); one `Game` variant in `main.rs`. Template:
+   `kuhn_poker.rs` and `scripts/fetch_kuhn_poker.sh`. Record the data licence in the
+   table above.
+4. Python — `model/games/candidates/<game>.py` with
+   `GAME = CandidateGame(name="<game>", sim_config={...})`. Discovery does the rest:
+   `build_game_network`, train_il_game `LABEL_KEYS` / `META_ARCH_KEYS`,
+   `make_vec_env` (env/vec_candidate.py) and train_rl_joint `GAME_SPECS` (the generic
+   `CandidateSpec`). Game-specific encoder / decoder subclasses or an RL spec go in the
+   same entry (`encoder=`, `decoder=`, `config_class=`, `rl_spec=`).
+5. Tests (template `tests/test_candidate_pipeline.py`): converter frames ==
+   `gmsim.replay` frames of each record; simulator frames == converter frames of the
+   simulator's own episodes; `tests/invariance.py` — `check_sim_battery` and, on the
+   real converter binary, `check_converter_causality` (truncated records) and
+   `check_converter_privacy` (opponents' private information changed); a tiny
+   `train_multi_game` + `train_rl_joint` run.
+
+Joint pretraining with very large corpora: `train_multi_game --mixture_frame_cap N`
+(per game `--game_frame_cap GAME=N`) caps the frames a game counts with in the
+mixture weights w_g ∝ m_g·min(N_g, C_g)^α, `--game_weight GAME=W` sets m_g — so a
+1e10-frame corpus cannot swamp the mixture.
+
 ## Tests
 
 ```sh
@@ -125,6 +224,8 @@ uv run pytest tests/test_rust_converters_parity.py \
               tests/test_label_overlay.py tests/test_fetch_engines.py \
               tests/test_label_chess.py tests/test_label_othello.py \
               tests/test_label_shogi.py tests/test_label_go.py
+uv run pytest tests/test_candidate_*.py               # gmrules / gmsim / candidate adapter
+GM_REFERENCE=1 uv run pytest tests/test_candidate_reference.py   # + live OpenSpiel diff
 ```
 
 Real-engine tests run only when the engine is installed (e.g. `STOCKFISH=path`

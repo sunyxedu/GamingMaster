@@ -76,6 +76,8 @@ impl Default for ConvertOptions {
 pub struct Stats {
     pub records: usize,
     pub converted: usize,
+    /// the parser could not read the record
+    pub unparseable: usize,
     pub illegal: usize,
     pub truncated: usize,
     pub returns_mismatch: usize,
@@ -215,9 +217,12 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
 }
 
 /// Replay, verify and write `records` as gm-shards of game `G` under `out` (converted
-/// in parallel chunks, written in input order — the output is deterministic).
-pub fn convert<G: Game>(cfg: &G::Config, records: impl Iterator<Item = Record>, out: &Path, opts: &ConvertOptions)
-    -> Result<Stats> {
+/// in parallel chunks, written in input order — the output is deterministic). The
+/// records are consumed lazily (stream them: corpora of 1e8+ records never need to
+/// fit in memory); an `Err` item is a record the parser could not read — counted as
+/// `unparseable` and skipped.
+pub fn convert<G: Game>(cfg: &G::Config, records: impl Iterator<Item = Result<Record>>, out: &Path,
+                        opts: &ConvertOptions) -> Result<Stats> {
     G::check_config(cfg).map_err(|e| anyhow::anyhow!("{} config: {e}", G::NAME))?;
     let w = ShardWriter::new(out, G::NAME, G::VERSION, shard_meta::<G>(cfg), opts.shard_size)?;
     convert_with(w, records, opts, |ev| replay_typed::<G>(cfg, ev))
@@ -225,8 +230,8 @@ pub fn convert<G: Game>(cfg: &G::Config, records: impl Iterator<Item = Record>, 
 
 /// [`convert`] for a game picked by NAME from the gmrules registry (`config` = JSON,
 /// "" = default) — every registered game, no per-game code (`gmdata rules convert`).
-pub fn convert_dyn(game: &str, config: &str, records: impl Iterator<Item = Record>, out: &Path, opts: &ConvertOptions)
-    -> Result<Stats> {
+pub fn convert_dyn(game: &str, config: &str, records: impl Iterator<Item = Result<Record>>, out: &Path,
+                   opts: &ConvertOptions) -> Result<Stats> {
     let g = registry::lookup(game).map_err(anyhow::Error::msg)?;
     let spec = g.spec(config).map_err(anyhow::Error::msg)?;
     let cfg: Value = serde_json::from_str(&g.normalize_config(config).map_err(anyhow::Error::msg)?)?;
@@ -234,15 +239,31 @@ pub fn convert_dyn(game: &str, config: &str, records: impl Iterator<Item = Recor
     convert_with(w, records, opts, |ev| g.replay(config, ev))
 }
 
-fn convert_with<F>(mut w: ShardWriter, records: impl Iterator<Item = Record>, opts: &ConvertOptions, replay_fn: F) -> Result<Stats>
+fn convert_with<F>(mut w: ShardWriter, records: impl Iterator<Item = Result<Record>>, opts: &ConvertOptions,
+                   replay_fn: F) -> Result<Stats>
 where
     F: Fn(&[Event]) -> std::result::Result<DynReplay, String> + Sync,
 {
     let mut st = Stats::default();
     let mut records = records.peekable();
     const CHUNK: usize = 4096;
+    let note = |st: &mut Stats, msg: String| {
+        if st.errors.len() < 10 {
+            st.errors.push(msg);
+        }
+    };
     while records.peek().is_some() {
-        let chunk: Vec<Record> = records.by_ref().take(CHUNK).collect();
+        let mut chunk: Vec<Record> = Vec::with_capacity(CHUNK);
+        for r in records.by_ref().take(CHUNK) {
+            match r {
+                Ok(rec) => chunk.push(rec),
+                Err(e) => {
+                    st.records += 1;
+                    st.unparseable += 1;
+                    note(&mut st, format!("unparseable: {e:#}"));
+                }
+            }
+        }
         let results: Vec<_> = chunk.par_iter().map(|rec| record_samples(replay_fn(&rec.events), rec, opts)).collect();
         for (rec, res) in chunk.iter().zip(results) {
             st.records += 1;
@@ -274,9 +295,7 @@ where
                     "no decision frame to keep".into()
                 }
             };
-            if st.errors.len() < 10 {
-                st.errors.push(format!("{}: {reason}", rec.id));
-            }
+            note(&mut st, format!("{}: {reason}", rec.id));
         }
     }
     w.flush()?;
@@ -308,7 +327,7 @@ mod tests {
             Record { id: "e".into(), events: ev([2, 0], &[1, 0]), meta: Value::Null, seats: Some(vec![1]), expected_returns: None },
         ];
         let opts = ConvertOptions { store_events: true, ..Default::default() };
-        let st = convert::<KuhnPoker>(&cfg, recs.into_iter(), &dir, &opts).unwrap();
+        let st = convert::<KuhnPoker>(&cfg, recs.into_iter().map(Ok), &dir, &opts).unwrap();
         assert_eq!((st.records, st.converted, st.truncated, st.illegal, st.returns_mismatch), (5, 2, 1, 1, 1));
         assert_eq!(st.samples, 3);
         let sh = ShardReader::open(&dir.join("kuhn_poker_00000")).unwrap();

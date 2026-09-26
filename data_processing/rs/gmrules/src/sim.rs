@@ -297,16 +297,14 @@ impl<G: Game> VecSim<G> {
         }
         let n = self.envs.len();
         let ns = self.spec.n_seats;
-        for r in 0..r_total {
-            if self.buf.active[r] == 1 && self.buf.forced[r] == 0 {
-                let i = action_idx[r];
-                if i < 0 || i >= self.buf.n_legal[r] {
-                    let e = r / self.rows_per_env();
-                    return Err(format!(
-                        "{} env {e} row {r} (seat {}): action_idx {i} is not a legal candidate (n_legal {}) - sample from legal['action']",
-                        G::NAME, self.buf.to_play[r], self.buf.n_legal[r]
-                    ));
-                }
+        for (r, &i) in action_idx.iter().enumerate() {
+            let checked = self.buf.active[r] == 1 && self.buf.forced[r] == 0;
+            if checked && (i < 0 || i >= self.buf.n_legal[r]) {
+                let e = r / self.rows_per_env();
+                return Err(format!(
+                    "{} env {e} row {r} (seat {}): action_idx {i} is not a legal candidate (n_legal {}) - sample from legal['action']",
+                    G::NAME, self.buf.to_play[r], self.buf.n_legal[r]
+                ));
             }
         }
         let mut info = StepInfo {
