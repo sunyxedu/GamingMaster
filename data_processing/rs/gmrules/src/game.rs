@@ -212,6 +212,13 @@ pub trait Game: Clone + Send + Sync + 'static {
     /// their `converter_version`, so shards of different generations never mix).
     const VERSION: u32;
 
+    /// Reject an invalid config with a message (called before [`spec`](Game::spec) /
+    /// [`new_game`](Game::new_game) by the registry, the simulators and the converters,
+    /// which may then assume a valid config).
+    fn check_config(_cfg: &Self::Config) -> Result<(), RulesError> {
+        Ok(())
+    }
+
     fn spec(cfg: &Self::Config) -> FrameSpec;
 
     /// The initial state (before any chance event).

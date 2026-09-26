@@ -1099,6 +1099,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "gmsim" },
     { name = "lzstring" },
     { name = "matplotlib" },
     { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
@@ -1128,6 +1129,7 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "arc-agi", marker = "python_full_version >= '3.13' and extra == 'arc3'" },
+    { name = "gmsim", directory = "data_processing/rs/gmsim" },
     { name = "luxai-s3", marker = "extra == 'lux'", specifier = "==0.2.1" },
     { name = "lzstring", specifier = ">=1.0.4" },
     { name = "matplotlib", specifier = ">=3.10.8" },
@@ -1146,6 +1148,18 @@ dev = [
     { name = "pytest", specifier = ">=7.0.0" },
     { name = "ruff", specifier = ">=0.1.0" },
 ]
+
+[[package]]
+name = "gmsim"
+version = "0.1.0"
+source = { directory = "data_processing/rs/gmsim" }
+dependencies = [
+    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
+    { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "numpy" }]
 
 [[package]]
 name = "gym"

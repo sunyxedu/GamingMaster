@@ -15,7 +15,4 @@ crate-type = ["cdylib"]
 gmrules = { path = "../gmrules" }
 pyo3 = { version = "0.29", features = ["abi3-py310"] }
 serde_json.workspace = true
-
-[features]
-# enabled by maturin (pyproject.toml): no libpython link for the extension module
-extension-module = ["pyo3/extension-module"]
+# (no `extension-module` feature: maturin sets PYO3_BUILD_EXTENSION_MODULE, pyo3 >= 0.26)

@@ -130,6 +130,16 @@ impl Game for Goofspiel {
     const NAME: &'static str = "goofspiel";
     const VERSION: u32 = 1;
 
+    fn check_config(cfg: &GoofspielConfig) -> Result<(), RulesError> {
+        if !(3..=MAX_CARDS).contains(&cfg.num_cards) || !(2..=4).contains(&cfg.players) {
+            rules_bail!("num_cards must be 3..=13 and players 2..=4, got {} / {}", cfg.num_cards, cfg.players);
+        }
+        if !["random", "ascending", "descending"].contains(&cfg.points_order.as_str()) {
+            rules_bail!("points_order must be random / ascending / descending, got {:?}", cfg.points_order);
+        }
+        Ok(())
+    }
+
     fn spec(cfg: &GoofspielConfig) -> FrameSpec {
         assert!((3..=MAX_CARDS).contains(&cfg.num_cards), "goofspiel: num_cards must be 3..=13");
         assert!((2..=4).contains(&cfg.players), "goofspiel: players must be 2..=4");

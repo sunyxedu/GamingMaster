@@ -33,7 +33,9 @@ pub fn lookup(name: &str) -> Result<&'static dyn DynGame, String> {
 /// Parse a JSON config (`""` / whitespace = default).
 pub fn parse_config<G: Game>(json: &str) -> Result<G::Config, String> {
     let j = if json.trim().is_empty() { "{}" } else { json };
-    serde_json::from_str(j).map_err(|e| format!("{} config {json:?}: {e}", G::NAME))
+    let cfg: G::Config = serde_json::from_str(j).map_err(|e| format!("{} config {json:?}: {e}", G::NAME))?;
+    G::check_config(&cfg).map_err(|e| format!("{} config {json:?}: {e}", G::NAME))?;
+    Ok(cfg)
 }
 
 /// A replay of any game (see [`crate::trajectory::replay`]).

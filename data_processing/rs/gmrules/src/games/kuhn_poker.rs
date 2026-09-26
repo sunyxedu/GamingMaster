@@ -82,6 +82,13 @@ impl Game for KuhnPoker {
     const NAME: &'static str = "kuhn_poker";
     const VERSION: u32 = 1;
 
+    fn check_config(cfg: &KuhnConfig) -> Result<(), RulesError> {
+        if !(2..=4).contains(&cfg.players) {
+            rules_bail!("players must be 2..=4, got {}", cfg.players);
+        }
+        Ok(())
+    }
+
     fn spec(cfg: &KuhnConfig) -> FrameSpec {
         assert!((2..=4).contains(&cfg.players), "kuhn_poker: players must be 2..=4, got {}", cfg.players);
         FrameSpec {
