@@ -300,10 +300,17 @@ def _make_othello(n_envs: int = 1, **kw) -> VecGameEnv:
     return OthelloVecEnv(n_envs, **kw)
 
 
+def _make_lux(n_envs: int = 1, **kw) -> VecGameEnv:
+    """Needs the ``lux`` extra (the official luxai-s3 env, JAX)."""
+    from env.vec_lux import LuxVecEnv
+    return LuxVecEnv(n_envs, **kw)
+
+
 #: games with a simulator (the others train on their IL replay stream only)
 VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
     "generals": _make_generals,
     "othello": _make_othello,
+    "lux": _make_lux,
 }
 
 
@@ -334,6 +341,9 @@ def __getattr__(name: str):
     if name == "OthelloVecEnv":
         from env.vec_othello import OthelloVecEnv
         return OthelloVecEnv
+    if name == "LuxVecEnv":
+        from env.vec_lux import LuxVecEnv
+        return LuxVecEnv
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
