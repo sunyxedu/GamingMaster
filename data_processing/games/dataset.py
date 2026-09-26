@@ -65,6 +65,10 @@ training/train_il_game.py ``batch_loss``, contract in
     legal_<key>            IL legality mask (bool, or packbits-stored {0, 1}
                            float) → the decoder's ``legal["<key>"]`` under the
                            trainers' --il_legal_mask; never a soft target
+    il_weight              optional float [T]: per-frame weight of the decoder's
+                           imitation terms (mahjong, converter v3: 0 on a recorded
+                           pass whose choice the log does not show — a call it
+                           could make was pre-empted); the value target is kept
 
 Collate pads all of them with zeros (False), i.e. "no teacher / no engine
 value / nothing legal" on padded frames, which the frame mask excludes anyway.
