@@ -519,11 +519,22 @@ def test_meta_registry_frozen_schema_keys():
                                      "sap_range": ("lux_sap_range",)}
 
 
+#: games whose pre-freeze shards must NOT train a fresh default net: clash_royale
+#: converter_version <= 2 inferred the hand from the whole match (a future leak),
+#: so the default deck-token net refuses them (the legacy net still accepts them)
+REFUSE_PRE_FREEZE = {"clash_royale": {"cr_card_tokens": "hand", "card_feature_dim": 8}}
+
+
 def test_meta_legacy_values_are_the_registry_defaults():
     """A fresh run on pre-freeze shards (no meta key) builds the legacy
-    architecture without anything being injected."""
+    architecture without anything being injected — except REFUSE_PRE_FREEZE
+    games, where it fails loudly and only the legacy config passes."""
     for game, legacy in META_LEGACY.items():
         cfg = build_game_network(game, **TINY).cfg
+        if game in REFUSE_PRE_FREEZE:
+            with pytest.raises(ValueError, match="implied"):
+                check_meta_arch(game, cfg, {})
+            cfg = build_game_network(game, **TINY, **REFUSE_PRE_FREEZE[game]).cfg
         for meta_key, want in legacy.items():
             for ck in META_ARCH_KEYS[game][meta_key]:
                 if hasattr(cfg, ck):
@@ -571,7 +582,7 @@ def test_go_and_lux_meta():
 
 def test_schema_freeze_warning():
     assert SCHEMA_FREEZE_CONVERTER_VERSION == {"chess": 3, "go": 2, "shogi": 2,
-                                               "mahjong": 2, "lux": 2}
+                                               "mahjong": 2, "lux": 2, "clash_royale": 3}
     msg = schema_freeze_warning("chess", SimpleNamespace(converter_version=2))
     assert msg.startswith("chess shards have converter_version 2 < 3: they predate the "
                           "frozen pre-training schema")
@@ -660,15 +671,16 @@ def _decoder_cases():
     out.append(("pokemon", net, pred, tgt, mask))
 
     torch.manual_seed(0)
-    cfg = _small(ClashRoyaleConfig, arena_h=8, arena_w=6, n_cards=20)
+    cfg = _small(ClashRoyaleConfig, arena_h=8, arena_w=6, n_cards=20)      # deck tokens
     net = GameNetwork(cfg, ClashRoyaleEncoder(cfg), CardPlacementDecoder(cfg))
+    D = cfg.deck_size
     obs = {"arena_seq": torch.randn(B, T, cfg.arena_channels, 8, 6, generator=g),
-           "hand_ids": torch.randint(0, 20, (B, T, cfg.hand_size), generator=g),
-           "hand_feats": torch.randn(B, T, cfg.hand_size, cfg.card_feature_dim, generator=g),
-           "hand_mask": torch.rand(B, T, cfg.hand_size, generator=g) < 0.8,
+           "deck_ids": torch.randint(0, 20, (B, T, D), generator=g),
+           "deck_feats": torch.randn(B, T, D, cfg.card_feature_dim, generator=g),
+           "deck_mask": torch.rand(B, T, D, generator=g) < 0.8,
            "globals_seq": torch.randn(B, T, cfg.cr_global_features, generator=g)}
     tgt = {"waited": torch.rand(B, T, generator=g) < 0.4,
-           "card_slot": torch.randint(0, 4, (B, T), generator=g),
+           "card_slot": torch.randint(0, D, (B, T), generator=g),
            "place_idx": torch.randint(0, 48, (B, T), generator=g)}
     pred = net(obs, labels={"card_slot": drop(tgt["card_slot"])})
     out.append(("clash_royale", net, pred, tgt, mask))

@@ -3,15 +3,36 @@
 Observations combine three modalities:
   - an arena grid (unit presence / side / hp / tower planes) encoded by the
     same conv stack shape as the generals ``SpatialEncoder``,
-  - a fixed-size hand of cards (variable real count → fixed padded slots
-    with a presence mask, per the ``ObservationEncoder`` contract),
+  - card tokens (fixed padded slots with a presence mask, per the
+    ``ObservationEncoder`` contract), see ``cr_card_tokens`` below,
   - a global scalar vector (elixir, time, tower counts, ...).
 
 The action space is hierarchical: first decide whether to WAIT this frame
 (elixir management is mostly about *not* playing), and if playing, pick a
-card from the hand and then a placement cell conditioned on that card.
+card token and then a placement cell conditioned on that card.
 Sampling, log-prob replay and teacher forcing all share one code path so
 PPO ratios are exact (same discipline as the generals adapter).
+
+Card tokens (``ClashRoyaleConfig.cr_card_tokens``):
+  - ``"deck"`` (default; crdata converter_version >= 3): the 8 own deck
+    cards, each carrying the causal hand belief P(in hand | own plays so far)
+    and P(next | own plays so far) among its features
+    (``data_processing/games/clash_royale/expand.py``).  The card head points
+    over the deck tokens; ``card_slot`` (label / action) is the deck index,
+    ``legal["card"]`` [.., 8] = P(in hand) > 0 and affordable.  Every deck
+    token shares one positional embedding: token order (by card id) carries
+    no meaning, the network is equivariant to it.
+  - ``"hand"`` (legacy checkpoints; converter_version <= 2 shards): the 4
+    reconstructed hand slots with per-slot embeddings.  Those shards inferred
+    the hand from the whole match (the coming play marked "certainly in
+    hand"), so this variant exists only to keep old checkpoints loading and
+    computing what they computed.
+
+Deployment: the live bot builds the deck features with the same causal
+posterior from its own plays (``data_processing/games/clash_royale/belief.py``),
+never from the client's true hand — that would be a different input
+distribution than training.  The true hand (and elixir) may restrict
+``legal["card"]``: it always lies inside the belief's support.
 """
 
 from __future__ import annotations
@@ -48,11 +69,18 @@ class ClashRoyaleConfig(ModelConfig):
     #: input planes: unit presence / side / hp / tower planes etc.
     arena_channels: int = 16
     hand_size: int = 4
+    #: card tokens: "deck" = the deck_size own deck cards with the causal hand
+    #: belief, card head over deck indices (crdata converter_version >= 3);
+    #: "hand" (legacy checkpoints) = hand_size reconstructed hand slots — see
+    #: the module docs.  Shards record it (meta "card_tokens").
+    cr_card_tokens: str = "deck"
+    deck_size: int = 8
     #: card-id vocabulary; index 0 = empty slot (catalog cr-card-catalog.v1:
     #: 124 ids; converted shards record it in their meta)
     n_cards: int = 124
-    #: per-card scalar features (elixir cost, level, ...)
-    card_feature_dim: int = 8
+    #: per-card scalar features (deck tokens: cost, kind, form, affordable,
+    #: P(in hand), P(next) = 9; legacy hand slots: 8)
+    card_feature_dim: int = 9
     #: own/enemy elixir, match time, tower counts, ...
     cr_global_features: int = 6
     #: time feature of the wait head's sinusoidal PE: "match" = the match
@@ -86,25 +114,52 @@ def _mask_logits(logits: torch.Tensor, mask: Optional[torch.Tensor]) -> torch.Te
     return safe
 
 
+def card_token_mode(cfg) -> str:
+    """``cfg.cr_card_tokens`` ("deck" | "hand"; configs without the field: "hand")."""
+    mode = getattr(cfg, "cr_card_tokens", "hand")
+    if mode not in ("deck", "hand"):
+        raise ValueError(f"cr_card_tokens must be 'deck' or 'hand', got {mode!r}")
+    return mode
+
+
+def n_card_tokens(cfg) -> int:
+    """Card tokens of the encoder = classes of the card head."""
+    return cfg.deck_size if card_token_mode(cfg) == "deck" else cfg.hand_size
+
+
+def cr_legal_from_obs(obs: Dict[str, torch.Tensor]) -> Optional[Dict[str, torch.Tensor]]:
+    """The decoder's ``legal`` dict from a deck-token observation (expand.py:
+    a deck card is playable iff P(in hand) > 0 and affordable; placements on the
+    own half, the whole arena when a playable card is a spell).  None for the
+    legacy hand observation, whose trainers never passed masks."""
+    if "deck_ids" not in obs or "legal_card" not in obs:
+        return None
+    return {"card": obs["legal_card"].bool(), "placement": obs["legal_place"].bool()}
+
+
 class ClashRoyaleEncoder(ObservationEncoder):
-    """Arena grid + hand slots + globals → arena_h*arena_w + hand_size tokens.
+    """Arena grid + card tokens + globals → arena_h*arena_w + n card tokens.
 
-    obs keys:
+    obs keys (``cr_card_tokens="deck"``, D = deck_size):
         arena_seq   [B, T, C, H, W]              arena planes
-        hand_ids    [B, T, hand_size] long       card ids (0 = empty)
-        hand_feats  [B, T, hand_size, F]         per-card scalar features
-        hand_mask   [B, T, hand_size] bool       True = real card in slot
+        deck_ids    [B, T, D] long               own deck card ids (0 = empty)
+        deck_feats  [B, T, D, F]                 per-card features incl. the hand
+                                                 belief P(in hand), P(next)
+        deck_mask   [B, T, D] bool               True = real card in slot
         globals_seq [B, T, G]                    global scalars
+    legacy ``"hand"``: hand_ids / hand_feats / hand_mask over hand_size slots.
 
-    Token order: arena tokens first, then hand tokens — the decoder relies
+    Token order: arena tokens first, then card tokens — the decoder relies
     on this split (``n_arena_tokens``).
     """
 
     def __init__(self, cfg: ClashRoyaleConfig):
         super().__init__()
         self.cfg = cfg
+        self.card_tokens = card_token_mode(cfg)
+        self.n_card_tokens = n_card_tokens(cfg)
         self.n_arena_tokens = cfg.arena_h * cfg.arena_w
-        self.n_tokens = self.n_arena_tokens + cfg.hand_size
+        self.n_tokens = self.n_arena_tokens + self.n_card_tokens
 
         # Arena conv encoder — mirrors SpatialEncoder's Conv→BN→ReLU→Res
         # structure so masked-BatchNorm frame handling transfers unchanged.
@@ -120,12 +175,18 @@ class ClashRoyaleEncoder(ObservationEncoder):
             ResBlock(cfg.d_model),
         )
 
-        # Hand tokens: card identity + card scalars, summed.
+        # Card tokens: card identity + card scalars, summed.  (The legacy hand
+        # modules keep their names and construction order: old checkpoints
+        # load, and a seeded legacy net initialises exactly as before.)
         self.card_embed = nn.Embedding(cfg.n_cards, cfg.d_model)
-        self.hand_feat_proj = nn.Linear(cfg.card_feature_dim, cfg.d_model)
-        # Empty hand slots keep their token (fixed layout) but carry a
-        # dedicated learnable embedding instead of stale card features.
-        self.hand_empty = nn.Parameter(torch.randn(1, 1, 1, cfg.d_model) * 0.02)
+        if self.card_tokens == "hand":
+            self.hand_feat_proj = nn.Linear(cfg.card_feature_dim, cfg.d_model)
+            # Empty hand slots keep their token (fixed layout) but carry a
+            # dedicated learnable embedding instead of stale card features.
+            self.hand_empty = nn.Parameter(torch.randn(1, 1, 1, cfg.d_model) * 0.02)
+        else:
+            self.deck_feat_proj = nn.Linear(cfg.card_feature_dim, cfg.d_model)
+            self.deck_empty = nn.Parameter(torch.randn(1, 1, 1, cfg.d_model) * 0.02)
 
         self.global_proj = nn.Sequential(
             nn.Linear(cfg.cr_global_features, cfg.d_model),
@@ -133,12 +194,17 @@ class ClashRoyaleEncoder(ObservationEncoder):
             nn.Linear(cfg.d_model, cfg.d_model),
         )
 
-        # 2-D arena PE (learnable row + column, summed) and per-hand-slot
+        # 2-D arena PE (learnable row + column, summed) and the card-token
         # embedding.  Both are delivered through positional_embedding() —
         # the core adds it once, so the encoder must not add them again.
         self.row_embed = nn.Parameter(torch.randn(1, cfg.arena_h, 1, cfg.d_model) * 0.02)
         self.col_embed = nn.Parameter(torch.randn(1, 1, cfg.arena_w, cfg.d_model) * 0.02)
-        self.hand_slot_embed = nn.Parameter(torch.randn(1, cfg.hand_size, cfg.d_model) * 0.02)
+        if self.card_tokens == "hand":
+            self.hand_slot_embed = nn.Parameter(torch.randn(1, cfg.hand_size, cfg.d_model) * 0.02)
+        else:
+            # ONE embedding shared by every deck token: the token order (by
+            # card id) carries no meaning, so nothing may depend on it
+            self.deck_token_embed = nn.Parameter(torch.randn(1, 1, cfg.d_model) * 0.02)
 
         # The core only re-inits Linear/Conv/Norm; Embedding is ours to init.
         nn.init.trunc_normal_(self.card_embed.weight, std=0.02)
@@ -175,6 +241,12 @@ class ClashRoyaleEncoder(ObservationEncoder):
         spatial = spatial + self.global_proj(obs["globals_seq"]).unsqueeze(-1).unsqueeze(-1)
         arena_tokens = spatial.reshape(B, T, d, self.n_arena_tokens).permute(0, 1, 3, 2)
 
+        if self.card_tokens == "deck":
+            cards = self.card_embed(obs["deck_ids"]) + self.deck_feat_proj(obs["deck_feats"])
+            present = obs["deck_mask"].unsqueeze(-1)                  # [B,T,deck,1]
+            cards = cards * present + self.deck_empty * (~present)
+            return torch.cat([arena_tokens, cards], dim=2)            # [B,T,S,d]
+
         hand = self.card_embed(obs["hand_ids"]) + self.hand_feat_proj(obs["hand_feats"])
         present = obs["hand_mask"].unsqueeze(-1)                      # [B,T,hand,1]
         # Absent slots: zero the card features, substitute the learnable
@@ -193,13 +265,21 @@ class ClashRoyaleEncoder(ObservationEncoder):
 
     def positional_embedding(self) -> torch.Tensor:
         arena_pe = (self.row_embed + self.col_embed).reshape(1, -1, self.cfg.d_model)
-        return torch.cat([arena_pe, self.hand_slot_embed], dim=1)
+        if self.card_tokens == "deck":
+            card_pe = self.deck_token_embed.expand(1, self.n_card_tokens, self.cfg.d_model)
+        else:
+            card_pe = self.hand_slot_embed
+        return torch.cat([arena_pe, card_pe], dim=1)
 
 
 class CardPlacementDecoder(ActionDecoder):
     """Hierarchical Wait → Card → Placement decoder.
 
-    legal keys:   card      [B, T, hand_size]       bool
+    The card head points over the encoder's card tokens: the deck_size deck
+    cards (``cr_card_tokens="deck"``; ``card_slot`` = deck index) or the
+    legacy hand_size hand slots (``"hand"``); N = that token count.
+
+    legal keys:   card      [B, T, N]               bool
                   placement [B, T, n_arena_tokens]  bool
     labels keys:  card_slot [B, T]  teacher-forcing card choice
                   (−1 → sample from the model's own card distribution)
@@ -213,6 +293,7 @@ class CardPlacementDecoder(ActionDecoder):
     def __init__(self, cfg: ClashRoyaleConfig):
         super().__init__()
         self.cfg = cfg
+        self.n_card_tokens = n_card_tokens(cfg)
         self.n_arena_tokens = cfg.arena_h * cfg.arena_w
         # Wait uses a sinusoidal time PE like generals' PassHead: whether
         # to hold elixir depends on match phase, not just the board.
@@ -221,7 +302,7 @@ class CardPlacementDecoder(ActionDecoder):
         if self.wait_time not in ("match", "frame"):
             raise ValueError(f"cr_wait_time must be 'match' or 'frame', got {self.wait_time!r}")
         self.wait_head = MLPHead(cfg.d_model + self.time_pe_dim, 1, hidden=cfg.d_model)
-        self.card_head = PointerHead(cfg.d_model, n_queries=1)       # hand ⊗ ll
+        self.card_head = PointerHead(cfg.d_model, n_queries=1)       # card tokens ⊗ ll
         self.place_head = PointerHead(cfg.d_model, n_queries=2)      # arena ⊗ (card, ll)
 
     # ------------------------------------------------------------------
@@ -240,23 +321,22 @@ class CardPlacementDecoder(ActionDecoder):
         labels: Optional[Dict[str, torch.Tensor]] = None,
         ctx: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
-        cfg = self.cfg
         BT = B * T
         device = tokens.device
 
         arena_tok = tokens[:, : self.n_arena_tokens]                 # [BT, A, d]
-        hand_tok = tokens[:, self.n_arena_tokens:]                   # [BT, hand, d]
+        card_tok = tokens[:, self.n_arena_tokens:]                   # [BT, N, d] card tokens
 
-        card_logits = self.card_head(hand_tok, ll)                   # [BT, hand] raw
+        card_logits = self.card_head(card_tok, ll)                   # [BT, N] raw
 
         # Card conditioning: teacher-forced when labels are given (−1 rows
         # fall back to the model's own masked sample), else sampled — the
         # chosen index is returned so losses can condition-weight on it.
         card_mask = legal.get("card") if legal else None
-        cm_flat = card_mask.reshape(BT, cfg.hand_size) if card_mask is not None else None
+        cm_flat = card_mask.reshape(BT, self.n_card_tokens) if card_mask is not None else None
         card_label = labels.get("card_slot") if labels else None
         if card_label is not None:
-            gt_slot = card_label.reshape(BT).long().clamp(0, cfg.hand_size - 1)
+            gt_slot = card_label.reshape(BT).long().clamp(0, self.n_card_tokens - 1)
             needs_sample = card_label.reshape(BT) < 0
             if needs_sample.any():
                 pred_slot = masked_sample(card_logits, cm_flat)
@@ -266,7 +346,7 @@ class CardPlacementDecoder(ActionDecoder):
         else:
             card_slot = masked_sample(card_logits, cm_flat)
 
-        card_embed = hand_tok[torch.arange(BT, device=device), card_slot]
+        card_embed = card_tok[torch.arange(BT, device=device), card_slot]
         placement_logits = self.place_head(arena_tok, card_embed, ll)  # [BT, A]
 
         # Wait PE of the match phase.  "match": the sinusoidal code of the
@@ -288,7 +368,7 @@ class CardPlacementDecoder(ActionDecoder):
 
         return {
             "wait_logits": wait_logits.reshape(B, T),
-            "card_logits": card_logits.reshape(B, T, cfg.hand_size),
+            "card_logits": card_logits.reshape(B, T, self.n_card_tokens),
             "placement_logits": placement_logits.reshape(B, T, self.n_arena_tokens),
             "card_slot": card_slot.reshape(B, T),
         }

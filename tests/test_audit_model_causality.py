@@ -122,11 +122,13 @@ def _obs(game: str, cfg, g: torch.Generator) -> Dict[str, torch.Tensor]:
         return {"species_ids": ids, "poke_feats": feats, "slot_mask": mask,
                 "field_seq": r(cfg.pokemon_field_features)}
     if game == "clash_royale":
-        mask = torch.rand(B, T, cfg.hand_size, generator=g) < 0.8
+        from model.games.clash_royale import n_card_tokens
+        N, pre = n_card_tokens(cfg), cfg.cr_card_tokens        # deck tokens (or legacy hand slots)
+        mask = torch.rand(B, T, N, generator=g) < 0.8
         mask[..., 0] = True
         return {"arena_seq": r(cfg.arena_channels, cfg.arena_h, cfg.arena_w),
-                "hand_ids": torch.randint(0, cfg.n_cards, (B, T, cfg.hand_size), generator=g),
-                "hand_feats": r(cfg.hand_size, cfg.card_feature_dim), "hand_mask": mask,
+                f"{pre}_ids": torch.randint(0, cfg.n_cards, (B, T, N), generator=g),
+                f"{pre}_feats": r(N, cfg.card_feature_dim), f"{pre}_mask": mask,
                 "globals_seq": torch.rand(B, T, cfg.cr_global_features, generator=g)}
     if game == "hearthstone":
         S = cfg.hand_slots + 2 * cfg.board_slots + 3
@@ -172,7 +174,8 @@ def _legal(game: str, cfg, obs, g) -> Optional[Dict[str, torch.Tensor]]:
                 "switch": m(cfg.team_slots), "tera": torch.rand(B, T, generator=g) < 0.5,
                 "active_idx": torch.randint(0, cfg.team_slots, (B, T), generator=g)}
     if game == "clash_royale":
-        return {"card": m(cfg.hand_size), "placement": m(cfg.arena_h * cfg.arena_w)}
+        from model.games.clash_royale import n_card_tokens
+        return {"card": m(n_card_tokens(cfg)), "placement": m(cfg.arena_h * cfg.arena_w)}
     if game == "hearthstone":
         S = cfg.hand_slots + 2 * cfg.board_slots + 3
         return {"action_type": m(cfg.n_action_types), "actor": m(S), "target": m(S)}
@@ -200,7 +203,8 @@ def _label_highs(game: str, cfg) -> Dict[str, int]:
         return {"action_type": cfg.n_action_types,
                 "actor_idx": cfg.hand_slots + 2 * cfg.board_slots + 3}
     if game == "clash_royale":
-        return {"card_slot": cfg.hand_size}
+        from model.games.clash_royale import n_card_tokens
+        return {"card_slot": n_card_tokens(cfg)}
     if game == "mahjong":
         return {"action_type": 8}
     if game == "pokemon":
