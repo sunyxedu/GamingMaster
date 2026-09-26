@@ -527,6 +527,69 @@ def test_gomoku_replay_matches_gmdata_frame_by_frame(gmdata, tmp_path):
             _assert_frames_equal(x["tgt"], y["tgt"], f"fixture {y['meta']['source']}")
 
 
+def _play_random_gomoku(n: int, rule: str, games: int, seed: int, band: int) -> List[Dict]:
+    """Random games played BY the env (``rule``), the moves preferring the
+    ``band`` outermost rows / columns (edge and corner lines, overlines on
+    small boards): per game its moves, frames, winner and final rewards."""
+    env = GomokuVecEnv(games, board_size=n, rule=rule, seed=seed)
+    gen = torch.Generator().manual_seed(seed)
+    r, c = torch.arange(n * n) // n, torch.arange(n * n) % n
+    edge = (r < band) | (c < band) | (r >= n - band) | (c >= n - band)
+    rec = [{"moves": [], "frames": []} for _ in range(games)]
+    obs = env.reset()
+    while bool(obs.active.any()):
+        legal = obs.legal["place"]
+        biased = legal & edge
+        legal = torch.where(biased.any(-1, keepdim=True), biased, legal)
+        # uniform over the (biased) legal points: the k-th legal point
+        cum = legal.long().cumsum(-1)
+        k = (torch.rand(games, generator=gen) * cum[:, -1]).long()
+        act = (cum <= k[:, None]).sum(-1).clamp(max=n * n - 1)
+        live = obs.active.nonzero().squeeze(1).tolist()
+        for i in live:
+            rec[i]["moves"].append(int(act[i]))
+            rec[i]["frames"].append(obs.obs["board_seq"][i])
+        obs, rew, done, info = env.step({"place_idx": act})
+        for i in live:
+            if done[i]:
+                rec[i]["winner"], rec[i]["reward"] = int(info["winner"][i]), rew[i]
+    return rec
+
+
+@pytest.mark.parametrize("rule", ["freestyle", "standard"])
+def test_gomoku_rules_match_gmdata_on_random_edge_games(gmdata, tmp_path, rule):
+    """Both rules vs fresh `gmdata gomoku convert --rule <rule>` on random
+    games played by the env (edge-biased: fives along the edges and corners,
+    overlines, which only `standard` refuses, and full-board draws, which the
+    converter drops as undecided): the converter keeps exactly the games the
+    env scored as decisive, with the same winner, frames, moves and value
+    targets (= the seats' final rewards)."""
+    for n, band, games in ((6, 1, 48), (7, 2, 48), (15, 2, 16)):
+        rec = _play_random_gomoku(n, rule, games, seed=100 * n + band, band=band)
+        d = tmp_path / f"psq_{rule}_{n}"
+        d.mkdir()
+        for i, g in enumerate(rec):
+            lines = [f"Piskvorky {n}x{n}, 11:11, 0"]
+            lines += [f"{m % n + 1},{m // n + 1},0" for m in g["moves"]]     # x = col, y = row
+            (d / f"g{i:03d}.psq").write_text("\n".join(lines + ["A.zip", "B.zip", "-1", ""]))
+        out = tmp_path / f"shards_{rule}_{n}"
+        subprocess.run([gmdata, "gomoku", "convert", "--input", str(d), "--out", str(out),
+                        "--board-size", str(n), "--rule", rule, "--min-moves", "1"],
+                       check=True, capture_output=True)
+        il = {s["meta"]["source"]: s for s in load_gm_samples(str(out))} if out.is_dir() else {}
+        decisive = [i for i, g in enumerate(rec) if g["winner"] >= 0]
+        assert sorted(il) == [f"g{i:03d}.psq" for i in decisive], (rule, n)
+        assert 0 < len(decisive) and (n > 7 or len(decisive) < games)      # draws occur
+        for i in decisive:
+            g, s = rec[i], il[f"g{i:03d}.psq"]
+            T = len(g["moves"])
+            what = f"gomoku {rule} {n}x{n} game {i}"
+            assert s["meta"]["plies"] == T and s["meta"]["winner"] == ("black", "white")[g["winner"]]
+            assert torch.equal(torch.stack(g["frames"]), s["obs"]["board_seq"]), what
+            assert s["tgt"]["place_idx"].tolist() == g["moves"], what
+            assert torch.equal(g["reward"][torch.arange(T) % 2], s["tgt"]["value"]), what
+
+
 def _replay_real_shard(path: str) -> Tuple[int, int]:
     """Replay every game of one real gm-shard (its recorded place_idx) and
     compare every frame's planes with the shard's packed bits; returns
