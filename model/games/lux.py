@@ -26,6 +26,20 @@ v2 writes ``tgt.sap_offset`` with R = 7 and shard meta
 ``lux_global_features`` / ``lux_sap_range`` from that meta.  R = 0 (the
 default, and every config written before the field existed) builds the
 legacy decoder: no sap head, the sap action a plain class with no target.
+
+Unit ↔ map alignment (``lux_unit_cell_pe``, ``lux_sap_head``): a unit's map
+cell is recovered from its features (converter: x/W, y/H) as
+cell = round(y·H)·W + round(x·W) (:meth:`LuxEncoder.unit_cells`).  With
+``lux_unit_cell_pe`` the encoder adds the map positional embedding of that
+cell to each present unit token, so units and map tokens share one spatial
+code.  ``lux_sap_head = "pointer"`` scores the sap target egocentrically:
+the unit's query attends over every map token, and the (2R+1)² window
+around the unit's cell is gathered into the same offset classes the MLP
+head emits (:class:`LuxSapPointerHead`); offsets off the map are always
+illegal (``sap_mask``).  The cell reaches the decoder as
+``ctx["unit_cell"]`` (:meth:`LuxEncoder.decode_context`).  Configs written
+before these fields existed rebuild the MLP head without the cell PE
+(``model.config.LEGACY_CONFIG_DEFAULTS``).
 """
 
 from __future__ import annotations
@@ -67,6 +81,19 @@ class LuxConfig(ModelConfig):
     # identically (converter v2 shards: 7, shard meta "sap_range")
     lux_sap_range: int = 0
     lux_sap_action: int = 5        # the unit action whose target the sap head picks
+    # add the map PE of each present unit's cell to its token (legacy: False,
+    # model.config.LEGACY_CONFIG_DEFAULTS)
+    lux_unit_cell_pe: bool = True
+    # sap target head (lux_sap_range > 0): "pointer" = egocentric attention
+    # over the map tokens (LuxSapPointerHead), "mlp" = the per-unit MLP over
+    # [unit_token || ll] (legacy: "mlp", model.config.LEGACY_CONFIG_DEFAULTS)
+    lux_sap_head: str = "pointer"
+
+
+#: raw sap logit of an offset whose target cell is off the map (pointer
+#: head): finite so mask-free consumers (z-loss, KL diagnostics) stay finite,
+#: low enough that it carries no probability mass; sap_mask excludes it.
+OFF_MAP_SAP_LOGIT = -1e4
 
 
 class LuxEncoder(ObservationEncoder):
@@ -81,6 +108,11 @@ class LuxEncoder(ObservationEncoder):
     Token layout: ``map_h*map_w`` map tokens (row-major) followed by
     ``max_units`` unit tokens.  Globals are broadcast-added to the map
     tokens (same treatment as the StarCraft economy vector).
+
+    ``units_seq[..., 0:2]`` are the unit's (x / map_w, y / map_h) (the
+    converter's normalisation); :meth:`unit_cells` turns them back into a
+    row-major cell index.  With ``lux_unit_cell_pe`` a present unit's token
+    gets that cell's map PE (row + col embedding) added.
     """
 
     def __init__(self, cfg: LuxConfig):
@@ -128,6 +160,23 @@ class LuxEncoder(ObservationEncoder):
         self.unit_slot_embed = nn.Parameter(
             torch.randn(1, cfg.max_units, cfg.d_model) * 0.02,
         )
+        self.unit_cell_pe = bool(getattr(cfg, "lux_unit_cell_pe", False))
+
+    def unit_cells(self, units_seq: torch.Tensor, unit_mask: torch.Tensor) -> torch.Tensor:
+        """Row-major map cell of every unit slot, long [..., U]:
+        round(y·H)·W + round(x·W) from the (x/W, y/H) features, each
+        coordinate clamped to the map; absent slots get 0 (they stay masked
+        everywhere downstream).  Pure tensor ops (CUDA-graph capturable)."""
+        H, W = self.cfg.map_h, self.cfg.map_w
+        cx = torch.round(units_seq[..., 0].float() * W).long().clamp(0, W - 1)
+        cy = torch.round(units_seq[..., 1].float() * H).long().clamp(0, H - 1)
+        cell = cy * W + cx
+        return torch.where(unit_mask.bool(), cell, torch.zeros_like(cell))
+
+    def decode_context(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """``{"unit_cell": long [B, T, U]}`` (:meth:`unit_cells`) — the
+        egocentric sap window's centre for :class:`LuxDecoder`."""
+        return {"unit_cell": self.unit_cells(obs["units_seq"], obs["unit_mask"])}
 
     def _encode_frames(self, map_seq, frame_mask):
         """Conv the map, excluding padded frames from BatchNorm statistics
@@ -164,6 +213,11 @@ class LuxEncoder(ObservationEncoder):
         present = unit_mask.unsqueeze(-1).to(units_seq.dtype)  # [B, T, U, 1]
         unit_tokens = self.unit_proj(units_seq) * present      # bias zeroed too
         unit_tokens = unit_tokens + self.empty_embed * (1.0 - present)
+        if self.unit_cell_pe:
+            # the map PE of the unit's own cell: a unit token and the map
+            # token it stands on share their spatial code
+            map_pe = (self.map_row_embed + self.map_col_embed).reshape(self.n_map_tokens, d)
+            unit_tokens = unit_tokens + map_pe[self.unit_cells(units_seq, unit_mask)] * present
 
         return torch.cat([map_tokens, unit_tokens], dim=2)
 
@@ -205,6 +259,62 @@ def lux_sap_delta(offset, sap_range: int):
     """Sap class → (dx, dy) for the env action [5, dx, dy]; ints or tensors."""
     n = 2 * sap_range + 1
     return offset % n - sap_range, offset // n - sap_range
+
+
+def lux_sap_window(
+    unit_cell: torch.Tensor, map_h: int, map_w: int, R: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """The (2R+1)² sap window around each unit's cell, in sap-class order.
+
+    ``unit_cell`` long [...] row-major cells (y·W + x).  Returns
+    ``(idx, in_map)``, each [..., (2R+1)²]: ``idx[..., o]`` is the row-major
+    cell (x+dx, y+dy) of offset class o = (dy+R)·(2R+1) + (dx+R), each
+    coordinate clamped to the map, and ``in_map[..., o]`` whether the
+    unclamped target lies on the map (only then is ``idx`` that target).
+    Pure tensor ops (CUDA-graph capturable)."""
+    dx, dy = lux_sap_offset_grid(R, device=unit_cell.device)
+    x = (unit_cell % map_w).unsqueeze(-1) + dx
+    y = (unit_cell // map_w).unsqueeze(-1) + dy
+    in_map = (x >= 0) & (x < map_w) & (y >= 0) & (y < map_h)
+    idx = y.clamp(0, map_h - 1) * map_w + x.clamp(0, map_w - 1)
+    return idx, in_map
+
+
+class LuxSapPointerHead(nn.Module):
+    """Egocentric sap-target head: each unit's query attends over ALL map
+    tokens, then the (2R+1)² window around the unit's cell is gathered into
+    the sap offset classes.
+
+        q_u   = Linear([unit_token ‖ ll])                      [BT, U, d]
+        k_c   = Linear(map_token_c)                            [BT, HW, d]
+        cell  = q_u · k_c / √d                                 [BT, U, HW]
+        sap_o = cell[window(unit_cell)_o] + b_o                [BT, U, (2R+1)²]
+
+    Scoring every cell and gathering afterwards costs one [U, d]×[d, HW]
+    product per frame instead of materialising [U, (2R+1)², d] keys.  Off-map
+    offsets get the constant :data:`OFF_MAP_SAP_LOGIT` (no gradient) and are
+    reported as ``in_map`` False — the decoder makes them illegal.
+    """
+
+    def __init__(self, d_model: int, map_h: int, map_w: int, sap_range: int):
+        super().__init__()
+        self.map_h, self.map_w, self.sap_range = map_h, map_w, sap_range
+        self.query = nn.Linear(2 * d_model, d_model)
+        self.key = nn.Linear(d_model, d_model)
+        self.offset_bias = nn.Parameter(torch.zeros((2 * sap_range + 1) ** 2))
+        self.scale = d_model ** -0.5
+
+    def forward(
+        self, x: torch.Tensor, map_tokens: torch.Tensor, unit_cell: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """``x`` [BT, U, 2d] = [unit_token ‖ ll], ``map_tokens`` [BT, HW, d],
+        ``unit_cell`` long [BT, U] → (sap logits [BT, U, O], in_map [BT, U, O])."""
+        q = self.query(x)
+        k = self.key(map_tokens)
+        cell_logits = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        idx, in_map = lux_sap_window(unit_cell, self.map_h, self.map_w, self.sap_range)
+        logits = cell_logits.gather(-1, idx) + self.offset_bias
+        return logits.masked_fill(~in_map, OFF_MAP_SAP_LOGIT), in_map
 
 
 def lux_sap_legal(
@@ -254,11 +364,23 @@ class LuxDecoder(ActionDecoder):
     ARG_USES convention): the offset is sampled for every unit so replay
     always holds a valid index, but only a sapping unit pays for it.
 
+    ``lux_sap_head``: ``"mlp"`` is the head above; ``"pointer"``
+    (:class:`LuxSapPointerHead`) scores the same classes by attending from
+    the unit to the map tokens around its cell, which it reads from
+    ``ctx["unit_cell"]`` [B, T, U] (:meth:`LuxEncoder.decode_context`,
+    passed by GameNetwork).  Its offsets whose target is off the map are
+    always illegal: ``sap_mask`` = in-map AND ``legal["sap"]`` (if given)
+    is echoed on every decode, and sample / log_prob_entropy / il_loss use
+    it (never empty: the unit's own cell is on the map).
+
     legal keys:   unit_action [B, T, U, A] bool — per-unit legality
                   unit        [B, T, U] bool — which slots hold real units
                   (gates the joint log-prob; absent → all-present)
                   sap         [B, T, U, O] bool — legal sap classes
-                  (:func:`lux_sap_legal`; echoed as ``sap_mask``)
+                  (:func:`lux_sap_legal`; echoed as ``sap_mask``, ANDed
+                  with the in-map window by the pointer head)
+    ctx keys:     unit_cell   [B, T, U] long — the unit's row-major map cell
+                  (pointer head only; required there)
     labels:       accepted and IGNORED — with no cross-head conditioning
                   there is nothing to teacher-force.
     actions keys: unit_actions [B, T, U] long (+ sap_offsets [B, T, U]
@@ -280,14 +402,21 @@ class LuxDecoder(ActionDecoder):
         self.sap_range = R
         self.sap_action = int(getattr(cfg, "lux_sap_action", 5))
         self.n_sap_offsets = (2 * R + 1) ** 2 if R > 0 else 0
+        self.sap_head_type = str(getattr(cfg, "lux_sap_head", "mlp"))
+        if self.sap_head_type not in ("mlp", "pointer"):
+            raise ValueError(f"lux_sap_head must be 'mlp' or 'pointer', "
+                             f"got {self.sap_head_type!r}")
         # R == 0 (legacy): no module at all, so old checkpoints load strictly.
-        self.sap_head: Optional[MLPHead] = None
+        self.sap_head: Optional[nn.Module] = None
         if R > 0:
             if not 0 <= self.sap_action < cfg.n_unit_actions:
                 raise ValueError(
                     f"lux_sap_action={self.sap_action} must index one of the "
                     f"n_unit_actions={cfg.n_unit_actions} unit actions")
-            self.sap_head = MLPHead(2 * cfg.d_model, self.n_sap_offsets)
+            if self.sap_head_type == "pointer":
+                self.sap_head = LuxSapPointerHead(cfg.d_model, cfg.map_h, cfg.map_w, R)
+            else:
+                self.sap_head = MLPHead(2 * cfg.d_model, self.n_sap_offsets)
 
     # ------------------------------------------------------------------
 
@@ -301,6 +430,7 @@ class LuxDecoder(ActionDecoder):
         t0: int = 0,
         legal: Optional[Dict[str, torch.Tensor]] = None,
         labels: Optional[Dict[str, torch.Tensor]] = None,
+        ctx: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
         cfg = self.cfg
         unit_tokens = tokens[:, self.n_map_tokens:]            # [BT, U, d]
@@ -323,17 +453,39 @@ class LuxDecoder(ActionDecoder):
         }
         if self.sap_head is not None:
             n_off = self.n_sap_offsets
-            out["sap_logits"] = self.sap_head(x).reshape(B, T, U, n_off)
             sap_mask = legal.get("sap") if legal else None
             if sap_mask is not None:
-                out["sap_mask"] = sap_mask.reshape(B, T, U, n_off).bool()
+                sap_mask = sap_mask.reshape(B, T, U, n_off).bool()
+            if self.sap_head_type == "pointer":
+                if ctx is None or ctx.get("unit_cell") is None:
+                    raise ValueError(
+                        "lux_sap_head='pointer' needs ctx['unit_cell'] [B, T, U] "
+                        "(LuxEncoder.decode_context; GameNetwork passes it)")
+                sap_logits, in_map = self.sap_head(
+                    x, tokens[:, :self.n_map_tokens],
+                    ctx["unit_cell"].reshape(B * T, U).long())
+                in_map = in_map.reshape(B, T, U, n_off)
+                sap_mask = in_map if sap_mask is None else sap_mask & in_map
+            else:
+                sap_logits = self.sap_head(x)
+            out["sap_logits"] = sap_logits.reshape(B, T, U, n_off)
+            if sap_mask is not None:
+                out["sap_mask"] = sap_mask
         return out
 
     def _sap_mask(self, pred, legal):
+        """The sap legality sample / log_prob_entropy apply: ``legal["sap"]``
+        when given (the mlp head's historical rule), else decode()'s echo; the
+        pointer head's echo carries the in-map window, which is always ANDed
+        in (off-map offsets are illegal whatever ``legal`` says)."""
+        echo = pred.get("sap_mask")
         m = legal.get("sap") if legal else None
         if m is None:
-            return pred.get("sap_mask")
-        return m.bool()
+            return echo
+        m = m.bool()
+        if self.sap_head_type == "pointer" and echo is not None:
+            m = m & echo
+        return m
 
     # ------------------------------------------------------------------
 

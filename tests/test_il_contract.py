@@ -12,7 +12,8 @@
 - the schema-freeze shard meta registry (META_ARCH_KEYS / META_LEGACY,
   schema_freeze_warning, ``--require_frozen_schema``);
 - the per-head decomposition of every owned decoder's il_loss (pokemon,
-  clash_royale, hearthstone, starcraft, generals factorized + joint);
+  clash_royale, hearthstone, starcraft, generals factorized + joint, lux
+  with the pointer sap head);
 - end to end: train_multi_game with soft / engine / legal targets.
 """
 
@@ -627,6 +628,7 @@ def _decoder_cases():
         HearthstoneConfig,
         HearthstoneEncoder,
     )
+    from model.games.lux import LuxConfig, LuxDecoder, LuxEncoder, lux_sap_legal
     from model.games.pokemon import PokemonConfig, PokemonDecoder, PokemonEncoder
     from model.games.starcraft import RTSDecoder, StarCraftConfig, StarCraftEncoder
     from model.network import GeneralsNetwork
@@ -717,6 +719,27 @@ def _decoder_cases():
                "ratio_id": torch.randint(0, 2, (B, T, 4), generator=g)}
         pred = net(obs, legal=legal_from_obs(obs), labels=source_labels(tgt))
         out.append(("generals_joint" if joint else "generals", net, pred, tgt, mask))
+    # lux with the pointer sap head: its sap term carries the in-map mask
+    # the decoder echoes (every target here is on the map, so legal)
+    torch.manual_seed(0)
+    cfg = _small(LuxConfig, map_h=6, map_w=6, map_channels=4, max_units=5,
+                 unit_feature_dim=6, lux_global_features=3, lux_sap_range=7,
+                 lux_sap_head="pointer")
+    net = GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg))
+    unit_mask = torch.rand(B, T, 5, generator=g) < 0.7
+    xy = torch.stack([torch.randint(0, 6, (B, T, 5), generator=g),
+                      torch.randint(0, 6, (B, T, 5), generator=g)], -1)
+    units = torch.randn(B, T, 5, 6, generator=g)
+    units[..., 0], units[..., 1] = xy[..., 0] / 6, xy[..., 1] / 6
+    obs = {"map_seq": torch.randn(B, T, 4, 6, 6, generator=g), "units_seq": units,
+           "unit_mask": unit_mask, "globals_seq": torch.randn(B, T, 3, generator=g)}
+    on_map = lux_sap_legal(xy, unit_mask, 7, 7, 6, 6)
+    so = torch.multinomial(on_map.reshape(-1, 225).float() + 1e-9, 1, generator=g)
+    tgt = {"unit_actions": torch.randint(0, 6, (B, T, 5), generator=g),
+           "sap_offset": so.reshape(B, T, 5)}
+    pred = net(obs, legal={"unit": unit_mask})
+    out.append(("lux", net, pred, tgt, mask))
+
     return out
 
 
@@ -727,6 +750,7 @@ IL_KEYS = {
     "hearthstone": {"type", "actor", "target", "position"},
     "starcraft": {"type", "queued", "actor", "target", "location"},
     "generals": {"source", "direction", "split", "pass"},
+    "lux": {"unit_action", "sap"},
 }
 HEADS = {
     "pokemon": {"action_type", "move", "switch", "tera"},
@@ -734,10 +758,11 @@ HEADS = {
     "hearthstone": {"action_type", "actor", "target", "position"},
     "starcraft": {"type", "queued", "actor", "target", "location"},
     "generals": {"source", "direction", "split", "pass"},
+    "lux": {"unit_action", "sap"},
 }
 
 
-@pytest.mark.parametrize("case", range(6))
+@pytest.mark.parametrize("case", range(7))
 def test_owned_decoders_reconstruct_il_loss(case):
     name, net, pred, tgt, mask = _decoder_cases()[case]
     key = "generals" if name.startswith("generals") else name

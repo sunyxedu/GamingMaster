@@ -795,3 +795,94 @@ def test_graphed_step_input_checks():
     with pytest.raises(ValueError, match="shape"):
         GraphedStep._check_inputs("legal", {"source": torch.ones(1, 1, 5, 5, dtype=torch.bool)},
                                   static)
+
+
+# ---------------------------------------------------------------------------
+# A decoder with a decode context (lux pointer sap head): the context is
+# computed inside the step, sync-free, and replays from the graph
+# ---------------------------------------------------------------------------
+
+LUX_H = LUX_W = 6
+LUX_U = 5
+LUX_R = 7
+
+
+def _lux_net(device="cpu", **kw):
+    from model.games.lux import LuxConfig, LuxDecoder, LuxEncoder
+
+    torch.manual_seed(0)
+    cfg = LuxConfig(**{**TINY, **kw}, core_type="recurrent_depth", moe_experts=4,
+                    map_h=LUX_H, map_w=LUX_W, map_channels=4, max_units=LUX_U,
+                    unit_feature_dim=6, lux_global_features=3, lux_sap_range=LUX_R,
+                    lux_sap_head="pointer", lux_unit_cell_pe=True)
+    return GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg)).to(device).eval()
+
+
+def _lux_obs_legal(B, device="cpu", seed=0, legal_on=True):
+    from model.games.lux import lux_sap_legal
+
+    g = torch.Generator().manual_seed(seed)
+    mask = torch.rand(B, LUX_U, generator=g) < 0.7
+    mask[:, 0] = True
+    xy = torch.stack([torch.randint(0, LUX_W, (B, LUX_U), generator=g),
+                      torch.randint(0, LUX_H, (B, LUX_U), generator=g)], -1)
+    units = torch.randn(B, LUX_U, 6, generator=g)
+    units[..., 0], units[..., 1] = xy[..., 0] / LUX_W, xy[..., 1] / LUX_H
+    obs = {"map_seq": torch.randn(B, 4, LUX_H, LUX_W, generator=g), "units_seq": units,
+           "unit_mask": mask, "globals_seq": torch.randn(B, 3, generator=g)}
+    legal = None
+    if legal_on:
+        ua = torch.rand(B, LUX_U, 6, generator=g) < 0.7
+        ua[..., 0] = True
+        legal = {"unit_action": ua, "unit": mask.clone(),
+                 "sap": lux_sap_legal(xy, mask, 4, LUX_R, LUX_W, LUX_H)}
+        legal = {k: v.to(device) for k, v in legal.items()}
+    return {k: v.to(device) for k, v in obs.items()}, legal
+
+
+LUX_LOGIT_KEYS = ("unit_action_logits", "sap_logits", "value")
+LUX_ACTION_KEYS = ("unit_actions", "sap_offsets")
+
+
+@pytest.mark.parametrize("legal_on", [False, True])
+@pytest.mark.parametrize("tensor_t", [True, False])
+def test_lux_pointer_step_is_sync_free_cpu(legal_on, tensor_t, monkeypatch):
+    net = _lux_net()
+    B = 2
+    obs, legal = _lux_obs_legal(B, legal_on=legal_on)
+    net.prepare_inference()
+    cache = net.initial_st_cache(B)
+    t = torch.tensor(3) if tensor_t else 3
+    with torch.no_grad(), monkeypatch.context() as mp, MoEFFN.inference_path("dense"):
+        _forbid_host_syncs(mp)
+        out = GameNetwork.step(net, obs, legal, st_cache=cache, step_idx=t, act_steps=2)
+        out2 = GameNetwork.step(net, obs, legal, st_cache=out["st_cache"],
+                                step_idx=t + 1, act_steps=2)
+    assert out2["sap_mask"].shape == (B, LUX_U, (2 * LUX_R + 1) ** 2)
+    assert torch.isfinite(out2["action_log_prob"]).all()
+
+
+@needs_cuda
+@pytest.mark.parametrize("legal_on", [False, True])
+def test_lux_pointer_graph_replay_matches_eager_cuda(legal_on):
+    from model.cuda_graph import GraphedStep
+
+    dev = torch.device("cuda")
+    net = _lux_net(device=dev)
+    B = 4
+    obs0, legal0 = _lux_obs_legal(B, dev, legal_on=legal_on)
+    g = GraphedStep(net, obs0, legal0, act_steps=2)
+    cache = None
+    for t in range(4):
+        obs, legal = _lux_obs_legal(B, dev, seed=t, legal_on=legal_on)
+        torch.manual_seed(2000 + t)
+        with torch.no_grad():
+            e = GameNetwork.step(net, obs, legal, st_cache=cache, step_idx=t, act_steps=2)
+        cache = e["st_cache"]
+        torch.manual_seed(2000 + t)
+        r = g(obs, t, legal)
+        for key in LUX_LOGIT_KEYS + ("action_log_prob",):
+            torch.testing.assert_close(r[key], e[key], rtol=1e-5, atol=1e-5)
+        assert torch.equal(r["sap_mask"], e["sap_mask"])
+        for key in LUX_ACTION_KEYS:
+            assert torch.equal(r[key], e[key]), (t, key)

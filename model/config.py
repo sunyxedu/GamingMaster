@@ -164,6 +164,18 @@ LEGACY_CONFIG_DEFAULTS = {
     "trm_arch": "legacy",
     "halt_exploration_prob": 0.0,
     "qk_norm": False,
+    # Lux adapter (model/games/lux.py): no unit-cell PE, the MLP sap head
+    "lux_unit_cell_pe": False,
+    "lux_sap_head": "mlp",
+}
+
+#: LEGACY_CONFIG_DEFAULTS keys of ONE game's config class → a marker field
+#: every config of that game ever saved carries.  They are applied only to
+#: dicts that have the marker, so other games' configs do not grow keys
+#: their class rejects (build_net_tolerant would drop them, loudly).
+LEGACY_CONFIG_SCOPE = {
+    "lux_unit_cell_pe": "n_unit_actions",
+    "lux_sap_head": "n_unit_actions",
 }
 
 
@@ -173,7 +185,9 @@ def upgrade_config_dict(d: dict) -> dict:
     default (e.g. the TRM block layout)."""
     out = dict(d)
     for k, v in LEGACY_CONFIG_DEFAULTS.items():
-        out.setdefault(k, v)
+        marker = LEGACY_CONFIG_SCOPE.get(k)
+        if marker is None or marker in d:
+            out.setdefault(k, v)
     return out
 
 
