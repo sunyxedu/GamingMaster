@@ -227,8 +227,9 @@ def config_from_dict(d: dict, cls=None):
 #: mountain memory went in, ON by default (2026-08-11: memory c56c5e2 at
 #: 21:07, joint_decoder 164e37d at 21:32).  training/train_rl.py never set
 #: the env's memory_vision, so a train_rl config dict carrying this key was
-#: written by code whose env had the memory on; one without it predates the
-#: memory (phases 1-7).
+#: written by code whose env had the memory on; one without it was written
+#: by older code — which, but for that 24-minute window, had no memory
+#: (phases 1-7, run-4/4b/4c, run5b; see legacy_memory_vision's caveat).
 MEMORY_VISION_ERA_FIELD = "joint_decoder"
 
 
@@ -260,7 +261,19 @@ def legacy_memory_vision(ckpt: Mapping[str, Any]) -> bool:
 
     A blanket legacy True (GeneralsEnv's old default) would feed every
     IL-only network an observation it never saw; a blanket False would take
-    the memory away from the train_rl lineages that trained with it."""
+    the memory away from the train_rl lineages that trained with it.
+
+    Caveat: the marker dates the CODE that wrote a config, not the run.  A
+    train_rl process started from code between c56c5e2 and 164e37d
+    (2026-08-11 21:07-21:31) played with the memory but wrote no
+    joint_decoder field — most likely the run5c lineage (job 45756, launched
+    from 34f8b07) — and resolves to False here, as does any
+    checkpoint such a process wrote before a requeue onto newer code.  Its
+    checkpoints cannot be told from the pre-memory run5b ones by content:
+    record the setting before resuming or playing them, e.g.
+    ``ck = torch.load(p, weights_only=False); ck["config"]["memory_vision"]
+    = True; torch.save(ck, p)`` (or pass training/train_rl.py
+    --memory_vision 1)."""
     if is_train_rl_checkpoint(ckpt):
         return MEMORY_VISION_ERA_FIELD in ckpt["config"]
     if ckpt.get("stage") == "rl_joint":
