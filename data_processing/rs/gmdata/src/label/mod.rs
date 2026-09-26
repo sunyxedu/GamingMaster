@@ -264,6 +264,12 @@ pub enum FakeKind {
         #[arg(long)]
         script: PathBuf,
     },
+    /// KataGo analysis-engine (JSON) fake (see label/go/fake.rs)
+    Katago {
+        /// exit on the n-th analysis query
+        #[arg(long)]
+        crash_on: Option<usize>,
+    },
 }
 
 pub fn run(cmd: Cmd) -> Result<()> {
@@ -295,6 +301,13 @@ pub fn run(cmd: Cmd) -> Result<()> {
             FakeKind::Canned { script } => {
                 let text = std::fs::read_to_string(&script).with_context(|| format!("read {}", script.display()))?;
                 fake::run_stdio(&mut fake::Canned::parse(&text)?)
+            }
+            FakeKind::Katago { crash_on } => {
+                let mut f = go::fake::KataFake::new();
+                if let Some(n) = crash_on {
+                    f = f.crash_on(n);
+                }
+                fake::run_stdio(&mut f)
             }
         },
     }
