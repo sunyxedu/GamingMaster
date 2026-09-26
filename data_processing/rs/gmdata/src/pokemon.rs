@@ -26,7 +26,11 @@
 //!                  end-of-turn request (after `|upkeep|`, sent at once to every side with a
 //!                  fainted active or a pending eject) the state before the FIRST switch line of
 //!                  that block, so a side never sees the other side's simultaneous replacement.
-//!                  A request left unanswered (forfeit at the prompt) yields no frame — nor does
+//!                  Server logs mark the answered decision with `|` + `|t:|` (turnLoop): when that
+//!                  commit follows the request's cause, the frame is the state AT the commit — the
+//!                  switch action's switch-out effects (Natural Cure's cure, the end of
+//!                  Neutralizing Gas or a primal weather, ...) are logged between it and the
+//!                  `|switch|` line, after the decision.  A request left unanswered (forfeit at the prompt) yields no frame — nor does
 //!                  a simultaneous end-of-turn request the OTHER player forfeited at (neither
 //!                  switch is logged).  Revival Blessing's choice of a fainted Pokémon logs no
 //!                  `|switch|` and has no frame.
@@ -341,12 +345,25 @@ impl Rec {
     }
 }
 
+#[derive(Clone)]
 struct Battle {
     sides: [SideSt; 2],
     weather: Option<usize>,
     terrain: Option<usize>,
     turn: i64,
     winner: Option<usize>,
+}
+
+/// The state a forced-switch request was answered in: the battle at the last decision commit
+/// (`|t:|`, logged by Showdown's turnLoop when the chosen actions start) if it came after the
+/// request's cause (`since`), else the current state (logs without commit markers).  The
+/// switch action's own switch-out effects (Natural Cure, the end of Neutralizing Gas or a
+/// primal weather, ...) are logged after the commit but before the `|switch|` line.
+fn request_state<'a>(b: &'a Battle, commit: &'a Option<(usize, Battle)>, since: usize) -> &'a Battle {
+    match commit {
+        Some((at, st)) if *at > since => st,
+        _ => b,
+    }
 }
 
 fn side_idx(pos: &str) -> Option<usize> {
@@ -470,6 +487,14 @@ fn parse_log(log: &str) -> Parse {
     let mut lead_block = false;
     let mut ended = false;
     let mut secret = false; // the next line is the private half of a |split| block
+    // the last decision commit (`|t:|`): (line number, battle state there) — forced-switch
+    // frames are that state when it follows the request's cause (request_state)
+    let mut commit: Option<(usize, Battle)> = None;
+    let mut line_no = 0usize;
+    let mut turn_at = 0usize; // line number of the last |turn|
+    // line number of the side's latest forced-switch cause (its active fainted, an eject
+    // activation) or move (a pivot, or the last action before an unrecognised forced switch)
+    let mut cause_at = [0usize; 2];
     macro_rules! stat {
         ($k:expr) => {
             *stats.entry($k.to_string()).or_default() += 1
@@ -509,7 +534,14 @@ fn parse_log(log: &str) -> Parse {
         let cmd = parts.get(1).copied().unwrap_or("");
         let args: &[&str] = if parts.len() > 2 { &parts[2..] } else { &[] };
         let a = |i: usize| args.get(i).copied().unwrap_or("");
+        line_no += 1;
         match cmd {
+            "t:" => {
+                // Showdown's turnLoop logs `|` + `|t:|TIME` when the answered request's actions
+                // start: nothing is logged between a request and its commit
+                commit = Some((line_no, b.clone()));
+                continue;
+            }
             "split" => {
                 // omniscient logs (local server, self-play): |split|SIDE, the SIDE-only line (exact
                 // HP), then the public line — only the public line is game state for both players
@@ -566,17 +598,20 @@ fn parse_log(log: &str) -> Parse {
                         });
                         if upkeep {
                             // the end-of-turn request goes to every side with a pending
-                            // replacement at once: all their frames are this pre-switch state
+                            // replacement at once: all their frames are the state it was answered
+                            // in (the commit, else this pre-switch state)
                             for s in 0..2 {
                                 if open[s].is_none() && (s == pi || need_replace[s] || pending_eject[s]) {
-                                    records[s].push(snapshot(&b, s, Phase::Forced));
+                                    let st = request_state(&b, &commit, cause_at[s].max(turn_at));
+                                    records[s].push(snapshot(st, s, Phase::Forced));
                                     open[s] = Some(records[s].len() - 1);
                                     stat!("frames_forced");
                                 }
                             }
                             target = open[pi].take();
                         } else {
-                            records[pi].push(snapshot(&b, pi, Phase::Forced));
+                            let st = request_state(&b, &commit, cause_at[pi].max(turn_at));
+                            records[pi].push(snapshot(st, pi, Phase::Forced));
                             target = Some(records[pi].len() - 1);
                             stat!("frames_forced");
                         }
@@ -586,7 +621,8 @@ fn parse_log(log: &str) -> Parse {
                     } else {
                         // after the side acted, with no recognised cause (an unlisted pivot)
                         stat!("forced_other");
-                        records[pi].push(snapshot(&b, pi, Phase::Forced));
+                        let st = request_state(&b, &commit, cause_at[pi].max(turn_at));
+                        records[pi].push(snapshot(st, pi, Phase::Forced));
                         target = Some(records[pi].len() - 1);
                         stat!("frames_forced");
                     }
@@ -622,6 +658,7 @@ fn parse_log(log: &str) -> Parse {
                 let (pos, nick) = ident(a(0));
                 let Some(pi) = side_idx(&pos) else { continue };
                 let mv = a(1);
+                cause_at[pi] = line_no;
                 if SELF_SWITCH.contains(&norm(mv).as_str()) {
                     pending_pivot[pi] = true;
                 }
@@ -686,6 +723,7 @@ fn parse_log(log: &str) -> Parse {
                     let what = norm(a(1).rsplit(':').next().unwrap_or(""));
                     if EJECT.contains(&what.as_str()) && !args[2..].iter().any(|x| x.contains("[from]")) {
                         pending_eject[pi] = true;
+                        cause_at[pi] = line_no;
                     }
                 }
                 continue;
@@ -807,6 +845,7 @@ fn parse_log(log: &str) -> Parse {
                     p.leave_field();
                     if b.sides[pi].active == Some(slot) {
                         need_replace[pi] = true;
+                        cause_at[pi] = line_no;
                     }
                 }
                 continue;
@@ -873,6 +912,7 @@ fn parse_log(log: &str) -> Parse {
             "turn" if !args.is_empty() => {
                 let Some(n) = py_int(a(0)) else { continue };
                 close_turn!();
+                turn_at = line_no;
                 if ended {
                     continue;
                 }
@@ -1344,6 +1384,42 @@ mod tests {
         assert_eq!((own(4).move_idx, own(4).move_name.as_str()), (-1, "Shadow Ball"));
         assert_eq!(own(5).frame.moves[2], "Shadow Ball");
         assert!(own(7).frame.moves.iter().all(|m| m.is_empty()), "Ditto's own moveset stays unrevealed");
+    }
+
+    #[test]
+    fn forced_frames_are_the_state_at_the_decision_commit() {
+        // Server logs mark every committed decision with `|` + `|t:|` (Battle.turnLoop): the
+        // switch request was answered there.  What follows is the switch action — the outgoing
+        // Pokémon's switch-out effects (Natural Cure, the end of Neutralizing Gas restarting a
+        // foe's Drizzle, ...) are logged BEFORE the |switch| line but after the decision.
+        let status = |r: &Rec, j: usize| (0..7).find(|&k| r.frame.feats[j * FEAT + F_STATUS + k] == 1.0).unwrap();
+        let rain = |r: &Rec| r.frame.field[1];
+        let pivot = ["|turn|1", "|", "|t:|100", "|move|p2a: Gholdengo|Will-O-Wisp|p1a: Garchomp", "|-status|p1a: Garchomp|brn",
+            "|move|p1a: Garchomp|U-turn|p2a: Gholdengo", "|-damage|p2a: Gholdengo|70/100", "|", "|t:|101",
+            "|-curestatus|p1a: Garchomp|brn|[from] ability: Natural Cure|[silent]",
+            "|-weather|RainDance|[from] ability: Drizzle|[of] p2a: Gholdengo", "|switch|p1a: Corviknight|Corviknight, F|100/100",
+            "|upkeep", "|turn|2"];
+        let p = parse(&pivot);
+        let r = &p.records[0];
+        assert!(forced(&r[2]) && r[2].switch_idx == 2);
+        assert_eq!((status(&r[2], 0), rain(&r[2])), (1, 0.0), "the pivot request's state: burned, no rain yet");
+        assert_eq!(r[2].frame.feats[TEAM * FEAT + F_HP], 0.7, "the U-turn hit before the request");
+        assert_eq!((status(&r[3], 0), rain(&r[3])), (0, 1.0), "both happened by the next turn");
+        // a log without commit markers (synthetic / pre-marker): the state at the switch line
+        let bare: Vec<&str> = pivot.iter().copied().filter(|l| *l != "|" && !l.starts_with("|t:|")).collect();
+        let q = parse(&bare);
+        assert_eq!((status(&q.records[0][2], 0), rain(&q.records[0][2])), (0, 1.0));
+        // end of turn: both requests are committed together; the first switch's switch-out effects
+        // reach neither frame
+        let p = parse(&["|turn|1", "|", "|t:|100", "|move|p1a: Garchomp|Toxic|p2a: Gholdengo", "|-status|p2a: Gholdengo|psn",
+            "|move|p2a: Gholdengo|Make It Rain|p1a: Garchomp", "|-damage|p1a: Garchomp|0 fnt", "|faint|p1a: Garchomp",
+            "|-damage|p2a: Gholdengo|40/100 psn|[from] psn", "|upkeep", "|-activate|p2a: Gholdengo|ability: Emergency Exit", "|",
+            "|t:|101", "|-curestatus|p2a: Gholdengo|psn|[from] ability: Natural Cure|[silent]",
+            "|switch|p2a: Kingambit|Kingambit, M|100/100", "|switch|p1a: Corviknight|Corviknight, F|100/100", "|turn|2"]);
+        let (a, o) = (&p.records[0][2], &p.records[1][2]);
+        assert!(forced(a) && forced(o) && a.switch_idx == 2 && o.switch_idx == 2);
+        assert_eq!((status(a, TEAM), status(o, 0)), (3, 3), "Gholdengo is still poisoned at the requests");
+        assert_eq!(status(&p.records[0][3], TEAM), 0);
     }
 
     #[test]

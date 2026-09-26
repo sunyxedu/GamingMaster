@@ -822,6 +822,70 @@ def test_simultaneous_replacements_do_not_see_each_other(gmdata, replays, tmp_pa
                 assert act.numel() == 1 and float(feats[lo + int(act), POKE_FEAT_FAINTED]) == 1.0
 
 
+def _forced_commits(lines: List[str]) -> List[Tuple[int, int]]:
+    """[(commit line, last switch line)] of every forced-switch decision in a server log: a
+    ``|t:|`` commit that is not the start of a turn / of the battle (Showdown's turnLoop logs
+    ``|`` + ``|t:|`` when the answered request's actions start), followed by the ``|switch|``
+    lines that answer it (up to the next commit / turn)."""
+    out, commit, last = [], None, None
+    prev = ""
+    for i, ln in enumerate(lines):
+        p = ln.split("|")
+        cmd = p[1] if len(p) > 1 else ""
+        if cmd in ("t:", "turn", "win", "tie"):
+            if commit is not None and last is not None:
+                out.append((commit, last))
+            commit = i if cmd == "t:" and prev not in ("turn", "teampreview", "start", "") else None
+            last = None
+        elif cmd == "switch" and commit is not None:
+            last = i
+        if cmd not in ("", "t:", "j", "J", "l", "L", "c", "c:", "inactive", "inactiveoff", "raw"):
+            prev = cmd
+    return out
+
+
+def test_forced_frames_ignore_post_commit_switch_out_effects(gmdata, replays, full, tmp_path):
+    """A forced-switch request is answered at its decision commit (``|t:|``); the switch action
+    that follows logs the outgoing Pokémon's switch-out effects — Natural Cure's cure, the end of
+    Neutralizing Gas restarting a foe's Drizzle / Intimidate / terrain, a primal weather ending —
+    BEFORE the ``|switch|`` line.  Injecting such effects right after the commit of a forced
+    switch leaves every frame through that decision's forced frames unchanged: they are the state
+    the request was answered in, not the state at the switch line."""
+    jobs, meta = {}, {}
+    for r in replays:
+        lines = r["log"].split("\n")
+        p1 = _names(lines).get(0)
+        actives: Dict[int, str] = {}
+        at_line: Dict[int, Dict[int, str]] = {}
+        for i, ln in enumerate(lines):
+            p = ln.split("|")
+            if len(p) > 2 and p[1] in ("switch", "drag", "replace") and _side(p[2]) is not None:
+                actives[_side(p[2])] = p[2].strip()
+            at_line[i] = dict(actives)
+        for n, (c, last) in enumerate(_forced_commits(lines)[:12]):
+            act = at_line[c]
+            inject = ["|-weather|RainDance", "|-fieldstart|move: Psychic Terrain"] + [
+                x for s in sorted(act) for x in (
+                    f"|-unboost|{act[s]}|spe|1",
+                    f"|-curestatus|{act[s]}|par|[from] ability: Natural Cure|[silent]")]
+            cid = f"{r['id']}~Q{n}"
+            jobs[cid] = _rec(cid, "\n".join(lines[: c + 1] + inject + lines[c + 1 :]), r)
+            jobs[cid + "c"] = _rec(cid + "c", "\n".join(lines[: last + 1] + [f"|win|{p1}"]), r)
+            meta[cid] = r["id"]
+    assert len(meta) > 100, len(meta)
+    got = _convert(gmdata, tmp_path, "commit", jobs)
+    checked = 0
+    for cid, rid in meta.items():
+        for side in ("p1", "p2"):
+            whole, pert = full.get((rid, side)), got.get((cid, side))
+            cut = got.get((cid + "c", side))
+            assert _n(pert) == _n(whole), (cid, side)
+            k = _n(cut)  # the side's frames through this decision (its forced frame last)
+            _assert_prefix(whole, pert, k, f"{cid}/{side}: post-commit effects reach the request")
+            checked += int(k > 0 and _forced(cut, k - 1))
+    assert checked > 100, checked
+
+
 # ----------------------------------------------------------------------------------------------
 # VALUE: the hindsight outcome
 # ----------------------------------------------------------------------------------------------
