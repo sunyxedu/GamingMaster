@@ -792,6 +792,7 @@ dependencies = [
  "clap",
  "crc32fast",
  "flate2",
+ "gmrules",
  "gmshard",
  "parquet",
  "pgn-reader",

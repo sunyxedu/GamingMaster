@@ -172,8 +172,12 @@ pub struct CheckReport {
 /// replay to exactly the frames the simulator emitted.
 pub fn check_game<G: Game>(cfg: &G::Config, n_games: usize, seed: u64) -> Result<CheckReport, String> {
     let spec = G::spec(cfg);
-    if spec.n_seats == 0 || spec.n_seats > 32 || spec.max_actions == 0 {
-        return Err(format!("bad spec {spec:?}"));
+    // every tensor has at least one element per frame (gm-shard frame shapes)
+    if spec.n_seats == 0 || spec.n_seats > 32 || spec.max_actions == 0 || spec.max_entities == 0
+        || spec.entity_features == 0 || spec.global_features == 0 || spec.action_features == 0
+        || spec.max_decisions == 0
+    {
+        return Err(format!("bad spec (every size must be >= 1, n_seats <= 32): {spec:?}"));
     }
     let mut rng = Rng::new(seed);
     let mut rep = CheckReport::default();
