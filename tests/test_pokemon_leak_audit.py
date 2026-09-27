@@ -1347,9 +1347,10 @@ def _encore_overrides(log: str) -> List[Tuple[int, int]]:
             turn, acted = int(p[2]), set()
         elif p[1] in ("move", "switch", "cant") and _side(p[2]) is not None:
             acted.add(_side(p[2]))
-        elif p[1] == "-start" and len(p) > 3 and p[3].strip() == "Encore" and _side(p[2]) is not None:
-            if _side(p[2]) not in acted and 0 < turn < TURN_CLIP:
-                out.append((_side(p[2]), turn))
+        elif p[1] == "-start" and len(p) > 3 and p[3].strip() == "Encore":
+            me = _side(p[2])
+            if me is not None and me not in acted and 0 < turn < TURN_CLIP:
+                out.append((me, turn))
     return out
 
 
@@ -1364,8 +1365,9 @@ def test_a_move_overridden_by_encore_is_not_labelled(replays, full):
             s = full.get((r["id"], ("p1", "p2")[me]))
             if s is None:
                 continue
-            f = [i for i, t in enumerate(_turns(s)) if t == turn and not _forced(s, i) and not _preview(s, i)]
+            f = [i for i, t in enumerate(_turns(s))
+                 if t == turn and not _forced(s, i) and not _preview(s, i)]
             assert len(f) == 1, (r["id"], me, turn)
-            assert not _labelled(s, f[0]), f"{r['id']} p{me + 1} turn {turn}: the Encore-forced move is a label"
+            assert not _labelled(s, f[0]), f"{r['id']} p{me + 1} turn {turn}: labelled Encore move"
             checked += 1
     assert checked >= 3, checked
