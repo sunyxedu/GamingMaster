@@ -440,13 +440,26 @@ def _cycle(loader):
             yield b
 
 
+def multi_checkpoint_core(ck: Dict) -> Dict:
+    """The shared-core fields (core config overrides) of a multi-game
+    checkpoint: its ``core_config`` over the full saved config of its first
+    game — the network whose modules the core was — so that core fields newer
+    than the code that wrote ``core_config`` (e.g. moe_bias_clip) still come
+    from the checkpoint.  {} for a checkpoint with neither."""
+    games = ck.get("games") or []
+    first = (ck.get("configs") or {}).get(games[0]) if games else None
+    src = {**(first or {}), **(ck.get("core_config") or {})}
+    return core_config_overrides(src) if src else {}
+
+
 def load_core_checkpoint(path: str):
     """(core_state, core config overrides) from a multi-game checkpoint
-    (``core_state`` + ``core_config``) or a single-game one (``model_state``
-    + ``config``; its core keys are extracted)."""
+    (``core_state`` + its core fields, :func:`multi_checkpoint_core`) or a
+    single-game one (``model_state`` + ``config``; its core keys are
+    extracted)."""
     ck = torch.load(path, map_location="cpu", weights_only=False)
     if "core_state" in ck:
-        return ck["core_state"], core_config_overrides(ck["core_config"])
+        return ck["core_state"], multi_checkpoint_core(ck)
     state = {k: v for k, v in ck["model_state"].items() if is_core_key(k)}
     return state, core_config_overrides(upgrade_config_dict(ck["config"]))
 
@@ -941,8 +954,7 @@ def main(argv=None) -> Dict[str, object]:
         # --init_core: every core field is the checkpoint's, and an
         # --override that contradicts it would reshape the core under the
         # old games' weights or split it from the new games'
-        src = resume.get("core_config") or (resume.get("configs") or {}).get(ck_games[0])
-        ck_core = core_config_overrides(src) if src is not None else {}
+        ck_core = multi_checkpoint_core(resume)
         clash = {k: v for k, v in core_kw.items() if k in ck_core and ck_core[k] != v}
         if clash:
             have = {k: ck_core[k] for k in clash}

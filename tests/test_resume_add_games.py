@@ -353,6 +353,44 @@ def test_added_game_with_another_core_is_refused(source, shards, tmp_path, monke
         tmg.main(argv)
 
 
+@pytest.mark.parametrize("fmt", ["current", "older_core_config"])
+def test_added_game_takes_every_core_field_of_the_checkpoint(shards, tmp_path, fmt):
+    """moe_bias_clip is kept by the shared MoE modules at construction, and the
+    core the games share is the FIRST game's: a game added in front of the
+    --data order must be built with the checkpoint's value even when the resume
+    command line does not repeat the --override that set it (else the old
+    games' balance biases silently lose their clip), a contradicting --override
+    is refused, and --init_core takes it from the checkpoint the same way —
+    also from a checkpoint whose core_config predates the field (its games'
+    full configs carry it)."""
+    from model.components.core import moe_layers
+
+    src = tmp_path / "src"
+    tmg.main([*_args(shards, src, OLD, "--steps", "2", "--ckpt_every", "2"),
+              "moe_bias_clip=0.05"])
+    path = src / "multi_latest.pt"
+    if fmt == "older_core_config":
+        ck = _load(path)
+        ck["core_config"] = {k: v for k, v in ck["core_config"].items()
+                             if k not in ("moe_bias_clip", "trm_rms_eps")}
+        path = tmp_path / "older.pt"
+        torch.save(ck, path)
+    games = ORDERS["first"]
+    out = tmg.main(_args(shards, tmp_path / "res", games, "--steps", "2",
+                         "--resume", str(path)))
+    model = out["model"]
+    assert {g: model[g].cfg.moe_bias_clip for g in games} == dict.fromkeys(games, 0.05)
+    assert {m.bias_clip for m in moe_layers(model)} == {0.05}
+    with pytest.raises(SystemExit, match="contradicts the core"):
+        tmg.main([*_args(shards, tmp_path / "bad", games, "--steps", "2",
+                         "--resume", str(path)), "moe_bias_clip=0.2"])
+    # a new game around the brain (--init_core): the checkpoint's core fields
+    init = tmg.main(_args(shards, tmp_path / "init", [NEW], "--steps", "1",
+                          "--init_core", str(path)))["model"]
+    assert init[NEW].cfg.moe_bias_clip == 0.05
+    assert {m.bias_clip for m in moe_layers(init)} == {0.05}
+
+
 def test_changed_freeze_flags_are_refused(source, frozen_source, shards, tmp_path):
     games = ORDERS["middle"]
     with pytest.raises(SystemExit, match="frozen in this run"):
