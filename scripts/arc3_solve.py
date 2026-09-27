@@ -12,6 +12,9 @@ frequent colour) — the object-level abstraction of a click (7-65 per frame on 
 games).  The first sequence that completes the level is its (shortest, under that
 abstraction) solution; the next level starts from the state it reaches.  A level the
 budget (``--budget`` expansions, ``--max_depth``) cannot solve ends the game's search.
+An action the engine raises on is pruned like a game over (the level's
+``engine_errors``); a game whose search fails otherwise records ``"error"`` and the
+other games' searches go on.
 
     OPERATION_MODE=offline ENVIRONMENTS_DIR=... uv run python scripts/arc3_solve.py \\
         --games cd82 lf52 ls20 sb26 --budget 20000 --out data/arc3/solutions.json
@@ -97,13 +100,17 @@ def state_key(fd) -> bytes:
 
 
 def solve_level(game_obj, fd0, level: int, budget: int, max_depth: int, sdk
-                ) -> Tuple[Optional[List[Action]], Optional[object], Optional[object], int]:
+                ) -> Tuple[Optional[List[Action]], Optional[object], Optional[object], int, Dict]:
     """BFS from (game_obj, fd0) until levels_completed > level.  Returns (actions,
-    the solved game object, its frame data, expansions) or (None, None, None, n)."""
+    the solved game object, its frame data, expansions, engine errors) or (None, None,
+    None, n, errors).  An action the engine raises on is a dead end (the games' own
+    code fails on some states: ``RuntimeError: … not attached to …``); ``errors``
+    counts them with the first message."""
     _, ActionInput, GameAction, GameState = sdk
     queue = collections.deque([(game_obj, fd0, [])])
     seen = {state_key(fd0)}
     expanded = 0
+    errors: Dict = {"count": 0, "first": None}
     while queue and expanded < budget:
         g, fd, path = queue.popleft()
         if len(path) >= max_depth:
@@ -114,18 +121,25 @@ def solve_level(game_obj, fd0, level: int, budget: int, max_depth: int, sdk
             child = copy.deepcopy(g)
             t, x, y = act
             data = {"x": x, "y": y} if t == 6 else {}
-            nfd = child.perform_action(ActionInput(id=GameAction.from_id(t), data=data), raw=True)
             expanded += 1
+            try:
+                nfd = child.perform_action(ActionInput(id=GameAction.from_id(t), data=data),
+                                           raw=True)
+            except Exception as e:
+                errors["count"] += 1
+                if errors["first"] is None:
+                    errors["first"] = f"{type(e).__name__}: {e} (after {path + [act]})"
+                continue
             if nfd is None or nfd.state == GameState.GAME_OVER:
                 continue
             if int(nfd.levels_completed) > level:
-                return path + [act], child, nfd, expanded
+                return path + [act], child, nfd, expanded, errors
             k = state_key(nfd)
             if k in seen:
                 continue
             seen.add(k)
             queue.append((child, nfd, path + [act]))
-    return None, None, None, expanded
+    return None, None, None, expanded, errors
 
 
 def _save_partial(partial_dir: Optional[str], game: str, res: Dict) -> None:
@@ -141,7 +155,22 @@ def _save_partial(partial_dir: Optional[str], game: str, res: Dict) -> None:
 
 
 def solve_game(args) -> Tuple[str, Dict]:
+    """One game's levels in order; a failure outside the per-action dead ends (loading
+    the game, cloning a state) ends this game's search with ``"error"`` in its results
+    and leaves the other games' searches running."""
     game, budget, max_depth, env_dir, partial_dir = args
+    res: Dict = {"win_levels": 0, "levels": [], "unsolved_at": None}
+    try:
+        _solve_levels(game, budget, max_depth, env_dir, partial_dir, res)
+    except Exception as e:
+        res["error"] = f"{type(e).__name__}: {e}"
+        _save_partial(partial_dir, game, res)
+        print(f"[{game}] search failed: {res['error']}", flush=True)
+    return game, res
+
+
+def _solve_levels(game: str, budget: int, max_depth: int, env_dir, partial_dir,
+                  res: Dict) -> None:
     if env_dir:
         os.environ["ENVIRONMENTS_DIR"] = env_dir
     sdk = _sdk()
@@ -149,22 +178,26 @@ def solve_game(args) -> Tuple[str, Dict]:
     w = arc_agi.Arcade().make(game, seed=0)
     fd = w.reset()
     g = w._game
-    res = {"win_levels": int(fd.win_levels), "levels": [], "unsolved_at": None}
+    res["win_levels"] = int(fd.win_levels)
     for level in range(int(fd.win_levels)):
         t0 = time.time()
-        actions, g2, fd2, n = solve_level(g, fd, level, budget, max_depth, sdk)
+        actions, g2, fd2, n, errors = solve_level(g, fd, level, budget, max_depth, sdk)
+        row = {"level": level, "actions": None if actions is None else [list(a) for a in actions],
+               "expanded": n, "seconds": round(time.time() - t0, 1)}
+        if errors["count"]:
+            row["engine_errors"] = errors["count"]
+            row["first_engine_error"] = errors["first"]
+            print(f"[{game}] level {level}: {errors['count']} engine errors, first "
+                  f"{errors['first']}", flush=True)
+        res["levels"].append(row)
         if actions is None:
             res["unsolved_at"] = level
-            res["levels"].append({"level": level, "actions": None, "expanded": n,
-                                  "seconds": round(time.time() - t0, 1)})
+            _save_partial(partial_dir, game, res)
             break
-        res["levels"].append({"level": level, "actions": [list(a) for a in actions],
-                              "expanded": n, "seconds": round(time.time() - t0, 1)})
         _save_partial(partial_dir, game, res)
         g, fd = g2, fd2
         print(f"[{game}] level {level}: {len(actions)} actions ({n} expansions, "
               f"{time.time() - t0:.1f} s)", flush=True)
-    return game, res
 
 
 def main(argv=None) -> Dict:

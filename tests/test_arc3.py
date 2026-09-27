@@ -5,7 +5,8 @@
 Adapter (no SDK needed): cell ↔ (patch, cell-in-patch) round trip; the rollout's
 μ = sample()'s log-prob equals the replay's log π of the stored action (teacher-forced
 click, the compact masks the rollout sampled with); legality of every sampled action;
-greedy mode; il_head_terms decomposes il_loss.
+greedy mode; il_head_terms decomposes il_loss.  Solver (no SDK needed): an action the
+engine raises on is a dead end of the search, and a game that fails leaves results.
 Env / solver / pipeline (skipped without the SDK and the cached games,
 ``ENVIRONMENTS_DIR``): the frame schema, a known solution completes a level (reward
 1 / levels), game over forces a RESET, the action cap truncates, the per-reset game
@@ -171,6 +172,49 @@ def test_env_frames_rewards_and_resets():
 # ---------------------------------------------------------------------------
 # solver → shards → IL → RL
 # ---------------------------------------------------------------------------
+
+class _Frame:
+    """A 1×4 corridor frame: the agent's cell is 1, the level is won at cell 3."""
+
+    def __init__(self, pos):
+        import numpy as np
+        grid = np.zeros((1, 4), dtype=np.uint8)
+        grid[0, pos] = 1
+        self.frame, self.available_actions = [grid], [1, 2]
+        self.state, self.levels_completed = "PLAY", int(pos == 3)
+
+
+class _Corridor:
+    """ACTION1 steps right; ACTION2 makes the engine raise (a game's own code failing)."""
+
+    def __init__(self):
+        self.pos = 0
+
+    def perform_action(self, action, raw=True):
+        if action.id == 2:
+            raise RuntimeError("sprite not attached to its layer")
+        self.pos += 1
+        return _Frame(self.pos)
+
+
+_FAKE_SDK = (None, lambda id, data: type("A", (), {"id": id, "data": data})(),
+             type("GA", (), {"from_id": staticmethod(lambda t: t)}),
+             type("GS", (), {"GAME_OVER": "OVER"}))
+
+
+def test_solver_prunes_engine_errors_and_isolates_failed_games(monkeypatch):
+    from scripts import arc3_solve
+
+    actions, _, fd, n, errors = arc3_solve.solve_level(_Corridor(), _Frame(0), 0, 100, 10,
+                                                       _FAKE_SDK)
+    assert actions == [(1, 0, 0)] * 3 and fd.levels_completed == 1
+    assert errors["count"] == 2 and "not attached" in errors["first"]
+
+    def broken_sdk():
+        raise RuntimeError("cannot load the game")
+    monkeypatch.setattr(arc3_solve, "_sdk", broken_sdk)
+    game, res = arc3_solve.solve_game(("xx00", 10, 5, None, None))
+    assert game == "xx00" and res["levels"] == [] and "cannot load" in res["error"]
 
 @needs_sdk
 def test_solver_shards_il_and_rl(tmp_path, monkeypatch):
