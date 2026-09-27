@@ -114,6 +114,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import collections
 import copy
 import hashlib
 import json
@@ -1933,6 +1934,7 @@ class JointRLTrainer:
         G = self.rl_games
         share_sum = {g: 0.0 for g in G}
         n_steps = 0
+        t = self._phase_t
         with moe_load_counting(self.model):
             for epoch in range(a.epochs):
                 plan, counts = self._minibatch_plan(it, epoch)
@@ -1948,6 +1950,7 @@ class JointRLTrainer:
                     canary = epoch == 0 and m == 0
                     # first minibatch: each component's shared-core gradient norm
                     probe = _GradProbe(self.core_params) if canary and self.core_params else None
+                    t0 = self._clock()
                     for g in G:
                         idx = plan[m].get(g, [])
                         ss = self.rl[g].streams
@@ -1962,6 +1965,8 @@ class JointRLTrainer:
                                 skipped += 1
                         if probe is not None:
                             diag.add(g, gn_rl=probe.delta_norm(), gn_rl_n=1)
+                    t1 = self._clock()
+                    t["rl"] += t1 - t0
                     for g, scale in self._replay_draws():
                         loss = self._forward_tracked(g, diag,
                                                      lambda g=g: self._replay_loss(g, diag))
@@ -1972,7 +1977,10 @@ class JointRLTrainer:
                         if probe is not None:
                             diag.add(g, gn_replay=probe.delta_norm(), gn_replay_n=1)
                     del probe
+                    t2 = self._clock()
+                    t["replay"] += t2 - t1
                     ok, norm = self._step()
+                    t["step"] += self._clock() - t2
                     dropped += int(not ok)
                     norms.append(norm)
         return {"dropped": dropped, "nonfinite": skipped,
@@ -2001,12 +2009,17 @@ class JointRLTrainer:
         bias0 = [m.balance_bias.clone() for m in self.moe]
         self.model.eval()
         q_glob, q_rank = self._global_quotas()
+        self._phase_t = collections.defaultdict(float)
         self._rollouts(it, q_rank, diag)
         t_roll = time.time() - t0
+        t1 = self._clock()
         for g in self.rl_games:
             if self.rl[g].streams:
                 self._recompute(g)
+        t2 = self._clock()
+        self._phase_t["recompute"] += t2 - t1
         self._targets(diag)
+        self._phase_t["targets"] += self._clock() - t2
         epoch_stats = self._epochs(it, diag, q_glob)
         for m, b in zip(self.moe, bias0):
             if not torch.equal(m.balance_bias, b):
@@ -2054,9 +2067,18 @@ class JointRLTrainer:
             self._log(rec)
         return rec
 
+    def _clock(self) -> float:
+        """Wall time after the device's queued work (phase timings: the CUDA
+        kernels of a phase are asynchronous; a few syncs per minibatch)."""
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+        return time.time()
+
     def _record(self, diag: Diag, ep: Dict[str, Any], quotas: Dict[str, int],
                 rel: Optional[torch.Tensor], dt: float, t_roll: float) -> Dict[str, Any]:
         rec: Dict[str, Any] = {"iteration": self.iteration, "time": dt, "rollout_time": t_roll,
+                               "phase_time": {k: round(v, 2) for k, v in
+                                              getattr(self, "_phase_t", {}).items()},
                                "gnorm": ep["gnorm"], "dropped": ep["dropped"],
                                "nonfinite": ep["nonfinite"],
                                "moe_load_cv": float(rel.std(-1).mean()) if rel is not None
@@ -2105,7 +2127,9 @@ class JointRLTrainer:
         self.log(f"[it {rec['iteration']}/{self.args.iterations}] gnorm={f(rec['gnorm'])} "
                  f"dropped={rec['dropped']} nonfinite={rec['nonfinite']} "
                  f"moe_load_cv={f(rec['moe_load_cv'])} "
-                 f"({rec['time']:.1f}s, rollouts {rec['rollout_time']:.1f}s)")
+                 f"({rec['time']:.1f}s, rollouts {rec['rollout_time']:.1f}s"
+                 + "".join(f", {k} {v:.1f}s" for k, v in rec.get("phase_time", {}).items())
+                 + ")")
         for g, row in rec["games"].items():
             self.log(f"  {g}: " + " ".join(f"{k}={f(v)}" for k, v in row.items()))
 
