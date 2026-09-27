@@ -404,7 +404,7 @@ def test_the_format_table_is_the_converters():
 
     from data_processing.games.pokemon import FORMATS, format_id
 
-    src = open(os.path.join(ROOT, "data_processing", "rs", "gmdata", "src", "pokemon.rs")).read()
+    src = open(os.path.join(ROOT, "data_processing", "rs", "gmpokemon", "src", "lib.rs")).read()
     m = re.search(r"pub const FORMATS: \[&str; (\d+)\] = \[(.*?)\];", src, re.S)
     rust = tuple(re.findall(r'"([^"]*)"', m.group(2)))
     assert rust == FORMATS and int(m.group(1)) == len(FORMATS)

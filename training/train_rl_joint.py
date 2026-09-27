@@ -889,6 +889,24 @@ class MahjongSpec(RLGameSpec):
         return {"action_type": actions["action_type"].long(), "tile_idx": actions["tile_idx"].long()}
 
 
+class PokemonSpec(RLGameSpec):
+    """Pokémon Showdown (model/games/pokemon.py PokemonDecoder on env/vec_pokemon.py): the
+    rollout samples type → (move + tera | switch) under the request's legality (usable moves,
+    switchable slots, tera, the active slot and revealed moves as state); the replay
+    teacher-forces the stored type (the move / switch heads condition on it) under the same
+    stored legal dict, so log π_old = μ; the KL covers every head (``il_head_terms``: type,
+    move | move type, switch | switch type, tera | move type)."""
+
+    full_kl = True
+
+    def labels(self, actions, cfg):
+        return {"action_type": actions["action_type"].long()}
+
+    def kl_targets(self, actions, forced, cfg):
+        return {"action_type": actions["action_type"].long(), "move_id": actions["move_id"].long(),
+                "switch_idx": actions["switch_idx"].long(), "tera": actions["tera"].long()}
+
+
 class ShogiSpec(RLGameSpec):
     """The shogi move-or-drop decoder (model/games/shogi.py ShogiDecoder) on the gmrules
     shogi env (legal ``mode`` / ``from`` / ``to_cond`` / ``promo_cond`` / ``drop_piece`` /
@@ -941,6 +959,7 @@ GAME_SPECS: Dict[str, RLGameSpec] = {
     "arc3": Arc3Spec(),
     "hok": HokSpec(),
     "mahjong": MahjongSpec(),
+    "pokemon": PokemonSpec(),
 }
 
 

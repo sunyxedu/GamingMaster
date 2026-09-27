@@ -1,0 +1,11 @@
+[package]
+name = "gmpokemon"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Pokémon Showdown battle parser and frame encoder shared by the converter (gmdata) and the simulator (gmsim)"
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true

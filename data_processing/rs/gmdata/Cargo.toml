@@ -20,6 +20,7 @@ hdf5 = { package = "hdf5-metno", version = "0.15", optional = true, features = [
 gmshard = { path = "../gmshard" }
 gmrules = { path = "../gmrules" }
 gmmahjong = { path = "../gmmahjong" }
+gmpokemon = { path = "../gmpokemon" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

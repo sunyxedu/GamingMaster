@@ -179,7 +179,7 @@ ABILITY_VOCAB_SIZE = VOCAB.n_abilities
 TYPE_VOCAB_SIZE = VOCAB.n_types
 
 #: the formats of converter v5's ``obs.format_id`` (append-only; the same table as
-#: ``FORMATS`` in data_processing/rs/gmdata/src/pokemon.rs, pinned by
+#: ``FORMATS`` in data_processing/rs/gmpokemon/src/lib.rs, pinned by
 #: tests/test_pokemon_vocab.py): Gen 9 6v6 singles with the standard mechanics. 0 = a
 #: format outside the table
 FORMATS = ("", "gen9ou", "gen9uu", "gen9ru", "gen9nu", "gen9pu", "gen9zu", "gen9lc", "gen9ubers",

@@ -338,6 +338,13 @@ def _make_mahjong(n_envs: int = 1, **kw) -> VecGameEnv:
     return MahjongVecEnv(n_envs, **kw)
 
 
+def _make_pokemon(n_envs: int = 1, **kw) -> VecGameEnv:
+    """Pokémon Showdown battles (Showdown's simulator in Node workers; frames from the
+    converter's parser)."""
+    from env.vec_pokemon import PokemonVecEnv
+    return PokemonVecEnv(n_envs, **kw)
+
+
 def _make_hok(n_envs: int = 1, **kw) -> VecGameEnv:
     """Needs Tencent's Honor of Kings research environment (HOK_ROOT: the SDK venv, Wine,
     the licensed gamecore)."""
@@ -354,6 +361,7 @@ VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
     "arc3": _make_arc3,
     "hok": _make_hok,
     "mahjong": _make_mahjong,
+    "pokemon": _make_pokemon,
 }
 
 

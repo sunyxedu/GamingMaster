@@ -574,6 +574,49 @@ impl MahjongSim {
     }
 }
 
+/// The frame of a live Pokémon Showdown request (gmpokemon::live_frame: the converter's frame
+/// of that request): `log` = the battle's sim protocol so far, `side` 0 / 1, `phase` "turn" /
+/// "forced" / "preview", `format` its format id (Showdown's toID: "gen9ou").  Returns the obs
+/// tensors as bytearrays (species_ids / move_ids / slot_moves / slot_item / slot_ability /
+/// slot_tera_type i64, poke_feats / field_seq f32, slot_mask / slot_no_item u8, format_id i64)
+/// and `slots` — the side's (nickname, species) per slot, `active` its active slot (−1: none).
+#[pyfunction]
+fn pokemon_live_frame<'py>(py: Python<'py>, log: &str, side: usize, phase: &str, format: &str) -> PyResult<Bound<'py, PyDict>> {
+    use gmpokemon::{frame_ids, live_frame, parse_log, slot_idents, Phase, UnkNames};
+    if side > 1 {
+        return Err(PyValueError::new_err(format!("side {side} is not 0 / 1")));
+    }
+    let ph = match phase {
+        "turn" => Phase::Turn,
+        "forced" => Phase::Forced,
+        "preview" => Phase::Preview,
+        _ => return Err(PyValueError::new_err(format!("phase {phase:?}: turn / forced / preview"))),
+    };
+    let (rec, slots) = py.detach(|| {
+        let p = parse_log(log);
+        let slots = slot_idents(&p.battle, side);
+        let _ = live_frame; // the same as snapshot(parse_log(log).battle, ..), parsed once here
+        (gmpokemon::snapshot(&p.battle, side, ph), slots)
+    });
+    let f = &rec.frame;
+    let ids = frame_ids(f, &mut UnkNames::default());
+    let d = PyDict::new(py);
+    d.set_item("species_ids", bytearray(py, &ids.species))?;
+    d.set_item("move_ids", bytearray(py, &ids.moves))?;
+    d.set_item("poke_feats", bytearray(py, &f.feats))?;
+    d.set_item("slot_mask", bytearray(py, &f.mask.iter().map(|&b| b as u8).collect::<Vec<u8>>()))?;
+    d.set_item("field_seq", bytearray(py, &f.field))?;
+    d.set_item("slot_moves", bytearray(py, &ids.slot_moves))?;
+    d.set_item("slot_item", bytearray(py, &ids.slot_item))?;
+    d.set_item("slot_no_item", bytearray(py, &f.slot_no_item.iter().map(|&b| b as u8).collect::<Vec<u8>>()))?;
+    d.set_item("slot_ability", bytearray(py, &ids.slot_ability))?;
+    d.set_item("slot_tera_type", bytearray(py, &ids.slot_tera))?;
+    d.set_item("format_id", gmpokemon::format_id(format))?;
+    d.set_item("active", f.active)?;
+    d.set_item("slots", slots)?;
+    Ok(d)
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(games, m)?)?;
@@ -585,5 +628,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Sim>()?;
     m.add_class::<State>()?;
     m.add_class::<MahjongSim>()?;
+    m.add_function(wrap_pyfunction!(pokemon_live_frame, m)?)?;
     Ok(())
 }
