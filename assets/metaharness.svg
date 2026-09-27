@@ -1,0 +1,209 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="750" viewBox="0 0 2000 750" role="img"><title>The Meta-Harness pipeline</title><desc>From a game name: a study agent researches the game on the web and writes study documents; an adapt agent writes a game adaptor validated by a generic smoke test; the harness search loop has a proposer write harness candidates, pre-flights them with stand-in models, evaluates them with real models on the game clock, archives code, traces and scores, and ranks them; the best harness is evaluated on unseen seeds and an unseen game.</desc><defs><marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3d74d9"/></marker><marker id="ahg" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#57606a"/></marker><linearGradient id="lat" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#7fb6ff"/><stop offset="0.5" stop-color="#4a7fd4"/><stop offset="1" stop-color="#e5382e"/></linearGradient></defs><rect width="2000" height="750" fill="#ffffff"/><text x="130" y="56" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="30" font-weight="600" fill="#1f2328" text-anchor="middle">Game name</text>
+<text x="465" y="56" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="30" font-weight="600" fill="#1f2328" text-anchor="middle">Study</text>
+<text x="855" y="56" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="30" font-weight="600" fill="#1f2328" text-anchor="middle">Adapt</text>
+<text x="1420" y="56" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="30" font-weight="600" fill="#1f2328" text-anchor="middle">Harness Search</text>
+<text x="1895" y="56" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="30" font-weight="600" fill="#1f2328" text-anchor="middle">Held-out</text>
+<ellipse cx="130" cy="190" rx="112" ry="58" fill="#fff" stroke="#6aa84f" stroke-width="2"/>
+<text x="130" y="198" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="24" font-weight="400" fill="#1f2328" text-anchor="middle">"Minecraft"</text>
+<polyline points="130,250 130,300" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="25" y="305" width="210" height="250" rx="20" fill="#ffffff" stroke="#6aa84f" stroke-width="1.6"/>
+<text x="45" y="345" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#d73a49">--notes</tspan></text>
+<text x="45" y="375" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" font-weight="400" fill="#1f2328" text-anchor="start">"Java 1.21 server</text>
+<text x="45" y="400" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" font-weight="400" fill="#1f2328" text-anchor="start"> on localhost"</text>
+<text x="45" y="450" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#d73a49">.env</tspan></text>
+<text x="45" y="480" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" font-weight="400" fill="#57606a" text-anchor="start">credentials,</text>
+<text x="45" y="505" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" font-weight="400" fill="#57606a" text-anchor="start">never in code</text>
+<text x="130" y="612" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="26" font-weight="400" fill="#1f2328" text-anchor="middle">Input</text>
+<polygon points="243.0,419.2 256.5,419.2 256.5,413.0 285.0,430.0 256.5,447.0 256.5,440.8 243.0,440.8" fill="#4a7fd4"/>
+<rect x="300" y="110" width="118" height="92" fill="#ece4f7"/>
+<line x1="329.5" y1="130.2" x2="361.4" y2="121.0" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="130.2" x2="361.4" y2="146.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="130.2" x2="361.4" y2="172.6" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="130.2" x2="361.4" y2="192.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="157.8" x2="361.4" y2="121.0" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="157.8" x2="361.4" y2="146.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="157.8" x2="361.4" y2="172.6" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="157.8" x2="361.4" y2="192.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="183.6" x2="361.4" y2="121.0" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="183.6" x2="361.4" y2="146.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="183.6" x2="361.4" y2="172.6" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="329.5" y1="183.6" x2="361.4" y2="192.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="361.4" y1="121.0" x2="394.4" y2="142.2" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="361.4" y1="121.0" x2="394.4" y2="169.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="361.4" y1="146.8" x2="394.4" y2="142.2" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="361.4" y1="146.8" x2="394.4" y2="169.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="361.4" y1="172.6" x2="394.4" y2="142.2" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="361.4" y1="172.6" x2="394.4" y2="169.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="361.4" y1="192.8" x2="394.4" y2="142.2" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="361.4" y1="192.8" x2="394.4" y2="169.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<circle cx="329.5" cy="130.2" r="7.8" fill="#7b3fbf"/>
+<circle cx="329.5" cy="157.8" r="7.8" fill="#7b3fbf"/>
+<circle cx="329.5" cy="183.6" r="7.8" fill="#7b3fbf"/>
+<circle cx="361.4" cy="121.0" r="7.8" fill="#7b3fbf"/>
+<circle cx="361.4" cy="146.8" r="7.8" fill="#7b3fbf"/>
+<circle cx="361.4" cy="172.6" r="7.8" fill="#7b3fbf"/>
+<circle cx="361.4" cy="192.8" r="7.8" fill="#7b3fbf"/>
+<circle cx="394.4" cy="142.2" r="7.8" fill="#7b3fbf"/>
+<circle cx="394.4" cy="169.8" r="7.8" fill="#7b3fbf"/>
+<text x="359" y="228" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#1f2328" text-anchor="middle">Astra</text>
+<text x="359" y="250" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">agentic</text>
+<circle cx="575" cy="156" r="40" fill="#fff" stroke="#1f2328" stroke-width="2.6"/>
+<ellipse cx="575" cy="156" rx="18.0" ry="40" fill="none" stroke="#1f2328" stroke-width="2.2"/>
+<line x1="540.4" y1="136.0" x2="609.6" y2="136.0" stroke="#1f2328" stroke-width="2.2"/>
+<line x1="535.0" y1="156.0" x2="615.0" y2="156.0" stroke="#1f2328" stroke-width="2.2"/>
+<line x1="540.4" y1="176.0" x2="609.6" y2="176.0" stroke="#1f2328" stroke-width="2.2"/>
+<polyline points="425,156 528,156" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="404.0" y="115.5" width="144.0" height="25" rx="3" fill="#c9f5e3"/>
+<text x="476" y="133.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">live web search</text>
+<text x="575" y="228" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">docs, APIs,</text>
+<text x="575" y="250" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">community play</text>
+<polyline points="359,262 359,300" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="402.2" y="268.5" width="135.6" height="25" rx="3" fill="#c9f5e3"/>
+<text x="470" y="286.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">write findings</text>
+<rect x="292" y="305" width="350" height="250" rx="20" fill="#ffffff" stroke="#6aa84f" stroke-width="1.6"/>
+<text x="312" y="342" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#d73a49">brief.md</tspan><tspan>      rules, pace</tspan></text>
+<text x="312" y="370" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#d73a49">interfaces.md</tspan><tspan> how to drive it</tspan></text>
+<text x="312" y="398" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#d73a49">strategies.md</tspan><tspan> what experts do</tspan></text>
+<text x="312" y="434" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#d73a49">study.json</tspan></text>
+<text x="312" y="460" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>{ "tier": </tspan><tspan fill="#0550ae">2</tspan><tspan>,</tspan></text>
+<text x="312" y="485" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>  "decision_latency_s": </tspan><tspan fill="#0550ae">0.5</tspan><tspan>,</tspan></text>
+<text x="312" y="510" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>  "interface": </tspan><tspan fill="#0a7d34">"bot library"</tspan><tspan> }</tspan></text>
+<text x="467" y="612" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="26" font-weight="400" fill="#1f2328" text-anchor="middle">Study documents</text>
+<polygon points="650.0,419.2 663.5,419.2 663.5,413.0 692.0,430.0 663.5,447.0 663.5,440.8 650.0,440.8" fill="#4a7fd4"/>
+<polygon points="780.0,124.8 787.8,116.8 795.3,119.0 797.3,130.1 802.1,133.9 813.3,133.8 817.0,140.7 810.6,149.9 811.2,156.0 819.2,163.8 817.0,171.3 805.9,173.3 802.1,178.1 802.2,189.3 795.3,193.0 786.1,186.6 780.0,187.2 772.2,195.2 764.7,193.0 762.7,181.9 757.9,178.1 746.7,178.2 743.0,171.3 749.4,162.1 748.8,156.0 740.8,148.2 743.0,140.7 754.1,138.7 757.9,133.9 757.8,122.7 764.7,119.0 773.9,125.4" fill="#ffffff" stroke="#1f2328" stroke-width="2.6" stroke-linejoin="round"/>
+<circle cx="780" cy="156" r="12.0" fill="#ffffff" stroke="#1f2328" stroke-width="2.6"/>
+<text x="780" y="228" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">validate_adaptor</text>
+<text x="780" y="250" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">generic smoke test</text>
+<path d="M915,122 h36.4 l15.6,15.6 v50.4 h-52 z" fill="#ddeefe" stroke="#5b9bd5" stroke-width="2"/>
+<path d="M951.4,122 v15.6 h15.6" fill="none" stroke="#5b9bd5" stroke-width="2"/>
+<line x1="923" y1="145.6" x2="959" y2="145.6" stroke="#5b9bd5" stroke-width="2" stroke-linecap="round"/>
+<line x1="923" y1="154.6" x2="959" y2="154.6" stroke="#5b9bd5" stroke-width="2" stroke-linecap="round"/>
+<line x1="923" y1="163.6" x2="959" y2="163.6" stroke="#5b9bd5" stroke-width="2" stroke-linecap="round"/>
+<text x="941" y="228" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">NEEDS.md</text>
+<text x="941" y="250" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">when you must act</text>
+<polyline points="822,156 908,156" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="827.6" y="105.5" width="76.8" height="25" rx="3" fill="#c9f5e3"/>
+<text x="866" y="123.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">blocked</text>
+<polyline points="760,300 760,262" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<polyline points="800,262 800,300" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="678.4" y="268.5" width="43.2" height="25" rx="3" fill="#c9f5e3"/>
+<text x="700" y="286.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">run</text>
+<rect x="824.8" y="268.5" width="110.4" height="25" rx="3" fill="#c9f5e3"/>
+<text x="880" y="286.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">feedback ×4</text>
+<rect x="700" y="305" width="312" height="250" rx="20" fill="#ffffff" stroke="#6aa84f" stroke-width="1.6"/>
+<text x="720" y="342" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#57606a"># adaptor/game.py</tspan></text>
+<text x="720" y="370" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#cf222e">class </tspan><tspan font-weight="700">Game</tspan><tspan>:</tspan></text>
+<text x="720" y="396" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>  tick_s = </tspan><tspan fill="#0550ae">0.05</tspan></text>
+<text x="720" y="422" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#cf222e">  def </tspan><tspan fill="#d73a49">reset</tspan><tspan>(seed)</tspan></text>
+<text x="720" y="448" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#cf222e">  def </tspan><tspan fill="#d73a49">observe</tspan><tspan>() -&gt; json</tspan></text>
+<text x="720" y="474" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#cf222e">  def </tspan><tspan fill="#d73a49">tick</tspan><tspan>(action)</tspan></text>
+<text x="720" y="500" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#cf222e">  def </tspan><tspan fill="#d73a49">describe</tspan><tspan>()</tspan></text>
+<text x="720" y="526" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>  score, done</tspan></text>
+<text x="856" y="612" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="26" font-weight="400" fill="#1f2328" text-anchor="middle">Game adaptor</text>
+<polygon points="1020.0,419.2 1033.5,419.2 1033.5,413.0 1062.0,430.0 1033.5,447.0 1033.5,440.8 1020.0,440.8" fill="#4a7fd4"/>
+<rect x="1090" y="110" width="118" height="92" fill="#ece4f7"/>
+<line x1="1119.5" y1="130.2" x2="1151.4" y2="121.0" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="130.2" x2="1151.4" y2="146.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="130.2" x2="1151.4" y2="172.6" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="130.2" x2="1151.4" y2="192.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="157.8" x2="1151.4" y2="121.0" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="157.8" x2="1151.4" y2="146.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="157.8" x2="1151.4" y2="172.6" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="157.8" x2="1151.4" y2="192.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="183.6" x2="1151.4" y2="121.0" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="183.6" x2="1151.4" y2="146.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="183.6" x2="1151.4" y2="172.6" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1119.5" y1="183.6" x2="1151.4" y2="192.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1151.4" y1="121.0" x2="1184.4" y2="142.2" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1151.4" y1="121.0" x2="1184.4" y2="169.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1151.4" y1="146.8" x2="1184.4" y2="142.2" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1151.4" y1="146.8" x2="1184.4" y2="169.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1151.4" y1="172.6" x2="1184.4" y2="142.2" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1151.4" y1="172.6" x2="1184.4" y2="169.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1151.4" y1="192.8" x2="1184.4" y2="142.2" stroke="#7b3fbf" stroke-width="2.2"/>
+<line x1="1151.4" y1="192.8" x2="1184.4" y2="169.8" stroke="#7b3fbf" stroke-width="2.2"/>
+<circle cx="1119.5" cy="130.2" r="7.8" fill="#7b3fbf"/>
+<circle cx="1119.5" cy="157.8" r="7.8" fill="#7b3fbf"/>
+<circle cx="1119.5" cy="183.6" r="7.8" fill="#7b3fbf"/>
+<circle cx="1151.4" cy="121.0" r="7.8" fill="#7b3fbf"/>
+<circle cx="1151.4" cy="146.8" r="7.8" fill="#7b3fbf"/>
+<circle cx="1151.4" cy="172.6" r="7.8" fill="#7b3fbf"/>
+<circle cx="1151.4" cy="192.8" r="7.8" fill="#7b3fbf"/>
+<circle cx="1184.4" cy="142.2" r="7.8" fill="#7b3fbf"/>
+<circle cx="1184.4" cy="169.8" r="7.8" fill="#7b3fbf"/>
+<text x="1149" y="228" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#1f2328" text-anchor="middle">Proposer</text>
+<text x="1149" y="250" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">Astra as coding agent</text>
+<polygon points="1345.0,124.8 1352.8,116.8 1360.3,119.0 1362.3,130.1 1367.1,133.9 1378.3,133.8 1382.0,140.7 1375.6,149.9 1376.2,156.0 1384.2,163.8 1382.0,171.3 1370.9,173.3 1367.1,178.1 1367.2,189.3 1360.3,193.0 1351.1,186.6 1345.0,187.2 1337.2,195.2 1329.7,193.0 1327.7,181.9 1322.9,178.1 1311.7,178.2 1308.0,171.3 1314.4,162.1 1313.8,156.0 1305.8,148.2 1308.0,140.7 1319.1,138.7 1322.9,133.9 1322.8,122.7 1329.7,119.0 1338.9,125.4" fill="#ffffff" stroke="#1f2328" stroke-width="2.6" stroke-linejoin="round"/>
+<circle cx="1345" cy="156" r="12.0" fill="#ffffff" stroke="#1f2328" stroke-width="2.6"/>
+<text x="1345" y="228" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#1f2328" text-anchor="middle">pre-flight</text>
+<text x="1345" y="250" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">stand-in models</text>
+<polygon points="1510.0,124.8 1517.8,116.8 1525.3,119.0 1527.3,130.1 1532.1,133.9 1543.3,133.8 1547.0,140.7 1540.6,149.9 1541.2,156.0 1549.2,163.8 1547.0,171.3 1535.9,173.3 1532.1,178.1 1532.2,189.3 1525.3,193.0 1516.1,186.6 1510.0,187.2 1502.2,195.2 1494.7,193.0 1492.7,181.9 1487.9,178.1 1476.7,178.2 1473.0,171.3 1479.4,162.1 1478.8,156.0 1470.8,148.2 1473.0,140.7 1484.1,138.7 1487.9,133.9 1487.8,122.7 1494.7,119.0 1503.9,125.4" fill="#ffffff" stroke="#1f2328" stroke-width="2.6" stroke-linejoin="round"/>
+<circle cx="1510" cy="156" r="12.0" fill="#ffffff" stroke="#1f2328" stroke-width="2.6"/>
+<circle cx="1540" cy="188" r="14" fill="#fff" stroke="#1f2328" stroke-width="2.4"/>
+<polyline points="1540,179.32 1540,188 1547.0,191.92" fill="none" stroke="#1f2328" stroke-width="2.4" stroke-linecap="round"/>
+<text x="1510" y="228" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#1f2328" text-anchor="middle">evaluate</text>
+<text x="1510" y="250" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">real models, clock</text>
+<path d="M1647.0,126.56 a33.0,10.56 0 0,0 66,0 v22.666666666666668 a33.0,10.56 0 0,1 -66,0 z" fill="#111"/>
+<ellipse cx="1680" cy="126.56" rx="33.0" ry="10.56" fill="#111" stroke="#fff" stroke-width="2"/>
+<circle cx="1704.0" cy="141.89333333333335" r="2.6" fill="#fff"/>
+<path d="M1647.0,153.22666666666666 a33.0,10.56 0 0,0 66,0 v22.666666666666668 a33.0,10.56 0 0,1 -66,0 z" fill="#111"/>
+<ellipse cx="1680" cy="153.22666666666666" rx="33.0" ry="10.56" fill="#111" stroke="#fff" stroke-width="2"/>
+<circle cx="1704.0" cy="168.56" r="2.6" fill="#fff"/>
+<path d="M1647.0,179.89333333333335 a33.0,10.56 0 0,0 66,0 v22.666666666666668 a33.0,10.56 0 0,1 -66,0 z" fill="#111"/>
+<ellipse cx="1680" cy="179.89333333333335" rx="33.0" ry="10.56" fill="#111" stroke="#fff" stroke-width="2"/>
+<circle cx="1704.0" cy="195.2266666666667" r="2.6" fill="#fff"/>
+<text x="1680" y="228" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#1f2328" text-anchor="middle">archive</text>
+<text x="1680" y="250" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="17" font-weight="400" fill="#57606a" text-anchor="middle">code + traces</text>
+<polyline points="1212,156 1300,156" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="1234.4" y="105.5" width="43.2" height="25" rx="3" fill="#c9f5e3"/>
+<text x="1256" y="123.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">new</text>
+<polyline points="1387,156 1462,156" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="1407.6" y="105.5" width="34.8" height="25" rx="3" fill="#c9f5e3"/>
+<text x="1425" y="123.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">ok</text>
+<polyline points="1552,156 1638,156" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="1561.8" y="105.5" width="68.4" height="25" rx="3" fill="#c9f5e3"/>
+<text x="1596" y="123.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">scores</text>
+<polyline points="1680,108 1680,84 1149,84 1149,106" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="1200.2" y="71.5" width="429.6" height="25" rx="3" fill="#c9f5e3"/>
+<text x="1415" y="89.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">read everything, diagnose, propose one hypothesis</text>
+<polyline points="1149,262 1149,300" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="1189.0" y="268.5" width="60.0" height="25" rx="3" fill="#c9f5e3"/>
+<text x="1219" y="286.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">write</text>
+<polyline points="1680,262 1680,300" fill="none" stroke="#3d74d9" stroke-width="1.8" stroke-dasharray="2.5 4" stroke-linecap="round" marker-end="url(#ah)"/>
+<rect x="1714.2" y="268.5" width="51.6" height="25" rx="3" fill="#c9f5e3"/>
+<text x="1740" y="286.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">rank</text>
+<rect x="1080" y="305" width="380" height="250" rx="20" fill="#ffffff" stroke="#6aa84f" stroke-width="1.6"/>
+<text x="1098" y="342" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#57606a"># candidates/0003/harness.py</tspan></text>
+<text x="1098" y="370" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#cf222e">def </tspan><tspan font-weight="700">run_episode</tspan><tspan>(self, game):</tspan></text>
+<text x="1098" y="396" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>  goal = ctx.</tspan><tspan fill="#d73a49">spawn</tspan><tspan>(plan)</tspan></text>
+<text x="1098" y="422" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#cf222e">  while not </tspan><tspan>ctx.done:</tspan></text>
+<text x="1098" y="448" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>    menu = options(obs, goal)</tspan></text>
+<text x="1098" y="474" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>    a = ctx.</tspan><tspan fill="#d73a49">decide</tspan><tspan>(state, menu)</tspan></text>
+<text x="1098" y="500" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>    ctx.</tspan><tspan fill="#d73a49">act</tspan><tspan>(a)</tspan></text>
+<text x="1098" y="526" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>    ctx.</tspan><tspan fill="#d73a49">wait_for_tick</tspan><tspan>()</tspan></text>
+<text x="1270" y="612" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="26" font-weight="400" fill="#1f2328" text-anchor="middle">Harness candidates</text>
+<polygon points="1468.0,419.2 1481.5,419.2 1481.5,413.0 1510.0,430.0 1481.5,447.0 1481.5,440.8 1468.0,440.8" fill="#4a7fd4"/>
+<text x="1530" y="350" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan fill="#57606a">            stale score</tspan></text>
+<rect x="1522" y="364" width="250" height="30" fill="#e6e6e6"/>
+<text x="1530" y="386" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>jev only    38%  15.3</tspan></text>
+<text x="1530" y="420" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>astra only  93%   6.3</tspan></text>
+<text x="1530" y="454" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>0002         0%  20.0</tspan></text>
+<rect x="1522" y="468" width="250" height="30" fill="#5fe35f"/>
+<text x="1530" y="490" font-family="'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="17" fill="#1f2328" text-anchor="start" xml:space="preserve"><tspan>0003         0%  </tspan><tspan fill="#d73a49" font-weight="700">26.7</tspan></text>
+<text x="1530" y="530" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#57606a" text-anchor="start">+ Jev→act, Astra→act,</text>
+<text x="1530" y="551" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#57606a" text-anchor="start">latency p50 / max</text>
+<text x="1648" y="612" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="26" font-weight="400" fill="#1f2328" text-anchor="middle">Leaderboard</text>
+<polygon points="1780.0,419.2 1791.5,419.2 1791.5,413.0 1820.0,430.0 1791.5,447.0 1791.5,440.8 1780.0,440.8" fill="#4a7fd4"/>
+<rect x="1775.2" y="382.5" width="51.6" height="25" rx="3" fill="#c9f5e3"/>
+<text x="1801" y="400.4" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#e5382e" text-anchor="middle">best</text>
+<rect x="1828" y="305" width="150" height="250" rx="20" fill="#ffffff" stroke="#6aa84f" stroke-width="1.6"/>
+<text x="1903" y="350" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" font-weight="400" fill="#57606a" text-anchor="middle">unseen</text>
+<text x="1903" y="376" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#1f2328" text-anchor="middle">seeds</text>
+<text x="1903" y="430" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" font-weight="400" fill="#57606a" text-anchor="middle">unseen</text>
+<text x="1903" y="456" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="20" font-weight="600" fill="#1f2328" text-anchor="middle">game</text>
+<text x="1903" y="505" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#57606a" text-anchor="middle">never used</text>
+<text x="1903" y="526" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#57606a" text-anchor="middle">for selection</text>
+<text x="1903" y="612" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="26" font-weight="400" fill="#1f2328" text-anchor="middle">Generality</text>
+<line x1="25" y1="648" x2="1975" y2="648" stroke="#d0d7de" stroke-width="1.2"/>
+<text x="1000" y="690" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" fill="#1f2328" text-anchor="middle" xml:space="preserve"><tspan>Every phase is resumable under </tspan><tspan fill="#d73a49">runs/&lt;game&gt;/</tspan><tspan> · nothing game-specific is written by hand · the proposer sees only the archive and the public interface</tspan></text>
+<text x="1000" y="724" font-family="-apple-system, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" fill="#1f2328" text-anchor="middle" xml:space="preserve"><tspan fill="#57606a">Scores are honest: a tick without a fresh decision replays the last action, and that stale tick is counted</tspan></text></svg>
