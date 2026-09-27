@@ -72,12 +72,13 @@ GAME_OVERRIDES = {
     "clash_royale": dict(arena_h=8, arena_w=6, n_cards=20),
     "hearthstone": dict(hand_slots=5, board_slots=3),
     "starcraft": dict(minimap_h=16, minimap_w=16, max_units=6),
+    "arc3": dict(arc_patch=8),
 }
 
 #: games with a normalised conv encoder (cfg.encoder_norm): per-frame GroupNorm
 #: by default, BatchNorm2d on batch statistics in train mode under "batch"
 CONV_ENCODER_GAMES = frozenset({"generals", "chess", "go", "othello", "gomoku", "shogi", "lux",
-                                "clash_royale", "starcraft", "breakthrough",
+                                "clash_royale", "starcraft", "breakthrough", "arc3",
                                 "chess_variants", "xiangqi"})
 #: cfg.encoder_norm values: the default, and the legacy layout
 NORMS = ("group", "batch")
@@ -190,6 +191,11 @@ def _obs(game: str, cfg, g: torch.Generator) -> Dict[str, torch.Tensor]:
         return {"minimap_seq": r(cfg.minimap_channels, cfg.minimap_h, cfg.minimap_w),
                 "units_seq": r(cfg.max_units, cfg.unit_feature_dim), "unit_mask": mask,
                 "globals_seq": r(cfg.sc_global_features)}
+    if game == "arc3":
+        G = cfg.arc_grid
+        return {"grid": torch.randint(0, cfg.arc_colours, (B, T, G, G), generator=g).to(torch.uint8),
+                "delta": torch.rand(B, T, G, G, generator=g) < 0.1,
+                "globals": torch.rand(B, T, cfg.arc_global_features, generator=g)}
     raise KeyError(game)
 
 
@@ -244,6 +250,8 @@ def _legal(game: str, cfg, obs, g) -> Optional[Dict[str, torch.Tensor]]:
         return {"action_type": m(cfg.n_action_types), "actor": m(cfg.max_units),
                 "target_unit": m(cfg.max_units),
                 "location": m((cfg.minimap_h // d) * (cfg.minimap_w // d))}
+    if game == "arc3":
+        return {"type": m(8), "click": m(cfg.arc_grid * cfg.arc_grid)}
     raise KeyError(game)
 
 
@@ -269,6 +277,8 @@ def _label_highs(game: str, cfg) -> Dict[str, int]:
         return {"action_type": 8}
     if game == "pokemon":
         return {"action_type": cfg.n_action_types, "active_idx": cfg.team_slots}
+    if game == "arc3":
+        return {"click_idx": cfg.arc_grid * cfg.arc_grid}
     return {}
 
 
@@ -658,6 +668,8 @@ def _conditioned_on_sample(game: str, key: str) -> bool:
              "xiangqi": ("from_logits",),
              "starcraft": ("type_logits",), "hearthstone": ("type_logits",),
              "clash_royale": ("wait_logits", "card_logits"), "mahjong": ("type_logits",),
+             # the cell head conditions on the committed (sampled) patch
+             "arc3": ("type_logits", "patch_logits"),
              # the move / switch heads condition on the sampled type; tera does not
              "pokemon": ("action_type_logits", "tera_logit")}
     return game in first and key not in first[game]

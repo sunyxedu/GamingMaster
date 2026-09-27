@@ -26,6 +26,7 @@ GAME_OVERRIDES = {
     "clash_royale": dict(arena_h=8, arena_w=6, n_cards=20),
     "hearthstone": {},
     "starcraft": dict(minimap_h=16, minimap_w=16, max_units=8),
+    "arc3": dict(arc_patch=8),
 }
 # gmrules games register themselves (model/games/gmrules/): every one
 # must build with its simulator's frame dims

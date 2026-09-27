@@ -90,6 +90,8 @@ LABEL_KEYS = {
     # active_idx is state (which own slot is on the field), delivered via
     # labels because the observer-view converter stores it in tgt.
     "pokemon": ("action_type", "active_idx"),
+    # the cell head conditions on the clicked patch (model/games/arc3.py)
+    "arc3": ("click_idx",),
 }
 
 # STATE keys are facts about the position, not decisions: the decoder
@@ -172,6 +174,8 @@ META_ARCH_KEYS = {
     "shogi": {"global_features": ("shogi_global_features",)},
     "lux": {"global_features": ("lux_global_features",),
             "sap_range": ("lux_sap_range",)},
+    # ARC-AGI-3 trajectories (scripts/arc3_solve.py): the globals width and the grid
+    "arc3": {"global_features": ("arc_global_features",), "grid": ("arc_grid",)},
 }
 
 # gmrules games (one module each in model/games/gmrules/): candidate-action games

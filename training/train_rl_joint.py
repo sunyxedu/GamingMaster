@@ -569,6 +569,37 @@ class GoSpec(RLGameSpec):
         return terms
 
 
+class Arc3Spec(RLGameSpec):
+    """ARC-AGI-3 (model/games/arc3.py Arc3Decoder on env/vec_arc3.py): the rollout
+    samples type → (ACTION6) patch → cell under the env's tables; the replay
+    teacher-forces the stored click (the cell head conditions on its patch) under the
+    masks the rollout sampled with (``arc3_replay_legal``: type [8], patch [P²], the
+    stored patch's cells [p²]), so log π_old = μ; full-head KL (type, patch, cell).
+    The env is checked against the network (grid size, globals width)."""
+
+    full_kl = True
+
+    def check_env(self, env, net):
+        cfg = net.cfg
+        schema = env.obs_schema()
+        have = (tuple(schema["grid"][0]), tuple(schema["globals"][0]))
+        want = ((cfg.arc_grid, cfg.arc_grid), (cfg.arc_global_features,))
+        if have != want:
+            raise SystemExit(f"arc3 env emits grid / globals {have}, the network expects {want}")
+
+    def rollout_legal(self, legal, out):
+        from model.games.arc3 import arc3_replay_legal
+
+        stored = arc3_replay_legal(out)
+        return stored if {"type", "patch", "sub_of"} <= set(stored) else legal
+
+    def labels(self, actions, cfg):
+        return {"click_idx": actions["click_idx"].long()}
+
+    def kl_targets(self, actions, forced, cfg):
+        return {"type_idx": actions["type_idx"].long(), "click_idx": actions["click_idx"].long()}
+
+
 class GeneralsSpec(RLGameSpec):
     """generals: the decoder's hierarchical log-prob (μ = ``action_log_prob``),
     the replay teacher-forces the stored source (direction / split condition
@@ -813,6 +844,7 @@ GAME_SPECS: Dict[str, RLGameSpec] = {
     "othello": ForcedPassPlacementSpec(),
     "gomoku": GomokuSpec(),
     "lux": LuxSpec(),
+    "arc3": Arc3Spec(),
 }
 
 

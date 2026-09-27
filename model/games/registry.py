@@ -169,6 +169,13 @@ def _build_starcraft(**overrides) -> nn.Module:
     return GameNetwork(cfg, StarCraftEncoder(cfg), RTSDecoder(cfg))
 
 
+def _build_arc3(**overrides) -> nn.Module:
+    """ARC-AGI-3 (env/vec_arc3.py): palette grids → patch tokens; type → click."""
+    from model.games.arc3 import build_arc3_network
+
+    return build_arc3_network(**overrides)
+
+
 GAME_REGISTRY: Dict[str, Callable[..., nn.Module]] = {
     "generals": _build_generals,
     "chess": _build_chess,
@@ -182,6 +189,7 @@ GAME_REGISTRY: Dict[str, Callable[..., nn.Module]] = {
     "clash_royale": _build_clash_royale,
     "hearthstone": _build_hearthstone,
     "starcraft": _build_starcraft,
+    "arc3": _build_arc3,
 }
 
 
