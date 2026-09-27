@@ -193,6 +193,39 @@ def test_env_reproduces_the_converter_frames_of_real_records(shards):
     assert ended == 22 and drops > 0 and promotions > 0
 
 
+def test_rl_env_draws_at_the_first_threefold_repetition(shards):
+    """With its RL setting (auto_threefold: lichess' claim, always made) the env plays a
+    record exactly like the converter until the first threefold repetition, and ends
+    there with a draw: the 7 fixture games drawn by a threefold claim end there with the
+    recorded draw; 1 game went on past a threefold (its later IL frames are positions the
+    RL env never reaches — the documented converter / env difference)."""
+    root, _ = shards
+    samples = load_gm_samples(str(root / "all"))
+    repeated = claimed = 0
+    for i, s in enumerate(samples):
+        cfg = {k: v for k, v in _env_config(s).items() if k != "auto_threefold"}
+        T = s["obs"]["board_seq"].shape[0]
+        env = GmSimVecEnv("chess_variants", 1, seed=i, max_turns=T + 5, config=cfg)
+        assert env.config["auto_threefold"] is True
+        obs = env.reset(seed=i)
+        for t in range(T):
+            assert torch.equal(obs.obs["globals_seq"][0], s["obs"]["globals_seq"][t]), (i, t)
+            keys = {k: s["tgt"][k][t:t + 1].clone() for k in ("from_idx", "to_idx", "promotion")}
+            obs, rew, done, _ = env.step(keys)
+            # globals_seq[11]: the position was seen >= 2 times before (a threefold)
+            third = t + 1 < T and bool(s["obs"]["globals_seq"][t + 1][11] == 1.0)
+            if bool(done[0]) and t + 1 < T:
+                assert third and rew[0].tolist() == [0.0, 0.0], (s["meta"]["record"], t)
+                repeated += 1
+                break
+            assert not third, (s["meta"]["record"], t)
+            if bool(done[0]) and s["meta"].get("adjudicated", False):
+                # the record ends with a threefold claim: the env draws right there
+                assert rew[0].tolist() == s["meta"]["outcome"] == [0.0, 0.0], s["meta"]["record"]
+                claimed += 1
+    assert (repeated, claimed) == (1, 7)
+
+
 def test_network_samples_legal_moves():
     from env.league import StreamStepper
 
