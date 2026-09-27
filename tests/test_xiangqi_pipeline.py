@@ -520,3 +520,30 @@ def test_fetch_script_is_valid_bash():
     text = script.read_text()
     assert "gmdata\" xiangqi fetch" in text or "xiangqi fetch" in text
     assert "--split train" in text and "--split val" in text
+
+
+def test_fetch_script_resolves_paths_from_the_callers_directory(gmdata, tmp_path):
+    """Relative OUT_DIR / RAW_DIR are the caller's: the emptiness check (FORCE) and the
+    converter look at the same directory — a second run is refused instead of appending
+    duplicate shards (the archive: the committed CCPD sample under its fetch name)."""
+    script = ROOT / "scripts" / "fetch_xiangqi.sh"
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    shutil.copy(SAMPLE, raw / "ccpd-368a47a9.zip")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    env = dict(os.environ, GMDATA=gmdata, HQ="0")
+    env.pop("FORCE", None)
+    run = lambda **kw: subprocess.run(["bash", str(script), "out", "../raw"], cwd=cwd,  # noqa: E731
+                                      env={**env, **kw}, capture_output=True, text=True)
+    first = run()
+    assert first.returncode == 0, first.stderr[-2000:]
+    shard_dirs = lambda: sorted(p.name for p in (cwd / "out" / "train").iterdir())  # noqa: E731
+    assert shard_dirs() == ["xiangqi_00000"] and (cwd / "out" / "val").is_dir()
+    assert not (ROOT / "out").exists()
+    again = run()
+    assert again.returncode != 0 and "exists and is not empty" in again.stderr
+    assert shard_dirs() == ["xiangqi_00000"]                 # nothing appended
+    forced = run(FORCE="1")
+    assert forced.returncode == 0, forced.stderr[-2000:]
+    assert shard_dirs() == ["xiangqi_00000"]

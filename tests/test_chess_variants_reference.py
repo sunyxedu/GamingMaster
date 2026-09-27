@@ -42,6 +42,8 @@ DUMP = ROOT / "scripts" / "reference" / "fairy_stockfish_dump.py"
 REAL = ROOT / "tests" / "fixtures" / "chess_variants" / "lichess_variants_2026-08_sample.pgn"
 WS = ROOT / "data_processing"
 CARGO = shutil.which("cargo") or os.path.expanduser("~/.cargo/bin/cargo")
+#: the reference version the committed fixture was written with (its "source")
+PYFFISH = "pyffish==0.0.90"
 
 sys.path.insert(0, str(DUMP.parent))
 from fairy_stockfish_dump import chess960_back_rank, legal_hash, parse_step  # noqa: E402
@@ -226,7 +228,7 @@ def _uv():
 
 def run_dump(tmp: Path, *args) -> Dict:
     out = tmp / "fsf.json"
-    subprocess.run([_uv(), "run", "--no-project", "--python", "3.12", "--with", "pyffish",
+    subprocess.run([_uv(), "run", "--no-project", "--python", "3.12", "--with", PYFFISH,
                     "python", str(DUMP), "--out", str(out), *args],
                    check=True, capture_output=True, text=True, timeout=1800)
     with open(out) as fh:
