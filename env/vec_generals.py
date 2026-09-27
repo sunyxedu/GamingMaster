@@ -19,12 +19,17 @@ Observation = the gm-shard / gio record schema (data_processing/games/generals.p
 
 ``memory_vision`` (sighted mountains stay encoded as mountains after vision is
 lost) is OFF by default: the IL data has no such memory, and the default
-observation is bit-identical to it (tests/test_vec_game_golden.py).  The
-phase-5+ generals RL runs used it on.
+observation is bit-identical to it (tests/test_vec_game_golden.py).  A
+network's setting is its ``cfg.memory_vision`` (training.train_rl_joint's
+GeneralsSpec builds the env from it); the training/train_rl.py runs of
+2026-08-11 until that field existed played with it on (see
+model.config.legacy_memory_vision).
 
 legal = {"source": [1, H, W], "direction": [4, H, W]} (the direction key only
-with ``direction_mask``: in-bounds, not-a-mountain directions per cell).  A
-row with no movable army is ``forced``: the env passes whatever is sent.
+with ``direction_mask``): the source mask, and the in-bounds, not-a-mountain
+directions at the row's own tiles (False elsewhere) — like everything in a
+row, a function of that seat's own view (tests/test_audit_generals_leaks.py).
+A row with no movable army is ``forced``: the env passes whatever is sent.
 
 Actions: the GeneralsDecoder's sample() output (action_source / _direction /
 _split / _pass) or its replay format (source_idx, direction, split, passed).

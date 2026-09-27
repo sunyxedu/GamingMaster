@@ -146,7 +146,7 @@ from torch.utils.data import BatchSampler, DataLoader, SequentialSampler
 from data_processing.games.dataset import collate_game_sequences, training_sampler
 from data_processing.games.generals import GeneralsGioDataset, gio_dataset_advice
 from model.components.core import allreduce_moe_loads, update_moe_balance
-from model.config import upgrade_config_dict
+from model.config import checkpoint_config_dict, legacy_memory_vision, upgrade_config_dict
 from model.multi_game import (
     MultiGameNetwork,
     core_config_overrides,
@@ -415,7 +415,12 @@ def game_checkpoint(ck: Dict, game: str) -> Dict:
     def part(state: Dict) -> Dict:
         return {k[len(pre):]: v for k, v in state.items() if k.startswith(pre)}
 
-    out = {"game": game, "config": dict(ck["configs"][game]),
+    config = dict(ck["configs"][game])
+    if game == "generals" and "memory_vision" not in config:
+        # the observation it was trained on, which only the multi-game
+        # checkpoint as a whole tells (a train_rl_joint --env_kw)
+        config["memory_vision"] = legacy_memory_vision(ck)
+    out = {"game": game, "config": config,
            "model_state": part(ck["model_state"]),
            "source": {"multi_game_games": list(ck["games"]), "step": ck.get("step")}}
     if "train_model_state" in ck:
@@ -646,7 +651,7 @@ def main(argv=None) -> Dict[str, object]:
             # resume invariant): a config default changed since it was written
             # (e.g. lux_sap_head) must not reshape the net under its weights;
             # fields newer than the checkpoint take their legacy values
-            kw = upgrade_config_dict(dict(saved))
+            kw = checkpoint_config_dict(resume, g)
             changed = {k: v for k, v in core_kw.items() if k in kw and kw[k] != v}
             if changed:
                 log(f"[warn] {g}: --override replaces checkpoint arch values: {changed}")

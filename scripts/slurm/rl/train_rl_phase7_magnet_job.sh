@@ -136,6 +136,16 @@ HALT_FRAC=${HALT_FRAC:-0.25}
 # a wasted turn; dir-validity aux loss supervises) so the network must
 # internalize terrain. Source mask and eval masking stay on.
 DIR_MASK=${DIR_MASK:-1}
+# Sighted-mountain memory in the observation (cfg.memory_vision). Every
+# train_rl launch from 2026-08-11 21:07 (c56c5e2) on played with it ON
+# (GeneralsEnv's default until cfg.memory_vision existed; train_rl never
+# set it): run5c, the joint-decoder run6 and their successors — run-4/4b/4c
+# themselves (launched 2026-08-03..05) and run5b predate it. Passed
+# explicitly, 1 keeps that recipe for a fresh launch from the pre-memory
+# SEED_CKPT and for any resume here (including checkpoints the legacy rule
+# cannot date, see model.config.legacy_memory_vision). 0 = pure fog (the
+# IL records' encoding, the default for new lineages).
+MEMORY_VISION=${MEMORY_VISION:-1}
 # Opening anchor (off by default): set OPENING_ANCHOR to the IL
 # checkpoint to teach the first OPENING_TURNS turns the human opening —
 # mirror self-play cannot punish shared opening habits and the magnet
@@ -203,6 +213,7 @@ srun apptainer exec --nv /scratch/$USER/pytorch.sif \
         --halt_ref_depth "$HALT_REF" \
         --halt_frac "$HALT_FRAC" \
         --dir_mask "$DIR_MASK" \
+        --memory_vision "$MEMORY_VISION" \
         --ppo_epochs 1 \
         --accum_episodes "$ACCUM_EPISODES" \
         --target_kl 0.02 \

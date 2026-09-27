@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from data_processing.games.dataset import collate_game_sequences
-from model.config import upgrade_config_dict
+from model.config import checkpoint_config_dict
 from model.multi_game import MultiGameNetwork
 from training.deep_supervision import Q_HALT_WEIGHT
 from training.train_il_game import (
@@ -38,8 +38,10 @@ def load_multi(path: str, device: torch.device, raw: bool = False) -> MultiGameN
     nets = {}
     for g in ck["games"]:
         # fields newer than the checkpoint take their legacy value (e.g.
-        # qk_norm=False), so the rebuilt net matches the saved weights
-        net, _ = build_net_tolerant(g, upgrade_config_dict(dict(ck["configs"][g])))
+        # qk_norm=False; a train_rl_joint generals net's memory_vision from
+        # its --env_kw), so the rebuilt net matches the saved weights and the
+        # observation it was trained on
+        net, _ = build_net_tolerant(g, checkpoint_config_dict(ck, g))
         nets[g] = net
     model = MultiGameNetwork(nets)
     model.load_state_dict(ck["train_model_state" if raw else "model_state"])

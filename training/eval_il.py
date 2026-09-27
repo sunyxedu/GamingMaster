@@ -20,7 +20,8 @@ import torch
 from torch.utils.data import ConcatDataset, DataLoader
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
-from model.config import ModelConfig, config_from_dict
+from model.config import checkpoint_config
+from model.games.generals import apply_memory_vision
 from model.losses import ImitationLoss, next_obs_loss
 from model.network import GeneralsNetwork
 from model.rl_utils import load_model_state
@@ -59,6 +60,9 @@ def evaluate(model, loader, criterion, device, wm_weight, act_steps):
     n_batches = 0
     for batch in loader:
         grid_seq = batch["obs"]["grid_seq"].to(device)
+        if getattr(model.cfg, "memory_vision", False):
+            # the observation a memory_vision network plays on (causal, exact)
+            grid_seq = apply_memory_vision(grid_seq)
         globals_seq = batch["obs"]["globals_seq"].to(device)
         legal_mask = batch["obs"]["legal_source_mask_seq"].to(device)
         tgt = {k: v.to(device) for k, v in batch["tgt"].items()}
@@ -123,7 +127,7 @@ def main():
     results = []
     for path in args.checkpoints:
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
-        cfg = config_from_dict(ckpt["config"])
+        cfg = checkpoint_config(ckpt)
         if model is None or cfg != prev_cfg:
             model = GeneralsNetwork(cfg).to(device)
             criterion = ImitationLoss(grid_w=cfg.grid_w, focal_gamma=args.focal_gamma)

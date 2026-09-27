@@ -37,7 +37,7 @@ from torch.utils.data.distributed import DistributedSampler
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
 from env.generals_env import GeneralsEnv
 from model.components.core import allreduce_moe_loads, moe_layers, update_moe_balance
-from model.config import ModelConfig, config_from_dict
+from model.config import ModelConfig, checkpoint_config
 from model.losses import ImitationLoss, RLLoss
 from model.magnet import expander_magnet_heads
 from model.network import GeneralsNetwork
@@ -260,6 +260,19 @@ def parse_args():
                         "no positional encoding, so the policy otherwise "
                         "cannot see the production clock. Sticky via "
                         "checkpoint config.")
+    p.add_argument("--memory_vision", type=int, default=-1, choices=(-1, 0, 1),
+                   help="Sighted-mountain memory in the observation (a "
+                        "mountain the player has seen stays a mountain after "
+                        "vision moves on). -1 = the checkpoint's "
+                        "cfg.memory_vision: off for a fresh run or an IL "
+                        "checkpoint (the IL records' encoding), on for the "
+                        "train_rl checkpoints of 2026-08-11 until the field "
+                        "existed (model.config.legacy_memory_vision; mind its "
+                        "caveat for runs started that evening). 0/1 "
+                        "set it — sticky via checkpoint config like "
+                        "--turn_globals, but NOT function-preserving: it "
+                        "changes what the network sees (phase boundaries "
+                        "only). The IL auxiliary batches follow it.")
     p.add_argument("--mirror_prob", type=float, default=0.5,
                    help="Probability an episode is MIRROR self-play (live "
                         "model vs itself, BOTH seats' trajectories train — "
@@ -513,6 +526,14 @@ class CaptureHead(torch.nn.Module):
 # Self-play rollout collection
 # ======================================================================
 
+def net_memory_vision(net, default: bool = False) -> bool:
+    """The observation ``net`` was trained on: its cfg.memory_vision (a
+    GeneralsNetwork, or a wrapper exposing ``cfg`` like
+    scripts/elo_ladder.WidthAdapter); ``default`` for a net without one."""
+    cfg = getattr(net, "cfg", None)
+    return bool(getattr(cfg, "memory_vision", default))
+
+
 def full_depth(net: torch.nn.Module) -> int:
     """The network's full TRM depth (cfg.halt_max_steps) — what a depth of
     ``None`` means: the reference runs every supervision step at test time."""
@@ -560,13 +581,20 @@ def collect_selfplay_episode(
     computing GAE (evaluation only reads env.winner — a 2048-step buffer is
     ~90MB of immediately-discarded allocations per game).
 
+    Each seat observes what ITS network was trained on: ``env.memory_vision``
+    is set per seat from the two nets' cfg.memory_vision (a sparring, eval or
+    ladder opponent may come from a lineage with the other setting); a net
+    without a config keeps the env's setting for its seat.
+
     If ``record=True``, returns a list of per-step dicts for replay viewing.
     """
     model.eval()
     opponent.eval()
     env.breakdown_pid = learner_pid
-    obs = env.reset(seed=reset_seed)
     nets = {learner_pid: model, 1 - learner_pid: opponent}
+    mv = tuple(net_memory_vision(nets[p], env.memory_vision_for(p)) for p in (0, 1))
+    env.memory_vision = mv[0] if mv[0] == mv[1] else mv
+    obs = env.reset(seed=reset_seed)
     seats = (learner_pid, 1 - learner_pid) if collect_both else (learner_pid,)
     buffers = {pid: RolloutBuffer() for pid in seats}
     caches = {0: None, 1: None}    # spatiotemporal KV caches
@@ -765,12 +793,22 @@ def collect_selfplay_episodes_vec(
     With ``worker_pool`` (an env.vec_workers.EnvWorkerPool), env slots
     1..n-1 live in worker processes and step in parallel; slot 0 stays in
     ``envs[0]`` (replay recording reads its internals directly). Worker
-    envs get their attrs (breakdown_pid included) at pool construction.
+    envs get their attrs (breakdown_pid included) at pool construction —
+    their memory_vision must already be the model's (checked here); the
+    local envs are set to it.
     """
     model.eval()
     n = worker_pool.n_envs if worker_pool is not None else len(envs)
+    mv = net_memory_vision(model, envs[0].memory_vision_for(0))
     for e in envs:
         e.breakdown_pid = 0
+        e.memory_vision = mv
+    if worker_pool is not None:
+        pool_mv = bool(worker_pool.env_attrs.get("memory_vision", False))
+        if pool_mv != mv:
+            raise ValueError(f"the env worker pool was built with memory_vision={pool_mv}, "
+                             f"the model was trained with memory_vision={mv} "
+                             f"(pass it in EnvWorkerPool env_attrs)")
     if worker_pool is not None:
         obs_map = worker_pool.reset_all()
         obs_map[0] = envs[0].reset()
@@ -1030,9 +1068,11 @@ def load_sparring_net(path: str, device: torch.device,
     policy heads drive its moves, its value head is never read. Globals
     width must match what the env emits for the learner (the env has one
     setting per run), hence the explicit check instead of a silent slice.
+    Its memory_vision may differ from the learner's: collect_selfplay_
+    episode gives each seat its own network's setting.
     """
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    sp_cfg = config_from_dict(ckpt["config"])
+    sp_cfg = checkpoint_config(ckpt)
     if sp_cfg.global_features != expected_globals:
         raise ValueError(
             f"sparring checkpoint expects {sp_cfg.global_features} globals "
@@ -1464,9 +1504,14 @@ def il_auxiliary_update(
 
     grid_seq = il_batch["obs"]["grid_seq"].to(device)
     globals_seq = il_batch["obs"]["globals_seq"].to(device)
-    # IL shards carry 4 globals; under cfg.turn_globals synthesize the
-    # production-cycle features from the frame index — the dataset
-    # truncates tail-only, so frame i IS turn i.
+    # The IL frames in the observation the env gives this network: under
+    # cfg.memory_vision the sighted-mountain memory, derived causally from
+    # the frames so far; IL shards carry 4 globals, and under
+    # cfg.turn_globals the production-cycle features come from the frame
+    # index — the dataset truncates tail-only, so frame i IS turn i.
+    if getattr(model.cfg, "memory_vision", False):
+        from model.games.generals import apply_memory_vision
+        grid_seq = apply_memory_vision(grid_seq)
     if (model.cfg.turn_globals
             and globals_seq.shape[-1] < model.cfg.global_features):
         from model.games.generals import append_turn_globals
@@ -1542,12 +1587,12 @@ def main():
 
     il_ckpt = None
     if rl_ckpt is not None and "config" in rl_ckpt:
-        cfg = config_from_dict(rl_ckpt["config"])
+        cfg = checkpoint_config(rl_ckpt)
         src_msg = f"Architecture from resume checkpoint {args.resume}"
     elif args.il_checkpoint:
         il_ckpt = torch.load(args.il_checkpoint, map_location=device,
                              weights_only=False)
-        cfg = config_from_dict(il_ckpt["config"])
+        cfg = checkpoint_config(il_ckpt)
         src_msg = f"Loaded IL checkpoint from {args.il_checkpoint}"
     else:
         cfg = ModelConfig(
@@ -1571,6 +1616,18 @@ def main():
         cfg.turn_globals = True
     if cfg.turn_globals:
         cfg.global_features = max(cfg.global_features, 7)
+    # The observation's sighted-mountain memory: the checkpoint's recorded
+    # setting (legacy train_rl lineages resolve to on, IL checkpoints and
+    # fresh runs to off) unless the CLI sets it; every env below and the IL
+    # auxiliary batches follow cfg.memory_vision, and it is saved with it.
+    if args.memory_vision >= 0 and bool(args.memory_vision) != cfg.memory_vision:
+        mv_msg = (" (switched by --memory_vision: the network now sees another "
+                  "observation than it trained on)"
+                  if rl_ckpt is not None or il_ckpt is not None else "")
+        cfg.memory_vision = bool(args.memory_vision)
+    else:
+        mv_msg = (" (the checkpoint's setting)"
+                  if rl_ckpt is not None or il_ckpt is not None else "")
 
     # HL-Gauss critic is sticky like the input features, but NOT
     # function-preserving: freshly enabling it swaps the value head for a
@@ -1601,6 +1658,7 @@ def main():
             print(f"  Input features: derive_army_channels="
                   f"{cfg.derive_army_channels} turn_globals={cfg.turn_globals}"
                   f" (global_features={cfg.global_features})")
+        print(f"  Observation: memory_vision={cfg.memory_vision}{mv_msg}")
         if cfg.hl_gauss_value:
             migrated = " (fresh head: migrated from scalar critic)" \
                 if hl_gauss_migrated else ""
@@ -1868,6 +1926,9 @@ def main():
                       max_turns=args.rollout_steps)
     env.city_budget_total = args.city_budget
     env.turn_globals = cfg.turn_globals
+    # the observation the learner trains on (collect_selfplay_episode sets
+    # it per seat from each network's own config for foreign opponents)
+    env.memory_vision = cfg.memory_vision
     # Truncation knobs are plain env attrs — never stored in checkpoints,
     # so setting them once here covers resumes too.
     env.trunc_material_scale = args.trunc_material
@@ -1924,6 +1985,7 @@ def main():
                 env_attrs=dict(
                     city_budget_total=env.city_budget_total,
                     turn_globals=env.turn_globals,
+                    memory_vision=env.memory_vision,
                     trunc_material_scale=env.trunc_material_scale,
                     trunc_penalty=env.trunc_penalty,
                     city_reward_scale=env.city_reward_scale,
@@ -1944,6 +2006,7 @@ def main():
                                  max_turns=args.rollout_steps)
                 e2.city_budget_total = env.city_budget_total
                 e2.turn_globals = env.turn_globals
+                e2.memory_vision = env.memory_vision
                 e2.trunc_material_scale = env.trunc_material_scale
                 e2.trunc_penalty = env.trunc_penalty
                 e2.city_reward_scale = env.city_reward_scale

@@ -19,7 +19,8 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from model.config import ModelConfig, config_from_dict
+from model.config import ModelConfig, checkpoint_config
+from model.games.generals import apply_memory_vision
 from model.network import GeneralsNetwork
 
 DIR_NAMES = ["down", "right", "up", "left"]
@@ -36,8 +37,7 @@ def load_model(checkpoint_path, device):
     from model.rl_utils import load_model_state
 
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    cfg_dict = ckpt["config"]
-    cfg = config_from_dict(cfg_dict)
+    cfg = checkpoint_config(ckpt)
     model = GeneralsNetwork(cfg)
     state_key = "model_state" if "model_state" in ckpt else "model_state_dict"
     load_model_state(model, ckpt[state_key], ctx=checkpoint_path)
@@ -161,6 +161,9 @@ def run_inference(model, replay, device, grid_w, act_steps=None):
     W = grid_w
 
     grid_seq = replay["grid"].unsqueeze(0).to(device)
+    if getattr(model.cfg, "memory_vision", False):
+        # the observation the checkpoint was trained on (causal, exact)
+        grid_seq = apply_memory_vision(grid_seq)
     globals_seq = replay["globals"].unsqueeze(0).to(device)
     legal_mask = replay["legal_mask"].unsqueeze(0).to(device)
 

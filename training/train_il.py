@@ -19,7 +19,8 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
-from model.config import ModelConfig, config_from_dict
+from model.config import ModelConfig, checkpoint_config
+from model.games.generals import apply_memory_vision
 from model.losses import ImitationLoss, next_obs_loss
 from model.network import GeneralsNetwork
 from model.optim import (
@@ -152,6 +153,10 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
         example (kept for all of its supervision steps)."""
         tgt = {k: v.to(device) for k, v in batch["tgt"].items()}
         obs = {k: v.to(device) for k, v in batch["obs"].items()}
+        if getattr(model.cfg, "memory_vision", False):
+            # the observation a memory_vision network plays on, derived
+            # causally from the records' pure-fog frames
+            obs["grid_seq"] = apply_memory_vision(obs["grid_seq"])
         aux = {}
         if tf_ratio > 0:
             source_y = tgt["src_y"][:, :, 0]
@@ -339,7 +344,7 @@ def main():
         resume_ckpt = torch.load(arch_ckpt_path, map_location="cpu", weights_only=False)
 
     if resume_ckpt is not None and "config" in resume_ckpt:
-        cfg = config_from_dict(resume_ckpt["config"])
+        cfg = checkpoint_config(resume_ckpt)
         # Enabling the world-model loss on a lineage without the head fails
         # loudly at weight load (documented in --world_model_weight help).
         cfg.predict_next_obs = cfg.predict_next_obs or (args.world_model_weight > 0)

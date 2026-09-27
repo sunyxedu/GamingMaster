@@ -13,8 +13,9 @@ by the multi-game trainers (training/train_il_game.py, train_multi_game.py):
 :func:`generals_il_loss` (both decoders' ``il_loss``) and
 :func:`generals_il_head_terms` (their ``il_head_terms``), the teacher-forcing
 labels derived from the stored targets (:func:`source_labels`), the legality
-dict read from the observation (:func:`legal_from_obs`) and the
-``turn_globals`` features for recorded games (:func:`append_turn_globals`).
+dict read from the observation (:func:`legal_from_obs`), and the
+``turn_globals`` features and ``memory_vision`` encoding for recorded games
+(:func:`append_turn_globals`, :func:`apply_memory_vision`).
 """
 
 from __future__ import annotations
@@ -55,6 +56,33 @@ def append_turn_globals(globals_seq: torch.Tensor) -> torch.Tensor:
     t = t.view(1, T, 1).expand(B, -1, -1)
     extra = torch.cat([(t % 50) / 50.0, t % 2, t / 500.0], dim=-1)
     return torch.cat([globals_seq, extra.to(globals_seq.dtype)], dim=-1)
+
+
+#: one-hot grid channels of the fog obstacle (a never-seen city or mountain,
+#: out of vision) and of a mountain in vision
+FOG_OBSTACLE_CHANNEL, MOUNTAIN_CHANNEL = 1, 4
+
+
+def apply_memory_vision(grid_seq: torch.Tensor) -> torch.Tensor:
+    """Pure-fog frames [..., T, C, H, W] (the IL records' encoding, frame 0 =
+    the game's first frame — generals records are only prefix-cropped) →
+    the env's ``memory_vision`` encoding (cfg.memory_vision,
+    env/generals_env.py): a fog-obstacle cell that showed a mountain in any
+    frame ≤ t shows a mountain at t.
+
+    Causal (frame t reads frames 0..t only) and exact: in pure fog a
+    mountain is state 4 exactly while in vision and the fog obstacle
+    (state 1) while not, cities are never state 4, and terrain is static —
+    the cumulative mountain sightings ARE the env's per-player memory.
+    Tail padding (all-zero frames) stays zero."""
+    seen = torch.cumsum(grid_seq[..., MOUNTAIN_CHANNEL, :, :].float(), dim=-3) > 0
+    remembered = seen & (grid_seq[..., FOG_OBSTACLE_CHANNEL, :, :] > 0)
+    out = grid_seq.clone()
+    out[..., FOG_OBSTACLE_CHANNEL, :, :] = grid_seq[..., FOG_OBSTACLE_CHANNEL, :, :].masked_fill(
+        remembered, 0)
+    out[..., MOUNTAIN_CHANNEL, :, :] = grid_seq[..., MOUNTAIN_CHANNEL, :, :].masked_fill(
+        remembered, 1)
+    return out
 
 
 def source_labels(tgt: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

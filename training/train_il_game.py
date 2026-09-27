@@ -48,7 +48,7 @@ from data_processing.games.dataset import (
 )
 from data_processing.games.generals import GeneralsGioDataset, gio_dataset_advice
 from model.components.core import update_moe_balance
-from model.config import upgrade_config_dict
+from model.config import checkpoint_config_dict, upgrade_config_dict
 from model.games import build_game_network
 from model.games import generals as generals_adapter
 from model.games import lux as lux_adapter
@@ -271,11 +271,17 @@ def open_dataset(game: str, data_dir: str, max_len: Optional[int] = None):
 
 
 def _generals_obs(obs: Dict[str, torch.Tensor], cfg) -> Dict[str, torch.Tensor]:
-    """turn_globals nets expect 3 more globals than the records carry:
-    derive them from the frame index (records are prefix-truncated, so
-    frame t is turn t) — the same features training/train_rl.py appends to
-    its IL batches."""
-    if cfg is None or not getattr(cfg, "turn_globals", False):
+    """The recorded frames as the network's config expects them (the same
+    transforms training/train_rl.py applies to its IL batches; records are
+    prefix-truncated, so frame t is turn t): memory_vision nets see the
+    sighted-mountain memory, derived from the frames so far
+    (model.games.generals.apply_memory_vision); turn_globals nets expect 3
+    more globals than the records carry, derived from the frame index."""
+    if cfg is None:
+        return obs
+    if getattr(cfg, "memory_vision", False):
+        obs = {**obs, "grid_seq": generals_adapter.apply_memory_vision(obs["grid_seq"])}
+    if not getattr(cfg, "turn_globals", False):
         return obs
     g = obs["globals_seq"]
     if g.shape[-1] + generals_adapter.TURN_GLOBAL_FEATURES != cfg.global_features:
@@ -420,14 +426,16 @@ def resume_arch_overrides(resume_ckpt: Dict, cli_overrides: Dict) -> Dict:
     Explicit CLI overrides still apply on top (loudly): they are the
     escape hatch when the saved config itself must be corrected.
     """
-    arch = resume_ckpt.get("config")
-    if arch is None:
+    if resume_ckpt.get("config") is not None:
+        # Fields newer than the checkpoint take their legacy value (e.g. the
+        # TRM block layout, or the observation a train_rl lineage played
+        # with), so the rebuilt net matches the saved weights and inputs.
+        arch = checkpoint_config_dict(resume_ckpt)
+    else:
         arch = resume_ckpt.get("config_overrides", {})
         print(f"[warn] checkpoint predates full-config saving; rebuilding "
               f"from saved overrides + current defaults: {arch}")
-    # Fields newer than the checkpoint take their legacy value (e.g. the
-    # TRM block layout), so the rebuilt net matches the saved weights.
-    arch = upgrade_config_dict(arch)
+        arch = upgrade_config_dict(arch)
     if cli_overrides:
         changed = {k: v for k, v in cli_overrides.items() if arch.get(k) != v}
         if changed:

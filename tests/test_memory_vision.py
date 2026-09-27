@@ -1,5 +1,8 @@
 """Tests for memory vision (per-player sighted-mountain persistence) and
-unmasked-direction training (--dir_mask 0)."""
+unmasked-direction training (--dir_mask 0).
+
+The memory is a recorded observation setting (cfg.memory_vision, default off
+like the IL records): the env tests below switch it on explicitly."""
 
 import math
 
@@ -33,6 +36,7 @@ def _far_mountain(env, min_dist=4):
 
 def test_remembered_mountain_stays_encoded():
     env = GeneralsEnv(grid_h=25, grid_w=25, max_turns=50, n_mountains=30)
+    env.memory_vision = True
     env.reset(seed=5)
     idx = _far_mountain(env)
     assert idx is not None, "map has no mountain far from both generals"
@@ -52,6 +56,7 @@ def test_remembered_mountain_stays_encoded():
 
 def test_memory_is_per_player():
     env = GeneralsEnv(grid_h=25, grid_w=25, max_turns=50, n_mountains=30)
+    env.memory_vision = True
     env.reset(seed=5)
     idx = _far_mountain(env)
     assert idx is not None
@@ -65,6 +70,7 @@ def test_memory_is_per_player():
 
 def test_visible_mountain_enters_memory():
     env = GeneralsEnv(grid_h=25, grid_w=25, max_turns=50, n_mountains=0)
+    env.memory_vision = True
     env.reset(seed=3)
     # plant a mountain right next to player 0's general → in vision
     g = env.generals[0]
@@ -81,6 +87,7 @@ def test_visible_mountain_enters_memory():
 
 def test_reset_clears_memory():
     env = GeneralsEnv(grid_h=25, grid_w=25, max_turns=50, n_mountains=30)
+    env.memory_vision = True
     env.reset(seed=5)
     env.seen_mountains[0].add(env.mountains[0])
     env.reset(seed=6)
@@ -89,11 +96,13 @@ def test_reset_clears_memory():
 
 def test_memory_vision_toggle():
     env = GeneralsEnv(grid_h=25, grid_w=25, max_turns=50, n_mountains=30)
+    env.memory_vision = True
     env.reset(seed=5)
     idx = _far_mountain(env)
     assert idx is not None
     r, c = divmod(idx, env.grid_w)
     env.seen_mountains[0].add(idx)
+    assert env._get_observation(0)["grid"][4, r, c] == 1.0
     env.memory_vision = False
     obs = env._get_observation(0)
     assert obs["grid"][4, r, c] == 0.0  # pure instantaneous fog again
@@ -125,3 +134,24 @@ def test_unmasked_directions_collect_and_update():
     assert math.isfinite(metrics["policy_loss"])
     # direction-validity aux supervision must be ACTIVE when dirs unmasked
     assert metrics["inv_loss"] > 0
+
+
+def test_memory_vision_per_seat():
+    """A (seat 0, seat 1) pair: two networks trained with different
+    settings in one game each see their own observation."""
+    env = GeneralsEnv(grid_h=25, grid_w=25, max_turns=50, n_mountains=30)
+    env.memory_vision = (True, False)
+    env.reset(seed=5)
+    assert env.memory_vision_for(0) and not env.memory_vision_for(1)
+    idx = _far_mountain(env)
+    assert idx is not None
+    r, c = divmod(idx, env.grid_w)
+    env.seen_mountains[0].add(idx)
+    env.seen_mountains[1].add(idx)
+    assert env._get_observation(0)["grid"][4, r, c] == 1.0     # remembered
+    assert env._get_observation(1)["grid"][1, r, c] == 1.0     # pure fog
+    gr, gc = divmod(env.generals[1], env.grid_w)
+    env.map[gr][gc + 1 if gc + 1 < env.real_w else gc - 1].terrain = _MOUNTAIN   # in vision
+    before = set(env.seen_mountains[1])
+    env._get_observation(1)
+    assert env.seen_mountains[1] == before                      # no memory kept for seat 1
