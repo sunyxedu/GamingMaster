@@ -52,8 +52,18 @@ temperature compromise (HPT uses √N, π0 N^0.43).  New games bring corpora of
 GAME=N``; default none) caps the frames a game counts with, so one giant corpus
 cannot dominate however large it grows (e.g. cap 1e8 with α = 0.5: a 1e10-frame
 game weighs like a 1e8 one, 10x a 1e6-frame game), and m_g (``--game_weight
-GAME=W``, default 1) multiplies a game's draw probability explicitly.  The
-chosen weights are logged ("[mixture]") and saved in the checkpoint.  The decoders' losses are not
+GAME=W``, default 1) multiplies a game's draw probability explicitly.
+Small corpora are repeated: over the run game g is expected to pass over its
+frames E_g = steps · K · w_g · B_g · F̄_g / R_g times (B_g its batch size, F̄_g
+its mean frames per sample after the crop, R_g its uncapped frames) — logged
+per game as ``epochs``.  ``--max_epochs E`` bounds every E_g by E: the
+KL-closest mixture to the temperature one under w_g ≤ u_g (u_g the w_g of
+E_g = E) is w'_g = min(u_g, c·w_g) with c normalising (water-filling; the
+games under their cap keep their ratios), so the steps a small corpus cannot
+use without memorising go to the games that still have unseen data
+(repeating data beyond ~4-16 epochs is worth little: Muennighoff et al. 2023,
+"Scaling Data-Constrained Language Models").  The chosen weights are logged
+("[mixture]") and saved in the checkpoint.  The decoders' losses are not
 on one scale: generals' is train_il.py's weighted ImitationLoss (source 3.0
 focal, direction 1.5, split 0.3, pass 1.0), the others sum unit-weight
 cross-entropies, so a generals micro-batch pulls the shared core ~2-3x harder
@@ -182,6 +192,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import math
 import os
 import random
 import time
@@ -286,6 +297,11 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "w_g ∝ W_g * min(frames_g, cap)^alpha (default 1); unlike "
                         "--game_loss_weight it changes how often the game is drawn, not the "
                         "scale of its gradient")
+    p.add_argument("--max_epochs", type=float, default=None, metavar="E",
+                   help="cap every game's expected passes over its frames during the run "
+                        "(steps x games per step x draw probability x batch x frames per "
+                        "sample / corpus frames) at E: capped games give their excess draw "
+                        "probability to the others, in proportion (default: no cap)")
     p.add_argument("--max_len", type=int, default=None,
                    help="crop training sequences to a random window (not generals: "
                         "with generals in the run, bound it via --game_max_len)")
@@ -450,6 +466,44 @@ def mixture_weights(frames: Dict[str, int], alpha: float, *,
     if not z > 0:
         raise SystemExit(f"mixture weights sum to {z}: every --game_weight is 0?")
     return {g: v / z for g, v in raw.items()}
+
+
+def expected_epochs(weights: Dict[str, float], stats: Dict[str, Dict[str, int]],
+                    batch: Dict[str, int], draws: float) -> Dict[str, float]:
+    """E_g = draws · w_g · B_g · (frames_g / samples_g) / raw_frames_g: the
+    expected passes over game g's (uncapped) frames when ``draws`` micro-batches
+    (steps × global games per step) are drawn from ``weights``; ``stats`` are
+    the datasets' ``frame_stats()`` (``frames`` capped at the crop)."""
+    out = {}
+    for g, w in weights.items():
+        st = stats[g]
+        per_draw = batch[g] * st["frames"] / max(st["samples"], 1)
+        out[g] = draws * w * per_draw / max(st["raw_frames"], 1)
+    return out
+
+
+def cap_mixture(weights: Dict[str, float], upper: Dict[str, float]
+                ) -> Tuple[Dict[str, float], List[str]]:
+    """The KL-closest distribution to ``weights`` with w_g ≤ ``upper[g]``:
+    w'_g = min(upper_g, c·w_g), c normalising (found by water-filling; the
+    games below their bound keep their ratios).  Returns (weights, the games
+    held at their bound).  If the bounds sum to less than 1 (every game
+    capped) they are scaled up together: w'_g ∝ upper_g."""
+    capped: Dict[str, float] = {}
+    while True:
+        free = {g: v for g, v in weights.items() if g not in capped}
+        mass = 1.0 - sum(capped.values())
+        z = sum(free.values())
+        if not free or not z > 0 or not mass > 0:
+            break
+        scaled = {g: v * mass / z for g, v in free.items()}
+        over = [g for g, v in scaled.items() if v > upper.get(g, math.inf)]
+        if not over:
+            return {**capped, **scaled}, sorted(capped)
+        for g in over:
+            capped[g] = upper[g]
+    total = sum(upper[g] for g in weights)
+    return {g: upper[g] / total for g in weights}, sorted(weights)
 
 
 def micro_batch_plan(games_per_step: int, global_games_per_step: int, n_games: int,
@@ -991,7 +1045,8 @@ def main(argv=None) -> Dict[str, object]:
                 # every rank sees the same shards: all of them exit here
                 raise SystemExit(f"--require_frozen_schema: {frozen}")
             log(f"[WARN] {frozen}")
-    frames = {g: ds.total_frames() for g, ds in datasets.items()}
+    frame_stats = {g: ds.frame_stats() for g, ds in datasets.items()}
+    frames = {g: st["frames"] for g, st in frame_stats.items()}
     try:
         game_frame_cap = {g: frame_count(n) for g, n in _pairs(args.game_frame_cap, "N").items()}
     except argparse.ArgumentTypeError as e:
@@ -1005,6 +1060,19 @@ def main(argv=None) -> Dict[str, object]:
             raise SystemExit(f"{flag} values must be >= 0")
     weights = mixture_weights(frames, args.sample_alpha, frame_cap=args.mixture_frame_cap,
                               game_frame_cap=game_frame_cap, game_weight=game_weight)
+    batch_of = {g: game_batch.get(g, args.batch_size) for g in games}
+    draws = float(args.steps) * k_glob
+    epoch_capped: List[str] = []
+    if args.max_epochs is not None:
+        if not args.max_epochs > 0:
+            raise SystemExit("--max_epochs must be > 0")
+        unit = expected_epochs({g: 1.0 for g in games}, frame_stats, batch_of, draws)
+        weights, epoch_capped = cap_mixture(
+            weights, {g: args.max_epochs / unit[g] for g in games})
+        if len(epoch_capped) == len(games):
+            log(f"[warn] --max_epochs {args.max_epochs:g}: every game is capped (the run "
+                f"draws more than its corpora hold at this cap): weights ∝ the caps")
+    epochs = expected_epochs(weights, frame_stats, batch_of, draws)
 
     core_kw = parse_overrides(args.override)
     core_state = None
@@ -1094,7 +1162,8 @@ def main(argv=None) -> Dict[str, object]:
     def _mix_note(g: str) -> str:
         cap = game_frame_cap.get(g, args.mixture_frame_cap)
         note = f" (capped {cap:,})" if cap is not None and frames[g] > cap else ""
-        return note + (f" x{game_weight[g]:g}" if g in game_weight else "")
+        note += f" x{game_weight[g]:g}" if g in game_weight else ""
+        return note + f" epochs={epochs[g]:.1f}" + ("(max)" if g in epoch_capped else "")
 
     log("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,}{_mix_note(g)} w={weights[g]:.3f}"
                                  for g in games))
