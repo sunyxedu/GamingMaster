@@ -352,6 +352,17 @@ def test_replay_split_deals_every_game_once_per_minibatch():
         for g, scale in d:
             assert scale == pytest.approx(3 * weights[g])
     assert [g for g, _ in draws[0]] == ["a"]                    # the costly game alone
+    # with the RL games split over the ranks, the replay fills the lightly loaded ranks:
+    # rank 0 carries an RL game of 10 s per minibatch, so the costly replay game moves on
+    seeded = []
+    for rank in range(3):
+        fake = SimpleNamespace(replay=dict.fromkeys(weights), replay_weight=weights,
+                               args=SimpleNamespace(replay_games_per_mb=0, replay_split=1,
+                                                    epochs=2, minibatches=4),
+                               world=3, rank=rank, replay_cost=cost, _owner={"rl": 0},
+                               learn_cost={"rl": 80.0})
+        seeded.append([g for g, _ in JointRLTrainer._replay_draws(fake)])
+    assert sorted(sum(seeded, [])) == sorted(weights) and seeded[0] == [] and "a" in seeded[1]
     one = SimpleNamespace(replay=dict.fromkeys(weights), replay_weight=weights,
                           args=SimpleNamespace(replay_games_per_mb=0, replay_split=1),
                           world=1, rank=0, replay_cost=cost)

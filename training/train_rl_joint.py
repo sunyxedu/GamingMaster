@@ -1595,6 +1595,9 @@ class JointRLTrainer:
         #: per-game seconds of one replay batch (the latest measurement, rank-identical):
         #: the --replay_split assignment
         self.replay_cost: Dict[str, float] = {}
+        #: per-game learner seconds of an iteration (on its rank, rank-identical): the
+        #: RL load a rank carries into every minibatch, which --replay_split tops up
+        self.learn_cost: Dict[str, float] = {}
         self.history: List[Dict[str, Any]] = []
         if a.resume:
             self._load_resume(a.resume)
@@ -1998,6 +2001,13 @@ class JointRLTrainer:
             # gradient is the every-game objective
             cost = {g: self.replay_cost.get(g, 1.0) for g in games}
             load = [0.0] * self.world
+            owner = getattr(self, "_owner", None)
+            if owner and self.replay_cost:
+                # the ranks' RL work of one minibatch (--rl_placement split): the replay
+                # games fill the lightly loaded ranks first
+                n_mb = max(1, self.args.epochs * max(1, self.args.minibatches))
+                for g, r in owner.items():
+                    load[r] += self.learn_cost.get(g, 0.0) / n_mb
             mine = []
             for g in sorted(games, key=lambda x: (-cost[x], x)):
                 r = min(range(self.world), key=lambda i: (load[i], i))
@@ -2165,6 +2175,9 @@ class JointRLTrainer:
             c = diag.v[g]["rollout_s"] + diag.v[g]["learn_s"]
             if c > 0:
                 self.game_cost[g] = c
+        for g in self.rl_games:
+            if diag.v[g]["learn_s"] > 0:
+                self.learn_cost[g] = diag.v[g]["learn_s"]
         for g in self.replay:               # the next --replay_split assignment
             if diag.v[g]["il_n"] > 0 and diag.v[g]["replay_s"] > 0:
                 self.replay_cost[g] = diag.v[g]["replay_s"] / diag.v[g]["il_n"]
@@ -2319,6 +2332,7 @@ class JointRLTrainer:
                 "klb": self.klb.state_dict(), "sched": self.sched.state_dict(),
                 "pool": self.pool.state_dict(), "il_baseline": dict(self.il_baseline),
                 "game_cost": dict(self.game_cost), "replay_cost": dict(self.replay_cost),
+                "learn_cost": dict(self.learn_cost),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -2465,6 +2479,7 @@ class JointRLTrainer:
         self.il_baseline = dict(st.get("il_baseline", {}))
         self.game_cost = dict(st.get("game_cost", {}))
         self.replay_cost = dict(st.get("replay_cost", {}))
+        self.learn_cost = dict(st.get("learn_cost", {}))
         self._load_env_states(st.get("envs"), int(ck.get("world_size", 1)))
         self.iteration = int(st["iteration"])
         self.log(f"[resume] {path}: iteration {self.iteration} (saved with world="
