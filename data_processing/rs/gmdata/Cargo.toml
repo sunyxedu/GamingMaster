@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 gmshard = { path = "../gmshard" }
+gmrules = { path = "../gmrules" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true
@@ -33,3 +34,4 @@ arrow-schema = "54"
 # riichi mahjong hand evaluation (yaku / yakuman) for exact hora legality; Apache-2.0,
 # https://github.com/smly/RiichiEnv (default features only: no Python bindings)
 riichienv-core = "=0.4.10"
+encoding_rs = "0.8"

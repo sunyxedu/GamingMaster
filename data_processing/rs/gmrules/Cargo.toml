@@ -1,0 +1,14 @@
+[package]
+name = "gmrules"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "GamingMaster game rules + observation / legal-action encoders, shared by the converters (gmdata) and the simulators (gmsim); no I/O"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true
+# chess_variants: shakmaty's variant rules (GPL-3.0-or-later, see data_processing/README.md)
+shakmaty = { version = "0.30.1", features = ["variant"] }

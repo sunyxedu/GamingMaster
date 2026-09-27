@@ -55,6 +55,7 @@ from model.games import generals as generals_adapter
 from model.games import lux as lux_adapter
 from model.games.base import densify_soft_target, soft_cross_entropy
 from model.games.clash_royale import cr_legal_from_obs
+from model.games.gmrules import resolve, rules_games
 from model.losses import hl_gauss_cross_entropy
 from model.optim import (
     TRM_BETAS,
@@ -172,6 +173,16 @@ META_ARCH_KEYS = {
     "lux": {"global_features": ("lux_global_features",),
             "sap_range": ("lux_sap_range",)},
 }
+
+# gmrules games (one module each in model/games/gmrules/): candidate-action games
+# are one categorical over the frame's candidates (nothing to teacher-force) with
+# the frame dimensions from the shard meta (written by gmdata traj.rs from the
+# FrameSpec); custom-schema games declare their own tables in their entry.
+for _game, _entry in rules_games().items():
+    LABEL_KEYS.setdefault(_game, tuple(_entry.label_keys))
+    META_ARCH_KEYS.setdefault(_game, _entry.meta_arch_keys())
+    if _entry.legal_from_obs is not None:
+        LEGAL_FROM_OBS.setdefault(_game, resolve(_entry.legal_from_obs))
 
 # The value a META_ARCH_KEYS meta key implies for shards written BEFORE the
 # converter recorded it (their meta lacks the key): check_meta_arch holds an

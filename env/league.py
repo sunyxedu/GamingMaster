@@ -30,7 +30,11 @@ opponents' actions in.  The league releases its opponents' streams when an
 env ends or changes hands; the learner's own streams are the caller's.
 
 Rollouts are meant to run in lockstep (see env/vec_game.py): then each
-network policy makes ONE batched ``step`` call per env step.
+network policy makes ONE batched ``step`` call per env step.  Per-seat streams of
+alternating gmrules games (env/vec_gmsim.py, ``lockstep = False``) are idle
+on the other seats' turns: a stream restarts on ``new_episode`` or at its first
+frame (``step_idx`` 0, :func:`restart_streams`) and is released when its ENV's
+episode ends, never merely because the row is inactive for a step.
 
 Snapshot league: :class:`SnapshotPool` (frozen copies of past learners; with
 ``store_dir`` one file each and only ids / meta in ``state_dict``) +
@@ -70,6 +74,25 @@ def release(policy: Policy, streams: Sequence[int]) -> None:
     fn = getattr(policy, "release_streams", None)
     if fn is not None and len(streams):
         fn(streams)
+
+
+def restart_streams(obs: VecObs, rows: torch.Tensor) -> List[int]:
+    """Streams of ``rows`` whose temporal state must restart: ``new_episode``, or
+    the stream's first frame (``step_idx`` 0) — per-seat streams of alternating
+    gmrules games get their first frame after the env's reset step."""
+    ne = obs.new_episode[rows] | (obs.step_idx[rows] == 0)
+    return obs.stream_id[rows][ne].tolist()
+
+
+def env_streams(obs: VecObs, envs) -> List[int]:
+    """Every stream of the envs ``envs`` (iterable of env ids)."""
+    envs = torch.as_tensor(sorted(envs), dtype=torch.long)
+    return obs.stream_id[torch.isin(obs.env_id, envs.to(obs.env_id.device))].tolist()
+
+
+def live_envs(obs: VecObs) -> set:
+    """Envs whose episode is still running (some row has a frame)."""
+    return set(obs.env_id[obs.active].tolist())
 
 
 def scatter_rows(actions: Mapping[str, torch.Tensor], rows: torch.Tensor,
@@ -338,7 +361,7 @@ class NetworkPolicy:
     def __call__(self, obs: VecObs, rows: torch.Tensor) -> Dict[str, torch.Tensor]:
         rows = torch.as_tensor(rows, dtype=torch.long).reshape(-1)
         streams = obs.stream_id[rows].tolist()
-        restart = [s for s, ne in zip(streams, obs.new_episode[rows].tolist()) if ne]
+        restart = restart_streams(obs, rows)
         if restart:
             self.stepper.reset(restart)
         with _eval_mode(self.net, self.greedy):
@@ -606,7 +629,10 @@ class League:
     by ``opponent_weights`` (uniform by default).  ``mirror_prob`` is the
     probability of a mirror episode (1.0, the default, or no opponents: pure
     mirror).  ``learner_seat`` pins the learner's seat in non-mirror episodes
-    (None: uniform per episode).
+    (None: uniform per episode).  Team games (``env.teams``, e.g. bridge
+    partnerships): the learner plays its seat's whole team and the opponent
+    the other team(s) — a policy never shares a team with another (bridge:
+    the declarer's controller also plays dummy's cards).
 
     Call :meth:`update` with every VecObs the env returns (it assigns the
     envs whose rows start a new episode and releases the opponents' streams
@@ -672,6 +698,9 @@ class League:
         name = self._names[int(torch.multinomial(self._weights, 1, generator=self._gen))]
         self.learner_seats[i] = False
         self.learner_seats[i, seat] = True
+        teams = getattr(self.env, "teams", None)
+        if teams is not None:       # team games: the learner takes its seat's whole team
+            self.learner_seats[i] = torch.tensor([t == teams[seat] for t in teams])
         self.opponent_of[i] = name
         theirs = ~self.learner_seats[i].to(obs.stream_seats.device)
         rows = (obs.env_id == i) & (obs.stream_seats & theirs).any(-1)
@@ -729,10 +758,16 @@ class League:
         """[R, S] learner seats of each row's env (on the VecObs device)."""
         return self.learner_seats.to(obs.env_id.device)[obs.env_id]
 
+    def learner_streams(self, obs: VecObs) -> torch.Tensor:
+        """[R] bool: rows whose stream the learner plays on, active or not (a
+        per-seat stream of an alternating game is idle on the other seats' turns
+        but still earns its seat's rewards)."""
+        return (obs.stream_seats & self._seats(obs)).any(-1)
+
     def learner_rows(self, obs: VecObs) -> torch.Tensor:
         """[R] bool: active rows whose stream the learner plays on (its network
         must process them, acting or not)."""
-        return obs.active & (obs.stream_seats & self._seats(obs)).any(-1)
+        return obs.active & self.learner_streams(obs)
 
     def learner_acting(self, obs: VecObs) -> torch.Tensor:
         """[R] bool: active rows where the learner is to play — its action is
@@ -780,16 +815,30 @@ class League:
         return out
 
     def learner_score(self, winner: torch.Tensor,
-                      learner_seats: Optional[torch.Tensor] = None) -> torch.Tensor:
+                      learner_seats: Optional[torch.Tensor] = None,
+                      returns: Optional[torch.Tensor] = None) -> torch.Tensor:
         """[N] learner result per env from ``info["winner"]``: 1 win, 0.5 draw,
         0 loss; NaN for mirror episodes (the learner plays both sides).
         ``learner_seats`` defaults to the current assignment (pass
-        ``prev_learner_seats`` after an autoreset ``update``)."""
+        ``prev_learner_seats`` after an autoreset ``update``).
+
+        ``returns`` [N, S] (optional: the episodes' final per-seat payoffs, the
+        gmsim envs' ``info["returns"]``) scores SHARED wins: an episode without a
+        single winner (``winner`` −1) whose top payoff some but not all seats
+        share — teammates of a side decided in play (Dou Dizhu's two peasants),
+        co-winners — is a win when a learner seat shares the top, a loss
+        otherwise; all seats tied (a draw, a truncation) stays 0.5."""
         seats = self.learner_seats if learner_seats is None else learner_seats.cpu()
         w = winner.long().cpu()
         won = torch.zeros(len(w), dtype=torch.bool)
         ok = w >= 0
         won[ok] = seats[ok.nonzero().squeeze(1), w[ok]]
+        if returns is not None:
+            r = returns.detach().double().cpu()
+            top = r == r.max(-1, keepdim=True).values
+            shared = ~ok & ~top.all(-1)
+            won[shared] = (top & seats)[shared].any(-1)
+            ok = ok | shared
         score = torch.where(ok, won.double(), torch.full((len(w),), 0.5, dtype=torch.float64))
         return torch.where(seats.all(-1), torch.full_like(score, float("nan")), score)
 
@@ -825,25 +874,34 @@ def play_episodes(env: VecGameEnv, league: League, learner: Policy, *,
     league.update(obs)          # resets the drawn opponents' streams
     N = env.num_envs
     winner = torch.full((N,), -1, dtype=torch.long)
+    returns: Optional[torch.Tensor] = None      # final per-seat payoffs (gmsim envs)
     episode_len = torch.zeros(N, dtype=torch.long)
     steps = 0
     try:
         while bool(obs.active.any()) and (max_steps is None or steps < max_steps):
             rows = league.learner_rows(obs).nonzero().squeeze(1)
             la = scatter_rows(learner(obs, rows), rows, obs.n_rows) if rows.numel() else {}
-            was_active = obs.active
+            was_live = live_envs(obs)
             obs, _, done, info = env.step(league.act(obs, la))
             winner = torch.where(done, info["winner"], winner)
+            if "returns" in info:
+                ret = info["returns"].double()
+                returns = torch.where(done.unsqueeze(-1), ret,
+                                      torch.zeros_like(ret) if returns is None else returns)
             episode_len = torch.where(done, info["episode_len"], episode_len)
             league.update(obs)
-            release(learner, obs.stream_id[was_active & ~obs.active].tolist())
+            # streams of envs whose episode ended (a per-seat row that merely waits
+            # for another seat's turn keeps its state)
+            ended = was_live - live_envs(obs)
+            if ended:
+                release(learner, env_streams(obs, ended))
             steps += 1
     finally:
         # max_steps cut-offs / errors: nothing keeps per-stream state
         release(learner, obs.stream_id.tolist())
         for i in list(league._held):
             league._release_env(i)
-    return {"winner": winner, "score": league.learner_score(winner),
+    return {"winner": winner, "score": league.learner_score(winner, returns=returns),
             "learner_seats": league.learner_seats.clone(),
             "opponent": list(league.opponent_of),
             "opponent_snapshot": list(league.opponent_snapshot),

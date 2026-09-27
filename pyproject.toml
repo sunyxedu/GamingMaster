@@ -17,6 +17,9 @@ dependencies = [
     "python-shogi>=1.1.1",
     "zstandard>=0.25.0",
     "tomli>=2.0; python_version < '3.11'",  # model profiles on Python 3.10
+    # gmrules simulators / replay (PyO3 extension built from source by maturin on
+    # `uv sync`; needs cargo on PATH — data_processing/rs/gmsim/README.md)
+    "gmsim",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +27,9 @@ arc3 = ["arc-agi; python_version >= '3.13'"]   # tier-1 ARC-AGI-3 adapter (metah
 # Lux AI S3 simulator (env/vec_lux.py): the official JAX env, pinned to the rules
 # the Kaggle competition ran (= kaggle-environments 1.17.2's vendored copy)
 lux = ["luxai-s3==0.2.1"]
+
+[tool.uv.sources]
+gmsim = { path = "data_processing/rs/gmsim" }
 
 [project.scripts]
 prepare-data = "scripts.prepare_data:main"

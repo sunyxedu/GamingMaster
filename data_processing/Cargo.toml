@@ -2,6 +2,17 @@
 resolver = "2"
 members = [
     "rs/gmshard",
+    "rs/gmrules",
+    "rs/gmdata",
+    "rs/gmsim",
+    "games/clash_royale/crdata",
+]
+# `cargo build|test` without -p: everything but the PyO3 extension (gmsim is
+# built by maturin through `uv sync`, see rs/gmsim/README.md; its logic is
+# tested in gmrules and from Python)
+default-members = [
+    "rs/gmshard",
+    "rs/gmrules",
     "rs/gmdata",
     "games/clash_royale/crdata",
 ]
