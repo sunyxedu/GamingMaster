@@ -170,9 +170,14 @@ def _legal(game: str, cfg, obs, g) -> Optional[Dict[str, torch.Tensor]]:
     if game == "mahjong":
         return {"action_type": m(8), "tile_of": m(34)}
     if game == "pokemon":
+        # both move heads' masks (identity: move_id over the vocabulary) and the
+        # revealed-move ids the decoder conditions on (state, from obs)
         return {"action_type": m(cfg.n_action_types), "move": m(cfg.n_move_slots),
+                "move_id": m(cfg.pokemon_move_buckets),
                 "switch": m(cfg.team_slots), "tera": torch.rand(B, T, generator=g) < 0.5,
-                "active_idx": torch.randint(0, cfg.team_slots, (B, T), generator=g)}
+                "active_idx": torch.randint(0, cfg.team_slots, (B, T), generator=g),
+                "move_ids": torch.randint(0, cfg.pokemon_move_buckets, (B, T, cfg.n_move_slots),
+                                          generator=g)}
     if game == "clash_royale":
         from model.games.clash_royale import n_card_tokens
         return {"card": m(n_card_tokens(cfg)), "placement": m(cfg.arena_h * cfg.arena_w)}
@@ -548,5 +553,6 @@ def _conditioned_on_sample(game: str, key: str) -> bool:
                                                   "piece_logits"),
              "starcraft": ("type_logits",), "hearthstone": ("type_logits",),
              "clash_royale": ("wait_logits", "card_logits"), "mahjong": ("type_logits",),
-             "pokemon": ("type_logits",)}
+             # the move / switch heads condition on the sampled type; tera does not
+             "pokemon": ("action_type_logits", "tera_logit")}
     return game in first and key not in first[game]

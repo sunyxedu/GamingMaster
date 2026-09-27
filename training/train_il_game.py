@@ -146,8 +146,11 @@ META_ARCH_KEYS = {
         "arena_h", "arena_w", "arena_channels", "hand_size", "n_cards",
         "card_feature_dim", "cr_global_features", "deck_size")},
         "card_tokens": ("cr_card_tokens",)},
+    # converter v2 records the field-token width (v1: 20; v2 appends the
+    # forced-switch / team-preview request flags → 22)
     "pokemon": {"move_buckets": ("pokemon_move_buckets",),
-                "species_buckets": ("pokemon_species_buckets",)},
+                "species_buckets": ("pokemon_species_buckets",),
+                "field_features": ("pokemon_field_features",)},
     # gio records (GeneralsGioDataset.shard_meta / `gmdata generals shard`);
     # with turn_globals the net has TURN_GLOBAL_FEATURES more globals than
     # the data (meta_arch_value), appended at batch time (OBS_HOOKS)
@@ -172,15 +175,18 @@ META_ARCH_KEYS = {
 # These equal the config dataclass / registry defaults, so a fresh run on
 # old shards builds the legacy architecture without injecting anything
 # (apply_meta_arch_defaults only reads keys the meta actually has) — except
-# clash_royale: its converter_version <= 2 shards carry a hindsight hand (a
+# (1) clash_royale: its converter_version <= 2 shards carry a hindsight hand (a
 # future leak), so a fresh default ("deck") net on them fails loudly instead;
-# --override cr_card_tokens=hand trains the legacy net on them.
+# --override cr_card_tokens=hand trains the legacy net on them; (2) config
+# defaults that changed with the new generation, which META_LEGACY_IMPLIES
+# injects (pokemon's move head).
 META_LEGACY = {
     "go": {"global_features": 0},
     "chess": {"global_features": 8},
     "shogi": {"global_features": 4},
     "lux": {"global_features": 6, "sap_range": 0},
     "clash_royale": {"card_tokens": "hand"},
+    "pokemon": {"field_features": 20},
 }
 
 # First converter generation of the frozen pre-training schema per game:
@@ -188,7 +194,7 @@ META_LEGACY = {
 # the frozen inputs / targets, so the trainers warn (or, with
 # --require_frozen_schema, refuse).
 SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 2, "lux": 2,
-                                   "clash_royale": 3}
+                                   "clash_royale": 3, "pokemon": 2}
 _SCHEMA_FREEZE_CONTENT = {
     "chess": "repetition flags + legal masks",
     "go": "side-to-move/komi globals",
@@ -197,6 +203,8 @@ _SCHEMA_FREEZE_CONTENT = {
     "lux": "env-param globals + sap targets",
     "clash_royale": "deck tokens with the causal hand belief; older shards infer the hand "
                     "from the whole match",
+    "pokemon": "move-identity targets, forced-switch / lead / unlabelled-turn frames, "
+               "request-phase flags + legal masks",
 }
 
 
@@ -305,14 +313,28 @@ def meta_arch_value(game: str, meta_key: str, value, cfg_get):
     return value
 
 
+# Config fields an old converter generation implies without a meta key of
+# their own: when the shard meta lacks META key K (the converter predates it),
+# a fresh run also defaults these fields, so pre-freeze shards keep training
+# the architecture they were made for.  pokemon: converter v1 shards (no
+# "field_features") carry only the revealed-move slot target tgt.move_idx —
+# the identity move head (the config default) trains on v2's tgt.move_id.
+META_LEGACY_IMPLIES = {"pokemon": {"field_features": {"pokemon_move_head": "slot"}}}
+
+
 def apply_meta_arch_defaults(game: str, kw: Dict, shard_meta: Dict) -> Dict:
     """Fresh runs: default ``game``'s data-dependent config fields
-    (META_ARCH_KEYS) from the shard meta; explicit values in ``kw`` win
-    (check_meta_arch then rejects a contradiction)."""
+    (META_ARCH_KEYS) from the shard meta, plus META_LEGACY_IMPLIES when the
+    meta predates a key; explicit values in ``kw`` win (check_meta_arch then
+    rejects a contradiction)."""
     for meta_key, cfg_keys in META_ARCH_KEYS.get(game, {}).items():
         if meta_key in shard_meta:
             v = meta_arch_value(game, meta_key, shard_meta[meta_key], kw.get)
             for ck in cfg_keys:
+                kw.setdefault(ck, v)
+    for meta_key, implied in META_LEGACY_IMPLIES.get(game, {}).items():
+        if meta_key not in shard_meta:
+            for ck, v in implied.items():
                 kw.setdefault(ck, v)
     return kw
 

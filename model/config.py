@@ -190,6 +190,8 @@ LEGACY_CONFIG_DEFAULTS = {
     "cr_wait_time": "frame",
     "cr_card_tokens": "hand",
     "card_feature_dim": 8,
+    # Pokémon adapter (model/games/pokemon.py): the revealed-move slot head
+    "pokemon_move_head": "slot",
 }
 
 #: LEGACY_CONFIG_DEFAULTS keys of ONE game's config class → a marker field
@@ -202,6 +204,8 @@ LEGACY_CONFIG_SCOPE = {
     "cr_wait_time": "cr_global_features",
     "cr_card_tokens": "cr_global_features",
     "card_feature_dim": "cr_global_features",
+    # every loadable pokemon config: the slot head needs pokemon_move_buckets
+    "pokemon_move_head": "pokemon_move_buckets",
 }
 
 
