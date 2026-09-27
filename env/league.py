@@ -809,16 +809,30 @@ class League:
         return out
 
     def learner_score(self, winner: torch.Tensor,
-                      learner_seats: Optional[torch.Tensor] = None) -> torch.Tensor:
+                      learner_seats: Optional[torch.Tensor] = None,
+                      returns: Optional[torch.Tensor] = None) -> torch.Tensor:
         """[N] learner result per env from ``info["winner"]``: 1 win, 0.5 draw,
         0 loss; NaN for mirror episodes (the learner plays both sides).
         ``learner_seats`` defaults to the current assignment (pass
-        ``prev_learner_seats`` after an autoreset ``update``)."""
+        ``prev_learner_seats`` after an autoreset ``update``).
+
+        ``returns`` [N, S] (optional: the episodes' final per-seat payoffs, the
+        gmsim envs' ``info["returns"]``) scores SHARED wins: an episode without a
+        single winner (``winner`` −1) whose top payoff some but not all seats
+        share — teammates of a side decided in play (Dou Dizhu's two peasants),
+        co-winners — is a win when a learner seat shares the top, a loss
+        otherwise; all seats tied (a draw, a truncation) stays 0.5."""
         seats = self.learner_seats if learner_seats is None else learner_seats.cpu()
         w = winner.long().cpu()
         won = torch.zeros(len(w), dtype=torch.bool)
         ok = w >= 0
         won[ok] = seats[ok.nonzero().squeeze(1), w[ok]]
+        if returns is not None:
+            r = returns.detach().double().cpu()
+            top = r == r.max(-1, keepdim=True).values
+            shared = ~ok & ~top.all(-1)
+            won[shared] = (top & seats)[shared].any(-1)
+            ok = ok | shared
         score = torch.where(ok, won.double(), torch.full((len(w),), 0.5, dtype=torch.float64))
         return torch.where(seats.all(-1), torch.full_like(score, float("nan")), score)
 
@@ -854,6 +868,7 @@ def play_episodes(env: VecGameEnv, league: League, learner: Policy, *,
     league.update(obs)          # resets the drawn opponents' streams
     N = env.num_envs
     winner = torch.full((N,), -1, dtype=torch.long)
+    returns: Optional[torch.Tensor] = None      # final per-seat payoffs (gmsim envs)
     episode_len = torch.zeros(N, dtype=torch.long)
     steps = 0
     try:
@@ -863,6 +878,10 @@ def play_episodes(env: VecGameEnv, league: League, learner: Policy, *,
             was_live = live_envs(obs)
             obs, _, done, info = env.step(league.act(obs, la))
             winner = torch.where(done, info["winner"], winner)
+            if "returns" in info:
+                ret = info["returns"].double()
+                returns = torch.where(done.unsqueeze(-1), ret,
+                                      torch.zeros_like(ret) if returns is None else returns)
             episode_len = torch.where(done, info["episode_len"], episode_len)
             league.update(obs)
             # streams of envs whose episode ended (a per-seat row that merely waits
@@ -876,7 +895,7 @@ def play_episodes(env: VecGameEnv, league: League, learner: Policy, *,
         release(learner, obs.stream_id.tolist())
         for i in list(league._held):
             league._release_env(i)
-    return {"winner": winner, "score": league.learner_score(winner),
+    return {"winner": winner, "score": league.learner_score(winner, returns=returns),
             "learner_seats": league.learner_seats.clone(),
             "opponent": list(league.opponent_of),
             "opponent_snapshot": list(league.opponent_snapshot),

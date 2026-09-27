@@ -941,6 +941,7 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
     recs: List[Dict[str, Any]] = []
     st = WaveStats(mirror=int(league.is_mirror().sum()))
     winner = torch.full((env.num_envs,), -1, dtype=torch.long)
+    final_ret: Optional[torch.Tensor] = None    # per-seat payoffs at the end (gmsim envs)
     ep_len = torch.zeros(env.num_envs, dtype=torch.long)
     last: Dict[int, Tuple[int, int]] = {}    # row → (record, position) of its latest frame
     try:
@@ -987,6 +988,10 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
                         recs[k]["rewards"][pos] += rew[e].float()
                         recs[k]["done"][pos] |= bool(done[e])
             winner = torch.where(done, info["winner"].long(), winner)
+            if "returns" in info:           # shared wins (teammates) in learner_score
+                ret = info["returns"].double()
+                final_ret = torch.where(done.unsqueeze(-1), ret,
+                                        torch.zeros_like(ret) if final_ret is None else final_ret)
             ep_len = torch.where(done, info["episode_len"].long(), ep_len)
             league.update(nxt)
             obs = nxt
@@ -996,7 +1001,7 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
     streams = _assemble_streams(recs)
     st.episodes = env.num_envs
     st.ep_len_sum = float(ep_len.sum())
-    score = league.learner_score(winner)
+    score = league.learner_score(winner, returns=final_ret)
     ok = ~torch.isnan(score)
     st.score_sum, st.score_n = float(score[ok].sum()), int(ok.sum())
     st.tokens = int(sum(int(s.vmask.sum()) for s in streams))

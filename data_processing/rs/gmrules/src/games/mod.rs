@@ -12,9 +12,12 @@
 //!   pyffish), from-to frames; converter `gmdata xiangqi`.
 //! - [`backgammon`]: backgammon with the doubling cube (match / money play; full-move
 //!   candidates; gnubg-pinned).
+//! - [`doudizhu`]: Dou Dizhu (3 players, auction, landlord vs peasants; OpenSpiel's
+//!   `dou_dizhu` + four-with-two), candidate schema with factored kicker decisions.
 
 pub mod backgammon;
 pub mod breakthrough;
+pub mod doudizhu;
 pub mod goofspiel;
 pub mod kuhn_poker;
 pub mod pig;

@@ -125,6 +125,21 @@ class GmSimVecEnv(VecEnvBase):
         self._sim.reset(ids.tolist(), self._episode_seeds(len(ids), seed))
         return self.observe()
 
+    def reset_from(self, prefixes: Sequence[Any], *, env_ids: Optional[Sequence[int]] = None,
+                   seed: Optional[int] = None) -> VecObs:
+        """New episodes for ``env_ids`` (default: every env) that first play the
+        recorded trajectory ``prefixes`` (one per env, :meth:`trajectory` format;
+        every event verified), then go on with chance from the episode seeds.  The
+        rows' frames are the converter's frames of the records' next decisions
+        (golden tests on real records; RL from recorded positions)."""
+        if seed is not None:
+            self._seed_rngs(seed)
+        ids = self._env_ids(env_ids)
+        if len(prefixes) != len(ids):
+            raise ValueError(f"{len(prefixes)} prefixes for {len(ids)} envs")
+        self._sim.reset_from(ids.tolist(), self._episode_seeds(len(ids), seed), list(prefixes))
+        return self.observe()
+
     def obs_schema(self) -> Dict[str, Tuple[Tuple[int, ...], torch.dtype]]:
         return {t["name"]: (tuple(t["shape"]), _TORCH[t["dtype"]]) for t in self.spec["obs"]}
 
@@ -177,11 +192,14 @@ class GmSimVecEnv(VecEnvBase):
 
     def random_actions(self, obs: VecObs,
                        generator: Optional[torch.Generator] = None) -> Dict[str, torch.Tensor]:
-        """A uniformly random legal action per acting row (action keys, [R] each;
-        drawn by the simulator from a seed of the torch generator)."""
+        """A uniformly random legal action per acting row of ``obs`` (action keys,
+        one entry per row of ``obs`` — every row, or the rows of a
+        ``VecObs.select`` subset, e.g. a policy's rows in the league; drawn by the
+        simulator from a seed of the torch generator)."""
         gen = self._generator(generator)
         seed = int(torch.randint(0, 2**62, (1,), generator=gen))
-        return {k: torch.from_numpy(v) for k, v in self._sim.random_actions(seed).items()}
+        rows = obs.stream_id.long()            # stream id = row index (observe())
+        return {k: torch.from_numpy(v)[rows] for k, v in self._sim.random_actions(seed).items()}
 
     # ------------------------------------------------------------------
 

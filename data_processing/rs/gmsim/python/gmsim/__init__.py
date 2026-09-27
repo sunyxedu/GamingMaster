@@ -191,6 +191,18 @@ class Sim:
     def reset(self, env_ids: Sequence[int], seeds: Sequence[int]) -> None:
         self._s.reset([int(e) for e in env_ids], [int(s) for s in seeds])
 
+    def reset_from(self, env_ids: Sequence[int], seeds: Sequence[int],
+                   prefixes: Sequence[Events]) -> None:
+        """New episodes in ``env_ids`` that first play recorded trajectory
+        ``prefixes`` (one per env; every event verified: possible chance outcomes,
+        legal actions of the acting seats, whole simultaneous turns), then go on
+        with chance from ``seeds``.  A record's prefix up to a decision gives
+        exactly the converter's frame of that decision (per-seat ``step_idx`` =
+        the seat's decisions in the prefix): golden tests on real records, RL
+        episodes from recorded positions."""
+        flat = [events_array(p).reshape(-1).tolist() for p in prefixes]
+        self._s.reset_from([int(e) for e in env_ids], [int(s) for s in seeds], flat)
+
     def observe(self) -> Dict[str, Any]:
         """``obs`` / ``legal`` dicts of ``[R, ...]`` arrays + ``n_legal``, ``to_play``,
         ``step_idx`` (int64 [R]) and ``active``, ``new_episode``, ``forced`` (bool [R])."""
