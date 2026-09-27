@@ -178,6 +178,8 @@ META_ARCH_KEYS = {
             "sap_range": ("lux_sap_range",)},
     # ARC-AGI-3 trajectories (scripts/arc3_solve.py): the globals width and the grid
     "arc3": {"global_features": ("arc_global_features",), "grid": ("arc_grid",)},
+    # Honor of Kings 1v1 (gmdata hok convert): the research environment's feature width
+    "hok": {"features": ("hok_features",)},
 }
 
 # gmrules games (one module each in model/games/gmrules/): candidate-action games

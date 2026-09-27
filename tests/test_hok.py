@@ -5,7 +5,8 @@ Adapter (no gamecore needed): the encoder's 16 entity tokens; the rollout's
 button teacher-forced, the compact masks the rollout sampled with); every sampled
 argument is legal; greedy decoding is deterministic; il_head_terms decomposes
 il_loss, and the heads a button does not use are neither sampled into μ nor
-supervised.
+supervised.  IL (the gmdata hok convert schema): train_multi_game on whole records
+longer than the chunk length, with the shards' legal masks.
 """
 
 from __future__ import annotations
@@ -141,3 +142,42 @@ def test_il_head_terms_decompose_il_loss_and_skip_unused_heads():
         assert bool((w <= used[..., j]).all()), h
     loss["loss"].backward()
     assert net.action_decoder.target_head.net[0].weight.grad is not None
+
+
+def _hok_records(n, lengths, g):
+    """IL samples in the gmdata hok convert schema."""
+    out = []
+    for i, T in zip(range(n), lengths):
+        tgt = {"button_idx": torch.full((T,), 2), "legal_button": torch.ones(T, BUTTONS, dtype=torch.bool)}
+        for h in ARG_HEADS:
+            n_h = N_TARGETS if h == "target" else DIR_BINS
+            tgt[f"{h}_idx"] = torch.randint(0, n_h, (T,), generator=g)
+            if h != "target":
+                tgt[f"legal_{h}"] = torch.ones(T, DIR_BINS, dtype=torch.bool)
+        tgt["legal_target"] = torch.ones(T, BUTTONS, N_TARGETS, dtype=torch.bool)
+        sub = torch.zeros(T, 6, dtype=torch.bool)
+        sub[:, :3] = True                                         # Move: button + move_x/z
+        tgt["legal_sub_of"] = sub
+        for h in ("skill_x", "skill_z", "target"):
+            tgt[f"{h}_idx"][:] = -1
+        out.append({"obs": {"features": torch.rand(T, N_FEATURES, generator=g)}, "tgt": tgt,
+                    "meta": {"episode": i}})
+    return out
+
+
+def test_train_multi_game_learns_hok_shards_in_chunks(tmp_path):
+    """The converter's schema through train_multi_game: whole records longer than the
+    chunk length (trained chunk by chunk), the shards' legal masks (--il_legal_mask)."""
+    from data_processing.games.dataset import save_shard
+    from training import train_multi_game
+
+    g = torch.Generator().manual_seed(5)
+    (tmp_path / "hok").mkdir()
+    save_shard(str(tmp_path / "hok" / "a.pt"), "hok", _hok_records(3, (7, 20, 13), g),
+               meta={"features": N_FEATURES})
+    train_multi_game.main([
+        "--data", f"hok={tmp_path / 'hok'}", "--steps", "3", "--warmup_steps", "1",
+        "--eval_every", "0", "--device", "cpu", "--frames_per_batch", "16", "--chunk_len", "8",
+        "--max_len", "64", "--il_legal_mask", "--save_dir", str(tmp_path / "ck"),
+        "--override", *[f"{k}={v}" for k, v in TINY.items()]])
+    assert (tmp_path / "ck" / "multi_final.pt").is_file()
