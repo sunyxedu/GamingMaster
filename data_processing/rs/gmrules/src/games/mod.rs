@@ -16,12 +16,16 @@
 //!   `dou_dizhu` + four-with-two), candidate schema with factored kicker decisions.
 //! - [`skat`]: Skat (3 players, ISS rules; converter from the ISS game archive).
 //! - [`bridge`]: contract bridge (auction + card play, duplicate scoring; a team game).
+//! - [`hunl`]: heads-up no-limit Texas hold'em (ACPC rules; exact bet amounts in the
+//!   rules, abstracted bet-size candidates for the policy: a custom schema with the
+//!   candidate layout).
 
 pub mod backgammon;
 pub mod breakthrough;
 pub mod doudizhu;
 pub mod bridge;
 pub mod goofspiel;
+pub mod hunl;
 pub mod kuhn_poker;
 pub mod pig;
 pub mod chess_variants;
