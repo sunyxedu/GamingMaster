@@ -519,13 +519,17 @@ def test_meta_registry_frozen_schema_keys():
                                      "sap_range": ("lux_sap_range",)}
     assert META_ARCH_KEYS["pokemon"] == {"move_buckets": ("pokemon_move_buckets",),
                                          "species_buckets": ("pokemon_species_buckets",),
-                                         "field_features": ("pokemon_field_features",)}
+                                         "field_features": ("pokemon_field_features",),
+                                         "move_vocab": ("pokemon_move_vocab",),
+                                         "species_vocab": ("pokemon_species_vocab",)}
 
 
 #: games whose pre-freeze shards must NOT train a fresh default net: clash_royale
 #: converter_version <= 2 inferred the hand from the whole match (a future leak),
-#: so the default deck-token net refuses them (the legacy net still accepts them)
-REFUSE_PRE_FREEZE = {"clash_royale": {"cr_card_tokens": "hand", "card_feature_dim": 8}}
+#: pokemon converter v1 / v2 hashed the move / species names into colliding buckets,
+#: so the default net refuses them (the legacy net still accepts them)
+REFUSE_PRE_FREEZE = {"clash_royale": {"cr_card_tokens": "hand", "card_feature_dim": 8},
+                     "pokemon": {"pokemon_move_vocab": 0, "pokemon_species_vocab": 0}}
 
 
 def test_meta_legacy_values_are_the_registry_defaults():
@@ -584,29 +588,62 @@ def test_go_and_lux_meta():
 
 
 def test_pokemon_meta():
-    """converter v2 shards (field_features 22: + forced-switch / team-preview flags) build the
-    v2 field token in fresh runs; v1 shards (no key) are held to the legacy 20."""
+    """converter v3 shards (exact Showdown vocabularies: move_vocab / species_vocab sizes, 22
+    field features) build the exact tables in fresh runs.  Hashed-bucket shards (v2: 22 field
+    features, v1: 20 — neither has a vocab key, i.e. implied 0) refuse a fresh default net
+    unless the legacy hashed net is asked for explicitly; hashed checkpoints refuse v3."""
+    from data_processing.games.pokemon import MOVE_VOCAB_SIZE, SPECIES_VOCAB_SIZE, VOCAB_VERSION
+
+    v3 = {"field_features": 22, "move_vocab": 900, "species_vocab": 1400,
+          "vocab_version": VOCAB_VERSION}
+    kw = apply_meta_arch_defaults("pokemon", dict(TINY), v3)
+    assert (kw["pokemon_field_features"], kw["pokemon_move_vocab"],
+            kw["pokemon_species_vocab"]) == (22, 900, 1400)
+    net = build_game_network("pokemon", **kw)
+    assert net.action_decoder.move_embed.num_embeddings == 900
+    assert net.obs_encoder.species_embed.num_embeddings == 1400
+    check_meta_arch("pokemon", net.cfg, v3)
+    fresh = build_game_network("pokemon", **TINY,                    # the vendored vocabulary
+                               pokemon_field_features=22).cfg
+    assert (fresh.pokemon_move_vocab, fresh.pokemon_species_vocab) == (MOVE_VOCAB_SIZE,
+                                                                       SPECIES_VOCAB_SIZE)
+    with pytest.raises(ValueError, match="move_vocab=900 but the model has "
+                                         f"pokemon_move_vocab={MOVE_VOCAB_SIZE}"):
+        check_meta_arch("pokemon", fresh, v3)          # another vocabulary version
+    hashed = dict(pokemon_move_vocab=0, pokemon_species_vocab=0)
+    with pytest.raises(ValueError, match="pokemon_move_vocab=0.*fresh pokemon adapter"):
+        check_meta_arch("pokemon", build_game_network("pokemon", **TINY, **hashed,
+                                                      pokemon_field_features=22).cfg, v3)
+    # v2 (hashed) shards: the fresh default net refuses them, naming the way out ...
     v2 = {"field_features": 22, "move_buckets": 1024, "species_buckets": 512}
     kw = apply_meta_arch_defaults("pokemon", dict(TINY), v2)
+    assert "pokemon_move_vocab" not in kw
+    with pytest.raises(ValueError, match="move_vocab=0 .implied.*--override pokemon_move_vocab=0"):
+        check_meta_arch("pokemon", build_game_network("pokemon", **kw).cfg, v2)
+    # ... and the explicit legacy net trains on them (buckets from the meta)
+    kw = apply_meta_arch_defaults("pokemon", {**TINY, **hashed}, v2)
+    old = build_game_network("pokemon", **kw)
     assert (kw["pokemon_field_features"], kw["pokemon_move_buckets"]) == (22, 1024)
-    net = build_game_network("pokemon", **kw)
-    check_meta_arch("pokemon", net.cfg, v2)
-    legacy = build_game_network("pokemon", **TINY).cfg
-    check_meta_arch("pokemon", legacy, {"move_buckets": 256, "species_buckets": 512})
+    assert old.action_decoder.move_embed.num_embeddings == 1024
+    check_meta_arch("pokemon", old.cfg, v2)
     with pytest.raises(ValueError, match="pokemon_field_features=20"):
         check_meta_arch("pokemon", SimpleNamespace(pokemon_field_features=20,
                                                    pokemon_move_buckets=1024,
                                                    pokemon_species_buckets=512), v2)
     with pytest.raises(ValueError, match="field_features=20 .implied"):
-        check_meta_arch("pokemon", net.cfg, {"move_buckets": 1024, "species_buckets": 512})
-    # the move head: v2 shards take the config default (identity); v1 shards (no
+        check_meta_arch("pokemon", old.cfg, {"move_buckets": 1024, "species_buckets": 512})
+    # the move head: v2 / v3 shards take the config default (identity); v1 shards (no
     # field_features, no tgt.move_id) keep the legacy slot head in fresh runs — the identity
     # head cannot train on them — unless the command line says otherwise
     assert net.cfg.pokemon_move_head == "identity" and "pokemon_move_head" not in kw
     v1 = {"move_buckets": 256, "species_buckets": 512}
-    old = build_game_network("pokemon", **apply_meta_arch_defaults("pokemon", dict(TINY), v1)).cfg
+    kw = apply_meta_arch_defaults("pokemon", {**TINY, **hashed}, v1)
+    old = build_game_network("pokemon", **kw).cfg
     assert (old.pokemon_move_head, old.pokemon_field_features) == ("slot", 20)
     check_meta_arch("pokemon", old, v1)
+    with pytest.raises(ValueError, match="implied"):
+        check_meta_arch("pokemon", build_game_network(
+            "pokemon", **apply_meta_arch_defaults("pokemon", dict(TINY), v1)).cfg, v1)
     explicit = apply_meta_arch_defaults("pokemon", {**TINY, "pokemon_move_head": "identity"}, v1)
     assert explicit["pokemon_move_head"] == "identity"
 
@@ -614,10 +651,12 @@ def test_pokemon_meta():
 def test_schema_freeze_warning():
     assert SCHEMA_FREEZE_CONVERTER_VERSION == {"chess": 3, "go": 2, "shogi": 2,
                                                "mahjong": 3, "lux": 2, "clash_royale": 3,
-                                               "pokemon": 2}
+                                               "pokemon": 3}
     assert "move-identity" in schema_freeze_warning("pokemon",
                                                     SimpleNamespace(converter_version=1))
-    assert schema_freeze_warning("pokemon", SimpleNamespace(converter_version=2)) is None
+    msg = schema_freeze_warning("pokemon", SimpleNamespace(converter_version=2))
+    assert msg.startswith("pokemon shards have converter_version 2 < 3") and "exact" in msg
+    assert schema_freeze_warning("pokemon", SimpleNamespace(converter_version=3)) is None
     msg = schema_freeze_warning("chess", SimpleNamespace(converter_version=2))
     assert msg.startswith("chess shards have converter_version 2 < 3: they predate the "
                           "frozen pre-training schema")
@@ -678,7 +717,7 @@ def _decoder_cases():
         HearthstoneEncoder,
     )
     from model.games.lux import LuxConfig, LuxDecoder, LuxEncoder, lux_sap_legal
-    from model.games.pokemon import PokemonConfig, PokemonDecoder, PokemonEncoder
+    from model.games.pokemon import PokemonConfig, PokemonDecoder, PokemonEncoder, n_move_ids
     from model.games.starcraft import RTSDecoder, StarCraftConfig, StarCraftEncoder
     from model.network import GeneralsNetwork
 
@@ -702,7 +741,7 @@ def _decoder_cases():
     # converter v2 targets: move identity (−1 = none), unlabelled frames
     tgt = {"action_type": torch.randint(0, 2, (B, T), generator=g),
            "move_idx": torch.randint(-1, 4, (B, T), generator=g),
-           "move_id": torch.randint(-1, cfg.pokemon_move_buckets, (B, T), generator=g),
+           "move_id": torch.randint(-1, n_move_ids(cfg), (B, T), generator=g),
            "switch_idx": torch.randint(0, 6, (B, T), generator=g),
            "tera": torch.randint(0, 2, (B, T), generator=g),
            "active_idx": torch.randint(0, 6, (B, T), generator=g),

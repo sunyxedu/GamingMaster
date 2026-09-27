@@ -7,9 +7,24 @@ Singles v1 token layout (``n_tokens = 13``):
     slots 6-11   opponent team
     slot  12     field token (weather / terrain / turn / side conditions)
 
-Each Pokémon slot carries a hash-bucket species embedding (species names
-are hashed into ``pokemon_species_buckets`` ids by the data pipeline —
-id 0 is reserved for "unknown") plus a small numeric feature vector.
+Each Pokémon slot carries a species embedding plus a small numeric
+feature vector.  Species and move names become ids through one of two
+schemes (the config's, :func:`n_species_ids` / :func:`n_move_ids`):
+
+    exact    (``pokemon_species_vocab`` / ``pokemon_move_vocab`` > 0; converter
+             v3, the default) the Showdown vocabularies of
+             ``data_processing/games/pokemon`` (showdown_vocab.json, generated
+             from Pokémon Showdown's data): 0 none, 1 UNK (a name the
+             vocabulary does not know), 2.. one id per move / per species or
+             forme that plays differently — no two names share an id.  The
+             vocabulary is append-only, so a net whose table is smaller than
+             the vendored vocabulary reads the newer names as UNK.
+    hashed   (both 0: configs saved before the fields existed,
+             model.config.LEGACY_CONFIG_DEFAULTS; converter v1 / v2 shards) crc32
+             buckets of the name (:func:`move_bucket`) — ``pokemon_species_buckets``
+             / ``pokemon_move_buckets`` ids, 0 = none; distinct names can share an
+             id.
+
 Slots whose species is unknown (``slot_mask`` False — e.g. no team
 preview) are replaced by a dedicated learnable "empty" embedding, the
 Hearthstone pattern.
@@ -31,8 +46,8 @@ the single source of truth shared with the converter via the
     16     tera                     is terastallized
 
 Field-token features (``pokemon_field_features``: 20 for converter v1
-shards and legacy configs, 22 for converter v2 — the trainers take it from
-the shard meta ``field_features``):
+shards and legacy configs, 22 from converter v2 on — the trainers take it
+from the shard meta ``field_features``):
 
     0-4    weather one-hot          sun/rain/sand/snow/other (all 0 = clear)
     5-8    terrain one-hot          electric/grassy/misty/psychic
@@ -45,22 +60,26 @@ the shard meta ``field_features``):
     21     team-preview request     (v2) the lead choice
 
 obs keys:
-    species_ids [B, T, 12] long     hash-bucket species ids (0 = unknown)
+    species_ids [B, T, 12] long     species ids (0 = none)
     poke_feats  [B, T, 12, F]       numeric features above
     slot_mask   [B, T, 12] bool     True = species known (slot exists)
     field_seq   [B, T, 20 | 22]     field features above
-    move_ids    [B, T, 4] long      hash ids of the first four moves the
-                                    active Pokémon REVEALED before the frame
+    move_ids    [B, T, 4] long      ids of the first four moves the active
+                                    Pokémon REVEALED before the frame
                                     (0 = none yet) — state for the decoder,
                                     forwarded as ``legal["move_ids"]``
                                     (training.train_il_game.LEGAL_FROM_OBS)
 
-Frames (converter v2, data_processing/rs/gmdata/src/pokemon.rs): one per
-request the player answers — the team-preview lead, every turn (with a
+Frames (converter v2 / v3, data_processing/rs/gmdata/src/pokemon.rs): one
+per request the player answers — the team-preview lead, every turn (with a
 masked label, ``tgt.action_known`` 0 / ``action_type`` −1, when the choice
 is not visible in the log) and every forced switch, snapshotted when the
 request is issued.  A live bot calls the network at every request with the
-same flags (field 20 on ``forceSwitch`` requests, 21 at team preview).
+same flags (field 20 on ``forceSwitch`` requests, 21 at team preview), and
+builds ``species_ids`` / ``move_ids`` from its battle-log tracker through
+:func:`species_id` / :func:`move_id` — converter v3's exact ids (a slot shows
+the forme the log last revealed: the team-preview ``Urshifu-*`` until the
+switch-in names the forme, permanent ``|detailschange|`` formes).
 
 ``frame_mask`` is intentionally a no-op: the encoder has no batch
 statistics (no BatchNorm — only per-frame pointwise Linear/Embedding),
@@ -72,8 +91,8 @@ Action space:
 
     type 0 = move    argument (``pokemon_move_head``):
                      "identity" (default): a categorical over the whole move
-                       vocabulary — the ``pokemon_move_buckets`` hash ids of
-                       move names (id 0 = no move, never chosen).  Move v is
+                       vocabulary — the :func:`n_move_ids` move ids (id 0 = no
+                       move, never chosen).  Move v is
                        scored by its embedding (the table that also embeds
                        ``move_ids``) against a query from (active_embed,
                        type_embed, ll, the revealed moves), plus a learned
@@ -83,7 +102,8 @@ Action space:
                        private until revealed — and a live bot masks it to
                        the moves of its request: ``legal["move_id"]``
                        [.., V] bool, built by :func:`request_move_mask` /
-                       :func:`legal_from_request`.  Sampled / replayed as
+                       :func:`legal_from_request` through the config's id
+                       scheme (:func:`move_id`).  Sampled / replayed as
                        ``actions["move_id"]``.
                      "slot" (legacy — configs saved before the field
                        existed, model.config.LEGACY_CONFIG_DEFAULTS): a
@@ -114,6 +134,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from data_processing.games.pokemon import ID_UNK, MOVE_VOCAB_SIZE, SPECIES_VOCAB_SIZE, VOCAB
 from model.config import ModelConfig
 from model.games.base import (
     ActionDecoder,
@@ -155,14 +176,58 @@ NO_MOVE_LOGIT = -1e4
 
 
 def move_bucket(name: str, n_buckets: int) -> int:
-    """The converter's hash id of a move (or species) name — gmdata pokemon
-    ``bucket``: 0 for the empty name, else crc32 of the lowercase
-    alphanumerics mod (n_buckets − 1), plus 1.  Request move names ("Earthquake")
-    and ids ("earthquake") give the same id."""
+    """The hashed id of a move (or species) name of converter v1 / v2 (gmdata
+    pokemon ``bucket``, the legacy scheme): 0 for the empty name, else crc32 of
+    the lowercase alphanumerics mod (n_buckets − 1), plus 1.  Request move
+    names ("Earthquake") and ids ("earthquake") give the same id."""
     if not name:
         return 0
     key = "".join(c for c in name.lower() if c.isalnum())
     return zlib.crc32(key.encode("utf-8")) % (n_buckets - 1) + 1
+
+
+def n_move_ids(cfg) -> int:
+    """Move id count of a config (the move embedding / identity-head size):
+    its exact vocabulary (``pokemon_move_vocab``), else its hash buckets."""
+    return getattr(cfg, "pokemon_move_vocab", 0) or cfg.pokemon_move_buckets
+
+
+def n_species_ids(cfg) -> int:
+    """Species id count of a config (the species embedding size): its exact
+    vocabulary (``pokemon_species_vocab``), else its hash buckets."""
+    return getattr(cfg, "pokemon_species_vocab", 0) or cfg.pokemon_species_buckets
+
+
+def _check_cfg(cfg) -> None:
+    if not hasattr(cfg, "pokemon_move_buckets"):
+        raise TypeError(f"expected the network's pokemon config (its id scheme: exact "
+                        f"vocabulary or hash buckets), got {cfg!r}")
+
+
+def move_id(name: str, cfg) -> int:
+    """The id ``cfg``'s network gives a move name (display name or Showdown
+    id): exact — the vocabulary id (1 = UNK for a name it does not know, and
+    for a name newer than the vocabulary the net was built with: an id past
+    its table) — or the legacy hash bucket (:func:`move_bucket`)."""
+    _check_cfg(cfg)
+    n = getattr(cfg, "pokemon_move_vocab", 0)
+    if not n:
+        return move_bucket(name, cfg.pokemon_move_buckets)
+    i = VOCAB.move_id(name)
+    return i if i < n else ID_UNK
+
+
+def species_id(name: str, cfg) -> int:
+    """The id ``cfg``'s network gives a species name as the battle log spells
+    it — the species part of a details string ("Urshifu-Rapid-Strike", the
+    team-preview "Urshifu-*"): exact (UNK past the net's table) or the legacy
+    hash bucket."""
+    _check_cfg(cfg)
+    n = getattr(cfg, "pokemon_species_vocab", 0)
+    if not n:
+        return move_bucket(name, cfg.pokemon_species_buckets)
+    i = VOCAB.species_id(name)
+    return i if i < n else ID_UNK
 
 
 @dataclass
@@ -173,11 +238,21 @@ class PokemonConfig(ModelConfig):
     team_slots: int = TEAM_SLOTS
     #: numeric per-slot features (see module docstring feature table)
     pokemon_feature_dim: int = POKE_FEATURE_DIM
-    #: hash buckets for the species embedding (id 0 = unknown)
+    #: exact species vocabulary: id count (reserved 0 none / 1 UNK included) of
+    #: data_processing/games/pokemon's table the shards were converted with
+    #: (converter v3 shard meta "species_vocab"; default: the vendored table);
+    #: 0 = the legacy hash buckets below (model.config.LEGACY_CONFIG_DEFAULTS:
+    #: configs saved before the field)
+    pokemon_species_vocab: int = SPECIES_VOCAB_SIZE
+    #: exact move vocabulary: id count (shard meta "move_vocab") — embeds the
+    #: revealed moves (obs move_ids) and, with the identity head, is its output
+    #: space; 0 = the legacy hash buckets below
+    pokemon_move_vocab: int = MOVE_VOCAB_SIZE
+    #: legacy (converter v1 / v2) hash buckets of the species names (id 0 =
+    #: unknown); unused with an exact species vocabulary
     pokemon_species_buckets: int = 512
-    #: hash buckets of the move vocabulary (id 0 = no move): embeds the
-    #: revealed moves (obs move_ids) and, with the identity head, is its
-    #: output space (converter v2 default: 1024, from the shard meta)
+    #: legacy hash buckets of the move names (id 0 = no move; converter v2
+    #: shard meta: 1024); unused with an exact move vocabulary
     pokemon_move_buckets: int = 256
     #: field-token features (weather/terrain/turn/side conditions [+ the v2
     #: request flags]: 20 = converter v1 / legacy, 22 = v2 shard meta)
@@ -211,7 +286,7 @@ class PokemonEncoder(ObservationEncoder):
         self.n_tokens = 2 * k + 1
 
         self.feat_proj = nn.Linear(cfg.pokemon_feature_dim, cfg.d_model)
-        self.species_embed = nn.Embedding(cfg.pokemon_species_buckets, cfg.d_model)
+        self.species_embed = nn.Embedding(n_species_ids(cfg), cfg.d_model)
         # Unknown slots keep their token (fixed layout) but carry a
         # dedicated learnable embedding instead of stale features.
         self.slot_empty = nn.Parameter(torch.randn(1, 1, 1, cfg.d_model) * 0.02)
@@ -298,20 +373,23 @@ class PokemonDecoder(ActionDecoder):
             raise ValueError(f"pokemon_move_head must be one of {MOVE_HEADS}, "
                              f"got {self.move_head_kind!r}")
         identity = self.move_head_kind == "identity"
+        #: move id count (exact vocabulary or hash buckets)
+        self.n_move_ids = n_move_ids(cfg)
         #: the action key / legal key / class count of the move argument
         self.move_action_key = "move_id" if identity else "move_idx"
         self.move_legal_key = "move_id" if identity else "move"
-        self.n_move_classes = cfg.pokemon_move_buckets if identity else cfg.n_move_slots
+        self.n_move_classes = self.n_move_ids if identity else cfg.n_move_slots
         self.register_buffer(
             "ARG_USES", torch.tensor(self.ARG_USES_DEFAULT, dtype=torch.bool)
         )
 
         d = cfg.d_model
+        V = self.n_move_ids
         self.type_head = MLPHead(d, cfg.n_action_types)
         self.type_embed = nn.Embedding(cfg.n_action_types, d)
         # One move embedding table: it embeds the revealed moves (move_ids,
         # 0 = none) and, for the identity head, the candidate moves.
-        self.move_embed = nn.Embedding(cfg.pokemon_move_buckets, d)
+        self.move_embed = nn.Embedding(V, d)
         if identity:
             # query (active_embed, type, ll, mean revealed-move embedding) ·
             # key(move embedding) + per-move bias + revealed-move bonus
@@ -319,11 +397,9 @@ class PokemonDecoder(ActionDecoder):
             self.move_key = nn.Linear(d, d, bias=False)
             # −log(V − 1): the initial log-partition over the real moves is ≈ 0
             # (softmax-neutral; keeps the z-loss of a large vocabulary small)
-            self.move_bias = nn.Parameter(
-                torch.full((cfg.pokemon_move_buckets,),
-                           -math.log(max(cfg.pokemon_move_buckets - 1, 1))))
+            self.move_bias = nn.Parameter(torch.full((V,), -math.log(max(V - 1, 1))))
             self.move_revealed = nn.Parameter(torch.zeros(()))
-            no_move = torch.zeros(cfg.pokemon_move_buckets, dtype=torch.bool)
+            no_move = torch.zeros(V, dtype=torch.bool)
             no_move[0] = True
             self.register_buffer("no_move", no_move, persistent=False)
         else:
@@ -425,7 +501,7 @@ class PokemonDecoder(ActionDecoder):
             move_ids = legal["move_ids"]
         if move_ids is not None:
             move_ids = move_ids.reshape(BT, cfg.n_move_slots).long().clamp(
-                0, cfg.pokemon_move_buckets - 1)
+                0, self.n_move_ids - 1)
         else:
             move_ids = torch.zeros(BT, cfg.n_move_slots, dtype=torch.long,
                                    device=device)
@@ -793,17 +869,22 @@ class PokemonDecoder(ActionDecoder):
 # Deploy: the legal dict of a live Showdown request
 # ----------------------------------------------------------------------
 
-def request_move_mask(moves: Sequence[Sequence[str]], n_buckets: int,
+def request_move_mask(moves: Sequence[Sequence[str]], cfg,
                       device: Optional[torch.device] = None) -> torch.Tensor:
-    """[B, n_buckets] bool identity-head mask of B requests: row b = the
+    """[B, n_move_ids(cfg)] bool identity-head mask of B requests: row b = the
     usable moves of request b's active Pokémon (display names or Showdown
     ids, e.g. ``[m["id"] for m in request["active"][0]["moves"] if not
-    m.get("disabled")]``), hashed like the converter (:func:`move_bucket`).
-    A row without moves (a switch-only request) is all False."""
-    mask = torch.zeros(len(moves), n_buckets, dtype=torch.bool, device=device)
+    m.get("disabled")]``) under ``cfg``'s id scheme, exactly as the converter
+    maps them (:func:`move_id`: the exact vocabulary, or the legacy hash
+    buckets of a hashed net).  A request move the vocabulary does not know is
+    offered as UNK (id 1) — choosing it means that move (with several unknown
+    moves in one request, any of them).  A row without moves (a switch-only
+    request) is all False."""
+    _check_cfg(cfg)
+    mask = torch.zeros(len(moves), n_move_ids(cfg), dtype=torch.bool, device=device)
     for b, names in enumerate(moves):
         for name in names:
-            v = move_bucket(name, n_buckets)
+            v = move_id(name, cfg)
             if v:
                 mask[b, v] = True
     return mask
@@ -812,7 +893,7 @@ def request_move_mask(moves: Sequence[Sequence[str]], n_buckets: int,
 def legal_from_request(
     request: Mapping[str, Any],
     slot_of: Mapping[str, int],
-    n_buckets: int,
+    cfg,
     move_ids: Optional[torch.Tensor] = None,
     n_slots: int = TEAM_SLOTS,
     device: Optional[torch.device] = None,
@@ -820,7 +901,8 @@ def legal_from_request(
     """The decoder ``legal`` dict (a batch of one: [1, ...]) for a Showdown
     request JSON (the ``|request|`` message of a battle), for
     ``GameNetwork.step(obs, legal=...)`` — the deploy-time mask hook of the
-    identity move head.
+    identity move head.  ``cfg``: the network's config (``net.cfg``), whose
+    id scheme maps the request's moves (:func:`request_move_mask`).
 
     ``slot_of`` maps a request Pokémon's ``ident`` ("p1: Garchomp") to its
     model slot, fixed at team preview: the team-preview request lists
@@ -828,7 +910,8 @@ def legal_from_request(
     (Showdown reorders ``side.pokemon`` on every switch later).
     ``move_ids`` [4] (or [1, 4]): the revealed-move ids of the active
     Pokémon from the bot's own battle-log tracker — the same causal state
-    as the converter's ``obs.move_ids``, NOT the request's moveset.
+    as the converter's ``obs.move_ids`` (names mapped by :func:`move_id`,
+    species by :func:`species_id`), NOT the request's moveset.
 
     Keys: ``action_type`` [move, switch] (team preview / ``forceSwitch``:
     switch only), ``move_id`` (the request's usable moves; empty on switch
@@ -868,7 +951,7 @@ def legal_from_request(
              if not m.get("disabled")]
     legal = {
         "action_type": torch.tensor([[bool(moves), any(switch)]], device=device),
-        "move_id": request_move_mask([moves], n_buckets, device=device),
+        "move_id": request_move_mask([moves], cfg, device=device),
         "switch": torch.tensor([switch], device=device),
         "tera": torch.tensor([bool(act.get("canTerastallize")) and bool(moves)], device=device),
         "active_idx": torch.tensor([active if active is not None else 0], device=device),

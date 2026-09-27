@@ -17,6 +17,8 @@ data_processing/
 ├── games/clash_royale/crdata/ `crdata` (Clash Royale replays)
 ├── games/dataset.py           GameShardDataset: reads gm-shard directories (and .pt)
 ├── games/clash_royale/        card catalog + load-time observation expansion
+├── games/pokemon/             exact Showdown move / species vocabulary (showdown_vocab.json,
+│                              embedded by `gmdata pokemon convert`; make_vocab.py regenerates it)
 ├── dataset_seq.py             SeqReplayDataset for generals gio records
 ├── download/ processing/ parsers/   generals reference decoder/simulator/converter
 │                                    (viewers, play_model; the Rust pipeline is
@@ -65,10 +67,8 @@ behaviour, which is what the golden parity tests pin.
 | othello | `$G othello fetch --first-year 2000` (WTHOR) | `convert --hq`: \|recorded − perfect-play score\| ≤ 4 discs, year ≥ 2000 | human tournament games; the score bound measures endgame error |
 | gomoku | Gomocup results zips (`https://gomocup.org/results/`) | `convert --top-engines 8` on one league (e.g. Freestyle1) | strength = win rate within the input |
 | riichi mahjong | `$G mahjong fetch --all` or `--shards 0 1 2` (Tenhou Houou mjai, 2.12M games in 24 parquet shards; Tenhou's log terms: keep data and shards private) | `convert --hq`: hanchan only (by the announced `kyoku_first`), games written twice by two converters dropped, logs that break the rules dropped; optional `--top-placements 2` | phoenix room = top players already; exact Tenhou legality (yaku via RiichiEnv); full-scale command in `rs/gmdata/src/mahjong/mod.rs` |
-| Pokémon | `$G pokemon fetch --format gen9ou --min-rating 1500` | `convert --hq`: rating ≥ 1500, ≥ 5 turns, no inactivity losses; optional `--winner-only` | forfeits are kept (concessions affect only the last turn); converter v2: one frame per request (lead, every turn, forced switches), move-identity targets — see `rs/gmdata/src/pokemon.rs` |
-| riichi mahjong | `$G mahjong fetch --shards 0 1 2` (Tenhou Houou mjai, 2.1M games) | `convert --hq`: hanchan only; optional `--top-placements 2` | phoenix room = top players already |
 | Dou Dizhu | no public human data: DouZero self-play, `scripts/fetch_doudizhu.sh D GAMES` (`scripts/generate_doudizhu.py`: the public DouZero ADP / WP agents, Apache-2.0 — weights from the pinned Hugging Face mirror `palemoky/douzero-baselines`, code from kwai/DouZero at a pinned commit, SHA-256 checked — play under the gmrules standard rules) → `$G doudizhu convert` | `convert --hq`: the seats the ADP / WP agents played (every seat with the default mix) | auction by the documented `heuristic_v1` (marked in `meta.bidding`; RL learns bidding); fixture 150 / 150 games verified, 5554 frames; 1M games ≈ 36M frames ≈ 28 GB at ~22 games/s per CPU worker; records carry DouZero's Q values (`--soft-k`); see `rs/gmdata/src/doudizhu.rs` |
-| Pokémon | `$G pokemon fetch --format gen9ou --min-rating 1500` | `convert --hq`: rating ≥ 1500, ≥ 5 turns, no inactivity losses; optional `--winner-only` | forfeits are kept (concessions affect only the last turn) |
+| Pokémon | `$G pokemon fetch --format gen9ou --min-rating 1500` | `convert --hq`: rating ≥ 1500, ≥ 5 turns, no inactivity losses; optional `--winner-only` | forfeits are kept (concessions affect only the last turn); converter v3: one frame per request (lead, every turn, forced switches), move-identity targets, exact move / species ids from Pokémon Showdown's data (`games/pokemon/`) — see `rs/gmdata/src/pokemon.rs` |
 | Lux AI S3 | `$G lux fetch --top-teams 10` (Kaggle API) | only episodes where both agents are top-10 leaderboard teams | needs `KAGGLE_API_TOKEN` or `~/.kaggle/access_token` |
 | Clash Royale | `crdata fetch --out D` (RoyaleAPI replays, HF) | `crdata convert --hq`: Ranked + Grand Challenge, ≥ 60 s, ≥ 5 own plays; optional `--winner-only` | anonymised (no trophies); see games/clash_royale/README.md |
 | Kuhn poker (toy) | `$G kuhn-poker generate` (synthetic hand logs; `scripts/fetch_kuhn_poker.sh`) | `convert --hq`: the scripted expert's seats only | gmrules reference game (below); rules pinned to OpenSpiel |

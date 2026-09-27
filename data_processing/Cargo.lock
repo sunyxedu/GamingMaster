@@ -831,7 +831,6 @@ dependencies = [
  "arrow-schema",
  "bzip2",
  "clap",
- "crc32fast",
  "encoding_rs",
  "flate2",
  "gmrules",

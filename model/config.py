@@ -212,8 +212,12 @@ LEGACY_CONFIG_DEFAULTS = {
     "cr_wait_time": "frame",
     "cr_card_tokens": "hand",
     "card_feature_dim": 8,
-    # Pokémon adapter (model/games/pokemon.py): the revealed-move slot head
+    # Pokémon adapter (model/games/pokemon.py): the revealed-move slot head; crc32
+    # hash buckets of the move / species names (converter v1 / v2) instead of the
+    # exact Showdown vocabularies (converter v3)
     "pokemon_move_head": "slot",
+    "pokemon_move_vocab": 0,
+    "pokemon_species_vocab": 0,
 }
 
 #: LEGACY_CONFIG_DEFAULTS keys of ONE game's config class → a marker field
@@ -228,6 +232,8 @@ LEGACY_CONFIG_SCOPE = {
     "card_feature_dim": "cr_global_features",
     # every loadable pokemon config: the slot head needs pokemon_move_buckets
     "pokemon_move_head": "pokemon_move_buckets",
+    "pokemon_move_vocab": "pokemon_move_buckets",
+    "pokemon_species_vocab": "pokemon_move_buckets",
 }
 
 
