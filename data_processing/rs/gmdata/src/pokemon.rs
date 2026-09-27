@@ -16,8 +16,9 @@
 //!                  no choice of HOLDER) or a voluntary `|switch|`.  Turns whose choice is not
 //!                  visible — KO'd / flinched / asleep / paralysed before moving, a locked move
 //!                  (`[from]lockedmove`) or recharge turn (no choice at all), Struggle, forced
-//!                  out first, the battle ended — keep their frame with the label masked:
-//!                  tgt.action_known 0, action_type −1.
+//!                  out first, an Encore landing before the move (Showdown then uses the encored
+//!                  move instead of the chosen one, logged without `[from]`), the battle ended —
+//!                  keep their frame with the label masked: tgt.action_known 0, action_type −1.
 //!   forced switch  phase 1 — every other in-battle `|switch|` of the side: KO replacements,
 //!                  pivots (U-turn, Volt Switch, Flip Turn, Parting Shot, Chilly Reception,
 //!                  Teleport, Baton Pass, Shed Tail), Eject Button / Eject Pack, Emergency Exit /
@@ -716,6 +717,19 @@ fn parse_log(log: &str) -> Parse {
                 }
                 continue;
             }
+            "-start" if args.len() >= 2 && norm(a(1).rsplit(':').next().unwrap_or("")) == "encore" => {
+                // Encore replaces the target's chosen move with the encored one (Showdown's
+                // onOverrideAction; the |move| line carries no [from]): landing before the target
+                // acted this turn, the move it then logs is not necessarily its choice.  (Switches
+                // precede every move, so the choice was a move — which one stays unknown.)
+                let (pos, _) = ident(a(0));
+                if let Some(pi) = side_idx(&pos) {
+                    if acted[pi].is_none() && turn_rec[pi].is_some() {
+                        acted[pi] = Some("encore_override");
+                    }
+                }
+                continue;
+            }
             "-activate" | "-enditem" if args.len() >= 2 => {
                 let (pos, _) = ident(a(0));
                 if let Some(pi) = side_idx(&pos) {
@@ -805,17 +819,32 @@ fn parse_log(log: &str) -> Parse {
                 }
                 continue;
             }
-            "-copyboost" | "-invertboost" | "-swapboost" if !args.is_empty() => {
+            "-invertboost" if !args.is_empty() => {
                 let (pos, nick) = ident(a(0));
                 let Some(pi) = side_idx(&pos) else { continue };
                 if let Some(slot) = b.sides[pi].slot_of(&nick) {
-                    let bs = &mut b.sides[pi].team[slot].boosts;
-                    if cmd == "-invertboost" {
-                        for x in bs.iter_mut() {
-                            *x = -*x;
-                        }
-                    } else {
-                        *bs = [0; 5];
+                    for x in b.sides[pi].team[slot].boosts.iter_mut() {
+                        *x = -*x;
+                    }
+                }
+                continue;
+            }
+            "-copyboost" | "-swapboost" if args.len() >= 2 => {
+                // |-copyboost|RECEIVER|SOURCE[|STATS]: RECEIVER takes SOURCE's stages (Psych Up);
+                // |-swapboost|A|B[|STATS]: A and B exchange them (Guard / Power / Heart Swap);
+                // every stat when no list is given
+                let ((pos, nick), (pos2, nick2)) = (ident(a(0)), ident(a(1)));
+                let (Some(pi), Some(qi)) = (side_idx(&pos), side_idx(&pos2)) else { continue };
+                let (Some(x), Some(y)) = (b.sides[pi].slot_of(&nick), b.sides[qi].slot_of(&nick2)) else { continue };
+                let stats: Vec<usize> = match args.get(2).filter(|s| !s.trim().is_empty() && !s.trim_start().starts_with('[')) {
+                    Some(list) => list.split(',').filter_map(|s| BOOSTS.iter().position(|&k| k == s.trim())).collect(),
+                    None => (0..BOOSTS.len()).collect(),
+                };
+                let (bx, by) = (b.sides[pi].team[x].boosts, b.sides[qi].team[y].boosts);
+                for k in stats {
+                    b.sides[pi].team[x].boosts[k] = by[k];
+                    if cmd == "-swapboost" {
+                        b.sides[qi].team[y].boosts[k] = bx[k];
                     }
                 }
                 continue;
@@ -1315,6 +1344,52 @@ mod tests {
         assert_eq!(moves(&r[3]), ["Earthquake", "Swords Dance"], "no foe move in the holder's moveset");
         assert_eq!(moves(&o[3]), ["Sucker Punch", "Explosion"]);
         assert!(!p.stats.contains_key("unlabelled_cant"));
+    }
+
+    #[test]
+    fn an_encore_before_the_move_hides_the_choice() {
+        // Encore replaces the target's chosen move with the encored one (Showdown's
+        // onOverrideAction, logged as a plain |move| line): when it lands before the target
+        // moved in the same turn, the logged move is not necessarily the choice — no label.
+        // Once encored, the requests offer the encored move only: its uses are choices, and an
+        // Encore after the target moved changes nothing about that turn.
+        let p = parse(&["|turn|1", "|move|p1a: Garchomp|Stealth Rock|p2a: Gholdengo", "|-sidestart|p2: Bob|move: Stealth Rock",
+            "|move|p2a: Gholdengo|Nasty Plot|p2a: Gholdengo", "|upkeep", "|turn|2", "|move|p2a: Gholdengo|Encore|p1a: Garchomp",
+            "|-start|p1a: Garchomp|Encore", "|move|p1a: Garchomp|Stealth Rock|p2a: Gholdengo|[still]", "|-fail|p1a: Garchomp",
+            "|upkeep", "|turn|3", "|move|p1a: Garchomp|Stealth Rock|p2a: Gholdengo|[still]", "|-fail|p1a: Garchomp",
+            "|move|p2a: Gholdengo|Shadow Ball|p1a: Garchomp", "|-end|p1a: Garchomp|Encore", "|upkeep", "|turn|4",
+            "|move|p1a: Garchomp|Earthquake|p2a: Gholdengo", "|move|p2a: Gholdengo|Encore|p1a: Garchomp",
+            "|-start|p1a: Garchomp|Encore", "|upkeep", "|turn|5"]);
+        let r = &p.records[0];
+        let labels: Vec<(i64, &str)> = r.iter().map(|x| (x.action_type, x.move_name.as_str())).collect();
+        assert_eq!(labels, [(1, ""), (0, "Stealth Rock"), (-1, ""), (0, "Stealth Rock"), (0, "Earthquake"), (-1, "")]);
+        assert_eq!(p.stats["unlabelled_encore_override"], 1);
+        assert_eq!(r[3].frame.moves[0], "Stealth Rock", "the encored move stays revealed");
+        let o = &p.records[1];
+        assert_eq!((o[2].move_name.as_str(), o[4].move_name.as_str()), ("Encore", "Encore"), "the Encore user's own choices");
+    }
+
+    #[test]
+    fn copied_and_swapped_boosts() {
+        // |-copyboost|RECEIVER|SOURCE[|STATS] (Psych Up) copies SOURCE's stages onto RECEIVER;
+        // |-swapboost|A|B[|STATS] (Guard Swap / Power Swap / Heart Swap) exchanges them — all
+        // stats when no list is given (the protocol as the Showdown client reads it)
+        let p = parse(&["|turn|1", "|move|p2a: Gholdengo|Nasty Plot|p2a: Gholdengo", "|-boost|p2a: Gholdengo|spa|2",
+            "|move|p1a: Garchomp|Swords Dance|p1a: Garchomp", "|-boost|p1a: Garchomp|atk|2", "|upkeep", "|turn|2",
+            "|move|p1a: Garchomp|Psych Up|p2a: Gholdengo", "|-copyboost|p1a: Garchomp|p2a: Gholdengo|[from] move: Psych Up",
+            "|move|p2a: Gholdengo|Shadow Ball|p1a: Garchomp", "|upkeep", "|turn|3", "|move|p1a: Garchomp|Power Swap|p2a: Gholdengo",
+            "|-swapboost|p1a: Garchomp|p2a: Gholdengo|atk, spa|[from] move: Power Swap", "|-boost|p2a: Gholdengo|def|1", "|upkeep",
+            "|turn|4", "|move|p2a: Gholdengo|Heart Swap|p1a: Garchomp", "|-swapboost|p2a: Gholdengo|p1a: Garchomp|[from] move: Heart Swap",
+            "|upkeep", "|turn|5"]);
+        let boosts = |t: i64, j: usize| {
+            let r = p.records[0].iter().find(|r| turn(r) == t && !forced(r)).unwrap();
+            (0..5).map(|k| (r.frame.feats[j * FEAT + F_BOOSTS + k] * 6.0).round() as i64).collect::<Vec<_>>()
+        };
+        // [atk, def, spa, spd, spe]
+        assert_eq!((boosts(2, 0), boosts(2, TEAM)), (vec![2, 0, 0, 0, 0], vec![0, 0, 2, 0, 0]));
+        assert_eq!((boosts(3, 0), boosts(3, TEAM)), (vec![0, 0, 2, 0, 0], vec![0, 0, 2, 0, 0]), "Psych Up copied the stages");
+        assert_eq!((boosts(4, 0), boosts(4, TEAM)), (vec![0, 0, 2, 0, 0], vec![0, 1, 2, 0, 0]), "atk and spa swapped (equal here)");
+        assert_eq!((boosts(5, 0), boosts(5, TEAM)), (vec![0, 1, 2, 0, 0], vec![0, 0, 2, 0, 0]), "Heart Swap: every stat");
     }
 
     #[test]

@@ -839,7 +839,10 @@ def _forced_commits(lines: List[str]) -> List[Tuple[int, int]]:
             last = None
         elif cmd == "switch" and commit is not None:
             last = i
-        if cmd not in ("", "t:", "j", "J", "l", "L", "c", "c:", "inactive", "inactiveoff", "raw"):
+        # room / connection lines are no battle events: a player leaving and rejoining during
+        # team preview (|player|p2| ... |player|p2|NAME|...) does not make its commit a switch
+        if cmd not in ("", "t:", "j", "J", "l", "L", "c", "c:", "chat", "n", "N", "inactive",
+                       "inactiveoff", "raw", "html", "uhtml", "badge", "player"):
             prev = cmd
     return out
 
@@ -1332,3 +1335,42 @@ def test_court_change_swaps_the_side_conditions(gmdata, replays, tmp_path):
             s = got[(cid, side)]
             fs = s["obs"]["field_seq"][_turns(s).index(t + 2)]
             assert (float(fs[sr_own]), float(fs[sr_opp])) == want, (cid, side, fs[10:20].tolist())
+
+
+def _encore_overrides(log: str) -> List[Tuple[int, int]]:
+    """[(side, turn)] where Encore landed on the side's active before the side acted that turn:
+    Showdown replaces the chosen move with the encored one (onOverrideAction), and the |move| line
+    it then logs carries no [from] marker."""
+    out, turn, acted = [], 0, set()
+    for ln in log.split("\n"):
+        p = ln.split("|")
+        if len(p) < 3:
+            continue
+        if p[1] == "turn" and p[2].strip().isdigit():
+            turn, acted = int(p[2]), set()
+        elif p[1] in ("move", "switch", "cant") and _side(p[2]) is not None:
+            acted.add(_side(p[2]))
+        elif p[1] == "-start" and len(p) > 3 and p[3].strip() == "Encore":
+            me = _side(p[2])
+            if me is not None and me not in acted and 0 < turn < TURN_CLIP:
+                out.append((me, turn))
+    return out
+
+
+def test_a_move_overridden_by_encore_is_not_labelled(replays, full):
+    """Encore before the target moved: the move the target then logs is the encored one, not
+    necessarily its choice (on the fixtures mostly a Stealth Rock / setup move re-used against
+    the player's will), so its turn frame carries no label.  Its later turns (the requests offer
+    the encored move only) keep their labels."""
+    checked = 0
+    for r in replays:
+        for me, turn in _encore_overrides(r["log"]):
+            s = full.get((r["id"], ("p1", "p2")[me]))
+            if s is None:
+                continue
+            f = [i for i, t in enumerate(_turns(s))
+                 if t == turn and not _forced(s, i) and not _preview(s, i)]
+            assert len(f) == 1, (r["id"], me, turn)
+            assert not _labelled(s, f[0]), f"{r['id']} p{me + 1} turn {turn}: labelled Encore move"
+            checked += 1
+    assert checked >= 3, checked

@@ -183,16 +183,18 @@ pub(super) fn walk_game(evs: &[Value], visit: &mut dyn FnMut(&Decision)) -> R<(u
                 // the claim decisions precede a riichi declaration's reach_accepted (the stick
                 // is deposited only if nobody rons), which the main loop applies afterwards
                 let resp = response(evs, i, a)?;
+                let ctx = Ctx::Claim { kind: kk, discarder: a, chankan: false };
+                let claims: Vec<(usize, Legal)> = (1..4).map(|rel| (a + rel) % 4).map(|s| (s, k.legal(s, &ctx))).collect();
                 // a draw straight after a discard with live-wall tiles left and no abortive draw
                 // pending has no public cause but the triple ron (三家和), which the logs write as
-                // a bare ryukyoku: the claims' outcome is unknown
-                let unexplained_draw = resp.draw && k.wall > 0 && !k.abortive_pending();
-                for rel in 1..4 {
-                    let sidx = (a + rel) % 4;
-                    let ctx = Ctx::Claim { kind: kk, discarder: a, chankan: false };
-                    let legal = k.legal(sidx, &ctx);
-                    let (label, weight) = claim_label(sidx, &legal, &resp, unexplained_draw);
-                    visit(&Decision { st: k, seat: sidx, ctx: &ctx, legal: &legal, label: Some(label), weight, focus: Some(kk),
+                // a bare ryukyoku: the claims' outcome is unknown.  After the last discard it is
+                // the exhaustive draw — unless all three seats could ron that tile (three legal
+                // rons all declined is no real alternative to the triple ron)
+                let triple_ron_legal = claims.iter().all(|(_, l)| l.types[HORA as usize]);
+                let unexplained_draw = resp.draw && !k.abortive_pending() && (k.wall > 0 || triple_ron_legal);
+                for (sidx, legal) in &claims {
+                    let (label, weight) = claim_label(*sidx, legal, &resp, unexplained_draw);
+                    visit(&Decision { st: k, seat: *sidx, ctx: &ctx, legal, label: Some(label), weight, focus: Some(kk),
                                       own: false, focus_actor: Some(a), event: i });
                 }
                 for rel in 1..4 {
@@ -425,6 +427,63 @@ mod tests {
         for l in [&chi, &ron] {
             assert_eq!(claim_label(1, l, &resp(&[], None, true), true), pass(0.0));
         }
+    }
+
+    /// A synthetic kyoku whose 70th (last) draw is seat 1's `last`, discarded at once: seats 0,
+    /// 2 and 3 hold `hands[0..3]` (seat 1 a hand that `last` does not complete), every other draw
+    /// is a chun discarded straight away (nobody's wait, nothing to call); then `end`.
+    fn houtei_kyoku(hands: [&[&str]; 3], last: &str, end: Value) -> Vec<Value> {
+        let seat1 = ["1m", "1m", "9m", "9m", "1p", "1p", "9p", "9p", "1s", "1s", "9s", "9s", "E"];
+        let tehais = vec![hands[0].to_vec(), seat1.to_vec(), hands[1].to_vec(), hands[2].to_vec()];
+        let mut evs = vec![json!({"type": "start_game", "kyoku_first": 0}),
+                           json!({"type": "start_kyoku", "bakaze": "E", "dora_marker": "1m", "kyoku": 1, "honba": 0,
+                                  "kyotaku": 0, "oya": 0, "scores": [25000, 25000, 25000, 25000], "tehais": tehais})];
+        for d in 0..WALL as usize {
+            let (a, p) = (d % 4, if d + 1 == WALL as usize { last } else { "C" });
+            evs.push(json!({"type": "tsumo", "actor": a, "pai": p}));
+            evs.push(json!({"type": "dahai", "actor": a, "pai": p, "tsumogiri": true}));
+        }
+        evs.push(end);
+        evs.push(json!({"type": "end_kyoku"}));
+        evs
+    }
+
+    /// (seat, ron legal, label, weight) of the claim decisions on the last discard.
+    fn last_claims(evs: &[Value]) -> Vec<(usize, bool, i64, f32)> {
+        let last = evs.iter().rposition(|e| ty(e) == "dahai").unwrap();
+        let mut out = Vec::new();
+        walk_game(evs, &mut |d: &Decision| {
+            if !d.own && d.event == last {
+                assert_eq!(d.st.wall, 0, "houtei");
+                out.push((d.seat, d.legal.types[HORA as usize], d.label.unwrap().0, d.weight));
+            }
+        })
+        .ok()
+        .unwrap();
+        out
+    }
+
+    /// A bare draw after the last discard is the exhaustive draw — unless all three other seats
+    /// could ron that houtei tile: then it is the triple ron (三家和, logged as a bare ryukyoku
+    /// like any abortive draw; three seats all declining a legal ron is no real alternative), and
+    /// their claims' outcome is unknown (weight 0), as after any earlier discard.
+    #[test]
+    fn a_triple_ron_on_the_houtei_tile_has_unknown_claims() {
+        // three hands waiting on 5p (46p kanchan); houtei is their yaku
+        let w0: &[&str] = &["1m", "2m", "3m", "4s", "5s", "6s", "7s", "8s", "9s", "E", "E", "4p", "6p"];
+        let w2: &[&str] = &["2m", "3m", "4m", "5s", "6s", "7s", "8s", "8s", "8s", "S", "S", "4p", "6p"];
+        let w3: &[&str] = &["3m", "4m", "5m", "6s", "7s", "8s", "9s", "9s", "9s", "W", "W", "4p", "6p"];
+        let draw = json!({"type": "ryukyoku", "deltas": [0, 0, 0, 0]});
+        let claims = last_claims(&houtei_kyoku([w0, w2, w3], "5p", draw.clone()));
+        assert_eq!(claims.len(), 3);
+        for (seat, ron, label, weight) in claims {
+            assert!(ron && label == PASS && weight == 0.0, "seat {seat}: {ron} {label} {weight}");
+        }
+        // seat 3 waiting on 1p instead: only two rons are possible, the draw is the exhaustive
+        // one and the passes are real declines
+        let other: &[&str] = &["3m", "4m", "5m", "6s", "7s", "8s", "9s", "9s", "9s", "W", "W", "W", "1p"];
+        let claims = last_claims(&houtei_kyoku([w0, w2, other], "5p", draw));
+        assert_eq!(claims.iter().map(|c| (c.0, c.1, c.3)).collect::<Vec<_>>(), [(2, true, 1.0), (3, false, 1.0), (0, true, 1.0)]);
     }
 
     /// The triple ron (三家和), which the logs write as a bare ryukyoku after a discard: all
