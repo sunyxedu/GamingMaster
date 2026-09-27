@@ -216,11 +216,12 @@ def random_openings(rules: GameRules, n: int, plies: int, seed: int = 0,
                     max_attempts: Optional[int] = None) -> List[List[Move]]:
     """``n`` move sequences of ``plies`` uniformly random legal moves from the
     start (``random.Random(seed)``; forced moves count as plies, chance
-    outcomes do not) leading to DISTINCT non-terminal positions
+    outcomes — ``rules.sample_chance`` — are part of the sequence but no
+    plies) leading to DISTINCT non-terminal positions
     (``rules.position_key``).  ValueError when fewer exist or are found
     within ``max_attempts`` playouts."""
     rng = random.Random(seed)
-    chance = getattr(rules, "chance_outcome", None)
+    is_chance = getattr(rules, "is_chance", None)
     seen: set = set()
     out: List[List[Move]] = []
     limit = max_attempts if max_attempts is not None else 200 * n + 1000
@@ -229,8 +230,8 @@ def random_openings(rules: GameRules, n: int, plies: int, seed: int = 0,
         attempts += 1
         s, moves, k = rules.initial_state(), [], 0
         while not rules.is_terminal(s):
-            c = chance(s, rng) if chance is not None else None
-            if c is not None:
+            if is_chance is not None and is_chance(s):
+                c = rules.sample_chance(s, rng)
                 moves.append(c)
                 s = rules.play(s, c)
                 continue
@@ -585,7 +586,7 @@ def run_games(rules: GameRules, specs: Sequence[GameSpec], openings: Sequence[Se
     unknown = sorted({n for s in specs for n in s.seats} - set(players))
     if unknown:
         raise KeyError(f"no player named {unknown}")
-    chance = getattr(rules, "chance_outcome", None)
+    is_chance = getattr(rules, "is_chance", None)
     max_plies = int(getattr(rules, "max_plies", 100_000))
     margin = getattr(rules, "margin", None)
     details = getattr(rules, "details", None)
@@ -657,11 +658,11 @@ def run_games(rules: GameRules, specs: Sequence[GameSpec], openings: Sequence[Se
             chosen: Dict[int, Move] = {}
             for g in list(live.values()):
                 try:
-                    while chance is not None and not rules.is_terminal(g.state):
-                        c = chance(g.state, g.rng)
-                        if c is None:
-                            break
-                        advance(g, c)
+                    while (is_chance is not None and not rules.is_terminal(g.state)
+                           and is_chance(g.state)):
+                        # the opening's own outcomes are replayed, later ones drawn
+                        advance(g, g.opening[len(g.history)] if len(g.history) < len(g.opening)
+                                else rules.sample_chance(g.state, g.rng))
                     if rules.is_terminal(g.state):
                         finish(g)
                         continue
@@ -741,12 +742,11 @@ def run_games(rules: GameRules, specs: Sequence[GameSpec], openings: Sequence[Se
         for g in list(live.values()):                    # aborted: release every player
             for name in _players_of(g.spec):
                 p = players[name]
-                if name in batched:
-                    p.end(g.gid)
-                else:
-                    rel = getattr(p, "release", None)
-                    if rel is not None:
-                        rel(g.gid)
+                with contextlib.suppress(Exception):     # never mask the original error
+                    if name in batched:
+                        p.end(g.gid)
+                    elif getattr(p, "release", None) is not None:
+                        p.release(g.gid)
         if pool is not None:
             pool.shutdown(wait=True, cancel_futures=True)
     return out  # type: ignore[return-value]
