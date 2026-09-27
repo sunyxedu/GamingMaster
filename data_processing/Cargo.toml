@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "rs/gmshard",
+    "rs/sc2api",
     "rs/gmrules",
     "rs/gmdata",
     "rs/gmsim",
@@ -12,6 +13,7 @@ members = [
 # tested in gmrules and from Python)
 default-members = [
     "rs/gmshard",
+    "rs/sc2api",
     "rs/gmrules",
     "rs/gmdata",
     "games/clash_royale/crdata",
