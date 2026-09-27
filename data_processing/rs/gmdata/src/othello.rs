@@ -1,5 +1,8 @@
-//! Othello: WTHOR `.wtb` databases (Fédération Française d'Othello) → shards
-//! for the "othello" adapter (BoardEncoder + PlacementDecoder, 8×8, 3 planes).
+//! Othello: WTHOR `.wtb` databases (Fédération Française d'Othello) and game
+//! transcripts (`.txt`, one game per line in the `f5d6c3…` notation — e.g. Egaroucid's
+//! `-selfplay` output) → shards for the "othello" adapter (BoardEncoder +
+//! PlacementDecoder, 8×8, 3 planes).  Both inputs give the same frames; a transcript
+//! has no recorded score (its result is the replayed board's).
 //!
 //! One sample = one game from the side-to-move perspective at every frame;
 //! frame t is the position BEFORE the t-th half-move, including the forced pass
@@ -85,6 +88,25 @@ pub struct WthorGame {
     pub black_real_score: u8,
     pub black_theoretical_score: u8,
     pub moves: Vec<(i32, i32)>,
+}
+
+/// A transcript line (`f5d6c3…`: column a-h then row 1-8 per move, passes implied, case
+/// insensitive) → the moves as (row, col).
+pub fn parse_transcript(line: &str) -> Result<Vec<(i32, i32)>> {
+    let t: Vec<char> = line.trim().chars().collect();
+    if !t.len().is_multiple_of(2) {
+        bail!("odd transcript length {}", t.len());
+    }
+    t.chunks(2)
+        .map(|m| {
+            let col = m[0].to_ascii_lowercase() as i32 - 'a' as i32;
+            let row = m[1] as i32 - '1' as i32;
+            if !(0..8).contains(&row) || !(0..8).contains(&col) {
+                bail!("not a square: {}{}", m[0], m[1]);
+            }
+            Ok((row, col))
+        })
+        .collect()
 }
 
 /// Game year recorded in a WTHOR header.
@@ -180,8 +202,10 @@ fn adjusted_black_score(black: i64, white: i64) -> i64 {
     }
 }
 
-fn game_to_sample(g: &WthorGame, source: &str, index: usize) -> Result<(Sample, bool, i64)> {
-    let (pl, movers, idx, passed, fin) = replay(&g.moves)?;
+/// A replayed game → (sample, replayed black / white discs, pass frames).  The frames and
+/// targets depend on the moves alone; `meta` (the source's fields) gains the replay's.
+fn moves_to_sample(moves: &[(i32, i32)], mut meta: serde_json::Value) -> Result<(Sample, i64, i64, i64)> {
+    let (pl, movers, idx, passed, fin) = replay(moves)?;
     if movers.is_empty() {
         bail!("empty move list");
     }
@@ -190,18 +214,34 @@ fn game_to_sample(g: &WthorGame, source: &str, index: usize) -> Result<(Sample, 
     let sign = ((black > white) as i32 - (black < white) as i32) as f32;
     let value: Vec<f32> = movers.iter().map(|&m| if m == BLACK { sign } else { -sign }).collect();
     let n_pass = passed.iter().filter(|&&p| p).count() as i64;
-    let meta = json!({
-        "source": source, "game_index": index, "tournament_id": g.tournament,
-        "black_player_id": g.black, "white_player_id": g.white,
-        "recorded_black_score": g.black_real_score, "theoretical_black_score": g.black_theoretical_score,
-        "replayed_black": black, "replayed_white": white, "n_recorded_moves": g.moves.len(), "n_pass_frames": n_pass,
-    });
+    let m = meta.as_object_mut().expect("sample meta is an object");
+    m.insert("replayed_black".into(), json!(black));
+    m.insert("replayed_white".into(), json!(white));
+    m.insert("n_recorded_moves".into(), json!(moves.len()));
+    m.insert("n_pass_frames".into(), json!(n_pass));
     let s = Sample::new(meta)
         .bits("obs.board_seq", &[3, 8, 8], &pl)
         .i64("tgt.place_idx", &[], idx)
         .bool("tgt.passed", &[], passed)
         .f32("tgt.value", &[], value);
+    Ok((s, black, white, n_pass))
+}
+
+fn game_to_sample(g: &WthorGame, source: &str, index: usize) -> Result<(Sample, bool, i64)> {
+    let meta = json!({
+        "source": source, "game_index": index, "tournament_id": g.tournament,
+        "black_player_id": g.black, "white_player_id": g.white,
+        "recorded_black_score": g.black_real_score, "theoretical_black_score": g.black_theoretical_score,
+    });
+    let (s, black, white, n_pass) = moves_to_sample(&g.moves, meta)?;
     Ok((s, adjusted_black_score(black, white) == g.black_real_score as i64, n_pass))
+}
+
+/// A transcript game → (sample, pass frames): no recorded score to check, the result is
+/// the replayed board's.
+fn transcript_to_sample(moves: &[(i32, i32)], source: &str, index: usize) -> Result<(Sample, i64)> {
+    let meta = json!({"source": source, "game_index": index, "transcript": true});
+    moves_to_sample(moves, meta).map(|(s, _, _, n_pass)| (s, n_pass))
 }
 
 #[derive(Subcommand)]
@@ -215,7 +255,7 @@ pub enum Cmd {
         #[arg(long)]
         last_year: Option<u32>,
     },
-    /// Convert .wtb files to gm-shards
+    /// Convert .wtb files and .txt transcripts to gm-shards
     Convert {
         #[arg(long)]
         input: PathBuf,
@@ -274,14 +314,40 @@ pub fn fetch(out: &Path, first: u32, last: u32) -> Result<()> {
 
 pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<usize>, max_err: Option<i64>, min_year: Option<u16>)
     -> Result<serde_json::Value> {
-    let files = common::find_files(input, &[".wtb"])?;
-    anyhow::ensure!(!files.is_empty(), "no .wtb files under {}", input.display());
+    let files = common::find_files(input, &[".wtb", ".txt"])?;
+    anyhow::ensure!(!files.is_empty(), "no .wtb / .txt files under {}", input.display());
     let mut w = ShardWriter::new(out, "othello", 1, json!({}), shard_size)?;
     let (mut games, mut converted, mut illegal, mut mismatch, mut pass_frames) = (0usize, 0usize, 0usize, 0usize, 0i64);
-    let mut low_quality = 0usize;
+    let (mut low_quality, mut transcripts) = (0usize, 0usize);
     'outer: for path in files {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let data = std::fs::read(&path)?;
+        if name.to_lowercase().ends_with(".txt") {
+            // transcripts: no year, no recorded / theoretical score (filters n/a)
+            let text = String::from_utf8(data).with_context(|| name.clone())?;
+            for (i, line) in text.lines().enumerate() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if max_games.map(|m| games >= m).unwrap_or(false) {
+                    break 'outer;
+                }
+                games += 1;
+                match parse_transcript(line).and_then(|mv| transcript_to_sample(&mv, &name, i)) {
+                    Ok((s, np)) => {
+                        converted += 1;
+                        transcripts += 1;
+                        pass_frames += np;
+                        w.push(s)?;
+                    }
+                    Err(e) => {
+                        illegal += 1;
+                        eprintln!("[warn] {name}:{}: skipped — {e}", i + 1);
+                    }
+                }
+            }
+            continue;
+        }
         let year_ok = min_year.map(|y| wtb_year(&data).map(|fy| fy >= y).unwrap_or(false)).unwrap_or(true);
         for (i, g) in parse_wtb(&data).with_context(|| name.clone())?.iter().enumerate() {
             if max_games.map(|m| games >= m).unwrap_or(false) {
@@ -309,7 +375,7 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, max_games: Option<us
     }
     w.flush()?;
     Ok(json!({"games": games, "converted": converted, "illegal": illegal, "score_mismatch": mismatch, "low_quality": low_quality,
-              "pass_frames": pass_frames, "shards": w.written_shards}))
+              "pass_frames": pass_frames, "transcripts": transcripts, "shards": w.written_shards}))
 }
 
 pub fn run(cmd: Cmd) -> Result<()> {

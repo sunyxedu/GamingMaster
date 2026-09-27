@@ -106,3 +106,33 @@ def test_matches_reference(gmdata, tmp_path, case):
     ds = GameShardDataset(str(out))
     assert ds.converter_version == golden["converter_version"]
     assert ds.shard_meta == golden["shard_meta"]
+
+
+def test_othello_transcripts_match_wthor(gmdata, tmp_path):
+    """A transcript (`.txt`, one game per line, `f5d6c3…`: column letter then row digit —
+    Egaroucid's -selfplay output) converts to exactly the frames of the same game read
+    from WTHOR; a malformed or illegal line is skipped, not fatal."""
+    from test_dial_probe import parse_wtb
+
+    with open(os.path.join(FIX, "othello", "WTH_2021.wtb"), "rb") as fh:
+        games = parse_wtb(fh.read())
+    lines = ["".join("abcdefgh"[m % 8] + str(m // 8 + 1) for m in g) for g in games]
+    lines[1] = lines[1].upper()                                      # case-insensitive
+    src = tmp_path / "txt"
+    src.mkdir()
+    (src / "selfplay.txt").write_text("\n".join(lines + ["", "f5z9", "f5f5"]) + "\n")
+    subprocess.run([gmdata, "othello", "convert", "--input", f"{FIX}/othello", "--out", str(tmp_path / "w")],
+                   check=True, capture_output=True)
+    r = subprocess.run([gmdata, "othello", "convert", "--input", str(src), "--out", str(tmp_path / "t")],
+                       check=True, capture_output=True, text=True)
+    st = json.loads(r.stdout.strip().splitlines()[-1])
+    ref, got = load_gm_samples(str(tmp_path / "w")), load_gm_samples(str(tmp_path / "t"))
+    assert st["transcripts"] == st["converted"] == len(got) == len(ref) > 0
+    assert st["illegal"] == len(games) - len(ref) + 2
+    for a, b in zip(got, ref):
+        assert a["meta"]["game_index"] == b["meta"]["game_index"] and a["meta"]["transcript"]
+        assert a["meta"]["replayed_black"] == b["meta"]["replayed_black"]
+        for part in ("obs", "tgt"):
+            assert a[part].keys() == b[part].keys()
+            for k in a[part]:
+                assert torch.equal(a[part][k], b[part][k]), (part, k, b["meta"]["game_index"])
