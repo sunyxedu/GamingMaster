@@ -331,6 +331,13 @@ def _make_arc3(n_envs: int = 1, **kw) -> VecGameEnv:
     return Arc3VecEnv(n_envs, **kw)
 
 
+def _make_hok(n_envs: int = 1, **kw) -> VecGameEnv:
+    """Needs Tencent's Honor of Kings research environment (HOK_ROOT: the SDK venv, Wine,
+    the licensed gamecore)."""
+    from env.vec_hok import HokVecEnv
+    return HokVecEnv(n_envs, **kw)
+
+
 #: games with a simulator (the others train on their IL replay stream only)
 VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
     "generals": _make_generals,
@@ -338,6 +345,7 @@ VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
     "gomoku": _make_gomoku,
     "lux": _make_lux,
     "arc3": _make_arc3,
+    "hok": _make_hok,
 }
 
 
