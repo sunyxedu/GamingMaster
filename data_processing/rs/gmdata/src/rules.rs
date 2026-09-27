@@ -12,7 +12,8 @@
 //! "events": [[seat, id], ...] (seat −1 = chance), "returns": [...] (optional, checked
 //! against the replay), "seats": [...] (optional: only these seats' streams),
 //! "meta": {...} (optional), "soft": [[event index, [[action, p], ...]], ...] (optional
-//! teacher distributions of the Act events, written with `--soft-k K`)}` — e.g. what a
+//! teacher distributions of the Act events, written with `--soft-k K`), "final_outcome":
+//! [...] (optional: the recorded result of a game that ended off the rules)}` — e.g. what a
 //! reference implementation, a solver or a scripted
 //! bot writes; real sources get their own parser module (see `kuhn_poker.rs`).
 
@@ -104,6 +105,7 @@ pub fn parse_jsonl_record(line: &str, fallback_id: &str) -> Result<Record> {
         meta: v.get("meta").cloned().unwrap_or(Value::Null),
         seats: v.get("seats").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(|s| s as usize).collect()),
         expected_returns: floats("returns"),
+        final_outcome: floats("final_outcome").map(|v| v.into_iter().map(|x| x as f32).collect()),
         soft_targets: match v.get("soft") {
             None | Some(Value::Null) => Vec::new(),
             Some(soft) => soft

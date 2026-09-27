@@ -10,3 +10,5 @@ description = "GamingMaster game rules + observation / legal-action encoders, sh
 serde.workspace = true
 serde_json.workspace = true
 rayon.workspace = true
+# chess_variants: shakmaty's variant rules (GPL-3.0-or-later, see data_processing/README.md)
+shakmaty = { version = "0.30.1", features = ["variant"] }

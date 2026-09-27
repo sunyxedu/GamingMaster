@@ -15,7 +15,9 @@
 //! obs.<name>      [T, ...]  every obs tensor (f32 tensors marked bits stored bit-packed)
 //! tgt.<name>      [T, ...]  every target tensor (candidate schema: tgt.action_idx, the
 //!                           index of the taken action among the candidates)
-//! tgt.value       [T] f32   outcome of the frame's seat (Game::outcome, [-1, 1])
+//! tgt.value       [T] f32   outcome of the frame's seat (Game::outcome, [-1, 1]; the
+//!                           recorded Record::final_outcome of a game that ended off the
+//!                           rules — resignation, time forfeit, agreed draw)
 //! tgt.value_mask  [T] bool  only with allow_truncated (false on unfinished records)
 //! tgt.action_probs_idx [T, K] i64   candidate schema, soft_k = K > 0: teacher
 //! tgt.action_probs_val [T, K] f32   distributions (Record::soft_targets) over
@@ -27,8 +29,9 @@
 //! (the schema name, layout, n_seats, the schema facts the model's META_ARCH_KEYS
 //! check), `rules_version`, the game `config`; converter_version = `Game::VERSION`.
 //! Sample meta: `record`, `seat` (−1 = interleaved), the per-seat `outcome` /
-//! `returns`, the record's own meta, and `events` (the trajectory as `[seat, id]`
-//! pairs, seat −1 = chance) with `store_events`.
+//! `returns`, `adjudicated: true` for a game that ended off the rules, the record's own
+//! meta, and `events` (the trajectory as `[seat, id]` pairs, seat −1 = chance) with
+//! `store_events`.
 
 use anyhow::Result;
 use gmrules::registry::{self, DynReplay};
@@ -58,6 +61,13 @@ pub struct Record {
     /// `tgt.action_probs_idx` / `action_probs_val` (candidate indices) when
     /// `ConvertOptions::soft_k > 0`; decisions without an entry get no teacher.
     pub soft_targets: Vec<(usize, Vec<(u32, f32)>)>,
+    /// The per-seat result the source records (in [-1, 1], like `Game::outcome`) for
+    /// games that may end OFF the rules — resignation, time forfeit, agreed or claimed
+    /// draw, adjudication. A replay that stops before a terminal state is then kept
+    /// (not `truncated`): its frames take this outcome as their value target and its
+    /// samples say `"adjudicated": true` (`Stats::adjudicated`). A replay that does
+    /// reach a terminal state must agree with it (else `returns_mismatch`).
+    pub final_outcome: Option<Vec<f32>>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +102,8 @@ pub struct Stats {
     pub truncated: usize,
     pub returns_mismatch: usize,
     pub empty: usize,
+    /// converted records that ended off the rules (`Record::final_outcome` as the value)
+    pub adjudicated: usize,
     pub samples: usize,
     pub frames: usize,
     pub forced_frames: usize,
@@ -230,14 +242,21 @@ fn replay_typed<G: Game>(cfg: &G::Config, events: &[Event]) -> std::result::Resu
     })
 }
 
-/// The samples of one record (replayed and verified), with its frame counts.
-type Converted = (Vec<Sample>, usize, usize, (usize, f64));
+/// The samples of one record (replayed and verified), with its frame counts and
+/// whether it ended off the rules.
+type Converted = (Vec<Sample>, usize, usize, (usize, f64), bool);
 
 fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts: &ConvertOptions)
     -> std::result::Result<Converted, Reject> {
     let r = r.map_err(Reject::Illegal)?;
     let spec = &r.spec;
-    if !r.terminal && !opts.allow_truncated {
+    if let Some(f) = &rec.final_outcome {
+        if f.len() != spec.n_seats || f.iter().any(|v| !(-1.0..=1.0).contains(v)) {
+            return Err(Reject::Returns(format!("recorded outcome {f:?}: {} values in [-1, 1] expected", spec.n_seats)));
+        }
+    }
+    let adjudicated = !r.terminal && rec.final_outcome.is_some();
+    if !r.terminal && !adjudicated && !opts.allow_truncated {
         return Err(Reject::Truncated);
     }
     if let (Some(want), Some(got)) = (&rec.expected_returns, &r.returns) {
@@ -245,6 +264,12 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
             return Err(Reject::Returns(format!("recorded returns {want:?}, replayed {got:?}")));
         }
     }
+    if let (Some(want), Some(got)) = (&rec.final_outcome, &r.outcome) {
+        if want.iter().zip(got).any(|(a, b)| (a - b).abs() > 1e-6) {
+            return Err(Reject::Returns(format!("recorded outcome {want:?}, the rules end the game with {got:?}")));
+        }
+    }
+    let outcome = if adjudicated { rec.final_outcome.clone() } else { r.outcome.clone() };
     let events_meta = opts.store_events.then(|| Value::from(rec.events.iter().map(|e| {
         let (s, i) = e.to_pair();
         json!([s, i])
@@ -268,9 +293,12 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
         let mut meta = json!({
             "record": rec.id,
             "seat": st.seat.map_or(-1, |s| s as i64),
-            "outcome": r.outcome,
+            "outcome": outcome,
             "returns": r.returns,
         });
+        if adjudicated {
+            meta["adjudicated"] = json!(true);
+        }
         if let Value::Object(m) = &rec.meta {
             for (k, v) in m {
                 meta[k] = v.clone();
@@ -279,13 +307,13 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
         if let Some(ev) = &events_meta {
             meta["events"] = ev.clone();
         }
-        out.push(stream_sample(spec, &decisions, r.outcome.as_deref(), meta, opts.allow_truncated, soft.as_ref(),
+        out.push(stream_sample(spec, &decisions, outcome.as_deref(), meta, opts.allow_truncated, soft.as_ref(),
                                &mut soft_st));
     }
     if out.is_empty() {
         return Err(Reject::Empty);
     }
-    Ok((out, frames, forced, soft_st))
+    Ok((out, frames, forced, soft_st, adjudicated))
 }
 
 fn check_options(spec: &FrameSpec, opts: &ConvertOptions) -> Result<()> {
@@ -351,8 +379,9 @@ where
         for (rec, res) in chunk.iter().zip(results) {
             st.records += 1;
             let reason = match res {
-                Ok((samples, frames, forced, (soft_n, soft_bad))) => {
+                Ok((samples, frames, forced, (soft_n, soft_bad), adjudicated)) => {
                     st.converted += 1;
+                    st.adjudicated += adjudicated as usize;
                     st.frames += frames;
                     st.forced_frames += forced;
                     st.soft_frames += soft_n;
@@ -405,7 +434,7 @@ mod tests {
             e
         };
         let recs = vec![
-            Record { id: "a".into(), events: ev([1, 2], &[0, 1, 1]), meta: json!({"x": 1}), seats: None, expected_returns: Some(vec![-2.0, 2.0]), soft_targets: vec![(3, vec![(0, 0.25), (1, 0.75)]), (4, vec![(1, 1.0), (7, 0.5)])] },
+            Record { id: "a".into(), events: ev([1, 2], &[0, 1, 1]), meta: json!({"x": 1}), seats: None, expected_returns: Some(vec![-2.0, 2.0]), soft_targets: vec![(3, vec![(0, 0.25), (1, 0.75)]), (4, vec![(1, 1.0), (7, 0.5)])], final_outcome: None },
             Record { id: "b".into(), events: ev([1, 2], &[0, 1]), meta: Value::Null, seats: None, expected_returns: None, ..Default::default() },
             Record { id: "c".into(), events: ev([1, 1], &[]), meta: Value::Null, seats: None, expected_returns: None, ..Default::default() },
             Record { id: "d".into(), events: ev([2, 0], &[1, 0]), meta: Value::Null, seats: Some(vec![1]), expected_returns: Some(vec![9.0, -1.0]), ..Default::default() },
@@ -437,6 +466,37 @@ mod tests {
         // frames: [seat0 pass (event 2), seat0 call (event 4)], [seat1 bet (event 3)]
         assert_eq!(idx[..6], [-1, -1, 1, -1, 1, 0]);
         assert_eq!(val[..6], [0.0, 0.0, 1.0, 0.0, 0.75, 0.25]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn games_ended_off_the_rules_take_the_recorded_outcome() {
+        let dir = std::env::temp_dir().join(format!("gmdata-traj-adj-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = KuhnConfig { players: 2 };
+        let ev = |acts: &[u32]| {
+            let mut e = vec![Event::Chance(1), Event::Chance(2)];
+            e.extend(acts.iter().enumerate().map(|(i, &a)| Event::Act(i % 2, a)));
+            e
+        };
+        let rec = |id: &str, acts: &[u32], f: Option<Vec<f32>>| Record {
+            id: id.into(), events: ev(acts), final_outcome: f, ..Default::default()
+        };
+        let recs = vec![
+            rec("resigned", &[0], Some(vec![-1.0, 1.0])),         // seat 0 passed, then "resigned"
+            rec("unfinished", &[0], None),                        // no recorded result: truncated
+            rec("agrees", &[0, 1, 1], Some(vec![-1.0, 1.0])),     // terminal, same result
+            rec("disagrees", &[0, 1, 1], Some(vec![1.0, -1.0])),  // terminal, other result
+            rec("bad", &[0], Some(vec![1.0])),                    // wrong arity
+        ];
+        let st = convert::<KuhnPoker>(&cfg, recs.into_iter().map(Ok), &dir, &ConvertOptions::default()).unwrap();
+        assert_eq!((st.converted, st.adjudicated, st.truncated, st.returns_mismatch), (2, 1, 1, 2), "{st:?}");
+        let sh = ShardReader::open(&dir.join("kuhn_poker_00000")).unwrap();
+        // the resigned record: seat 0's single frame carries the recorded outcome -1
+        assert_eq!(sh.samples[0].meta["adjudicated"], true);
+        assert_eq!(sh.samples[0].meta["outcome"], json!([-1.0, 1.0]));
+        assert_eq!(sh.read_f32("tgt.value").unwrap()[0], -1.0);
+        assert!(sh.samples[1].meta.get("adjudicated").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

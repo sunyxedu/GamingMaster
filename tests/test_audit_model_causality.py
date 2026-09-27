@@ -77,7 +77,8 @@ GAME_OVERRIDES = {
 #: games with a normalised conv encoder (cfg.encoder_norm): per-frame GroupNorm
 #: by default, BatchNorm2d on batch statistics in train mode under "batch"
 CONV_ENCODER_GAMES = frozenset({"generals", "chess", "go", "othello", "gomoku", "shogi", "lux",
-                                "clash_royale", "starcraft", "breakthrough"})
+                                "clash_royale", "starcraft", "breakthrough",
+                                "chess_variants"})
 #: cfg.encoder_norm values: the default, and the legacy layout
 NORMS = ("group", "batch")
 
@@ -88,7 +89,14 @@ GAME_OVERRIDES.update({g: {} for g in rules_games()})
 GAME_OVERRIDES["breakthrough"] = dict(board_h=6, board_w=6)
 
 #: from-to decoder games (legal from / to_of, labels from_idx / to_idx)
-FROMTO_GAMES = frozenset({"chess", "breakthrough"})
+FROMTO_GAMES = frozenset({"chess", "breakthrough", "chess_variants"})
+
+def _fromto_tokens(game: str, cfg) -> int:
+    """Decoder tokens of a from-to game: the board squares (+ chess_variants' pocket
+    slots, the from-token of a drop)."""
+    extra = 2 * cfg.n_hand_piece_types if game == "chess_variants" else 0
+    return cfg.board_h * cfg.board_w + extra
+
 
 def _is_candidate(game: str) -> bool:
     entry = rules_games().get(game)
@@ -122,6 +130,10 @@ def _obs(game: str, cfg, g: torch.Generator) -> Dict[str, torch.Tensor]:
     if game == "generals":
         grid = torch.rand(B, T, cfg.grid_channels, cfg.grid_h, cfg.grid_w, generator=g)
         return {"grid_seq": grid, "globals_seq": r(cfg.global_features)}
+    if game == "chess_variants":
+        return {"board_seq": bits(cfg.piece_channels, cfg.board_h, cfg.board_w),
+                "hand_seq": bits(2 * cfg.n_hand_piece_types, cfg.hand_feature_dim),
+                "globals_seq": r(cfg.board_global_features)}
     if game in ("chess", "go", "othello", "gomoku", "breakthrough"):
         o = {"board_seq": bits(cfg.piece_channels, cfg.board_h, cfg.board_w)}
         if cfg.board_global_features:
@@ -189,9 +201,10 @@ def _legal(game: str, cfg, obs, g) -> Optional[Dict[str, torch.Tensor]]:
     if game == "generals":
         return {"source": m(1, cfg.grid_h * cfg.grid_w).reshape(B, T, 1, cfg.grid_h, cfg.grid_w),
                 "direction": _mask(g, B, T, cfg.grid_h, cfg.grid_w, 4).permute(0, 1, 4, 2, 3)}
-    if game in ("chess", "go", "othello", "gomoku", "shogi", "breakthrough"):
+    if game in ("chess", "go", "othello", "gomoku", "shogi", "breakthrough", "chess_variants"):
         N = cfg.board_h * cfg.board_w
         if game in FROMTO_GAMES:
+            N = _fromto_tokens(game, cfg)
             lg = {"from": m(N), "to_of": m(N)}
             if cfg.n_promotions > 1:
                 lg["promotion_of"] = m(cfg.n_promotions)
@@ -238,7 +251,7 @@ def _label_highs(game: str, cfg) -> Dict[str, int]:
     if game == "generals":
         return {"source_y": cfg.grid_h, "source_x": cfg.grid_w}
     if game in FROMTO_GAMES:
-        N = cfg.board_h * cfg.board_w
+        N = _fromto_tokens(game, cfg)
         return {"from_idx": N, "to_idx": N}
     if game == "shogi":
         N = cfg.board_h * cfg.board_w
@@ -640,7 +653,7 @@ def _conditioned_on_sample(game: str, key: str) -> bool:
     first = {"generals": ("source_logits",),
              "chess": ("from_logits",), "shogi": ("mode_logit", "mode_logits", "from_logits",
                                                   "piece_logits"),
-             "breakthrough": ("from_logits",),
+             "breakthrough": ("from_logits",), "chess_variants": ("from_logits",),
              "starcraft": ("type_logits",), "hearthstone": ("type_logits",),
              "clash_royale": ("wait_logits", "card_logits"), "mahjong": ("type_logits",),
              # the move / switch heads condition on the sampled type; tera does not
