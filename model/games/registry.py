@@ -209,9 +209,9 @@ def _register_rules_games() -> None:
     from model.games.gmrules import rules_games
 
     for name in rules_games():
-        if name in GAME_REGISTRY:
-            raise ValueError(f"gmrules game {name!r} clashes with a registered game")
-        GAME_REGISTRY[name] = functools.partial(_build_rules_game, name)
+        # a game with its own adapter here (chess, go, shogi) keeps it when it gains a gmrules
+        # simulator: its RulesGame entry names that builder
+        GAME_REGISTRY.setdefault(name, functools.partial(_build_rules_game, name))
 
 
 _register_rules_games()
