@@ -193,13 +193,13 @@ META_LEGACY = {
 # older shards still train (their META_LEGACY architecture), but they lack
 # the frozen inputs / targets, so the trainers warn (or, with
 # --require_frozen_schema, refuse).
-SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 2, "lux": 2,
+SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 3, "lux": 2,
                                    "clash_royale": 3, "pokemon": 2}
 _SCHEMA_FREEZE_CONTENT = {
     "chess": "repetition flags + legal masks",
     "go": "side-to-move/komi globals",
     "shogi": "repetition + legal masks",
-    "mahjong": "legal masks",
+    "mahjong": "exact legal masks, leak-free claim frames + il_weight",
     "lux": "env-param globals + sap targets",
     "clash_royale": "deck tokens with the causal hand belief; older shards infer the hand "
                     "from the whole match",

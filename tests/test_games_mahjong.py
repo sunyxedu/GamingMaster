@@ -543,3 +543,40 @@ def test_il_head_terms_reconstruct_il_loss(cfg, model, masked):
         assert (h["mask"] is not None) == masked
         if masked:
             assert h["mask"].shape == h["logits"].shape and h["mask"].dtype == torch.bool
+
+
+@pytest.mark.parametrize("masked", [False, True])
+def test_il_weight_zero_frames_are_left_out(cfg, model, masked):
+    """tgt["il_weight"] (converter v3: 0 on a recorded pass whose options were
+    pre-empted by a higher-priority call) = excluding those frames from the
+    imitation terms: il_loss, its stats, answer_mask and il_head_terms equal
+    the unweighted loss over seq_mask & (weight > 0); an all-ones weight is the
+    historical loss bit for bit."""
+    B, T = 3, 5
+    if masked:
+        pred, tgt = _masked_batch(cfg, model, B, T, seed=4, illegal=True)
+    else:
+        tgt = _make_tgt(B, T, seed=4)
+        pred = model(_make_obs(cfg, B, T, seed=4), labels={"action_type": tgt["action_type"]})
+    seq_mask = torch.ones(B, T, dtype=torch.bool)
+    seq_mask[1, -1] = False
+    w = torch.ones(B, T)
+    w[0, 1] = w[2, 3] = w[1, 0] = 0.0
+    dec = model.action_decoder
+    ref = dec.il_loss(pred, tgt, seq_mask & (w > 0))
+    got = dec.il_loss(pred, {**tgt, "il_weight": w}, seq_mask)
+    assert set(got) == set(ref)
+    for k in ref:
+        assert torch.equal(got[k], ref[k]), k
+    assert not got["answer_mask"][0, 1] and got["answer_mask"][0, 0]
+    ones = dec.il_loss(pred, {**tgt, "il_weight": torch.ones(B, T)}, seq_mask)
+    plain = dec.il_loss(pred, tgt, seq_mask)
+    for k in plain:
+        assert torch.equal(ones[k], plain[k]), k
+    terms = dec.il_head_terms(pred, {**tgt, "il_weight": w}, seq_mask)
+    torch.testing.assert_close(_reconstruct(terms), got["loss"], atol=1e-6, rtol=1e-6)
+    for h in terms.values():
+        assert (h["weight"][w == 0] == 0).all()
+    # a weight-0 frame gets no gradient from the imitation loss
+    g = torch.autograd.grad(got["loss"], pred["action_type_logits"], retain_graph=True)[0]
+    assert (g[0, 1] == 0).all() and (g[2, 3] == 0).all() and g[2, 0].abs().sum() > 0

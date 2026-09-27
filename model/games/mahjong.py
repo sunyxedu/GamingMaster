@@ -18,7 +18,10 @@ exported here)::
     31..33  P F C           (haku, hatsu, chun — white/green/red dragons)
 
 Per-frame feature layouts (produced by
-``gmdata mahjong convert`` (data_processing/rs/gmdata/src/mahjong.rs), consumed here):
+``gmdata mahjong convert`` (data_processing/rs/gmdata/src/mahjong/), consumed here;
+converter_version ≥ 3 stores ``tiles_seq`` as exact quarters, ``raw.tiles_q``
+uint8 = value × 4, expanded when a sample is loaded —
+data_processing/games/mahjong.py):
 
 ``tiles_seq`` [B, T, 34, TILE_FEATURE_DIM=16] float — per tile kind k:
     0..4   own concealed-hand count one-hot (0..4)
@@ -34,7 +37,8 @@ Per-frame feature layouts (produced by
     13     k is a terminal or honor
     14     own concealed hand holds the red five of this kind
     15     focus flag: the just-drawn tile on own-turn frames, the
-           claimable discard on call-opportunity frames
+           claimable discard (or robbable kakan tile) on call-opportunity
+           frames
 
 ``players_seq`` [B, T, 4, PLAYER_FEATURE_DIM=12] float — player-relative
 row r (0 self, 1 shimocha, 2 toimen, 3 kamicha):
@@ -45,7 +49,8 @@ row r (0 self, 1 shimocha, 2 toimen, 3 kamicha):
     7      meld count / 4
     8      discard count / 24
     9      kan count / 4
-    10     focus actor (the discarder on call-opportunity frames)
+    10     focus actor (the discarder / kakan declarer on call-opportunity
+           frames)
     11     1.0 bias
 
 ``table_seq`` [B, T, TABLE_FEATURE_DIM=12] float:
@@ -82,6 +87,12 @@ committed type — ``tile_cond`` [..., 8, 34] (exact, RL: build it with
 labelled type: the converter's ``tgt.legal_tile_of``, IL legality via
 ``tgt.legal_<key>`` → ``legal[<key>]``); the legacy unconditional ``tile``
 mask still works.  See :class:`MahjongDecoder`.
+
+Imitation weight: ``tgt["il_weight"]`` [B, T] (converter_version ≥ 3)
+scales every frame's imitation terms — 0 on a recorded pass that does not
+show the seat's choice, because a call it could make was pre-empted by a
+higher-priority one (another seat's ron, or a pon over a chi).  Absent
+(older shards) = 1: the historical loss bit for bit.
 """
 
 from __future__ import annotations
@@ -497,10 +508,19 @@ class MahjongDecoder(ActionDecoder):
         bit-identical).  With them (IL legality via ``--il_legal_mask``):
         CE over the masked logits (degenerate-row guard), a target outside
         its mask gets weight 0 (its CE would be +inf) and is counted in
-        ``illegal_target_frac``; the normalisers are unchanged."""
+        ``illegal_target_frac``; the normalisers are unchanged.
+
+        ``tgt["il_weight"]`` [B, T] (converter_version ≥ 3; absent = 1, the
+        historical loss bit for bit) weights every frame's imitation terms
+        and their normalisers and metrics: 0 on a recorded pass that does
+        not show the seat's choice (a call it could make was pre-empted by
+        a higher-priority one), so such frames train the value head only."""
         cfg = self.cfg
         B, T, _ = pred["tile_logits"].shape
         seq_f = seq_mask.float()
+        il_weight = tgt.get("il_weight")
+        if il_weight is not None:
+            seq_f = seq_f * il_weight.float()
         n_seq = seq_f.sum().clamp(min=1)
 
         tgt_type = tgt["action_type"].long().clamp(0, cfg.n_action_types - 1)
@@ -542,6 +562,7 @@ class MahjongDecoder(ActionDecoder):
         return {
             "tgt_type": tgt_type, "safe_tile": safe_tile, "uses": uses,
             "seq_f": seq_f, "n_seq": n_seq,
+            "supervised": seq_mask.bool() if il_weight is None else seq_mask.bool() & (seq_f > 0),
             "type_logits": type_logits, "type_scored": type_scored, "type_ce": type_ce,
             "w_type": w_type, "type_mask": type_mask,
             "tile_logits": tile_logits, "tile_scored": tile_scored, "tile_ce": tile_ce,
@@ -564,7 +585,10 @@ class MahjongDecoder(ActionDecoder):
         distributions (see :meth:`_il_parts`).
 
         tgt keys: action_type / tile_idx [B, T] long (tile_idx may be −1
-        or 0 on tile-less frames; either way the weight zeroes it out).
+        or 0 on tile-less frames; either way the weight zeroes it out);
+        optional il_weight [B, T] (see :meth:`_il_parts`; weight-0 frames
+        are also left out of ``answer_mask``, the q-halt / exact-accuracy
+        target).
         """
         p = self._il_parts(pred, tgt, seq_mask)
         seq_f, n_seq, n_tile = p["seq_f"], p["n_seq"], p["n_tile"]
@@ -583,7 +607,7 @@ class MahjongDecoder(ActionDecoder):
 
         out = {
             "answer_correct": answer_ok,
-            "answer_mask": seq_mask.bool(),
+            "answer_mask": p["supervised"],
             "loss": loss,
             "type_loss": type_loss.detach(),
             "tile_loss": tile_loss.detach(),
