@@ -18,7 +18,9 @@ budget (``--budget`` expansions, ``--max_depth``) cannot solve ends the game's s
 
 Output JSON: {game: {"win_levels": W, "levels": [{"level": k, "actions": [[type, x, y],
 ...], "expanded": n, "seconds": s}, ...], "unsolved_at": k | null}}; replay it into
-IL shards with scripts/arc3_shards.py.
+IL shards with scripts/arc3_shards.py.  Each game's results so far are also written
+to ``<out>.partial/<game>.json`` after every solved level, so a search cut short keeps
+its solved levels (the shards script takes that directory's files as well).
 """
 
 from __future__ import annotations
@@ -126,8 +128,20 @@ def solve_level(game_obj, fd0, level: int, budget: int, max_depth: int, sdk
     return None, None, None, expanded
 
 
+def _save_partial(partial_dir: Optional[str], game: str, res: Dict) -> None:
+    """Write a game's results so far (atomic): a long search that is cut short
+    (time limit, preemption) keeps the levels it already solved."""
+    if not partial_dir:
+        return
+    os.makedirs(partial_dir, exist_ok=True)
+    tmp = os.path.join(partial_dir, f".{game}.json.tmp")
+    with open(tmp, "w") as fh:
+        json.dump(res, fh, indent=1)
+    os.replace(tmp, os.path.join(partial_dir, f"{game}.json"))
+
+
 def solve_game(args) -> Tuple[str, Dict]:
-    game, budget, max_depth, env_dir = args
+    game, budget, max_depth, env_dir, partial_dir = args
     if env_dir:
         os.environ["ENVIRONMENTS_DIR"] = env_dir
     sdk = _sdk()
@@ -146,6 +160,7 @@ def solve_game(args) -> Tuple[str, Dict]:
             break
         res["levels"].append({"level": level, "actions": [list(a) for a in actions],
                               "expanded": n, "seconds": round(time.time() - t0, 1)})
+        _save_partial(partial_dir, game, res)
         g, fd = g2, fd2
         print(f"[{game}] level {level}: {len(actions)} actions ({n} expansions, "
               f"{time.time() - t0:.1f} s)", flush=True)
@@ -161,7 +176,8 @@ def main(argv=None) -> Dict:
     p.add_argument("--workers", type=int, default=0, help="processes (0 = one per game)")
     p.add_argument("--out", required=True)
     a = p.parse_args(argv)
-    jobs = [(g, a.budget, a.max_depth, a.environments_dir) for g in a.games]
+    partial = a.out + ".partial"
+    jobs = [(g, a.budget, a.max_depth, a.environments_dir, partial) for g in a.games]
     n = a.workers or len(jobs)
     if n > 1:
         with mp.get_context("spawn").Pool(n) as pool:

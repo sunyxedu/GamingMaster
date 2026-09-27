@@ -76,14 +76,22 @@ def playthrough(game: str, levels: List[Dict], environments_dir=None) -> Dict:
 
 def main(argv=None) -> Dict:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--solutions", required=True)
+    p.add_argument("--solutions", required=True,
+                   help="arc3_solve.py's JSON, or its <out>.partial directory")
     p.add_argument("--out", required=True)
     p.add_argument("--games", nargs="*", default=None, help="default: every solved game")
     p.add_argument("--environments_dir", default=os.environ.get("ENVIRONMENTS_DIR"))
     a = p.parse_args(argv)
-    with open(a.solutions) as fh:
-        sol = json.load(fh)
-    games = a.games or sorted(sol)
+    if os.path.isdir(a.solutions):        # arc3_solve.py's <out>.partial directory
+        sol = {}
+        for name in sorted(os.listdir(a.solutions)):
+            if name.endswith(".json") and not name.startswith("."):
+                with open(os.path.join(a.solutions, name)) as fh:
+                    sol[name[:-5]] = json.load(fh)
+    else:
+        with open(a.solutions) as fh:
+            sol = json.load(fh)
+    games = [g for g in (a.games or sorted(sol)) if g in sol]
     samples, stats = [], {}
     for g in games:
         levels = sol[g]["levels"]

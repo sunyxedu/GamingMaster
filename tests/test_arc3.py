@@ -186,8 +186,13 @@ def test_solver_shards_il_and_rl(tmp_path, monkeypatch):
     sol = arc3_solve.main(["--games", "vc33", "sp80", "--budget", "600", "--max_depth", "12",
                            "--workers", "1", "--out", str(tmp_path / "sol.json")])
     assert sol["vc33"]["levels"][0]["actions"] == [[6, 62, 34]] * 3
+    # the per-game partial results (written after every solved level) replay the same
+    partial = tmp_path / "sol.json.partial"
+    assert (partial / "vc33.json").is_file()
+    st_p = arc3_shards.main(["--solutions", str(partial), "--out", str(tmp_path / "from_partial")])
     st = arc3_shards.main(["--solutions", str(tmp_path / "sol.json"),
                            "--out", str(tmp_path / "train")])
+    assert st_p == st
     assert st["samples"] == 2 and st["levels"]["vc33"] >= 1
     ds = GameShardDataset(str(tmp_path / "train"), game="arc3")
     s = ds[0]
