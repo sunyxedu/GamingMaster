@@ -1,7 +1,8 @@
 //! Pokémon Showdown replays (observer-view sim protocol) → shards for the pokemon adapter.
 //!
-//! converter_version 2. One sample per (replay, side) holding one frame per decision the
-//! side's player answers, in log order — the requests a live Showdown bot receives:
+//! converter_version 3 (v2 + exact move / species ids, see "Vocabulary" below). One sample
+//! per (replay, side) holding one frame per decision the side's player answers, in log
+//! order — the requests a live Showdown bot receives:
 //!
 //!   team preview   phase 2, turn 0 — the lead, when the format has team preview (`|poke|` /
 //!                  `|teampreview|` lines): a switch to the lead's team-preview slot.  Both
@@ -36,13 +37,13 @@
 //!                  switch is logged).  Revival Blessing's choice of a fainted Pokémon logs no
 //!                  `|switch|` and has no frame.
 //!
-//!   obs.species_ids [T,12] i64 (crc32 hash buckets)   obs.move_ids [T,4] i64
+//!   obs.species_ids [T,12] i64 (exact species ids)    obs.move_ids [T,4] i64 (exact move ids)
 //!   obs.poke_feats [T,12,17] f32   obs.slot_mask [T,12] bool   obs.field_seq [T,22] f32
 //!   tgt.action_type [T] i64    0 move / 1 switch / −1 no observed choice
 //!   tgt.action_known [T] bool  the frame carries an action label
-//!   tgt.move_id [T] i64        hash bucket (move_buckets) of the used move's NAME, −1 off move
-//!                              frames — the identity target (the policy scores the whole move
-//!                              vocabulary; a live bot masks it to the moves of its request)
+//!   tgt.move_id [T] i64        exact id of the used move, −1 off move frames — the identity
+//!                              target (the policy scores the whole move vocabulary; a live bot
+//!                              masks it to the moves of its request)
 //!   tgt.move_idx [T] i64       the used move's slot in obs.move_ids when it was revealed BEFORE
 //!                              the frame (legacy slot head), else −1 (first use, 5th+ reveal)
 //!   tgt.switch_idx / tera / active_idx [T] i64, tgt.value [T] f32
@@ -62,26 +63,50 @@
 //! screens; `-transform` gives the transformed Pokémon the target's revealed moves and boosts
 //! for as long as it stays in (moves used meanwhile are not added to its own moveset);
 //! Revival Blessing's `-heal` revives the Pokémon: fainted flag, status and tera state cleared
-//! (as Showdown does).  Replays without a `|win|` yield no samples.
+//! (as Showdown does).  Species (v3): a slot shows the forme the log last revealed — the
+//! team-preview placeholder of a species whose forme team preview hides (`Urshifu-*`,
+//! `Zamazenta-*`, `Greninja-*`, …) until the Pokémon's first switch-in names the forme, and
+//! every permanent forme change (`|detailschange|`: Mega Evolution, Primal Reversion,
+//! Ogerpon / Terapagos tera formes, Palafin-Hero, Mimikyu-Busted, and the regression when such
+//! a Pokémon faints) from its line on; temporary ones (`-formechange`) are not tracked.
+//! Replays without a `|win|` yield no samples.
 //!
-//! Re-conversion (v1 shards are obsolete: different frames, targets and field width; shard
-//! meta `{"field_features": 22, "move_buckets": 1024, "species_buckets": 512}`) — on the
+//! Vocabulary (v3; v1 / v2 hashed names into crc32 buckets — v2: 1024 moves / 512 species —
+//! where e.g. Swords Dance and Fire Blast, or Dragonite and Hoopa-Unbound, shared an id): every
+//! move / species name maps to an exact id of data_processing/games/pokemon/showdown_vocab.json,
+//! generated from Pokémon Showdown's data (data/moves.ts, data/pokedex.ts, the team-preview
+//! forme hiding of data/rulesets.ts) at a pinned commit by make_vocab.py next to it, and
+//! embedded here at build time.  Ids: 0 none (empty name), 1 UNK (a name the vocabulary does
+//! not know — counted per name in the convert stats `unk_moves` / `unk_species`, never merged
+//! with a known id), 2.. the entries.  Keys are Showdown's toID of the name (species: plus
+//! Nidoran♀/♂ → nidoranf/nidoranm and a `*` suffix for a team-preview placeholder); cosmetic
+//! formes (Gastrodon-East, Vivillon-Polar, …) and other Unicode spellings are aliases of their
+//! entry.  data_processing/games/pokemon/__init__.py is the same lookup in Python (the adapter's
+//! deploy request mask).  Shard meta: `{"field_features": 22, "move_vocab": M, "species_vocab":
+//! S, "vocab_version": V}` (M / S = id counts incl. the reserved ids; the vocabulary is
+//! append-only, so its size identifies it).
+//!
+//! Re-conversion (v1 / v2 shards are obsolete: hashed, colliding move / species ids) — on the
 //! cluster from the checkout root (`cargo build --release -p gmdata` in data_processing/; the
 //! fetch is resumable and skips replays already on disk — without internet access on the
 //! nodes, fetch elsewhere and rsync the raw directory), then every 5th shard → val:
 //!
-//!   G=$PWD/data_processing/target/release/gmdata; D=$HOME/gm-data/v4
+//!   G=$PWD/data_processing/target/release/gmdata; P=$HOME/gm-data/pokemon
 //!   $G pokemon fetch --format gen9ou --min-rating 1500 --max-replays 2000 --sleep-ms 500 \
-//!       --out $HOME/gm-data/raw/pokemon
-//!   $G pokemon convert --hq --input $HOME/gm-data/raw/pokemon --out $D/shards/pokemon
-//!   mkdir -p $D/split/pokemon/train $D/split/pokemon/val; i=0
-//!   for s in $D/shards/pokemon/pokemon_*; do
-//!     [ $((i % 5)) -eq 4 ] && v=val || v=train; ln -s $s $D/split/pokemon/$v/; i=$((i + 1)); done
+//!       --out $P/raw
+//!   $G pokemon convert --hq --input $P/raw --out $P/shards_v3
+//!   mkdir -p $P/split_v3/train $P/split_v3/val; i=0
+//!   for s in $P/shards_v3/pokemon_*; do
+//!     [ $((i % 5)) -eq 4 ] && v=val || v=train; ln -s $s $P/split_v3/$v/; i=$((i + 1)); done
 //!
-//! Train on `--data pokemon=$D/split/pokemon/train --val pokemon=$D/split/pokemon/val`; fresh
-//! runs take pokemon_field_features / pokemon_move_buckets from the shard meta.  A checkpoint
-//! with a v1 pokemon adapter (20 field features, the slot head) is refused on v2 shards by
-//! check_meta_arch: its pokemon adapter must be rebuilt (a fresh adapter on the trained core).
+//! Train on `--data pokemon=$P/split_v3/train --val pokemon=$P/split_v3/val`; fresh runs take
+//! pokemon_field_features / pokemon_move_vocab / pokemon_species_vocab from the shard meta.
+//! check_meta_arch refuses a hashed-bucket checkpoint (pokemon_move_vocab 0) on v3 shards —
+//! its move / species tables index a different id space: rebuild its pokemon adapter (a fresh
+//! adapter on the trained core) — and a fresh exact-vocabulary net on v1 / v2 shards, unless
+//! asked for the legacy net explicitly (`--override pokemon_move_vocab=0
+//! pokemon_species_vocab=0`).  A v1 adapter (20 field features, the slot head) is refused on
+//! v2 / v3 shards as before.
 //!
 //! Spectator logs are third-person: the converter can only show what the log reveals, so a
 //! side's own moves, items, abilities, stats and tera type — all known to the player — appear
@@ -96,14 +121,15 @@
 //! estimated fields are a train/deploy gap (a live bot knows its exact set).
 
 use crate::common;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
 use gmshard::{Sample, ShardWriter};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-pub const CONVERTER_VERSION: u32 = 2;
+pub const CONVERTER_VERSION: u32 = 3;
 const TEAM: usize = 6;
 const FEAT: usize = 17;
 const FIELD: usize = 22;
@@ -131,11 +157,118 @@ fn norm(s: &str) -> String {
     s.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
-fn bucket(name: &str, buckets: u32) -> i64 {
-    if name.is_empty() {
-        return 0;
+/// The exact move / species vocabularies (module docs, "Vocabulary"), embedded at build time.
+const VOCAB_JSON: &str = include_str!("../../../games/pokemon/showdown_vocab.json");
+const VOCAB_FORMAT: &str = "gm-pokemon-vocab.v1";
+/// id of the empty name (no move / no Pokémon)
+const ID_NONE: i64 = 0;
+/// id of a name the vocabulary does not know
+const ID_UNK: i64 = 1;
+/// the team-preview placeholder suffix of a species name (`Urshifu-*`)
+const HIDDEN_FORME: &str = "-*";
+
+/// Showdown's `toID` (sim/dex-data.ts): lowercase, then keep only a-z0-9.
+fn to_id(s: &str) -> String {
+    s.to_lowercase().chars().filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit()).collect()
+}
+
+/// The vocabulary key of a species name as the log spells it (Showdown's species.get rule
+/// for Nidoran♀ / ♂, `*` for a team-preview placeholder).
+fn species_key(name: &str) -> String {
+    let t = name.trim();
+    let mut key = to_id(t);
+    if key == "nidoran" && t.ends_with('♀') {
+        key = "nidoranf".into();
+    } else if key == "nidoran" && t.ends_with('♂') {
+        key = "nidoranm".into();
     }
-    (crc32fast::hash(norm(name).as_bytes()) % (buckets - 1) + 1) as i64
+    if t.ends_with(HIDDEN_FORME) {
+        key.push('*');
+    }
+    key
+}
+
+pub struct Vocab {
+    pub version: String,
+    /// key (entries and aliases) → id
+    moves: HashMap<String, i64>,
+    species: HashMap<String, i64>,
+    /// id counts, reserved ids included (the shard meta move_vocab / species_vocab)
+    pub n_moves: usize,
+    pub n_species: usize,
+}
+
+impl Vocab {
+    fn parse(text: &str) -> Result<Vocab> {
+        let doc: Value = serde_json::from_str(text).context("parse showdown_vocab.json")?;
+        anyhow::ensure!(doc["format"] == VOCAB_FORMAT, "showdown_vocab.json: format {} is not {VOCAB_FORMAT}", doc["format"]);
+        let ids = &doc["ids"];
+        anyhow::ensure!(ids["none"] == ID_NONE && ids["unk"] == ID_UNK && ids["first"] == 2, "unexpected reserved ids {ids}");
+        let table = |entries: &str, aliases: &str| -> Result<(HashMap<String, i64>, usize)> {
+            let rows = doc[entries].as_array().with_context(|| format!("no {entries} table"))?;
+            let mut m = HashMap::new();
+            for (i, row) in rows.iter().enumerate() {
+                let key = row[0].as_str().with_context(|| format!("{entries}[{i}]: no key"))?;
+                anyhow::ensure!(m.insert(key.to_string(), 2 + i as i64).is_none(), "{entries}: duplicate key {key}");
+            }
+            for a in doc[aliases].as_array().with_context(|| format!("no {aliases} table"))? {
+                let (Some(alias), Some(target)) = (a[0].as_str(), a[1].as_str()) else { anyhow::bail!("{aliases}: bad row {a}") };
+                let id = *m.get(target).with_context(|| format!("{aliases}: {alias} → unknown {target}"))?;
+                anyhow::ensure!(m.insert(alias.to_string(), id).is_none(), "{aliases}: {alias} shadows an entry");
+            }
+            Ok((m, rows.len() + 2))
+        };
+        let (moves, n_moves) = table("moves", "move_aliases")?;
+        let (species, n_species) = table("species", "species_aliases")?;
+        let version = doc["version"].as_str().context("no version")?.to_string();
+        Ok(Vocab { version, moves, species, n_moves, n_species })
+    }
+
+    /// The exact id of a move name: 0 empty, 1 (UNK) unknown.
+    fn move_id(&self, name: &str) -> i64 {
+        if name.trim().is_empty() {
+            return ID_NONE;
+        }
+        *self.moves.get(&to_id(name)).unwrap_or(&ID_UNK)
+    }
+
+    /// The exact id of a species name: 0 empty, 1 (UNK) unknown.
+    fn species_id(&self, name: &str) -> i64 {
+        if name.trim().is_empty() {
+            return ID_NONE;
+        }
+        *self.species.get(&species_key(name)).unwrap_or(&ID_UNK)
+    }
+}
+
+/// The vocabulary this binary was built with.
+pub fn vocab() -> &'static Vocab {
+    static V: OnceLock<Vocab> = OnceLock::new();
+    V.get_or_init(|| Vocab::parse(VOCAB_JSON).expect("the embedded showdown_vocab.json is valid"))
+}
+
+/// Names that mapped to UNK in the written samples: name → ids emitted (obs + targets).
+#[derive(Default)]
+struct UnkNames {
+    moves: BTreeMap<String, usize>,
+    species: BTreeMap<String, usize>,
+}
+
+impl UnkNames {
+    fn move_id(&mut self, v: &Vocab, name: &str) -> i64 {
+        let id = v.move_id(name);
+        if id == ID_UNK {
+            *self.moves.entry(name.trim().to_string()).or_default() += 1;
+        }
+        id
+    }
+    fn species_id(&mut self, v: &Vocab, name: &str) -> i64 {
+        let id = v.species_id(name);
+        if id == ID_UNK {
+            *self.species.entry(name.trim().to_string()).or_default() += 1;
+        }
+        id
+    }
 }
 
 fn status_idx(s: &str) -> Option<usize> {
@@ -645,6 +778,11 @@ fn parse_log(log: &str) -> Parse {
                 let p = &mut s.team[slot];
                 p.revealed = true;
                 p.leave_field();
+                // team preview hid the forme (`Urshifu-*`): the switch-in names it
+                let sp = base_species(a(1));
+                if p.species.ends_with(HIDDEN_FORME) && !sp.is_empty() {
+                    p.species = sp;
+                }
                 if args.len() >= 3 && !a(2).is_empty() {
                     let (hp, st, fnt) = parse_hp(a(2));
                     p.hp = hp;
@@ -849,6 +987,18 @@ fn parse_log(log: &str) -> Parse {
                 }
                 continue;
             }
+            "detailschange" if args.len() >= 2 => {
+                // |detailschange|POKEMON|DETAILS: a permanent forme change (Mega Evolution, Primal
+                // Reversion, Ogerpon / Terapagos tera formes, Palafin-Hero, ...) or its regression
+                // when the Pokémon faints (`[silent]`): the slot shows the new forme from here on
+                let (pos, nick) = ident(a(0));
+                let Some(pi) = side_idx(&pos) else { continue };
+                let sp = base_species(a(1));
+                if let (Some(slot), false) = (b.sides[pi].slot_of(&nick), sp.is_empty()) {
+                    b.sides[pi].team[slot].species = sp;
+                }
+                continue;
+            }
             "-transform" if args.len() >= 2 => {
                 // |-transform|POKEMON|TARGET: POKEMON copies TARGET's moves and stat stages
                 let (pos, nick) = ident(a(0));
@@ -981,12 +1131,15 @@ fn parse_log(log: &str) -> Parse {
     Parse { records, winner: b.winner, names: [b.sides[0].name.clone(), b.sides[1].name.clone()], stats, unknown }
 }
 
-fn replay_samples(r: &Value, sb: u32, mb: u32, p: &Parse) -> Vec<Sample> {
+/// The samples of a parsed replay (the winner's only with `winner_only`), names mapped to
+/// exact vocabulary ids; the names that map to UNK are counted in `unk`.
+fn replay_samples(r: &Value, p: &Parse, winner_only: bool, unk: &mut UnkNames) -> Vec<Sample> {
     let mut out = Vec::new();
     let Some(w) = p.winner else { return out };
+    let voc = vocab();
     for side in 0..2 {
         let recs = &p.records[side];
-        if recs.is_empty() {
+        if recs.is_empty() || (winner_only && w != side) {
             continue;
         }
         let t = recs.len();
@@ -995,8 +1148,8 @@ fn replay_samples(r: &Value, sb: u32, mb: u32, p: &Parse) -> Vec<Sample> {
         let (mut lt, mut ls) = (vec![], vec![]);
         for rec in recs {
             let f = &rec.frame;
-            sp.extend(f.species.iter().map(|s| bucket(s, sb)));
-            mv.extend(f.moves.iter().map(|m| bucket(m, mb)));
+            sp.extend(f.species.iter().map(|s| unk.species_id(voc, s)));
+            mv.extend(f.moves.iter().map(|m| unk.move_id(voc, m)));
             feats.extend_from_slice(&f.feats);
             mask.extend_from_slice(&f.mask);
             field.extend_from_slice(&f.field);
@@ -1004,7 +1157,7 @@ fn replay_samples(r: &Value, sb: u32, mb: u32, p: &Parse) -> Vec<Sample> {
             at.push(rec.action_type);
             known.push(rec.action_type >= 0);
             mi.push(rec.move_idx);
-            mid.push(if rec.action_type == 0 { bucket(&rec.move_name, mb) } else { -1 });
+            mid.push(if rec.action_type == 0 { unk.move_id(voc, &rec.move_name) } else { -1 });
             si.push(rec.switch_idx);
             te.push(rec.tera);
             lt.extend_from_slice(&rec.legal_type);
@@ -1061,11 +1214,6 @@ pub enum Cmd {
         min_rating: i64,
         #[arg(long)]
         max_replays: Option<usize>,
-        #[arg(long, default_value_t = 512)]
-        species_buckets: u32,
-        /// hash buckets of the move vocabulary (obs.move_ids, the tgt.move_id identity target)
-        #[arg(long, default_value_t = 1024)]
-        move_buckets: u32,
         /// drop replays shorter than this many turns
         #[arg(long, default_value_t = 0)]
         min_turns: i64,
@@ -1159,14 +1307,15 @@ fn fetch(format: &str, min_rating: i64, max: usize, sleep_ms: u64, out: &Path) -
     Ok(json!({"listed": listed, "downloaded": downloaded, "skipped_rating": low, "skipped_existing": existing, "errors": errors}))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max_replays: Option<usize>, sb: u32, mb: u32,
-               q: Quality) -> Result<Value> {
-    let meta = json!({"field_features": FIELD, "move_buckets": mb, "species_buckets": sb});
+pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max_replays: Option<usize>, q: Quality) -> Result<Value> {
+    let voc = vocab();
+    let meta = json!({"field_features": FIELD, "move_vocab": voc.n_moves, "species_vocab": voc.n_species,
+                      "vocab_version": voc.version});
     let mut w = ShardWriter::new(out, "pokemon", CONVERTER_VERSION, meta, shard_size)?;
     let mut st: BTreeMap<&str, usize> = ["seen", "kept", "samples", "frames", "no_winner", "low_rating", "not_replay", "low_quality"].into_iter().map(|k| (k, 0)).collect();
     let mut labels: BTreeMap<String, usize> = BTreeMap::new();
     let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unk = UnkNames::default();
     let mut files: Vec<PathBuf> = std::fs::read_dir(input)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().map(|e| e == "json").unwrap_or(false)).collect();
     files.sort();
     for path in files {
@@ -1200,10 +1349,7 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max
             *st.get_mut("no_winner").unwrap() += 1;
             continue;
         }
-        let mut ss = replay_samples(&r, sb, mb, &p);
-        if q.winner_only {
-            ss.retain(|smp| smp.meta["won"] == json!(true));
-        }
+        let ss = replay_samples(&r, &p, q.winner_only, &mut unk);
         if ss.is_empty() {
             continue;
         }
@@ -1222,6 +1368,11 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max
     v["shards"] = json!(w.written_shards);
     v["labels"] = json!(labels);
     v["unknown"] = json!(unknown);
+    v["vocab"] = json!({"version": voc.version, "move_vocab": voc.n_moves, "species_vocab": voc.n_species});
+    // names the vocabulary does not know (UNK ids, never merged with a known id): name → ids
+    // written (frames × slots of obs.species_ids / obs.move_ids, plus tgt.move_id labels)
+    v["unk_moves"] = json!(unk.moves);
+    v["unk_species"] = json!(unk.species);
     Ok(v)
 }
 
@@ -1231,8 +1382,8 @@ pub fn run(cmd: Cmd) -> Result<()> {
             println!("{}", fetch(&format, min_rating, max_replays, sleep_ms, &out)?);
             Ok(())
         }
-        Cmd::Convert { input, out, shard_size, min_rating, max_replays, species_buckets, move_buckets, min_turns, exclude_forfeit,
-                       exclude_inactivity, winner_only, hq } => {
+        Cmd::Convert { input, out, shard_size, min_rating, max_replays, min_turns, exclude_forfeit, exclude_inactivity,
+                       winner_only, hq } => {
             let mut q = Quality { min_turns, exclude_forfeit, exclude_inactivity, winner_only };
             let mut min_rating = min_rating;
             if hq {
@@ -1240,7 +1391,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 q.min_turns = q.min_turns.max(5);
                 q.exclude_inactivity = true;
             }
-            println!("{}", convert(&input, &out, shard_size, min_rating, max_replays, species_buckets, move_buckets, q)?);
+            println!("{}", convert(&input, &out, shard_size, min_rating, max_replays, q)?);
             Ok(())
         }
     }
@@ -1539,6 +1690,7 @@ mod tests {
     fn fixture_replays_convert_without_mismatches() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/pokemon");
         let mut frames = 0;
+        let mut unk = UnkNames::default();
         for e in std::fs::read_dir(dir).unwrap() {
             let r: Value = serde_json::from_slice(&std::fs::read(e.unwrap().path()).unwrap()).unwrap();
             let p = parse_log(r["log"].as_str().unwrap());
@@ -1553,7 +1705,116 @@ mod tests {
                     assert!(x.move_idx < 0 || !x.frame.moves[x.move_idx as usize].is_empty());
                 }
             }
+            assert_eq!(replay_samples(&r, &p, false, &mut unk).len(), 2);
         }
         assert!(frames > 1500, "{frames}");
+        assert!(unk.moves.is_empty() && unk.species.is_empty(), "UNK names: {:?} {:?}", unk.moves, unk.species);
+    }
+
+    fn i64s(s: &Sample, name: &str) -> Vec<i64> {
+        match &s.tensors.iter().find(|t| t.name == name).expect(name).col {
+            gmshard::Column::I64(v) => v.clone(),
+            _ => panic!("{name} is not an i64 tensor"),
+        }
+    }
+
+    #[test]
+    fn vocabulary_round_trips() {
+        let v = vocab();
+        let doc: Value = serde_json::from_str(VOCAB_JSON).unwrap();
+        let (moves, species) = (doc["moves"].as_array().unwrap(), doc["species"].as_array().unwrap());
+        assert_eq!((v.n_moves, v.n_species), (moves.len() + 2, species.len() + 2));
+        assert!(v.n_moves > 900 && v.n_species > 1400 && v.version.starts_with("ps-"));
+        // every entry's display name and key give its own id (ids = table index + 2, all distinct)
+        for (i, e) in moves.iter().enumerate() {
+            let (key, name) = (e[0].as_str().unwrap(), e[1].as_str().unwrap());
+            assert_eq!((v.move_id(name), v.move_id(key)), (i as i64 + 2, i as i64 + 2), "{name}");
+        }
+        for (i, e) in species.iter().enumerate() {
+            assert_eq!(v.species_id(e[1].as_str().unwrap()), i as i64 + 2, "{}", e[1]);
+        }
+        for a in doc["species_aliases"].as_array().unwrap() {
+            assert_eq!(v.species[a[0].as_str().unwrap()], v.species[a[1].as_str().unwrap()], "{a}");
+        }
+        // reserved ids: the empty name, a name the vocabulary does not know
+        assert_eq!((v.move_id(""), v.move_id("Zz Sentinel Move"), v.species_id(" "), v.species_id("Zzmon")), (0, 1, 0, 1));
+        // formes that play differently are distinct (the team-preview placeholder too) ...
+        let distinct = |names: &[&str]| names.iter().map(|n| v.species_id(n)).collect::<std::collections::BTreeSet<_>>().len();
+        let formes = ["Rotom", "Rotom-Wash", "Rotom-Heat", "Urshifu", "Urshifu-Rapid-Strike", "Urshifu-*", "Ogerpon",
+            "Ogerpon-Wellspring", "Ogerpon-Wellspring-Tera", "Ogerpon-Teal-Tera", "Palafin", "Palafin-Hero"];
+        assert_eq!(distinct(&formes), formes.len());
+        assert!(formes.iter().all(|n| v.species_id(n) > ID_UNK));
+        // ... cosmetic formes and other spellings are not
+        assert_eq!(v.species_id("Gastrodon-East"), v.species_id("Gastrodon"));
+        assert_eq!(v.species_id("Vivillon-Polar"), v.species_id("Vivillon"));
+        assert_eq!(v.species_id("Flabe\u{301}be\u{301}"), v.species_id("Flab\u{e9}b\u{e9}"));
+        assert_eq!(v.species_id("Nidoran♀"), v.species_id("Nidoran-F"));
+        assert_ne!(v.species_id("Nidoran♀"), v.species_id("Nidoran♂"));
+        assert_eq!(v.move_id("U-turn"), v.move_id("uturn"));
+        // converter v2's crc32 buckets merged these (1024 move / 512 species buckets)
+        assert_ne!(v.move_id("Swords Dance"), v.move_id("Fire Blast"));
+        assert_eq!(distinct(&["Dragonite", "Hoopa-Unbound", "Primarina", "Rillaboom"]), 4);
+        let mv = ["Earthquake", "Tidy Up", "Aura Sphere"].map(|m| v.move_id(m));
+        assert!(mv[0] != mv[1] && mv[1] != mv[2] && mv[0] != mv[2]);
+    }
+
+    #[test]
+    fn species_show_the_forme_the_log_revealed() {
+        // team preview hides Urshifu's / Zamazenta's forme; the switch-in names it, and a
+        // permanent forme change (the Ogerpon tera forme) holds until the faint regression
+        let log = ["|player|p1|Alice|", "|player|p2|Bob|", "|poke|p1|Urshifu-*, M|", "|poke|p1|Ogerpon-Wellspring, F|",
+            "|poke|p2|Zamazenta-*|", "|poke|p2|Gholdengo|", "|teampreview", "|start",
+            "|switch|p1a: Urshifu|Urshifu-Rapid-Strike, M|100/100", "|switch|p2a: Gholdengo|Gholdengo|100/100", "|turn|1",
+            "|switch|p1a: Blaise|Ogerpon-Wellspring, F|100/100", "|move|p2a: Gholdengo|Make It Rain|p1a: Blaise", "|upkeep",
+            "|turn|2", "|-terastallize|p1a: Blaise|Water", "|detailschange|p1a: Blaise|Ogerpon-Wellspring-Tera, F, tera:Water",
+            "|move|p1a: Blaise|Ivy Cudgel|p2a: Gholdengo", "|move|p2a: Gholdengo|Make It Rain|p1a: Blaise", "|upkeep", "|turn|3",
+            "|move|p2a: Gholdengo|Make It Rain|p1a: Blaise", "|-damage|p1a: Blaise|0 fnt", "|faint|p1a: Blaise",
+            "|detailschange|p1: Blaise|Ogerpon-Wellspring, F|[silent]", "|upkeep",
+            "|switch|p1a: Urshifu|Urshifu-Rapid-Strike, M|100/100", "|turn|4", "|win|Alice"].join("\n");
+        let p = parse_log(&log);
+        let sp = |side: usize| p.records[side].iter().map(|r| r.frame.species[..8].to_vec()).collect::<Vec<_>>();
+        let (a, b) = (sp(0), sp(1));
+        let (u, o, z) = ("Urshifu-Rapid-Strike", "Ogerpon-Wellspring", "Zamazenta-*");
+        let want: [[&str; 3]; 6] = [["Urshifu-*", o, z], [u, o, z], [u, o, z], [u, "Ogerpon-Wellspring-Tera", z], [u, o, z], [u, o, z]];
+        assert_eq!(a.len(), 6, "lead, turns 1-3, the replacement, turn 4");
+        for (f, w) in want.iter().enumerate() {
+            assert_eq!([a[f][0].as_str(), a[f][1].as_str(), a[f][6].as_str()], *w, "p1 frame {f}");
+        }
+        assert_eq!((b[0][6].as_str(), b[1][6].as_str(), b[0][0].as_str()), ("Urshifu-*", u, z), "p2's view");
+        // the ids are the vocabulary's, the placeholder its own
+        let mut unk = UnkNames::default();
+        let s = replay_samples(&json!({"id": "t"}), &p, false, &mut unk);
+        let ids = i64s(&s[0], "obs.species_ids");
+        let v = vocab();
+        assert_eq!(ids[..2], [v.species_id("Urshifu-*"), v.species_id(o)]);
+        assert_eq!(ids[12..14], [v.species_id(u), v.species_id(o)]);
+        assert_eq!(ids[3 * 12 + 1], v.species_id("Ogerpon-Wellspring-Tera"));
+        assert_ne!(v.species_id("Urshifu-*"), v.species_id("Urshifu"));
+        assert!(unk.species.is_empty() && unk.moves.is_empty());
+    }
+
+    #[test]
+    fn unknown_names_map_to_unk_and_are_counted() {
+        // a move / species newer than the vocabulary: UNK (id 1), never another move's id
+        let log = ["|player|p1|Alice|", "|player|p2|Bob|", "|poke|p1|Garchomp, M|", "|poke|p2|Zzmon|", "|teampreview",
+            "|start", "|switch|p1a: Garchomp|Garchomp, M|100/100", "|switch|p2a: Zzmon|Zzmon|100/100", "|turn|1",
+            "|move|p1a: Garchomp|Zz Quake|p2a: Zzmon", "|move|p2a: Zzmon|Splash|p2a: Zzmon", "|upkeep", "|turn|2",
+            "|move|p1a: Garchomp|Zz Quake|p2a: Zzmon", "|upkeep", "|turn|3", "|win|Alice"].join("\n");
+        let p = parse_log(&log);
+        let mut unk = UnkNames::default();
+        let s = replay_samples(&json!({"id": "t"}), &p, false, &mut unk);
+        let v = vocab();
+        assert_eq!(i64s(&s[0], "tgt.move_id"), [-1, ID_UNK, ID_UNK, -1]);
+        assert_eq!(i64s(&s[1], "tgt.move_id")[1], v.move_id("Splash"));
+        assert_eq!(i64s(&s[0], "obs.move_ids")[2 * 4..3 * 4], [ID_UNK, 0, 0, 0], "the revealed unknown move");
+        let own = i64s(&s[0], "obs.species_ids");
+        assert!((0..4).all(|f| own[f * 12] == v.species_id("Garchomp") && own[f * 12 + 6] == ID_UNK));
+        // counted per name: 2 labels + 2 revealed-move slots (turns 2, 3); 4 frames × 2 sides
+        assert_eq!(unk.moves, BTreeMap::from([("Zz Quake".to_string(), 4)]));
+        assert_eq!(unk.species, BTreeMap::from([("Zzmon".to_string(), 8)]));
+        // winner_only: only the winner's sample, and only its names are counted
+        let mut unk = UnkNames::default();
+        assert_eq!(replay_samples(&json!({"id": "t"}), &p, true, &mut unk).len(), 1);
+        assert_eq!((unk.moves["Zz Quake"], unk.species["Zzmon"]), (4, 4));
     }
 }

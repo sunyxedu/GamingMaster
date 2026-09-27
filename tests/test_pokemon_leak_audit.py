@@ -48,12 +48,12 @@ import pytest
 import torch
 
 from data_processing.games.dataset import load_gm_samples
+from data_processing.games.pokemon import VOCAB
 from model.games.pokemon import (
     FIELD_FORCED_SWITCH,
     FIELD_TEAM_PREVIEW,
     POKE_FEAT_ACTIVE,
     POKE_FEAT_FAINTED,
-    move_bucket,
 )
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -66,7 +66,6 @@ EXTRA_ENV = "GM_AUDIT_POKEMON_REPLAYS"
 EXTRA_MAX = 150
 CARGO = shutil.which("cargo") or os.path.expanduser("~/.cargo/bin/cargo")
 TURN_CLIP = 50  # obs.field_seq[..., 9] = min(turn / 50, 1): exact turn numbers below this
-MOVE_BUCKETS = 1024  # gmdata pokemon convert --move-buckets default (shard meta "move_buckets")
 
 Key = Tuple[str, str]
 
@@ -369,9 +368,9 @@ def test_turn_frame_is_a_function_of_the_log_through_the_turn_line(gmdata, repla
                 assert _turns(whole)[k] == t and all(_turns(whole)[f] == t for f in between)
             d = _diff(whole, k, part, k, tgt=False) + _state_diff(whole, k, part, k)
             assert not d, f"{rid}/{side}: turn-{t} frame depends on turn-{t} events ({d})"
-            # the synthetic Splash labels the cut's turn-t frame by its identity (never revealed
-            # before, so no obs.move_ids slot)
-            splash = move_bucket("Splash", MOVE_BUCKETS)
+            # the synthetic Splash labels the cut's turn-t frame by its identity — its exact
+            # vocabulary id (never revealed before, so no obs.move_ids slot)
+            splash = VOCAB.move_id("Splash")
             assert int(part["tgt"]["move_id"][k]) == splash, (rid, side, t)
             assert int(part["tgt"]["move_idx"][k]) == -1, (rid, side, t)
             checked_t += 1
@@ -986,8 +985,8 @@ def test_pokemon_network_is_causal_over_frames():
         trm_L_cycles=2,
         trm_block_layers=1,
         halt_max_steps=2,
-        pokemon_species_buckets=64,
-        pokemon_move_buckets=32,
+        pokemon_species_vocab=64,
+        pokemon_move_vocab=32,
     )
     net = GameNetwork(cfg, PokemonEncoder(cfg), PokemonDecoder(cfg)).eval()
     B, T, S, cut = 2, 6, 12, 3
