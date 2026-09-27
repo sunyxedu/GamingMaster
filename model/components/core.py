@@ -522,9 +522,12 @@ class DeepCore(nn.Module):
         """``routes`` [N, C, S, k]: replay a recorded routing (:func:`record_moe_routes`).
 
         With memory sub-layers (model.components.memory): ``bt`` = (B, T), the
-        sequence layout of the N = B·T frames (full-sequence forward), or
-        ``mem_states`` = the sub-layers' states for one frame per row (step; the
-        list, in :meth:`CoreMemory.ordered` order, is updated in place)."""
+        sequence layout of the N = B·T frames (full-sequence forward; ``mem_states``,
+        if given, the states the sequence starts from — None entries = the initial
+        ones — replaced by the states after its last frame: a longer sequence in
+        chunks), or without ``bt``, ``mem_states`` = the sub-layers' states for one
+        frame per row (step).  The list, in :meth:`CoreMemory.ordered` order, is
+        updated in place."""
         _check_routes(routes, x, self.moe_calls())
         if not self.memory:
             return self.final_norm(_run_blocks(self.blocks, x, valid, routes)), 1
@@ -536,17 +539,22 @@ class DeepCore(nn.Module):
         for s, e in split_blocks(self.blocks, cuts):
             x = _run_blocks(self.blocks[s:e], x, valid, routes, first=s)
             for mem in self.memory.modules_after(e - 1):
-                if mem_states is not None:                       # one frame per row
+                if bt is None:                                   # one frame per row
                     j = order[id(mem)]
                     x, mem_states[j] = mem.step(x, mem_states[j])
-                else:
-                    B, T = bt
-                    x4 = x.reshape(B, T, *x.shape[1:])
-                    # recomputed in the backward like the blocks: a scan's saved
-                    # gates / states would cost several activations per sub-layer
-                    x4 = (ckpt(mem, x4) if torch.is_grad_enabled() and x4.requires_grad
-                          else mem(x4))
-                    x = x4.reshape(x.shape)
+                    continue
+                B, T = bt
+                x4 = x.reshape(B, T, *x.shape[1:])
+                # recomputed in the backward like the blocks: a scan's saved
+                # gates / states would cost several activations per sub-layer
+                grad = torch.is_grad_enabled() and x4.requires_grad
+                if mem_states is None:
+                    x4 = ckpt(mem, x4) if grad else mem(x4)
+                else:                                            # a chunk: carry the state
+                    j = order[id(mem)]
+                    x4, mem_states[j] = (ckpt(mem, x4, mem_states[j], True) if grad
+                                         else mem(x4, mem_states[j], True))
+                x = x4.reshape(x.shape)
         return self.final_norm(x), 1
 
 

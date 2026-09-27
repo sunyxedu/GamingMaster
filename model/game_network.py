@@ -362,6 +362,9 @@ class GameNetwork(nn.Module):
         return_carry: bool = False,
         reset: Optional[torch.Tensor] = None,
         routes: Optional[torch.Tensor] = None,
+        init_cache: Optional[List[Optional[torch.Tensor]]] = None,
+        t0: int = 0,
+        return_cache: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Full-sequence forward.
 
@@ -369,6 +372,15 @@ class GameNetwork(nn.Module):
         ``step(record_routes=True)`` returned for each frame, at the same
         depth): the RL learner's forward then takes exactly the actor's
         experts (model.components.core, routing replay).
+
+        A sequence in chunks (recurrent temporal mixer, non-TRM cores):
+        ``init_cache`` is the memory state the frames continue from — the
+        ``step()`` cache layout (Stage-1 states, then the core memory's), e.g. a
+        previous chunk's ``out["st_cache"]`` — and ``t0`` the absolute index of the
+        first frame (the decoders' time features); ``return_cache`` returns the
+        state after the last frame as ``out["st_cache"]`` (rows padded at the end
+        carry their padding's updates).  Chunks chained this way compute what one
+        forward over the whole sequence does.
 
         ``carry`` / ``active`` / ``return_carry`` drive deep supervision
         (training.deep_supervision): ``carry`` is the detached (z_H, z_L)
@@ -406,9 +418,20 @@ class GameNetwork(nn.Module):
 
         # ── Stage 1: Spatiotemporal encoding (checkpointed) ──
         tokens = self.pre_norm(tokens)
-        for layer in self.st_layers:
-            tokens = (checkpoint(layer, tokens, use_reentrant=True)
-                      if torch.is_grad_enabled() else layer(tokens))
+        chunked = init_cache is not None or return_cache
+        if chunked and (cfg.temporal_mixer != "recurrent" or self.core_type == "trm"):
+            raise ValueError("a carried memory state (init_cache / return_cache) needs the "
+                             "recurrent temporal mixer and a non-TRM core")
+        st_states: List[torch.Tensor] = []
+        for i, layer in enumerate(self.st_layers):
+            if chunked:
+                h0 = init_cache[i] if init_cache is not None else None
+                tokens, h = (checkpoint(layer, tokens, h0, True, use_reentrant=True)
+                             if torch.is_grad_enabled() else layer(tokens, h0, True))
+                st_states.append(h)
+            else:
+                tokens = (checkpoint(layer, tokens, use_reentrant=True)
+                          if torch.is_grad_enabled() else layer(tokens))
         tokens = self.mid_norm(tokens)
 
         # ── Stage 2: TRM pondering ──
@@ -429,7 +452,14 @@ class GameNetwork(nn.Module):
             valid = frame_mask.reshape(BT) if frame_mask is not None else None
             if routes is not None:
                 routes = routes.reshape((BT,) + tuple(routes.shape[2:]))
-            z_H, q_halt, _ = self._core_pass(x, act_steps, valid, routes, bt=(B, T))
+            mem = self._core_memory()
+            mem_states = None
+            if chunked and mem is not None:
+                n_st = len(self.st_layers)
+                mem_states = (list(init_cache[n_st:]) if init_cache is not None
+                              else [None] * len(mem.ordered()))
+            z_H, q_halt, _ = self._core_pass(x, act_steps, valid, routes, bt=(B, T),
+                                             mem_states=mem_states)
             new_carry = None
         z_H = self.post_norm(z_H)
 
@@ -439,7 +469,7 @@ class GameNetwork(nn.Module):
         ll_out = z_H[:, S_game + 1]
 
         out = self.action_decoder.decode(
-            game_out, hl_out, ll_out, B=B, T=T, t0=0, legal=legal, labels=labels,
+            game_out, hl_out, ll_out, B=B, T=T, t0=t0, legal=legal, labels=labels,
             **self._decode_ctx(obs),
         )
         if isinstance(self.value_head, HLGaussValueHead):
@@ -454,6 +484,8 @@ class GameNetwork(nn.Module):
         out["q_halt"] = q_halt.reshape(B, T)
         if return_carry:
             out["carry"] = new_carry
+        if return_cache:
+            out["st_cache"] = st_states + (mem_states or [])
 
         # Self-supervised next-observation prediction from belief tokens
         if cfg.predict_next_obs:

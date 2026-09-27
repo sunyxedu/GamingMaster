@@ -193,13 +193,17 @@ class GatedRecurrence(nn.Module):
     def initial_state(self, batch: int) -> torch.Tensor:
         return self.h_init.float().unsqueeze(0).expand(batch, -1)
 
-    def forward(self, x: torch.Tensor, h0: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """x: [B_, T, d] → y: [B_, T, d] (full-sequence training path)."""
+    def forward(self, x: torch.Tensor, h0: Optional[torch.Tensor] = None,
+                return_state: bool = False):
+        """x: [B_, T, d] → y: [B_, T, d] (full-sequence training path); from state
+        ``h0`` [B_, d] float32 (None = h_init), with ``return_state`` also the state
+        after the last frame, (y, h_T) — a longer sequence in chunks."""
         a, v = self._gates(x)
         if h0 is None:
             h0 = self.initial_state(x.shape[0])
         h_all = _GatedScan.apply(a, v, h0)
-        return self._readout(h_all, x)
+        y = self._readout(h_all, x)
+        return (y, h_all[:, -1]) if return_state else y
 
     def forward_step(
         self, x: torch.Tensor, h_prev: Optional[torch.Tensor],

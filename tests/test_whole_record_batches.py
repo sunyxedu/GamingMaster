@@ -1,7 +1,8 @@
 """Whole-record training (WholeRecordBatchSampler, train_multi_game --frames_per_batch):
 every trained frame carries its record's whole history — batches of whole records from
 their first frame, sized by a frame budget, as in play (the network's only memory is
-its recurrent state, which a cropped window would restart mid-game)."""
+its recurrent state, which a cropped window would restart mid-game); a record longer
+than --chunk_len trains chunk by chunk with that state carried (truncated BPTT)."""
 
 from __future__ import annotations
 
@@ -91,3 +92,32 @@ def test_train_multi_game_trains_whole_records(shards, tmp_path):
         "temporal_mixer=recurrent"])
     assert (tmp_path / "ck" / "multi_final.pt").is_file()
     assert res is None or isinstance(res, dict)
+
+
+def test_train_multi_game_trains_long_records_in_chunks(shards, tmp_path, monkeypatch):
+    """--chunk_len: a micro-batch longer than it (here records up to 199 frames in
+    batches of <= 64) trains chunk by chunk, each continuing from the previous one's
+    memory state (train_il_game.chunked_batch_loss)."""
+    from training import train_il_game, train_multi_game
+
+    root, _ = shards
+    starts = []
+    orig = train_il_game.batch_loss
+
+    def spy(*a, **kw):
+        starts.append(kw.get("t0", 0))
+        return orig(*a, **kw)
+
+    monkeypatch.setattr(train_il_game, "batch_loss", spy)
+    torch.manual_seed(0)
+    train_multi_game.main([
+        "--data", f"othello={root}", "--steps", "6", "--games_per_step", "2",
+        "--warmup_steps", "1", "--eval_every", "0", "--device", "cpu",
+        "--frames_per_batch", "64", "--max_len", "200", "--chunk_len", "48",
+        "--save_dir", str(tmp_path / "ck"),
+        "--override", "d_model=32", "n_heads=4", "d_ff=64", "n_st_layers=1", "dropout=0.0",
+        "core_type=transformer", "core_layers=2", "moe_experts=4",
+        "temporal_mixer=recurrent", "core_delta_memory=1", "core_delta_heads=2",
+        "core_delta_dk=8", "core_delta_writes=2"])
+    assert (tmp_path / "ck" / "multi_final.pt").is_file()
+    assert any(s > 0 for s in starts) and all(s % 48 == 0 for s in starts)

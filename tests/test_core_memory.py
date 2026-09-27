@@ -7,6 +7,9 @@ recurrences and the global gated-delta associative memory between core blocks.
   identity RL needs), with the states carried in the Stage-1 cache list;
 * causal: a frame never sees a later one; the memory does carry information from
   earlier frames once trained (its output depends on the history);
+* a sequence in chunks — forward from a carried state (``init_cache``, ``t0``,
+  ``return_cache``) — computes what the whole forward does, and chunked_batch_loss
+  trains a long batch chunk by chunk (truncated BPTT);
 * gradients reach the memory; StreamStepper and the fixed-shape cache handle the
   new state shapes; games share the core's memory.
 """
@@ -103,6 +106,110 @@ def test_delta_memory_alone_carries_history():
         off = net(obs)["value"]
     assert torch.equal(live[:, 0], off[:, 0])            # the first frame reads an empty memory
     assert not torch.allclose(live[:, 1:], off[:, 1:])
+
+
+@pytest.mark.parametrize("mem", [{}, MEM], ids=["stage1_only", "core_memory"])
+def test_chunked_forward_equals_the_whole_sequence(mem):
+    """forward over frames [0, s) with return_cache, then over [s, T) from that cache
+    at t0=s, computes what one forward over [0, T) does (what chunked truncated-BPTT
+    training relies on); the chunk's cache also seeds step() at frame s."""
+    torch.manual_seed(0)
+    net = build_game_network("othello", **TINY, **mem).eval()
+    if mem:
+        _randomize_memory(net)
+    g = torch.Generator().manual_seed(7)
+    B, T, s = 2, 9, 4
+    obs = _obs(B, T, g)
+    with torch.no_grad():
+        full = net(obs)
+        a = net({k: v[:, :s] for k, v in obs.items()}, return_cache=True)
+        b = net({k: v[:, s:] for k, v in obs.items()}, init_cache=a["st_cache"], t0=s,
+                return_cache=True)
+        nxt = net.step({k: v[:, s] for k, v in obs.items()}, st_cache=a["st_cache"],
+                       step_idx=s)
+    assert len(a["st_cache"]) == len(net.initial_st_cache(B))
+    for k in ("value", "place_logits"):
+        torch.testing.assert_close(torch.cat([a[k], b[k]], 1), full[k], rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(nxt["value"], full["value"][:, s], rtol=1e-5, atol=1e-5)
+    with pytest.raises(ValueError, match="recurrent temporal mixer"):
+        build_game_network("othello", **{**TINY, "temporal_mixer": "attention"})(
+            obs, return_cache=True)
+
+
+def test_chunked_forward_passes_absolute_time_to_the_decoder():
+    """clash_royale's frame-time wait PE reads the absolute frame index: a chunk decodes
+    at t0 = its first frame."""
+    from model.games.clash_royale import CardPlacementDecoder, ClashRoyaleConfig, ClashRoyaleEncoder
+    from model.game_network import GameNetwork
+    from tests.test_games_clash_royale import _make_obs
+
+    cfg = ClashRoyaleConfig(d_model=32, n_heads=4, d_ff=64, dropout=0.0, n_st_layers=1,
+                            core_type="transformer", core_layers=3, temporal_mixer="recurrent",
+                            encoder_channels=16, arena_h=8, arena_w=6, arena_channels=5,
+                            hand_size=4, n_cards=20, cr_global_features=6,
+                            cr_card_tokens="deck", card_feature_dim=9, cr_wait_time="frame",
+                            **MEM)
+    torch.manual_seed(0)
+    net = GameNetwork(cfg, ClashRoyaleEncoder(cfg), CardPlacementDecoder(cfg)).eval()
+    _randomize_memory(net)
+    obs = _make_obs(cfg, B=2, T=7, seed=3)
+    with torch.no_grad():
+        full = net(obs)["wait_logits"]
+        a = net({k: v[:, :3] for k, v in obs.items()}, return_cache=True)
+        b = net({k: v[:, 3:] for k, v in obs.items()}, init_cache=a["st_cache"], t0=3)
+        b0 = net({k: v[:, 3:] for k, v in obs.items()}, init_cache=a["st_cache"])
+    torch.testing.assert_close(b["wait_logits"], full[:, 3:], rtol=1e-5, atol=1e-5)
+    assert not torch.allclose(b0["wait_logits"], full[:, 3:])
+
+
+def test_chunked_batch_loss_trains_long_batches_in_chunks():
+    """chunked_batch_loss: the chunks' losses weigh like the whole batch's (same stats
+    as batch_loss on it); the decoder's gradient — no path through the carried state —
+    is the whole batch's; the chunks' backward calls hold at most one chunk."""
+    from training.train_il_game import batch_loss, chunked_batch_loss
+
+    torch.manual_seed(0)
+    net = build_game_network("othello", **TINY, **MEM).train()
+    _randomize_memory(net)
+    g = torch.Generator().manual_seed(8)
+    B, T = 2, 10
+    obs = _obs(B, T, g)
+    fm = torch.ones(B, T, dtype=torch.bool)
+    fm[1, 7:] = False                                      # tail padding of the shorter row
+    tgt = {"place_idx": torch.randint(0, 64, (B, T), generator=g),
+           "passed": torch.zeros(B, T, dtype=torch.bool), "value": torch.rand(B, T) * 2 - 1}
+    mb = dict(obs=obs, tgt=tgt, frame_mask=fm, labels=None, legal=None)
+    args = (torch.device("cpu"), 1.0, 0.0, False)
+
+    def grads():
+        return {n: p.grad.clone() for n, p in net.named_parameters() if p.grad is not None}
+
+    net.zero_grad()
+    loss, whole_stats, _ = batch_loss(net, mb, *args)
+    loss.backward()
+    whole = grads()
+    net.zero_grad()
+    lengths = []
+    stats, pred = chunked_batch_loss(net, mb, args[0], 4,
+                                     lambda l: (lengths.append(1), l.backward()), *args[1:])
+    chunked = grads()
+    assert len(lengths) == 3 and pred["q_halt"].shape == (B, T)
+    for k in ("loss", "value_loss"):
+        assert stats[k] == pytest.approx(whole_stats[k], rel=1e-4), k
+    dec = [n for n in whole if n.startswith("action_decoder.")]
+    assert dec
+    for n in dec:
+        torch.testing.assert_close(chunked[n], whole[n], rtol=1e-4, atol=1e-6)
+    # the memory's own parameters train in both (their gradient differs: it is cut at
+    # the chunk boundaries)
+    mem_grads = [n for n in chunked if ".memory." in n and n.endswith("out_proj.weight")]
+    assert mem_grads and all(chunked[n].abs().sum() > 0 for n in mem_grads)
+    # short batches take the plain path: one backward
+    net.zero_grad()
+    calls = []
+    chunked_batch_loss(net, mb, args[0], 16, lambda l: (calls.append(1), l.backward()),
+                       *args[1:])
+    assert len(calls) == 1 and grads().keys() == whole.keys()
 
 
 def test_gradients_reach_the_memory():

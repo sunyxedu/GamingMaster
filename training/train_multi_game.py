@@ -247,6 +247,7 @@ from training.train_il_game import (
     apply_meta_arch_defaults,
     batch_loss,
     build_net_tolerant,
+    chunked_batch_loss,
     check_meta_arch,
     default_tf,
     describe_value_head,
@@ -317,6 +318,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--game_frames", action="append", default=[], metavar="GAME=N",
                    help="per-game --frames_per_batch (0 = that game keeps --batch_size "
                         "windows)")
+    p.add_argument("--chunk_len", type=int, default=0, metavar="N",
+                   help="a micro-batch longer than N frames (a whole record longer than "
+                        "its game's frame budget, kept up to --max_len) is trained in "
+                        "chunks of N frames, in order, each continuing from the memory "
+                        "state the previous one ended in (truncated backpropagation "
+                        "through time: one chunk's activations, the gradient cut at chunk "
+                        "boundaries; train_il_game.chunked_batch_loss). 0 = whole")
+    p.add_argument("--game_chunk_len", action="append", default=[], metavar="GAME=N",
+                   help="per-game --chunk_len")
     p.add_argument("--val_max_len", type=int, default=None,
                    help="validation crop (default: full sequences, so every evaluation "
                         "sees exactly the same frames); generals ignores it and validates "
@@ -1051,6 +1061,12 @@ def main(argv=None) -> Dict[str, object]:
         """g's whole-record frame budget (0 = --batch_size windows)."""
         return game_frames.get(g, args.frames_per_batch)
 
+    game_chunk = {g: int(n) for g, n in _pairs(args.game_chunk_len, "N").items()}
+
+    def chunk_of(g: str) -> int:
+        """g's truncated-BPTT chunk length (0 = micro-batches trained whole)."""
+        return game_chunk.get(g, args.chunk_len)
+
     datasets = {g: open_dataset(g, d, crop(g, args.max_len, game_max_len),
                                 whole_records=frames_of(g) > 0)
                 for g, d in data_dirs.items()}
@@ -1206,7 +1222,9 @@ def main(argv=None) -> Dict[str, object]:
             log(f"[data] {g}: whole records from their first frame"
                 + (f" (capped at {ml})" if ml is not None else "")
                 + f", batches of <= {whole[g].frames} frames: {whole[g].records_per_batch():.1f} "
-                f"records per batch on average")
+                f"records per batch on average"
+                + (f"; longer batches trained in chunks of {chunk_of(g)} frames"
+                   if chunk_of(g) > 0 else ""))
         elif g in PREFIX_CROP:
             ml = crop(g, args.max_len, game_max_len)
             log(f"[data] {g}: {type(datasets[g]).__name__}, sequences cut to their first "
@@ -1354,15 +1372,19 @@ def main(argv=None) -> Dict[str, object]:
 
             def forward_backward(merged, carry, active, reset, weight, g=g, net=net):
                 mb = mb_from_merged(g, merged, args.il_legal_mask)
-                loss, stats, pred = batch_loss(net, mb, device,
-                                               args.value_weight, Q_HALT_WEIGHT, args.bf16,
-                                               carry=carry, active=active, reset=reset,
-                                               z_loss_weight=args.logit_z_loss,
-                                               soft_target_weight=args.soft_target_weight,
-                                               engine_value_weight=args.engine_value_weight)
-                if torch.isfinite(loss):
-                    # logs report the unweighted loss; λ_g scales the gradient
-                    (loss * (loss_weight.get(g, 1.0) * weight / k_div)).backward()
+                scale = loss_weight.get(g, 1.0) * weight / k_div
+
+                def backward(loss):
+                    if torch.isfinite(loss):
+                        # logs report the unweighted loss; λ_g scales the gradient
+                        (loss * scale).backward()
+                stats, pred = chunked_batch_loss(
+                    net, mb, device, chunk_of(g), backward,
+                    args.value_weight, Q_HALT_WEIGHT, args.bf16,
+                    carry=carry, active=active, reset=reset,
+                    z_loss_weight=args.logit_z_loss,
+                    soft_target_weight=args.soft_target_weight,
+                    engine_value_weight=args.engine_value_weight)
                 return pred, stats
 
             st = carries[g].step(prepare_rows(g, next(loaders[g]), device,

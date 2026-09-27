@@ -236,14 +236,21 @@ class SpatiotemporalBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-    ) -> torch.Tensor:
+        h0: torch.Tensor | None = None,
+        return_state: bool = False,
+    ):
         """
         Args:
             x : [B, T, S, d]   S = N+2 (spatial tokens + decision tokens)
+            h0: recurrent mixer only — the state to start from, [B*S, d] float32
+                (None = h_init; a sequence continued in chunks)
+            return_state: also return the recurrent state after the last frame
         Returns:
-            [B, T, S, d]
+            [B, T, S, d]  (with ``return_state``: that and the state [B*S, d])
         """
         B, T, S, d = x.shape
+        if (h0 is not None or return_state) and self.mixer != "recurrent":
+            raise ValueError("a carried temporal state needs the recurrent mixer")
 
         # ── spatial self-attention (within each timestep) ──
         x_flat = x.reshape(B * T, S, d)
@@ -253,8 +260,11 @@ class SpatiotemporalBlock(nn.Module):
 
         # ── temporal mixing (across timesteps, per position) ──
         x_perm = x.permute(0, 2, 1, 3).reshape(B * S, T, d)
-        if self.mixer == "recurrent":
-            ta_out = self.temporal_rnn(x_perm)
+        h_last = None
+        if return_state:
+            ta_out, h_last = self.temporal_rnn(x_perm, h0, return_state=True)
+        elif self.mixer == "recurrent":
+            ta_out = self.temporal_rnn(x_perm, h0)
         else:
             ta_out = self._causal_temporal_attn(x_perm)
         x_perm = self.temporal_norm(x_perm + ta_out)
@@ -262,7 +272,7 @@ class SpatiotemporalBlock(nn.Module):
 
         # ── feed-forward ──
         x = self.ff_norm(x + self.ff(x))
-        return x
+        return (x, h_last) if return_state else x
 
     def forward_step(
         self,

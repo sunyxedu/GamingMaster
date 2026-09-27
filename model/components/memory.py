@@ -73,12 +73,17 @@ class GatedMemory(nn.Module):
         """[batch · tokens, d] float32 — the learned h_init of every position."""
         return self.rnn.initial_state(batch * tokens).clone(memory_format=torch.contiguous_format)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x [B, T, S, d] → same shape."""
+    def forward(self, x: torch.Tensor, h0: Optional[torch.Tensor] = None,
+                return_state: bool = False):
+        """x [B, T, S, d] → same shape; from state ``h0`` [B·S, d] (None = h_init),
+        with ``return_state`` also the state after the last frame."""
         B, T, S, d = x.shape
         xs = x.permute(0, 2, 1, 3).reshape(B * S, T, d)
-        y = self.rnn(self.norm(xs))
-        return x + y.reshape(B, S, T, d).permute(0, 2, 1, 3).to(x.dtype)
+        y = self.rnn(self.norm(xs), h0, return_state=return_state)
+        if return_state:
+            y, h = y
+        out = x + y.reshape(B, S, T, d).permute(0, 2, 1, 3).to(x.dtype)
+        return (out, h) if return_state else out
 
     def step(self, x: torch.Tensor, h: Optional[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
         """x [B, S, d], h [B·S, d] (None = h_init) → (x', h')."""
@@ -150,18 +155,22 @@ class DeltaMemory(nn.Module):
         o = torch.einsum("bhvk,bshk->bshv", M, q).flatten(-2)
         return self.out_proj(o.to(dtype))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x [B, T, S, d] → same shape; frame t reads the memory of frames < t."""
+    def forward(self, x: torch.Tensor, M0: Optional[torch.Tensor] = None,
+                return_state: bool = False):
+        """x [B, T, S, d] → same shape; frame t reads the memory of frames < t.
+        From memory ``M0`` [B, H, dv, dk] (None = empty), with ``return_state``
+        also the memory after the last frame."""
         B, T, S, d = x.shape
         k, v, beta, alpha, q = self._frame_terms(self.norm(x))
-        M = self.initial_state(B)
+        M = self.initial_state(B) if M0 is None else M0
         before = []
         for t in range(T):
             before.append(M)
             M = self._update(M, k[:, t], v[:, t], beta[:, t], alpha[:, t])
         Ms = torch.stack(before, dim=1)                                    # [B, T, H, dv, dk]
         o = torch.einsum("bthvk,btshk->btshv", Ms, q).flatten(-2)
-        return x + self.out_proj(o.to(x.dtype))
+        out = x + self.out_proj(o.to(x.dtype))
+        return (out, M) if return_state else out
 
     def step(self, x: torch.Tensor, M: Optional[torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
         """x [B, S, d], M [B, H, dv, dk] (None = empty) → (x', M')."""

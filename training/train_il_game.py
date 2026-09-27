@@ -35,7 +35,7 @@ import os
 import random
 import re
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -914,12 +914,15 @@ def batch_loss(
     act_steps: Optional[int] = None, reset: Optional[torch.Tensor] = None,
     z_loss_weight: float = 0.0,
     soft_target_weight: float = 1.0, engine_value_weight: float = 1.0,
+    init_cache=None, t0: int = 0, return_cache: bool = False,
 ) -> Tuple[torch.Tensor, Dict[str, float], Dict[str, torch.Tensor]]:
     """One TRM supervision step: decoder IL loss + value loss (value_losses:
     MSE, or HL-Gauss CE for an HL-Gauss head) + q_halt BCE (target = whole
     action exactly right, reference ACTLossHead), all on the ``active``
     frames.  Stats report both ``value_loss`` (the value term's training
     loss) and ``value_mse`` (comparable across head types).
+    ``init_cache`` / ``t0`` / ``return_cache``: a chunk of a longer batch
+    (GameNetwork.forward; :func:`chunked_batch_loss`).
 
     Engine supervision, used only when the shards carry it (absent keys =
     the plain objective above, bit for bit): soft policy targets
@@ -930,10 +933,12 @@ def batch_loss(
     Returns (loss, stats, pred)."""
     mask = mb["frame_mask"] if active is None else active
     autocast = torch.autocast(device.type, dtype=torch.bfloat16, enabled=bf16)
+    chunk_kw = ({} if init_cache is None and not t0 and not return_cache
+                else dict(init_cache=init_cache, t0=t0, return_cache=return_cache))
     with autocast:
         pred = net(mb["obs"], legal=mb["legal"], labels=mb["labels"],
                    act_steps=act_steps, frame_mask=mb["frame_mask"],
-                   carry=carry, active=active, reset=reset, return_carry=True)
+                   carry=carry, active=active, reset=reset, return_carry=True, **chunk_kw)
         losses = net.action_decoder.il_loss(pred, mb["tgt"], mask)
         loss = losses["loss"]
         tgt = mb["tgt"]
@@ -991,6 +996,62 @@ def batch_loss(
     stats = {k: float(v) for k, v in losses.items() if k != "loss"}
     stats["loss"] = float(loss.detach())
     return loss, stats, pred
+
+
+def _time_slice(x, s: int, e: int, B: int, T: int):
+    """Frames [s, e) of every [B, T, ...] tensor in a (nested) batch dict."""
+    if torch.is_tensor(x):
+        return x[:, s:e] if x.dim() >= 2 and x.shape[0] == B and x.shape[1] == T else x
+    if isinstance(x, dict):
+        return {k: _time_slice(v, s, e, B, T) for k, v in x.items()}
+    return x
+
+
+def chunked_batch_loss(net, mb: Dict, device: torch.device, chunk: int,
+                       backward: Callable[[torch.Tensor], None], *loss_args,
+                       active: Optional[torch.Tensor] = None,
+                       reset: Optional[torch.Tensor] = None, carry=None, **loss_kw
+                       ) -> Tuple[Dict[str, float], Dict[str, torch.Tensor]]:
+    """:func:`batch_loss` and ``backward(loss)`` for a batch; one longer than ``chunk``
+    frames (> 0) goes chunk by chunk — truncated backpropagation through time: chunk
+    c covers frames [c·chunk, (c+1)·chunk) and starts from the memory state the
+    previous chunk ended in (detached: the gradient stops at chunk boundaries), its
+    loss scaled by its share of the batch's supervised frames, so the chunks together
+    weigh like the whole batch while holding one chunk's activations.  The forward is
+    exactly the whole batch's (GameNetwork.forward ``init_cache`` / ``t0``); frames
+    are a prefix of each row (tail padding), so the chunks stop at the last frame.
+    Returns (stats, pred) as batch_loss does — stats frame-weighted over the chunks,
+    pred only ``q_halt`` [B, T] (the chunked path is for cores without deep
+    supervision, whose q_halt is 0)."""
+    fm = mb["frame_mask"]
+    B, T = fm.shape
+    if chunk <= 0 or T <= chunk:
+        loss, stats, pred = batch_loss(net, mb, device, *loss_args, active=active,
+                                       reset=reset, carry=carry, **loss_kw)
+        backward(loss)
+        return stats, pred
+    if carry is not None or net.supervision_steps > 1:
+        raise ValueError("chunked training carries the memory state, not TRM latents: "
+                         "it needs a core without deep supervision")
+    mask = fm if active is None else active
+    n_all = float(mask.sum())
+    cache, agg = None, {}
+    for s in range(0, T, chunk):
+        e = min(s + chunk, T)
+        sub = _time_slice(mb, s, e, B, T)
+        sub_active = None if active is None else active[:, s:e]
+        n = float(mask[:, s:e].sum())
+        if n == 0:
+            break
+        loss, stats, pred = batch_loss(
+            net, sub, device, *loss_args, active=sub_active,
+            reset=None if reset is None else reset[:, s:e], init_cache=cache, t0=s,
+            return_cache=True, **loss_kw)
+        backward(loss * (n / n_all))
+        cache = [c.detach() for c in pred["st_cache"]]
+        for k, v in stats.items():
+            agg[k] = agg.get(k, 0.0) + v * n / n_all
+    return agg, {"q_halt": torch.zeros(B, T, device=fm.device)}
 
 
 @contextlib.contextmanager
