@@ -55,8 +55,10 @@
 //! hands of the same depth at another chip scale — the 2009 logs, 1 / 2 / 400 —
 //! multiplying every amount by the integer factor); duplicates (same players, stacks,
 //! blinds, actions and hand number) are dropped; `--split train|val` keeps the hands
-//! whose key hash falls outside / inside the `--val-per-mille` bucket;
-//! `--keep-per-mille K` a uniform hash-based subsample of K / 1000 of the hands; `--hq`
+//! whose DEAL hash ([`PhhHand::deal_key`]: both hands of an ACPC duplicate pair — the
+//! same cards replayed with the seats swapped — share it) falls outside / inside the
+//! `--val-per-mille` bucket; `--keep-per-mille K` a uniform hash-based subsample of
+//! K / 1000 of the deals; `--hq`
 //! keeps only the seats of WINNING bots (a first pass over the same input measures
 //! every player's big blinds per 100 hands; `--min-bb100`), `--player NAME` only the
 //! named ones. The hash ([`StableHash`]) is platform- and release-independent, so the
@@ -97,12 +99,21 @@ pub struct PhhHand {
     /// `_results` (the ACPC conversion) or `finishing_stacks - starting_stacks`.
     pub results: Option<Vec<f64>>,
     /// Hash of variant, antes, blinds, stacks, players, actions and the hand number (not
-    /// the results): the same hand archived twice shares it; two different hands that
-    /// happen to repeat a deal and its action line (a few per match: 1.6 M deals,
-    /// deterministic bots) differ in their hand numbers. [`StableHash`]: the same on
-    /// every machine and Rust release, so the train / val split (`key % 1000`) and the
-    /// subsample (`key / 1000 % 1000`) of a hand never change.
+    /// the results): the same hand archived twice shares it (the de-duplication key);
+    /// two different hands that happen to repeat a deal and its action line (a few per
+    /// match: 1.6 M deals, deterministic bots) differ in their hand numbers.
+    /// [`StableHash`]: the same on every machine and Rust release.
     pub key: u64,
+    /// Hash of the DEAL: variant, antes, blinds, stacks, the hand number, the players as
+    /// a set and the two hole-card pairs as a set — shared by the two hands of an ACPC
+    /// duplicate pair (the same deal replayed with the seats swapped, e.g. 2017
+    /// `A.B.1.0` / `A.B.1.1`: players reversed, the same cards per seat and hand
+    /// number, other actions). The train / val split (`deal_key % 1000`) and the
+    /// subsample (`deal_key / 1000 % 1000`) use it, so both hands of a pair land on the
+    /// same side (a key per hand would put the mirror of almost every val hand into
+    /// train); [`StableHash`], so a hand's buckets never change. Hands without two
+    /// readable hole-card deals fall back to `key`.
+    pub deal_key: u64,
 }
 
 /// FNV-1a 64 over the fed bytes + the murmur3 finaliser: a platform- and
@@ -268,7 +279,47 @@ fn hand_from_fields(fields: &[(String, String)]) -> Result<PhhHand> {
         }
     }
     h.key = hasher.finish();
+    h.deal_key = deal_key(&h).unwrap_or(h.key);
     Ok(h)
+}
+
+/// [`PhhHand::deal_key`] (None: not exactly one two-card hole deal per seat p1 / p2).
+fn deal_key(h: &PhhHand) -> Option<u64> {
+    let mut hole: [Option<Vec<u8>>; 2] = [None, None];
+    for a in &h.actions {
+        let tok: Vec<&str> = a.split_whitespace().collect();
+        if let ["d", "dh", p, cards] = tok.as_slice() {
+            let s = seat_of(p).ok()?;
+            let mut c = parse_cards(cards).filter(|c| c.len() == 2)?;
+            c.sort_unstable();
+            if hole[s].replace(c).is_some() {
+                return None;
+            }
+        }
+    }
+    let [Some(h0), Some(h1)] = hole else { return None };
+    let mut deals = [h0, h1];
+    deals.sort();
+    let mut players = h.players.clone();
+    players.sort();
+    let mut hasher = StableHash::new();
+    let fields = [
+        ("variant", json!(h.variant)),
+        ("antes", json!(h.antes)),
+        ("blinds_or_straddles", json!(h.blinds)),
+        ("starting_stacks", json!(h.stacks)),
+        ("hand", json!(h.hand)),
+        ("players", json!(players)),
+        ("hole", json!(deals)),
+    ];
+    hasher.write(b"deal");
+    for (k, v) in fields {
+        hasher.write(k.as_bytes());
+        hasher.write(&[0xff]);
+        hasher.write(v.to_string().as_bytes());
+        hasher.write(&[0xfe]);
+    }
+    Some(hasher.finish())
 }
 
 /// The hands of a `.phh` (one hand) / `.phhs` (`[n]` sections) text, in order; a hand
@@ -605,8 +656,8 @@ pub struct Filter {
     pub dedup: bool,
     pub split: Split,
     pub val_per_mille: u64,
-    /// A uniform subsample: keep the hands whose `key / 1000 % 1000` is below this
-    /// (1000 = every hand; independent of the split bucket `key % 1000`).
+    /// A uniform subsample: keep the hands whose `deal_key / 1000 % 1000` is below this
+    /// (1000 = every hand; independent of the split bucket `deal_key % 1000`).
     pub keep_per_mille: u64,
     /// Non-empty: emit only these players' seats (hands without them are dropped).
     pub keep_players: HashSet<String>,
@@ -663,12 +714,13 @@ impl Filter {
                 return None;
             }
         };
-        let val = h.key % 1000 < self.val_per_mille;
+        // split and subsample by DEAL: both hands of a duplicate pair on the same side
+        let val = h.deal_key % 1000 < self.val_per_mille;
         if (self.split == Split::Train && val) || (self.split == Split::Val && !val) {
             self.split_skipped.set(self.split_skipped.get() + 1);
             return None;
         }
-        if h.key / 1000 % 1000 >= self.keep_per_mille {
+        if h.deal_key / 1000 % 1000 >= self.keep_per_mille {
             self.subsampled.set(self.subsampled.get() + 1);
             return None;
         }
@@ -1287,6 +1339,66 @@ _results = [-5, 5]
         let st = run(&f);
         assert_eq!((st.converted, st.samples), (2, 2));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The two hands of an ACPC duplicate pair: the same deal replayed with the seats
+    /// swapped (players reversed; the same hole cards per seat and hand number — the
+    /// real logs, e.g. 2017 `ASHE.ElDonatoro.1.0` / `.1.1`), other actions.
+    const DUPLICATE_PAIR: &str = "[1]
+variant = 'NT'
+antes = [0, 0]
+blinds_or_straddles = [50, 100]
+min_bet = 100
+starting_stacks = [20000, 20000]
+actions = ['d dh p1 6h6s', 'd dh p2 As9d', 'p2 cbr 200', 'p1 f']
+hand = 5
+players = ['ElDonatoro_2pn_2017', 'ASHE_2pn_2017']
+_results = [-100, 100]
+
+[2]
+variant = 'NT'
+antes = [0, 0]
+blinds_or_straddles = [50, 100]
+min_bet = 100
+starting_stacks = [20000, 20000]
+actions = ['d dh p1 6h6s', 'd dh p2 As9d', 'p2 cc', 'p1 cc', 'd db Qs2dTd', 'p1 cc', 'p2 cc', 'd db 3c', 'p1 cc', 'p2 cc', 'd db 4h', 'p1 cc', 'p2 cc', 'p1 sm 6h6s', 'p2 sm As9d']
+hand = 5
+players = ['ASHE_2pn_2017', 'ElDonatoro_2pn_2017']
+_results = [100, -100]
+";
+
+    /// The two hands of a duplicate pair are different hands (both survive the
+    /// de-duplication) but ONE deal: the train / val split and the subsample must keep
+    /// them together — else the val split holds deals (hole cards, board run-out,
+    /// showdown) whose mirror was trained on.
+    #[test]
+    fn duplicate_pairs_share_the_split_and_the_subsample() {
+        let hands = parse_phh(DUPLICATE_PAIR);
+        let (a, b) = (hands[0].as_ref().unwrap(), hands[1].as_ref().unwrap());
+        let cfg = HunlConfig::default();
+        for h in [a, b] {
+            let r = replay::<Hunl>(&cfg, &hand_events(h, &cfg, 1).unwrap()).unwrap();
+            assert_eq!(Some(r.state.returns()), h.results);
+        }
+        assert_ne!(a.key, b.key, "two hands: both survive the de-duplication");
+        let admitted = |h: &PhhHand, split: Split, vpm: u64, keep: u64| {
+            Filter::new(cfg.clone(), false, true, split, vpm, HashSet::new()).subsample(keep).admit(h).is_some()
+        };
+        for m in 0..=1000u64 {
+            for split in [Split::Train, Split::Val] {
+                assert_eq!(admitted(a, split, m, 1000), admitted(b, split, m, 1000), "{split:?} at --val-per-mille {m}");
+            }
+            if m > 0 {
+                assert_eq!(admitted(a, Split::All, 0, m), admitted(b, Split::All, 0, m), "--keep-per-mille {m}");
+            }
+        }
+        // another deal (other hole cards, or another hand number) is bucketed on its own
+        let other = |from: &str, to: &str| parse_phh(&DUPLICATE_PAIR.replacen(from, to, 1)).remove(0).unwrap();
+        assert_ne!(other("6h6s", "6h6d").deal_key, a.deal_key);
+        assert_ne!(other("hand = 5", "hand = 6").deal_key, a.deal_key);
+        // pinned: the same buckets on every machine / release
+        assert_eq!(a.deal_key, b.deal_key);
+        assert_eq!(parse_phh(SAMPLE)[0].as_ref().unwrap().deal_key, 6317137920518709595);
     }
 
     fn rand_suffix() -> u64 {
