@@ -85,7 +85,7 @@ NORMS = ("group", "batch")
 # gmrules games (model/games/gmrules/): the candidate-action ones go through the
 # generic candidate branches below (dims = their simulator's spec); custom schemas
 # need their own entry (breakthrough, xiangqi: the from-to board branch, like chess)
-GAME_OVERRIDES.update({g: {} for g in rules_games()})
+GAME_OVERRIDES.update({g: {} for g in rules_games() if g not in GAME_OVERRIDES})
 GAME_OVERRIDES["breakthrough"] = dict(board_h=6, board_w=6)
 
 #: from-to decoder games (legal from / to_of, labels from_idx / to_idx)

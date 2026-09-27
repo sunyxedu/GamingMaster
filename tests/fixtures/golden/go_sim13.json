@@ -1,0 +1,51 @@
+{
+"converter_version": 2,
+"shard_meta": {
+"board_size": 13,
+"global_features": 6
+},
+"samples": [
+{
+"obs": {
+"board_seq": "169145f9622f7f2e41b40f1ea95ea73b19847d8558cfcf1af707617f1125c585",
+"globals_seq": "012ec9ad19951a2557555d6108b0d36f5eeb172283842e25db5e74e0b4493065"
+},
+"tgt": {
+"passed": "2c389a842e93e9233170eff443d7e7d5e6bb32446e0c9d920335463cb09e43ac",
+"place_idx": "88073cfb3ad9b22c7ffa8be47a58eed1574fae82b3e3cdc0e4c68ac6e2d255fc",
+"value": "43b35cd65de0a188a0041af82ca6ddc790c538b955b60cfb499cf6d93022a244"
+},
+"meta": {
+"result": "B+R",
+"komi": null,
+"handicap": 0,
+"n_moves": 6,
+"players": {
+"black": null,
+"white": null
+}
+}
+},
+{
+"obs": {
+"board_seq": "68ce6c562a1825929082887c91ec2fa04f96ac2edf72a91e91e72da64b3aa99a",
+"globals_seq": "f8403144fc90d57c49956f6af777350b740aeb9a7af25222559007db0f46fccd"
+},
+"tgt": {
+"passed": "b1affa8790b26cc0ca6e159d929eaae255376863eeb7c76975273a44f2507c9c",
+"place_idx": "0cd0088742461f33679e53470f3259433dcf83e7aed0d8eb9e2dd7f7ac0fe1cb",
+"value": "f500a211f41a98bbcde1ac7cceaa5bb33245ccb61ed1fa2d9a23ed62cbb42f00"
+},
+"meta": {
+"result": "W+R",
+"komi": 0.5,
+"handicap": 3,
+"n_moves": 8,
+"players": {
+"black": null,
+"white": null
+}
+}
+}
+]
+}

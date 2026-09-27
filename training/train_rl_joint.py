@@ -532,6 +532,43 @@ class GomokuSpec(ForcedPassPlacementSpec):
                              f"{cfg.board_global_features} board_global_features")
 
 
+class GoSpec(RLGameSpec):
+    """go (model/games/board.py PlacementDecoder with its pass head) on the gmrules go
+    env (legal ``place`` [N·N], the pass always legal; action keys place_idx / passed):
+    μ is the decoder's pass-gated log-prob (a pass frame by the pass head alone, a move
+    by pass + placement), π its ``log_prob_entropy`` of the same action — no
+    conditioning labels (LABEL_KEYS["go"] is empty), so the replay is exact without
+    teacher forcing.  Unlike othello's forced passes a Go pass is a real choice: it is
+    part of the action.  The KL covers both heads (``il_head_terms``; the placement
+    under the env's mask).  The env is built on the network's board (``board_size`` =
+    board_h) and checked against it (board_seq [piece_channels, N, N], globals)."""
+
+    full_kl = True
+
+    def env_kwargs(self, cfg):
+        return {"board_size": int(cfg.board_h)}
+
+    def check_env(self, env, net):
+        cfg = net.cfg
+        schema = env.obs_schema()
+        have = tuple(schema["board_seq"][0])
+        want = (cfg.piece_channels, cfg.board_h, cfg.board_w)
+        g = schema["globals_seq"][0][0] if "globals_seq" in schema else 0
+        if have != want or g != getattr(cfg, "board_global_features", 0):
+            raise SystemExit(f"go env emits board_seq {have} / {g} globals, the network expects "
+                             f"{want} / {getattr(cfg, 'board_global_features', 0)} "
+                             f"(piece_channels, board_h, board_w / board_global_features)")
+
+    def kl_targets(self, actions, forced, cfg):
+        return {"place_idx": actions["place_idx"].long(), "passed": actions["passed"].bool()}
+
+    def kl_terms(self, net, pred, tgt, mask, legal):
+        terms = dict(net.action_decoder.il_head_terms(pred, tgt, mask))
+        if "place" in terms and "place" in legal:
+            terms["place"] = {**terms["place"], "mask": legal["place"].bool()}
+        return terms
+
+
 class GeneralsSpec(RLGameSpec):
     """generals: the decoder's hierarchical log-prob (μ = ``action_log_prob``),
     the replay teacher-forces the stored source (direction / split condition
@@ -724,6 +761,50 @@ class FromToSpec(RLGameSpec):
         tgt = {"from_idx": actions["from_idx"].long(), "to_idx": actions["to_idx"].long()}
         if "promotion" in actions:
             tgt["promotion"] = actions["promotion"].long()
+        return tgt
+
+
+class ShogiSpec(RLGameSpec):
+    """The shogi move-or-drop decoder (model/games/shogi.py ShogiDecoder) on the gmrules
+    shogi env (legal ``mode`` / ``from`` / ``to_cond`` / ``promo_cond`` / ``drop_piece`` /
+    ``drop_to_cond``, action keys dropped / from_idx / to_idx / promoted / piece_idx /
+    drop_to_idx).  The rollout commits mode, from → to → promotion and piece → drop
+    square under the env's exact tables; the replay teacher-forces the stored dropped /
+    from_idx / to_idx / piece_idx (the decoder's LABEL_KEYS) under the masks the rollout
+    sampled with (``shogi_replay_legal``: every ``_of`` row at the stored conditioning),
+    so the leaves condition exactly as in the rollout: log π_old = μ.  Both branches
+    are decoded on every frame, the mode gates which one's log-prob counts.  The KL
+    covers every head (``il_head_terms``: mode, from, to | from, promotion | from / to,
+    piece, drop square | piece) under those masks."""
+
+    full_kl = True
+    LABELS = ("dropped", "from_idx", "to_idx", "piece_idx")
+
+    def check_env(self, env, net):
+        cfg = net.cfg
+        schema = env.obs_schema()
+        want = {"board_seq": (cfg.piece_channels, cfg.board_h, cfg.board_w),
+                "hand_seq": (2 * cfg.n_hand_piece_types, cfg.hand_feature_dim),
+                "globals_seq": (cfg.shogi_global_features,)}
+        have = {k: tuple(schema[k][0]) if k in schema else None for k in want}
+        if have != want:
+            raise SystemExit(f"{env.game} env emits {have}, the network expects {want} "
+                             f"(piece_channels / board dims, hand slots x hand_feature_dim, "
+                             f"shogi_global_features)")
+
+    def rollout_legal(self, legal, out):
+        from model.games.shogi import shogi_replay_legal
+
+        stored = shogi_replay_legal(out)
+        return stored if {"mode", "from", "to_of", "promo_of", "drop_piece",
+                          "drop_to_of"} <= set(stored) else legal
+
+    def labels(self, actions, cfg):
+        return {k: actions[k].long() for k in self.LABELS}
+
+    def kl_targets(self, actions, forced, cfg):
+        tgt = {k: actions[k].long() for k in self.LABELS + ("drop_to_idx",)}
+        tgt["promoted"] = actions["promoted"].bool()
         return tgt
 
 

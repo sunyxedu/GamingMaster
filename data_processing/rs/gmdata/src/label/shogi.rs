@@ -181,7 +181,9 @@ use super::game::{Analysis, EngineConfig, HeadKind, HeadRow, HeadSpec, Labeller,
 use super::transform::{conditional, marginal, q_from_cp, q_from_mate, u_cp, u_mate};
 use super::uci::{Flavor, Info, Score, UciSession};
 use super::LabelArgs;
-use crate::shogi::{self as rules, Board, Mv, BLACK, NONE, OBS_BOARD, PAWN, ROOK, WHITE};
+use crate::shogi::{self as rules, Board, Mv, BLACK, NONE, OBS_BOARD};
+#[cfg(test)]
+use crate::shogi::{PAWN, WHITE};
 use anyhow::{bail, ensure, Context, Result};
 use gmshard::ShardReader;
 use serde_json::{json, Value};
@@ -310,156 +312,17 @@ impl Action {
     }
 }
 
-const USI_PIECES: [char; 8] = ['?', 'P', 'L', 'N', 'S', 'G', 'B', 'R'];
-
-fn usi_square(sq: usize) -> String {
-    format!("{}{}", 9 - sq % 9, (b'a' + (sq / 9) as u8) as char)
-}
-
-fn parse_usi_square(file: u8, rank: u8) -> Option<usize> {
-    let (f, r) = (file.checked_sub(b'0')?, rank.checked_sub(b'a')?);
-    ((1..=9).contains(&f) && r < 9).then(|| r as usize * 9 + (9 - f as usize))
-}
-
-/// USI notation of a move (absolute squares): `7g7f`, `8h2b+`, `P*5e`.
-pub(crate) fn usi_move(m: &Mv) -> String {
-    match m.from {
-        Some(f) => format!("{}{}{}", usi_square(f), usi_square(m.to), if m.promotion { "+" } else { "" }),
-        None => format!("{}*{}", USI_PIECES[m.drop as usize], usi_square(m.to)),
-    }
-}
-
-/// Parse a USI move (no legality check).
-pub(crate) fn parse_usi_move(s: &str) -> Option<Mv> {
-    let b = s.as_bytes();
-    if b.len() == 4 && b[1] == b'*' {
-        let drop = USI_PIECES.iter().position(|&c| c as u8 == b[0]).filter(|&p| p >= 1)? as u8;
-        return Some(Mv { from: None, to: parse_usi_square(b[2], b[3])?, promotion: false, drop });
-    }
-    if b.len() == 4 || (b.len() == 5 && b[4] == b'+') {
-        let from = parse_usi_square(b[0], b[1])?;
-        let to = parse_usi_square(b[2], b[3])?;
-        return Some(Mv { from: Some(from), to, promotion: b.len() == 5, drop: NONE });
-    }
-    None
-}
-
-const SFEN_PIECES: [&str; 15] = ["", "P", "L", "N", "S", "G", "B", "R", "K", "+P", "+L", "+N", "+S", "+B", "+R"];
+// USI / SFEN notation: gmrules' (`gmrules::games::shogi`, shared with the simulator).
+pub(crate) use gmrules::games::shogi::{parse_usi_move, sfen, usi_move};
 
 /// The hirate start position (black to move, move 1).
 pub(crate) fn hirate_board() -> Board {
-    let mut b = Board { piece: [NONE; 81], color: [0; 81], hand: [[0; 9]; 2], turn: BLACK, king: [None, None], move_number: 1 };
-    for (sq, p) in rules::hirate().iter().enumerate() {
-        if let Some((pt, c)) = *p {
-            b.piece[sq] = pt;
-            b.color[sq] = c as u8;
-            if pt == rules::KING {
-                b.king[c] = Some(sq);
-            }
-        }
-    }
-    b
-}
-
-/// SFEN of a position (board, side to move, hands in R B G S N L P order, move number).
-pub(crate) fn sfen(b: &Board) -> String {
-    let mut s = String::new();
-    for r in 0..9 {
-        let mut empty = 0;
-        for c in 0..9 {
-            let sq = r * 9 + c;
-            if b.piece[sq] == NONE {
-                empty += 1;
-                continue;
-            }
-            if empty > 0 {
-                s.push_str(&empty.to_string());
-                empty = 0;
-            }
-            let p = SFEN_PIECES[b.piece[sq] as usize];
-            s.push_str(&if b.color[sq] as usize == BLACK { p.to_string() } else { p.to_lowercase() });
-        }
-        if empty > 0 {
-            s.push_str(&empty.to_string());
-        }
-        if r < 8 {
-            s.push('/');
-        }
-    }
-    s.push_str(if b.turn == BLACK { " b " } else { " w " });
-    let mut hands = String::new();
-    for c in [BLACK, WHITE] {
-        for pt in (PAWN..=ROOK).rev().map(|p| p as usize) {
-            let n = b.hand[c][pt];
-            if n == 0 {
-                continue;
-            }
-            if n > 1 {
-                hands.push_str(&n.to_string());
-            }
-            let l = SFEN_PIECES[pt];
-            hands.push_str(&if c == BLACK { l.to_string() } else { l.to_lowercase() });
-        }
-    }
-    s.push_str(if hands.is_empty() { "-" } else { &hands });
-    s.push_str(&format!(" {}", b.move_number));
-    s
+    Board::hirate()
 }
 
 /// Parse SFEN fields (board, side, hands, [move number]).
 pub(crate) fn parse_sfen(fields: &[&str]) -> Result<Board> {
-    ensure!(fields.len() >= 3, "SFEN needs board, side and hands");
-    let mut b = Board { piece: [NONE; 81], color: [0; 81], hand: [[0; 9]; 2], turn: BLACK, king: [None, None], move_number: 1 };
-    let rows: Vec<&str> = fields[0].split('/').collect();
-    ensure!(rows.len() == 9, "SFEN board {:?} has {} rows", fields[0], rows.len());
-    for (r, row) in rows.iter().enumerate() {
-        let (mut c, mut promoted) = (0usize, false);
-        for ch in row.chars() {
-            if let Some(d) = ch.to_digit(10) {
-                c += d as usize;
-                continue;
-            }
-            if ch == '+' {
-                promoted = true;
-                continue;
-            }
-            let name = format!("{}{}", if promoted { "+" } else { "" }, ch.to_ascii_uppercase());
-            let pt = SFEN_PIECES.iter().position(|&p| p == name).filter(|&p| p > 0).with_context(|| format!("SFEN piece {name:?}"))?;
-            ensure!(c < 9, "SFEN row {row:?} is longer than 9 squares");
-            let sq = r * 9 + c;
-            let owner = if ch.is_ascii_uppercase() { BLACK } else { WHITE };
-            b.piece[sq] = pt as u8;
-            b.color[sq] = owner as u8;
-            if pt as u8 == rules::KING {
-                b.king[owner] = Some(sq);
-            }
-            c += 1;
-            promoted = false;
-        }
-        ensure!(c == 9, "SFEN row {row:?} covers {c} squares");
-    }
-    b.turn = match fields[1] {
-        "b" => BLACK,
-        "w" => WHITE,
-        s => bail!("SFEN side {s:?}"),
-    };
-    if fields[2] != "-" {
-        let mut n = 0u32;
-        for ch in fields[2].chars() {
-            if let Some(d) = ch.to_digit(10) {
-                n = n * 10 + d;
-                continue;
-            }
-            let pt = SFEN_PIECES.iter().position(|&p| p == ch.to_ascii_uppercase().to_string()).filter(|&p| (1..=7).contains(&p));
-            let pt = pt.with_context(|| format!("SFEN hand piece {ch:?}"))?;
-            b.hand[if ch.is_ascii_uppercase() { BLACK } else { WHITE }][pt] += n.max(1);
-            n = 0;
-        }
-    }
-    if let Some(m) = fields.get(3) {
-        b.move_number = m.parse().with_context(|| format!("SFEN move number {m:?}"))?;
-    }
-    Ok(b)
+    gmrules::games::shogi::parse_sfen(fields).map_err(anyhow::Error::msg)
 }
 
 /// The position of a USI `position startpos|sfen … [moves …]` line (moves checked for

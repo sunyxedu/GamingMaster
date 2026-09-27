@@ -189,8 +189,9 @@ pub struct FrameSpec {
     /// IL targets of the taken action (gm-shard `tgt.<name>`; `value`, `value_mask`
     /// and `action_probs_*` are reserved for the converter).
     pub target: Vec<TensorSpec>,
-    /// The i64 scalar targets that make up the policy's action: the simulator's step
-    /// input and the decoder's replay keys (candidate schema: `["action_idx"]`).
+    /// The i64 (or bool, stepped as 0 / 1) scalar targets that make up the policy's
+    /// action: the simulator's step input and the decoder's replay keys (candidate
+    /// schema: `["action_idx"]`).
     pub action_keys: Vec<String>,
     /// Schema facts the model config must match (written into the shard meta; the
     /// trainers' META_ARCH_KEYS), e.g. the candidate frame dimensions.
@@ -310,8 +311,8 @@ impl FrameSpec {
         }
         for k in &self.action_keys {
             match index_of(&self.target, k).map(|i| &self.target[i]) {
-                Some(t) if t.dtype == DType::I64 && t.shape.is_empty() => {}
-                _ => return bad(format!("action key {k:?} must be an i64 scalar target tensor")),
+                Some(t) if matches!(t.dtype, DType::I64 | DType::Bool) && t.shape.is_empty() => {}
+                _ => return bad(format!("action key {k:?} must be an i64 or bool scalar target tensor")),
             }
         }
         if let Some(c) = &self.candidate {
