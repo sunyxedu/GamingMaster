@@ -521,7 +521,10 @@ def test_meta_registry_frozen_schema_keys():
                                          "species_buckets": ("pokemon_species_buckets",),
                                          "field_features": ("pokemon_field_features",),
                                          "move_vocab": ("pokemon_move_vocab",),
-                                         "species_vocab": ("pokemon_species_vocab",)}
+                                         "species_vocab": ("pokemon_species_vocab",),
+                                         "item_vocab": ("pokemon_item_vocab",),
+                                         "ability_vocab": ("pokemon_ability_vocab",),
+                                         "type_vocab": ("pokemon_type_vocab",)}
 
 
 #: games whose pre-freeze shards must NOT train a fresh default net: clash_royale
@@ -653,14 +656,16 @@ def test_pokemon_meta():
 def test_schema_freeze_warning():
     assert SCHEMA_FREEZE_CONVERTER_VERSION == {"chess": 3, "go": 2, "shogi": 2,
                                                "mahjong": 4, "lux": 3, "clash_royale": 3,
-                                               "pokemon": 3}
+                                               "pokemon": 4}
     msg = schema_freeze_warning("lux", SimpleNamespace(converter_version=2))
     assert msg.startswith("lux shards have converter_version 2 < 3") and "one sample per game" in msg
     assert "move-identity" in schema_freeze_warning("pokemon",
                                                     SimpleNamespace(converter_version=1))
     msg = schema_freeze_warning("pokemon", SimpleNamespace(converter_version=2))
-    assert msg.startswith("pokemon shards have converter_version 2 < 3") and "exact" in msg
-    assert schema_freeze_warning("pokemon", SimpleNamespace(converter_version=3)) is None
+    assert msg.startswith("pokemon shards have converter_version 2 < 4") and "exact" in msg
+    msg = schema_freeze_warning("pokemon", SimpleNamespace(converter_version=3))
+    assert msg.startswith("pokemon shards have converter_version 3 < 4") and "revealed" in msg
+    assert schema_freeze_warning("pokemon", SimpleNamespace(converter_version=4)) is None
     msg = schema_freeze_warning("chess", SimpleNamespace(converter_version=2))
     assert msg.startswith("chess shards have converter_version 2 < 3: they predate the "
                           "frozen pre-training schema")

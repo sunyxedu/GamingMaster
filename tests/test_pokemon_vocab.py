@@ -276,10 +276,52 @@ POKEDEX_TS = """export const Pokedex: import('../sim/dex-species').SpeciesDataTa
 
 RULESETS_TS = """\t\t\t\t\t.replace(/(Urshifu|Gastrodon)(-[a-zA-Z?-]+)?/g, '$1-*');"""
 
+ITEMS_TS = """export const Items: import('../sim/dex-items').ItemDataTable = {
+\tleftovers: {
+\t\tname: "Leftovers",
+\t\tspritenum: 242,
+\t\tfling: {
+\t\t\tbasePower: 10,
+\t\t},
+\t\tnum: 234,
+\t},
+\trockyhelmet: {
+\t\tname: "Rocky Helmet",
+\t\tnum: 540,
+\t},
+};
+"""
+
+ABILITIES_TS = """export const Abilities: import('../sim/dex-abilities').AbilityDataTable = {
+\tdrizzle: {
+\t\tonStart(source) {
+\t\t\tthis.field.setWeather('raindance');
+\t\t},
+\t\tname: "Drizzle",
+\t\tnum: 2,
+\t},
+};
+"""
+
+TYPECHART_TS = """export const TypeChart: import('../sim/dex-data').TypeDataTable = {
+\tbug: {
+\t\tdamageTaken: {
+\t\t\tBug: 0,
+\t\t},
+\t},
+\tstellar: {
+\t\tdamageTaken: {
+\t\t\tBug: 0,
+\t\t},
+\t},
+};
+"""
+
 
 def _mini(moves=MOVES_TS, pokedex=POKEDEX_TS):
     return {"data/moves.ts": moves, "data/pokedex.ts": pokedex, "data/rulesets.ts": RULESETS_TS,
-            "sim/battle.ts": ""}
+            "sim/battle.ts": "", "data/items.ts": ITEMS_TS, "data/abilities.ts": ABILITIES_TS,
+            "data/typechart.ts": TYPECHART_TS}
 
 
 def _build(texts, commit, old=None):
@@ -308,6 +350,13 @@ def test_generator_parses_showdown_tables(tmp_path):
     assert v.species_id(FLABEBE_NFC + "-Blue") == v.species_id(FLABEBE_NFD) == 2
     assert v.species_id(FLABEBE_NFC) == v.species_id("Gastrodon-East") - 1 == 2
     assert v.species_id("Urshifu-*") == 6 and v.move_id("G-Max Cannonade") == 5
+    # items / abilities / types (converter v4): entries in file order, nested fields skipped
+    assert [x[:2] for x in doc["items"]] == [["leftovers", "Leftovers"], ["rockyhelmet", "Rocky Helmet"]]
+    assert [x[:2] for x in doc["abilities"]] == [["drizzle", "Drizzle"]]
+    assert [x[:2] for x in doc["types"]] == [["bug", "Bug"], ["stellar", "Stellar"]]
+    assert (v.n_items, v.n_abilities, v.n_types) == (4, 3, 4)
+    assert (v.item_id("Rocky Helmet"), v.ability_id("Drizzle"), v.type_id("Stellar")) == (3, 2, 3)
+    assert v.item_id("Choice Band") == 1 and v.item_id("") == 0
 
 
 def test_generator_is_append_only():

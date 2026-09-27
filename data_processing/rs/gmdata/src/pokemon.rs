@@ -83,8 +83,28 @@
 //! formes (Gastrodon-East, Vivillon-Polar, …) and other Unicode spellings are aliases of their
 //! entry.  data_processing/games/pokemon/__init__.py is the same lookup in Python (the adapter's
 //! deploy request mask).  Shard meta: `{"field_features": 22, "move_vocab": M, "species_vocab":
-//! S, "vocab_version": V}` (M / S = id counts incl. the reserved ids; the vocabulary is
-//! append-only, so its size identifies it).
+//! S, "item_vocab": I, "ability_vocab": A, "type_vocab": Y, "vocab_version": V}` (id counts
+//! incl. the reserved ids; the vocabulary is append-only, so its size identifies it).
+//!
+//! converter_version 4: every slot's revealed information, both sides — what the public log
+//! has shown by the frame, from either player's view:
+//!
+//!   obs.slot_moves [T,12,4] i64   the first four moves the Pokémon revealed (the transformed
+//!                                 set while transformed); v3 showed only the own active's
+//!                                 (obs.move_ids, kept), so the opponent's revealed moves never
+//!                                 reached the network
+//!   obs.slot_item [T,12] i64      the held item the log revealed (`-item`, `-enditem`, any
+//!                                 `[from] item: X`), 0 = not revealed
+//!   obs.slot_no_item [T,12] bool  known to hold nothing (`-enditem`: consumed, knocked off,
+//!                                 stolen, flung)
+//!   obs.slot_ability [T,12] i64   the revealed ability (`-ability`, `[from] ability: X`; a
+//!                                 Trace copies onto the tracer), 0 = not revealed
+//!   obs.slot_tera_type [T,12] i64 the tera type once terastallized, 0 before
+//!
+//! A `[from]` effect with an `[of] SOURCE` belongs to SOURCE (Rocky Helmet, Rough Skin,
+//! Drizzle), else to the line's Pokémon.  A side's own full sets stay out: the spectator log
+//! shows them only once revealed, and filling them in from the whole replay would tell a frame
+//! which Pokémon come in and act later (a future leak).
 //!
 //! Re-conversion (v1 / v2 shards are obsolete: hashed, colliding move / species ids) — on the
 //! cluster from the checkout root (`cargo build --release -p gmdata` in data_processing/; the
@@ -129,7 +149,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-pub const CONVERTER_VERSION: u32 = 3;
+pub const CONVERTER_VERSION: u32 = 4;
 const TEAM: usize = 6;
 const FEAT: usize = 17;
 const FIELD: usize = 22;
@@ -193,9 +213,16 @@ pub struct Vocab {
     /// key (entries and aliases) → id
     moves: HashMap<String, i64>,
     species: HashMap<String, i64>,
-    /// id counts, reserved ids included (the shard meta move_vocab / species_vocab)
+    items: HashMap<String, i64>,
+    abilities: HashMap<String, i64>,
+    types: HashMap<String, i64>,
+    /// id counts, reserved ids included (the shard meta move_vocab / species_vocab /
+    /// item_vocab / ability_vocab / type_vocab)
     pub n_moves: usize,
     pub n_species: usize,
+    pub n_items: usize,
+    pub n_abilities: usize,
+    pub n_types: usize,
 }
 
 impl Vocab {
@@ -211,7 +238,9 @@ impl Vocab {
                 let key = row[0].as_str().with_context(|| format!("{entries}[{i}]: no key"))?;
                 anyhow::ensure!(m.insert(key.to_string(), 2 + i as i64).is_none(), "{entries}: duplicate key {key}");
             }
-            for a in doc[aliases].as_array().with_context(|| format!("no {aliases} table"))? {
+            let none = Value::Array(Vec::new());
+            let alias_rows = if aliases.is_empty() { &none } else { &doc[aliases] };
+            for a in alias_rows.as_array().with_context(|| format!("no {aliases} table"))? {
                 let (Some(alias), Some(target)) = (a[0].as_str(), a[1].as_str()) else { anyhow::bail!("{aliases}: bad row {a}") };
                 let id = *m.get(target).with_context(|| format!("{aliases}: {alias} → unknown {target}"))?;
                 anyhow::ensure!(m.insert(alias.to_string(), id).is_none(), "{aliases}: {alias} shadows an entry");
@@ -220,8 +249,19 @@ impl Vocab {
         };
         let (moves, n_moves) = table("moves", "move_aliases")?;
         let (species, n_species) = table("species", "species_aliases")?;
+        let (items, n_items) = table("items", "")?;
+        let (abilities, n_abilities) = table("abilities", "")?;
+        let (types, n_types) = table("types", "")?;
         let version = doc["version"].as_str().context("no version")?.to_string();
-        Ok(Vocab { version, moves, species, n_moves, n_species })
+        Ok(Vocab { version, moves, species, items, abilities, types, n_moves, n_species, n_items, n_abilities, n_types })
+    }
+
+    /// The exact id of an item / ability / type name: 0 empty, 1 (UNK) unknown.
+    fn named_id(table: &HashMap<String, i64>, name: &str) -> i64 {
+        if name.trim().is_empty() {
+            return ID_NONE;
+        }
+        *table.get(&to_id(name)).unwrap_or(&ID_UNK)
     }
 
     /// The exact id of a move name: 0 empty, 1 (UNK) unknown.
@@ -349,6 +389,14 @@ struct Mon {
     /// moves while transformed: the target's revealed moves, then the ones used; None when
     /// not transformed (cleared when the Pokémon leaves the field)
     transformed: Option<Vec<String>>,
+    /// the held item the log has revealed ("" = not revealed), `no_item` once it is known
+    /// to hold none (consumed, knocked off, stolen, flung)
+    item: String,
+    no_item: bool,
+    /// the ability the log has revealed ("" = not revealed)
+    ability: String,
+    /// the tera type the log has revealed ("" = not terastallized yet)
+    tera_type: String,
 }
 
 impl Mon {
@@ -437,6 +485,13 @@ struct Frame {
     mask: Vec<bool>,
     field: Vec<f32>,
     active: i64,
+    /// every slot's revealed info (own slots 0..6, the opponent's 6..12): the first MOVES
+    /// moves (the transformed set while transformed), held item, no item, ability, tera type
+    slot_moves: Vec<String>,
+    slot_item: Vec<String>,
+    slot_no_item: Vec<bool>,
+    slot_ability: Vec<String>,
+    slot_tera: Vec<String>,
 }
 
 /// The request a frame answers.
@@ -561,7 +616,106 @@ fn encode(b: &Battle, side: usize) -> Frame {
     let mut os: Vec<String> = b.sides[other].team.iter().map(|p| p.species.clone()).collect();
     os.resize(TEAM, String::new());
     species.extend(os);
-    Frame { species, moves, feats, mask, field: fld, active: own.active.unwrap_or(0) as i64 }
+    let (mut slot_moves, mut slot_item, mut slot_no_item, mut slot_ability, mut slot_tera) =
+        (vec![String::new(); 2 * TEAM * MOVES], vec![String::new(); 2 * TEAM], vec![false; 2 * TEAM],
+         vec![String::new(); 2 * TEAM], vec![String::new(); 2 * TEAM]);
+    for (base, s) in [(0, &b.sides[side]), (TEAM, &b.sides[other])] {
+        for (i, p) in s.team.iter().take(TEAM).enumerate() {
+            let j = base + i;
+            for (k, m) in p.moves_now().iter().take(MOVES).enumerate() {
+                slot_moves[j * MOVES + k] = m.clone();
+            }
+            slot_item[j] = p.item.clone();
+            slot_no_item[j] = p.no_item;
+            slot_ability[j] = p.ability.clone();
+            slot_tera[j] = p.tera_type.clone();
+        }
+    }
+    Frame { species, moves, feats, mask, field: fld, active: own.active.unwrap_or(0) as i64, slot_moves, slot_item,
+            slot_no_item, slot_ability, slot_tera }
+}
+
+/// The `item: NAME` / `ability: NAME` an argument names (the effect of a `[from]` tag or of
+/// `-activate` / `-block` lines), as (is_item, name).
+fn effect_of(arg: &str) -> Option<(bool, String)> {
+    let t = arg.trim().trim_start_matches("[from]").trim();
+    if let Some(n) = t.strip_prefix("item:") {
+        return Some((true, n.trim().to_string()));
+    }
+    t.strip_prefix("ability:").map(|n| (false, n.trim().to_string()))
+}
+
+/// The Pokémon an `[of] POKEMON` tag of the line names.
+fn of_arg<'a>(args: &'a [&'a str]) -> Option<&'a str> {
+    args.iter().find_map(|x| x.trim().strip_prefix("[of]").map(|v| v.trim()))
+}
+
+/// Reveals the items / abilities a line names (converter v4): `-item` / `-enditem` /
+/// `-ability` lines, and every `[from] item: X` / `[from] ability: X` (or bare `item: X` /
+/// `ability: X` effect argument) of any line — the holder is the `[of]` Pokémon when the tag
+/// comes with one (Rocky Helmet, Rough Skin, Drizzle: the effect's source), else the line's
+/// first Pokémon.  Only what the public log shows; nothing is inferred.
+fn reveal_effects(b: &mut Battle, cmd: &str, args: &[&str]) {
+    let mon = |b: &mut Battle, tok: &str| -> Option<(usize, usize)> {
+        let (pos, nick) = ident(tok);
+        let pi = side_idx(&pos)?;
+        Some((pi, b.sides[pi].slot_of(&nick)?))
+    };
+    let first = args.first().copied().unwrap_or("");
+    match cmd {
+        "-item" if args.len() >= 2 => {
+            if let Some((pi, sl)) = mon(b, first) {
+                let p = &mut b.sides[pi].team[sl];
+                p.item = args[1].trim().to_string();
+                p.no_item = false;
+            }
+            return;
+        }
+        "-enditem" if args.len() >= 2 => {
+            if let Some((pi, sl)) = mon(b, first) {
+                let p = &mut b.sides[pi].team[sl];
+                p.item = args[1].trim().to_string();
+                p.no_item = true;
+            }
+            return;
+        }
+        "-ability" if args.len() >= 2 => {
+            // |-ability|POKEMON|ABILITY|[from] ability: Trace|[of] SOURCE: POKEMON traced
+            // SOURCE's ABILITY — its own is Trace, the source's ABILITY
+            let traced = args[2..].iter().any(|x| effect_of(x) == Some((false, "Trace".into())));
+            if let Some((pi, sl)) = mon(b, first) {
+                b.sides[pi].team[sl].ability = if traced { "Trace".into() } else { args[1].trim().to_string() };
+            }
+            if traced {
+                if let Some((qi, sl)) = of_arg(&args[2..]).and_then(|o| mon(b, o)) {
+                    b.sides[qi].team[sl].ability = args[1].trim().to_string();
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+    let of = of_arg(args);
+    for (k, arg) in args.iter().enumerate() {
+        let Some((is_item, name)) = effect_of(arg) else { continue };
+        if name.is_empty() {
+            continue;
+        }
+        let tagged = arg.trim_start().starts_with("[from]");
+        // a [from] tag with an [of]: the effect's source holds it; else the line's Pokémon
+        let holder = if tagged { of.unwrap_or(first) } else if k > 0 { first } else { continue };
+        if let Some((pi, sl)) = mon(b, holder) {
+            let p = &mut b.sides[pi].team[sl];
+            if is_item {
+                if p.item.is_empty() || p.no_item {
+                    p.item = name;
+                    p.no_item = false;
+                }
+            } else if p.ability.is_empty() {
+                p.ability = name;
+            }
+        }
+    }
 }
 
 /// The frame of `side` answering a `phase` request in the current state (label unset).
@@ -669,6 +823,9 @@ fn parse_log(log: &str) -> Parse {
         let args: &[&str] = if parts.len() > 2 { &parts[2..] } else { &[] };
         let a = |i: usize| args.get(i).copied().unwrap_or("");
         line_no += 1;
+        if !matches!(cmd, "t:" | "split" | "player" | "poke" | "switch" | "drag" | "replace") {
+            reveal_effects(&mut b, cmd, args);
+        }
         match cmd {
             "t:" => {
                 // Showdown's turnLoop logs `|` + `|t:|TIME` when the answered request's actions
@@ -1084,6 +1241,7 @@ fn parse_log(log: &str) -> Parse {
                 let Some(pi) = side_idx(&pos) else { continue };
                 if let Some(slot) = b.sides[pi].slot_of(&nick) {
                     b.sides[pi].team[slot].tera = true;
+                    b.sides[pi].team[slot].tera_type = a(1).trim().to_string();
                 }
                 tera_pending[pi] = true;
                 continue;
@@ -1146,10 +1304,16 @@ fn replay_samples(r: &Value, p: &Parse, winner_only: bool, unk: &mut UnkNames) -
         let (mut sp, mut mv, mut feats, mut mask, mut field) = (vec![], vec![], vec![], vec![], vec![]);
         let (mut at, mut known, mut mi, mut mid, mut si, mut te, mut ai) = (vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
         let (mut lt, mut ls) = (vec![], vec![]);
+        let (mut smv, mut sit, mut sni, mut sab, mut ste) = (vec![], vec![], vec![], vec![], vec![]);
         for rec in recs {
             let f = &rec.frame;
             sp.extend(f.species.iter().map(|s| unk.species_id(voc, s)));
             mv.extend(f.moves.iter().map(|m| unk.move_id(voc, m)));
+            smv.extend(f.slot_moves.iter().map(|m| unk.move_id(voc, m)));
+            sit.extend(f.slot_item.iter().map(|x| Vocab::named_id(&voc.items, x)));
+            sni.extend_from_slice(&f.slot_no_item);
+            sab.extend(f.slot_ability.iter().map(|x| Vocab::named_id(&voc.abilities, x)));
+            ste.extend(f.slot_tera.iter().map(|x| Vocab::named_id(&voc.types, x)));
             feats.extend_from_slice(&f.feats);
             mask.extend_from_slice(&f.mask);
             field.extend_from_slice(&f.field);
@@ -1173,6 +1337,11 @@ fn replay_samples(r: &Value, p: &Parse, winner_only: bool, unk: &mut UnkNames) -
             .f32("obs.poke_feats", &[2 * TEAM, FEAT], feats)
             .bool("obs.slot_mask", &[2 * TEAM], mask)
             .f32("obs.field_seq", &[FIELD], field)
+            .i64("obs.slot_moves", &[2 * TEAM, MOVES], smv)
+            .i64("obs.slot_item", &[2 * TEAM], sit)
+            .bool("obs.slot_no_item", &[2 * TEAM], sni)
+            .i64("obs.slot_ability", &[2 * TEAM], sab)
+            .i64("obs.slot_tera_type", &[2 * TEAM], ste)
             .i64("tgt.action_type", &[], at)
             .bool("tgt.action_known", &[], known)
             .i64("tgt.move_id", &[], mid)
@@ -1310,6 +1479,7 @@ fn fetch(format: &str, min_rating: i64, max: usize, sleep_ms: u64, out: &Path) -
 pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max_replays: Option<usize>, q: Quality) -> Result<Value> {
     let voc = vocab();
     let meta = json!({"field_features": FIELD, "move_vocab": voc.n_moves, "species_vocab": voc.n_species,
+                      "item_vocab": voc.n_items, "ability_vocab": voc.n_abilities, "type_vocab": voc.n_types,
                       "vocab_version": voc.version});
     let mut w = ShardWriter::new(out, "pokemon", CONVERTER_VERSION, meta, shard_size)?;
     let mut st: BTreeMap<&str, usize> = ["seen", "kept", "samples", "frames", "no_winner", "low_rating", "not_replay", "low_quality"].into_iter().map(|k| (k, 0)).collect();
@@ -1711,6 +1881,46 @@ mod tests {
         assert!(unk.moves.is_empty() && unk.species.is_empty(), "UNK names: {:?} {:?}", unk.moves, unk.species);
     }
 
+    fn bools(s: &Sample, name: &str) -> Vec<bool> {
+        match &s.tensors.iter().find(|t| t.name == name).expect(name).col {
+            gmshard::Column::Bool(v) => v.iter().map(|&x| x != 0).collect(),
+            _ => panic!("{name} is not a bool tensor"),
+        }
+    }
+
+    #[test]
+    fn revealed_items_abilities_and_tera_types_reach_both_views() {
+        // HEAD: p1 Garchomp + Ditto, p2 Gholdengo + ... (team preview); items / abilities by
+        // their holders (an [of] source holds its [from] effect), tera type, Knock Off
+        let p = parse(&["|-weather|RainDance|[from] ability: Drizzle|[of] p2a: Gholdengo", "|turn|1",
+            "|move|p1a: Garchomp|Earthquake|p2a: Gholdengo",
+            "|-damage|p1a: Garchomp|80/100|[from] item: Rocky Helmet|[of] p2a: Gholdengo",
+            "|-heal|p1a: Garchomp|86/100|[from] item: Leftovers",
+            "|-terastallize|p2a: Gholdengo|Fairy", "|move|p2a: Gholdengo|Knock Off|p1a: Garchomp",
+            "|-enditem|p1a: Garchomp|Leftovers|[from] move: Knock Off|[of] p2a: Gholdengo",
+            "|upkeep", "|turn|2"]);
+        let mut unk = UnkNames::default();
+        let s = replay_samples(&json!({"id": "t"}), &p, false, &mut unk);
+        let v = vocab();
+        let (item, ability, tera) = (|n: &str| Vocab::named_id(&v.items, n), |n: &str| Vocab::named_id(&v.abilities, n),
+                                     |n: &str| Vocab::named_id(&v.types, n));
+        // frames: preview, turn 1, turn 2; slot j of frame f at f * 12 + j
+        // (side, g, h): the slots of p1's lead Garchomp / p2's lead Gholdengo in that side's
+        // view (own slots 0..6, the opponent's 6..12)
+        for (side, g, h) in [(0usize, 0usize, 6usize), (1, 6, 0)] {
+            let (it, ni, ab, te) = (i64s(&s[side], "obs.slot_item"), bools(&s[side], "obs.slot_no_item"),
+                                    i64s(&s[side], "obs.slot_ability"), i64s(&s[side], "obs.slot_tera_type"));
+            let mv = i64s(&s[side], "obs.slot_moves");
+            // turn 1: Drizzle was already revealed; nothing else yet
+            assert_eq!((ab[12 + h], it[12 + h], it[12 + g], te[12 + h]), (ability("Drizzle"), 0, 0, 0));
+            // turn 2: Rocky Helmet on its [of] source, Leftovers knocked off, the tera type
+            assert_eq!((it[24 + h], it[24 + g], ni[24 + g], ni[24 + h]), (item("Rocky Helmet"), item("Leftovers"), true, false));
+            assert_eq!((te[24 + h], te[24 + g]), (tera("Fairy"), 0));
+            assert_eq!((mv[(24 + g) * 4], mv[(24 + h) * 4]), (v.move_id("Earthquake"), v.move_id("Knock Off")));
+        }
+        assert!(item("Rocky Helmet") > ID_UNK && ability("Drizzle") > ID_UNK && tera("Fairy") > ID_UNK);
+    }
+
     fn i64s(s: &Sample, name: &str) -> Vec<i64> {
         match &s.tensors.iter().find(|t| t.name == name).expect(name).col {
             gmshard::Column::I64(v) => v.clone(),
@@ -1809,12 +2019,16 @@ mod tests {
         assert_eq!(i64s(&s[0], "obs.move_ids")[2 * 4..3 * 4], [ID_UNK, 0, 0, 0], "the revealed unknown move");
         let own = i64s(&s[0], "obs.species_ids");
         assert!((0..4).all(|f| own[f * 12] == v.species_id("Garchomp") && own[f * 12 + 6] == ID_UNK));
-        // counted per name: 2 labels + 2 revealed-move slots (turns 2, 3); 4 frames × 2 sides
-        assert_eq!(unk.moves, BTreeMap::from([("Zz Quake".to_string(), 4)]));
+        // counted per name: 2 labels + 2 revealed-move slots (turns 2, 3) + the per-slot
+        // revealed moves (v4: turns 2, 3, both sides' frames); 4 frames × 2 sides
+        assert_eq!(unk.moves, BTreeMap::from([("Zz Quake".to_string(), 8)]));
         assert_eq!(unk.species, BTreeMap::from([("Zzmon".to_string(), 8)]));
+        // the opponent's revealed move reaches the other side's frames too (v4)
+        let opp = i64s(&s[1], "obs.slot_moves");
+        assert_eq!(opp[2 * 48 + 6 * 4..2 * 48 + 6 * 4 + 4], [ID_UNK, 0, 0, 0], "p1's move in p2's view");
         // winner_only: only the winner's sample, and only its names are counted
         let mut unk = UnkNames::default();
         assert_eq!(replay_samples(&json!({"id": "t"}), &p, true, &mut unk).len(), 1);
-        assert_eq!((unk.moves["Zz Quake"], unk.species["Zzmon"]), (4, 4));
+        assert_eq!((unk.moves["Zz Quake"], unk.species["Zzmon"]), (6, 4));
     }
 }

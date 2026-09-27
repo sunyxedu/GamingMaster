@@ -10,7 +10,9 @@ licence) at a pinned commit.
 Read from Showdown: ``data/moves.ts`` (every move), ``data/pokedex.ts`` (every species and
 forme; cosmetic formes become aliases of their species), and the team-preview forme hiding of
 ``data/rulesets.ts`` / ``sim/battle.ts`` (``Urshifu-*``: one placeholder entry per species whose
-forme team preview hides).  The ids (``data_processing/games/pokemon/__init__.py`` reads them in
+forme team preview hides); ``data/items.ts`` (every item), ``data/abilities.ts`` (every ability)
+and ``data/typechart.ts`` (the types, Stellar included — tera types) for the revealed held items,
+abilities and tera types of converter v4.  The ids (``data_processing/games/pokemon/__init__.py`` reads them in
 Python, ``gmdata pokemon convert`` embeds the file at build time):
 
     0        none (empty name: no move / no Pokémon)
@@ -42,7 +44,11 @@ from typing import Dict, Iterable, List, Optional, Tuple
 SHOWDOWN_COMMIT = "a5df8274e85b0889bf2a9b3422a08b39732374fc"
 SHOWDOWN_REPO = "https://github.com/smogon/pokemon-showdown"
 RAW = "https://raw.githubusercontent.com/smogon/pokemon-showdown/{commit}/{path}"
-FILES = ("data/moves.ts", "data/pokedex.ts", "data/rulesets.ts", "sim/battle.ts")
+FILES = ("data/moves.ts", "data/pokedex.ts", "data/rulesets.ts", "sim/battle.ts",
+         "data/items.ts", "data/abilities.ts", "data/typechart.ts")
+#: the name-keyed tables beside moves / species: (table, Showdown file, plausible minimum size)
+EXTRA_TABLES = (("items", "data/items.ts", 500), ("abilities", "data/abilities.ts", 280),
+                ("types", "data/typechart.ts", 19))
 FORMAT = "gm-pokemon-vocab.v1"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "showdown_vocab.json")
 ID_NONE, ID_UNK, ID_FIRST = 0, 1, 2
@@ -116,6 +122,25 @@ def parse_moves(text: str) -> List[Entry]:
             raise SystemExit(f"data/moves.ts: move {key!r} without name / num")
         out.append((key, _string(e["name"], key), int(str(e["num"]))))
     return out
+
+
+def parse_named(text: str, path: str) -> List[Entry]:
+    """Items / abilities: (key, name, num) of every entry (like :func:`parse_moves`)."""
+    out = []
+    for e in _parse_table(text, path):
+        key = str(e["key"])
+        if "name" not in e or "num" not in e:
+            raise SystemExit(f"{path}: entry {key!r} without name / num")
+        out.append((key, _string(e["name"], key), int(str(e["num"]))))
+    return out
+
+
+def parse_types(text: str) -> List[Entry]:
+    """The types of the type chart (keys, capitalised names; num = their order)."""
+    keys = re.findall(r"^\t([a-z]+): \{$", text, flags=re.M)
+    if not keys:
+        raise SystemExit("data/typechart.ts: no types parsed — has the file layout changed?")
+    return [(k, k.capitalize(), i + 1) for i, k in enumerate(keys)]
 
 
 def parse_species(text: str) -> Tuple[List[Entry], Dict[str, str], Dict[str, str]]:
@@ -207,10 +232,11 @@ def _aliases(entries: List[Entry], extra: Dict[str, str], extra_names: Dict[str,
 
 
 def build(texts: Dict[str, str], commit: str, old: Optional[Dict] = None,
-          min_sizes: Tuple[int, int] = (900, 1400)) -> Dict:
+          min_sizes: Tuple[int, ...] = (900, 1400)) -> Dict:
     """The vocabulary document from Showdown's files (``texts`` by repo path), appended to
-    ``old`` (a previous document) when given; fewer than ``min_sizes`` (moves, species)
-    entries means the parser missed most of the table."""
+    ``old`` (a previous document) when given; fewer than ``min_sizes`` (moves, species[,
+    items, abilities, types] — the last three default to EXTRA_TABLES') entries means the
+    parser missed most of the table."""
     moves = parse_moves(texts["data/moves.ts"])
     species, cosmetic, cosmetic_names = parse_species(texts["data/pokedex.ts"])
     by_key = {k: (n, num) for k, n, num in species}
@@ -227,9 +253,22 @@ def build(texts: Dict[str, str], commit: str, old: Optional[Dict] = None,
                 raise SystemExit(f"{what}: key {k!r} is not the toID of its name {n!r}")
     if len(moves) < min_sizes[0] or len(species) < min_sizes[1]:
         raise SystemExit(f"implausibly small tables ({len(moves)} moves, {len(species)} species)")
+    extra: Dict[str, List[Entry]] = {}
+    for i, (name, path, least) in enumerate(EXTRA_TABLES):
+        least = min_sizes[2 + i] if len(min_sizes) > 2 + i else (least if min_sizes[0] else 0)
+        table = parse_types(texts[path]) if name == "types" else parse_named(texts[path], path)
+        keys = [k for k, _, _ in table]
+        if len(set(keys)) != len(keys) or len(table) < least:
+            raise SystemExit(f"{name}: duplicate keys or an implausibly small table ({len(table)})")
+        for k, n, _ in table:
+            if to_id(n) != k and k not in _variants(n):
+                raise SystemExit(f"{name}: key {k!r} is not the toID of its name {n!r}")
+        extra[name] = table
     if old is not None:
         moves = _merge([tuple(e) for e in old["moves"]], moves, "moves")
         species = _merge([tuple(e) for e in old["species"]], species, "species")
+        for name in extra:
+            extra[name] = _merge([tuple(e) for e in old.get(name, [])], extra[name], name)
     return {
         "format": FORMAT,
         "version": f"ps-{commit[:12]}",
@@ -240,6 +279,7 @@ def build(texts: Dict[str, str], commit: str, old: Optional[Dict] = None,
         "species": [list(e) for e in species],
         "species_aliases": [list(a) for a in _aliases(species, cosmetic, cosmetic_names,
                                                       "species")],
+        **{name: [list(e) for e in table] for name, table in extra.items()},
     }
 
 
@@ -298,7 +338,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     with open(a.out, "w", encoding="utf-8") as f:
         f.write(text)
     print(f"[vocab] {a.out}: version {doc['version']}, {len(doc['moves'])} moves, "
-          f"{len(doc['species'])} species (+ ids 0 none / 1 UNK), "
+          f"{len(doc['species'])} species, {len(doc['items'])} items, "
+          f"{len(doc['abilities'])} abilities, {len(doc['types'])} types (+ ids 0 none / 1 UNK), "
           f"{len(doc['move_aliases'])} move / {len(doc['species_aliases'])} species aliases")
     return 0
 

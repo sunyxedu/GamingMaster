@@ -161,7 +161,11 @@ META_ARCH_KEYS = {
                 "species_buckets": ("pokemon_species_buckets",),
                 "field_features": ("pokemon_field_features",),
                 "move_vocab": ("pokemon_move_vocab",),
-                "species_vocab": ("pokemon_species_vocab",)},
+                "species_vocab": ("pokemon_species_vocab",),
+                # converter v4: every slot's revealed item / ability / tera type
+                "item_vocab": ("pokemon_item_vocab",),
+                "ability_vocab": ("pokemon_ability_vocab",),
+                "type_vocab": ("pokemon_type_vocab",)},
     # gio records (GeneralsGioDataset.shard_meta / `gmdata generals shard`);
     # with turn_globals the net has TURN_GLOBAL_FEATURES more globals than
     # the data (meta_arch_value), appended at batch time (OBS_HOOKS)
@@ -218,7 +222,8 @@ META_LEGACY = {
     "shogi": {"global_features": 4},
     "lux": {"global_features": 6, "sap_range": 0},
     "clash_royale": {"card_tokens": "hand"},
-    "pokemon": {"field_features": 20, "move_vocab": 0, "species_vocab": 0},
+    "pokemon": {"field_features": 20, "move_vocab": 0, "species_vocab": 0,
+                "item_vocab": 0, "ability_vocab": 0, "type_vocab": 0},
     "mahjong": {"tile_features": 16},
 }
 
@@ -244,7 +249,7 @@ META_MISMATCH_HINTS = {
 # the frozen inputs / targets, so the trainers warn (or, with
 # --require_frozen_schema, refuse).
 SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 4, "lux": 3,
-                                   "clash_royale": 3, "pokemon": 3}
+                                   "clash_royale": 3, "pokemon": 4}
 _SCHEMA_FREEZE_CONTENT = {
     "chess": "repetition flags + legal masks",
     "go": "side-to-move/komi globals",
@@ -258,7 +263,9 @@ _SCHEMA_FREEZE_CONTENT = {
                     "from the whole match",
     "pokemon": "exact Showdown move / species ids (older shards hash the names into "
                "colliding buckets), move-identity targets, forced-switch / lead / "
-               "unlabelled-turn frames, request-phase flags + legal masks",
+               "unlabelled-turn frames, request-phase flags + legal masks; every slot's "
+               "revealed moves / item / ability / tera type (older shards show the own "
+               "active's moves only)",
 }
 
 

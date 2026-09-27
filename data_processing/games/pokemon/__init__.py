@@ -78,6 +78,39 @@ class Vocab:
     species_ids: Dict[str, int]
     move_names: Tuple[str, ...]
     species_names: Tuple[str, ...]
+    #: the revealed held items / abilities / tera types (converter v4): key → id, id → name
+    item_ids: Dict[str, int] = None
+    ability_ids: Dict[str, int] = None
+    type_ids: Dict[str, int] = None
+    item_names: Tuple[str, ...] = ()
+    ability_names: Tuple[str, ...] = ()
+    type_names: Tuple[str, ...] = ()
+
+    @property
+    def n_items(self) -> int:
+        return len(self.item_names)
+
+    @property
+    def n_abilities(self) -> int:
+        return len(self.ability_names)
+
+    @property
+    def n_types(self) -> int:
+        return len(self.type_names)
+
+    def _named_id(self, table: Dict[str, int], name: str) -> int:
+        if not name.strip():
+            return ID_NONE
+        return table.get(to_id(name), ID_UNK)
+
+    def item_id(self, name: str) -> int:
+        return self._named_id(self.item_ids, name)
+
+    def ability_id(self, name: str) -> int:
+        return self._named_id(self.ability_ids, name)
+
+    def type_id(self, name: str) -> int:
+        return self._named_id(self.type_ids, name)
 
     @property
     def n_moves(self) -> int:
@@ -100,7 +133,7 @@ class Vocab:
         return self.species_ids.get(species_key(name), ID_UNK)
 
 
-def _table(doc: Dict, entries: str, aliases: str) -> Tuple[Dict[str, int], Tuple[str, ...]]:
+def _table(doc: Dict, entries: str, aliases: str = "") -> Tuple[Dict[str, int], Tuple[str, ...]]:
     first = doc["ids"]["first"]
     ids: Dict[str, int] = {}
     names = ["", "<UNK>"]
@@ -111,7 +144,7 @@ def _table(doc: Dict, entries: str, aliases: str) -> Tuple[Dict[str, int], Tuple
             raise ValueError(f"{entries}: duplicate key {key!r}")
         ids[key] = first + i
         names.append(name)
-    for alias, target in doc[aliases]:
+    for alias, target in (doc[aliases] if aliases else []):
         if alias in ids or target not in ids:
             raise ValueError(f"{aliases}: {alias!r} → {target!r} shadows an entry or names none")
         ids[alias] = ids[target]
@@ -126,8 +159,14 @@ def load_vocab(path: str = VOCAB_PATH) -> Vocab:
         raise ValueError(f"{path}: format {doc.get('format')!r}, expected {FORMAT!r}")
     move_ids, move_names = _table(doc, "moves", "move_aliases")
     species_ids, species_names = _table(doc, "species", "species_aliases")
+    extra = {name: _table(doc, name) for name in ("items", "abilities", "types") if name in doc}
+    empty = ({}, ("", "<UNK>"))
+    (item_ids, item_names), (ability_ids, ability_names), (type_ids, type_names) = (
+        extra.get(n, empty) for n in ("items", "abilities", "types"))
     return Vocab(version=doc["version"], commit=doc["source"]["commit"], move_ids=move_ids,
-                 species_ids=species_ids, move_names=move_names, species_names=species_names)
+                 species_ids=species_ids, move_names=move_names, species_names=species_names,
+                 item_ids=item_ids, ability_ids=ability_ids, type_ids=type_ids,
+                 item_names=item_names, ability_names=ability_names, type_names=type_names)
 
 
 #: the vendored vocabulary (what `gmdata pokemon convert` of this checkout writes)
@@ -135,3 +174,6 @@ VOCAB = load_vocab()
 VOCAB_VERSION = VOCAB.version
 MOVE_VOCAB_SIZE = VOCAB.n_moves
 SPECIES_VOCAB_SIZE = VOCAB.n_species
+ITEM_VOCAB_SIZE = VOCAB.n_items
+ABILITY_VOCAB_SIZE = VOCAB.n_abilities
+TYPE_VOCAB_SIZE = VOCAB.n_types

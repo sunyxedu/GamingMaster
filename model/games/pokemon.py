@@ -69,6 +69,16 @@ obs keys:
                                     (0 = none yet) — state for the decoder,
                                     forwarded as ``legal["move_ids"]``
                                     (training.train_il_game.LEGAL_FROM_OBS)
+  converter v4 (``pokemon_item_vocab`` > 0: the shard meta's item_vocab /
+  ability_vocab / type_vocab), every slot's revealed information, both sides —
+  what the public log showed by the frame (id 0 = not revealed, embedded as zero):
+    slot_moves     [B, T, 12, 4] long  its first four revealed moves (summed)
+    slot_item      [B, T, 12] long     the held item the log revealed
+    slot_no_item   [B, T, 12] bool     known to hold nothing (consumed, knocked off)
+    slot_ability   [B, T, 12] long     the revealed ability
+    slot_tera_type [B, T, 12] long     the tera type once terastallized
+  v3 showed the own active's revealed moves only: the opponent's revealed moves
+  and every revealed item / ability never reached the network.
 
 Frames (converter v2 / v3, data_processing/rs/gmdata/src/pokemon.rs): one
 per request the player answers — the team-preview lead, every turn (with a
@@ -265,6 +275,13 @@ class PokemonConfig(ModelConfig):
     #: pointer over the 4 revealed-move slots (tgt.move_idx).  Configs saved
     #: before the field existed load as "slot" (LEGACY_CONFIG_DEFAULTS).
     pokemon_move_head: str = "identity"
+    #: every slot's revealed information (converter v4, shard meta item_vocab /
+    #: ability_vocab / type_vocab: the id counts of the vendored tables): its revealed
+    #: moves, held item (or none), ability and tera type, both sides.  0 = off (the
+    #: default: converter v3 shards and the configs before the fields)
+    pokemon_item_vocab: int = 0
+    pokemon_ability_vocab: int = 0
+    pokemon_type_vocab: int = 0
 
 
 class PokemonEncoder(ObservationEncoder):
@@ -304,6 +321,21 @@ class PokemonEncoder(ObservationEncoder):
         # The core only re-inits Linear/Conv/Norm; Embedding is ours to init.
         nn.init.trunc_normal_(self.species_embed.weight, std=0.02)
 
+        # converter v4: every slot's revealed moves / item / ability / tera type (id 0 =
+        # not revealed: the zero row, padding_idx — it adds nothing)
+        self.slot_info = getattr(cfg, "pokemon_item_vocab", 0) > 0
+        if self.slot_info:
+            d = cfg.d_model
+            self.slot_move_embed = nn.Embedding(n_move_ids(cfg), d, padding_idx=0)
+            self.item_embed = nn.Embedding(cfg.pokemon_item_vocab, d, padding_idx=0)
+            self.ability_embed = nn.Embedding(cfg.pokemon_ability_vocab, d, padding_idx=0)
+            self.tera_type_embed = nn.Embedding(cfg.pokemon_type_vocab, d, padding_idx=0)
+            self.no_item = nn.Parameter(torch.randn(d) * 0.02)
+            for e in (self.slot_move_embed, self.item_embed, self.ability_embed, self.tera_type_embed):
+                nn.init.trunc_normal_(e.weight, std=0.02)
+                with torch.no_grad():
+                    e.weight[0].zero_()
+
     def forward(
         self,
         obs: Dict[str, torch.Tensor],
@@ -312,6 +344,12 @@ class PokemonEncoder(ObservationEncoder):
         # frame_mask is a documented no-op: no batch statistics here.
         present = obs["slot_mask"].unsqueeze(-1)                        # [B,T,12,1]
         x = self.feat_proj(obs["poke_feats"]) + self.species_embed(obs["species_ids"])
+        if self.slot_info:
+            x = (x + self.slot_move_embed(obs["slot_moves"].long()).sum(-2)
+                 + self.item_embed(obs["slot_item"].long())
+                 + self.ability_embed(obs["slot_ability"].long())
+                 + self.tera_type_embed(obs["slot_tera_type"].long())
+                 + obs["slot_no_item"].unsqueeze(-1).to(x.dtype) * self.no_item.to(x.dtype))
         # Absent slots: zero the content, substitute the "empty" embedding
         # (zeroing also makes the output invariant to padded-slot garbage).
         x = x * present + self.slot_empty * (~present)
