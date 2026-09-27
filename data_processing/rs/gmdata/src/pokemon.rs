@@ -121,21 +121,29 @@
 //! parquet dumps with its columns (id, log, rating, format / formatid, players, uploadtime:
 //! HolidayOugi/pokemon-showdown-replays, milkkarten/pokemon-showdown-replays-merged on
 //! Hugging Face, fetched by `fetch-hf`); a replay id is converted once, from the first input
-//! that has it.  Selection (`Select`):
+//! that has it (a battle's identity: format, battle number, players — the merged dump
+//! re-labels ids).  Selection (`Select`):
 //!   * `--formats` keeps those formats;
-//!   * `--min-rating R`: a rated battle's rating must reach R.  The rating Showdown stores is
-//!     `min(p1, p2)` of the players' Elo after the battle (server/ladders-remote.ts: `room.rated
-//!     = Math.min(p1NewElo, p2NewElo)`; at matchmaking the lower pre-battle Elo, ladders.ts),
-//!     so R is a bound on BOTH players;
-//!   * `--players P --min-peak K [--min-peak-games N]`: both players' highest battle rating in
-//!     the format (the `players` table over the same inputs; a lower bound of their peak Elo,
-//!     robust to accounts still climbing from 1000) must reach K with ≥ N rated battles — this
-//!     also admits unrated battles (tournaments, challenges) between proven players.
+//!   * servers (the id's prefix): only the main server's rated battles pass a bar; the
+//!     tournament server (smogtours) passes with `--tournaments`; other servers (their own
+//!     ladders, or other rules: radicalred is a ROM hack) and unrated main-server battles
+//!     (challenges, unrated queues) are dropped;
+//!   * rating route `--min-rating R`: the battle's rating reaches R.  The rating Showdown
+//!     stores is `min(p1, p2)` of the players' Elo (server/ladders-remote.ts: `room.rated =
+//!     Math.min(p1NewElo, p2NewElo)` after the battle, the lower pre-battle Elo before), so R
+//!     bounds BOTH players.  Two dumps holding one battle agree on it in 55% of 4.0M cases,
+//!     else they differ by one battle's Elo change (median 21: an upload at the battle's end
+//!     and a later re-upload) — immaterial next to the bars;
+//!   * peak route `--players P --min-peak K [--min-peak-games N]`: both players' highest battle
+//!     rating in the format (the `players` table over the same inputs; a lower bound of their
+//!     peak Elo, robust to accounts still climbing from 1000) reaches K with ≥ N rated battles
+//!     — proven players on a fresh account or early in their climb;
+//!   * `--hq`: the per-format bars of HQ_BARS (each format's ladder #500 for the rating route,
+//!     #100 for the peak route), tournaments, ≥ 5 turns, no inactivity losses.
 //!
 //!   $G pokemon fetch-hf --dataset HolidayOugi/pokemon-showdown-replays --match "[Gen 9] OU" --out $P/hf
-//!   $G pokemon players --input $P/hf --input $P/raw --formats gen9ou --out $P/players.json
-//!   $G pokemon convert --input $P/raw --input $P/hf --formats gen9ou --min-rating 1500 \
-//!       --players $P/players.json --min-peak 1700 --min-turns 5 --exclude-inactivity --out $P/shards_v5
+//!   $G pokemon players --input $P/hf --input $P/raw --out $P/players.json
+//!   $G pokemon convert --hq --input $P/raw --input $P/hf --players $P/players.json --out $P/shards_v5
 //!
 //! Re-conversion (v1 / v2 shards are obsolete: hashed, colliding move / species ids) — on the
 //! cluster from the checkout root (`cargo build --release -p gmdata` in data_processing/; the
@@ -301,22 +309,30 @@ pub enum Cmd {
         out: PathBuf,
         #[arg(long, default_value_t = 256)]
         shard_size: usize,
-        /// a rated battle's rating (the lower of both players' Elo) must reach this; unrated
-        /// battles pass only through `--players` / `--min-peak`
+        /// hold out every N-th battle (a stable hash of its identity; both sides together):
+        /// `out/train` and `out/val`; 0 = all in `out`
+        #[arg(long, default_value_t = 0)]
+        val_every: u64,
+        /// rating route: a rated main-server battle passes when its rating (the lower of both
+        /// players' Elo) reaches this (0 = route closed; with no bar at all every replay passes)
         #[arg(long, default_value_t = 0)]
         min_rating: i64,
         /// formats to keep (ids as in FORMATS, comma-separated); none = all
         #[arg(long, value_delimiter = ',')]
         formats: Vec<String>,
-        /// the `players` table: with `--min-peak`, both players' highest battle rating in the
-        /// format must reach it (rated and unrated battles alike)
+        /// the `players` table, for the peak route
         #[arg(long)]
         players: Option<PathBuf>,
+        /// peak route: a rated main-server battle passes when both players' highest battle
+        /// rating in the format (the `players` table) reaches this
         #[arg(long, default_value_t = 0)]
         min_peak: i64,
         /// with `--min-peak`: both players need at least this many rated battles in the format
         #[arg(long, default_value_t = 1)]
         min_peak_games: i64,
+        /// keep the tournament server's (smogtours) replays whatever the bars
+        #[arg(long)]
+        tournaments: bool,
         #[arg(long)]
         max_replays: Option<usize>,
         /// drop replays shorter than this many turns
@@ -331,7 +347,8 @@ pub enum Cmd {
         /// imitate only the winning side
         #[arg(long)]
         winner_only: bool,
-        /// high-quality preset: rating >= 1500, >= 5 turns, no inactivity losses
+        /// high-quality preset: the formats and bars of HQ_BARS, tournaments, >= 5 turns, no
+        /// inactivity losses (`--players` opens the peak route)
         #[arg(long)]
         hq: bool,
     },
@@ -412,51 +429,128 @@ fn fetch(format: &str, min_rating: i64, max: usize, sleep_ms: u64, out: &Path) -
     Ok(json!({"listed": listed, "downloaded": downloaded, "skipped_rating": low, "skipped_existing": existing, "errors": errors}))
 }
 
-/// Which battles a conversion keeps beyond the per-replay quality filters.
-#[derive(Default)]
-pub struct Select {
-    pub min_rating: i64,
-    /// formats to keep (empty = all)
-    pub formats: Vec<String>,
-    /// format → player id → (rated battles, highest battle rating)
-    pub players: Option<HashMap<String, HashMap<String, (i64, i64)>>>,
-    pub min_peak: i64,
-    pub min_peak_games: i64,
+/// Where a replay was played, from its id: `<format>-<n>` on the main server (the ladder),
+/// `<server>-<format>-<n>` on another server (`smogtours`: Smogon's tournament server; others —
+/// china, radicalred (a ROM hack), rom, dawn, ... — run their own ladders or rules); a private
+/// replay ends in `-<key>pw`; the merged dump prefixes copies with their source (`metamon-`,
+/// `holidayougi-`) or re-labels main-server scrapes (`sethkarten-<n>`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Server {
+    Main,
+    Tournament,
+    Other,
 }
 
-impl Select {
-    /// None = keep, Some(reason) = the stat the replay is dropped under
-    fn verdict(&self, r: &Value, format: &str) -> Option<&'static str> {
-        if !self.formats.is_empty() && !self.formats.iter().any(|f| f == format) {
-            return Some("other_format");
-        }
-        let rating = record_rating(r);
-        if self.min_rating > 0 {
-            match rating {
-                Some(x) if x >= self.min_rating as f64 => {}
-                Some(_) => return Some("low_rating"),
-                None if self.players.is_none() => return Some("unrated"),
-                None => {}
-            }
-        }
-        if let Some(table) = &self.players {
-            if self.min_peak > 0 {
-                let t = table.get(format);
-                let ok = record_players(r).len() == 2 && record_players(r).iter().all(|p| {
-                    t.and_then(|t| t.get(&norm(p))).map(|&(n, peak)| n >= self.min_peak_games && peak >= self.min_peak).unwrap_or(false)
-                });
-                if !ok {
-                    return Some("low_peak");
-                }
-            }
-        }
-        None
+pub fn server_of(id: &str) -> Server {
+    let id = id.strip_prefix("metamon-").or_else(|| id.strip_prefix("holidayougi-")).unwrap_or(id);
+    let mut parts: Vec<&str> = id.split('-').collect();
+    if parts.len() > 1 && parts.last().is_some_and(|p| p.ends_with("pw") && !p.chars().all(|c| c.is_ascii_digit())) {
+        parts.pop();
+    }
+    match parts.as_slice() {
+        [_] | ["sethkarten", _] => Server::Main,
+        [_, _] => Server::Main,
+        ["smogtours", _, _] => Server::Tournament,
+        _ => Server::Other,
     }
 }
 
-/// A replay's rating: None for unrated battles (missing, null or 0).
+/// A format's bars: a rated battle passes on its rating (`min_rating`) or on both players'
+/// peaks (`min_peak`); 0 = that route closed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Bar {
+    pub min_rating: i64,
+    pub min_peak: i64,
+}
+
+/// `--hq`: per format, the rating of the ladder's #500 (rating route) and #100 (peak route) on
+/// 2026-09-28 (pokemonshowdown.com/ladder/<format>.json), rounded down to 50, with floors of
+/// 1300 / 1400 (the small tiers' top 500 reach down to ~1200, barely above the 1000 start):
+/// both players of a kept battle are top-ladder players of that format.
+pub const HQ_BARS: [(&str, i64, i64); 13] = [
+    ("gen9ou", 1600, 1750),                 // #500 1631, #100 1750
+    ("gen9uu", 1450, 1500),                 // 1463, 1500
+    ("gen9ru", 1350, 1450),                 // 1370, 1499
+    ("gen9nu", 1300, 1450),                 // 1287, 1463
+    ("gen9pu", 1300, 1450),                 // 1297, 1460
+    ("gen9zu", 1300, 1400),                 // 1191, 1416
+    ("gen9lc", 1300, 1400),                 // 1227, 1438
+    ("gen9ubers", 1500, 1550),              // 1500, 1571
+    ("gen9ubersuu", 1300, 1400),            // 15 players ranked (#1 1280)
+    ("gen9monotype", 1450, 1500),           // 1499, 1536
+    ("gen9anythinggoes", 1500, 1600),       // 1516, 1611
+    ("gen9randombattle", 2100, 2200),       // 2105, 2246
+    ("gen9randombattleblitz", 1650, 1800),  // 1691, 1818
+];
+
+/// Which battles a conversion keeps beyond the per-replay quality filters.
+#[derive(Default)]
+pub struct Select {
+    /// formats to keep (empty = all)
+    pub formats: Vec<String>,
+    /// per-format bars (formats without one take `bar`)
+    pub bars: HashMap<String, Bar>,
+    pub bar: Bar,
+    /// format → player id → (rated battles, highest battle rating)
+    pub players: Option<HashMap<String, HashMap<String, (i64, i64)>>>,
+    pub min_peak_games: i64,
+    /// keep the tournament server's replays (unrated) whatever the bars
+    pub tournaments: bool,
+}
+
+impl Select {
+    pub fn hq() -> Select {
+        let bars = HQ_BARS.iter().map(|&(f, r, p)| (f.to_string(), Bar { min_rating: r, min_peak: p })).collect();
+        Select { formats: HQ_BARS.iter().map(|b| b.0.to_string()).collect(), bars, min_peak_games: 1, tournaments: true,
+                 ..Default::default() }
+    }
+
+    fn bar_of(&self, format: &str) -> Bar {
+        self.bars.get(format).copied().unwrap_or(self.bar)
+    }
+
+    /// Ok(route the replay is kept by: all / rating / peak / tournament), Err(the stat it is
+    /// dropped under).  With a bar set, only rated main-server battles (and, with
+    /// `tournaments`, tournament-server ones) can pass: an unrated main-server battle is a
+    /// challenge or an unrated queue; other servers have their own ladders (ratings not
+    /// comparable, and the dumps hold none) or rules.
+    fn verdict(&self, r: &Value, format: &str) -> Result<&'static str, &'static str> {
+        if !self.formats.is_empty() && !self.formats.iter().any(|f| f == format) {
+            return Err("other_format");
+        }
+        let bar = self.bar_of(format);
+        let open = bar.min_rating > 0 || bar.min_peak > 0;
+        match server_of(r.get("id").and_then(|v| v.as_str()).unwrap_or("")) {
+            Server::Main => {}
+            Server::Tournament if self.tournaments => return Ok("tournament"),
+            _ if !open && !self.tournaments => return Ok("all"),
+            _ => return Err("other_server"),
+        }
+        if !open {
+            return Ok("all");
+        }
+        let Some(rating) = record_rating(r) else { return Err("unrated") };
+        if bar.min_rating > 0 && rating >= bar.min_rating as f64 {
+            return Ok("rating");
+        }
+        if let (Some(table), true) = (&self.players, bar.min_peak > 0) {
+            let t = table.get(format);
+            let ps = record_players(r);
+            let ok = ps.len() == 2 && ps.iter().all(|p| {
+                t.and_then(|t| t.get(&norm(p))).map(|&(n, peak)| n >= self.min_peak_games && peak >= bar.min_peak).unwrap_or(false)
+            });
+            if ok {
+                return Ok("peak");
+            }
+        }
+        Err("low_rating")
+    }
+}
+
+/// A replay's rating: None for unrated battles (missing, null or 0) and corrupt values (the
+/// merged dump has a few upload timestamps in the column; Elo stays far below 4000).
 fn record_rating(r: &Value) -> Option<f64> {
-    r.get("rating").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).filter(|&x| x > 0.0)
+    r.get("rating").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).filter(|&x| x > 0.0 && x < 4000.0)
 }
 
 /// The player names of a replay record: its `players` list, else the log's `|player|` lines.
@@ -535,7 +629,11 @@ fn f64_col(batch: &arrow_array::RecordBatch, name: &str) -> Option<Vec<Option<f6
 /// format, the battle number and the two players.
 fn canon_key(r: &Value) -> Option<String> {
     let id = r.get("id").and_then(|v| v.as_str())?;
-    let number = id.rsplit('-').next().filter(|x| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit()));
+    let mut parts: Vec<&str> = id.split('-').collect();
+    if parts.len() > 1 && parts.last().is_some_and(|p| p.ends_with("pw") && !p.chars().all(|c| c.is_ascii_digit())) {
+        parts.pop();
+    }
+    let number = parts.last().copied().filter(|x| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit()));
     let Some(number) = number else { return Some(id.to_string()) };
     let mut players: Vec<String> = record_players(r).iter().map(|p| norm(p)).collect();
     players.sort();
@@ -677,14 +775,23 @@ fn load_players(path: &Path) -> Result<HashMap<String, HashMap<String, (i64, i64
     Ok(out)
 }
 
-pub fn convert(inputs: &[PathBuf], out: &Path, shard_size: usize, sel: &Select, max_replays: Option<usize>, q: Quality) -> Result<Value> {
+#[allow(clippy::too_many_arguments)]
+pub fn convert(inputs: &[PathBuf], out: &Path, shard_size: usize, val_every: u64, sel: &Select, max_replays: Option<usize>,
+               q: Quality) -> Result<Value> {
     let voc = vocab();
     let meta = json!({"field_features": FIELD, "poke_features": FEAT, "move_vocab": voc.n_moves, "species_vocab": voc.n_species,
                       "item_vocab": voc.n_items, "ability_vocab": voc.n_abilities, "type_vocab": voc.n_types,
                       "format_vocab": FORMATS.len(), "formats": FORMATS, "vocab_version": voc.version});
-    let mut w = ShardWriter::new(out, "pokemon", CONVERTER_VERSION, meta, shard_size)?;
-    let mut st: BTreeMap<&str, usize> = ["seen", "kept", "samples", "frames", "no_winner", "low_rating", "unrated", "low_peak",
-        "other_format", "low_quality"].into_iter().map(|k| (k, 0)).collect();
+    let (mut w, mut w_val) = if val_every > 0 {
+        (ShardWriter::new(&out.join("train"), "pokemon", CONVERTER_VERSION, meta.clone(), shard_size)?,
+         Some(ShardWriter::new(&out.join("val"), "pokemon", CONVERTER_VERSION, meta, shard_size)?))
+    } else {
+        (ShardWriter::new(out, "pokemon", CONVERTER_VERSION, meta, shard_size)?, None)
+    };
+    let mut held_out = 0usize;
+    let mut st: BTreeMap<&str, usize> = ["seen", "kept", "samples", "frames", "no_winner", "low_rating", "unrated",
+        "other_format", "other_server", "low_quality"].into_iter().map(|k| (k, 0)).collect();
+    let mut routes: BTreeMap<String, BTreeMap<&str, usize>> = BTreeMap::new();
     let mut labels: BTreeMap<String, usize> = BTreeMap::new();
     let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
     let mut per_format: BTreeMap<String, usize> = BTreeMap::new();
@@ -695,10 +802,13 @@ pub fn convert(inputs: &[PathBuf], out: &Path, shard_size: usize, sel: &Select, 
         }
         *st.get_mut("seen").unwrap() += 1;
         let fmt = record_format(&r);
-        if let Some(why) = sel.verdict(&r, &fmt) {
-            *st.get_mut(why).unwrap() += 1;
-            return Ok(true);
-        }
+        let route = match sel.verdict(&r, &fmt) {
+            Ok(route) => route,
+            Err(why) => {
+                *st.get_mut(why).unwrap() += 1;
+                return Ok(true);
+            }
+        };
         let log = r["log"].as_str().unwrap_or("");
         if (q.min_turns > 0 && n_turns(log) < q.min_turns)
             || (q.exclude_forfeit && log.contains(" forfeited."))
@@ -719,10 +829,18 @@ pub fn convert(inputs: &[PathBuf], out: &Path, shard_size: usize, sel: &Select, 
             return Ok(true);
         }
         *st.get_mut("kept").unwrap() += 1;
+        *routes.entry(fmt.clone()).or_default().entry(route).or_default() += 1;
         *per_format.entry(fmt).or_default() += 1;
         for (k, v) in &p.stats {
             *labels.entry(k.clone()).or_default() += v;
         }
+        let key = canon_key(&r).unwrap_or_default();
+        let val = w_val.as_mut().filter(|_| common::hash_bucket(&key, val_every));
+        held_out += val.is_some() as usize;
+        let w = match val {
+            Some(v) => v,
+            None => &mut w,
+        };
         for s in ss {
             *st.get_mut("samples").unwrap() += 1;
             *st.get_mut("frames").unwrap() += s.frames()?;
@@ -731,12 +849,20 @@ pub fn convert(inputs: &[PathBuf], out: &Path, shard_size: usize, sel: &Select, 
         Ok(true)
     })?;
     w.flush()?;
+    if let Some(v) = w_val.as_mut() {
+        v.flush()?;
+    }
     let mut v = json!(st);
     v["records"] = json!(records);
     v["duplicates"] = json!(duplicates);
     v["not_replay"] = json!(unreadable);
     v["kept_per_format"] = json!(per_format);
+    v["kept_by_route"] = json!(routes);
     v["shards"] = json!(w.written_shards);
+    if let Some(wv) = &w_val {
+        v["val_shards"] = json!(wv.written_shards);
+        v["val_battles"] = json!(held_out);
+    }
     v["labels"] = json!(labels);
     v["unknown"] = json!(unknown);
     v["vocab"] = json!({"version": voc.version, "move_vocab": voc.n_moves, "species_vocab": voc.n_species});
@@ -767,12 +893,16 @@ pub fn run(cmd: Cmd) -> Result<()> {
             println!("{summary}");
             Ok(())
         }
-        Cmd::Convert { input, out, shard_size, min_rating, formats, players, min_peak, min_peak_games, max_replays, min_turns,
-                       exclude_forfeit, exclude_inactivity, winner_only, hq } => {
+        Cmd::Convert { input, out, shard_size, val_every, min_rating, formats, players, min_peak, min_peak_games, tournaments,
+                       max_replays, min_turns, exclude_forfeit, exclude_inactivity, winner_only, hq } => {
             let mut q = Quality { min_turns, exclude_forfeit, exclude_inactivity, winner_only };
-            let mut sel = Select { min_rating, formats, players: None, min_peak, min_peak_games };
+            let mut sel = Select { formats, bar: Bar { min_rating, min_peak }, min_peak_games, tournaments, ..Default::default() };
             if hq {
-                sel.min_rating = sel.min_rating.max(1500);
+                let formats = std::mem::take(&mut sel.formats);
+                sel = Select { min_peak_games, ..Select::hq() };
+                if !formats.is_empty() {
+                    sel.formats = formats;
+                }
                 q.min_turns = q.min_turns.max(5);
                 q.exclude_inactivity = true;
             }
@@ -780,8 +910,10 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 sel.players = Some(load_players(&p)?);
             } else if min_peak > 0 {
                 anyhow::bail!("--min-peak needs --players (the table of `gmdata pokemon players`)");
+            } else if hq {
+                eprintln!("[pokemon convert] --hq without --players: the peak route is closed");
             }
-            println!("{}", convert(&input, &out, shard_size, &sel, max_replays, q)?);
+            println!("{}", convert(&input, &out, shard_size, val_every, &sel, max_replays, q)?);
             Ok(())
         }
     }
@@ -1297,6 +1429,38 @@ mod tests {
         assert!(i64s(&s[0], "obs.format_id").iter().all(|&x| x == format_id("gen9lc")));
     }
 
+    #[test]
+    fn selection_servers_and_routes() {
+        assert_eq!(server_of("gen9ou-2003265563"), Server::Main);
+        assert_eq!(server_of("gen9ou-2003265563-0a1b2c3d4e5f6g7h8i9jpw"), Server::Main, "a private replay");
+        assert_eq!(server_of("sethkarten-2383111891"), Server::Main);
+        assert_eq!(server_of("metamon-gen9ou-12"), Server::Main);
+        assert_eq!(server_of("smogtours-gen9ou-812345"), Server::Tournament);
+        assert_eq!(server_of("metamon-smogtours-gen9ou-812345"), Server::Tournament);
+        assert_eq!(server_of("radicalred-gen9ou-5"), Server::Other);
+        assert_eq!(server_of("china-gen9ou-12930985"), Server::Other);
+        let ps = |v: &[(&str, (i64, i64))]| v.iter().map(|(p, x)| (p.to_string(), *x)).collect::<HashMap<_, _>>();
+        let table = HashMap::from([("gen9ou".to_string(), ps(&[("alice", (5, 1800)), ("bob", (3, 1760)), ("carl", (1, 1500))]))]);
+        let sel = Select { players: Some(table), ..Select::hq() };
+        let rec = |id: &str, rating: Option<f64>, p: [&str; 2]| json!({"id": id, "rating": rating, "players": p});
+        let v = |id: &str, rating: Option<f64>, p: [&str; 2], f: &str| sel.verdict(&rec(id, rating, p), f);
+        assert_eq!(v("gen9ou-1", Some(1650.0), ["Carl", "Dan"], "gen9ou"), Ok("rating"));
+        assert_eq!(v("gen9ou-2", Some(1400.0), ["Alice", "Bob"], "gen9ou"), Ok("peak"));
+        assert_eq!(v("gen9ou-3", Some(1400.0), ["Alice", "Carl"], "gen9ou"), Err("low_rating"));
+        assert_eq!(v("gen9ou-4", None, ["Alice", "Bob"], "gen9ou"), Err("unrated"));
+        assert_eq!(v("smogtours-gen9ou-5", None, ["X", "Y"], "gen9ou"), Ok("tournament"));
+        assert_eq!(v("radicalred-gen9ou-6", Some(1900.0), ["Alice", "Bob"], "gen9ou"), Err("other_server"));
+        assert_eq!(v("gen9ou-7", Some(1756747200.0), ["Alice", "Carl"], "gen9ou"), Err("unrated"), "a timestamp as rating");
+        assert_eq!(v("gen9randombattle-8", Some(2000.0), ["A", "B"], "gen9randombattle"), Err("low_rating"), "randbats' own bar");
+        assert_eq!(v("gen9randombattle-9", Some(2150.0), ["A", "B"], "gen9randombattle"), Ok("rating"));
+        assert_eq!(v("gen9doublesou-10", Some(1900.0), ["A", "B"], "gen9doublesou"), Err("other_format"));
+        let all = Select::default();
+        assert_eq!(all.verdict(&rec("china-gen9ou-11", None, ["A", "B"]), "gen9ou"), Ok("all"), "no selection: everything");
+        let dup = |id: &str| canon_key(&json!({"id": id, "formatid": "gen9ou", "players": ["B", "a"]}));
+        assert_eq!(dup("gen9ou-77"), dup("sethkarten-77"));
+        assert_eq!(dup("gen9ou-77"), dup("gen9ou-77-xyz123pw"));
+    }
+
     fn write_parquet(path: &Path, rows: &[(&str, &str, Option<f64>, &str, [&str; 2])]) {
         use arrow_array::builder::{ListBuilder, StringBuilder};
         use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray};
@@ -1360,24 +1524,33 @@ mod tests {
         let conv = |sel: &Select| {
             let out = d.join("out");
             std::fs::remove_dir_all(&out).ok();
-            convert(&inputs, &out, 64, sel, None, Quality::default()).unwrap()
+            convert(&inputs, &out, 64, 0, sel, None, Quality::default()).unwrap()
         };
         // rating only: the rated OU battles >= 1500 (1 and 5); unrated 3 and the 1400 one out
-        let st = conv(&Select { min_rating: 1500, formats: vec!["gen9ou".into()], ..Default::default() });
+        let rated = |min_rating, min_peak| Select { bar: Bar { min_rating, min_peak }, formats: vec!["gen9ou".into()],
+                                                    players: Some(load_players(&pf).unwrap()), min_peak_games: 1, ..Default::default() };
+        let st = conv(&Select { players: None, ..rated(1500, 0) });
         assert_eq!((st["kept"].as_i64(), st["low_rating"].as_i64(), st["unrated"].as_i64()), (Some(2), Some(1), Some(1)));
         assert_eq!((st["other_format"].as_i64(), st["duplicates"].as_i64()), (Some(1), Some(1)));
-        // + peaks >= 1700: the unrated battle 3 passes too (Alice 1720, Eve 1810)
-        let sel = Select { min_rating: 1500, formats: vec!["gen9ou".into()], players: Some(load_players(&pf).unwrap()),
-                           min_peak: 1700, min_peak_games: 1 };
-        let st = conv(&sel);
-        assert_eq!((st["kept"].as_i64(), st["low_peak"].as_i64()), (Some(3), Some(0)), "{st}");
-        // peaks >= 1750: Alice (1720) is out of battles 1 and 3, rated or not
-        let st = conv(&Select { min_peak: 1750, ..Select { players: Some(load_players(&pf).unwrap()), ..sel } });
-        assert_eq!((st["kept"].as_i64(), st["low_peak"].as_i64()), (Some(1), Some(2)), "{st}");
-        let sel = Select { min_rating: 1500, formats: vec!["gen9ou".into()], players: Some(load_players(&pf).unwrap()),
-                           min_peak: 1700, min_peak_games: 1 };
-        let sel = Select { min_peak_games: 2, ..sel };
-        let st = conv(&sel);
+        assert_eq!(st["kept_by_route"]["gen9ou"], json!({"rating": 2}));
+        let st = convert(&inputs, &d.join("split"), 64, 1, &Select { players: None, ..rated(1500, 0) }, None, Quality::default()).unwrap();
+        assert_eq!((st["val_battles"].as_i64(), st["val_shards"].as_i64(), st["shards"].as_i64()), (Some(2), Some(1), Some(0)),
+                   "N = 1 holds out every battle: {st}");
+        // peaks only (>= 1700): 1 (Alice 1720, Bob 1810) and 5; the unrated battle 3 stays out
+        // though Alice and Eve are proven players (unrated main-server battles are casual)
+        let st = conv(&rated(0, 1700));
+        assert_eq!((st["kept"].as_i64(), st["low_rating"].as_i64(), st["unrated"].as_i64()), (Some(2), Some(1), Some(1)), "{st}");
+        assert_eq!(st["kept_by_route"]["gen9ou"], json!({"peak": 2}));
+        // peaks >= 1750: Alice (1720) is out of battle 1
+        let st = conv(&rated(0, 1750));
+        assert_eq!((st["kept"].as_i64(), st["low_rating"].as_i64()), (Some(1), Some(2)), "{st}");
+        // either route: at 1700 both pass on their ratings (Alice's peak is short of the peak
+        // route's 1750); at 1815 only 5, on its players' peaks
+        let st = conv(&rated(1700, 1750));
+        assert_eq!(st["kept_by_route"]["gen9ou"], json!({"rating": 2}), "{st}");
+        let st = conv(&rated(1815, 1750));
+        assert_eq!(st["kept_by_route"]["gen9ou"], json!({"peak": 1}), "{st}");
+        let st = conv(&Select { min_peak_games: 2, ..rated(0, 1700) });
         assert_eq!(st["kept"].as_i64(), Some(0), "only Bob has two rated battles: {st}");
         std::fs::remove_dir_all(&d).ok();
     }

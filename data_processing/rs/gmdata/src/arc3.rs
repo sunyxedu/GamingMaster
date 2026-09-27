@@ -503,13 +503,7 @@ fn for_each_recording(inputs: &[PathBuf], f: &mut dyn FnMut(&str, Result<Vec<Row
 }
 
 fn guid_bucket(guid: &str, every: u64) -> bool {
-    // FNV-1a: stable across runs and platforms
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in guid.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    every > 0 && h % every == 0
+    crate::common::hash_bucket(guid, every)
 }
 
 #[allow(clippy::too_many_arguments)]

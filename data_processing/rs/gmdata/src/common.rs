@@ -7,6 +7,17 @@ use std::time::Duration;
 
 /// Files under `path` (recursive, sorted) whose name ends with one of `exts`
 /// (case-insensitive); `path` itself when it is a file.
+/// A stable held-out bucket: FNV-1a of `key` (the same across runs and platforms) ≡ 0 mod
+/// `every` (never for every = 0).
+pub fn hash_bucket(key: &str, every: u64) -> bool {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in key.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    every > 0 && h % every == 0
+}
+
 pub fn find_files(path: &Path, exts: &[&str]) -> Result<Vec<PathBuf>> {
     if path.is_file() {
         return Ok(vec![path.to_path_buf()]);
