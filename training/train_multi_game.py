@@ -267,6 +267,17 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="data parallel: micro-batches per optimizer step summed over "
                         "all ranks (the single-GPU --games_per_step objective); "
                         "exclusive with --games_per_step")
+    p.add_argument("--mixture_frame_cap", type=lambda x: int(float(x)), default=None,
+                   metavar="N",
+                   help="frames counted per game in the mixture weights: w_g ∝ "
+                        "min(frames_g, N)^alpha, so one giant corpus cannot dominate the "
+                        "mixture (default: no cap; accepts 1e8)")
+    p.add_argument("--game_frame_cap", action="append", default=[], metavar="GAME=N",
+                   help="per-game --mixture_frame_cap")
+    p.add_argument("--game_weight", action="append", default=[], metavar="GAME=W",
+                   help="multiplier of a game's mixture weight (draw probability), "
+                        "w_g ∝ W_g * min(frames_g, cap)^alpha (default 1); unlike "
+                        "--game_loss_weight it changes how often the game is drawn")
     p.add_argument("--sample_alpha", type=float, default=0.5,
                    help="mixture temperature: w_g ∝ frames_g^alpha")
     p.add_argument("--max_len", type=int, default=None,
@@ -400,10 +411,28 @@ def tf_at(sched: Tuple[float, float], step: int, steps: int) -> float:
     return lo + (hi - lo) * (step - 1) / max(1, steps - 1)
 
 
-def mixture_weights(frames: Dict[str, int], alpha: float) -> Dict[str, float]:
-    """w_g ∝ N_g^α, normalised."""
-    raw = {g: float(max(n, 1)) ** alpha for g, n in frames.items()}
+def mixture_weights(frames: Dict[str, int], alpha: float, *,
+                    frame_cap: Optional[int] = None,
+                    game_frame_cap: Optional[Dict[str, int]] = None,
+                    game_weight: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+    """w_g ∝ m_g · min(N_g, C_g)^α, normalised.
+
+    ``N_g`` = frames of game g; ``C_g`` = its cap (``game_frame_cap[g]``, else
+    ``frame_cap``, else none): a corpus of 1e10 frames counts as C_g, so it cannot
+    swamp the mixture however large it grows.  ``m_g`` = ``game_weight[g]``
+    (default 1), e.g. < 1 for a small corpus that would otherwise be repeated
+    too often.  Without caps / multipliers this is the plain temperature
+    mixture w_g ∝ N_g^α."""
+    caps = dict(game_frame_cap or {})
+    mult = dict(game_weight or {})
+    raw = {}
+    for g, n in frames.items():
+        cap = caps.get(g, frame_cap)
+        eff = n if cap is None else min(n, cap)
+        raw[g] = mult.get(g, 1.0) * float(max(eff, 1)) ** alpha
     z = sum(raw.values())
+    if z <= 0:
+        raise SystemExit(f"mixture weights sum to {z}: every --game_weight is 0?")
     return {g: v / z for g, v in raw.items()}
 
 
@@ -947,7 +976,14 @@ def main(argv=None) -> Dict[str, object]:
                 raise SystemExit(f"--require_frozen_schema: {frozen}")
             log(f"[WARN] {frozen}")
     frames = {g: ds.total_frames() for g, ds in datasets.items()}
-    weights = mixture_weights(frames, args.sample_alpha)
+    game_frame_cap = {g: int(float(n)) for g, n in _pairs(args.game_frame_cap, "N").items()}
+    game_weight = {g: float(w) for g, w in _pairs(args.game_weight, "W").items()}
+    for flag, vals in (("--game_frame_cap", game_frame_cap), ("--game_weight", game_weight)):
+        unknown = sorted(set(vals) - set(frames))
+        if unknown:
+            raise SystemExit(f"{flag}: {unknown} are not games of this run ({sorted(frames)})")
+    weights = mixture_weights(frames, args.sample_alpha, frame_cap=args.mixture_frame_cap,
+                              game_frame_cap=game_frame_cap, game_weight=game_weight)
 
     core_kw = parse_overrides(args.override)
     core_state = None
@@ -1034,7 +1070,12 @@ def main(argv=None) -> Dict[str, object]:
     if args.init_core and not first.cfg.qk_norm:
         log(f"[note] qk_norm=False comes from the --init_core checkpoint "
             f"({args.init_core}): a pre-QK-norm core cannot switch it on")
-    log("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,} w={weights[g]:.3f}" for g in games))
+    def _mix_note(g: str) -> str:
+        cap = game_frame_cap.get(g, args.mixture_frame_cap)
+        note = f" (capped {cap:,})" if cap is not None and frames[g] > cap else ""
+        return note + (f" x{game_weight[g]:g}" if g in game_weight else "")
+    log("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,}{_mix_note(g)} w={weights[g]:.3f}"
+                                 for g in games))
     for g in games:
         if g in PREFIX_CROP:
             ml = crop(g, args.max_len, game_max_len)
