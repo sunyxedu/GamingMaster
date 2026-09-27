@@ -1783,6 +1783,9 @@ fn iter_records(inputs: &[PathBuf], f: &mut dyn FnMut(Value) -> Result<bool>) ->
 pub fn players(inputs: &[PathBuf], formats: &[String]) -> Result<Value> {
     let mut t: BTreeMap<String, HashMap<String, (i64, i64)>> = BTreeMap::new();
     let (mut rated, mut unrated) = (0usize, 0usize);
+    // per format: battles by rating (bins of 50), unrated battles
+    let mut hist: BTreeMap<String, BTreeMap<i64, usize>> = BTreeMap::new();
+    let mut unrated_per: BTreeMap<String, usize> = BTreeMap::new();
     let (n, dup, bad) = iter_records(inputs, &mut |r: Value| {
         let fmt = record_format(&r);
         if !formats.is_empty() && !formats.iter().any(|f| *f == fmt) {
@@ -1790,9 +1793,11 @@ pub fn players(inputs: &[PathBuf], formats: &[String]) -> Result<Value> {
         }
         let Some(x) = record_rating(&r) else {
             unrated += 1;
+            *unrated_per.entry(fmt).or_default() += 1;
             return Ok(true);
         };
         rated += 1;
+        *hist.entry(fmt.clone()).or_default().entry((x as i64).div_euclid(50) * 50).or_default() += 1;
         let m = t.entry(fmt).or_default();
         for p in record_players(&r) {
             let e = m.entry(norm(&p)).or_insert((0, 0));
@@ -1804,7 +1809,8 @@ pub fn players(inputs: &[PathBuf], formats: &[String]) -> Result<Value> {
     let table: BTreeMap<&String, BTreeMap<&String, [i64; 2]>> =
         t.iter().map(|(f, m)| (f, m.iter().map(|(p, &(k, peak))| (p, [k, peak])).collect())).collect();
     Ok(json!({"records": n, "duplicates": dup, "unreadable": bad, "rated": rated, "unrated": unrated,
-              "players": t.iter().map(|(f, m)| (f.clone(), m.len())).collect::<BTreeMap<_, _>>(), "table": table}))
+              "players": t.iter().map(|(f, m)| (f.clone(), m.len())).collect::<BTreeMap<_, _>>(),
+              "rating_hist": hist, "unrated_per_format": unrated_per, "table": table}))
 }
 
 fn load_players(path: &Path) -> Result<HashMap<String, HashMap<String, (i64, i64)>>> {
@@ -2496,6 +2502,8 @@ mod tests {
         assert_eq!(t["bob"], json!([2, 1810]), "the first copy's rating, the duplicate skipped");
         assert_eq!(t["eve"], json!([1, 1810]));
         assert!(v["table"]["gen9uu"].is_null());
+        assert_eq!(v["rating_hist"]["gen9ou"], json!({"1700": 1, "1800": 1, "1400": 1}));
+        assert_eq!(v["unrated_per_format"]["gen9ou"], json!(1));
         let pf = d.join("players.json");
         std::fs::write(&pf, serde_json::to_vec(&v).unwrap()).unwrap();
         let conv = |sel: &Select| {
