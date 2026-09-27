@@ -15,6 +15,8 @@
 //! - [`doudizhu`]: Dou Dizhu (3 players, auction, landlord vs peasants; OpenSpiel's
 //!   `dou_dizhu` + four-with-two), candidate schema with factored kicker decisions.
 //! - [`skat`]: Skat (3 players, ISS rules; converter from the ISS game archive).
+//! - [`shogi`]: shogi (floodgate / CSA rules: the `gmdata shogi` converter's engine, frames
+//!   = its converter_version 2 shards; move-or-drop keys for the shogi adapter).
 //! - [`bridge`]: contract bridge (auction + card play, duplicate scoring; a team game).
 //! - [`hunl`]: heads-up no-limit Texas hold'em (ACPC rules; exact bet amounts in the
 //!   rules, abstracted bet-size candidates for the policy: a custom schema with the
@@ -31,3 +33,4 @@ pub mod pig;
 pub mod chess_variants;
 pub mod xiangqi;
 pub mod skat;
+pub mod shogi;
