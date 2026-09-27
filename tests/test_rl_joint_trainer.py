@@ -330,6 +330,34 @@ def _first_minibatch_ratio(tr):
     return res, canary
 
 
+def test_replay_split_deals_every_game_once_per_minibatch():
+    """--replay_split: over the ranks every replay game once per minibatch, at world x
+    its weight (so the ranks' averaged gradient is the every-game objective), the
+    costly games spread out (longest first to the least loaded rank)."""
+    from types import SimpleNamespace
+
+    from training.train_rl_joint import JointRLTrainer
+
+    weights = {"a": 0.1, "b": 0.2, "c": 0.3, "d": 0.15, "e": 0.25}
+    cost = {"a": 5.0, "b": 1.0, "c": 1.0, "d": 1.0, "e": 1.0}
+    draws = []
+    for rank in range(3):
+        fake = SimpleNamespace(replay=dict.fromkeys(weights), replay_weight=weights,
+                               args=SimpleNamespace(replay_games_per_mb=0, replay_split=1),
+                               world=3, rank=rank, replay_cost=cost)
+        draws.append(JointRLTrainer._replay_draws(fake))
+    games = [g for d in draws for g, _ in d]
+    assert sorted(games) == sorted(weights)                     # each game exactly once
+    for d in draws:
+        for g, scale in d:
+            assert scale == pytest.approx(3 * weights[g])
+    assert [g for g, _ in draws[0]] == ["a"]                    # the costly game alone
+    one = SimpleNamespace(replay=dict.fromkeys(weights), replay_weight=weights,
+                          args=SimpleNamespace(replay_games_per_mb=0, replay_split=1),
+                          world=1, rank=0, replay_cost=cost)
+    assert JointRLTrainer._replay_draws(one) == [(g, w) for g, w in weights.items()]
+
+
 def test_length_chunks():
     from training.train_rl_joint import _length_chunks
 
@@ -641,7 +669,8 @@ def _ddp_worker(rank: int, port: int, root: str, kind: str = "cpu", lrs=(0, 1),
     dev = [] if kind == "cpu" else ["--device", kind, "--dist_backend", "gloo"]
     out = train_rl_joint.main(_args(rootp, save, "--iterations", "2",
                                     "--snapshot_dir", str(rootp / save / "snaps"),
-                                    "--dist_timeout", "3", "--rl_placement", placement, *dev))
+                                    "--dist_timeout", "3", "--rl_placement", placement,
+                                    "--replay_split", str(int(placement == "split")), *dev))
     model, ema, tr = out["model"], out["ema"], out["trainer"]
     torch.save({
         "params": {n: p.detach().clone() for n, p in model.named_parameters()},
@@ -663,8 +692,9 @@ def _ddp_worker(rank: int, port: int, root: str, kind: str = "cpu", lrs=(0, 1),
     pytest.param("cpu", "split")])
 def test_two_gloo_ranks_stay_identical(stage1, kind, placement):
     """Two ranks end bit-identical (params, buffers, EMA, RL statistics, pool) with
-    global logs.  --rl_placement split: each game is rolled out by ONE rank (its whole
-    quota), the other rank holds no stream of it."""
+    global logs.  --rl_placement split (+ --replay_split): each game is rolled out by
+    ONE rank (its whole quota), the other rank holds no stream of it, and each replay
+    game is replayed by one rank per minibatch."""
     ctx = torch.multiprocessing.get_context("spawn")
     port = _free_port()
     lrs = local_ranks(WORLD, kind)

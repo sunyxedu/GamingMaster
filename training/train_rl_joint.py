@@ -343,6 +343,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--replay_games_per_mb", type=int, default=0,
       help="replay games drawn per minibatch by their weights (0 = every game every "
            "minibatch)")
+    a("--replay_split", type=int, default=0,
+      help="multi-GPU: deal each minibatch's replay games (every game once) to the ranks, "
+           "balanced by their measured cost, at world x their weight (the same objective "
+           "as every rank replaying every game, at 1/world of the replay work); 0 = every "
+           "rank replays every game (or its --replay_games_per_mb draws)")
     a("--replay_batch_size", type=int, default=4)
     a("--replay_batch", action="append", default=[], metavar="GAME=N")
     a("--replay_max_len", action="append", default=[], metavar="GAME=N",
@@ -1587,6 +1592,9 @@ class JointRLTrainer:
         #: per-game cost of the latest iteration that played it (rollout + learner
         #: seconds, rank-identical): the --rl_placement split assignment
         self.game_cost: Dict[str, float] = {}
+        #: per-game seconds of one replay batch (the latest measurement, rank-identical):
+        #: the --replay_split assignment
+        self.replay_cost: Dict[str, float] = {}
         self.history: List[Dict[str, Any]] = []
         if a.resume:
             self._load_resume(a.resume)
@@ -1984,6 +1992,19 @@ class JointRLTrainer:
         if not games:
             return []
         K = self.args.replay_games_per_mb
+        if self.args.replay_split and self.world > 1:
+            # every game once per minibatch over the ranks, longest first to the least
+            # loaded rank (rank-identical), at world x weight: the ranks' averaged
+            # gradient is the every-game objective
+            cost = {g: self.replay_cost.get(g, 1.0) for g in games}
+            load = [0.0] * self.world
+            mine = []
+            for g in sorted(games, key=lambda x: (-cost[x], x)):
+                r = min(range(self.world), key=lambda i: (load[i], i))
+                load[r] += cost[g]
+                if r == self.rank:
+                    mine.append((g, self.replay_weight[g] * self.world))
+            return mine
         if K <= 0:
             return [(g, self.replay_weight[g]) for g in games]
         w = [self.replay_weight[g] for g in games]
@@ -2144,6 +2165,9 @@ class JointRLTrainer:
             c = diag.v[g]["rollout_s"] + diag.v[g]["learn_s"]
             if c > 0:
                 self.game_cost[g] = c
+        for g in self.replay:               # the next --replay_split assignment
+            if diag.v[g]["il_n"] > 0 and diag.v[g]["replay_s"] > 0:
+                self.replay_cost[g] = diag.v[g]["replay_s"] / diag.v[g]["il_n"]
         # ---- between iterations ----------------------------------------
         if self.dist_env.enabled:
             allreduce_moe_loads(self.model)
@@ -2294,7 +2318,7 @@ class JointRLTrainer:
                 "advnorm": self.advnorm.state_dict(), "entc": self.entc.state_dict(),
                 "klb": self.klb.state_dict(), "sched": self.sched.state_dict(),
                 "pool": self.pool.state_dict(), "il_baseline": dict(self.il_baseline),
-                "game_cost": dict(self.game_cost),
+                "game_cost": dict(self.game_cost), "replay_cost": dict(self.replay_cost),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -2440,6 +2464,7 @@ class JointRLTrainer:
         self.pool.load_state_dict(st["pool"])
         self.il_baseline = dict(st.get("il_baseline", {}))
         self.game_cost = dict(st.get("game_cost", {}))
+        self.replay_cost = dict(st.get("replay_cost", {}))
         self._load_env_states(st.get("envs"), int(ck.get("world_size", 1)))
         self.iteration = int(st["iteration"])
         self.log(f"[resume] {path}: iteration {self.iteration} (saved with world="
