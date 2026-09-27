@@ -18,6 +18,7 @@
 //! turns them into gm-shards for the multi-game trainers.
 
 mod traj;
+mod arc3;
 mod backgammon;
 mod bridge;
 mod chess;
@@ -61,6 +62,11 @@ enum Game {
     Chess {
         #[command(subcommand)]
         cmd: chess::Cmd,
+    },
+    /// ARC-AGI-3 recordings (the toolkit's *.recording.jsonl: human baselines, agents)
+    Arc3 {
+        #[command(subcommand)]
+        cmd: arc3::Cmd,
     },
     /// Honor of Kings 1v1 (Hokoff offline datasets; `--features hok`)
     Hok {
@@ -157,6 +163,7 @@ enum Game {
 fn main() -> Result<()> {
     match Cli::parse().game {
         Game::Generals { cmd } => generals::run(cmd),
+        Game::Arc3 { cmd } => arc3::run(cmd),
         Game::Hok { cmd } => hok::run(cmd),
         Game::Othello { cmd } => othello::run(cmd),
         Game::Chess { cmd } => chess::run(cmd),

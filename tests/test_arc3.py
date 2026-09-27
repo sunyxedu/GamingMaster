@@ -169,6 +169,31 @@ def test_env_frames_rewards_and_resets():
     assert env.game_of == ["sp80", "vc33"]
 
 
+@needs_sdk
+def test_resets_are_level_resets_and_episodes_start_the_game():
+    """RESET is a level reset even on a fresh level (the competition's rule, and the human
+    baseline recordings'): after vc33's level 1 a RESET — and a second one — keep level 2;
+    a new episode starts from level 1 although the reused SDK wrapper was left at level 2 by
+    a truncated episode."""
+    from env.vec_arc3 import Arc3VecEnv
+
+    env = Arc3VecEnv(1, games=("vc33",), max_actions=6, environments_dir=ENV_DIR)
+    start = env.observe().obs["grid"][0].clone()
+    click = {"type_idx": torch.tensor([6]), "click_idx": torch.tensor([34 * 64 + 62])}
+    for _ in range(3):
+        obs, rew, done, info = env.step(click)
+    assert int(info["levels"][0]) == 1
+    level2 = obs.obs["grid"][0].clone()
+    for k in range(2):                                   # a fresh level: RESET changes nothing
+        obs, rew, done, info = env.step({"type_idx": torch.tensor([0]), "click_idx": torch.tensor([0])})
+        assert int(info["levels"][0]) == 1 and torch.equal(obs.obs["grid"][0], level2), k
+        assert not obs.obs["delta"][0].any()
+    obs, rew, done, info = env.step(click)               # the 6th action: truncated
+    assert bool(info["truncated"][0])
+    obs = env.reset()
+    assert int(env.levels[0]) == 0 and torch.equal(obs.obs["grid"][0], start)
+
+
 # ---------------------------------------------------------------------------
 # solver → shards → IL → RL
 # ---------------------------------------------------------------------------

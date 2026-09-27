@@ -40,6 +40,13 @@ the n-th time in the episode (count-based exploration on the grid's hash; 0 = of
 default).
 A GAME_OVER frame is shown to the policy with RESET as its only legal action (the
 env applies it: ``forced``); the SDK then restarts the current level.
+
+RESET is always a level reset, as in the ARC-AGI-3 competition mode ("Game Resets are not
+allowed and become Level Resets") and in ARC Prize's human baseline recordings (arcengine's
+``ONLY_RESET_LEVELS``): by default the engine restarts the whole game on a RESET at a fresh
+level (no other action since the level began: right after a level-up, a game over's RESET or
+another RESET).  A new episode always starts the game from its first level (the engine's full
+reset; a reused SDK wrapper otherwise kept the level an earlier, truncated episode ended in).
 """
 
 from __future__ import annotations
@@ -72,6 +79,10 @@ def _sdk(environments_dir: Optional[str]):
             f"ENVIRONMENTS_DIR (got {env_dir!r})")
     os.environ["OPERATION_MODE"] = "offline"
     os.environ["ENVIRONMENTS_DIR"] = env_dir
+    # RESET is always a level reset (the competition's rule; arcengine's handle_reset reads
+    # this at every RESET): without it a RESET on a fresh level — no other action since the
+    # level began — restarts the whole game
+    os.environ["ONLY_RESET_LEVELS"] = "true"
     for name in ("arc_agi", "arcengine"):
         logging.getLogger(name).setLevel(logging.WARNING)
     try:
@@ -169,7 +180,11 @@ class Arc3VecEnv(VecEnvBase):
             game = self.games[(i + int(self._resets[i])) % len(self.games)]
             self._resets[i] += 1
             self.game_of[i] = game
-            fd = self._wrapper(i, game).reset()
+            w = self._wrapper(i, game)
+            # a new episode is a new game: the engine's full reset (the SDK's reset() is a
+            # RESET action — a level reset, which would keep a reused wrapper's level)
+            w._game.full_reset()
+            fd = w.reset()
             self.grid[i] = 0
             self._load(i, fd)
             self.delta[i] = False
