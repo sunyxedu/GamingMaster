@@ -331,6 +331,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--replay_batch", action="append", default=[], metavar="GAME=N")
     a("--replay_max_len", action="append", default=[], metavar="GAME=N",
       help="crop replay sequences (generals: its first N frames, as in train_multi_game)")
+    a("--replay_max_len_default", type=int, default=None, metavar="N",
+      help="crop of every replay game without its own --replay_max_len (random windows as "
+           "in pretraining, e.g. 64; games that are never cropped keep their full sequences; "
+           "default: full sequences)")
     a("--replay_tf", action="append", default=[], metavar="GAME=P",
       help="teacher forcing of the replay batches (default train_il_game.default_tf)")
     a("--replay_value_weight", action="append", default=[], metavar="GAME=W",
@@ -1490,8 +1494,8 @@ class JointRLTrainer:
             if g == "generals" and g not in rml:
                 raise SystemExit("--data generals: bound its prefix crop with "
                                  "--replay_max_len generals=N (as train_multi_game)")
-            self.replay[g] = ReplayStream(g, d, rb.get(g, a.replay_batch_size), rml.get(g),
-                                          a.num_workers)
+            self.replay[g] = ReplayStream(g, d, rb.get(g, a.replay_batch_size),
+                                          rml.get(g, a.replay_max_len_default), a.num_workers)
             if a.replay_weight_total > 0:
                 self.replay_weight[g] = (a.replay_weight_total * rel[g] / rel_sum
                                          if rel_sum > 0 else 0.0)
