@@ -17,6 +17,7 @@ use std::marker::PhantomData;
 pub static GAMES: &[&dyn DynGame] = &[
     &Entry::<games::kuhn_poker::KuhnPoker>(PhantomData),
     &Entry::<games::goofspiel::Goofspiel>(PhantomData),
+    &Entry::<games::go::Go>(PhantomData),
     &Entry::<games::pig::Pig>(PhantomData),
     &Entry::<games::breakthrough::Breakthrough>(PhantomData),
     &Entry::<games::chess_variants::ChessVariants>(PhantomData),

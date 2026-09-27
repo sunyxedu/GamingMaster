@@ -3,6 +3,9 @@
 //! - [`kuhn_poker`]: the toy reference game (hidden information, chance, 2-4 players),
 //!   implemented through every layer (converter, shards, adapter, simulator, trainers).
 //! - [`goofspiel`]: the simultaneous-move test game (no converter).
+//! - [`go`]: Go — the rules and frames of `gmdata go convert` (KGS records; the
+//!   converter and its KataGo labeller use this module's board and encoders), Tromp-Taylor
+//!   area scoring for the simulator; placement + pass keys for the PlacementDecoder.
 //! - [`pig`]: the perfect-information dice test game (interleaved layout, no converter).
 //! - [`breakthrough`]: the CUSTOM-schema reference game (a from-to board game for the
 //!   board adapter; the pattern for chess-like games).
@@ -25,6 +28,7 @@ pub mod breakthrough;
 pub mod doudizhu;
 pub mod bridge;
 pub mod goofspiel;
+pub mod go;
 pub mod hunl;
 pub mod kuhn_poker;
 pub mod pig;
