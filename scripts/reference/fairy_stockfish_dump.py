@@ -3,10 +3,10 @@ gmrules game ``chess_variants`` (tests/test_chess_variants_reference.py).  Stand
 runs in its own throw-away uv environment, never in the project one:
 
     # Fairy-Stockfish's own random playouts, every variant
-    uv run --no-project --python 3.12 --with pyffish \\
+    uv run --no-project --python 3.12 --with pyffish==0.0.90 \\
         python scripts/reference/fairy_stockfish_dump.py --playouts 4 --seed 0 --out fsf.json
     # replay move lists (gmrules' random playouts, real lichess games) through it
-    uv run --no-project --python 3.12 --with pyffish \\
+    uv run --no-project --python 3.12 --with pyffish==0.0.90 \\
         python scripts/reference/fairy_stockfish_dump.py --replay ours.json --out fsf.json
 
 ``--replay`` input: ``{"trajectories": [{"key", "variant", "start", "moves"}]}`` —
