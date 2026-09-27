@@ -1273,7 +1273,7 @@ DIAG_KEYS = (
     "ev_n", "ev_g", "ev_g2", "ev_e", "ev_e2",
     "il_sum", "il_n", "rkl_sum", "rkl_n", "rvl_sum",
     "gn_rl", "gn_rl_n", "gn_replay", "gn_replay_n",
-    "learn_s", "learn_fwd", "replay_s",
+    "learn_s", "learn_fwd", "replay_s", "rollout_s", "rollout_steps",
 )
 
 
@@ -1669,6 +1669,7 @@ class JointRLTrainer:
                 r.pool_policy.refresh()
             total = WaveStats()
             wave = 0
+            t_game = time.time()
             while total.tokens < q:
                 opps = {"pool": r.pool_policy} if r.pool_policy is not None else {}
                 league = League(r.env, opps, mirror_prob=r.mirror_prob,
@@ -1688,7 +1689,8 @@ class JointRLTrainer:
             stats[g] = total
             diag.add(g, episodes=total.episodes, ep_len_sum=total.ep_len_sum,
                      score_sum=total.score_sum, score_n=total.score_n, mirror=total.mirror,
-                     streams=len(r.streams))
+                     streams=len(r.streams), rollout_s=time.time() - t_game,
+                     rollout_steps=total.steps)
         return stats
 
     # ------------------------------------------------------------------
@@ -2177,8 +2179,11 @@ class JointRLTrainer:
                     adv_std=self.advnorm.std(g))
             if g in self.rl:
                 row["core_gnorm_rl"] = diag.mean(g, "gn_rl", "gn_rl_n")
-                # per-rank learner seconds / forwards of the epochs (summed over ranks)
-                row.update(learn_s=d["learn_s"] / self.world,
+                # per-rank rollout / learner seconds, env steps and forwards (summed
+                # over ranks)
+                row.update(rollout_s=d["rollout_s"] / self.world,
+                           rollout_steps=d["rollout_steps"] / self.world,
+                           learn_s=d["learn_s"] / self.world,
                            learn_fwd=d["learn_fwd"] / self.world)
             if g in self.replay:
                 il = diag.mean(g, "il_sum", "il_n")
