@@ -314,7 +314,8 @@ pub fn play_events(seat: Seat, play: &Play) -> Vec<Event> {
 impl Game for DouDizhu {
     type Config = DouDizhuConfig;
     const NAME: &'static str = "doudizhu";
-    const VERSION: u32 = 1;
+    /// 2: `scoring = "wp"` values a game nobody bid on 0 (was +1 for every seat).
+    const VERSION: u32 = 2;
 
     fn check_config(cfg: &DouDizhuConfig) -> Result<(), RulesError> {
         if !["standard", "openspiel"].contains(&cfg.rules.as_str()) {
@@ -469,9 +470,12 @@ impl Game for DouDizhu {
     }
 
     fn outcome(&self) -> Vec<f32> {
+        // "wp": the sign of the return, 0 for a game nobody bid on (all returns 0 —
+        // `f64::signum` would make that +1 for every seat)
+        let sign = |x: f64| (x > 0.0) as i8 as f32 - (x < 0.0) as i8 as f32;
         self.returns()
             .iter()
-            .map(|&x| if self.wp { x.signum() as f32 } else { (x / self.score_scale).clamp(-1.0, 1.0) as f32 })
+            .map(|&x| if self.wp { sign(x) } else { (x / self.score_scale).clamp(-1.0, 1.0) as f32 })
             .collect()
     }
 

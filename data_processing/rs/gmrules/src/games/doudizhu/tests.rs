@@ -136,6 +136,13 @@ fn auction_variants() {
     let g = run(&[(1, PASS), (2, PASS), (0, PASS)]);
     assert_eq!(g.turn(), Turn::Terminal);
     assert_eq!((g.returns(), g.outcome()), (vec![0.0; 3], vec![0.0; 3]));
+    // ... worth nothing under "wp" scoring too (not a win for every seat)
+    let wp = DouDizhuConfig { scoring: "wp".into(), ..cfg() };
+    let mut ev = deal(4, hands);
+    ev.extend([Event::Act(1, PASS), Event::Act(2, PASS), Event::Act(0, PASS)]);
+    let r = replay::<DouDizhu>(&wp, &ev).unwrap();
+    assert!(r.terminal());
+    assert_eq!(r.state.outcome(), vec![0.0; 3]);
     // a seat that passed may bid later; the bid must rise
     let g = run(&[(1, PASS), (2, 1), (0, PASS), (1, 2)]);
     let mut legal = Vec::new();
