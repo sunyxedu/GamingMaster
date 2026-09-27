@@ -1993,10 +1993,11 @@ class JointRLTrainer:
                     # first minibatch: each component's shared-core gradient norm
                     probe = _GradProbe(self.core_params) if canary and self.core_params else None
                     t0 = self._clock()
+                    marks = []                  # per-game (key, game, start, end) marks
                     for g in G:
                         idx = plan[m].get(g, [])
                         ss = self.rl[g].streams
-                        tg = self._clock()
+                        mg = self._mark()
                         chunks = self._forward_chunks(g, idx)
                         for chunk in chunks:
                             loss = self._forward_tracked(
@@ -2009,11 +2010,12 @@ class JointRLTrainer:
                                 skipped += 1
                         if probe is not None:
                             diag.add(g, gn_rl=probe.delta_norm(), gn_rl_n=1)
-                        diag.add(g, learn_s=self._clock() - tg, learn_fwd=len(chunks))
+                        marks.append(("learn_s", g, mg, self._mark()))
+                        diag.add(g, learn_fwd=len(chunks))
                     t1 = self._clock()
                     t["rl"] += t1 - t0
                     for g, scale in self._replay_draws():
-                        tg = self._clock()
+                        mg = self._mark()
                         loss = self._forward_tracked(g, diag,
                                                      lambda g=g: self._replay_loss(g, diag))
                         if torch.isfinite(loss):
@@ -2022,10 +2024,12 @@ class JointRLTrainer:
                             skipped += 1
                         if probe is not None:
                             diag.add(g, gn_replay=probe.delta_norm(), gn_replay_n=1)
-                        diag.add(g, replay_s=self._clock() - tg)
+                        marks.append(("replay_s", g, mg, self._mark()))
                     del probe
                     t2 = self._clock()
                     t["replay"] += t2 - t1
+                    for key, g, a, b in marks:          # complete after the sync
+                        diag.add(g, **{key: self._seconds(a, b)})
                     ok, norm = self._step()
                     t["step"] += self._clock() - t2
                     dropped += int(not ok)
@@ -2113,6 +2117,24 @@ class JointRLTrainer:
         if self.iteration % a.log_every == 0:
             self._log(rec)
         return rec
+
+    def _mark(self):
+        """A per-game timing mark without a host sync: a recorded CUDA event (read
+        with :meth:`_seconds` after the phase's :meth:`_clock` sync), or the wall
+        clock on other devices.  Syncing per game would stall the host between
+        replay draws, serialising their data loading with the device's work."""
+        if self.device.type == "cuda":
+            e = torch.cuda.Event(enable_timing=True)
+            e.record()
+            return e
+        return time.time()
+
+    @staticmethod
+    def _seconds(a, b) -> float:
+        """Seconds between two :meth:`_mark` marks (CUDA events: after a sync)."""
+        if isinstance(a, float):
+            return b - a
+        return a.elapsed_time(b) / 1000.0
 
     def _clock(self) -> float:
         """Wall time after the device's queued work (phase timings: the CUDA
