@@ -128,6 +128,7 @@ pub fn parse_jsonl_record(line: &str, fallback_id: &str) -> Result<Record> {
                 })
                 .collect::<Result<Vec<_>>>()?,
         },
+        ..Default::default()
     })
 }
 
@@ -182,7 +183,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
                     }
                 }))
             });
-            let opts = ConvertOptions { shard_size, store_events, allow_truncated, soft_k };
+            let opts = ConvertOptions { shard_size, store_events, allow_truncated, soft_k, ..Default::default() };
             let st = traj::convert_dyn(&game, &config, recs, &out, &opts)?;
             println!("{}", serde_json::to_string(&st)?);
             Ok(())

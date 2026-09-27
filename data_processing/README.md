@@ -69,6 +69,7 @@ behaviour, which is what the golden parity tests pin.
 | Lux AI S3 | `$G lux fetch --top-teams 10` (Kaggle API) | only episodes where both agents are top-10 leaderboard teams | needs `KAGGLE_API_TOKEN` or `~/.kaggle/access_token` |
 | Clash Royale | `crdata fetch --out D` (RoyaleAPI replays, HF) | `crdata convert --hq`: Ranked + Grand Challenge, ≥ 60 s, ≥ 5 own plays; optional `--winner-only` | anonymised (no trophies); see games/clash_royale/README.md |
 | Kuhn poker (toy) | `$G kuhn-poker generate` (synthetic hand logs; `scripts/fetch_kuhn_poker.sh`) | `convert --hq`: the scripted expert's seats only | gmrules reference game (below); rules pinned to OpenSpiel |
+| backgammon | `scripts/fetch_backgammon.sh OUT MATCHES WORKERS` = `$G backgammon generate` (gnubg 2-ply self-play, 7-point matches; our engine runs the matches and checks gnubg's legal list at every move) + `convert` | engine play only (no human corpus): gnubg 2-ply both seats; `convert --soft-k 8 --engine-values` (gnubg's equities / match-winning chances) | gmrules game; rules pinned to gnubg (legal moves, its own match loop). Data: generated here, no third-party records; gnubg (GPL-3.0-or-later) runs as an external process in a throw-away uv env, never linked or vendored |
 
 Measured on real data (kept / seen): chess elite 2021-06 601k / 781k games;
 go KGS 2019-04 202 / 1255; shogi 2025-06-01 158 / 447; othello 2019–21
@@ -295,6 +296,7 @@ uv run pytest tests/test_rust_converters_parity.py \
               tests/test_label_shogi.py tests/test_label_go.py
 uv run pytest tests/test_candidate_*.py tests/test_gmrules_*.py   # gmrules / gmsim / adapters
 GM_REFERENCE=1 uv run pytest tests/test_gmrules_reference.py   # + live OpenSpiel diff
+GM_REFERENCE=1 uv run pytest tests/test_backgammon.py          # + live gnubg diff / match loop
 ```
 
 Real-engine tests run only when the engine is installed (e.g. `STOCKFISH=path`

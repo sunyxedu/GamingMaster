@@ -21,6 +21,7 @@ pub static GAMES: &[&dyn DynGame] = &[
     &Entry::<games::breakthrough::Breakthrough>(PhantomData),
     &Entry::<games::chess_variants::ChessVariants>(PhantomData),
     &Entry::<games::xiangqi::Xiangqi>(PhantomData),
+    &Entry::<games::backgammon::Backgammon>(PhantomData),
 ];
 
 pub fn game_names() -> Vec<&'static str> {

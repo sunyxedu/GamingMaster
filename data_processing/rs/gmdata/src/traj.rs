@@ -22,6 +22,8 @@
 //! tgt.action_probs_idx [T, K] i64   candidate schema, soft_k = K > 0: teacher
 //! tgt.action_probs_val [T, K] f32   distributions (Record::soft_targets) over
 //!                                   candidate indices
+//! tgt.engine_value      [T] f32     with engine_values: the engine's evaluation of the
+//! tgt.engine_value_mask [T] bool    frame's position for its seat (Record::engine_values)
 //! ```
 //!
 //! Legal tensors are not stored (the candidate mask is `obs.action_mask`; custom
@@ -68,6 +70,12 @@ pub struct Record {
     /// samples say `"adjudicated": true` (`Stats::adjudicated`). A replay that does
     /// reach a terminal state must agree with it (else `returns_mismatch`).
     pub final_outcome: Option<Vec<f32>>,
+    /// Engine values (any schema): `(event index of the Act, the acting seat's expected
+    /// outcome in [-1, 1])` — an engine's evaluation of the decision's position in the
+    /// units of `Game::outcome` — written as `tgt.engine_value` / `tgt.engine_value_mask`
+    /// when `ConvertOptions::engine_values` (decisions without an entry: mask false).
+    /// The trainers blend them into the value target (`--engine_value_weight`).
+    pub engine_values: Vec<(usize, f32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -83,11 +91,14 @@ pub struct ConvertOptions {
     /// `tgt.action_probs_val` [T, K] f32 — the most probable K legal actions of each
     /// labelled decision.
     pub soft_k: usize,
+    /// Write the records' engine values (`Record::engine_values`) as
+    /// `tgt.engine_value` [T] f32 / `tgt.engine_value_mask` [T] bool.
+    pub engine_values: bool,
 }
 
 impl Default for ConvertOptions {
     fn default() -> Self {
-        ConvertOptions { shard_size: 1024, store_events: false, allow_truncated: false, soft_k: 0 }
+        ConvertOptions { shard_size: 1024, store_events: false, allow_truncated: false, soft_k: 0, engine_values: false }
     }
 }
 
@@ -178,8 +189,9 @@ fn push_tensor(s: Sample, name: &str, t: &TensorSpec, data: Buf) -> Sample {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stream_sample(spec: &FrameSpec, decisions: &[&Decision], outcome: Option<&[f32]>, meta: Value, allow_truncated: bool,
-                 soft: Option<&Soft>, st: &mut (usize, f64)) -> Sample {
+                 soft: Option<&Soft>, values: Option<&std::collections::HashMap<usize, f32>>, st: &mut (usize, f64)) -> Sample {
     let t = decisions.len();
     let mut obs = Buf::with_capacity(&spec.obs, t);
     let mut target = Buf::with_capacity(&spec.target, t);
@@ -222,6 +234,12 @@ fn stream_sample(spec: &FrameSpec, decisions: &[&Decision], outcome: Option<&[f3
             }
         }
         s = s.i64("tgt.action_probs_idx", &[soft.k], idx).f32("tgt.action_probs_val", &[soft.k], val);
+    }
+    if let Some(values) = values {
+        let v: Vec<Option<f32>> = decisions.iter().map(|d| values.get(&d.event).copied()).collect();
+        s = s
+            .f32("tgt.engine_value", &[], v.iter().map(|x| x.unwrap_or(0.0)).collect())
+            .bool("tgt.engine_value_mask", &[], v.iter().map(Option::is_some).collect());
     }
     s
 }
@@ -278,6 +296,10 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
         k: opts.soft_k,
         by_event: rec.soft_targets.iter().map(|(e, d)| (*e, d.as_slice())).collect(),
     });
+    if let Some(&(e, v)) = rec.engine_values.iter().find(|(_, v)| !(v.is_finite() && (-1.0..=1.0).contains(v))) {
+        return Err(Reject::Illegal(format!("engine value {v} of event {e} is not in [-1, 1]")));
+    }
+    let values = opts.engine_values.then(|| rec.engine_values.iter().copied().collect::<std::collections::HashMap<usize, f32>>());
     let mut soft_st = (0usize, 0.0f64);
     let mut out = Vec::new();
     let (mut frames, mut forced) = (0, 0);
@@ -308,7 +330,7 @@ fn record_samples(r: std::result::Result<DynReplay, String>, rec: &Record, opts:
             meta["events"] = ev.clone();
         }
         out.push(stream_sample(spec, &decisions, outcome.as_deref(), meta, opts.allow_truncated, soft.as_ref(),
-                               &mut soft_st));
+                               values.as_ref(), &mut soft_st));
     }
     if out.is_empty() {
         return Err(Reject::Empty);
@@ -321,6 +343,9 @@ fn check_options(spec: &FrameSpec, opts: &ConvertOptions) -> Result<()> {
     if opts.soft_k > 0 && !spec.is_candidate() {
         anyhow::bail!("soft targets (--soft-k) are candidate-index distributions; schema {:?} labels its heads through \
                        its own target tensors (or gmdata label overlays)", spec.schema);
+    }
+    if opts.engine_values && spec.target.iter().any(|t| t.name.starts_with("engine_value")) {
+        anyhow::bail!("schema {:?} declares an engine_value* target of its own", spec.schema);
     }
     Ok(())
 }
@@ -434,15 +459,16 @@ mod tests {
             e
         };
         let recs = vec![
-            Record { id: "a".into(), events: ev([1, 2], &[0, 1, 1]), meta: json!({"x": 1}), seats: None, expected_returns: Some(vec![-2.0, 2.0]), soft_targets: vec![(3, vec![(0, 0.25), (1, 0.75)]), (4, vec![(1, 1.0), (7, 0.5)])], final_outcome: None },
+            Record { id: "a".into(), events: ev([1, 2], &[0, 1, 1]), meta: json!({"x": 1}), seats: None, expected_returns: Some(vec![-2.0, 2.0]), soft_targets: vec![(3, vec![(0, 0.25), (1, 0.75)]), (4, vec![(1, 1.0), (7, 0.5)])], final_outcome: None, engine_values: vec![(2, -0.5), (3, 0.25)] },
             Record { id: "b".into(), events: ev([1, 2], &[0, 1]), meta: Value::Null, seats: None, expected_returns: None, ..Default::default() },
             Record { id: "c".into(), events: ev([1, 1], &[]), meta: Value::Null, seats: None, expected_returns: None, ..Default::default() },
             Record { id: "d".into(), events: ev([2, 0], &[1, 0]), meta: Value::Null, seats: Some(vec![1]), expected_returns: Some(vec![9.0, -1.0]), ..Default::default() },
             Record { id: "e".into(), events: ev([2, 0], &[1, 0]), meta: Value::Null, seats: Some(vec![1]), expected_returns: None, ..Default::default() },
+            Record { id: "f".into(), events: ev([2, 0], &[1, 0]), engine_values: vec![(2, 1.5)], ..Default::default() },
         ];
-        let opts = ConvertOptions { store_events: true, soft_k: 2, ..Default::default() };
+        let opts = ConvertOptions { store_events: true, soft_k: 2, engine_values: true, ..Default::default() };
         let st = convert::<KuhnPoker>(&cfg, recs.into_iter().map(Ok), &dir, &opts).unwrap();
-        assert_eq!((st.records, st.converted, st.truncated, st.illegal, st.returns_mismatch), (5, 2, 1, 1, 1));
+        assert_eq!((st.records, st.converted, st.truncated, st.illegal, st.returns_mismatch), (6, 2, 1, 2, 1));
         assert_eq!(st.samples, 3);
         let sh = ShardReader::open(&dir.join("kuhn_poker_00000")).unwrap();
         assert_eq!(sh.meta()["layout"], "per_seat");
@@ -466,6 +492,10 @@ mod tests {
         // frames: [seat0 pass (event 2), seat0 call (event 4)], [seat1 bet (event 3)]
         assert_eq!(idx[..6], [-1, -1, 1, -1, 1, 0]);
         assert_eq!(val[..6], [0.0, 0.0, 1.0, 0.0, 0.75, 0.25]);
+        // engine values: record a's events 2 (seat 0) and 3 (seat 1); event 4 has none;
+        // record f's value 1.5 is out of range (rejected as illegal)
+        assert_eq!(sh.read_f32("tgt.engine_value").unwrap()[..3], [-0.5, 0.0, 0.25]);
+        assert_eq!(sh.read_bool("tgt.engine_value_mask").unwrap()[..3], [true, false, true]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
