@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+# maturin behind a thin in-tree shim that finds a user-level rustup (~/.cargo/bin)
+# when cargo is not on PATH (gmsim_build.py)
+build-backend = "gmsim_build"
+backend-path = ["."]
+
+[project]
+name = "gmsim"
+version = "0.1.0"
+description = "GamingMaster batched simulators of gmrules games (PyO3 extension, abi3)"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = ["numpy"]
+
+[tool.maturin]
+# mixed Rust/Python package: python/gmsim/ + the extension gmsim._native
+python-source = "python"
+module-name = "gmsim._native"
+manifest-path = "Cargo.toml"
+
+[tool.uv]
+# rebuild the wheel whenever the Rust sources (this crate or gmrules) change
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "gmsim_build.py" },
+    { file = "Cargo.toml" },
+    { file = "src/**/*.rs" },
+    { file = "python/**/*.py" },
+    { file = "../gmrules/Cargo.toml" },
+    { file = "../gmrules/src/**/*.rs" },
+]

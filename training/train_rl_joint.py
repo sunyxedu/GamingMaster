@@ -122,7 +122,14 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 
 from data_processing.games.dataset import collate_game_sequences, training_sampler
-from env.league import League, PoolPolicy, SnapshotPool, StreamStepper, scatter_rows
+from env.league import (
+    League,
+    PoolPolicy,
+    SnapshotPool,
+    StreamStepper,
+    restart_streams,
+    scatter_rows,
+)
 from env.vec_game import VecGameEnv, VecObs, has_simulator, make_vec_env
 from model.components.core import (
     MoEFFN,
@@ -134,6 +141,7 @@ from model.components.core import (
 from model.components.heads import HLGaussValueHead
 from model.config import checkpoint_config_dict
 from model.games.base import categorical_entropy, masked_log_prob
+from model.games.gmrules import resolve, rules_games
 from model.multi_game import MultiGameNetwork, core_config_overrides, is_core_key
 from model.optim import TRM_BETAS, AdamATan2, ModelEMA
 from model.rl_utils import sync_gradients
@@ -445,6 +453,13 @@ class RLGameSpec:
     def kl_terms(self, net, pred, tgt, mask, legal) -> Dict[str, Dict]:
         return net.action_decoder.il_head_terms(pred, tgt, mask)
 
+    def rollout_legal(self, legal: Dict[str, torch.Tensor],
+                      out: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """The ``legal`` dict stored with the learner's frames for the replay: the
+        env's (default), or a compact equivalent derived from the actor's outputs
+        ``out`` (its sample() keys) that replays the rollout exactly."""
+        return legal
+
 
 class ForcedPassPlacementSpec(RLGameSpec):
     """Placement games whose passes are rules-forced (othello): the env
@@ -619,12 +634,110 @@ class LuxSpec(RLGameSpec):
         return terms
 
 
+class CandidateSpec(RLGameSpec):
+    """Candidate-action games (gmrules: env/vec_gmsim.py +
+    model/games/candidate.py) — the GENERIC spec of every such game.  The action
+    is one categorical over the frame's legal candidates: μ = ``sample()``'s
+    ``action_log_prob`` and the policy ``log_prob_entropy``, both masked by the
+    frame's candidate mask (the decoder's decode context) ∧ ``legal["action"]``;
+    nothing to teacher-force; the KL is exact over every legal candidate (the
+    decoder's ``action`` head).  Forced frames (one candidate) carry no policy
+    loss.  The env is configured by ``--env_kw <game>:key=value`` (the gmrules
+    game config, e.g. ``kuhn_poker:players=3``) and checked against the network's
+    frame dimensions.  Per-seat games are not lockstep: use ``--actor stream``."""
+
+    full_kl = True
+
+    def check_env(self, env, net):
+        from model.games.gmrules import CANDIDATE_META_ARCH
+
+        spec = getattr(env, "spec", None)
+        # the candidate schema, or a custom one with its layout (e.g. an abstracted
+        # action space: exact bets in the rules, discretised sizes as candidates)
+        need = {"entities", "entity_mask", "globals", "actions", "action_mask"}
+        if (spec is None or not need <= {t["name"] for t in spec["obs"]}
+                or spec["action_keys"] != ["action_idx"]
+                or not set(CANDIDATE_META_ARCH) <= set(spec["meta"])):
+            raise SystemExit(f"{env.game}: not a candidate-action gmsim env (env/vec_gmsim.py)")
+        meta = spec["meta"]
+        bad = {k: (meta[k], getattr(net.cfg, f[0], None)) for k, f in CANDIDATE_META_ARCH.items()
+               if meta[k] != getattr(net.cfg, f[0], None)}
+        if bad:
+            raise SystemExit(f"{env.game} env {env.config} emits frames {{dim: (env, network)}} "
+                             f"{bad}: the network was trained on another variant")
+
+    def kl_targets(self, actions, forced, cfg):
+        return {"action_idx": actions["action_idx"].long()}
+
+
+class FromToSpec(RLGameSpec):
+    """From-to decoder games (model/games/board.py FromToDecoder on a gmrules custom
+    schema: env/vec_gmsim.py legal ``from`` / ``to_cond`` (/ ``promotion_cond``),
+    action keys ``from_idx`` / ``to_idx`` (/ ``promotion``) — breakthrough, chess
+    variants, xiangqi, ...) — the GENERIC spec of such games.  The rollout commits
+    from → to (→ promotion) under the env's exact tables; the replay teacher-forces
+    the stored from / to (``labels``), so the to / promotion heads condition exactly
+    as in the rollout, under the masks the rollout sampled with (FromToDecoder.sample's
+    ``legal_from`` / ``legal_to`` / ``legal_promotion``, stored as ``from`` / ``to_of``
+    / ``promotion_of`` — [N] per frame instead of the env's [N, N] tables): log π_old
+    = μ.  The KL covers every head (``il_head_terms``: from, to | stored from,
+    promotion | stored from / to) under those masks.  The env is checked against the
+    network's board (``board_seq`` [piece_channels, board_h, board_w], globals)."""
+
+    full_kl = True
+
+    def check_env(self, env, net):
+        cfg = net.cfg
+        schema = env.obs_schema()
+        if "board_seq" not in schema:
+            raise SystemExit(f"{env.game}: FromToSpec needs a board_seq observation")
+        have = tuple(schema["board_seq"][0])
+        want = (cfg.piece_channels, cfg.board_h, cfg.board_w)
+        g = schema["globals_seq"][0][0] if "globals_seq" in schema else 0
+        if have != want or g != getattr(cfg, "board_global_features", 0):
+            raise SystemExit(f"{env.game} env emits board_seq {have} / {g} globals, the network "
+                             f"expects {want} / {getattr(cfg, 'board_global_features', 0)} "
+                             f"(piece_channels, board_h, board_w / board_global_features)")
+
+    def rollout_legal(self, legal, out):
+        from model.games.board import fromto_replay_legal
+
+        stored = fromto_replay_legal(out)
+        return stored if "from" in stored and "to_of" in stored else legal
+
+    def labels(self, actions, cfg):
+        return {"from_idx": actions["from_idx"].long(), "to_idx": actions["to_idx"].long()}
+
+    def kl_targets(self, actions, forced, cfg):
+        tgt = {"from_idx": actions["from_idx"].long(), "to_idx": actions["to_idx"].long()}
+        if "promotion" in actions:
+            tgt["promotion"] = actions["promotion"].long()
+        return tgt
+
+
 GAME_SPECS: Dict[str, RLGameSpec] = {
     "generals": GeneralsSpec(),
     "othello": ForcedPassPlacementSpec(),
     "gomoku": GomokuSpec(),
     "lux": LuxSpec(),
 }
+
+
+def _spec_factory(ref) -> Callable[[], RLGameSpec]:
+    """A RulesGame ``rl_spec`` reference; ``"training.train_rl_joint:X"`` resolves
+    here (no second import of this module when it runs as ``__main__``)."""
+    if isinstance(ref, str) and ref.startswith("training.train_rl_joint:"):
+        return globals()[ref.split(":", 1)[1]]
+    return resolve(ref)
+
+
+# every gmrules game (model/games/gmrules/): its own spec, else the generic
+# candidate spec (custom schemas without one fall back to game_spec's rules)
+for _game, _entry in rules_games().items():
+    if _entry.rl_spec is not None:
+        GAME_SPECS.setdefault(_game, _spec_factory(_entry.rl_spec)())
+    elif _entry.is_candidate:
+        GAME_SPECS.setdefault(_game, CandidateSpec())
 
 
 def game_spec(game: str) -> RLGameSpec:
@@ -735,7 +848,7 @@ class LearnerActor:
                 if rows.numel() == 0:
                     return {}
                 streams = obs.stream_id[rows].tolist()
-                restart = [s for s, ne in zip(streams, obs.new_episode[rows].tolist()) if ne]
+                restart = restart_streams(obs, rows)
                 if restart:
                     self.stepper.reset(restart)
                 with _autocast(self.device, self.bf16):
@@ -829,6 +942,7 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
     st = WaveStats(mirror=int(league.is_mirror().sum()))
     winner = torch.full((env.num_envs,), -1, dtype=torch.long)
     ep_len = torch.zeros(env.num_envs, dtype=torch.long)
+    last: Dict[int, Tuple[int, int]] = {}    # row → (record, position) of its latest frame
     try:
         while bool(obs.active.any()):
             if st.steps >= max_steps:
@@ -848,12 +962,30 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
                 recs.append({
                     "rows": rows.clone(),
                     "obs": {k: v[rows] for k, v in obs.obs.items()},
-                    "legal": {k: v[rows] for k, v in obs.legal.items()},
+                    "legal": actor.spec.rollout_legal({k: v[rows] for k, v in obs.legal.items()},
+                                                      out),
                     "actions": {k: v.cpu() for k, v in acts.items()},
                     "mu": out["mu"], "value": out["value"],
                     "seat": obs.to_play[rows].long(), "vmask": acting.bool(),
                     "pmask": pmask.bool(), "forced": obs.forced[rows].bool(),
                     "rewards": rew[env_rows].float(), "done": done[env_rows].bool()})
+                for pos, r in enumerate(rows.tolist()):
+                    last[r] = (len(recs) - 1, pos)
+            # per-seat streams of alternating games (env/vec_gmsim.py): a learner
+            # row idle on this step (another seat moved) still earns its seat's reward
+            # and sees its episode end — credited to its latest frame.  A no-op for
+            # layouts whose learner rows act on every step of their episode (skipped
+            # for lockstep envs: every env but those per-seat gmrules games).
+            if not getattr(env, "lockstep", True):
+                earned = ((rew != 0).any(-1) | done)[obs.env_id] & league.learner_streams(obs)
+                if rows.numel():
+                    earned[rows] = False
+                for r in earned.nonzero().squeeze(1).tolist():
+                    if r in last:
+                        k, pos = last[r]
+                        e = int(obs.env_id[r])
+                        recs[k]["rewards"][pos] += rew[e].float()
+                        recs[k]["done"][pos] |= bool(done[e])
             winner = torch.where(done, info["winner"].long(), winner)
             ep_len = torch.where(done, info["episode_len"].long(), ep_len)
             league.update(nxt)
@@ -1161,6 +1293,10 @@ class JointRLTrainer:
                                **kw)
             if env.autoreset:
                 raise SystemExit(f"{g}: the trainer's lockstep waves need autoreset off")
+            if a.actor == "fixed" and not getattr(env, "lockstep", True):
+                raise SystemExit(f"{g}: --actor fixed steps every row at one frame index, but "
+                                 f"this env's per-seat streams advance separately (seats act "
+                                 f"on different turns); use --actor stream")
             spec.check_env(env, net)
             actor = LearnerActor(net, spec, self.depth, device, bf16=a.bf16, mode=a.actor,
                                  cuda_graph=a.cuda_graph)

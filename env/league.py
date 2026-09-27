@@ -30,7 +30,11 @@ opponents' actions in.  The league releases its opponents' streams when an
 env ends or changes hands; the learner's own streams are the caller's.
 
 Rollouts are meant to run in lockstep (see env/vec_game.py): then each
-network policy makes ONE batched ``step`` call per env step.
+network policy makes ONE batched ``step`` call per env step.  Per-seat streams of
+alternating gmrules games (env/vec_gmsim.py, ``lockstep = False``) are idle
+on the other seats' turns: a stream restarts on ``new_episode`` or at its first
+frame (``step_idx`` 0, :func:`restart_streams`) and is released when its ENV's
+episode ends, never merely because the row is inactive for a step.
 
 Snapshot league: :class:`SnapshotPool` (frozen copies of past learners; with
 ``store_dir`` one file each and only ids / meta in ``state_dict``) +
@@ -70,6 +74,25 @@ def release(policy: Policy, streams: Sequence[int]) -> None:
     fn = getattr(policy, "release_streams", None)
     if fn is not None and len(streams):
         fn(streams)
+
+
+def restart_streams(obs: VecObs, rows: torch.Tensor) -> List[int]:
+    """Streams of ``rows`` whose temporal state must restart: ``new_episode``, or
+    the stream's first frame (``step_idx`` 0) — per-seat streams of alternating
+    gmrules games get their first frame after the env's reset step."""
+    ne = obs.new_episode[rows] | (obs.step_idx[rows] == 0)
+    return obs.stream_id[rows][ne].tolist()
+
+
+def env_streams(obs: VecObs, envs) -> List[int]:
+    """Every stream of the envs ``envs`` (iterable of env ids)."""
+    envs = torch.as_tensor(sorted(envs), dtype=torch.long)
+    return obs.stream_id[torch.isin(obs.env_id, envs.to(obs.env_id.device))].tolist()
+
+
+def live_envs(obs: VecObs) -> set:
+    """Envs whose episode is still running (some row has a frame)."""
+    return set(obs.env_id[obs.active].tolist())
 
 
 def scatter_rows(actions: Mapping[str, torch.Tensor], rows: torch.Tensor,
@@ -338,7 +361,7 @@ class NetworkPolicy:
     def __call__(self, obs: VecObs, rows: torch.Tensor) -> Dict[str, torch.Tensor]:
         rows = torch.as_tensor(rows, dtype=torch.long).reshape(-1)
         streams = obs.stream_id[rows].tolist()
-        restart = [s for s, ne in zip(streams, obs.new_episode[rows].tolist()) if ne]
+        restart = restart_streams(obs, rows)
         if restart:
             self.stepper.reset(restart)
         with _eval_mode(self.net, self.greedy):
@@ -729,10 +752,16 @@ class League:
         """[R, S] learner seats of each row's env (on the VecObs device)."""
         return self.learner_seats.to(obs.env_id.device)[obs.env_id]
 
+    def learner_streams(self, obs: VecObs) -> torch.Tensor:
+        """[R] bool: rows whose stream the learner plays on, active or not (a
+        per-seat stream of an alternating game is idle on the other seats' turns
+        but still earns its seat's rewards)."""
+        return (obs.stream_seats & self._seats(obs)).any(-1)
+
     def learner_rows(self, obs: VecObs) -> torch.Tensor:
         """[R] bool: active rows whose stream the learner plays on (its network
         must process them, acting or not)."""
-        return obs.active & (obs.stream_seats & self._seats(obs)).any(-1)
+        return obs.active & self.learner_streams(obs)
 
     def learner_acting(self, obs: VecObs) -> torch.Tensor:
         """[R] bool: active rows where the learner is to play — its action is
@@ -831,12 +860,16 @@ def play_episodes(env: VecGameEnv, league: League, learner: Policy, *,
         while bool(obs.active.any()) and (max_steps is None or steps < max_steps):
             rows = league.learner_rows(obs).nonzero().squeeze(1)
             la = scatter_rows(learner(obs, rows), rows, obs.n_rows) if rows.numel() else {}
-            was_active = obs.active
+            was_live = live_envs(obs)
             obs, _, done, info = env.step(league.act(obs, la))
             winner = torch.where(done, info["winner"], winner)
             episode_len = torch.where(done, info["episode_len"], episode_len)
             league.update(obs)
-            release(learner, obs.stream_id[was_active & ~obs.active].tolist())
+            # streams of envs whose episode ended (a per-seat row that merely waits
+            # for another seat's turn keeps its state)
+            ended = was_live - live_envs(obs)
+            if ended:
+                release(learner, env_streams(obs, ended))
             steps += 1
     finally:
         # max_steps cut-offs / errors: nothing keeps per-stream state

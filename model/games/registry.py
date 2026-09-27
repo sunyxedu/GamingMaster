@@ -6,10 +6,14 @@ the game's ObservationEncoder / ActionDecoder.  Builders import lazily so
 importing one game never pays for the others.
 
 Register new games here (or call :func:`register_game` from plugin code).
+gmrules games register themselves: every module of model/games/gmrules/ becomes
+an entry (:func:`_register_rules_games`) — the candidate-action adapter, or the
+entry's own ``builder`` for a custom schema.
 """
 
 from __future__ import annotations
 
+import functools
 from typing import Callable, Dict
 
 import torch.nn as nn
@@ -179,6 +183,38 @@ GAME_REGISTRY: Dict[str, Callable[..., nn.Module]] = {
     "hearthstone": _build_hearthstone,
     "starcraft": _build_starcraft,
 }
+
+
+def _build_rules_game(game: str, **overrides) -> nn.Module:
+    """A gmrules game (model/games/gmrules/<game>.py): the generic candidate-action
+    adapter (model/games/candidate.py), or the entry's own builder."""
+    from model.games.gmrules import resolve, rules_games
+
+    entry = rules_games()[game]
+    if entry.is_candidate:
+        from model.games.candidate import build_candidate_network
+
+        return build_candidate_network(game, **overrides)
+    # precedence: overrides (incl. a fresh IL run's shard meta) > the entry's config >
+    # the simulator's spec meta for its sim_config (the meta_arch keys)
+    keys = [k for ks in entry.meta_arch_keys().values() for k in ks]
+    base = {}
+    if keys and not all(k in entry.config or k in overrides for k in keys):
+        base = entry.sim_dims()
+    return resolve(entry.builder)(**{**base, **entry.config, **overrides})
+
+
+def _register_rules_games() -> None:
+    """Every game of model/games/gmrules/ (discovered: no edit here per game)."""
+    from model.games.gmrules import rules_games
+
+    for name in rules_games():
+        if name in GAME_REGISTRY:
+            raise ValueError(f"gmrules game {name!r} clashes with a registered game")
+        GAME_REGISTRY[name] = functools.partial(_build_rules_game, name)
+
+
+_register_rules_games()
 
 
 def register_game(name: str, builder: Callable[..., nn.Module]) -> None:

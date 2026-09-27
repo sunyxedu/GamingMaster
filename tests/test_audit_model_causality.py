@@ -43,6 +43,7 @@ import torch
 import torch.nn as nn
 
 from model.games import GAME_REGISTRY, build_game_network
+from model.games.gmrules import rules_games
 from training.train_il_game import LABEL_KEYS, STATE_LABEL_KEYS
 
 B, T = 3, 7
@@ -76,9 +77,22 @@ GAME_OVERRIDES = {
 #: games with a normalised conv encoder (cfg.encoder_norm): per-frame GroupNorm
 #: by default, BatchNorm2d on batch statistics in train mode under "batch"
 CONV_ENCODER_GAMES = frozenset({"generals", "chess", "go", "othello", "gomoku", "shogi", "lux",
-                                "clash_royale", "starcraft"})
+                                "clash_royale", "starcraft", "breakthrough"})
 #: cfg.encoder_norm values: the default, and the legacy layout
 NORMS = ("group", "batch")
+
+# gmrules games (model/games/gmrules/): the candidate-action ones go through the
+# generic candidate branches below (dims = their simulator's spec); custom schemas
+# need their own entry (breakthrough: the from-to board branch, like chess)
+GAME_OVERRIDES.update({g: {} for g in rules_games()})
+GAME_OVERRIDES["breakthrough"] = dict(board_h=6, board_w=6)
+
+#: from-to decoder games (legal from / to_of, labels from_idx / to_idx)
+FROMTO_GAMES = frozenset({"chess", "breakthrough"})
+
+def _is_candidate(game: str) -> bool:
+    entry = rules_games().get(game)
+    return entry is not None and entry.is_candidate
 
 
 # ---------------------------------------------------------------------------
@@ -94,10 +108,21 @@ def _mask(g, *shape, p=0.5):
 def _obs(game: str, cfg, g: torch.Generator) -> Dict[str, torch.Tensor]:
     r = lambda *s: torch.randn(B, T, *s, generator=g)            # noqa: E731
     bits = lambda *s: (torch.rand(B, T, *s, generator=g) < 0.3).float()   # noqa: E731
+    if _is_candidate(game):
+        E, A = cfg.cand_max_entities, cfg.cand_max_actions
+        em = _mask(g, B, T, E, p=0.7)
+        am = torch.arange(A) < torch.randint(1, A + 1, (B, T, 1), generator=g)
+        o = {"entities": r(E, cfg.cand_entity_features) * em.unsqueeze(-1), "entity_mask": em,
+             "globals": r(cfg.cand_global_features),
+             "actions": r(A, cfg.cand_action_features) * am.unsqueeze(-1), "action_mask": am}
+        if cfg.cand_entity_types > 0:
+            o["entity_type"] = torch.randint(0, cfg.cand_entity_types, (B, T, E),
+                                             generator=g).int() * em
+        return o
     if game == "generals":
         grid = torch.rand(B, T, cfg.grid_channels, cfg.grid_h, cfg.grid_w, generator=g)
         return {"grid_seq": grid, "globals_seq": r(cfg.global_features)}
-    if game in ("chess", "go", "othello", "gomoku"):
+    if game in ("chess", "go", "othello", "gomoku", "breakthrough"):
         o = {"board_seq": bits(cfg.piece_channels, cfg.board_h, cfg.board_w)}
         if cfg.board_global_features:
             o["globals_seq"] = r(cfg.board_global_features)
@@ -158,13 +183,19 @@ def _obs(game: str, cfg, g: torch.Generator) -> Dict[str, torch.Tensor]:
 
 def _legal(game: str, cfg, obs, g) -> Optional[Dict[str, torch.Tensor]]:
     m = lambda *s: _mask(g, B, T, *s)                           # noqa: E731
+    if _is_candidate(game):
+        # ANDed with the frame's own candidate mask (slot 0 always legal)
+        return {"action": obs["action_mask"] & m(cfg.cand_max_actions)}
     if game == "generals":
         return {"source": m(1, cfg.grid_h * cfg.grid_w).reshape(B, T, 1, cfg.grid_h, cfg.grid_w),
                 "direction": _mask(g, B, T, cfg.grid_h, cfg.grid_w, 4).permute(0, 1, 4, 2, 3)}
-    if game in ("chess", "go", "othello", "gomoku", "shogi"):
+    if game in ("chess", "go", "othello", "gomoku", "shogi", "breakthrough"):
         N = cfg.board_h * cfg.board_w
-        if game == "chess":
-            return {"from": m(N), "to_of": m(N), "promotion_of": m(cfg.n_promotions)}
+        if game in FROMTO_GAMES:
+            lg = {"from": m(N), "to_of": m(N)}
+            if cfg.n_promotions > 1:
+                lg["promotion_of"] = m(cfg.n_promotions)
+            return lg
         if game == "shogi":
             return {"mode": m(2), "from": m(N), "to_of": m(N), "promo_of": m(2),
                     "drop_piece": m(2 * cfg.n_hand_piece_types), "drop_to_of": m(N)}
@@ -206,7 +237,7 @@ def _label_highs(game: str, cfg) -> Dict[str, int]:
     """Exclusive upper bound of every teacher-forcing label of LABEL_KEYS[game]."""
     if game == "generals":
         return {"source_y": cfg.grid_h, "source_x": cfg.grid_w}
-    if game == "chess":
+    if game in FROMTO_GAMES:
         N = cfg.board_h * cfg.board_w
         return {"from_idx": N, "to_idx": N}
     if game == "shogi":
@@ -550,7 +581,7 @@ def test_legal_masks_condition_their_own_frame_only(game, mode):
 # (e) decode context: per-frame function of the frame's own obs
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("game", ["lux", "clash_royale"])
+@pytest.mark.parametrize("game", ["lux", "clash_royale", "kuhn_poker"])
 def test_decode_context_is_per_frame(game):
     net = _net(game)
     enc = net.obs_encoder
@@ -564,7 +595,8 @@ def test_decode_context_is_per_frame(game):
         for k in ctx:
             assert torch.equal(ctx[k][:, t], c2[k][:, t]), (game, k, t)
     # which obs keys it reads: only the acting player's own view
-    reads = {"lux": {"units_seq", "unit_mask"}, "clash_royale": {"globals_seq"}}[game]
+    reads = {"lux": {"units_seq", "unit_mask"}, "clash_royale": {"globals_seq"},
+             "kuhn_poker": {"action_mask"}}[game]
     for k in obs:
         o = dict(obs)
         o[k] = obs2[k]
@@ -608,6 +640,7 @@ def _conditioned_on_sample(game: str, key: str) -> bool:
     first = {"generals": ("source_logits",),
              "chess": ("from_logits",), "shogi": ("mode_logit", "mode_logits", "from_logits",
                                                   "piece_logits"),
+             "breakthrough": ("from_logits",),
              "starcraft": ("type_logits",), "hearthstone": ("type_logits",),
              "clash_royale": ("wait_logits", "card_logits"), "mahjong": ("type_logits",),
              # the move / switch heads condition on the sampled type; tera does not

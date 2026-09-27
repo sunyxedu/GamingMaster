@@ -6,6 +6,10 @@
 //!
 //!     gmdata label chess --input data/chess --out data/chess_sf --engine ~/gm-engines/bin/stockfish
 //!
+//! Games whose rules live in `gmrules` (e.g. `kuhn-poker`) parse their source into
+//! trajectories and convert through `traj.rs` (replay with the simulator's rules and
+//! encoders); `gmdata rules ...` converts any registered gmrules game by name.
+//!
 //! Converters write `gm-shard.v1` directories (see the `gmshard` crate); `gmdata label`
 //! adds engine teacher columns to existing shards as overlay shards (see `label/mod.rs`);
 //! `python -m data_processing.games.rs_shards` turns them into `.pt` shards
@@ -13,6 +17,7 @@
 //! training records (read by `SeqReplayDataset`); `gmdata generals shard`
 //! turns them into gm-shards for the multi-game trainers.
 
+mod traj;
 mod chess;
 mod common;
 mod generals;
@@ -20,9 +25,11 @@ mod go;
 mod lux;
 mod mahjong;
 mod gomoku;
+mod kuhn_poker;
 mod label;
 mod othello;
 mod pokemon;
+mod rules;
 mod shogi;
 
 use anyhow::Result;
@@ -82,6 +89,16 @@ enum Game {
         #[command(subcommand)]
         cmd: gomoku::Cmd,
     },
+    /// Kuhn poker (the toy reference game of the gmrules / candidate-action framework)
+    KuhnPoker {
+        #[command(subcommand)]
+        cmd: kuhn_poker::Cmd,
+    },
+    /// Generic tools for every gmrules game: list, check, random-play / JSONL → shards
+    Rules {
+        #[command(subcommand)]
+        cmd: rules::Cmd,
+    },
     /// Engine teacher labels for existing gm-shards (overlay shards; see label/mod.rs)
     Label {
         #[command(subcommand)]
@@ -100,6 +117,8 @@ fn main() -> Result<()> {
         Game::Mahjong { cmd } => mahjong::run(cmd),
         Game::Pokemon { cmd } => pokemon::run(cmd),
         Game::Shogi { cmd } => shogi::run(cmd),
+        Game::KuhnPoker { cmd } => kuhn_poker::run(cmd),
+        Game::Rules { cmd } => rules::run(cmd),
         Game::Label { cmd } => label::run(cmd),
     }
 }
