@@ -599,6 +599,16 @@ mod tests {
         assert_eq!(sh.samples[1].meta["returns"], json!([-1.0, 1.0]));
         assert!(sh.index["tensors"].get("tgt.value_mask").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
+        // a record carrying BOTH a concession and a recorded result (the two mechanisms of
+        // games that end off the rules): the concession ends the game and is the value;
+        // the recorded result must agree with it; counted once, as conceded
+        let both = |id: &str, f: Vec<f32>| Record { final_outcome: Some(f), ..rec(id, &[0, 1], Some(c.clone()), None) };
+        let recs = vec![both("agree", vec![-0.5, 0.5]), both("disagree", vec![-1.0, 1.0])];
+        let st = convert::<KuhnPoker>(&cfg, recs.into_iter().map(Ok), &dir, &ConvertOptions::default()).unwrap();
+        assert_eq!((st.converted, st.conceded, st.adjudicated, st.returns_mismatch), (1, 1, 0, 1), "{st:?}");
+        let sh = ShardReader::open(&dir.join("kuhn_poker_00000")).unwrap();
+        assert_eq!(sh.read_f32("tgt.value").unwrap(), vec![-0.5, 0.5]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
 }
