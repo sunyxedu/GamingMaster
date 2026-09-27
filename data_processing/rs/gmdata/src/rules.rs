@@ -13,11 +13,13 @@
 //! against the replay), "seats": [...] (optional: only these seats' streams),
 //! "meta": {...} (optional), "soft": [[event index, [[action, p], ...]], ...] (optional
 //! teacher distributions of the Act events, written with `--soft-k K`), "final_outcome":
-//! [...] (optional: the recorded result of a game that ended off the rules)}` — e.g. what a
+//! [...] (optional: the recorded result of a game that ended off the rules), "conceded":
+//! {"outcome": [...], "returns": [...]} (optional: the record stops before the end by
+//! a resignation scored so, see `traj::Record::conceded`)}` — e.g. what a
 //! reference implementation, a solver or a scripted
 //! bot writes; real sources get their own parser module (see `kuhn_poker.rs`).
 
-use crate::traj::{self, ConvertOptions, Record};
+use crate::traj::{self, Concession, ConvertOptions, Record};
 use crate::common;
 use anyhow::{bail, Context, Result};
 use clap::Subcommand;
@@ -128,6 +130,20 @@ pub fn parse_jsonl_record(line: &str, fallback_id: &str) -> Result<Record> {
                 })
                 .collect::<Result<Vec<_>>>()?,
         },
+        conceded: match v.get("conceded") {
+            None | Some(Value::Null) => None,
+            Some(c) => {
+                let nums = |k: &str| -> Result<Vec<f64>> {
+                    c.get(k)
+                        .and_then(Value::as_array)
+                        .with_context(|| format!("\"conceded\".{k} must be an array of numbers"))?
+                        .iter()
+                        .map(|x| x.as_f64().with_context(|| format!("\"conceded\".{k}: {x} is not a number")))
+                        .collect()
+                };
+                Some(Concession { outcome: nums("outcome")?.into_iter().map(|x| x as f32).collect(), returns: nums("returns")? })
+            }
+        },
         ..Default::default()
     })
 }
@@ -203,6 +219,10 @@ mod tests {
         assert_eq!(r.events[2], Event::Act(0, 1));
         assert_eq!(r.expected_returns, Some(vec![1.0, -1.0]));
         assert!(parse_jsonl_record(r#"{"events":[[0]]}"#, "f").is_err());
+        assert_eq!(r.conceded, None);
+        let c = parse_jsonl_record(r#"{"events":[],"conceded":{"outcome":[0.5,-0.5],"returns":[1,-1]}}"#, "f").unwrap();
+        assert_eq!(c.conceded, Some(Concession { outcome: vec![0.5, -0.5], returns: vec![1.0, -1.0] }));
+        assert!(parse_jsonl_record(r#"{"events":[],"conceded":{"outcome":[0.5]}}"#, "f").is_err());
         let dir = std::env::temp_dir().join(format!("gmdata-rules-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let st = traj::convert_dyn("kuhn_poker", "", vec![Ok(r)].into_iter(), &dir, &ConvertOptions::default()).unwrap();

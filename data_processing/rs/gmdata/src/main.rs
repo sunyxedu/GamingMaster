@@ -35,6 +35,7 @@ mod rules;
 mod shogi;
 mod chess_variants;
 mod xiangqi;
+mod skat;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -118,6 +119,11 @@ enum Game {
         #[command(subcommand)]
         cmd: backgammon::Cmd,
     },
+    /// Skat (the ISS game archive; gmrules rules)
+    Skat {
+        #[command(subcommand)]
+        cmd: skat::Cmd,
+    },
     /// Generic tools for every gmrules game: list, check, random-play / JSONL → shards
     Rules {
         #[command(subcommand)]
@@ -146,6 +152,7 @@ fn main() -> Result<()> {
         Game::ChessVariants { cmd } => chess_variants::run(cmd),
         Game::Xiangqi { cmd } => xiangqi::run(cmd),
         Game::Backgammon { cmd } => backgammon::run(cmd),
+        Game::Skat { cmd } => skat::run(cmd),
         Game::Rules { cmd } => rules::run(cmd),
         Game::Label { cmd } => label::run(cmd),
     }

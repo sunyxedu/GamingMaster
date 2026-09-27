@@ -73,6 +73,7 @@ behaviour, which is what the golden parity tests pin.
 | Clash Royale | `crdata fetch --out D` (RoyaleAPI replays, HF) | `crdata convert --hq`: Ranked + Grand Challenge, ≥ 60 s, ≥ 5 own plays; optional `--winner-only` | anonymised (no trophies); see games/clash_royale/README.md |
 | Kuhn poker (toy) | `$G kuhn-poker generate` (synthetic hand logs; `scripts/fetch_kuhn_poker.sh`) | `convert --hq`: the scripted expert's seats only | gmrules reference game (below); rules pinned to OpenSpiel |
 | backgammon | `scripts/fetch_backgammon.sh OUT MATCHES WORKERS` = `$G backgammon generate` (gnubg 2-ply self-play, 7-point matches; our engine runs the matches and checks gnubg's legal list at every move) + `convert` | engine play only (no human corpus): gnubg 2-ply both seats; `convert --soft-k 8 --engine-values` (gnubg's equities / match-winning chances) | gmrules game; rules pinned to gnubg (legal moves, its own match loop). Data: generated here, no third-party records; gnubg (GPL-3.0-or-later) runs as an external process in a throw-away uv env, never linked or vendored |
+| Skat | `$G skat fetch --out D` (ISS game archive `iss-games-07-2024.sgf.bz2`, 545 MiB, 9.1M games 2007-2024, humans and programs, "available for free to everyone"; + the ISS ratings page); end to end `scripts/fetch_skat.sh D` | `convert --hq --players P --ratings R`: the seats of players with ≥ 2000 games and ≥ 5 money points per game in the corpus (`skat stats`) or ISS Elo ≥ 1050 (± ≤ 60); `--split train\|val` (1% val by game id) | gmrules game (ISS rules; every record replayed, its recorded result reproduced; pinned to the ISS engine by `tests/test_skat_reference.py`); see `rs/gmdata/src/skat.rs` |
 
 Measured on real data (kept / seen): chess elite 2021-06 601k / 781k games;
 go KGS 2019-04 202 / 1255; shogi 2025-06-01 158 / 447; othello 2019–21
@@ -87,6 +88,9 @@ trajectories — e.g. Metamon's reconstructed replays
 (github.com/UT-Austin-RPL/metamon, MIT), which rebuild each player's own view
 of the battle — could replace them later through a converter emitting the same
 schema; details in the `pokemon.rs` module docs.
+8456 / 9392 player sequences (4186 with `--winner-only`); skat, the full ISS
+archive: 9,094,590 / 9,094,699 records verified (0 result mismatches), `--hq` train
+11.2 M / 27.0 M seat streams (137 M / 315 M frames, ~57 GB).
 
 ## Engine teacher labels
 
@@ -216,6 +220,16 @@ cards: converter from synthetic hand logs, `scripts/fetch_kuhn_poker.sh`),
 stream) and `breakthrough` (the custom-schema board game). `gmdata rules
 list|check|random|convert` work for every registered game without per-game code
 (conformance battery, random-play shards, trajectory JSONL → shards).
+
+`skat` (3 players, the International Skat Server's rules: bidding incl. jump bids,
+pickup / hand, suit / grand / null, schneider / schwarz / ouvert, ISS scoring) is a
+real candidate game: decisions factored to ≤ 12 candidates (bid window + MORE, hand
+game type + modifier, game + one discard at a time), per-seat streams, reward = ISS
+money score / 1260. Converter `gmdata skat` (the ISS archive: every move replayed,
+every recorded result reproduced — 9,094,590 of 9,094,699 records, 0 result
+mismatches), `scripts/fetch_skat.sh`; parity with the ISS rule engine itself
+(its GPLv3 client classes, fetched at test time) by randomized differential tests in
+both directions (`tests/test_skat_reference.py`, live with `GM_REFERENCE=1` + a JDK).
 
 ### Adding a game
 

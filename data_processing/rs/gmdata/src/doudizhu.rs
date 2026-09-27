@@ -229,6 +229,7 @@ pub fn parse_record(line: &str, fallback_id: &str, filter: &Filter) -> Result<Op
         seats,
         expected_returns,
         soft_targets,
+        ..Default::default()
     }))
 }
 
@@ -437,7 +438,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
             ensure!((soft_k > 0) == !temps.is_empty(), "--soft-k K and --soft-temp AGENT=T go together");
             let filter = Filter { agents: agent, dropped_seats: Cell::new(0), soft_temp: temps };
             let recs = records(&input, &filter)?.take(max_records.unwrap_or(usize::MAX));
-            let opts = ConvertOptions { shard_size, store_events, allow_truncated, soft_k };
+            let opts = ConvertOptions { shard_size, store_events, allow_truncated, soft_k, engine_values: false };
             let st = traj::convert::<DouDizhu>(&cfg, recs, &out, &opts)?;
             let mut v = serde_json::to_value(&st)?;
             v["dropped_seats"] = json!(filter.dropped_seats.get());

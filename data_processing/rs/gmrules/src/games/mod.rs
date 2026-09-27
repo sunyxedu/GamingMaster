@@ -14,6 +14,7 @@
 //!   candidates; gnubg-pinned).
 //! - [`doudizhu`]: Dou Dizhu (3 players, auction, landlord vs peasants; OpenSpiel's
 //!   `dou_dizhu` + four-with-two), candidate schema with factored kicker decisions.
+//! - [`skat`]: Skat (3 players, ISS rules; converter from the ISS game archive).
 
 pub mod backgammon;
 pub mod breakthrough;
@@ -23,3 +24,4 @@ pub mod kuhn_poker;
 pub mod pig;
 pub mod chess_variants;
 pub mod xiangqi;
+pub mod skat;
