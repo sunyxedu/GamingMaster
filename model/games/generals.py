@@ -1,7 +1,7 @@
 """Generals.io game adapter — observation encoder and action decoder.
 
 This module contains exactly the game-specific logic that used to live
-inside ``GeneralsNetwork``: the conv grid encoder with masked BatchNorm,
+inside ``GeneralsNetwork``: the conv grid encoder (``cfg.encoder_norm``),
 the 2-D positional embedding, the next-observation world-model head, and
 the autoregressive Source → Direction / Split / Pass action decoder.
 
@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.components.encoder import SpatialEncoder
+from model.components.encoder import SpatialEncoder, encode_frames, uses_batch_stats
 from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead
 from model.components.transformer import sinusoidal_pe_rows
 from model.config import ModelConfig
@@ -174,6 +174,7 @@ class GeneralsEncoder(ObservationEncoder):
         # defines the RAW obs format (next-obs head target, env, IL data).
         in_channels = cfg.grid_channels + (3 if cfg.derive_army_channels else 0)
         self.spatial_encoder = SpatialEncoder(cfg, in_channels=in_channels)
+        self.batch_stats = uses_batch_stats(cfg)
         self.global_proj = nn.Sequential(
             nn.Linear(cfg.global_features, cfg.d_model),
             nn.ReLU(),
@@ -220,22 +221,15 @@ class GeneralsEncoder(ObservationEncoder):
         return torch.cat([grid, extra.to(grid.dtype)], dim=-3)
 
     def _encode_frames(self, grid_seq, frame_mask):
-        """Run the spatial encoder, excluding padded frames from BatchNorm
-        statistics when ``frame_mask`` ([B, T] bool, True = real frame) is
-        given.  Padded frames get zero features; they are masked in the loss
-        and cannot influence real frames because collate pads only at the
-        sequence TAIL and both temporal mixers are causal (attention masks
-        the future; the recurrence only carries state forward)."""
+        """Run the spatial encoder over every frame.  A legacy BatchNorm
+        encoder (``cfg.encoder_norm="batch"``) excludes padded frames
+        (``frame_mask`` [B, T] bool, True = real frame) from its batch
+        statistics and gives them zero features; they are masked in the loss
+        and cannot influence real frames
+        (``model.components.encoder.encode_frames``)."""
         B, T, C, H, W = grid_seq.shape
-        BT = B * T
-        flat = self._augment(grid_seq.reshape(BT, C, H, W))
-        if frame_mask is None or bool(frame_mask.all()):
-            return self.spatial_encoder(flat).reshape(B, T, -1, H, W)
-        fm = frame_mask.reshape(BT)
-        enc = self.spatial_encoder(flat[fm])
-        feat = enc.new_zeros(BT, enc.shape[1], H, W)
-        feat[fm] = enc
-        return feat.reshape(B, T, -1, H, W)
+        flat = self._augment(grid_seq.reshape(B * T, C, H, W))
+        return encode_frames(self.spatial_encoder, flat, B, T, frame_mask, self.batch_stats)
 
     def forward(
         self,

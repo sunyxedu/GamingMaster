@@ -48,6 +48,7 @@ from data_processing.games.dataset import (
 )
 from data_processing.games.generals import GeneralsGioDataset, gio_dataset_advice
 from model.components.core import update_moe_balance
+from model.components.encoder import describe_encoder_norm
 from model.config import checkpoint_config_dict, upgrade_config_dict
 from model.games import build_game_network
 from model.games import generals as generals_adapter
@@ -1078,6 +1079,7 @@ def main() -> None:
     if args.halt_max_steps > 0:
         cfg.halt_max_steps = args.halt_max_steps
     print(f"[init] core={cfg.core_type} moe_experts={cfg.moe_experts} qk_norm={cfg.qk_norm} "
+          f"encoder_norm={describe_encoder_norm(cfg)} "
           f"supervision_steps={net.supervision_steps} inference_depth={net.default_depth} "
           f"value_head={describe_value_head(cfg)}")
     if args.resume and not cfg.qk_norm:

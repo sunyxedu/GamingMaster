@@ -46,7 +46,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.components.encoder import ResBlock
+from model.components.encoder import conv_stack, encode_frames, encoder_norm_of, uses_batch_stats
 from model.config import ModelConfig
 from model.games.base import (
     ActionDecoder,
@@ -97,8 +97,9 @@ class ShogiEncoder(ObservationEncoder):
     Hand slots 0..6 are the side-to-move's P L N S G B R counts, slots
     7..13 the opponent's.  The hand path is a shared Linear (no batch
     statistics, so padded frames cannot pollute anything and need no
-    ``frame_mask`` handling); the board conv stack uses the same
-    masked-BatchNorm technique as ``BoardEncoder``.
+    ``frame_mask`` handling); the board conv stack is ``BoardEncoder``'s
+    (``cfg.encoder_norm``; a legacy BatchNorm stack keeps padded frames out
+    of its statistics).
     """
 
     def __init__(self, cfg: ShogiConfig):
@@ -109,17 +110,9 @@ class ShogiEncoder(ObservationEncoder):
         self.n_tokens = self.n_board_tokens + self.n_hand_slots
 
         # Board: same conv → ResBlock → conv → ResBlock stack as BoardEncoder.
-        c_mid = cfg.encoder_channels
-        self.conv = nn.Sequential(
-            nn.Conv2d(cfg.piece_channels, c_mid, 3, padding=1, bias=False),
-            nn.BatchNorm2d(c_mid),
-            nn.ReLU(inplace=True),
-            ResBlock(c_mid),
-            nn.Conv2d(c_mid, cfg.d_model, 3, padding=1, bias=False),
-            nn.BatchNorm2d(cfg.d_model),
-            nn.ReLU(inplace=True),
-            ResBlock(cfg.d_model),
-        )
+        self.conv = conv_stack(cfg.piece_channels, cfg.encoder_channels, cfg.d_model,
+                               encoder_norm_of(cfg))
+        self.batch_stats = uses_batch_stats(cfg)
 
         # Hand: shared feature projection; slot identity (piece type +
         # owner) comes from the per-slot embedding delivered via
@@ -147,20 +140,11 @@ class ShogiEncoder(ObservationEncoder):
         )
 
     def _encode_frames(self, board_seq, frame_mask):
-        """Conv stack with padded frames excluded from BatchNorm statistics
-        (same technique as ``BoardEncoder._encode_frames``): padded frames
-        get zero features and cannot influence real frames because collate
-        pads at the sequence tail and the temporal mixers are causal."""
+        """Conv stack over every frame (a BatchNorm stack keeps padded
+        frames out of its statistics: ``model.components.encoder.encode_frames``)."""
         B, T, C, H, W = board_seq.shape
-        BT = B * T
-        flat = board_seq.reshape(BT, C, H, W)
-        if frame_mask is None or bool(frame_mask.all()):
-            return self.conv(flat).reshape(B, T, -1, H, W)
-        fm = frame_mask.reshape(BT)
-        enc = self.conv(flat[fm])
-        feat = enc.new_zeros(BT, enc.shape[1], H, W)
-        feat[fm] = enc
-        return feat.reshape(B, T, -1, H, W)
+        return encode_frames(self.conv, board_seq.reshape(B * T, C, H, W), B, T,
+                             frame_mask, self.batch_stats)
 
     def forward(
         self,

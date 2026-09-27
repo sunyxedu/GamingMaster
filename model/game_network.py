@@ -121,7 +121,7 @@ class GameNetwork(nn.Module):
                     nn.init.zeros_(m.bias)
             elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-            elif isinstance(m, (nn.LayerNorm, nn.BatchNorm2d)):
+            elif isinstance(m, (nn.LayerNorm, nn.BatchNorm2d, nn.GroupNorm)):
                 nn.init.ones_(m.weight)
                 nn.init.zeros_(m.bias)
 

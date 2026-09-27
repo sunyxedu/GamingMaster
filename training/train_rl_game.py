@@ -59,6 +59,7 @@ import torch.nn.functional as F
 
 from env.board_selfplay_env import BoardSelfPlayEnv
 from model.components.core import update_moe_balance
+from model.components.encoder import describe_encoder_norm
 from model.games.base import categorical_entropy, masked_log_prob
 from model.rl_utils import compute_gae, freeze_encoder, optim_param_groups
 from training.train_il_game import build_net_tolerant, pick_device, resume_arch_overrides
@@ -411,8 +412,10 @@ def main() -> None:
         if args.opponent_act_steps <= 0:
             args.opponent_act_steps = opponent.default_depth
 
-    # Eval mode for rollout AND update: masked BatchNorm statistics must
-    # not drift between the two or the PPO ratio is not exact.
+    # Eval mode for rollout AND update: no dropout, and a legacy BatchNorm
+    # encoder (encoder_norm="batch") normalises with its running statistics
+    # instead of batch statistics, so the PPO ratio is exact (the default
+    # per-frame GroupNorm computes the same in both modes).
     net.eval()
     if args.freeze_encoder:
         freeze_encoder(net)
@@ -422,6 +425,7 @@ def main() -> None:
     n_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
     print(f"[init] game={args.game} device={device.type} "
           f"board={board_size} trainable={n_params:,} qk_norm={cfg.qk_norm} "
+          f"encoder_norm={describe_encoder_norm(cfg)} "
           f"learner_seats={','.join(map(str, args.learner_seats))} "
           f"opponent={args.opponent_checkpoint or 'self'}")
 

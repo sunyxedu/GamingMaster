@@ -298,8 +298,11 @@ class ObservationEncoder(nn.Module, ABC):
         Args:
             obs:        game-specific tensors, each shaped [B, T, ...]
             frame_mask: [B, T] bool, True = real frame.  Encoders with
-                        batch statistics (BatchNorm) must exclude padded
-                        frames from those statistics.
+                        batch statistics (the legacy BatchNorm conv
+                        encoders, ``cfg.encoder_norm="batch"``) must exclude
+                        padded frames from those statistics; per-frame
+                        encoders may ignore it (padded frames sit at the
+                        sequence tail, behind causal temporal mixers).
         Returns:
             tokens [B, T, n_tokens, d_model]
         """

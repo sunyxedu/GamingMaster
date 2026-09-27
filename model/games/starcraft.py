@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.components.encoder import ResBlock
+from model.components.encoder import ResBlock, encode_frames, encoder_norm_of, uses_batch_stats
 from model.config import ModelConfig
 from model.games.base import (
     ActionDecoder,
@@ -102,15 +102,17 @@ class StarCraftEncoder(ObservationEncoder):
         self.n_tokens = self.n_map_tokens + cfg.max_units
 
         c_mid = cfg.encoder_channels
+        norm = encoder_norm_of(cfg)
         self.minimap_conv = nn.Sequential(
             nn.Conv2d(cfg.minimap_channels, c_mid, 3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(c_mid),
+            norm(c_mid),
             nn.ReLU(inplace=True),
             nn.Conv2d(c_mid, cfg.d_model, 3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(cfg.d_model),
+            norm(cfg.d_model),
             nn.ReLU(inplace=True),
-            ResBlock(cfg.d_model),
+            ResBlock(cfg.d_model, norm),
         )
+        self.batch_stats = uses_batch_stats(cfg)
 
         self.unit_proj = nn.Linear(cfg.unit_feature_dim, cfg.d_model)
         # Absent slots: features are zeroed and replaced by this marker —
@@ -136,19 +138,11 @@ class StarCraftEncoder(ObservationEncoder):
         )
 
     def _encode_frames(self, minimap_seq, frame_mask):
-        """Conv the minimap, excluding padded frames from BatchNorm
-        statistics (same technique as ``GeneralsEncoder._encode_frames``)."""
+        """Conv the minimap, every frame (a BatchNorm stack keeps padded
+        frames out of its statistics: ``model.components.encoder.encode_frames``)."""
         B, T, C, H, W = minimap_seq.shape
-        BT = B * T
-        flat = minimap_seq.reshape(BT, C, H, W)
-        if frame_mask is None or bool(frame_mask.all()):
-            enc = self.minimap_conv(flat)
-            return enc.reshape(B, T, *enc.shape[1:])
-        fm = frame_mask.reshape(BT)
-        enc = self.minimap_conv(flat[fm])
-        feat = enc.new_zeros(BT, *enc.shape[1:])
-        feat[fm] = enc
-        return feat.reshape(B, T, *feat.shape[1:])
+        return encode_frames(self.minimap_conv, minimap_seq.reshape(B * T, C, H, W), B, T,
+                             frame_mask, self.batch_stats)
 
     def forward(
         self,

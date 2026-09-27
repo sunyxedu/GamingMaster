@@ -395,8 +395,9 @@ def test_sharded_step_equals_single_process(tmp_path, kind, world, bucket_mb):
 # ----------------------------------------------------------------------
 
 #: the scripted game draws of the aligned runs: step s's micro-batches (two
-#: different games, so a BatchNorm layer never updates on both ranks, and one
-#: game undrawn); rank r draws entry r, the single process both
+#: different games, so a BatchNorm layer of their legacy encoders never updates
+#: on both ranks, and one game undrawn); rank r draws entry r, the single
+#: process both
 SCRIPT = [("othello", "chess"), ("chess", "gomoku"), ("gomoku", "othello"),
           ("othello", "gomoku"), ("chess", "othello")]
 
@@ -417,14 +418,14 @@ class _ScriptedRandom:
         return out
 
 
-def _common(data: str, save_dir: str, kind: str):
+def _common(data: str, save_dir: str, kind: str, overrides=()):
     dev = ["--device", "cpu"] if kind == "cpu" else ["--device", "cuda", "--dist_backend", "gloo"]
     return ["--data", f"othello={data}/othello", "--data", f"chess={data}/chess",
             "--data", f"gomoku={data}/gomoku", "--val", f"othello={data}/othello",
             "--batch_size", "2", "--warmup_steps", "3", "--eval_every", "2", "--log_every", "2",
             "--ema_rate", "0.9", "--moe_balance_rate", "0.01", "--clip_grad", "0.5",
             "--seed", "3", "--bucket_mb", "0.01", *dev, "--save_dir", save_dir,
-            "--override", *[f"{k}={v}" for k, v in CORE_TF.items()]]
+            "--override", *[f"{k}={v}" for k, v in CORE_TF.items()], *overrides]
 
 
 def _train_worker(rank, world, port, root, tag, argv, kind, lrs, poison, scripted):
@@ -516,13 +517,14 @@ def _train_worker(rank, world, port, root, tag, argv, kind, lrs, poison, scripte
 
 
 def _train(root, tag, world, *extra, kind="cpu", data="data", poison=False, scripted=False,
-           steps=STEPS):
+           steps=STEPS, overrides=()):
     """One train_multi_game run on ``world`` spawned ranks (1: a single
-    process); returns (per-rank outputs, multi_latest.pt, multi_final.pt)."""
+    process); returns (per-rank outputs, multi_latest.pt, multi_final.pt).
+    ``overrides``: config KEY=VALUE pairs on top of CORE_TF."""
     ctx = torch.multiprocessing.get_context("spawn")
     port = _free_port()
     lrs = local_ranks(world, kind)
-    argv = [*_common(str(root / data), str(root / f"ck_{tag}"), kind),
+    argv = [*_common(str(root / data), str(root / f"ck_{tag}"), kind, overrides),
             "--steps", str(steps), "--ckpt_every", str(steps), *extra, "--dist_timeout", "2"]
     _run_procs([ctx.Process(target=_train_worker,
                             args=(r, world, port, str(root), tag, argv, kind, lrs, poison,
@@ -577,6 +579,8 @@ def _assert_runs_identical(a, b, what):
 def test_sharded_run_is_bit_identical_to_unsharded(base, world):
     _assert_runs_identical(base[f"u{world}"], base[f"s{world}"], f"world {world}")
     ranks, latest, _ = base[f"s{world}"]
+    # the default per-frame GroupNorm encoders: no running statistics
+    assert not any(n.endswith("running_mean") for n in ranks[0]["buffers"])
     assert len(ranks[0]["vals"]) == 3                # validation at steps 2, 4 and 5
     for r in ranks[1:]:                              # identical full weights everywhere
         _assert_same(ranks[0]["params"], r["params"], "rank params")
@@ -759,8 +763,11 @@ def aligned(root):
     """The same micro-batches three ways: a single process with 2 per step,
     and 2 ranks with 1 each (rank r takes micro-batch r of the step), sharded
     and not; single-record datasets make every draw of a game the same batch,
-    the game draws are scripted (SCRIPT)."""
-    kw = dict(data="aligned", poison=True, scripted=True)
+    the game draws are scripted (SCRIPT).  Legacy BatchNorm encoders
+    (encoder_norm=batch, the layout of checkpoints predating the field) so
+    that the runs also pin the trainer's BatchNorm statistics merge; the other
+    trainer-level runs build the default per-frame GroupNorm."""
+    kw = dict(data="aligned", poison=True, scripted=True, overrides=("encoder_norm=batch",))
     return {"sp": _train(root, "al_sp", 1, "--games_per_step", "2", **kw),
             "u2": _train(root, "al_u2", 2, "--games_per_step", "1", **kw),
             "s2": _train(root, "al_s2", 2, "--games_per_step", "1", "--shard_optimizer", **kw)}
@@ -774,6 +781,11 @@ def test_aligned_two_rank_runs_are_bit_identical_to_single_process(aligned):
     both checkpoints agree, sharded or not."""
     (sp, _, _), (u2, _, _) = aligned["sp"], aligned["u2"]
     assert [a for _, a in u2[0]["record"]] == [sorted(p) for p in SCRIPT]
+    # every game's legacy encoder has BatchNorm statistics, and they moved
+    for g in GAMES:
+        counts = [b for n, b in sp[0]["buffers"].items()
+                  if n.startswith(f"nets.{g}.obs_encoder") and n.endswith("num_batches_tracked")]
+        assert counts and all(int(c) > 0 for c in counts), g
     _assert_runs_identical(aligned["u2"], aligned["s2"], "aligned u2 vs s2")
     for tag in ("u2", "s2"):
         ranks, latest, final = aligned[tag]

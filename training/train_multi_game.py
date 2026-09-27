@@ -74,6 +74,15 @@ supervision only if the core is the legacy TRM.  With a MoE core the
 aux-loss-free balance bias is updated once per optimizer step from the
 loads of ALL K micro-batches, i.e. balanced on the game mixture.
 
+Conv encoders (generals, board games, shogi, lux, clash_royale, starcraft)
+normalise every frame on its own by default (``encoder_norm="group"``,
+model/components/encoder.py): a training forward over B·T frames gives frame
+t no statistics of later frames or other samples, and train and eval mode
+compute the same function.  ``--override encoder_norm=batch`` builds the
+legacy BatchNorm encoders, which every checkpoint predating the field gets
+automatically (resume, evaluation); it is not a core field, so the fresh
+encoder of a game adapted to an ``--init_core`` brain takes the default.
+
 Data parallelism (torchrun; NCCL on CUDA, gloo on CPU and on MIG slices —
 ``--dist_backend``, training.distributed: on a MIG allocation every rank pins
 itself to its own slice and runs on cuda:0).  Every rank draws its
@@ -96,8 +105,9 @@ encoder/decoder has no gradient on ranks that did not draw it (zeros are
 contributed), and a parameter without gradient on EVERY rank keeps grad None
 so AdamATan2 skips it exactly as single-process.  The step-drop decision on a
 non-finite gradient norm is collective, MoE load tallies are summed over
-ranks before the balance-bias update, the encoders' BatchNorm running
-statistics are merged every step (training.distributed.BatchNormStatSync),
+ranks before the balance-bias update, the BatchNorm running statistics of
+legacy encoders (``encoder_norm="batch"``; the default per-frame GroupNorm has
+none) are merged every step (training.distributed.BatchNormStatSync),
 and the initial weights and buffers are broadcast from rank 0 — so
 parameters, buffers (balance biases included) and EMA shadows stay
 bit-identical across ranks.  Rank 0 alone logs (losses aggregated over all
@@ -123,7 +133,7 @@ Resuming.  ``--ckpt_every N`` makes rank 0 write ``multi_latest.pt`` every N
 steps and at the last one (weights, EMA shadows, optimizer, LR schedule,
 step; written atomically).  ``--resume <that file>`` continues from it with
 the same arguments, any world size: weights, optimizer moments, EMA, balance
-biases, BatchNorm statistics and the LR schedule continue exactly; game
+biases, (legacy) BatchNorm statistics and the LR schedule continue exactly; game
 draws and data order restart from fresh RNG streams, and a TRM core's deep-
 supervision carries restart empty.  Each game's network is rebuilt from the
 config saved in the checkpoint (``--override`` values on top), so a config
@@ -146,6 +156,7 @@ from torch.utils.data import BatchSampler, DataLoader, SequentialSampler
 from data_processing.games.dataset import collate_game_sequences, training_sampler
 from data_processing.games.generals import GeneralsGioDataset, gio_dataset_advice
 from model.components.core import allreduce_moe_loads, update_moe_balance
+from model.components.encoder import describe_encoder_norm
 from model.config import checkpoint_config_dict, legacy_memory_vision, upgrade_config_dict
 from model.multi_game import (
     MultiGameNetwork,
@@ -678,14 +689,22 @@ def main(argv=None) -> Dict[str, object]:
     if dist_env.enabled:
         # every rank initialised its per-game adapters from its own seed
         broadcast_module_state(model, src=0)
+        # running statistics exist only in legacy BatchNorm encoders
+        # (encoder_norm="batch"); the default GroupNorm keeps none
         bn_sync = BatchNormStatSync(model)
+        if not bn_sync.bns:
+            bn_sync = None
 
     n_total = sum(p.numel() for p in model.parameters())
     n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
     wtag = f" world={world}" if dist_env.enabled else ""
+    enc_norms = {g: describe_encoder_norm(model[g].cfg) for g in games}
+    enc_norm = (next(iter(enc_norms.values())) if len(set(enc_norms.values())) == 1
+                else ",".join(f"{g}:{v}" for g, v in enc_norms.items()))
     log(f"[init] games={games} core={first.cfg.core_type} moe={first.cfg.moe_experts} "
-        f"qk_norm={first.cfg.qk_norm} params={n_total:,} trainable={n_train:,} "
-        f"device={device.type}{wtag} value_head={describe_value_head(first.cfg)}")
+        f"qk_norm={first.cfg.qk_norm} encoder_norm={enc_norm} params={n_total:,} "
+        f"trainable={n_train:,} device={device.type}{wtag} "
+        f"value_head={describe_value_head(first.cfg)}")
     if args.init_core and not first.cfg.qk_norm:
         log(f"[note] qk_norm=False comes from the --init_core checkpoint "
             f"({args.init_core}): a pre-QK-norm core cannot switch it on")
