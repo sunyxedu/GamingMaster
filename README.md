@@ -18,8 +18,7 @@ one trained multi-game network where there is not.
   <a href="#installation">Installation</a> ·
   <a href="#quickstart">Quickstart</a> ·
   <a href="#the-meta-harness-layers-1-and-2">Meta-Harness</a> ·
-  <a href="#the-multi-game-network-layer-3">Multi-game network</a> ·
-  <a href="#citation">Citation</a>
+  <a href="#the-multi-game-network-layer-3">Multi-game network</a>
 </p>
 
 <p align="center">
@@ -355,27 +354,6 @@ GamingMaster/
 ├── scripts/            data fetching, probes, visualisation, Slurm jobs
 └── tests/              unit, golden-parity and end-to-end tests (`uv run pytest tests/ -q`)
 ```
-
-## Citation
-
-If GamingMaster is useful in your research, please cite it:
-
-```bibtex
-@software{sun2026gamingmaster,
-  author = {Sun, Yuxuan},
-  title  = {GamingMaster: Latency-Tiered Game Agents with a Meta-Harness and a Shared Multi-Game Network},
-  year   = {2026},
-  url    = {https://github.com/sunyxedu/GamingMaster}
-}
-```
-
-GamingMaster builds on Meta-Harness ([arXiv 2603.28052](https://arxiv.org/abs/2603.28052)),
-recurrent-depth transformers ([arXiv 2502.05171](https://arxiv.org/abs/2502.05171)), the Tiny
-Recursive Model ([arXiv 2510.04871](https://arxiv.org/abs/2510.04871)), DeepSeek-V3 routing
-([arXiv 2412.19437](https://arxiv.org/abs/2412.19437)), gated delta networks
-([arXiv 2412.06464](https://arxiv.org/abs/2412.06464)), multi-task PopArt
-([arXiv 1809.04474](https://arxiv.org/abs/1809.04474)) and AlphaStar's recipe of imitation
-learning followed by self-play RL with a KL anchor.
 
 ## License
 
