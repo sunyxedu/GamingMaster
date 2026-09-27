@@ -77,11 +77,15 @@ impl SgfGame {
     pub fn komi(&self) -> Option<f64> {
         self.first("KM").filter(|r| !r.is_empty()).and_then(|r| py_float(r))
     }
-    /// RU names an area-scoring ruleset (Chinese / AGA / New Zealand);
-    /// territory rulesets (Japanese, Korean) and unknown / missing → false.
+    /// RU names an area-scoring ruleset (Chinese / AGA / New Zealand, or a KataGo rules
+    /// string with `scoreAREA`, e.g. `koSIMPLEscoreAREAtaxNONEsui0`); territory rulesets
+    /// (Japanese, Korean, KataGo `scoreTERRITORY`) and unknown / missing → false.
     pub fn area_scoring(&self) -> bool {
         self.first("RU")
-            .map(|r| matches!(r.trim().to_lowercase().as_str(), "chinese" | "aga" | "nz" | "new zealand" | "area"))
+            .map(|r| {
+                let r = r.trim().to_lowercase();
+                matches!(r.as_str(), "chinese" | "aga" | "nz" | "new zealand" | "area") || r.contains("scorearea")
+            })
             .unwrap_or(false)
     }
 }
@@ -423,6 +427,21 @@ fn game_to_sample(g: &SgfGame, size: i32, allow_handicap: bool, allow_no_result:
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Download KataGo's public games (katagoarchive.org: the kata1 run's daily archives of
+    /// rating games — its networks playing each other at full strength, exact komi and rules,
+    /// ~900 a day since 2020-12 — or of training games) and extract their .sgf files
+    FetchKatago {
+        /// ratinggames | traininggames
+        #[arg(long, default_value = "ratinggames")]
+        kind: String,
+        /// first / last day (YYYY-MM-DD, inclusive; default: every archive)
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Download a KGS archive (u-go.net) and extract its .sgf files
     Fetch {
         /// archive URL (.tar.bz2), e.g. https://dl.u-go.net/gamerecords/KGS-2019_04-19-1255-.tar.bz2
@@ -485,6 +504,57 @@ pub fn fetch(url: &str, out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// KataGo's daily game archives (see `FetchKatago`), each extracted into `out/<day><kind>/`;
+/// days already extracted are skipped (resumable).
+pub fn fetch_katago(kind: &str, from: Option<&str>, to: Option<&str>, out: &Path) -> Result<()> {
+    anyhow::ensure!(matches!(kind, "ratinggames" | "traininggames"), "--kind: ratinggames | traininggames");
+    let base = format!("https://katagoarchive.org/kata1/{kind}");
+    let client = common::http()?;
+    let index = client.get(format!("{base}/index.html")).send()?.error_for_status()?.text()?;
+    let mut names: Vec<String> = index.split("href=\"./").skip(1)
+        .filter_map(|x| x.split('"').next().map(str::to_string))
+        .filter(|n| n.ends_with(".tar.bz2"))
+        .collect();
+    names.sort();
+    names.dedup();
+    let day = |n: &str| n.get(..10).unwrap_or("").to_string();
+    names.retain(|n| from.map(|f| day(n).as_str() >= f).unwrap_or(true) && to.map(|t| day(n).as_str() <= t).unwrap_or(true));
+    std::fs::create_dir_all(out)?;
+    let (mut done, mut skipped) = (0, 0);
+    for (i, n) in names.iter().enumerate() {
+        let dir = out.join(n.trim_end_matches(".tar.bz2"));
+        let marker = dir.join(".complete");
+        if marker.exists() {
+            skipped += 1;
+            continue;
+        }
+        let mut last = None;
+        for attempt in 0..5 {
+            match fetch(&format!("{base}/{n}"), out) {
+                Ok(()) => {
+                    last = None;
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("[fetch-katago] {n}: {e} (attempt {})", attempt + 1);
+                    last = Some(e);
+                    std::thread::sleep(std::time::Duration::from_secs(20 * (attempt + 1)));
+                }
+            }
+        }
+        if let Some(e) = last {
+            return Err(e);
+        }
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(&marker, b"")?;
+        done += 1;
+        eprintln!("[{}/{}] {n}", i + 1, names.len());
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    println!("{}", json!({"archives": names.len(), "downloaded": done, "skipped": skipped, "out": out}));
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn convert(input: &Path, out: &Path, shard_size: usize, board_size: i32, max_games: Option<usize>, min_moves: usize,
                allow_handicap: bool, allow_no_result: bool, q: Quality) -> Result<Value> {
@@ -528,6 +598,7 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, board_size: i32, max
 pub fn run(cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Fetch { url, out } => fetch(&url, &out),
+        Cmd::FetchKatago { kind, from, to, out } => fetch_katago(&kind, from.as_deref(), to.as_deref(), &out),
         Cmd::Convert { input, out, shard_size, board_size, max_games, min_moves, allow_handicap, allow_no_result, min_rank, no_time_loss, no_forfeit, hq } => {
             let mut q = Quality { min_rank: match &min_rank {
                 Some(r) => Some(rank_value(r).ok_or_else(|| anyhow::anyhow!("bad rank {r:?} (use e.g. 6d, 3k, 1p)"))?),
