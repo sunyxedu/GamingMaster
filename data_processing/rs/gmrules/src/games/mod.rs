@@ -6,6 +6,8 @@
 //! - [`pig`]: the perfect-information dice test game (interleaved layout, no converter).
 //! - [`breakthrough`]: the CUSTOM-schema reference game (a from-to board game for the
 //!   board adapter; the pattern for chess-like games).
+//! - [`chess`]: standard chess (shakmaty's FIDE rules) with the `gmdata chess` converter's
+//!   frozen v3 frames (the converter builds its frames through this game).
 //! - [`chess_variants`]: the Lichess chess variants (shakmaty's rules), one game with
 //!   a variant chance event; from-to decoder over board squares + pocket slots.
 //! - [`xiangqi`]: Chinese chess (Asian rules as Fairy-Stockfish implements them, pinned to
@@ -22,6 +24,7 @@
 
 pub mod backgammon;
 pub mod breakthrough;
+pub mod chess;
 pub mod doudizhu;
 pub mod bridge;
 pub mod goofspiel;

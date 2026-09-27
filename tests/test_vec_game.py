@@ -84,8 +84,8 @@ def test_registry_and_protocol(game):
     assert (obs.step_idx[obs.env_id == 2] == 0).all()
     assert (obs.step_idx[obs.env_id != 2] == 1).all()
     with pytest.raises(KeyError):
-        make_vec_env("chess")
-    assert not has_simulator("chess")
+        make_vec_env("starcraft")
+    assert not has_simulator("starcraft")
     with pytest.raises(ValueError):
         register_vec_env(game, lambda n: env)
     sub = obs.select(torch.tensor([0, obs.n_rows - 1]))
