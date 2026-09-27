@@ -272,6 +272,8 @@ class GameShardDataset(Dataset):
         # index would cost ~150 B per sample in every process (the trainer's
         # ranks and each DataLoader worker), gigabytes for 1e7-sample corpora.
         self._offsets: List[int] = [0]
+        # per shard: (samples, frames capped at max_len, raw frames) — frame_stats()
+        self._frame_sums: List[Tuple[int, int, int]] = []
         self.converter_version: Optional[int] = None
         self.shard_meta: Dict = {}
         self._ref_path: Optional[str] = None
@@ -281,6 +283,11 @@ class GameShardDataset(Dataset):
             shard = self._open(p, header_only=True)
             self._check(shard, p)
             self._offsets.append(self._offsets[-1] + int(shard["n_samples"]))
+            lengths = (shard["_lengths"] if "_lengths" in shard
+                       else [next(iter(x["obs"].values())).shape[0] for x in shard["samples"]])
+            capped = (sum(min(L, max_len) for L in lengths) if max_len is not None
+                      else sum(lengths))
+            self._frame_sums.append((len(lengths), capped, sum(lengths)))
         self._cache_idx: int = -1
         self._cache: Optional[Dict] = None
 
@@ -301,6 +308,7 @@ class GameShardDataset(Dataset):
                     raw_names = [n.split(".", 1)[1] for n in names if n.startswith("raw.")]
                     obs_keys = obs_keys | exp[1](raw_names)
                 head["_keys"] = (obs_keys, frozenset(n.split(".", 1)[1] for n in names if n.startswith("tgt.")))
+                head["_lengths"] = [int(x["length"]) for x in sh.index["samples"]]
             return head
         shard = torch.load(path, map_location="cpu", weights_only=False)
         shard["n_samples"] = len(shard["samples"])
@@ -371,19 +379,9 @@ class GameShardDataset(Dataset):
 
     def frame_stats(self) -> Dict[str, int]:
         """``samples``, ``frames`` (each sample capped at max_len: what the
-        dataset supervises per draw at most) and ``raw_frames`` (uncapped).
-        Cheap for gm-shard directories (index only); .pt shards are loaded."""
-        n = capped = raw = 0
-        for p in self.paths:
-            if os.path.isdir(p):
-                lengths = [int(s["length"]) for s in GmShard(p).index["samples"]]
-            else:
-                lengths = [next(iter(s["obs"].values())).shape[0]
-                           for s in torch.load(p, map_location="cpu", weights_only=False)["samples"]]
-            n += len(lengths)
-            raw += sum(lengths)
-            capped += (sum(min(L, self.max_len) for L in lengths) if self.max_len is not None
-                       else sum(lengths))
+        dataset supervises per draw at most) and ``raw_frames`` (uncapped) —
+        summed while the index was built (no second pass over the shards)."""
+        n, capped, raw = (sum(x) for x in zip(*self._frame_sums)) if self._frame_sums else (0, 0, 0)
         return {"samples": n, "frames": capped, "raw_frames": raw}
 
     def total_frames(self) -> int:
