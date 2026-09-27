@@ -23,6 +23,7 @@ from env.vec_lux import (  # noqa: E402
     DIVISORS,
     MOVE_DELTAS,
     SAP_WINDOW,
+    VIEW_ACTION,
     LuxVecEnv,
     div_tables_np,
     param_defaults,
@@ -120,45 +121,93 @@ def test_registry_protocol_and_resets():
         LuxVecEnv(1, env_params={"bogus": 1})
 
 
-def test_matches_are_episodes_and_reset_continues_the_game():
-    """One match = one episode (frames match_steps 0..10 here); the match
-    winner gets +1, the loser −1; reset continues the game (same map, wins
-    carried, frame 0 = the observation the match-ending step returned); after
-    the last match a reset deals a fresh game."""
+def test_games_are_episodes_and_matches_are_rewarded():
+    """One game = one episode (5 matches of match_steps 0..10 here, step_idx = the
+    env's steps 0..54): the map, relics and point tiles carry over, so the stream does
+    too; each match's winner gets +1, the loser −1 on the step that ends it, and the
+    next frame is the next match's frame 0; the 5th match ends the episode, and a
+    reset deals a fresh game."""
     env = LuxVecEnv(2, env_params=SHORT, seed=3)
     obs = env.reset(seed=11, new_game=True)
     L = SHORT["max_steps_in_match"] + 1
     g = _gen(1)
     wins = torch.zeros(2, 2, dtype=torch.long)
     for m in range(5):
-        assert obs.new_episode.all() and (obs.step_idx == 0).all()
         assert (env.matches_played == m).all()
         for t in range(L):
-            assert (obs.step_idx == t).all() and obs.active.all()
+            assert (obs.step_idx == m * L + t).all() and obs.active.all()
+            assert bool(obs.new_episode.all()) == (m == 0 and t == 0)
+            assert not obs.new_episode.any() or (m, t) == (0, 0)
+            assert torch.allclose(obs.obs["globals_seq"][:, 4] * 101, torch.tensor(float(t)))
             obs, rew, done, info = env.step(env.random_actions(obs, g))
             if t < L - 1:
-                assert not done.any() and (rew == 0).all()
-        assert done.all() and info["terminated"].all() and not info["truncated"].any()
-        assert (info["episode_len"] == L).all() and (info["match_index"] == m).all()
+                assert not done.any() and (rew == 0).all() and not info["match_ended"].any()
+                assert (info["winner"] == -1).all()
+        assert info["match_ended"].all() and (info["match_index"] == m).all()
         w = info["winner"]
         assert ((w == 0) | (w == 1)).all()
         assert torch.equal(rew, torch.where(torch.arange(2) == w.view(-1, 1), 1.0, -1.0))
         wins[torch.arange(2), w] += 1
         assert torch.equal(info["team_wins"], wins)
-        assert not obs.active.any() and env.finished.all()
-        last = obs.obs["map_seq"].clone()
-        tiles = env.raw_obs()[0]["map_features"]["tile_type"].copy()
-        assert info["game_over"].tolist() == [m == 4] * 2
-        if m < 4:
-            obs = env.reset()
-            assert torch.equal(obs.obs["map_seq"], last)             # no env step in reset
-            assert np.array_equal(env.raw_obs()[0]["map_features"]["tile_type"], tiles)
+        last = m == 4
+        assert done.tolist() == [last] * 2 and info["terminated"].tolist() == [last] * 2
+        assert not info["truncated"].any() and info["game_over"].tolist() == [last] * 2
+        assert (info["episode_len"] == (5 * L if last else 0)).all()
+        assert bool(obs.active.any()) != last and bool(env.finished.all()) == last
+        if not last:     # the next match's frame 0, the wins so far in the globals
             wg = obs.obs["globals_seq"][:, 2:4] * 5                  # own / opp wins
             assert torch.equal(wg[0::2].round().long(), wins.float().long())
     assert (info["game_winner"] == wins.argmax(1)).all() and env.game_over.all()
     obs = env.reset()
     assert (env.matches_played == 0).all() and not env.game_over.any()
+    assert obs.new_episode.all() and (obs.step_idx == 0).all()
     assert (obs.obs["globals_seq"][:, 2:6] == 0).all()               # wins, steps: fresh
+
+
+def test_team_1_sees_the_reflected_world():
+    """Team 1's frame is team 0's convention on the world reflected by T(x, y) =
+    (23 − y, 23 − x) (lux.rs): its units sit at T of their positions, the tiles
+    under them are T's; its decoder actions are turned back into the world (up <->
+    right, down <-> left, saps (dx, dy) -> (−dy, −dx)) and ``applied`` keeps the view."""
+    env = LuxVecEnv(1, seed=21)
+    obs = env.observe()
+    g = _gen(9)
+    for _ in range(12):                                   # units on the map, some energy
+        obs, *_ = env.step(env.random_actions(obs, g))
+    raw = env.raw_obs()
+    pos = raw[1]["units"]["position"][0, 1]                # team 1, world (x, y)
+    live = raw[1]["units_mask"][0, 1]
+    assert live.any()
+    u = obs.obs["units_seq"][1]
+    for k in np.flatnonzero(live):
+        x, y = int(pos[k][0]), int(pos[k][1])
+        assert torch.allclose(u[k, :2], torch.tensor([(23 - y) / 24, (23 - x) / 24]))
+    tiles = raw[1]["map_features"]["tile_type"][0]         # [x][y], -1 unseen
+    asteroid = obs.obs["map_seq"][1, 2]                     # [y][x] view
+    for x in range(24):
+        for y in range(24):
+            assert float(asteroid[23 - x, 23 - y]) == float(tiles[x, y] == 2)
+    # team 0's frame is the world itself
+    pos0 = raw[0]["units"]["position"][0, 0]
+    for k in np.flatnonzero(raw[0]["units_mask"][0, 0]):
+        assert torch.allclose(obs.obs["units_seq"][0, k, :2],
+                              torch.tensor([pos0[k][0] / 24, pos0[k][1] / 24]).float())
+    # actions: the view's "up" of a team 1 unit moves it right in the world
+    ua = torch.zeros(2, 16, dtype=torch.long)
+    k = int(np.flatnonzero(live)[0])
+    ua[1, k] = 1
+    env_act, applied = env._env_actions({"unit_actions": ua})
+    assert env_act[0, 1, k].tolist() == [2, 0, 0] and applied["unit_actions"][1, k] == 1
+    so = torch.full((2, 16), sap_class(0, 0))
+    ua[1, k], so[1, k] = 5, sap_class(2, -1)
+    env_act, applied = env._env_actions({"unit_actions": ua, "sap_offsets": so})
+    assert env_act[0, 1, k].tolist() == [5, 1, -2] and applied["sap_offsets"][1, k] == sap_class(2, -1)
+    raw_act = np.zeros((1, 2, 16, 3), dtype=np.int64)
+    raw_act[0, 1, k] = [5, 1, -2]
+    raw_act[0, 1, (k + 1) % 16] = [3, 0, 0]
+    _, applied = env._raw_actions(raw_act)
+    assert applied["sap_offsets"][1, k] == sap_class(2, -1)
+    assert applied["unit_actions"][1, (k + 1) % 16] == 4                  # down -> left
 
 
 def test_game_reward_and_autoreset():
@@ -266,7 +315,8 @@ def test_legal_masks_follow_the_rules():
                 pos0 = raw[p]["units"]["position"][i, p, k]
                 pos1 = raw2[p]["units"]["position"][i, p, k]
                 if legal["unit_action"][r, k, act]:
-                    dx, dy = MOVE_DELTAS[act - 1]
+                    # team 1 acts in its reflected view: the world move is T's
+                    dx, dy = MOVE_DELTAS[(VIEW_ACTION[act] if p == 1 else act) - 1]
                     assert pos1.tolist() == [pos0[0] + dx, pos0[1] + dy], (step, r, k, act)
                     checked_legal += 1
                 else:
@@ -275,6 +325,10 @@ def test_legal_masks_follow_the_rules():
         # sap legality = lux_sap_legal over the gated units, energy-gated action
         xy = torch.from_numpy(np.stack([raw[p]["units"]["position"][:, p] for p in (0, 1)], 1)
                               ).reshape(8, 16, 2)
+        # team 1's saps are legal in its view: its units at T(x, y) = (23 - y, 23 - x)
+        view = torch.stack([23 - xy[..., 1], 23 - xy[..., 0]], -1)
+        xy = torch.where((torch.arange(8) % 2 == 1).view(8, 1, 1) & (xy >= 0).all(-1, keepdim=True),
+                         view, xy)
         rng = torch.from_numpy(np.repeat(env._params["unit_sap_range"].astype(np.int64), 2))
         want = lux_sap_legal(xy, legal["unit"], rng, SAP_WINDOW, 24, 24)
         assert torch.equal(legal["sap"], want)
@@ -392,8 +446,8 @@ def test_play_episodes_random_vs_random():
     league = League(env, {"rand": RandomPolicy(env, seed=1)}, mirror_prob=0.0, seed=0)
     res = play_episodes(env, league, RandomPolicy(env, seed=2))
     assert env.finished.all()
-    assert set(res["score"].tolist()) <= {0.0, 1.0}             # a match always has a winner
-    assert (res["episode_len"] == SHORT["max_steps_in_match"] + 1).all()
+    assert set(res["score"].tolist()) <= {0.0, 0.5, 1.0}
+    assert (res["episode_len"] == 5 * (SHORT["max_steps_in_match"] + 1)).all()   # a game
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +471,7 @@ def test_decoder_sample_matches_log_prob_entropy_on_env_frames():
     R = obs.n_rows
     seq = {"obs": [], "legal": [], "act": [], "lp": []}
     n_sap = 0
-    for t in range(SHORT["max_steps_in_match"] + 1):
+    for t in range(5 * (SHORT["max_steps_in_match"] + 1)):          # the whole game
         with torch.no_grad():
             out = st.step(obs.obs, obs.legal, list(range(R)), obs.step_idx.tolist())
         ua, so = out["unit_actions"], out["sap_offsets"]
@@ -554,7 +608,7 @@ def test_train_rl_joint_on_lux(tmp_path, actor):
     iterations of --rl lux: finite metrics, an exact replay (π/π_old = 1),
     the actor's μ = π_old, the full-head KL anchor.  The fixed-batch actor
     (recurrent temporal mixer) checks the lockstep contract: every row's
-    step_idx is the wave's frame count (a wave = one match)."""
+    step_idx is the wave's frame count (a wave = one game)."""
     from training import train_rl_joint
 
     data, init = _lux_stage1(tmp_path, recurrent=actor == "fixed")
@@ -569,17 +623,17 @@ def test_train_rl_joint_on_lux(tmp_path, actor):
                   "il_loss", "core_gnorm_rl"):
             assert math.isfinite(row[k]), (k, row[k])
         assert row["tokens"] >= 1 and row["episodes"] >= 2
-        assert row["ep_len"] == SHORT["max_steps_in_match"] + 1
+        assert row["ep_len"] == 5 * (SHORT["max_steps_in_match"] + 1)      # a game
         assert row["canary_log_ratio"] < 1e-5 and row["canary_log_old_mu"] < 1e-4
         assert row["kl"] >= 0.0
     assert out["trainer"].rl["lux"].spec.full_kl
 
 
 def test_train_rl_joint_lux_resume_continues_the_games(tmp_path):
-    """A lux wave continues the envs' games (one match per wave), so the env
-    state is part of the RL state: a run resumed from its iteration-1
-    checkpoint plays match 2 of the same games and reproduces iteration 2
-    bit for bit (without the saved env state the games restarted at match 1)."""
+    """The env state (its RNG streams and games) is part of the RL state: a run
+    resumed from its iteration-1 checkpoint deals the same games and reproduces
+    iteration 2 bit for bit.  A wave plays whole games here (one episode = one
+    game of 5 matches)."""
     from training import train_rl_joint
 
     data, init = _lux_stage1(tmp_path)
@@ -590,8 +644,8 @@ def test_train_rl_joint_lux_resume_continues_the_games(tmp_path):
     torch.manual_seed(0)
     res = train_rl_joint.main(_lux_rl_args(data, init, tmp_path / "res", *base, "--resume",
                                            str(tmp_path / "full" / "rl_iter1.pt")))
-    played = full["trainer"].rl["lux"].env.matches_played      # one match per wave
-    assert (played >= 2).all() and (played < 5).all()          # iteration 2 continued the games
+    played = full["trainer"].rl["lux"].env.matches_played      # a wave plays whole games
+    assert (played == 5).all() and full["trainer"].rl["lux"].env.game_over.all()
     assert torch.equal(res["trainer"].rl["lux"].env.matches_played, played)
     a = torch.load(tmp_path / "full" / "rl_iter2.pt", weights_only=False)
     b = torch.load(tmp_path / "res" / "rl_iter2.pt", weights_only=False)

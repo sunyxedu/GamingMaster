@@ -134,7 +134,7 @@ def _team(ep, agent: int) -> int:
 
 def _convert(gmdata_bin: str, eps: Dict[str, dict], tmp_path) -> Dict[Tuple[str, int, int], dict]:
     """Convert every episode of ``eps`` ({name: replay}) in ONE gmdata run →
-    {(name, agent, match_index): sample}."""
+    {(name, agent): sample} (converter v3: one sample per agent, the whole game)."""
     d = tmp_path / "conv"
     (d / "in").mkdir(parents=True)
     for name, ep in eps.items():
@@ -145,7 +145,7 @@ def _convert(gmdata_bin: str, eps: Dict[str, dict], tmp_path) -> Dict[Tuple[str,
     out = {}
     for s in load_gm_samples(str(d / "out")):
         m = s["meta"]
-        key = (m["source"][: -len(".json")], m["agent"], m["match_index"])
+        key = (m["source"][: -len(".json")], m["agent"])
         assert key not in out, key
         out[key] = s
     return out
@@ -171,8 +171,7 @@ def _assert_agent_identical(base: dict, got: dict, agent: int, what: str) -> Non
             if not torch.equal(a["obs"][k], b["obs"][k]):
                 t = next(t for t in range(a["obs"][k].shape[0])
                          if not torch.equal(a["obs"][k][t], b["obs"][k][t]))
-                raise AssertionError(f"{what}: agent {agent} match {key[1]}: obs.{k} changed "
-                                     f"at frame {t}")
+                raise AssertionError(f"{what}: agent {agent}: obs.{k} changed at frame {t}")
         for k in ACT_KEYS:
             assert torch.equal(a["tgt"][k], b["tgt"][k]), (what, key, k)
 
@@ -403,8 +402,8 @@ def test_converter_ignores_values_under_the_obs_masks(gmdata, tmp_path, kaggle_e
     got = _convert(gmdata, {"base": ep, "masked": pert, "ctrl": ctrl}, tmp_path)
     base = _of(got, "base")
     _assert_agent_identical(base, _of(got, "masked"), p, "masked values rewritten")
-    c = _of(got, "ctrl")[(p, 1)]["obs"]["map_seq"]
-    assert not torch.equal(c[t_ctrl - 101], base[(p, 1)]["obs"]["map_seq"][t_ctrl - 101])
+    c = _of(got, "ctrl")[(p,)]["obs"]["map_seq"]           # the whole game: frame t = step t
+    assert not torch.equal(c[t_ctrl], base[(p,)]["obs"]["map_seq"][t_ctrl])
 
 
 def test_converter_env_params_are_agent_visible(gmdata, tmp_path, kaggle_ep):  # noqa: F811

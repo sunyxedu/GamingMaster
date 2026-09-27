@@ -10,8 +10,9 @@ agents' recorded actions:
     the competition ran JAX with ``jax_threefry_partitionable`` off, which
     the adapter reproduces (``kaggle_rng``);
   * the adapter's rows equal the converter's shards frame by frame, bit for
-    bit: every (agent, match) sample (obs, the recorded actions as IL targets,
-    the match value = the env's match reward), frame t = ``match_steps`` t;
+    bit: every (agent) sample = the whole game (obs in the agent's own view —
+    team 1's reflected —, the recorded actions as IL targets in that view, each
+    frame's value = its match's reward), frame t = env ``steps`` t;
   * the obs builder on the replay's own recorded observations equals the
     shards too (the path for replays the env cannot replay: the synthetic
     converter fixture with its 2-step matches and unknown env_cfg);
@@ -44,10 +45,13 @@ pytest.importorskip("luxai_s3")
 
 from data_processing.games.dataset import load_gm_samples  # noqa: E402
 from env.vec_lux import (  # noqa: E402
+    VIEW_ACTION,
     LuxVecEnv,
     build_obs,
     div_tables,
     json_obs_arrays,
+    view_arrays,
+    view_offset,
     kaggle_env_actions,
     kaggle_env_globals,
     kaggle_obs,
@@ -73,10 +77,10 @@ def _raw_equal(ours, ref, i: int, path: str = "") -> list:
 
 
 def replay_in_env(ep: Dict, check_raw: bool = True) -> Tuple[Dict, LuxVecEnv]:
-    """Play the replay's game in LuxVecEnv(1): {(agent, match): IL-shaped
-    sample} of the adapter's frames, the applied actions (IL target
-    convention) and the match rewards; asserts the official observations equal
-    the recorded ones at every step when ``check_raw``."""
+    """Play the replay's game in LuxVecEnv(1): {agent: IL-shaped sample} of the
+    adapter's frames over the whole game, the applied actions (IL target convention:
+    the agent's view) and each frame's match reward; asserts the official
+    observations equal the recorded ones at every step when ``check_raw``."""
     env = LuxVecEnv(1, seed=0)
     obs = env.reset(seed=kaggle_seed(ep), new_game=True)
     params = (ep["steps"][0][0].get("info") or {}).get("replay", {}).get("params")
@@ -86,8 +90,10 @@ def replay_in_env(ep: Dict, check_raw: bool = True) -> Tuple[Dict, LuxVecEnv]:
                 assert np.isclose(float(env._params[k][0]), float(v)), (k, env._params[k][0], v)
     acts = kaggle_env_actions(ep)
     n_steps = len(ep["steps"])
-    out: Dict[Tuple[int, int], Dict] = {}
-    match = 0
+    out: Dict[int, Dict] = {p: {"obs": {k: [] for k in OBS_KEYS},
+                                "tgt": {"unit_actions": [], "sap_offset": []}, "value": []}
+                            for p in (0, 1)}
+    match, frames_of_match = 0, 0
     for t in range(n_steps):
         if check_raw:
             raw = env.raw_obs()
@@ -96,29 +102,28 @@ def replay_in_env(ep: Dict, check_raw: bool = True) -> Tuple[Dict, LuxVecEnv]:
                 assert not bad, f"step {t} agent {p}: official obs differs from the replay at {bad}"
         if t == n_steps - 1:
             break
-        assert bool(obs.active.all()) and int(obs.step_idx[0]) == t - 101 * match
-        assert bool(obs.new_episode[0]) == (int(obs.step_idx[0]) == 0)
+        assert bool(obs.active.all()) and int(obs.step_idx[0]) == t
+        assert bool(obs.new_episode[0]) == (t == 0)
         for p in (0, 1):
-            s = out.setdefault((p, match), {"obs": {k: [] for k in OBS_KEYS},
-                                            "tgt": {"unit_actions": [], "sap_offset": []}})
             for k in OBS_KEYS:
-                s["obs"][k].append(obs.obs[k][p])
+                out[p]["obs"][k].append(obs.obs[k][p])
         obs, rew, done, info = env.step({}, env_actions=acts[t])
+        frames_of_match += 1
         for p in (0, 1):
-            s = out[(p, match)]
-            s["tgt"]["unit_actions"].append(info["applied"]["unit_actions"][p])
-            s["tgt"]["sap_offset"].append(info["applied"]["sap_offsets"][p])
-        if bool(done[0]):
-            for p in (0, 1):
-                s = out[(p, match)]
-                s["obs"] = {k: torch.stack(v) for k, v in s["obs"].items()}
-                s["tgt"] = {k: torch.stack(v) for k, v in s["tgt"].items()}
-                s["value"] = float(rew[0, p])
+            out[p]["tgt"]["unit_actions"].append(info["applied"]["unit_actions"][p])
+            out[p]["tgt"]["sap_offset"].append(info["applied"]["sap_offsets"][p])
+        if bool(info["match_ended"][0]):
             assert int(info["match_index"][0]) == match
-            match += 1
-            if not bool(info["game_over"][0]):
-                obs = env.reset()
+            for p in (0, 1):
+                out[p]["value"] += [float(rew[0, p])] * frames_of_match
+            match, frames_of_match = match + 1, 0
+        assert bool(done[0]) == bool(info["game_over"][0])
     assert env.game_over.all() and match == 5
+    for p in (0, 1):
+        s = out[p]
+        s["obs"] = {k: torch.stack(v) for k, v in s["obs"].items()}
+        s["tgt"] = {k: torch.stack(v) for k, v in s["tgt"].items()}
+        s["value"] = torch.tensor(s["value"])
     wins = np.asarray(env.raw_obs()[0]["team_wins"][0]).tolist()
     assert wins == list(ep["rewards"]), (wins, ep["rewards"])
     return out, env
@@ -135,12 +140,14 @@ def _convert(gmdata_bin: str, ep_json: Dict, tmp_path, name: str):  # noqa: F811
 
 
 def _assert_matches_shards(ours: Dict, il, what: str) -> None:
-    assert len(il) == len(ours) == 10, (what, len(il), len(ours))
+    assert len(il) == len(ours) == 2, (what, len(il), len(ours))
     for s in il:
-        key = (s["meta"]["agent"], s["meta"]["match_index"])
+        key = s["meta"]["agent"]
         a, b0 = s["meta"]["step_range"]
         mine = ours[key]
-        assert b0 - a == mine["obs"]["map_seq"].shape[0] == 101, (what, key)
+        assert b0 - a == mine["obs"]["map_seq"].shape[0] == 505 and s["meta"]["matches"] == 5, \
+            (what, key)
+        assert s["meta"]["view"] == ("reflected" if s["meta"]["team"] == 1 else "world")
         for k in OBS_KEYS:
             x, y = mine["obs"][k], s["obs"][k]
             assert x.dtype == y.dtype and x.shape == y.shape, (what, key, k, x.shape, y.shape)
@@ -150,7 +157,7 @@ def _assert_matches_shards(ours: Dict, il, what: str) -> None:
         for k in ("unit_actions", "sap_offset"):
             assert torch.equal(mine["tgt"][k], s["tgt"][k]), (what, key, k)
         assert torch.equal(s["tgt"]["unit_mask"], s["obs"]["unit_mask"])
-        assert (s["tgt"]["value"] == mine["value"]).all(), (what, key, mine["value"])
+        assert torch.equal(s["tgt"]["value"], mine["value"]), (what, key)
 
 
 @pytest.fixture(scope="module")
@@ -165,11 +172,12 @@ def test_fixture_replays_exactly_in_the_official_env(kaggle_fixture):
     frames are also the builder applied to the recorded observations."""
     ep, ours = kaggle_fixture
     tables = div_tables()
-    for (p, m), s in ours.items():
-        frames = [kaggle_obs(ep, t, p) for t in range(101 * m, 101 * m + 101)]
-        ref = build_obs(tables, json_obs_arrays(frames), p, kaggle_env_globals(ep, p)[None])
+    for p, s in ours.items():
+        frames = [kaggle_obs(ep, t, p) for t in range(505)]
+        a = json_obs_arrays(frames)
+        ref = build_obs(tables, view_arrays(a) if p == 1 else a, p, kaggle_env_globals(ep, p)[None])
         for k in OBS_KEYS:
-            assert np.array_equal(s["obs"][k].numpy(), np.asarray(ref[k])), (p, m, k)
+            assert np.array_equal(s["obs"][k].numpy(), np.asarray(ref[k])), (p, k)
     saps = sum(int((s["tgt"]["unit_actions"] == 5).sum()) for s in ours.values())
     assert saps > 1000
     # stacks of >= 3 units with different energies: the f32 per-cell energy sums
@@ -201,15 +209,20 @@ def test_decoder_actions_replay_the_fixture_in_a_batched_env():
             assert not bad, f"step {t} agent {p}: differs at {bad}"
         if t == n_steps - 1:
             break
-        ua = torch.from_numpy(acts[t][..., 0].astype(np.int64))
-        assert ((ua >= 0) & (ua <= 5)).all()
-        so = torch.from_numpy(np.where(ua.numpy() == 5, sap_class(acts[t][..., 1], acts[t][..., 2]),
-                                       sap_class(0, 0)).astype(np.int64))
+        # the recorded (world) actions in each seat's own view, as the decoder emits them
+        raw_a = acts[t][..., 0].astype(np.int64)
+        assert ((raw_a >= 0) & (raw_a <= 5)).all()
+        dx, dy = acts[t][..., 1].astype(np.int64), acts[t][..., 2].astype(np.int64)
+        raw_a[1] = np.asarray(VIEW_ACTION)[raw_a[1]]
+        dx[1], dy[1] = view_offset(acts[t][1, :, 1].astype(np.int64), acts[t][1, :, 2].astype(np.int64))
+        ua = torch.from_numpy(raw_a)
+        so = torch.from_numpy(np.where(raw_a == 5, sap_class(dx, dy), sap_class(0, 0)).astype(np.int64))
         a = {k: v.clone() for k, v in env.random_actions(obs, g).items()}
         a["unit_actions"][rows], a["sap_offsets"][rows] = ua, so
         obs, rew, done, info = env.step(a)
-        if bool(done[slot]) and not bool(info["game_over"][slot]):
-            obs = env.reset()
+        if bool(done.any()):                     # another slot's game ended: a fresh one
+            env.reset(env_ids=[i for i in range(N) if bool(done[i]) and i != slot])
+            obs = env.observe()
     assert np.asarray(env.raw_obs()[0]["team_wins"][slot]).tolist() == list(ep["rewards"])
 
 
@@ -226,7 +239,7 @@ def test_builder_on_recorded_obs_matches_gmdata(gmdata, tmp_path):  # noqa: F811
     subprocess.run([gmdata, "lux", "convert", "--input", os.path.join(FIX, "lux"),
                     "--out", str(d)], check=True, capture_output=True)
     il = load_gm_samples(str(d))
-    assert len(il) == 8
+    assert len(il) == 4                        # 2 synthetic episodes x 2 agents: whole games
     tables = div_tables()
     by_source = {}
     for s in il:
@@ -237,8 +250,8 @@ def test_builder_on_recorded_obs_matches_gmdata(gmdata, tmp_path):  # noqa: F811
         ep = by_source[src]
         agent, team = s["meta"]["agent"], s["meta"]["team"]
         a, b = s["meta"]["step_range"]
-        frames = [kaggle_obs(ep, t, agent) for t in range(a, b)]
-        ref = build_obs(tables, json_obs_arrays(frames), team,
+        frames = json_obs_arrays([kaggle_obs(ep, t, agent) for t in range(a, b)])
+        ref = build_obs(tables, view_arrays(frames) if team == 1 else frames, team,
                         np.repeat(kaggle_env_globals(ep, agent)[None], b - a, 0))
         for k in OBS_KEYS:
             assert np.array_equal(np.asarray(ref[k]), s["obs"][k].numpy()), (src, agent, k)

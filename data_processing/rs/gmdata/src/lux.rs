@@ -1,7 +1,19 @@
 //! Lux AI Season 3: Kaggle episode replays (JSON) → shards for the "lux" adapter.
 //!
-//! One sample = one (episode, agent, match): matches reset at `match_steps == 0`;
-//! observation t pairs with the action stored at steps[t+1]; both agents emitted.
+//! One sample = one (episode, agent): the whole game, its 5 matches in a row (from the
+//! first `match_steps == 0` frame on). The map, the relic nodes and the hidden point
+//! tiles stay from match to match (only the units reset), so what an agent found in
+//! the first matches is what it plays on in the later ones: a sample per match would
+//! restart the network's memory where the game does not. Observation t pairs with the
+//! action stored at steps[t+1]; both agents emitted.
+//!
+//! Every frame is in the agent's own view: team 1's is reflected onto team 0's by
+//! T(x, y) = (W − 1 − y, H − 1 − x), the map symmetry of Lux S3 (the generator mirrors
+//! the relic and energy nodes and the relic point patterns this way; team 1 spawns at
+//! T(0, 0)), so every agent sees itself spawn at the top-left of maps from one
+//! distribution. Positions go through T, a move through T's action map (up ↔ right,
+//! down ↔ left), a sap offset (dx, dy) → (−dy, −dx); T is an involution, so the same
+//! maps turn the view back into the world (env/vec_lux.py does both).
 //!
 //!   obs.map_seq     [T,12,24,24] f32  tile empty/nebula/asteroid, energy/20 (visible),
 //!                                     sensor mask, relic, own/opp unit count/4,
@@ -14,10 +26,11 @@
 //!   tgt.unit_actions [T,16] i64       action type 0..5
 //!   tgt.sap_offset   [T,16] i64       sap units: (dy+7)*15 + (dx+7) for |dx|,|dy| ≤ 7, else −1
 //!   tgt.unit_mask    [T,16] bool
-//!   tgt.value        [T] f32          match result for the agent
+//!   tgt.value        [T] f32          the result for the agent of the frame's match
 //!
 //! converter_version 2 (shard meta {"global_features": 11, "sap_range": 7}) added the
-//! env-parameter globals and the sap target. The env parameters come from
+//! env-parameter globals and the sap target; converter_version 3 (meta + "layout":
+//! "per_game", "view": "own") the whole-game samples and team 1's reflected view. The env parameters come from
 //! steps[0][agent].info.env_cfg, then configuration.env_cfg; a key found in neither takes
 //! the Lux S3 default (move 2, sap cost 10, sap range 4, sensor 2), and env_cfg_known = 1
 //! only when all four keys came from one source (sample meta `env_cfg`). The sap offset
@@ -39,7 +52,7 @@ const C: usize = 12;
 const U: usize = 16;
 const F: usize = 16;
 const G: usize = 11;
-const CONVERTER_VERSION: u32 = 2;
+const CONVERTER_VERSION: u32 = 3;
 /// Sap target window: offsets (dx, dy) with |dx|, |dy| ≤ SAP_R (Lux S3 unit_sap_range ∈ 3..=7).
 const SAP_R: i64 = 7;
 const SAP_ACTION: i64 = 5;
@@ -126,6 +139,35 @@ fn grid(o: &Value, x: usize, y: usize) -> &Value {
     &o[x][y]
 }
 
+/// A world position (x, y) in `team`'s view: team 1's reflected by T(x, y) = (W − 1 − y,
+/// H − 1 − x) (module docs); an involution, so it also maps the view back.
+fn view(team: usize, x: i64, y: i64) -> (i64, i64) {
+    if team == 1 {
+        (W as i64 - 1 - y, H as i64 - 1 - x)
+    } else {
+        (x, y)
+    }
+}
+
+/// A unit action of the world in `team`'s view (and back): T turns up (1) into right
+/// (2), down (3) into left (4) and vice versa; noop and sap stay.
+fn view_action(team: usize, a: i64) -> i64 {
+    if team == 1 && (1..=4).contains(&a) {
+        [0, 2, 1, 4, 3][a as usize]
+    } else {
+        a
+    }
+}
+
+/// A sap offset (dx, dy) of the world in `team`'s view (and back): (−dy, −dx) under T.
+fn view_offset(team: usize, dx: i64, dy: i64) -> (i64, i64) {
+    if team == 1 {
+        (-dy, -dx)
+    } else {
+        (dx, dy)
+    }
+}
+
 fn build_frame(o: &Value, team: usize, env: &EnvCfg, maps: &mut Vec<f32>, units: &mut Vec<f32>, mask: &mut Vec<bool>,
                globs: &mut Vec<f32>) {
     let opp = 1 - team;
@@ -136,22 +178,25 @@ fn build_frame(o: &Value, team: usize, env: &EnvCfg, maps: &mut Vec<f32>, units:
     let sm = &o["sensor_mask"];
     for y in 0..H {
         for x in 0..W {
+            let (vx, vy) = view(team, x as i64, y as i64);
+            let (vx, vy) = (vx as usize, vy as usize);
             let t = i(grid(tt, x, y));
-            p[idx(0, y, x)] = (t == 0) as u8 as f32;
-            p[idx(1, y, x)] = (t == 1) as u8 as f32;
-            p[idx(2, y, x)] = (t == 2) as u8 as f32;
+            p[idx(0, vy, vx)] = (t == 0) as u8 as f32;
+            p[idx(1, vy, vx)] = (t == 1) as u8 as f32;
+            p[idx(2, vy, vx)] = (t == 2) as u8 as f32;
             let vis = truthy(grid(sm, x, y));
             // np.where(sm, energy(float32)/20.0, 0.0): float32 energy / python float → float64, stored float32
             let e32 = f(grid(en, x, y)) as f32;
-            p[idx(3, y, x)] = if vis { (e32 as f64 / 20.0) as f32 } else { 0.0 };
-            p[idx(4, y, x)] = vis as u8 as f32;
+            p[idx(3, vy, vx)] = if vis { (e32 as f64 / 20.0) as f32 } else { 0.0 };
+            p[idx(4, vy, vx)] = vis as u8 as f32;
         }
     }
     if let (Some(nodes), Some(nmask)) = (o["relic_nodes"].as_array(), o["relic_nodes_mask"].as_array()) {
         for (n, m) in nodes.iter().zip(nmask) {
             let (x, y) = (i(&n[0]), i(&n[1]));
             if truthy(m) && (0..W as i64).contains(&x) && (0..H as i64).contains(&y) {
-                p[idx(5, y as usize, x as usize)] = 1.0;
+                let (vx, vy) = view(team, x, y);
+                p[idx(5, vy as usize, vx as usize)] = 1.0;
             }
         }
     }
@@ -166,8 +211,9 @@ fn build_frame(o: &Value, team: usize, env: &EnvCfg, maps: &mut Vec<f32>, units:
             }
             let (x, y) = (i(&pos[side][k][0]), i(&pos[side][k][1]));
             if (0..W as i64).contains(&x) && (0..H as i64).contains(&y) {
-                p[idx(cc, y as usize, x as usize)] += (1.0f64 / 4.0) as f32;
-                p[idx(ec, y as usize, x as usize)] += (f(&ens[side][k]).max(0.0) / 400.0) as f32;
+                let (vx, vy) = view(team, x, y);
+                p[idx(cc, vy as usize, vx as usize)] += (1.0f64 / 4.0) as f32;
+                p[idx(ec, vy as usize, vx as usize)] += (f(&ens[side][k]).max(0.0) / 400.0) as f32;
             }
         }
     }
@@ -187,8 +233,11 @@ fn build_frame(o: &Value, team: usize, env: &EnvCfg, maps: &mut Vec<f32>, units:
             continue;
         }
         umask[k] = true;
-        uf[k * F] = (f(&pos[team][k][0]) / W as f64) as f32;
-        uf[k * F + 1] = (f(&pos[team][k][1]) / H as f64) as f32;
+        // a visible own unit is on the map; a position off it (never seen in replays)
+        // keeps its value, reflected like any other
+        let (vx, vy) = view(team, i(&pos[team][k][0]), i(&pos[team][k][1]));
+        uf[k * F] = (vx as f64 / W as f64) as f32;
+        uf[k * F + 1] = (vy as f64 / H as f64) as f32;
         uf[k * F + 2] = (f(&ens[team][k]) / 400.0) as f32;
         uf[k * F + 3] = 1.0;
     }
@@ -229,7 +278,8 @@ fn match_value(parsed: &[Option<Value>], a: usize, b: usize, team: usize) -> f32
     0.0
 }
 
-/// (samples, sap actions outside the SAP_R window)
+/// (samples, sap actions outside the SAP_R window): one sample per agent, the whole
+/// game from its first match's first frame (module docs), in the agent's view.
 fn episode_samples(ep: &Value, source: &str) -> (Vec<Sample>, usize) {
     let mut sap_out = 0usize;
     let Some(steps) = ep["steps"].as_array() else { return (Vec::new(), sap_out) };
@@ -245,47 +295,54 @@ fn episode_samples(ep: &Value, source: &str) -> (Vec<Sample>, usize) {
         let player = steps[0][agent]["observation"]["player"].as_str().unwrap_or("");
         let team = player.strip_prefix("player_").and_then(|s| s.parse::<usize>().ok()).unwrap_or(agent);
         let bounds: Vec<usize> = parsed.iter().enumerate().filter(|(_, o)| o.as_ref().map(|o| f(&o["match_steps"]) == 0.0).unwrap_or(false)).map(|(t, _)| t).collect();
+        let Some(&first) = bounds.first() else { continue };
         let mut ends = bounds[1..].to_vec();
         ends.push(steps.len());
-        for (mi, (&a, &b)) in bounds.iter().zip(ends.iter()).enumerate() {
-            let (mut maps, mut units, mut masks, mut globs, mut acts, mut saps) = (vec![], vec![], vec![], vec![], vec![], vec![]);
-            let mut t_len = 0;
-            for t in a..b {
-                let (Some(o), Some(action)) = (&parsed[t], actions_at(steps, t + 1, agent)) else { break };
-                build_frame(o, team, &env, &mut maps, &mut units, &mut masks, &mut globs);
-                let mut ua = vec![0i64; U];
-                let mut so = vec![-1i64; U];
-                for (slot, a) in action.iter().take(U).enumerate() {
-                    ua[slot] = i(&a[0]).clamp(0, 5);
-                    if ua[slot] == SAP_ACTION {
-                        if let Some(raw) = a.as_array().filter(|r| r.len() >= 3) {
-                            match sap_offset(i(&raw[1]), i(&raw[2])) {
-                                Some(o) => so[slot] = o,
-                                None => sap_out += 1,
-                            }
+        let values: Vec<f32> = bounds.iter().zip(ends.iter()).map(|(&a, &b)| match_value(&parsed, a, b, team)).collect();
+        let (mut maps, mut units, mut masks, mut globs, mut acts, mut saps, mut vals) = (vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
+        let mut t_len = 0;
+        let mut mi = 0usize;
+        for t in first..steps.len() {
+            // the game's end (no action follows) or an abandoned replay
+            let (Some(o), Some(action)) = (&parsed[t], actions_at(steps, t + 1, agent)) else { break };
+            while mi + 1 < bounds.len() && t >= bounds[mi + 1] {
+                mi += 1;
+            }
+            build_frame(o, team, &env, &mut maps, &mut units, &mut masks, &mut globs);
+            let mut ua = vec![0i64; U];
+            let mut so = vec![-1i64; U];
+            for (slot, a) in action.iter().take(U).enumerate() {
+                ua[slot] = view_action(team, i(&a[0]).clamp(0, 5));
+                if ua[slot] == SAP_ACTION {
+                    if let Some(raw) = a.as_array().filter(|r| r.len() >= 3) {
+                        let (dx, dy) = view_offset(team, i(&raw[1]), i(&raw[2]));
+                        match sap_offset(dx, dy) {
+                            Some(o) => so[slot] = o,
+                            None => sap_out += 1,
                         }
                     }
                 }
-                acts.extend_from_slice(&ua);
-                saps.extend_from_slice(&so);
-                t_len += 1;
             }
-            if t_len == 0 {
-                continue;
-            }
-            let value = match_value(&parsed, a, b, team);
-            out.push(Sample::new(json!({"source": source, "episode_id": episode_id, "agent": agent, "team": team,
-                                         "match_index": mi, "step_range": [a, a + t_len], "match_value": value,
-                                         "env_cfg": env.meta()}))
-                .f32("obs.map_seq", &[C, H, W], maps)
-                .f32("obs.units_seq", &[U, F], units)
-                .bool("obs.unit_mask", &[U], masks.clone())
-                .f32("obs.globals_seq", &[G], globs)
-                .i64("tgt.unit_actions", &[U], acts)
-                .i64("tgt.sap_offset", &[U], saps)
-                .bool("tgt.unit_mask", &[U], masks)
-                .f32("tgt.value", &[], vec![value; t_len]));
+            acts.extend_from_slice(&ua);
+            saps.extend_from_slice(&so);
+            vals.push(values[mi]);
+            t_len += 1;
         }
+        if t_len == 0 {
+            continue;
+        }
+        out.push(Sample::new(json!({"source": source, "episode_id": episode_id, "agent": agent, "team": team,
+                                     "matches": mi + 1, "step_range": [first, first + t_len],
+                                     "match_values": &values[..=mi], "view": if team == 1 { "reflected" } else { "world" },
+                                     "env_cfg": env.meta()}))
+            .f32("obs.map_seq", &[C, H, W], maps)
+            .f32("obs.units_seq", &[U, F], units)
+            .bool("obs.unit_mask", &[U], masks.clone())
+            .f32("obs.globals_seq", &[G], globs)
+            .i64("tgt.unit_actions", &[U], acts)
+            .i64("tgt.sap_offset", &[U], saps)
+            .bool("tgt.unit_mask", &[U], masks)
+            .f32("tgt.value", &[], vals));
     }
     (out, sap_out)
 }
@@ -382,7 +439,7 @@ pub enum Cmd {
 
 pub fn convert(input: &Path, out: &Path, shard_size: usize, max_episodes: Option<usize>) -> Result<Value> {
     let files = common::find_files(input, &[".json"])?;
-    let meta = json!({"global_features": G, "sap_range": SAP_R});
+    let meta = json!({"global_features": G, "sap_range": SAP_R, "layout": "per_game", "view": "own"});
     let mut w = ShardWriter::new(out, "lux", CONVERTER_VERSION, meta, shard_size)?;
     let (mut episodes, mut bad, mut samples, mut sap_out) = (0usize, 0usize, 0usize, 0usize);
     for path in files {
@@ -430,6 +487,54 @@ mod tests {
     fn fixture() -> Value {
         let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/lux/ep0.json");
         serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn team_1_sees_the_reflected_world() {
+        // T is an involution; spawn corners swap; moves and saps follow the positions
+        for (x, y) in [(0, 0), (3, 17), (23, 5), (23, 23)] {
+            let (vx, vy) = view(1, x, y);
+            assert_eq!(view(1, vx, vy), (x, y));
+            assert_eq!(view(0, x, y), (x, y));
+        }
+        assert_eq!(view(1, 23, 23), (0, 0));
+        let deltas = [(0, 0), (0, -1), (1, 0), (0, 1), (-1, 0)]; // noop, up, right, down, left
+        for a in 0..=5i64 {
+            assert_eq!(view_action(1, view_action(1, a)), a);
+            if (1..=4).contains(&a) {
+                let (dx, dy) = deltas[a as usize];
+                let (x, y) = (7, 11);
+                let (vx, vy) = view(1, x, y);
+                let (wx, wy) = view(1, x + dx, y + dy);
+                assert_eq!((wx - vx, wy - vy), deltas[view_action(1, a) as usize], "action {a}");
+            }
+        }
+        let (x, y, dx, dy) = (5, 9, 3, -2);
+        let (vx, vy) = view(1, x, y);
+        let (tx, ty) = view(1, x + dx, y + dy);
+        assert_eq!(view_offset(1, dx, dy), (tx - vx, ty - vy));
+        // a frame: team 1's planes are team 0's convention on the reflected map
+        let ep = fixture();
+        let o = parse_obs(&ep["steps"][2][1]).unwrap();
+        let env = EnvCfg::parse(&ep, 1);
+        let (mut m1, mut u1, mut k1, mut g1) = (vec![], vec![], vec![], vec![]);
+        build_frame(&o, 1, &env, &mut m1, &mut u1, &mut k1, &mut g1);
+        let tt = &o["map_features"]["tile_type"];
+        for y in 0..H {
+            for x in 0..W {
+                let (vx, vy) = view(1, x as i64, y as i64);
+                let asteroid = m1[2 * H * W + vy as usize * W + vx as usize];
+                assert_eq!(asteroid, (i(grid(tt, x, y)) == 2) as u8 as f32);
+            }
+        }
+        let pos = &o["units"]["position"][1];
+        for k in 0..U {
+            if k1[k] {
+                let (vx, vy) = view(1, i(&pos[k][0]), i(&pos[k][1]));
+                assert_eq!(u1[k * F], (vx as f64 / W as f64) as f32);
+                assert_eq!(u1[k * F + 1], (vy as f64 / H as f64) as f32);
+            }
+        }
     }
 
     #[test]
@@ -487,8 +592,8 @@ mod tests {
         assert_eq!(stats["sap_out_of_range"], 0);
         let idx: Value =
             serde_json::from_slice(&std::fs::read(dir.join("out").join("lux_00000").join("index.json")).unwrap()).unwrap();
-        assert_eq!(idx["converter_version"], 2);
-        assert_eq!(idx["meta"], json!({"global_features": 11, "sap_range": 7}));
+        assert_eq!(idx["converter_version"], 3);
+        assert_eq!(idx["meta"], json!({"global_features": 11, "sap_range": 7, "layout": "per_game", "view": "own"}));
         assert_eq!(idx["tensors"]["obs.globals_seq"]["frame_shape"], json!([11]));
         assert_eq!(idx["tensors"]["tgt.sap_offset"]["frame_shape"], json!([16]));
         let meta = &idx["samples"][0]["meta"]["env_cfg"];
@@ -511,10 +616,25 @@ mod tests {
         };
         for smp in &ss {
             let (so, ua) = (col(smp, "tgt.sap_offset"), col(smp, "tgt.unit_actions"));
+            // slot 2 always plays [9, 2, -1]: team 0 saps (2, -1); team 1 (agent 1) sees
+            // it reflected, (1, -2) = class 83; slot 0 moves up, team 1 sees "right"
+            let team = smp.meta["team"].as_u64().unwrap();
+            assert_eq!(ua[0], if team == 1 { 2 } else { 1 }); // frame 0: slot 0 plays [1, 0, 0]
             for (o, a) in so.chunks(U).zip(ua.chunks(U)) {
-                assert_eq!(o[2], 99); // slot 2 always plays [9, 2, -1]
+                assert_eq!(o[2], if team == 1 { 83 } else { 99 });
                 assert!(o.iter().zip(a).all(|(&o, &a)| (a == SAP_ACTION) == (o >= 0)));
             }
+        }
+        // whole games: one sample per agent, the matches in a row (the fixture's last
+        // frame has no action: 6 frames of its matches 0 and 1)
+        assert_eq!(ss.len(), 2);
+        for smp in &ss {
+            assert_eq!(smp.meta["matches"], 2);
+            assert_eq!(smp.meta["step_range"], json!([0, 6]));
+            let t = smp.tensors.iter().find(|t| t.name == "tgt.value").unwrap();
+            let gmshard::Column::F32(v) = &t.col else { panic!("value dtype") };
+            let mv: Vec<f32> = smp.meta["match_values"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap() as f32).collect();
+            assert_eq!(v, &[mv[0], mv[0], mv[0], mv[1], mv[1], mv[1]]);
         }
         // a sap outside the window is counted, target −1
         let mut far = fixture();

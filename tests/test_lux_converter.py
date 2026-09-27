@@ -1,11 +1,13 @@
-"""`gmdata lux convert` v2 (frozen pre-training schema) on the committed fixture.
+"""`gmdata lux convert` v3 on the committed fixture.
 
-obs.globals_seq grew 6 → 11 (env parameters: unit move / sap cost, sap range,
+v2: obs.globals_seq grew 6 → 11 (env parameters: unit move / sap cost, sap range,
 sensor range, env_cfg_known), tgt.sap_offset [T, 16] holds the sap target
-class (dy+7)·15 + (dx+7) (−1 = none), and the shard meta announces
-{"global_features": 11, "sap_range": 7} for the trainers' config defaults.
-The fixture's env_cfg carries none of the unit parameters: Lux S3 defaults,
-env_cfg_known = 0."""
+class (dy+7)·15 + (dx+7) (−1 = none).  v3: one sample per (episode, agent) — the
+whole game, its matches in a row — and team 1's frames and targets in its
+reflected view (T(x, y) = (23 − y, 23 − x): up ↔ right, down ↔ left, a sap
+(dx, dy) → (−dy, −dx)); the shard meta announces {"global_features": 11,
+"sap_range": 7, "layout": "per_game", "view": "own"}.  The fixture's env_cfg
+carries none of the unit parameters: Lux S3 defaults, env_cfg_known = 0."""
 from __future__ import annotations
 
 import json
@@ -32,10 +34,11 @@ def converted(gmdata, tmp_path_factory):  # noqa: F811
 
 def test_meta_and_stats(converted):
     out, stats = converted
-    assert stats["sap_out_of_range"] == 0 and stats["samples"] == 8
+    assert stats["sap_out_of_range"] == 0 and stats["samples"] == 4    # 2 episodes x 2 agents
     ds = GameShardDataset(out)
-    assert ds.converter_version == 2
-    assert ds.shard_meta == {"global_features": 11, "sap_range": 7}
+    assert ds.converter_version == 3
+    assert ds.shard_meta == {"global_features": 11, "sap_range": 7, "layout": "per_game",
+                             "view": "own"}
     for s in load_gm_samples(out):
         assert s["meta"]["env_cfg"] == {"unit_move_cost": 2.0, "unit_sap_cost": 10.0,
                                         "unit_sap_range": 4.0, "unit_sensor_range": 2.0,
@@ -59,12 +62,14 @@ def test_sap_offsets(converted):
         assert so.shape == ua.shape and so.dtype == torch.int64
         assert torch.equal(so >= 0, ua == 5)            # a target exactly on sap units
         assert ((so >= -1) & (so < (2 * SAP_R + 1) ** 2)).all()
-        # slot 2 always plays the raw action [9, 2, -1]: clamped to sap, offset 99
-        assert (so[:, 2] == 99).all()
-        assert lux_sap_delta(99, SAP_R) == (2, -1)
-    # a raw [5, 0, 0] (sap on the own cell) appears once per (agent, match 1)
+        # slot 2 always plays the raw action [9, 2, -1]: clamped to sap, offset 99 —
+        # team 1 sees it reflected, (1, -2) = class 83
+        team1 = s["meta"]["team"] == 1
+        assert (so[:, 2] == (83 if team1 else 99)).all()
+    assert lux_sap_delta(99, SAP_R) == (2, -1) and lux_sap_delta(83, SAP_R) == (1, -2)
+    # a raw [5, 0, 0] (sap on the own cell, the same in both views) appears in match 1
     allv = torch.cat([s["tgt"]["sap_offset"].flatten() for s in samples])
-    assert set(allv.unique().tolist()) == {-1, 99, 112}
+    assert set(allv.unique().tolist()) == {-1, 83, 99, 112}
     assert lux_sap_delta(112, SAP_R) == (0, 0)
 
 

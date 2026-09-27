@@ -27,7 +27,8 @@ for lux) from the perspective of the player acting in that frame, in
     chess, shogi, go     +1 win / 0 draw or no result / −1 loss (mover)
     othello              sign(final own − opponent discs) for the mover
     gomoku               ±1 for the mover (undecided kept games: last mover wins)
-    lux                  ±1 / 0 per match for the agent's team (wins, then points)
+    lux                  ±1 / 0 of the frame's match for the agent's team (wins, then
+                         points); a sample is the whole game, its 5 matches in a row
     mahjong              final placement 1st..4th → +1, +1/3, −1/3, −1 (seat)
     pokemon              ±1 for the recorded side
     clash_royale         +1 victory / 0 draw / −1 defeat for the side (crdata)

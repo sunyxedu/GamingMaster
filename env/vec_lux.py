@@ -6,26 +6,34 @@ one ``jax.vmap`` of ``LuxAIS3Env.reset_env`` / ``step`` (jit-compiled once per
 
 Episodes, streams, rows
 -----------------------
-A Lux game is 5 matches of 101 frames (``match_steps`` 0..100) on one map;
-``gmdata lux convert`` (data_processing/rs/gmdata/src/lux.rs, the IL data)
-writes ONE sample per (game, agent, match), starting at ``match_steps == 0``.
-So here one EPISODE = one MATCH, and a row's stream is exactly one IL sample:
+A Lux game is 5 matches of 101 frames (``match_steps`` 0..100) on one map.  The
+map, the relic nodes and the hidden point tiles stay from match to match (only
+the units reset), so the game is ONE episode: ``gmdata lux convert``
+(data_processing/rs/gmdata/src/lux.rs, the IL data, converter_version 3) writes
+one sample per (game, agent), the 5 matches in a row, and a row's stream is
+exactly one such sample:
 
   * simultaneous moves: ``rows_per_env = 2``, row ``2 * env + seat`` = team
     ``seat``'s own fog-of-war view (``player_<seat>``), one frame per env step;
-  * frame t of a match is the observation at ``match_steps == t``;
-    ``step_idx = match_steps`` (0..100) and ``new_episode`` marks frame 0, so
-    the network's temporal state restarts exactly where an IL sample starts;
-  * the step that plays frame 100 ends the match: ``done`` (terminated), the
-    rows go inactive.  ``reset`` then CONTINUES the game: the next match's
-    frame 0 is the observation that step returned (the env's own match
-    transition; the previous match's units are still shown and are removed by
-    the next step, as in the IL data).  Only a finished game (5 matches), a
-    match abandoned mid-way, ``new_game=True`` or a resize starts a fresh game
-    (seed, map, env params).  Lockstep rollouts therefore play one match per
-    wave and a fresh game every 5th wave.  (``state_dict`` holds the game
-    state; train_rl_joint checkpoints it, so ``--resume`` continues the
-    games exactly.)
+  * frame t of a game is the observation at env ``steps == t`` (0..504):
+    ``step_idx = steps`` and ``new_episode`` marks frame 0 of the game, so the
+    network's temporal state carries what the earlier matches showed;
+  * the step that plays a match's frame 100 rewards the match (below); the next
+    frame is the next match's frame 0 (the env's own match transition: the
+    previous match's units are still shown and are removed by the next step, as
+    in the IL data).  The step that ends the 5th match is ``done``
+    (terminated) and the rows go inactive; ``reset`` starts a fresh game (seed,
+    map, env params) — so does resetting a game in progress, ``new_game=True``
+    or a resize.  (``state_dict`` holds the game state; train_rl_joint
+    checkpoints it, so ``--resume`` continues the games exactly.)
+
+Views: team 1's frames (obs and legal masks) and actions are reflected onto team
+0's by T(x, y) = (W − 1 − y, H − 1 − x), the Lux S3 map symmetry (lux.rs's module
+docs): every agent sees itself spawn at the top-left.  :func:`view_arrays` reflects
+an observation before the builders read it; a decoder action of team 1 is turned
+back into the world (a move through T's action map up ↔ right, down ↔ left; a sap
+offset (dx, dy) → (−dy, −dx); both involutions), and ``info["applied"]`` holds the
+actions in the view, as the IL targets.
 
 Observation (the gm-shard ``obs`` schema of converter v2, bit-identical to
 ``gmdata lux convert`` on the same game: tests/test_vec_lux_golden.py):
@@ -73,9 +81,10 @@ unless a sap inside the window).
 
 Rewards per seat: +1 / −1 to the winner / loser of the match on the step that
 ends it (the env always decides a winner: points, then unit energy, then a
-coin flip) — the IL value target of the match; plus ±``game_reward`` (default
-0) for the game result on the game's last step.  ``info``: ``winner`` (match),
-``game_over``, ``game_winner``, ``team_wins``, ``match_index``.
+coin flip) — the IL value target of the match's frames; plus ±``game_reward``
+(default 0) for the game result on the game's last step.  ``info``: ``winner``
+(of the match the step ended, else −1), ``match_ended``, ``game_over``,
+``game_winner``, ``team_wins``, ``match_index``.
 
 New games draw the env parameters exactly as the competition's
 ``LuxAIS3GymEnv.reset(seed)`` (``luxai_s3.params.env_params_ranges``, the same
@@ -173,6 +182,40 @@ def kaggle_rng():
         yield
     finally:
         jax.config.update("jax_threefry_partitionable", prev)
+
+
+#: team 1's view of a unit action (T's action map, an involution): up <-> right, down <-> left
+VIEW_ACTION = (0, 2, 1, 4, 3, 5)
+
+
+def view_arrays(a: Mapping[str, Any]) -> Dict[str, Any]:
+    """An observation's builder inputs (:func:`env_obs_arrays` /
+    :func:`json_obs_arrays`, map arrays [x][y]) reflected by T(x, y) = (W − 1 − y,
+    H − 1 − x): team 1's view (module docs).  Positions of −1 (not visible) stay."""
+    lux = _lux()
+    jnp = lux.jnp
+
+    def grid(g):
+        return jnp.flip(jnp.swapaxes(jnp.asarray(g), -1, -2), axis=(-1, -2))
+
+    def pos(p):
+        p = jnp.asarray(p)
+        x, y = p[..., 0], p[..., 1]
+        ok = (x >= 0) & (y >= 0)
+        return jnp.stack([jnp.where(ok, W - 1 - y, x), jnp.where(ok, H - 1 - x, y)],
+                         axis=-1).astype(p.dtype)
+
+    out = dict(a)
+    for k in ("tile_type", "energy", "sensor_mask"):
+        out[k] = grid(a[k])
+    out["relic_nodes"] = pos(a["relic_nodes"])
+    out["unit_position"] = pos(a["unit_position"])
+    return out
+
+
+def view_offset(dx, dy):
+    """A sap offset in team 1's view (and back: an involution): (−dy, −dx)."""
+    return -dy, -dx
 
 
 def sap_class(dx, dy, window: int = SAP_WINDOW):
@@ -427,6 +470,8 @@ class _Kernels:
             eg = env_globals_of(tables, params)
             for t in (0, 1):
                 a = env_obs_arrays(obs[f"player_{t}"])
+                if t == 1:
+                    a = view_arrays(a)                  # team 1's reflected view
                 r = build_obs(tables, a, t, eg)
                 lg = build_legal(a, t, params, window, action_mask)
                 r.update({f"legal_{k}": v for k, v in lg.items()})
@@ -631,16 +676,15 @@ class LuxVecEnv(VecEnvBase):
         return torch.from_numpy(self._wins.sum(1))
 
     def reset(self, n: Optional[int] = None, *, seed: Optional[int] = None,
-              env_ids: Optional[Sequence[int]] = None, new_game: bool = False,
+              env_ids: Optional[Sequence[int]] = None, new_game: bool = True,
               params: Optional[Sequence[Optional[Mapping[str, Any]]]] = None) -> VecObs:
-        """New episodes (matches) for all envs (``n`` resizes) or ``env_ids``.
-
-        An env whose match ended continues its game with the next match; a
-        fresh game starts for finished games, envs in the middle of a match,
-        ``new_game=True``, a resize, or an entry of ``params`` (env params for
-        the k-th reset env's new game, e.g. a replay's).  The k-th reset env's
-        new game has seed ``seed + k`` (else a draw from the env RNG) — the
-        competition's seed: its env params and map come from it."""
+        """New episodes (games) for all envs (``n`` resizes) or ``env_ids``: a
+        fresh game for every reset env (a game in progress is abandoned;
+        ``new_game`` is accepted for the callers of the per-match episodes).  An
+        entry of ``params`` sets env params of the k-th reset env's new game (e.g.
+        a replay's).  The k-th reset env's new game has seed ``seed + k`` (else a
+        draw from the env RNG) — the competition's seed: its env params and map
+        come from it."""
         if n is not None and n != self._n:
             if env_ids is not None:
                 raise ValueError("resize (n) and env_ids are exclusive")
@@ -653,12 +697,9 @@ class LuxVecEnv(VecEnvBase):
         seed_arr = np.zeros(self._n, dtype=np.int64)
         overrides: List[Optional[Mapping[str, Any]]] = [None] * self._n
         for k, i in enumerate(ids):
-            pk = params[k] if params is not None else None
-            if (new_game or pk is not None or not self._started[i] or self._game_over[i]
-                    or self._live[i]):
-                fresh[i] = True
-                seed_arr[i] = int(seeds[k]) % 2**32
-                overrides[i] = pk
+            fresh[i] = True
+            seed_arr[i] = int(seeds[k]) % 2**32
+            overrides[i] = params[k] if params is not None else None
         if fresh.any():
             self._start_games(fresh, seed_arr, overrides)
         self._new[:] = False
@@ -687,7 +728,7 @@ class LuxVecEnv(VecEnvBase):
             to_play=seat,
             env_id=self._row_env(),
             stream_id=torch.arange(R, dtype=torch.long),
-            step_idx=torch.from_numpy(np.repeat(self._ms, 2)),
+            step_idx=torch.from_numpy(np.repeat(self._steps, 2)),
             new_episode=torch.from_numpy(np.repeat(self._new, 2)) & active,
             active=active,
             forced=active & ~legal["unit"].any(-1),
@@ -714,6 +755,11 @@ class LuxVecEnv(VecEnvBase):
             sx, sy = sap_delta(so, self.sap_window)
             is_sap = a == SAP_ACTION
             dx, dy = torch.where(is_sap, sx, dx), torch.where(is_sap, sy, dy)
+        # team 1 acts in its reflected view: back into the world (involutions)
+        seat1 = (torch.arange(self.num_rows) % 2 == 1).view(-1, 1)
+        wx, wy = view_offset(dx, dy)
+        a = torch.where(seat1, torch.as_tensor(VIEW_ACTION)[a], a)
+        dx, dy = torch.where(seat1, wx, dx), torch.where(seat1, wy, dy)
         env_act = torch.stack([a, dx, dy], dim=-1).numpy().astype(np.int32)
         return env_act.reshape(self._n, 2, U, 3), applied
 
@@ -722,9 +768,12 @@ class LuxVecEnv(VecEnvBase):
         raw = np.asarray(torch.as_tensor(env_actions).cpu(), dtype=np.int64)
         raw = raw.reshape(self._n, 2, U, 3)
         a = np.clip(raw[..., 0], 0, N_UNIT_ACTIONS - 1)
+        # the IL target convention is each team's own view: team 1's reflected
+        a[:, 1] = np.asarray(VIEW_ACTION)[a[:, 1]]
         applied = {"unit_actions": torch.from_numpy(a.reshape(self.num_rows, U).copy())}
         if self.sap_window > 0:
-            dx, dy = raw[..., 1], raw[..., 2]
+            dx, dy = raw[..., 1].copy(), raw[..., 2].copy()
+            dx[:, 1], dy[:, 1] = view_offset(raw[:, 1, :, 1], raw[:, 1, :, 2])
             w = self.sap_window
             ok = (a == SAP_ACTION) & (np.abs(dx) <= w) & (np.abs(dy) <= w)
             so = np.where(ok, sap_class(dx, dy, self.sap_window), -1)
@@ -752,26 +801,27 @@ class LuxVecEnv(VecEnvBase):
                     div_tables(), self._keys, self._state, jnp.asarray(env_act), self._jparams(),
                     jnp.asarray(live), self._rows)
         prev_wins = self._wins.copy()
-        prev_ms = self._ms.copy()
+        prev_steps = self._steps.copy()
         self._sync_host()
         wins = self._wins_now
         rewards = np.zeros((n, 2), dtype=np.float32)
-        ended = live & (self._ms == 0)
+        match_ended = live & (self._ms == 0)
         dw = wins - prev_wins
-        winner = np.where(ended, np.argmax(dw, axis=1), -1)
-        e_idx = np.flatnonzero(ended)
+        winner = np.where(match_ended, np.argmax(dw, axis=1), -1)
+        e_idx = np.flatnonzero(match_ended)
         rewards[e_idx, winner[e_idx]] = 1.0
         rewards[e_idx, 1 - winner[e_idx]] = -1.0
         game_len = ((self._params["max_steps_in_match"].astype(np.int64) + 1)
                     * self._params["match_count_per_episode"].astype(np.int64))
-        over = ended & (self._steps >= game_len)
+        over = match_ended & (self._steps >= game_len)
         game_winner = np.where(over, np.argmax(wins, axis=1), -1)
         if self.game_reward and over.any():
             o_idx = np.flatnonzero(over)
             rewards[o_idx, game_winner[o_idx]] += self.game_reward
             rewards[o_idx, 1 - game_winner[o_idx]] -= self.game_reward
-        match_index = np.where(ended, prev_wins.sum(1), -1)
+        match_index = np.where(match_ended, prev_wins.sum(1), -1)
         self._wins = np.where(live[:, None], wins, self._wins)
+        ended = over                      # the episode is the game (module docs)
         self._live[ended] = False
         self._game_over |= over
         self._new[:] = False
@@ -783,16 +833,17 @@ class LuxVecEnv(VecEnvBase):
             "terminated": torch.from_numpy(ended.copy()),
             "truncated": torch.zeros(n, dtype=torch.bool),
             "winner": torch.from_numpy(winner.astype(np.int64)),
-            "episode_len": torch.from_numpy(np.where(ended, prev_ms + 1, 0).astype(np.int64)),
+            "episode_len": torch.from_numpy(np.where(ended, prev_steps + 1, 0).astype(np.int64)),
             "acted": acted,
             "applied": applied,
+            "match_ended": torch.from_numpy(match_ended.copy()),
             "game_over": torch.from_numpy(over.copy()),
             "game_winner": torch.from_numpy(game_winner.astype(np.int64)),
             "team_wins": torch.from_numpy(wins.copy()),
             "match_index": torch.from_numpy(match_index.astype(np.int64)),
         }
-        if self.autoreset and e_idx.size:
-            self.reset(env_ids=e_idx.tolist())
+        if self.autoreset and ended.any():
+            self.reset(env_ids=np.flatnonzero(ended).tolist())
         return self.observe(), torch.from_numpy(rewards), torch.from_numpy(ended), info
 
     # ------------------------------------------------------------------
