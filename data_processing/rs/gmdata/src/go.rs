@@ -9,7 +9,7 @@
 //! simulator): each record becomes that game's state ([`sgf_config`]: board size,
 //! komi, rules flag, HA, AB / AW stones), every frame is its encoder's output for the
 //! record's mover and every move its transition — so a gmsim frame of the same
-//! position is this frame, bit for bit (the `sim_parity` tests). This module keeps the
+//! position is this frame, bit for bit (tests/test_go_sim.py). This module keeps the
 //! SGF parsing, the record filters, the targets and the shard layout.
 //!
 //!   obs.board_seq   [T,4,N,N] f32
@@ -45,9 +45,6 @@ use std::path::{Path, PathBuf};
 /// The rules and encoders (gmrules), also for the labeller (`label/go.rs`).
 pub(crate) use gmrules::games::go::{encode_globals, encode_planes, globals_consts, opponent, Board, BLACK, EMPTY, GLOBAL_FEATURES,
                                     WHITE};
-
-#[cfg(test)]
-mod sim_parity;
 
 /// 2: + obs.globals_seq (side to move, komi, ruleset, handicap, last pass).
 pub const CONVERTER_VERSION: u32 = 2;

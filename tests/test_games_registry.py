@@ -29,7 +29,7 @@ GAME_OVERRIDES = {
 }
 # gmrules games register themselves (model/games/gmrules/): every one
 # must build with its simulator's frame dims
-GAME_OVERRIDES.update({g: {} for g in rules_games()})
+GAME_OVERRIDES.update({g: {} for g in rules_games() if g not in GAME_OVERRIDES})
 
 
 def test_registry_covers_all_games():
