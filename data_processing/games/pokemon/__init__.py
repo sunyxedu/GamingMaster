@@ -177,3 +177,19 @@ SPECIES_VOCAB_SIZE = VOCAB.n_species
 ITEM_VOCAB_SIZE = VOCAB.n_items
 ABILITY_VOCAB_SIZE = VOCAB.n_abilities
 TYPE_VOCAB_SIZE = VOCAB.n_types
+
+#: the formats of converter v5's ``obs.format_id`` (append-only; the same table as
+#: ``FORMATS`` in data_processing/rs/gmdata/src/pokemon.rs, pinned by
+#: tests/test_pokemon_vocab.py): Gen 9 6v6 singles with the standard mechanics. 0 = a
+#: format outside the table
+FORMATS = ("", "gen9ou", "gen9uu", "gen9ru", "gen9nu", "gen9pu", "gen9zu", "gen9lc", "gen9ubers",
+           "gen9ubersuu", "gen9monotype", "gen9anythinggoes", "gen9randombattle",
+           "gen9randombattleblitz")
+FORMAT_VOCAB_SIZE = len(FORMATS)
+
+
+def format_id(format: str) -> int:
+    """A format's id (Showdown's toID of its name: "[Gen 9] OU" → gen9ou); 0 = not in
+    the table."""
+    fid = "".join(c for c in format.lower() if c.isalnum())
+    return FORMATS.index(fid) if fid and fid in FORMATS else 0

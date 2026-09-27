@@ -33,9 +33,10 @@ The observer-view replay data cannot see hidden information (opponent
 movesets, items, exact stats); the encoder deliberately only consumes
 what the sim-protocol log reveals.
 
-Numeric per-slot features (``pokemon_feature_dim = 17``; the layout is
-the single source of truth shared with the converter via the
-``POKE_FEAT_*`` constants):
+Numeric per-slot features (``pokemon_feature_dim``: 17 for converter v1-v4
+shards and legacy configs, 18 from converter v5 on — shard meta
+``poke_features``; the layout is the single source of truth shared with the
+converter via the ``POKE_FEAT_*`` constants):
 
     0      hp_frac                  current HP fraction 0..1
     1      active                   is the currently active Pokémon
@@ -44,6 +45,8 @@ the single source of truth shared with the converter via the
     10-14  boosts / 6               atk/def/spa/spd/spe, clipped to ±1
     15     revealed                 has entered battle at least once
     16     tera                     is terastallized
+    17     level / 100              (v5) 1 in the level-100 tiers, 0.05 in Little
+                                    Cup, per Pokémon in the random battles
 
 Field-token features (``pokemon_field_features``: 20 for converter v1
 shards and legacy configs, 22 from converter v2 on — the trainers take it
@@ -79,6 +82,12 @@ obs keys:
     slot_tera_type [B, T, 12] long     the tera type once terastallized
   v3 showed the own active's revealed moves only: the opponent's revealed moves
   and every revealed item / ability never reached the network.
+  converter v5 (``pokemon_format_vocab`` > 0: the shard meta's format_vocab):
+    format_id      [B, T] long         the battle's format, an id of
+                                       data_processing.games.pokemon.FORMATS (Gen 9 OU,
+                                       UU, RU, NU, PU, ZU, LC, Ubers, Ubers UU, Monotype,
+                                       Anything Goes, the random battles; 0 = another),
+                                       embedded into the field token
 
 Frames (converter v2 / v3, data_processing/rs/gmdata/src/pokemon.rs): one
 per request the player answers — the team-preview lead, every turn (with a
@@ -165,7 +174,11 @@ POKE_FEAT_STATUS = 3          # 7 one-hot dims: none/brn/par/psn/tox/slp/frz
 POKE_FEAT_BOOSTS = 10         # 5 dims: atk/def/spa/spd/spe, /6 clipped
 POKE_FEAT_REVEALED = 15
 POKE_FEAT_TERA = 16
+#: per-slot features of converter v1-v4 shards (the config default: legacy nets)
 POKE_FEATURE_DIM = 17
+#: converter v5 appends level / 100 (shard meta "poke_features": 18)
+POKE_FEAT_LEVEL = 17
+POKE_FEATURE_DIM_V5 = 18
 
 #: field-token width of converter v1 shards (the config default: legacy nets)
 FIELD_FEATURE_DIM = 20
@@ -282,6 +295,10 @@ class PokemonConfig(ModelConfig):
     pokemon_item_vocab: int = 0
     pokemon_ability_vocab: int = 0
     pokemon_type_vocab: int = 0
+    #: the battle's format (converter v5, shard meta format_vocab: the id count of
+    #: data_processing/games/pokemon.FORMATS — Gen 9 OU, UU, ..., the random battles),
+    #: embedded into the field token; 0 = off (the default: older shards and configs)
+    pokemon_format_vocab: int = 0
 
 
 class PokemonEncoder(ObservationEncoder):
@@ -335,6 +352,14 @@ class PokemonEncoder(ObservationEncoder):
                 nn.init.trunc_normal_(e.weight, std=0.02)
                 with torch.no_grad():
                     e.weight[0].zero_()
+        # converter v5: the format (tier) of the battle, on the field token (id 0 = a
+        # format outside the table: the zero row)
+        self.format_vocab = getattr(cfg, "pokemon_format_vocab", 0)
+        if self.format_vocab > 0:
+            self.format_embed = nn.Embedding(self.format_vocab, cfg.d_model, padding_idx=0)
+            nn.init.trunc_normal_(self.format_embed.weight, std=0.02)
+            with torch.no_grad():
+                self.format_embed.weight[0].zero_()
 
     def forward(
         self,
@@ -353,8 +378,10 @@ class PokemonEncoder(ObservationEncoder):
         # Absent slots: zero the content, substitute the "empty" embedding
         # (zeroing also makes the output invariant to padded-slot garbage).
         x = x * present + self.slot_empty * (~present)
-        field = self.field_proj(obs["field_seq"]).unsqueeze(2)          # [B,T,1,d]
-        return torch.cat([x, field], dim=2)                            # [B,T,13,d]
+        field = self.field_proj(obs["field_seq"])                       # [B,T,d]
+        if self.format_vocab > 0:
+            field = field + self.format_embed(obs["format_id"].long())
+        return torch.cat([x, field.unsqueeze(2)], dim=2)               # [B,T,13,d]
 
     def positional_embedding(self) -> torch.Tensor:
         return self.slot_embed

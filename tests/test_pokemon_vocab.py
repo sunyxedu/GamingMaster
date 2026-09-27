@@ -396,3 +396,18 @@ def test_vendored_file_is_the_generator_output():
         texts = make_vocab.read_sources(make_vocab.SHOWDOWN_COMMIT, src)
         assert make_vocab.dumps(make_vocab.build(texts, make_vocab.SHOWDOWN_COMMIT, old=doc)) == \
             make_vocab.dumps(doc)
+
+
+def test_the_format_table_is_the_converters():
+    """converter v5's obs.format_id: the Python table (the live bot's) is the Rust one."""
+    import re
+
+    from data_processing.games.pokemon import FORMATS, format_id
+
+    src = open(os.path.join(ROOT, "data_processing", "rs", "gmdata", "src", "pokemon.rs")).read()
+    m = re.search(r"pub const FORMATS: \[&str; (\d+)\] = \[(.*?)\];", src, re.S)
+    rust = tuple(re.findall(r'"([^"]*)"', m.group(2)))
+    assert rust == FORMATS and int(m.group(1)) == len(FORMATS)
+    assert format_id("[Gen 9] OU") == 1 and format_id("gen9ou") == 1
+    assert format_id("[Gen 9] Random Battle") == FORMATS.index("gen9randombattle")
+    assert format_id("[Gen 9] National Dex") == 0 and format_id("") == 0

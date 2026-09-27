@@ -72,3 +72,120 @@ pub fn download(client: &reqwest::blocking::Client, url: &str, dest: &Path) -> R
     eprintln!("fetched {url} ({:.1} MB)", n as f64 / 1e6);
     Ok(true)
 }
+
+
+/// SHA-256 of a file, hex.
+pub fn sha256_file(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut f = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(hex::encode(h.finalize()))
+}
+
+/// Percent-encode a Hub file path for a `resolve` URL (keeps `/`).
+fn hf_path_url(path: &str) -> String {
+    let mut out = String::new();
+    for b in path.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Download the files of a Hugging Face dataset repo whose path `want` accepts into `out`
+/// (same relative paths), each checked against the SHA-256 of the Hub's LFS pointer (files
+/// without one: against their size).  Resumable: a file already present with the right
+/// checksum is skipped; a failed download is retried 5 times.  Writes `out/hf_files.json`
+/// (repo, commit, every file's path / size / sha256).
+pub fn fetch_hf_files(repo: &str, want: &dyn Fn(&str) -> bool, out: &Path) -> Result<serde_json::Value> {
+    use sha2::{Digest, Sha256};
+    use std::io::Write;
+    let client = http()?;
+    let info: serde_json::Value = client.get(format!("https://huggingface.co/api/datasets/{repo}"))
+        .send()?.error_for_status()?.json()?;
+    let commit = info["sha"].as_str().unwrap_or("main").to_string();
+    let tree: Vec<serde_json::Value> = client
+        .get(format!("https://huggingface.co/api/datasets/{repo}/tree/{commit}?recursive=true"))
+        .send()?.error_for_status()?.json()?;
+    let files: Vec<(String, u64, Option<String>)> = tree.iter()
+        .filter(|x| x["type"] == "file")
+        .filter_map(|x| {
+            let path = x["path"].as_str()?.to_string();
+            want(&path).then(|| (path, x["size"].as_u64().unwrap_or(0), x["lfs"]["oid"].as_str().map(str::to_string)))
+        })
+        .collect();
+    std::fs::create_dir_all(out)?;
+    std::fs::write(out.join("hf_files.json"), serde_json::to_vec_pretty(&serde_json::json!({
+        "repo": repo, "commit": commit,
+        "files": files.iter().map(|(p, n, h)| serde_json::json!({"path": p, "bytes": n, "sha256": h})).collect::<Vec<_>>(),
+    }))?)?;
+    let total: u64 = files.iter().map(|f| f.1).sum();
+    eprintln!("fetch-hf {repo}@{commit}: {} files, {:.2} GB", files.len(), total as f64 / 1e9);
+    let (mut got, mut cached) = (0usize, 0usize);
+    for (i, (path, size, sha)) in files.iter().enumerate() {
+        let dest = out.join(path);
+        let ok = |p: &Path| -> Result<bool> {
+            Ok(p.exists() && match sha {
+                Some(h) => sha256_file(p)? == *h,
+                None => std::fs::metadata(p)?.len() == *size,
+            })
+        };
+        if ok(&dest)? {
+            cached += 1;
+            continue;
+        }
+        if let Some(d) = dest.parent() {
+            std::fs::create_dir_all(d)?;
+        }
+        let tmp = PathBuf::from(format!("{}.part", dest.display()));
+        let url = format!("https://huggingface.co/datasets/{repo}/resolve/{commit}/{}", hf_path_url(path));
+        let mut last_err = None;
+        for attempt in 0..5 {
+            let r = (|| -> Result<String> {
+                let mut resp = client.get(&url).send()?.error_for_status()?;
+                let mut file = std::fs::File::create(&tmp)?;
+                let mut h = Sha256::new();
+                let mut buf = vec![0u8; 1 << 20];
+                loop {
+                    let n = resp.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    h.update(&buf[..n]);
+                    file.write_all(&buf[..n])?;
+                }
+                file.flush()?;
+                Ok(hex::encode(h.finalize()))
+            })();
+            match r {
+                Ok(digest) if sha.as_ref().map(|h| *h == digest).unwrap_or(true) => {
+                    last_err = None;
+                    break;
+                }
+                Ok(digest) => last_err = Some(anyhow::anyhow!("{path}: sha256 {digest} != {}", sha.as_deref().unwrap_or(""))),
+                Err(e) => last_err = Some(e),
+            }
+            eprintln!("[fetch-hf] {path}: attempt {} failed: {}", attempt + 1, last_err.as_ref().unwrap());
+            std::thread::sleep(Duration::from_secs(10 * (attempt + 1) as u64));
+        }
+        if let Some(e) = last_err {
+            std::fs::remove_file(&tmp).ok();
+            return Err(e);
+        }
+        std::fs::rename(&tmp, &dest)?;
+        got += 1;
+        eprintln!("[{}/{}] {path} {:.1} MB", i + 1, files.len(), *size as f64 / 1e6);
+    }
+    Ok(serde_json::json!({"repo": repo, "commit": commit, "files": files.len(), "downloaded": got, "cached": cached,
+                          "bytes": total}))
+}

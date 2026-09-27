@@ -25,6 +25,8 @@ serde.workspace = true
 serde_json.workspace = true
 rayon.workspace = true
 reqwest.workspace = true
+sha2.workspace = true
+hex.workspace = true
 zip = { version = "2", default-features = false, features = ["deflate"] }
 flate2 = "1"
 bzip2 = "0.4"

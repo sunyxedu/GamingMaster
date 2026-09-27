@@ -165,7 +165,10 @@ META_ARCH_KEYS = {
                 # converter v4: every slot's revealed item / ability / tera type
                 "item_vocab": ("pokemon_item_vocab",),
                 "ability_vocab": ("pokemon_ability_vocab",),
-                "type_vocab": ("pokemon_type_vocab",)},
+                "type_vocab": ("pokemon_type_vocab",),
+                # converter v5: the per-slot level, the battle's format
+                "poke_features": ("pokemon_feature_dim",),
+                "format_vocab": ("pokemon_format_vocab",)},
     # gio records (GeneralsGioDataset.shard_meta / `gmdata generals shard`);
     # with turn_globals the net has TURN_GLOBAL_FEATURES more globals than
     # the data (meta_arch_value), appended at batch time (OBS_HOOKS)
@@ -223,7 +226,8 @@ META_LEGACY = {
     "lux": {"global_features": 6, "sap_range": 0},
     "clash_royale": {"card_tokens": "hand"},
     "pokemon": {"field_features": 20, "move_vocab": 0, "species_vocab": 0,
-                "item_vocab": 0, "ability_vocab": 0, "type_vocab": 0},
+                "item_vocab": 0, "ability_vocab": 0, "type_vocab": 0,
+                "poke_features": 17, "format_vocab": 0},
     "mahjong": {"tile_features": 16},
 }
 
@@ -249,7 +253,7 @@ META_MISMATCH_HINTS = {
 # the frozen inputs / targets, so the trainers warn (or, with
 # --require_frozen_schema, refuse).
 SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 4, "lux": 3,
-                                   "clash_royale": 3, "pokemon": 4}
+                                   "clash_royale": 3, "pokemon": 5}
 _SCHEMA_FREEZE_CONTENT = {
     "chess": "repetition flags + legal masks",
     "go": "side-to-move/komi globals",
@@ -265,7 +269,8 @@ _SCHEMA_FREEZE_CONTENT = {
                "colliding buckets), move-identity targets, forced-switch / lead / "
                "unlabelled-turn frames, request-phase flags + legal masks; every slot's "
                "revealed moves / item / ability / tera type (older shards show the own "
-               "active's moves only)",
+               "active's moves only); every slot's level and the battle's format (older "
+               "shards: level-100 Gen 9 OU only)",
 }
 
 

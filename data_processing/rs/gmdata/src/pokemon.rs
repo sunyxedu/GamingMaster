@@ -106,6 +106,37 @@
 //! shows them only once revealed, and filling them in from the whole replay would tell a frame
 //! which Pokémon come in and act later (a future leak).
 //!
+//! converter_version 5: more formats, levels, dumps.
+//!
+//!   obs.poke_feats [T,12,18]     + [17] level / 100 (details `L<n>`, 100 when not given): 1 in
+//!                                the level-100 tiers, 0.05 in Little Cup, per Pokémon in the
+//!                                random battles
+//!   obs.format_id [T] i64        the battle's format, an id of FORMATS (Gen 9 6v6 singles with
+//!                                the standard mechanics: OU, UU, RU, NU, PU, ZU, LC, Ubers,
+//!                                Ubers UU, Monotype, Anything Goes, the random battles); 0 = a
+//!                                format outside the table.  Shard meta + `poke_features`,
+//!                                `format_vocab`, `formats`.
+//!
+//! Inputs (`--input`, repeatable): directories of the replay API's `.json` objects and / or
+//! parquet dumps with its columns (id, log, rating, format / formatid, players, uploadtime:
+//! HolidayOugi/pokemon-showdown-replays, milkkarten/pokemon-showdown-replays-merged on
+//! Hugging Face, fetched by `fetch-hf`); a replay id is converted once, from the first input
+//! that has it.  Selection (`Select`):
+//!   * `--formats` keeps those formats;
+//!   * `--min-rating R`: a rated battle's rating must reach R.  The rating Showdown stores is
+//!     `min(p1, p2)` of the players' Elo after the battle (server/ladders-remote.ts: `room.rated
+//!     = Math.min(p1NewElo, p2NewElo)`; at matchmaking the lower pre-battle Elo, ladders.ts),
+//!     so R is a bound on BOTH players;
+//!   * `--players P --min-peak K [--min-peak-games N]`: both players' highest battle rating in
+//!     the format (the `players` table over the same inputs; a lower bound of their peak Elo,
+//!     robust to accounts still climbing from 1000) must reach K with ≥ N rated battles — this
+//!     also admits unrated battles (tournaments, challenges) between proven players.
+//!
+//!   $G pokemon fetch-hf --dataset HolidayOugi/pokemon-showdown-replays --match "[Gen 9] OU" --out $P/hf
+//!   $G pokemon players --input $P/hf --input $P/raw --formats gen9ou --out $P/players.json
+//!   $G pokemon convert --input $P/raw --input $P/hf --formats gen9ou --min-rating 1500 \
+//!       --players $P/players.json --min-peak 1700 --min-turns 5 --exclude-inactivity --out $P/shards_v5
+//!
 //! Re-conversion (v1 / v2 shards are obsolete: hashed, colliding move / species ids) — on the
 //! cluster from the checkout root (`cargo build --release -p gmdata` in data_processing/; the
 //! fetch is resumable and skips replays already on disk — without internet access on the
@@ -149,9 +180,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-pub const CONVERTER_VERSION: u32 = 4;
+pub const CONVERTER_VERSION: u32 = 5;
 const TEAM: usize = 6;
-const FEAT: usize = 17;
+const FEAT: usize = 18;
 const FIELD: usize = 22;
 const MOVES: usize = 4;
 const F_HP: usize = 0;
@@ -161,6 +192,36 @@ const F_STATUS: usize = 3;
 const F_BOOSTS: usize = 10;
 const F_REVEALED: usize = 15;
 const F_TERA: usize = 16;
+/// level / 100 (converter v5): 1 in the level-100 tiers, 0.05 in Little Cup, per Pokémon in
+/// the random battles
+const F_LEVEL: usize = 17;
+
+/// The formats a sample may come from (converter v5, obs.format_id; append-only: an id never
+/// changes meaning).  0 = a format not in the table.  All are Gen 9 6v6 singles with the
+/// standard Gen 9 mechanics (team preview except the random battles); tiers differ only in
+/// which Pokémon / moves / items are allowed.  Formats with other mechanics (National Dex:
+/// Mega Evolution and Z-moves; Almost Any Ability, Balanced Hackmons, STABmons; 1v1, Battle
+/// Stadium Singles' pick-3; doubles) are not in the table.
+pub const FORMATS: [&str; 14] = ["", "gen9ou", "gen9uu", "gen9ru", "gen9nu", "gen9pu", "gen9zu", "gen9lc", "gen9ubers",
+    "gen9ubersuu", "gen9monotype", "gen9anythinggoes", "gen9randombattle", "gen9randombattleblitz"];
+
+/// The format id of a replay record: its `formatid`, else its display `format` normalised the
+/// way Showdown's toID does ("[Gen 9] OU" → "gen9ou").
+fn record_format(r: &Value) -> String {
+    let raw = r.get("formatid").and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+        .or_else(|| r.get("format").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    norm(raw)
+}
+
+fn format_id(format: &str) -> i64 {
+    FORMATS.iter().position(|&f| !f.is_empty() && f == format).unwrap_or(0) as i64
+}
+
+/// The level in a details string ("Garchomp, L80, M" → 80); None = not given (level 100).
+fn details_level(details: &str) -> Option<u8> {
+    details.split(',').skip(1).map(str::trim).find_map(|t| t.strip_prefix('L')?.parse::<u8>().ok())
+}
 /// obs.field_seq flag: the frame answers a forced-switch request
 const FLD_FORCED: usize = 20;
 /// obs.field_seq flag: the frame answers the team-preview (lead) request
@@ -397,11 +458,18 @@ struct Mon {
     ability: String,
     /// the tera type the log has revealed ("" = not terastallized yet)
     tera_type: String,
+    /// its level (details `L<n>`; 100 when not given)
+    level: u8,
 }
 
 impl Mon {
     fn new(species: String) -> Self {
-        Mon { species, hp: 1.0, ..Default::default() }
+        Mon { species, hp: 1.0, level: 100, ..Default::default() }
+    }
+    fn with_details(details: &str) -> Self {
+        let mut m = Mon::new(base_species(details));
+        m.level = details_level(details).unwrap_or(100);
+        m
     }
     /// the moveset in effect (the transformed one while transformed)
     fn moves_now(&self) -> &[String] {
@@ -465,7 +533,7 @@ impl SideSt {
             }
         }
         if self.team.len() < TEAM {
-            self.team.push(Mon::new(sp));
+            self.team.push(Mon::with_details(details));
             let i = self.team.len() - 1;
             return self.assign(nick, i);
         }
@@ -586,6 +654,7 @@ fn encode(b: &Battle, side: usize) -> Frame {
             }
             f[F_REVEALED] = p.revealed as u8 as f32;
             f[F_TERA] = p.tera as u8 as f32;
+            f[F_LEVEL] = p.level as f32 / 100.0;
         }
     }
     let mut fld = vec![0f32; FIELD];
@@ -850,7 +919,7 @@ fn parse_log(log: &str) -> Parse {
                     let s = &mut b.sides[si];
                     s.previewed = true;
                     if s.team.len() < TEAM {
-                        s.team.push(Mon::new(base_species(a(1))));
+                        s.team.push(Mon::with_details(a(1)));
                     }
                 }
                 preview = true;
@@ -939,6 +1008,9 @@ fn parse_log(log: &str) -> Parse {
                 let sp = base_species(a(1));
                 if p.species.ends_with(HIDDEN_FORME) && !sp.is_empty() {
                     p.species = sp;
+                }
+                if let Some(l) = details_level(a(1)) {
+                    p.level = l;
                 }
                 if args.len() >= 3 && !a(2).is_empty() {
                     let (hp, st, fnt) = parse_hp(a(2));
@@ -1153,6 +1225,9 @@ fn parse_log(log: &str) -> Parse {
                 let sp = base_species(a(1));
                 if let (Some(slot), false) = (b.sides[pi].slot_of(&nick), sp.is_empty()) {
                     b.sides[pi].team[slot].species = sp;
+                    if let Some(l) = details_level(a(1)) {
+                        b.sides[pi].team[slot].level = l;
+                    }
                 }
                 continue;
             }
@@ -1329,6 +1404,7 @@ fn replay_samples(r: &Value, p: &Parse, winner_only: bool, unk: &mut UnkNames) -
         }
         let v = if w == side { 1.0 } else { -1.0 };
         let fmt = r.get("formatid").or_else(|| r.get("format")).cloned().unwrap_or_else(|| json!("?"));
+        let fid = format_id(&record_format(r));
         out.push(Sample::new(json!({"replay_id": r.get("id").cloned().unwrap_or(json!("?")), "side": (if side == 0 { "p1" } else { "p2" }),
                                      "player": p.names[side], "rating": r.get("rating").cloned().unwrap_or(Value::Null),
                                      "format": fmt, "won": w == side}))
@@ -1342,6 +1418,7 @@ fn replay_samples(r: &Value, p: &Parse, winner_only: bool, unk: &mut UnkNames) -
             .bool("obs.slot_no_item", &[2 * TEAM], sni)
             .i64("obs.slot_ability", &[2 * TEAM], sab)
             .i64("obs.slot_tera_type", &[2 * TEAM], ste)
+            .i64("obs.format_id", &[], vec![fid; t])
             .i64("tgt.action_type", &[], at)
             .bool("tgt.action_known", &[], known)
             .i64("tgt.move_id", &[], mid)
@@ -1371,16 +1448,57 @@ pub enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Convert replay .json files to gm-shards
-    Convert {
+    /// Download replay dumps (parquet) of a Hugging Face dataset: the files whose names
+    /// contain one of `--match` (resumable, SHA-256 checked against the Hub's LFS pointers)
+    FetchHf {
+        /// e.g. HolidayOugi/pokemon-showdown-replays or milkkarten/pokemon-showdown-replays-merged
         #[arg(long)]
-        input: PathBuf,
+        dataset: String,
+        /// substrings of the file names to take (e.g. "[Gen 9] OU_part"); none = every parquet file
+        #[arg(long = "match")]
+        matches: Vec<String>,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Per format and player: the rated battles seen and the highest battle rating — a player's
+    /// strength estimate (a battle's rating is the lower of both players' Elo, so a player's
+    /// highest one is a lower bound of their peak)
+    Players {
+        /// replay directories (.json) and / or parquet dumps; a replay id counts once
+        #[arg(long, required = true)]
+        input: Vec<PathBuf>,
+        /// formats to count (ids as in FORMATS, comma-separated); none = all
+        #[arg(long, value_delimiter = ',')]
+        formats: Vec<String>,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Convert replays (.json files and / or parquet dumps) to gm-shards
+    Convert {
+        /// replay directories (.json) and / or parquet dumps (files or directories); a replay
+        /// id is converted once, from the first input that has it
+        #[arg(long, required = true)]
+        input: Vec<PathBuf>,
         #[arg(long)]
         out: PathBuf,
         #[arg(long, default_value_t = 256)]
         shard_size: usize,
+        /// a rated battle's rating (the lower of both players' Elo) must reach this; unrated
+        /// battles pass only through `--players` / `--min-peak`
         #[arg(long, default_value_t = 0)]
         min_rating: i64,
+        /// formats to keep (ids as in FORMATS, comma-separated); none = all
+        #[arg(long, value_delimiter = ',')]
+        formats: Vec<String>,
+        /// the `players` table: with `--min-peak`, both players' highest battle rating in the
+        /// format must reach it (rated and unrated battles alike)
+        #[arg(long)]
+        players: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        min_peak: i64,
+        /// with `--min-peak`: both players need at least this many rated battles in the format
+        #[arg(long, default_value_t = 1)]
+        min_peak_games: i64,
         #[arg(long)]
         max_replays: Option<usize>,
         /// drop replays shorter than this many turns
@@ -1476,40 +1594,260 @@ fn fetch(format: &str, min_rating: i64, max: usize, sleep_ms: u64, out: &Path) -
     Ok(json!({"listed": listed, "downloaded": downloaded, "skipped_rating": low, "skipped_existing": existing, "errors": errors}))
 }
 
-pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max_replays: Option<usize>, q: Quality) -> Result<Value> {
+/// Which battles a conversion keeps beyond the per-replay quality filters.
+#[derive(Default)]
+pub struct Select {
+    pub min_rating: i64,
+    /// formats to keep (empty = all)
+    pub formats: Vec<String>,
+    /// format → player id → (rated battles, highest battle rating)
+    pub players: Option<HashMap<String, HashMap<String, (i64, i64)>>>,
+    pub min_peak: i64,
+    pub min_peak_games: i64,
+}
+
+impl Select {
+    /// None = keep, Some(reason) = the stat the replay is dropped under
+    fn verdict(&self, r: &Value, format: &str) -> Option<&'static str> {
+        if !self.formats.is_empty() && !self.formats.iter().any(|f| f == format) {
+            return Some("other_format");
+        }
+        let rating = record_rating(r);
+        if self.min_rating > 0 {
+            match rating {
+                Some(x) if x >= self.min_rating as f64 => {}
+                Some(_) => return Some("low_rating"),
+                None if self.players.is_none() => return Some("unrated"),
+                None => {}
+            }
+        }
+        if let Some(table) = &self.players {
+            if self.min_peak > 0 {
+                let t = table.get(format);
+                let ok = record_players(r).len() == 2 && record_players(r).iter().all(|p| {
+                    t.and_then(|t| t.get(&norm(p))).map(|&(n, peak)| n >= self.min_peak_games && peak >= self.min_peak).unwrap_or(false)
+                });
+                if !ok {
+                    return Some("low_peak");
+                }
+            }
+        }
+        None
+    }
+}
+
+/// A replay's rating: None for unrated battles (missing, null or 0).
+fn record_rating(r: &Value) -> Option<f64> {
+    r.get("rating").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).filter(|&x| x > 0.0)
+}
+
+/// The player names of a replay record: its `players` list, else the log's `|player|` lines.
+fn record_players(r: &Value) -> Vec<String> {
+    if let Some(a) = r.get("players").and_then(|v| v.as_array()) {
+        let v: Vec<String> = a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
+        if v.len() == 2 {
+            return v;
+        }
+    }
+    let mut out = vec![String::new(), String::new()];
+    for l in r.get("log").and_then(|v| v.as_str()).unwrap_or("").lines().take(64) {
+        let f: Vec<&str> = l.split('|').collect();
+        if f.len() >= 4 && f[1] == "player" && !f[3].is_empty() {
+            if let Some(i) = side_idx(f[2]) {
+                out[i] = f[3].to_string();
+            }
+        }
+    }
+    out.retain(|x| !x.is_empty());
+    out
+}
+
+/// A string column of a record batch (Utf8 or LargeUtf8), row by row.
+fn str_col(batch: &arrow_array::RecordBatch, name: &str) -> Option<Vec<Option<String>>> {
+    use arrow_array::{Array, LargeStringArray, StringArray};
+    let c = batch.column_by_name(name)?;
+    if let Some(a) = c.as_any().downcast_ref::<StringArray>() {
+        return Some((0..a.len()).map(|i| (!a.is_null(i)).then(|| a.value(i).to_string())).collect());
+    }
+    if let Some(a) = c.as_any().downcast_ref::<LargeStringArray>() {
+        return Some((0..a.len()).map(|i| (!a.is_null(i)).then(|| a.value(i).to_string())).collect());
+    }
+    let c = arrow_cast::cast(c, &arrow_schema::DataType::Utf8).ok()?;
+    let a = c.as_any().downcast_ref::<StringArray>()?;
+    Some((0..a.len()).map(|i| (!a.is_null(i)).then(|| a.value(i).to_string())).collect())
+}
+
+/// The `players` column: a list of names (List / LargeList of strings) or a string holding a
+/// Python-style list ("['a', 'b']").
+fn players_col(batch: &arrow_array::RecordBatch) -> Option<Vec<Option<Value>>> {
+    use arrow_array::{Array, LargeListArray, ListArray};
+    let c = batch.column_by_name("players")?;
+    let names = |v: std::sync::Arc<dyn Array>| -> Option<Value> {
+        let s = arrow_cast::cast(&v, &arrow_schema::DataType::Utf8).ok()?;
+        let s = s.as_any().downcast_ref::<arrow_array::StringArray>()?;
+        Some(json!((0..s.len()).filter(|&i| !s.is_null(i)).map(|i| s.value(i).to_string()).collect::<Vec<_>>()))
+    };
+    if let Some(a) = c.as_any().downcast_ref::<ListArray>() {
+        return Some((0..a.len()).map(|i| if a.is_null(i) { None } else { names(a.value(i)) }).collect());
+    }
+    if let Some(a) = c.as_any().downcast_ref::<LargeListArray>() {
+        return Some((0..a.len()).map(|i| if a.is_null(i) { None } else { names(a.value(i)) }).collect());
+    }
+    let strs = str_col(batch, "players")?;
+    Some(strs.into_iter().map(|s| {
+        s.map(|s| json!(s.trim_matches(|c| c == '[' || c == ']').split(',')
+            .map(|x| x.trim().trim_matches(|c| c == '\'' || c == '"').to_string()).filter(|x| !x.is_empty()).collect::<Vec<_>>()))
+    }).collect())
+}
+
+fn f64_col(batch: &arrow_array::RecordBatch, name: &str) -> Option<Vec<Option<f64>>> {
+    use arrow_array::Array;
+    let c = batch.column_by_name(name)?;
+    let c = arrow_cast::cast(c, &arrow_schema::DataType::Float64).ok()?;
+    let a = c.as_any().downcast_ref::<arrow_array::Float64Array>()?.clone();
+    Some((0..a.len()).map(|i| (!a.is_null(i)).then(|| a.value(i))).collect())
+}
+
+/// Every replay record of `inputs` — directories / files of replay `.json` (the replay API's
+/// objects) and parquet dumps with its columns (id, log, rating, format / formatid, players,
+/// uploadtime) — each replay id once, from the first input that has it.  `f` returns false to
+/// stop.  Returns (records passed on, duplicates skipped, unreadable entries).
+fn iter_records(inputs: &[PathBuf], f: &mut dyn FnMut(Value) -> Result<bool>) -> Result<(usize, usize, usize)> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let (mut n, mut dup, mut bad) = (0usize, 0usize, 0usize);
+    let mut take = |r: Value, n: &mut usize, dup: &mut usize| -> Result<bool> {
+        if let Some(id) = r.get("id").and_then(|v| v.as_str()) {
+            if !seen.insert(id.to_string()) {
+                *dup += 1;
+                return Ok(true);
+            }
+        }
+        *n += 1;
+        f(r)
+    };
+    for input in inputs {
+        let files = common::find_files(input, &[".json", ".parquet"])?;
+        for path in files {
+            if path.extension().map(|e| e == "parquet").unwrap_or(false) {
+                let file = std::fs::File::open(&path).with_context(|| format!("open {}", path.display()))?;
+                let bld = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(file)
+                    .with_context(|| format!("parquet {}", path.display()))?;
+                let schema = bld.schema().clone();
+                let want = ["id", "log", "rating", "format", "formatid", "players", "uploadtime"];
+                let cols: Vec<usize> = want.iter().filter_map(|c| schema.index_of(c).ok()).collect();
+                let mask = parquet::arrow::ProjectionMask::roots(bld.parquet_schema(), cols);
+                for batch in bld.with_projection(mask).with_batch_size(256).build()? {
+                    let batch = batch?;
+                    let ids = str_col(&batch, "id");
+                    let logs = str_col(&batch, "log").context("parquet replays need a `log` column")?;
+                    let fmt = str_col(&batch, "format");
+                    let fid = str_col(&batch, "formatid");
+                    let rat = f64_col(&batch, "rating");
+                    let up = f64_col(&batch, "uploadtime");
+                    let pl = players_col(&batch);
+                    for (i, log) in logs.into_iter().enumerate() {
+                        let Some(log) = log else {
+                            bad += 1;
+                            continue;
+                        };
+                        let pick = |v: &Option<Vec<Option<String>>>| v.as_ref().and_then(|v| v[i].clone());
+                        let mut r = json!({"log": log});
+                        if let Some(x) = pick(&ids) { r["id"] = json!(x); }
+                        if let Some(x) = pick(&fmt) { r["format"] = json!(x); }
+                        if let Some(x) = pick(&fid) { r["formatid"] = json!(x); }
+                        if let Some(x) = rat.as_ref().and_then(|v| v[i]) { r["rating"] = json!(x); }
+                        if let Some(x) = up.as_ref().and_then(|v| v[i]) { r["uploadtime"] = json!(x as i64); }
+                        if let Some(x) = pl.as_ref().and_then(|v| v[i].clone()) { r["players"] = x; }
+                        if !take(r, &mut n, &mut dup)? {
+                            return Ok((n, dup, bad));
+                        }
+                    }
+                }
+            } else {
+                match std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
+                    Some(v @ Value::Object(_)) if v.get("log").is_some() => {
+                        if !take(v, &mut n, &mut dup)? {
+                            return Ok((n, dup, bad));
+                        }
+                    }
+                    _ => bad += 1,
+                }
+            }
+        }
+    }
+    Ok((n, dup, bad))
+}
+
+/// The `players` table: per format, per player id (toID of the name), (rated battles, highest
+/// battle rating).
+pub fn players(inputs: &[PathBuf], formats: &[String]) -> Result<Value> {
+    let mut t: BTreeMap<String, HashMap<String, (i64, i64)>> = BTreeMap::new();
+    let (mut rated, mut unrated) = (0usize, 0usize);
+    let (n, dup, bad) = iter_records(inputs, &mut |r: Value| {
+        let fmt = record_format(&r);
+        if !formats.is_empty() && !formats.iter().any(|f| *f == fmt) {
+            return Ok(true);
+        }
+        let Some(x) = record_rating(&r) else {
+            unrated += 1;
+            return Ok(true);
+        };
+        rated += 1;
+        let m = t.entry(fmt).or_default();
+        for p in record_players(&r) {
+            let e = m.entry(norm(&p)).or_insert((0, 0));
+            e.0 += 1;
+            e.1 = e.1.max(x.round() as i64);
+        }
+        Ok(true)
+    })?;
+    let table: BTreeMap<&String, BTreeMap<&String, [i64; 2]>> =
+        t.iter().map(|(f, m)| (f, m.iter().map(|(p, &(k, peak))| (p, [k, peak])).collect())).collect();
+    Ok(json!({"records": n, "duplicates": dup, "unreadable": bad, "rated": rated, "unrated": unrated,
+              "players": t.iter().map(|(f, m)| (f.clone(), m.len())).collect::<BTreeMap<_, _>>(), "table": table}))
+}
+
+fn load_players(path: &Path) -> Result<HashMap<String, HashMap<String, (i64, i64)>>> {
+    let v: Value = serde_json::from_slice(&std::fs::read(path).with_context(|| format!("read {}", path.display()))?)?;
+    let mut out = HashMap::new();
+    for (f, m) in v["table"].as_object().context("players file needs a `table`")? {
+        let mut pm = HashMap::new();
+        for (p, a) in m.as_object().context("table entries are objects")? {
+            pm.insert(p.clone(), (a[0].as_i64().unwrap_or(0), a[1].as_i64().unwrap_or(0)));
+        }
+        out.insert(f.clone(), pm);
+    }
+    Ok(out)
+}
+
+pub fn convert(inputs: &[PathBuf], out: &Path, shard_size: usize, sel: &Select, max_replays: Option<usize>, q: Quality) -> Result<Value> {
     let voc = vocab();
-    let meta = json!({"field_features": FIELD, "move_vocab": voc.n_moves, "species_vocab": voc.n_species,
+    let meta = json!({"field_features": FIELD, "poke_features": FEAT, "move_vocab": voc.n_moves, "species_vocab": voc.n_species,
                       "item_vocab": voc.n_items, "ability_vocab": voc.n_abilities, "type_vocab": voc.n_types,
-                      "vocab_version": voc.version});
+                      "format_vocab": FORMATS.len(), "formats": FORMATS, "vocab_version": voc.version});
     let mut w = ShardWriter::new(out, "pokemon", CONVERTER_VERSION, meta, shard_size)?;
-    let mut st: BTreeMap<&str, usize> = ["seen", "kept", "samples", "frames", "no_winner", "low_rating", "not_replay", "low_quality"].into_iter().map(|k| (k, 0)).collect();
+    let mut st: BTreeMap<&str, usize> = ["seen", "kept", "samples", "frames", "no_winner", "low_rating", "unrated", "low_peak",
+        "other_format", "low_quality"].into_iter().map(|k| (k, 0)).collect();
     let mut labels: BTreeMap<String, usize> = BTreeMap::new();
     let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
+    let mut per_format: BTreeMap<String, usize> = BTreeMap::new();
     let mut unk = UnkNames::default();
-    let mut files: Vec<PathBuf> = std::fs::read_dir(input)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().map(|e| e == "json").unwrap_or(false)).collect();
-    files.sort();
-    for path in files {
+    let (records, duplicates, unreadable) = iter_records(inputs, &mut |r: Value| {
         if max_replays.map(|m| st["kept"] >= m).unwrap_or(false) {
-            break;
+            return Ok(false);
         }
-        let r: Value = match std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()) {
-            Some(v @ Value::Object(_)) if v.get("log").is_some() => v,
-            _ => {
-                *st.get_mut("not_replay").unwrap() += 1;
-                continue;
-            }
-        };
         *st.get_mut("seen").unwrap() += 1;
-        if min_rating > 0 && r["rating"].as_f64().unwrap_or(0.0) < min_rating as f64 {
-            *st.get_mut("low_rating").unwrap() += 1;
-            continue;
+        let fmt = record_format(&r);
+        if let Some(why) = sel.verdict(&r, &fmt) {
+            *st.get_mut(why).unwrap() += 1;
+            return Ok(true);
         }
         let log = r["log"].as_str().unwrap_or("");
         if (q.min_turns > 0 && n_turns(log) < q.min_turns)
             || (q.exclude_forfeit && log.contains(" forfeited."))
             || (q.exclude_inactivity && log.contains("due to inactivity")) {
             *st.get_mut("low_quality").unwrap() += 1;
-            continue;
+            return Ok(true);
         }
         let p = parse_log(log);
         for (k, v) in &p.unknown {
@@ -1517,13 +1855,14 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max
         }
         if p.winner.is_none() {
             *st.get_mut("no_winner").unwrap() += 1;
-            continue;
+            return Ok(true);
         }
         let ss = replay_samples(&r, &p, q.winner_only, &mut unk);
         if ss.is_empty() {
-            continue;
+            return Ok(true);
         }
         *st.get_mut("kept").unwrap() += 1;
+        *per_format.entry(fmt).or_default() += 1;
         for (k, v) in &p.stats {
             *labels.entry(k.clone()).or_default() += v;
         }
@@ -1532,9 +1871,14 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_rating: i64, max
             *st.get_mut("frames").unwrap() += s.frames()?;
             w.push(s)?;
         }
-    }
+        Ok(true)
+    })?;
     w.flush()?;
     let mut v = json!(st);
+    v["records"] = json!(records);
+    v["duplicates"] = json!(duplicates);
+    v["not_replay"] = json!(unreadable);
+    v["kept_per_format"] = json!(per_format);
     v["shards"] = json!(w.written_shards);
     v["labels"] = json!(labels);
     v["unknown"] = json!(unknown);
@@ -1552,16 +1896,35 @@ pub fn run(cmd: Cmd) -> Result<()> {
             println!("{}", fetch(&format, min_rating, max_replays, sleep_ms, &out)?);
             Ok(())
         }
-        Cmd::Convert { input, out, shard_size, min_rating, max_replays, min_turns, exclude_forfeit, exclude_inactivity,
-                       winner_only, hq } => {
+        Cmd::FetchHf { dataset, matches, out } => {
+            println!("{}", common::fetch_hf_files(&dataset, &|name: &str| {
+                name.ends_with(".parquet") && (matches.is_empty() || matches.iter().any(|m| name.contains(m.as_str())))
+            }, &out)?);
+            Ok(())
+        }
+        Cmd::Players { input, formats, out } => {
+            let v = players(&input, &formats)?;
+            std::fs::write(&out, serde_json::to_vec(&v)?)?;
+            let mut summary = v.clone();
+            summary.as_object_mut().unwrap().remove("table");
+            println!("{summary}");
+            Ok(())
+        }
+        Cmd::Convert { input, out, shard_size, min_rating, formats, players, min_peak, min_peak_games, max_replays, min_turns,
+                       exclude_forfeit, exclude_inactivity, winner_only, hq } => {
             let mut q = Quality { min_turns, exclude_forfeit, exclude_inactivity, winner_only };
-            let mut min_rating = min_rating;
+            let mut sel = Select { min_rating, formats, players: None, min_peak, min_peak_games };
             if hq {
-                min_rating = min_rating.max(1500);
+                sel.min_rating = sel.min_rating.max(1500);
                 q.min_turns = q.min_turns.max(5);
                 q.exclude_inactivity = true;
             }
-            println!("{}", convert(&input, &out, shard_size, min_rating, max_replays, q)?);
+            if let Some(p) = players {
+                sel.players = Some(load_players(&p)?);
+            } else if min_peak > 0 {
+                anyhow::bail!("--min-peak needs --players (the table of `gmdata pokemon players`)");
+            }
+            println!("{}", convert(&input, &out, shard_size, &sel, max_replays, q)?);
             Ok(())
         }
     }
@@ -2030,5 +2393,133 @@ mod tests {
         let mut unk = UnkNames::default();
         assert_eq!(replay_samples(&json!({"id": "t"}), &p, true, &mut unk).len(), 1);
         assert_eq!((unk.moves["Zz Quake"], unk.species["Zzmon"]), (6, 4));
+    }
+
+    fn f32s(s: &Sample, name: &str) -> Vec<f32> {
+        match &s.tensors.iter().find(|t| t.name == name).expect(name).col {
+            gmshard::Column::F32(v) => v.clone(),
+            _ => panic!("{name} is not an f32 tensor"),
+        }
+    }
+
+    #[test]
+    fn levels_and_formats() {
+        assert_eq!(details_level("Garchomp, L80, M"), Some(80));
+        assert_eq!(details_level("Pikachu, L5"), Some(5));
+        assert_eq!(details_level("Great Tusk"), None);
+        assert_eq!(details_level("Landorus-Therian, M, shiny"), None);
+        for (raw, id) in [("[Gen 9] OU", "gen9ou"), ("[Gen 9] Random Battle", "gen9randombattle"),
+            ("[Gen 9] RANDOMBATTLE (BLITZ)", "gen9randombattleblitz"), ("[Gen 9] Ubers UU", "gen9ubersuu")] {
+            assert_eq!(record_format(&json!({"format": raw})), id);
+        }
+        assert_eq!(record_format(&json!({"formatid": "gen9uu", "format": "[Gen 9] OU"})), "gen9uu");
+        assert_eq!(format_id("gen9ou"), 1);
+        assert_eq!(format_id("gen9nationaldex"), 0);
+        assert_eq!(format_id(""), 0);
+        // a random battle: no team preview, per-Pokémon levels on the switch lines
+        let log = ["|player|p1|Alice|", "|player|p2|Bob|", "|start", "|switch|p1a: Garchomp|Garchomp, L80, M|100/100",
+            "|switch|p2a: Snorlax|Snorlax, L88, F|100/100", "|turn|1", "|move|p1a: Garchomp|Earthquake|p2a: Snorlax",
+            "|move|p2a: Snorlax|Rest|p2a: Snorlax", "|upkeep", "|turn|2", "|win|Alice"].join("\n");
+        let p = parse_log(&log);
+        let mut unk = UnkNames::default();
+        let s = replay_samples(&json!({"id": "gen9randombattle-1", "formatid": "gen9randombattle"}), &p, false, &mut unk);
+        let f = f32s(&s[0], "obs.poke_feats");
+        let first = &f[..2 * TEAM * FEAT];
+        assert_eq!(first[F_LEVEL], 0.8, "own Garchomp");
+        assert_eq!(first[TEAM * FEAT + F_LEVEL], 0.88, "the opponent's Snorlax");
+        assert_eq!(first[FEAT + F_LEVEL], 0.0, "an unknown slot");
+        assert!(i64s(&s[0], "obs.format_id").iter().all(|&x| x == format_id("gen9randombattle")));
+        // team preview levels (Little Cup) reach the unrevealed slots too
+        let log = ["|player|p1|Alice|", "|player|p2|Bob|", "|poke|p1|Pawniard, L5, M|", "|poke|p1|Mudbray, L5|",
+            "|poke|p2|Foongus, L5|", "|teampreview", "|start", "|switch|p1a: Pawniard|Pawniard, L5, M|100/100",
+            "|switch|p2a: Foongus|Foongus, L5|100/100", "|turn|1", "|win|Bob"].join("\n");
+        let p = parse_log(&log);
+        let s = replay_samples(&json!({"id": "x", "format": "[Gen 9] LC"}), &p, false, &mut unk);
+        let f = f32s(&s[0], "obs.poke_feats");
+        assert_eq!((f[F_LEVEL], f[FEAT + F_LEVEL]), (0.05, 0.05));
+        assert!(i64s(&s[0], "obs.format_id").iter().all(|&x| x == format_id("gen9lc")));
+    }
+
+    fn write_parquet(path: &Path, rows: &[(&str, &str, Option<f64>, &str, [&str; 2])]) {
+        use arrow_array::builder::{ListBuilder, StringBuilder};
+        use arrow_array::{ArrayRef, Float64Array, RecordBatch, StringArray};
+        use std::sync::Arc;
+        let mut pl = ListBuilder::new(StringBuilder::new());
+        for r in rows {
+            for n in r.4 {
+                pl.values().append_value(n);
+            }
+            pl.append(true);
+        }
+        let cols: Vec<(&str, ArrayRef)> = vec![
+            ("id", Arc::new(StringArray::from(rows.iter().map(|r| r.0).collect::<Vec<_>>()))),
+            ("log", Arc::new(StringArray::from(rows.iter().map(|r| r.1).collect::<Vec<_>>()))),
+            ("rating", Arc::new(Float64Array::from(rows.iter().map(|r| r.2).collect::<Vec<_>>()))),
+            ("format", Arc::new(StringArray::from(rows.iter().map(|r| r.3).collect::<Vec<_>>()))),
+            ("players", Arc::new(pl.finish())),
+        ];
+        let batch = RecordBatch::try_from_iter(cols).unwrap();
+        let mut w = parquet::arrow::ArrowWriter::try_new(std::fs::File::create(path).unwrap(), batch.schema(), None).unwrap();
+        w.write(&batch).unwrap();
+        w.close().unwrap();
+    }
+
+    fn battle(p1: &str, p2: &str) -> String {
+        [format!("|player|p1|{p1}|"), format!("|player|p2|{p2}|"), "|poke|p1|Garchomp, M|".into(), "|poke|p2|Gholdengo|".into(),
+         "|teampreview".into(), "|start".into(), "|switch|p1a: Garchomp|Garchomp, M|100/100".into(),
+         "|switch|p2a: Gholdengo|Gholdengo|100/100".into(), "|turn|1".into(), "|move|p1a: Garchomp|Earthquake|p2a: Gholdengo".into(),
+         "|move|p2a: Gholdengo|Make It Rain|p1a: Garchomp".into(), "|upkeep".into(), "|turn|2".into(), format!("|win|{p1}")].join("\n")
+    }
+
+    #[test]
+    fn parquet_dumps_dedupe_select_and_count_players() {
+        let d = std::env::temp_dir().join(format!("gm-pokemon-pq-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("b")).unwrap();
+        let (ab, cd, ae, ce) = (battle("Alice", "Bob"), battle("Carol", "Dan"), battle("Alice", "Eve"), battle("Carol", "Eve"));
+        write_parquet(&d.join("a.parquet"), &[
+            ("gen9ou-1", &ab, Some(1720.0), "[Gen 9] OU", ["Alice", "Bob"]),
+            ("gen9ou-2", &cd, Some(1400.0), "[Gen 9] OU", ["Carol", "Dan"]),
+            ("gen9ou-3", &ae, None, "[Gen 9] OU", ["Alice", "Eve"]),
+            ("gen9uu-4", &ce, Some(1650.0), "[Gen 9] UU", ["Carol", "Eve"]),
+        ]);
+        // a second dump repeating gen9ou-1 (another rating spelling) plus Eve's rated battle
+        write_parquet(&d.join("b/c.parquet"), &[
+            ("gen9ou-1", &ab, Some(9999.0), "gen9ou", ["Alice", "Bob"]),
+            ("gen9ou-5", &battle("Eve", "Bob"), Some(1810.0), "gen9ou", ["Eve", "Bob"]),
+        ]);
+        let inputs = vec![d.join("a.parquet"), d.join("b")];
+        let v = players(&inputs, &["gen9ou".to_string()]).unwrap();
+        assert_eq!((v["records"].as_i64(), v["duplicates"].as_i64()), (Some(5), Some(1)));
+        assert_eq!((v["rated"].as_i64(), v["unrated"].as_i64()), (Some(3), Some(1)));
+        let t = &v["table"]["gen9ou"];
+        assert_eq!(t["alice"], json!([1, 1720]));
+        assert_eq!(t["bob"], json!([2, 1810]), "the first copy's rating, the duplicate skipped");
+        assert_eq!(t["eve"], json!([1, 1810]));
+        assert!(v["table"]["gen9uu"].is_null());
+        let pf = d.join("players.json");
+        std::fs::write(&pf, serde_json::to_vec(&v).unwrap()).unwrap();
+        let conv = |sel: &Select| {
+            let out = d.join("out");
+            std::fs::remove_dir_all(&out).ok();
+            convert(&inputs, &out, 64, sel, None, Quality::default()).unwrap()
+        };
+        // rating only: the rated OU battles >= 1500 (1 and 5); unrated 3 and the 1400 one out
+        let st = conv(&Select { min_rating: 1500, formats: vec!["gen9ou".into()], ..Default::default() });
+        assert_eq!((st["kept"].as_i64(), st["low_rating"].as_i64(), st["unrated"].as_i64()), (Some(2), Some(1), Some(1)));
+        assert_eq!((st["other_format"].as_i64(), st["duplicates"].as_i64()), (Some(1), Some(1)));
+        // + peaks >= 1700: the unrated battle 3 passes too (Alice 1720, Eve 1810)
+        let sel = Select { min_rating: 1500, formats: vec!["gen9ou".into()], players: Some(load_players(&pf).unwrap()),
+                           min_peak: 1700, min_peak_games: 1 };
+        let st = conv(&sel);
+        assert_eq!((st["kept"].as_i64(), st["low_peak"].as_i64()), (Some(3), Some(0)), "{st}");
+        // peaks >= 1750: Alice (1720) is out of battles 1 and 3, rated or not
+        let st = conv(&Select { min_peak: 1750, ..Select { players: Some(load_players(&pf).unwrap()), ..sel } });
+        assert_eq!((st["kept"].as_i64(), st["low_peak"].as_i64()), (Some(1), Some(2)), "{st}");
+        let sel = Select { min_rating: 1500, formats: vec!["gen9ou".into()], players: Some(load_players(&pf).unwrap()),
+                           min_peak: 1700, min_peak_games: 1 };
+        let sel = Select { min_peak_games: 2, ..sel };
+        let st = conv(&sel);
+        assert_eq!(st["kept"].as_i64(), Some(0), "only Bob has two rated battles: {st}");
+        std::fs::remove_dir_all(&d).ok();
     }
 }

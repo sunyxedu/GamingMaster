@@ -35,7 +35,14 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from data_processing.games.pokemon import ID_UNK, MOVE_VOCAB_SIZE, SPECIES_VOCAB_SIZE, VOCAB
+from data_processing.games.pokemon import (
+    FORMATS,
+    ID_UNK,
+    MOVE_VOCAB_SIZE,
+    SPECIES_VOCAB_SIZE,
+    VOCAB,
+    format_id,
+)
 from model.config import upgrade_config_dict
 from model.game_network import GameNetwork
 from model.games.pokemon import (
@@ -171,6 +178,27 @@ def test_revealed_slot_info_reaches_its_slot_token_only():
         assert diff[0, 1, j] > 0, key
         diff[0, 1, j] = 0
         assert diff.max() == 0, key
+
+
+def test_format_reaches_the_field_token_only():
+    """converter v5 (pokemon_format_vocab > 0): the format id changes the field token and
+    nothing else; id 0 (a format outside the table) adds nothing, so on it the net computes
+    the pre-v5 encoder with the same weights."""
+    torch.manual_seed(0)
+    cfg = _cfg("identity", pokemon_format_vocab=len(FORMATS))
+    enc = PokemonEncoder(cfg)
+    obs = _make_obs(cfg)
+    B, T = obs["species_ids"].shape[:2]
+    legacy = PokemonEncoder(_cfg("identity"))
+    legacy.load_state_dict({k: v for k, v in enc.state_dict().items() if k in legacy.state_dict()})
+    base = enc({**obs, "format_id": torch.zeros(B, T, dtype=torch.long)})
+    torch.testing.assert_close(legacy(obs), base)
+    fid = torch.zeros(B, T, dtype=torch.long)
+    fid[0, 1] = format_id("[Gen 9] UU")
+    diff = (enc({**obs, "format_id": fid}) - base).abs().sum(-1)      # [B, T, 13]
+    assert diff[0, 1, enc.field_idx] > 0
+    diff[0, 1, enc.field_idx] = 0
+    assert diff.max() == 0
 
 
 def test_encoder_empty_slots_invariant(cfg):
@@ -929,7 +957,9 @@ def test_train_il_game_on_converter_v3_shards(v3_shards, tmp_path, monkeypatch, 
                     "species_vocab": SPECIES_VOCAB_SIZE, "vocab_version": VOCAB.version,
                     # converter v4: every slot's revealed item / ability / tera type
                     "item_vocab": VOCAB.n_items, "ability_vocab": VOCAB.n_abilities,
-                    "type_vocab": VOCAB.n_types}
+                    "type_vocab": VOCAB.n_types,
+                    # converter v5: the per-slot level, the battle's format
+                    "poke_features": 18, "format_vocab": len(FORMATS), "formats": list(FORMATS)}
     args = ("--val_dir", str(v3_shards), "--il_legal_mask", "--require_frozen_schema")
     log = _train(monkeypatch, capsys, v3_shards, tmp_path / "ck", *args)
     ck = torch.load(tmp_path / "ck" / "pokemon_epoch0.pt", map_location="cpu", weights_only=False)
@@ -938,6 +968,7 @@ def test_train_il_game_on_converter_v3_shards(v3_shards, tmp_path, monkeypatch, 
             cfg["pokemon_move_head"]) == (22, MOVE_VOCAB_SIZE, SPECIES_VOCAB_SIZE, "identity")
     assert (cfg["pokemon_item_vocab"], cfg["pokemon_ability_vocab"], cfg["pokemon_type_vocab"]) == (
         VOCAB.n_items, VOCAB.n_abilities, VOCAB.n_types)
+    assert (cfg["pokemon_feature_dim"], cfg["pokemon_format_vocab"]) == (18, len(FORMATS))
     val = next(ln for ln in log.splitlines() if ln.startswith("[e0 val]"))
     assert "illegal_target_frac=0.0000" in val and "move_loss=" in val
     log = _train(monkeypatch, capsys, v3_shards, tmp_path / "ck", *args, "--resume",
@@ -964,6 +995,9 @@ def _legacy_shards(v3_shards, path, version):
     out = []
     for s in load_gm_samples(str(v3_shards)):
         obs, tgt = dict(s["obs"]), dict(s["tgt"])
+        # the pre-v5 layout: 17 per-slot features, no format
+        obs["poke_feats"] = obs["poke_feats"][..., :17].contiguous()
+        obs.pop("format_id", None)
         obs["species_ids"] = _hash_ids(obs["species_ids"], VOCAB.species_names, 512)
         obs["move_ids"] = _hash_ids(obs["move_ids"], VOCAB.move_names, mb)
         tgt["move_id"] = _hash_ids(tgt["move_id"], VOCAB.move_names, mb)
@@ -997,7 +1031,7 @@ def test_train_il_game_refuses_hashed_v2_shards_unless_asked(v3_shards, tmp_path
         _train(monkeypatch, capsys, data, tmp_path / "ck")
     log = _train(monkeypatch, capsys, data, tmp_path / "ck", "--il_legal_mask",
                  override=HASHED_NET)
-    assert "converter_version 2 < 4" in log and "exact Showdown move / species ids" in log
+    assert "converter_version 2 < 5" in log and "exact Showdown move / species ids" in log
     cfg = torch.load(tmp_path / "ck" / "pokemon_epoch0.pt", map_location="cpu",
                      weights_only=False)["config"]
     assert (cfg["pokemon_move_vocab"], cfg["pokemon_species_vocab"], cfg["pokemon_move_buckets"],
@@ -1018,7 +1052,7 @@ def test_train_il_game_fresh_on_converter_v1_shards(v3_shards, tmp_path, monkeyp
     with pytest.raises(ValueError, match="implied"):
         _train(monkeypatch, capsys, data, tmp_path / "ck")
     log = _train(monkeypatch, capsys, data, tmp_path / "ck", override=HASHED_NET)
-    assert "converter_version 1 < 4" in log
+    assert "converter_version 1 < 5" in log
     cfg = torch.load(tmp_path / "ck" / "pokemon_epoch0.pt", map_location="cpu",
                      weights_only=False)["config"]
     assert (cfg["pokemon_move_head"], cfg["pokemon_field_features"],
