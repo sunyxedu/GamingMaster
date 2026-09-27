@@ -35,6 +35,13 @@ CASES = {
     "go": (["go", "convert", "--input", f"{FIX}/go"], ("result", "komi", "handicap", "n_moves", "players")),
     "go_handicap_noresult": (["go", "convert", "--input", f"{FIX}/go", "--allow-handicap", "--allow-no-result"],
                              ("result", "komi", "handicap", "n_moves", "players")),
+    # hand-written 9x9 / 13x13 records (tests/fixtures/go_sim: captures, ko fights, a
+    # snapback, fixed / free handicap, passes, suicide and ko-retake rejections, a
+    # double-ko cycle), pinned by the converter before its rules moved into gmrules
+    "go_sim9": (["go", "convert", "--input", f"{FIX}/go_sim", "--board-size", "9", "--min-moves", "1",
+                 "--allow-handicap", "--allow-no-result"], ("result", "komi", "handicap", "n_moves", "players")),
+    "go_sim13": (["go", "convert", "--input", f"{FIX}/go_sim", "--board-size", "13", "--min-moves", "1",
+                  "--allow-handicap", "--allow-no-result"], ("result", "komi", "handicap", "n_moves", "players")),
     "chess": (["chess", "convert", "--input", PGN], ("white", "black", "elo", "result")),
     "chess_elo1500_nobullet": (["chess", "convert", "--input", PGN, "--min-elo", "1500", "--skip-bullet"],
                                ("white", "black", "elo", "result")),
