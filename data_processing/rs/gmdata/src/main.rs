@@ -28,6 +28,7 @@ mod go;
 mod lux;
 mod mahjong;
 mod gomoku;
+mod hok;
 mod hunl;
 mod kuhn_poker;
 mod label;
@@ -60,6 +61,11 @@ enum Game {
     Chess {
         #[command(subcommand)]
         cmd: chess::Cmd,
+    },
+    /// Honor of Kings 1v1 (Hokoff offline datasets; `--features hok`)
+    Hok {
+        #[command(subcommand)]
+        cmd: hok::Cmd,
     },
     /// Othello (WTHOR databases)
     Othello {
@@ -151,6 +157,7 @@ enum Game {
 fn main() -> Result<()> {
     match Cli::parse().game {
         Game::Generals { cmd } => generals::run(cmd),
+        Game::Hok { cmd } => hok::run(cmd),
         Game::Othello { cmd } => othello::run(cmd),
         Game::Chess { cmd } => chess::run(cmd),
         Game::Gomoku { cmd } => gomoku::run(cmd),

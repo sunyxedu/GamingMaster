@@ -176,6 +176,13 @@ def _build_arc3(**overrides) -> nn.Module:
     return build_arc3_network(**overrides)
 
 
+def _build_hok(**overrides) -> nn.Module:
+    """Honor of Kings 1v1 (env/vec_hok.py): entity tokens; button → its arguments."""
+    from model.games.hok import build_hok_network
+
+    return build_hok_network(**overrides)
+
+
 GAME_REGISTRY: Dict[str, Callable[..., nn.Module]] = {
     "generals": _build_generals,
     "chess": _build_chess,
@@ -190,6 +197,7 @@ GAME_REGISTRY: Dict[str, Callable[..., nn.Module]] = {
     "hearthstone": _build_hearthstone,
     "starcraft": _build_starcraft,
     "arc3": _build_arc3,
+    "hok": _build_hok,
 }
 
 

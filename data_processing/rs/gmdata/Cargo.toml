@@ -10,7 +10,13 @@ description = "GamingMaster data pipelines: fetch, simulate and convert game rec
 name = "gmdata"
 path = "src/main.rs"
 
+[features]
+# Honor of Kings: the Hokoff HDF5 datasets (gmdata hok convert); HDF5 is built from source
+# (static, with its zlib filter), no system library needed
+hok = ["dep:hdf5"]
+
 [dependencies]
+hdf5 = { package = "hdf5-metno", version = "0.15", optional = true, features = ["static", "zlib"] }
 gmshard = { path = "../gmshard" }
 gmrules = { path = "../gmrules" }
 anyhow.workspace = true

@@ -92,6 +92,8 @@ LABEL_KEYS = {
     "pokemon": ("action_type", "active_idx"),
     # the cell head conditions on the clicked patch (model/games/arc3.py)
     "arc3": ("click_idx",),
+    # the argument heads condition on the button (model/games/hok.py)
+    "hok": ("button_idx",),
 }
 
 # STATE keys are facts about the position, not decisions: the decoder
