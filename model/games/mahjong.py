@@ -39,6 +39,17 @@ data_processing/games/mahjong.py):
     15     focus flag: the just-drawn tile on own-turn frames, the
            claimable discard (or robbable kakan tile) on call-opportunity
            frames
+    16..36 (converter_version 4, ``mahjong_tile_feature_dim=37``, shard meta
+           ``tile_features``) each opponent's public discard history of k,
+           7 flags per opponent (shimocha 16..22, toimen 23..29, kamicha
+           30..36): it discarded k ever (called ones included: its furiten
+           set) / k passed it after its riichi / k passed it since its own
+           last discard (same-turn furiten) / k is its latest discard / k is
+           among its last 6 / its latest discard of k was tsumogiri / k is its
+           riichi declaration tile.  The per-kind counts 7..10 lose the order
+           of the discards, which the safety of a tile against a riichi and
+           the hand reads rest on.  The registry default stays 16 (the legacy
+           shards); fresh runs take 37 from the v4 shard meta.
 
 ``players_seq`` [B, T, 4, PLAYER_FEATURE_DIM=12] float — player-relative
 row r (0 self, 1 shimocha, 2 toimen, 3 kamicha):

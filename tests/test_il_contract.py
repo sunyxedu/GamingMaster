@@ -652,7 +652,7 @@ def test_pokemon_meta():
 
 def test_schema_freeze_warning():
     assert SCHEMA_FREEZE_CONVERTER_VERSION == {"chess": 3, "go": 2, "shogi": 2,
-                                               "mahjong": 3, "lux": 3, "clash_royale": 3,
+                                               "mahjong": 4, "lux": 3, "clash_royale": 3,
                                                "pokemon": 3}
     msg = schema_freeze_warning("lux", SimpleNamespace(converter_version=2))
     assert msg.startswith("lux shards have converter_version 2 < 3") and "one sample per game" in msg
@@ -667,8 +667,10 @@ def test_schema_freeze_warning():
     assert "repetition flags + legal masks" in msg and "re-convert" in msg
     assert "komi" in schema_freeze_warning("go", SimpleNamespace(converter_version=None))
     msg = schema_freeze_warning("mahjong", SimpleNamespace(converter_version=2))
-    assert msg.startswith("mahjong shards have converter_version 2 < 3") and "il_weight" in msg
-    assert schema_freeze_warning("mahjong", SimpleNamespace(converter_version=3)) is None
+    assert msg.startswith("mahjong shards have converter_version 2 < 4") and "il_weight" in msg
+    msg = schema_freeze_warning("mahjong", SimpleNamespace(converter_version=3))
+    assert msg.startswith("mahjong shards have converter_version 3 < 4") and "discard history" in msg
+    assert schema_freeze_warning("mahjong", SimpleNamespace(converter_version=4)) is None
     assert schema_freeze_warning("chess", SimpleNamespace(converter_version=3)) is None
     assert schema_freeze_warning("othello", SimpleNamespace(converter_version=1)) is None
     assert schema_freeze_warning("generals", SimpleNamespace(converter_version=1)) is None

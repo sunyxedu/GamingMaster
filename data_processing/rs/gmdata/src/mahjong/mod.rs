@@ -8,7 +8,7 @@
 //!               rob it (chankan); label: the call or ron it made, else pass
 //! State: hands, reds, melds, ponds, riichi, dora, scores, wall.
 //!
-//!   raw.tiles_q     [T,34,16] u8    obs.players_seq [T,4,12] f32   obs.table_seq [T,12] f32
+//!   raw.tiles_q     [T,34,37] u8    obs.players_seq [T,4,12] f32   obs.table_seq [T,12] f32
 //!   tgt.action_type [T] i64         tgt.tile_idx [T] i64           tgt.value [T] f32
 //!   tgt.legal_action_type [T,8]     tgt.legal_tile_of [T,34]       tgt.il_weight [T]
 //!   (the last three: packed bits → f32 {0,1})
@@ -16,6 +16,14 @@
 //! a 0/1 flag: value × 4); the loader expands it to the adapter's float32 obs.tiles_seq
 //! (data_processing/games/mahjong.py), a quarter of the disk space.
 //! value = final placement 1st +1, 2nd +1/3, 3rd −1/3, 4th −1 (ties → lower seat).
+//!
+//! converter_version 4 (shard meta {"tile_features": 37}): each tile kind's plane gains
+//! every opponent's public discard history (7 flags per opponent, shimocha, toimen,
+//! kamicha): it discarded the kind ever (called ones included: its furiten set), passed it
+//! after its riichi declaration, passed it since its own last discard (same-turn furiten),
+//! it is its latest discard, among its last 6, its latest discard of it was tsumogiri,
+//! it is its riichi declaration tile. The per-kind counts of v3 lose the order of the
+//! discards, which is what the safety of a tile against a riichi and a hand read rest on.
 //!
 //! Information (converter_version 3).  A frame — its observation, its masks and whether it
 //! exists at all — depends only on the log up to its decision point (the tsumo, the chi /
@@ -120,13 +128,13 @@ use gmshard::{Sample, ShardWriter};
 use rayon::prelude::*;
 use rules::{is_red, tile_kind};
 use serde_json::{json, Value};
-use state::ACTION_NAMES;
+use state::{ACTION_NAMES, TILE_FEATURES};
 use std::collections::{BTreeMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const CONVERTER_VERSION: u32 = 3;
+const CONVERTER_VERSION: u32 = 4;
 const HF_DATASET: &str = "hhim8826/tenhou-houou-mjai";
 
 /// One game read from the input: its name, mjai text and the `kyoku_first` column (parquet).
@@ -279,7 +287,7 @@ fn convert_text(g: &RawGame, min_frames: usize) -> Converted {
 }
 
 pub fn convert(inputs: &[PathBuf], out: &Path, o: &ConvertOpts) -> Result<Value> {
-    let mut w = if o.stats_only { None } else { Some(ShardWriter::new(out, "mahjong", CONVERTER_VERSION, json!({}), o.shard_size)?) };
+    let mut w = if o.stats_only { None } else { Some(ShardWriter::new(out, "mahjong", CONVERTER_VERSION, json!({"tile_features": TILE_FEATURES}), o.shard_size)?) };
     let (mut games, mut skipped, mut samples, mut frames) = (0usize, 0usize, 0usize, 0usize);
     let (mut low_quality, mut unknown_length, mut duplicates, mut inconsistent) = (0usize, 0usize, 0usize, 0usize);
     let mut hist: BTreeMap<&str, usize> = ACTION_NAMES.iter().map(|&n| (n, 0)).collect();

@@ -169,7 +169,8 @@ pub(super) fn walk_game(evs: &[Value], visit: &mut dyn FnMut(&Decision)) -> R<(u
             }
             "dahai" => {
                 let a = seat(ev, "actor")?;
-                let kk = k.discard(a, s(ev, "pai")?)?;
+                let tsumogiri = ev.get("tsumogiri").and_then(|v| v.as_bool()).unwrap_or(false);
+                let kk = k.discard(a, s(ev, "pai")?, tsumogiri)?;
                 // Tenhou flips an open kan's new dora with this discard: one log spelling
                 // writes it just before the dahai (already applied), the other just after it
                 let mut j = i + 1;
@@ -370,7 +371,7 @@ pub(super) fn convert_game(evs: &[Value], name: &str, min_frames: usize) -> R<(V
         let v = PLACEMENT[placement[sidx]];
         let smp = Sample::new(json!({"name": name, "seat": sidx, "kyokus": n_kyoku, "placement": placement[sidx] + 1,
                                      "final_score": scores[sidx]}))
-            .u8("raw.tiles_q", &[NK, 16], f.obs.tiles_q)
+            .u8("raw.tiles_q", &[NK, TILE_FEATURES], f.obs.tiles_q)
             .f32("obs.players_seq", &[4, 12], f.obs.players)
             .f32("obs.table_seq", &[12], f.obs.table)
             .i64("tgt.action_type", &[], f.atype)

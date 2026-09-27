@@ -1,7 +1,8 @@
 """Load-time expansion of riichi mahjong gm-shards (``gmdata mahjong convert``).
 
 From converter_version 3 on, the tile planes are stored as ``raw.tiles_q``
-[T, 34, 16] uint8 — every tile feature is a count / 4 or a 0/1 flag, stored
+[T, 34, F] uint8 (F = 16; 37 from converter_version 4, shard meta
+``tile_features``) — every tile feature is a count / 4 or a 0/1 flag, stored
 exactly as quarters (value × 4) — a quarter of the float32 ``tiles_seq``'s
 size (the full Tenhou Houou corpus: ~1.1 TB instead of ~3.3 TB).  They are
 expanded here when a sample is read (``GameShardDataset`` calls :func:`expand`

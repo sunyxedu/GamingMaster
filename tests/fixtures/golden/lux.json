@@ -1,168 +1,106 @@
 {
-"converter_version": 2,
+"converter_version": 3,
 "shard_meta": {
 "global_features": 11,
-"sap_range": 7
+"layout": "per_game",
+"sap_range": 7,
+"view": "own"
 },
 "samples": [
 {
 "obs": {
-"globals_seq": "ea3f80571bdbd8514f60e2aaa37dbc73735c940685990d1424250c41aa81c732",
-"map_seq": "42410314c9621e69983e0ac254ed656302144eb3985cf67d21e2cba0438a7da6",
-"unit_mask": "494f5150fe554ee066c644227578c763a0a1520f3659428f33b5edbfe83989f1",
-"units_seq": "81fc87da586d8431acea2219401d685e67a90e693151d2b0bcef441822d815c2"
+"globals_seq": "b423f6da705a6bb716c3ec282da0563aedbf6b9917c793fbe04f241cdfad19bc",
+"map_seq": "4f6b4c36adb71f7f6e6718e67bea5109f0b056d88ba61e23429847e3bfea7f31",
+"unit_mask": "e0ce358e5f6ac5a9338f6e72ca85618d5938cbc44f54562eb3bd00d40c7ac7d1",
+"units_seq": "68847020b0d099c9f12d5dbdfafc0b3c5e29264073091d60c6b46ae78b62ad41"
 },
 "tgt": {
-"sap_offset": "09604d8680ffee48d95b97ad599f6b02d6627ed30a4e8e83639bc5a16d39bb92",
-"unit_actions": "6a27c465d86b94b846a373fa71fb30f1411ef5c94b416aff2e67c602468b97ba",
-"unit_mask": "494f5150fe554ee066c644227578c763a0a1520f3659428f33b5edbfe83989f1",
-"value": "6f45c36ff71f6011eee953dc6733a732dc3e2b908ca02427ff2166deb51b6a88"
+"sap_offset": "a6e039a58d049f291a3e2e57185adf778974bfd29fd9885b66d564266b3103e9",
+"unit_actions": "b066da26667d9d42e025460bbf4c510c0c66307a0cbb059b9324bbf662142bea",
+"unit_mask": "e0ce358e5f6ac5a9338f6e72ca85618d5938cbc44f54562eb3bd00d40c7ac7d1",
+"value": "e7dcae64eb3284f16c8fed299f477ab867bc810dd4466c9f81b9e3bd28886cec"
 },
 "meta": {
 "agent": 0,
 "team": 0,
-"match_index": 0,
-"match_value": 1.0
+"matches": 2,
+"match_values": [
+1.0,
+-1.0
+],
+"view": "world"
 }
 },
 {
 "obs": {
-"globals_seq": "26a7770b0a05a63f2f103ffe81725e8203d57f35715633b2fa4220acad485fbb",
-"map_seq": "42410314c9621e69983e0ac254ed656302144eb3985cf67d21e2cba0438a7da6",
-"unit_mask": "494f5150fe554ee066c644227578c763a0a1520f3659428f33b5edbfe83989f1",
-"units_seq": "81fc87da586d8431acea2219401d685e67a90e693151d2b0bcef441822d815c2"
+"globals_seq": "7f3b06262e262d93b16e9f3a624b2801c88f29083bbbad332ccc41a076871033",
+"map_seq": "804fcad61918a0127049e357064efbf70ddae0c2142c4f945804877be8ea7805",
+"unit_mask": "9b719417a7d5ed6f2530601b4040d4bd4531c36542d210602672b6b0ace6603d",
+"units_seq": "5aa634ce3d5e80192802fe35ca84e665935fc0f4b0bc2ca5fc8d575c21ca1ce7"
 },
 "tgt": {
-"sap_offset": "1b575978b0cb30f77988e3ed49a105da903e9e5493807f21d2ed30243dd8de9a",
-"unit_actions": "5650796f1ade9ebe7a60e66ebb22fdeb024e2832c1f88e8bf76fd5d9f4bcbf74",
-"unit_mask": "494f5150fe554ee066c644227578c763a0a1520f3659428f33b5edbfe83989f1",
-"value": "00591c0e3bdbe781e4b42229c5b97866e904d92a07c4f7277d2868fc34ffcfac"
+"sap_offset": "687ffe48f508adb300bdfd10f0d50f67fdba5cb303008aa92432630419794d72",
+"unit_actions": "75621efe352349633eb58c1d7704426c41179a227a3264e38f27acf00079591f",
+"unit_mask": "9b719417a7d5ed6f2530601b4040d4bd4531c36542d210602672b6b0ace6603d",
+"value": "e588449f55e5c1c65a8e3f875c9c8a15f68557bd3f9c0e7b3b26b7f33c1cc8bc"
+},
+"meta": {
+"agent": 1,
+"team": 1,
+"matches": 2,
+"match_values": [
+-1.0,
+1.0
+],
+"view": "reflected"
+}
+},
+{
+"obs": {
+"globals_seq": "b423f6da705a6bb716c3ec282da0563aedbf6b9917c793fbe04f241cdfad19bc",
+"map_seq": "4f6b4c36adb71f7f6e6718e67bea5109f0b056d88ba61e23429847e3bfea7f31",
+"unit_mask": "e0ce358e5f6ac5a9338f6e72ca85618d5938cbc44f54562eb3bd00d40c7ac7d1",
+"units_seq": "68847020b0d099c9f12d5dbdfafc0b3c5e29264073091d60c6b46ae78b62ad41"
+},
+"tgt": {
+"sap_offset": "a6e039a58d049f291a3e2e57185adf778974bfd29fd9885b66d564266b3103e9",
+"unit_actions": "b066da26667d9d42e025460bbf4c510c0c66307a0cbb059b9324bbf662142bea",
+"unit_mask": "e0ce358e5f6ac5a9338f6e72ca85618d5938cbc44f54562eb3bd00d40c7ac7d1",
+"value": "e7dcae64eb3284f16c8fed299f477ab867bc810dd4466c9f81b9e3bd28886cec"
 },
 "meta": {
 "agent": 0,
 "team": 0,
-"match_index": 1,
-"match_value": -1.0
+"matches": 2,
+"match_values": [
+1.0,
+-1.0
+],
+"view": "world"
 }
 },
 {
 "obs": {
-"globals_seq": "1df38800fb5cbce4f5f7885d715a915b08cbbad2d038b16c61e551613b89ae3c",
-"map_seq": "8d7fa1391e2e3b3180a7c971985ee8a85b8fe582156c9d07f1ae7c3df769e59f",
-"unit_mask": "bad6b42d88324cba04723f4c2d338da80b782d4550dd0ba55628758a49fe74c0",
-"units_seq": "adc01b1a852bd04d9517fe7adfd3a4dec3defe9acb59c1949a6015f4c8e3d0de"
+"globals_seq": "7f3b06262e262d93b16e9f3a624b2801c88f29083bbbad332ccc41a076871033",
+"map_seq": "804fcad61918a0127049e357064efbf70ddae0c2142c4f945804877be8ea7805",
+"unit_mask": "9b719417a7d5ed6f2530601b4040d4bd4531c36542d210602672b6b0ace6603d",
+"units_seq": "5aa634ce3d5e80192802fe35ca84e665935fc0f4b0bc2ca5fc8d575c21ca1ce7"
 },
 "tgt": {
-"sap_offset": "09604d8680ffee48d95b97ad599f6b02d6627ed30a4e8e83639bc5a16d39bb92",
-"unit_actions": "6a27c465d86b94b846a373fa71fb30f1411ef5c94b416aff2e67c602468b97ba",
-"unit_mask": "bad6b42d88324cba04723f4c2d338da80b782d4550dd0ba55628758a49fe74c0",
-"value": "00591c0e3bdbe781e4b42229c5b97866e904d92a07c4f7277d2868fc34ffcfac"
+"sap_offset": "687ffe48f508adb300bdfd10f0d50f67fdba5cb303008aa92432630419794d72",
+"unit_actions": "75621efe352349633eb58c1d7704426c41179a227a3264e38f27acf00079591f",
+"unit_mask": "9b719417a7d5ed6f2530601b4040d4bd4531c36542d210602672b6b0ace6603d",
+"value": "e588449f55e5c1c65a8e3f875c9c8a15f68557bd3f9c0e7b3b26b7f33c1cc8bc"
 },
 "meta": {
 "agent": 1,
 "team": 1,
-"match_index": 0,
-"match_value": -1.0
-}
-},
-{
-"obs": {
-"globals_seq": "79ea6d632b2288be6423fb4eb8cfd068a19c2f002f455d89829aef28eed7ce8e",
-"map_seq": "8d7fa1391e2e3b3180a7c971985ee8a85b8fe582156c9d07f1ae7c3df769e59f",
-"unit_mask": "bad6b42d88324cba04723f4c2d338da80b782d4550dd0ba55628758a49fe74c0",
-"units_seq": "adc01b1a852bd04d9517fe7adfd3a4dec3defe9acb59c1949a6015f4c8e3d0de"
-},
-"tgt": {
-"sap_offset": "1b575978b0cb30f77988e3ed49a105da903e9e5493807f21d2ed30243dd8de9a",
-"unit_actions": "5650796f1ade9ebe7a60e66ebb22fdeb024e2832c1f88e8bf76fd5d9f4bcbf74",
-"unit_mask": "bad6b42d88324cba04723f4c2d338da80b782d4550dd0ba55628758a49fe74c0",
-"value": "6f45c36ff71f6011eee953dc6733a732dc3e2b908ca02427ff2166deb51b6a88"
-},
-"meta": {
-"agent": 1,
-"team": 1,
-"match_index": 1,
-"match_value": 1.0
-}
-},
-{
-"obs": {
-"globals_seq": "ea3f80571bdbd8514f60e2aaa37dbc73735c940685990d1424250c41aa81c732",
-"map_seq": "42410314c9621e69983e0ac254ed656302144eb3985cf67d21e2cba0438a7da6",
-"unit_mask": "494f5150fe554ee066c644227578c763a0a1520f3659428f33b5edbfe83989f1",
-"units_seq": "81fc87da586d8431acea2219401d685e67a90e693151d2b0bcef441822d815c2"
-},
-"tgt": {
-"sap_offset": "09604d8680ffee48d95b97ad599f6b02d6627ed30a4e8e83639bc5a16d39bb92",
-"unit_actions": "6a27c465d86b94b846a373fa71fb30f1411ef5c94b416aff2e67c602468b97ba",
-"unit_mask": "494f5150fe554ee066c644227578c763a0a1520f3659428f33b5edbfe83989f1",
-"value": "6f45c36ff71f6011eee953dc6733a732dc3e2b908ca02427ff2166deb51b6a88"
-},
-"meta": {
-"agent": 0,
-"team": 0,
-"match_index": 0,
-"match_value": 1.0
-}
-},
-{
-"obs": {
-"globals_seq": "26a7770b0a05a63f2f103ffe81725e8203d57f35715633b2fa4220acad485fbb",
-"map_seq": "42410314c9621e69983e0ac254ed656302144eb3985cf67d21e2cba0438a7da6",
-"unit_mask": "494f5150fe554ee066c644227578c763a0a1520f3659428f33b5edbfe83989f1",
-"units_seq": "81fc87da586d8431acea2219401d685e67a90e693151d2b0bcef441822d815c2"
-},
-"tgt": {
-"sap_offset": "1b575978b0cb30f77988e3ed49a105da903e9e5493807f21d2ed30243dd8de9a",
-"unit_actions": "5650796f1ade9ebe7a60e66ebb22fdeb024e2832c1f88e8bf76fd5d9f4bcbf74",
-"unit_mask": "494f5150fe554ee066c644227578c763a0a1520f3659428f33b5edbfe83989f1",
-"value": "00591c0e3bdbe781e4b42229c5b97866e904d92a07c4f7277d2868fc34ffcfac"
-},
-"meta": {
-"agent": 0,
-"team": 0,
-"match_index": 1,
-"match_value": -1.0
-}
-},
-{
-"obs": {
-"globals_seq": "1df38800fb5cbce4f5f7885d715a915b08cbbad2d038b16c61e551613b89ae3c",
-"map_seq": "8d7fa1391e2e3b3180a7c971985ee8a85b8fe582156c9d07f1ae7c3df769e59f",
-"unit_mask": "bad6b42d88324cba04723f4c2d338da80b782d4550dd0ba55628758a49fe74c0",
-"units_seq": "adc01b1a852bd04d9517fe7adfd3a4dec3defe9acb59c1949a6015f4c8e3d0de"
-},
-"tgt": {
-"sap_offset": "09604d8680ffee48d95b97ad599f6b02d6627ed30a4e8e83639bc5a16d39bb92",
-"unit_actions": "6a27c465d86b94b846a373fa71fb30f1411ef5c94b416aff2e67c602468b97ba",
-"unit_mask": "bad6b42d88324cba04723f4c2d338da80b782d4550dd0ba55628758a49fe74c0",
-"value": "00591c0e3bdbe781e4b42229c5b97866e904d92a07c4f7277d2868fc34ffcfac"
-},
-"meta": {
-"agent": 1,
-"team": 1,
-"match_index": 0,
-"match_value": -1.0
-}
-},
-{
-"obs": {
-"globals_seq": "79ea6d632b2288be6423fb4eb8cfd068a19c2f002f455d89829aef28eed7ce8e",
-"map_seq": "8d7fa1391e2e3b3180a7c971985ee8a85b8fe582156c9d07f1ae7c3df769e59f",
-"unit_mask": "bad6b42d88324cba04723f4c2d338da80b782d4550dd0ba55628758a49fe74c0",
-"units_seq": "adc01b1a852bd04d9517fe7adfd3a4dec3defe9acb59c1949a6015f4c8e3d0de"
-},
-"tgt": {
-"sap_offset": "1b575978b0cb30f77988e3ed49a105da903e9e5493807f21d2ed30243dd8de9a",
-"unit_actions": "5650796f1ade9ebe7a60e66ebb22fdeb024e2832c1f88e8bf76fd5d9f4bcbf74",
-"unit_mask": "bad6b42d88324cba04723f4c2d338da80b782d4550dd0ba55628758a49fe74c0",
-"value": "6f45c36ff71f6011eee953dc6733a732dc3e2b908ca02427ff2166deb51b6a88"
-},
-"meta": {
-"agent": 1,
-"team": 1,
-"match_index": 1,
-"match_value": 1.0
+"matches": 2,
+"match_values": [
+-1.0,
+1.0
+],
+"view": "reflected"
 }
 }
 ]

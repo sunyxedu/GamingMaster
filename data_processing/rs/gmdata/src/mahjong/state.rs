@@ -19,6 +19,12 @@ pub(super) const USES_TILE: [bool; 8] = [true, true, true, true, true, false, fa
 pub(super) const N_TYPES: usize = 8;
 /// Live-wall draws of a kyoku (136 − 52 dealt − 14 dead wall); rinshan draws count too.
 pub(super) const WALL: i64 = 70;
+/// Tile-plane features per kind: the 16 of converter_version 3, then the public discard
+/// history of each opponent (shimocha, toimen, kamicha), [`OPP_TILE_FEATURES`] each.
+pub(super) const TILE_FEATURES: usize = 16 + 3 * OPP_TILE_FEATURES;
+pub(super) const OPP_TILE_FEATURES: usize = 7;
+/// Discards of a seat the "recent" column looks back on (about one and a half go-arounds).
+pub(super) const RECENT_DISCARDS: usize = 6;
 
 /// Decision context of a frame (what just happened to the acting seat).
 #[derive(Clone, Debug)]
@@ -77,7 +83,7 @@ pub(super) fn seat(ev: &Value, k: &str) -> R<usize> {
 /// Observation buffers of one seat's frames (layouts in `Kyoku::encode`).
 #[derive(Default)]
 pub(super) struct ObsBuf {
-    /// tile planes [T, 34, 16] as u8 quarters (value × 4)
+    /// tile planes [T, 34, TILE_FEATURES] as u8 quarters (value × 4)
     pub tiles_q: Vec<u8>,
     pub players: Vec<f32>,
     pub table: Vec<f32>,
@@ -129,6 +135,18 @@ pub(super) struct Kyoku {
     pub after_kan: bool,
     /// the current own-turn draw is a rinshan draw
     pub rinshan_draw: bool,
+    /// kinds another seat discarded after this seat's riichi declaration (the declarer
+    /// passed them: safe against it)
+    pub after_riichi: [[bool; NK]; 4],
+    /// kinds another seat discarded since this seat's own last discard (same-turn
+    /// furiten: safe against it until it discards again)
+    pub since_own: [[bool; NK]; 4],
+    /// this seat's last RECENT_DISCARDS discards, oldest first
+    pub recent: [Vec<usize>; 4],
+    /// this seat's latest discard of the kind was tsumogiri (the tile just drawn)
+    pub tsumogiri: [[bool; NK]; 4],
+    /// this seat's riichi declaration tile
+    pub riichi_tile: [Option<usize>; 4],
 }
 
 impl Kyoku {
@@ -167,6 +185,11 @@ impl Kyoku {
             any_call: false,
             after_kan: false,
             rinshan_draw: false,
+            after_riichi: [[false; NK]; 4],
+            since_own: [[false; NK]; 4],
+            recent: Default::default(),
+            tsumogiri: [[false; NK]; 4],
+            riichi_tile: [None; 4],
         };
         let tehais = ev.get("tehais").and_then(|v| v.as_array()).ok_or(Skip)?;
         if tehais.len() != 4 {
@@ -216,7 +239,8 @@ impl Kyoku {
         tile_kind(p)
     }
 
-    pub fn discard(&mut self, s: usize, p: &str) -> R<usize> {
+    /// `tsumogiri`: the discard is the tile just drawn (the mjai `tsumogiri` flag).
+    pub fn discard(&mut self, s: usize, p: &str, tsumogiri: bool) -> R<usize> {
         let k = self.remove(s, p)?;
         self.disc[s][k] += 1;
         self.disc_n[s] += 1;
@@ -225,9 +249,24 @@ impl Kyoku {
         if self.first_discard[s].is_none() {
             self.first_discard[s] = Some(k);
         }
+        // the public discard history (the tile planes' opponent columns): the other seats
+        // saw this discard pass; the declarer's riichi counts from its declaration tile on
+        for r in (0..4).filter(|&r| r != s) {
+            if self.riichi[r] {
+                self.after_riichi[r][k] = true;
+            }
+            self.since_own[r][k] = true;
+        }
+        self.since_own[s] = [false; NK];
+        self.recent[s].push(k);
+        if self.recent[s].len() > RECENT_DISCARDS {
+            self.recent[s].remove(0);
+        }
+        self.tsumogiri[s][k] = tsumogiri;
         if self.pending[s] {
             self.pending[s] = false;
             self.riichi[s] = true;
+            self.riichi_tile[s] = Some(k);
         }
         // the seat's own discard ends same-turn furiten (同巡振聴の解消は打牌時), a discard after
         // its own call too, even a pon called out of turn order: the stricter reading (no
@@ -547,8 +586,8 @@ impl Kyoku {
         l
     }
 
-    /// The observation of `seat` (tiles [34,16], players [4,12], table [12]; layouts in
-    /// model/games/mahjong.py) appended to the three buffers.  Every tile feature is a
+    /// The observation of `seat` (tiles [34, TILE_FEATURES], players [4,12], table [12];
+    /// layouts in model/games/mahjong.py) appended to the three buffers.  Every tile feature is a
     /// multiple of 1/4 (counts / 4 and 0/1 flags), stored exactly as u8 quarters (value × 4):
     /// the loader expands them to the float32 `tiles_seq` (data_processing/games/mahjong.py).
     pub fn encode(&self, seat: usize, focus: Option<usize>, own_turn: bool, focus_actor: Option<usize>, out: &mut ObsBuf) {
@@ -575,6 +614,22 @@ impl Kyoku {
             row[14] = 4 * self.reds[seat].contains(&k) as u8;
             row[15] = 4 * (Some(k) == focus) as u8;
             out.tiles_q.extend_from_slice(&row);
+            // each opponent's public discard history of the kind (0/1 flags): discarded it
+            // ever (called ones included: its furiten set), passed it after its riichi,
+            // passed it since its own last discard, its latest discard, among its last
+            // RECENT_DISCARDS, its latest discard of it was tsumogiri, its riichi tile
+            for p in [shimo, toi, kami] {
+                let flags = [
+                    self.river[p][k],
+                    self.after_riichi[p][k],
+                    self.since_own[p][k],
+                    self.recent[p].last() == Some(&k),
+                    self.recent[p].contains(&k),
+                    self.river[p][k] && self.tsumogiri[p][k],
+                    self.riichi_tile[p] == Some(k),
+                ];
+                out.tiles_q.extend(flags.iter().map(|&f| 4 * f as u8));
+            }
         }
         for rel in 0..4 {
             let p = (seat + rel) % 4;
@@ -791,18 +846,50 @@ mod tests {
         k.note_pass(0, 3); // passed on 4m → same-turn furiten
         assert!(k.furiten_temp[0] && !k.ron_legal(0, 0, false));
         k.hands[0][9] += 1;
-        k.discard(0, "1p").ok().unwrap(); // own discard lifts it
+        k.discard(0, "1p", false).ok().unwrap(); // own discard lifts it
         assert!(k.ron_legal(0, 0, false));
         // in riichi a passed winning tile is furiten for good
         k.riichi[0] = true;
         k.note_pass(0, 0);
         k.hands[0][9] += 1;
-        k.discard(0, "1p").ok().unwrap();
+        k.discard(0, "1p", false).ok().unwrap();
         assert!(!k.ron_legal(0, 3, false));
         // a tile that does not complete the hand changes nothing
         let mut k = kyoku_with(hand("23m456p789s11122z"));
         k.note_pass(0, 5);
         assert!(!k.furiten_temp[0]);
+    }
+
+    #[test]
+    fn opponent_discard_history_columns() {
+        // seat 1 (seat 0's shimocha) discards 1p tsumogiri, declares riichi on 2p; seat 2
+        // then discards 1s and seat 3 East; seat 0's view of each kind
+        let mut k = kyoku_with(hand("23m456p789s11122z"));
+        let (p1, p2, s1, e) = (9, 10, 18, 27); // 1p, 2p, 1s, East
+        k.discard(1, "1p", true).ok().unwrap();
+        k.pending[1] = true;
+        k.discard(1, "2p", false).ok().unwrap();
+        k.discard(2, "1s", false).ok().unwrap();
+        k.discard(3, "E", false).ok().unwrap();
+        let mut out = ObsBuf::default();
+        k.encode(0, None, true, None, &mut out);
+        assert_eq!(out.tiles_q.len(), NK * TILE_FEATURES);
+        let col = |kind: usize, opp: usize, f: usize| out.tiles_q[kind * TILE_FEATURES + 16 + opp * OPP_TILE_FEATURES + f] / 4;
+        // shimocha (seat 1): discarded 1p (tsumogiri) and 2p (its riichi tile, latest)
+        assert_eq!((0..7).map(|f| col(p1, 0, f)).collect::<Vec<_>>(), vec![1, 0, 0, 0, 1, 1, 0]);
+        assert_eq!((0..7).map(|f| col(p2, 0, f)).collect::<Vec<_>>(), vec![1, 0, 0, 1, 1, 0, 1]);
+        // 1s and East passed seat 1 after its riichi and since its last discard: safe
+        for kind in [s1, e] {
+            assert_eq!((col(kind, 0, 1), col(kind, 0, 2)), (1, 1));
+        }
+        // toimen (seat 2) discarded 1s; East passed it since its last discard; 1p / 2p did
+        // not (they came before its discard)
+        assert_eq!((col(s1, 1, 0), col(s1, 1, 3), col(s1, 1, 2)), (1, 1, 0));
+        assert_eq!((col(e, 1, 2), col(p1, 1, 2), col(p1, 1, 1)), (1, 0, 0));
+        // kamicha (seat 3): its own latest discard is East; nothing passed it since
+        assert_eq!((col(e, 2, 0), col(e, 2, 3), col(s1, 2, 2)), (1, 1, 0));
+        // the base columns are v3's: seat 0's own view of 1p (in no hand of its own)
+        assert_eq!(out.tiles_q[p1 * TILE_FEATURES], 4);
     }
 
     #[test]

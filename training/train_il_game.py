@@ -181,6 +181,9 @@ META_ARCH_KEYS = {
     "arc3": {"global_features": ("arc_global_features",), "grid": ("arc_grid",)},
     # Honor of Kings 1v1 (gmdata hok convert): the research environment's feature width
     "hok": {"features": ("hok_features",)},
+    # riichi mahjong (gmdata mahjong convert v4): the tile planes' width (v3: 16; v4 adds
+    # each opponent's public discard history → 37)
+    "mahjong": {"tile_features": ("mahjong_tile_feature_dim",)},
 }
 
 # gmrules games (one module each in model/games/gmrules/): candidate-action games
@@ -216,6 +219,7 @@ META_LEGACY = {
     "lux": {"global_features": 6, "sap_range": 0},
     "clash_royale": {"card_tokens": "hand"},
     "pokemon": {"field_features": 20, "move_vocab": 0, "species_vocab": 0},
+    "mahjong": {"tile_features": 16},
 }
 
 _POKEMON_VOCAB_HINT = (
@@ -239,13 +243,15 @@ META_MISMATCH_HINTS = {
 # older shards still train (their META_LEGACY architecture), but they lack
 # the frozen inputs / targets, so the trainers warn (or, with
 # --require_frozen_schema, refuse).
-SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 3, "lux": 3,
+SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 4, "lux": 3,
                                    "clash_royale": 3, "pokemon": 3}
 _SCHEMA_FREEZE_CONTENT = {
     "chess": "repetition flags + legal masks",
     "go": "side-to-move/komi globals",
     "shogi": "repetition + legal masks",
-    "mahjong": "exact legal masks, leak-free claim frames + il_weight",
+    "mahjong": "exact legal masks, leak-free claim frames + il_weight; each opponent's "
+               "public discard history on the tile planes (older shards count the discards "
+               "per kind, losing their order, tsumogiri and the riichi safety)",
     "lux": "env-param globals + sap targets; one sample per game (older shards cut it into "
            "matches, restarting the memory the game keeps) with team 1's reflected view",
     "clash_royale": "deck tokens with the causal hand belief; older shards infer the hand "

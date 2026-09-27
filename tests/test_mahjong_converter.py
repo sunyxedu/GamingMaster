@@ -56,7 +56,7 @@ def test_schema_and_mismatch_stat(converted):
     assert stats["mask_mismatch"] == 0
     assert stats["frames"] > 0
     ds = GameShardDataset(out)
-    assert ds.converter_version == 3 and ds.shard_meta == {}
+    assert ds.converter_version == 4 and ds.shard_meta == {"tile_features": 37}
     # the tile planes are stored as u8 quarters and expanded (exactly) at load
     import json as _json
     import os
@@ -71,7 +71,7 @@ def test_schema_and_mismatch_stat(converted):
             v = s["tgt"][k]
             assert v.dtype == torch.float32 and ((v == 0) | (v == 1)).all()
         tiles = s["obs"]["tiles_seq"]
-        assert tiles.dtype == torch.float32 and tiles.shape == (T, N_TILE_KINDS, 16)
+        assert tiles.dtype == torch.float32 and tiles.shape == (T, N_TILE_KINDS, 37)
         assert torch.equal(tiles * 4, (tiles * 4).round()) and "raw" not in s
 
 
@@ -155,7 +155,8 @@ def test_masks_feed_the_decoder_il_path(converted):
                                     for s in samples])
     tgt, fm = batch["tgt"], batch["meta"]["frame_mask"]
     cfg = MahjongConfig(d_model=32, n_heads=4, d_ff=64, n_st_layers=1, core_type="trm",
-                        trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1, halt_max_steps=1)
+                        trm_H_cycles=1, trm_L_cycles=1, trm_block_layers=1, halt_max_steps=1,
+                        mahjong_tile_feature_dim=37)             # the v4 shard meta's
     torch.manual_seed(0)
     net = GameNetwork(cfg, MahjongEncoder(cfg), MahjongDecoder(cfg))
     legal = {k[len("legal_"):]: v.bool() for k, v in tgt.items() if k.startswith("legal_")}

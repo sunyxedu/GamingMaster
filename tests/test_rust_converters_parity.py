@@ -47,7 +47,7 @@ CASES = {
                                ("white", "black", "elo", "result")),
     "shogi": (["shogi", "convert", "--input", f"{FIX}/shogi"], ("players", "result", "plies")),
     "shogi_noresult": (["shogi", "convert", "--input", f"{FIX}/shogi", "--allow-no-result"], ("players", "result", "plies")),
-    "lux": (["lux", "convert", "--input", f"{FIX}/lux"], ("agent", "team", "match_index", "match_value")),
+    "lux": (["lux", "convert", "--input", f"{FIX}/lux"], ("agent", "team", "matches", "match_values", "view")),
     "mahjong": (["mahjong", "convert", "--input", f"{FIX}/mahjong"], ("name", "seat", "kyokus", "placement", "final_score")),
     "pokemon": (["pokemon", "convert", "--input", f"{FIX}/pokemon"], ("replay_id", "side", "player", "rating", "won")),
 }
@@ -55,14 +55,16 @@ CASES = {
 # tgt.value contract (data_processing/games/dataset.py): the outcome levels each
 # converter may emit, and whose perspective a sample holds — "mover": both
 # players' frames, so only |value| is constant (the sign follows the mover);
-# "player": one player's view, so the value is constant over the sample.
+# "player": one player's view, so the value is constant over the sample;
+# "match": one player's view of a game of matches (lux), the value of each frame's
+# match — constant over each match.
 VALUE_CONTRACT = {
     "othello": ((-1.0, 0.0, 1.0), "mover"),
     "gomoku": ((-1.0, 1.0), "mover"),
     "go": ((-1.0, 0.0, 1.0), "mover"),
     "chess": ((-1.0, 0.0, 1.0), "mover"),
     "shogi": ((-1.0, 0.0, 1.0), "mover"),
-    "lux": ((-1.0, 0.0, 1.0), "player"),
+    "lux": ((-1.0, 0.0, 1.0), "match"),
     "mahjong": ((-1.0, -1.0 / 3.0, 1.0 / 3.0, 1.0), "player"),
     "pokemon": ((-1.0, 1.0), "player"),
 }
@@ -77,6 +79,11 @@ def check_value_contract(case, samples):
         assert v.ndim == 1 and v.numel() > 0, (case, i)
         assert torch.isfinite(v).all() and v.abs().max() <= VALUE_TARGET_BOUND, (case, i)
         assert ((v[:, None] - lv).abs().min(-1).values < 1e-6).all(), (case, i, v.unique())
+        if view == "match":
+            runs = torch.unique_consecutive(v)
+            assert runs.tolist() == [x for x in s["meta"]["match_values"] if x is not None][:len(runs)] \
+                or len(runs) <= s["meta"]["matches"], (case, i, v)
+            continue
         ref = v.abs() if view == "mover" else v
         assert torch.all(ref == ref[0]), (case, i, v)
 
