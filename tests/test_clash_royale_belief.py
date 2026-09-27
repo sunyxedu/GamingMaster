@@ -270,7 +270,7 @@ def test_legacy_hand_network_computes_what_it_computed(case):
     # a config dict saved before the deck tokens existed: every field of that time,
     # but no cr_card_tokens / deck_size
     saved = asdict(ClashRoyaleConfig(**_LEGACY_BASE, **_LEGACY_CORES[case]))
-    for k in ("cr_card_tokens", "deck_size"):
+    for k in ("cr_card_tokens", "deck_size", "encoder_norm"):   # fields of later times
         saved.pop(k)
     cfg = config_from_dict(saved, ClashRoyaleConfig)
     assert (cfg.cr_card_tokens, cfg.card_feature_dim) == ("hand", 8)

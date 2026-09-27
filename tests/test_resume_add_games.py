@@ -69,7 +69,10 @@ def _args(root, save_dir, games, *extra, kind="cpu"):
             "--eval_every", "2", "--log_every", "1", "--ema_rate", "0.9",
             "--moe_balance_rate", "0.01", "--clip_grad", "0.5", "--seed", "3", *dev,
             "--save_dir", str(save_dir), *extra,
-            "--override", *[f"{k}={v}" for k, v in CORE_TF.items()]]
+            # legacy BatchNorm encoders: their running statistics are the
+            # buffers a resume must carry exactly (the default per-frame
+            # GroupNorm has none)
+            "--override", *[f"{k}={v}" for k, v in {**CORE_TF, "encoder_norm": "batch"}.items()]]
 
 
 def _probe(mp) -> None:
