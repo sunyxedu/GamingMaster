@@ -310,8 +310,8 @@ impl FrameSpec {
         }
         for k in &self.action_keys {
             match index_of(&self.target, k).map(|i| &self.target[i]) {
-                Some(t) if t.dtype == DType::I64 && t.shape.is_empty() => {}
-                _ => return bad(format!("action key {k:?} must be an i64 scalar target tensor")),
+                Some(t) if matches!(t.dtype, DType::I64 | DType::Bool) && t.shape.is_empty() => {}
+                _ => return bad(format!("action key {k:?} must be an i64 or bool scalar target tensor")),
             }
         }
         if let Some(c) = &self.candidate {

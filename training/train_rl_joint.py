@@ -727,6 +727,50 @@ class FromToSpec(RLGameSpec):
         return tgt
 
 
+class ShogiSpec(RLGameSpec):
+    """The shogi move-or-drop decoder (model/games/shogi.py ShogiDecoder) on the gmrules
+    shogi env (legal ``mode`` / ``from`` / ``to_cond`` / ``promo_cond`` / ``drop_piece`` /
+    ``drop_to_cond``, action keys dropped / from_idx / to_idx / promoted / piece_idx /
+    drop_to_idx).  The rollout commits mode, from → to → promotion and piece → drop
+    square under the env's exact tables; the replay teacher-forces the stored dropped /
+    from_idx / to_idx / piece_idx (the decoder's LABEL_KEYS) under the masks the rollout
+    sampled with (``shogi_replay_legal``: every ``_of`` row at the stored conditioning),
+    so the leaves condition exactly as in the rollout: log π_old = μ.  Both branches
+    are decoded on every frame, the mode gates which one's log-prob counts.  The KL
+    covers every head (``il_head_terms``: mode, from, to | from, promotion | from / to,
+    piece, drop square | piece) under those masks."""
+
+    full_kl = True
+    LABELS = ("dropped", "from_idx", "to_idx", "piece_idx")
+
+    def check_env(self, env, net):
+        cfg = net.cfg
+        schema = env.obs_schema()
+        want = {"board_seq": (cfg.piece_channels, cfg.board_h, cfg.board_w),
+                "hand_seq": (2 * cfg.n_hand_piece_types, cfg.hand_feature_dim),
+                "globals_seq": (cfg.shogi_global_features,)}
+        have = {k: tuple(schema[k][0]) if k in schema else None for k in want}
+        if have != want:
+            raise SystemExit(f"{env.game} env emits {have}, the network expects {want} "
+                             f"(piece_channels / board dims, hand slots x hand_feature_dim, "
+                             f"shogi_global_features)")
+
+    def rollout_legal(self, legal, out):
+        from model.games.shogi import shogi_replay_legal
+
+        stored = shogi_replay_legal(out)
+        return stored if {"mode", "from", "to_of", "promo_of", "drop_piece",
+                          "drop_to_of"} <= set(stored) else legal
+
+    def labels(self, actions, cfg):
+        return {k: actions[k].long() for k in self.LABELS}
+
+    def kl_targets(self, actions, forced, cfg):
+        tgt = {k: actions[k].long() for k in self.LABELS + ("drop_to_idx",)}
+        tgt["promoted"] = actions["promoted"].bool()
+        return tgt
+
+
 GAME_SPECS: Dict[str, RLGameSpec] = {
     "generals": GeneralsSpec(),
     "othello": ForcedPassPlacementSpec(),

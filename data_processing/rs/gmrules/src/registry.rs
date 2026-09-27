@@ -25,6 +25,7 @@ pub static GAMES: &[&dyn DynGame] = &[
     &Entry::<games::backgammon::Backgammon>(PhantomData),
     &Entry::<games::doudizhu::DouDizhu>(PhantomData),
     &Entry::<games::skat::Skat>(PhantomData),
+    &Entry::<games::shogi::Shogi>(PhantomData),
     &Entry::<games::bridge::Bridge>(PhantomData),
     &Entry::<games::hunl::Hunl>(PhantomData),
 ];

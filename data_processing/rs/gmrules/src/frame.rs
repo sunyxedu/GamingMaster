@@ -199,7 +199,7 @@ pub fn new_target(spec: &FrameSpec) -> Vec<Buf> {
 pub fn action_keys_of(spec: &FrameSpec, target: &[Buf]) -> Vec<i64> {
     spec.action_key_indices()
         .into_iter()
-        .map(|i| target[i].as_i64().expect("action keys are i64")[0])
+        .map(|i| match &target[i] { Buf::Bool(v) => v[0] as i64, b => b.as_i64().expect("action keys are i64 or bool")[0] })
         .collect()
 }
 
