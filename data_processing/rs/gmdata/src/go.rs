@@ -5,6 +5,13 @@
 //! suicide rejection and simple ko; a record with an illegal move is skipped.
 //! One sample = one game = both colours' frames interleaved in play order.
 //!
+//! The rules and the frame encoders are gmrules' (`gmrules::games::go`, the go
+//! simulator): each record becomes that game's state ([`sgf_config`]: board size,
+//! komi, rules flag, HA, AB / AW stones), every frame is its encoder's output for the
+//! record's mover and every move its transition — so a gmsim frame of the same
+//! position is this frame, bit for bit (tests/test_go_sim.py). This module keeps the
+//! SGF parsing, the record filters, the targets and the shard layout.
+//!
 //!   obs.board_seq   [T,4,N,N] f32
 //!   obs.globals_seq [T,6] f32     0 mover is black
 //!                                 1 komi from the mover's view / 20, clipped to [-1,1]
@@ -29,17 +36,18 @@
 use crate::common;
 use anyhow::Result;
 use clap::Subcommand;
+use gmrules::games::go::{Colour, Go, GoConfig, Point, PLANES};
 use gmshard::{Sample, ShardWriter};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-type Point = (i32, i32);
+/// The rules and encoders (gmrules), also for the labeller (`label/go.rs`).
+pub(crate) use gmrules::games::go::{encode_globals, encode_planes, globals_consts, opponent, Board, BLACK, EMPTY, GLOBAL_FEATURES,
+                                    WHITE};
 
 /// 2: + obs.globals_seq (side to move, komi, ruleset, handicap, last pass).
 pub const CONVERTER_VERSION: u32 = 2;
-/// Width of obs.globals_seq (shard meta `global_features`).
-pub const GLOBAL_FEATURES: usize = 6;
 
 // ---------------------------------------------------------------- SGF
 
@@ -78,44 +86,27 @@ impl SgfGame {
     }
 }
 
-/// The per-game constants of obs.globals_seq: (komi known, komi / 20 from white's
-/// view, area scoring, handicap / 9).
-fn game_globals(g: &SgfGame) -> (bool, f32, f32, f32) {
-    globals_consts(g.komi(), g.handicap(), g.area_scoring())
-}
-
-/// [`game_globals`] from the values the sample meta records (`komi`, `handicap`) plus
-/// the area-scoring flag — shared with the go labeller's replay verification.
-pub(crate) fn globals_consts(komi: Option<f64>, handicap: i64, area: bool) -> (bool, f32, f32, f32) {
-    let komi = komi.filter(|k| k.is_finite());
-    let white_komi = komi.map(|k| (k / 20.0).clamp(-1.0, 1.0) as f32).unwrap_or(0.0);
-    let ha = handicap.clamp(0, 9) as f32 / 9.0;
-    (komi.is_some(), white_komi, area as u8 as f32, ha)
-}
-
-/// One obs.globals_seq frame (`out`: [`GLOBAL_FEATURES`] values) for `color` to move.
-pub(crate) fn encode_globals(color: u8, consts: (bool, f32, f32, f32), prev_pass: bool, out: &mut [f32]) {
-    let (komi_known, white_komi, area, ha_feat) = consts;
-    out[0] = (color == BLACK) as u8 as f32;
-    out[1] = if color == BLACK { -white_komi } else { white_komi };
-    out[2] = komi_known as u8 as f32;
-    out[3] = area;
-    out[4] = ha_feat;
-    out[5] = prev_pass as u8 as f32;
-}
-
-/// One obs.board_seq frame (`out`: 4·N² values, all written) of `b` with `color` to
-/// move: own / opponent / empty stones and the simple-ko point.
-pub(crate) fn encode_planes(b: &Board, color: u8, out: &mut [f32]) {
-    let nn = (b.n * b.n) as usize;
-    for (i, &v) in b.g.iter().enumerate() {
-        out[i] = (v == color) as u8 as f32;
-        out[nn + i] = (v == opponent(color)) as u8 as f32;
-        out[2 * nn + i] = (v == EMPTY) as u8 as f32;
-    }
-    out[3 * nn..4 * nn].fill(0.0);
-    if let Some((kr, kc)) = b.ko {
-        out[3 * nn + (kr * b.n + kc) as usize] = 1.0;
+/// The gmrules go config of a record: the game the simulator plays from the record's
+/// start — its board size, komi (a non-finite one = unknown), the RU scoring flag, HA,
+/// the AB / AW stones (point indices), the first mover and, for a free handicap
+/// placement (HA > 0, no AB, the first HA moves black's: what [`game_to_sample`]
+/// accepts with `allow_handicap`), the HA placement moves; the simulator's default end
+/// rules. The converter builds its frames on this config's state (with `superko` off:
+/// no frame depends on how the game ends).
+pub fn sgf_config(g: &SgfGame, size: i32) -> GoConfig {
+    let pt = |&(r, c): &Point| (r * size + c) as usize;
+    let ha = g.handicap();
+    let free = ha > 0 && g.setup_black.is_empty() && g.moves.len() as i64 >= ha && g.moves[..ha as usize].iter().all(|(c, _)| *c == 'B');
+    GoConfig {
+        board_size: size as usize,
+        komi: g.komi().filter(|k| k.is_finite()),
+        area_scoring: g.area_scoring(),
+        handicap: ha,
+        setup_black: g.setup_black.iter().map(pt).collect(),
+        setup_white: g.setup_white.iter().map(pt).collect(),
+        first_player: if !free && matches!(g.moves.first(), Some(('W', _))) { Colour::White } else { Colour::Black },
+        free_handicap: if free { ha as usize } else { 0 },
+        ..GoConfig::default()
     }
 }
 
@@ -301,123 +292,7 @@ pub fn parse_sgf(text: &str) -> std::result::Result<Vec<SgfGame>, ()> {
     Ok(games)
 }
 
-// ---------------------------------------------------------------- rules
-
-pub(crate) const EMPTY: u8 = 0;
-pub(crate) const BLACK: u8 = 1;
-pub(crate) const WHITE: u8 = 2;
-
-pub(crate) fn opponent(c: u8) -> u8 {
-    if c == BLACK {
-        WHITE
-    } else {
-        BLACK
-    }
-}
-
-/// A Go position with the converter's rules (captures, suicide rejected, simple ko):
-/// `g` = N² points row-major (row 0 = SGF row `a` = the top), `ko` = the point the
-/// side to move may not play (set by a single-stone capture that could be retaken).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Board {
-    pub(crate) n: i32,
-    pub(crate) g: Vec<u8>,
-    pub(crate) ko: Option<Point>,
-}
-
-impl Board {
-    pub(crate) fn new(n: i32) -> Self {
-        Board { n, g: vec![EMPTY; (n * n) as usize], ko: None }
-    }
-    pub(crate) fn at(&self, p: Point) -> u8 {
-        self.g[(p.0 * self.n + p.1) as usize]
-    }
-    pub(crate) fn set(&mut self, p: Point, v: u8) {
-        let n = self.n;
-        self.g[(p.0 * n + p.1) as usize] = v;
-    }
-    fn neighbors(&self, (r, c): Point) -> Vec<Point> {
-        let mut v = Vec::with_capacity(4);
-        if r > 0 {
-            v.push((r - 1, c));
-        }
-        if r < self.n - 1 {
-            v.push((r + 1, c));
-        }
-        if c > 0 {
-            v.push((r, c - 1));
-        }
-        if c < self.n - 1 {
-            v.push((r, c + 1));
-        }
-        v
-    }
-    fn group(&self, p: Point) -> (HashSet<Point>, HashSet<Point>) {
-        let color = self.at(p);
-        let (mut stones, mut libs) = (HashSet::new(), HashSet::new());
-        let mut stack = vec![p];
-        while let Some(q) = stack.pop() {
-            if !stones.insert(q) {
-                continue;
-            }
-            for nb in self.neighbors(q) {
-                let v = self.at(nb);
-                if v == EMPTY {
-                    libs.insert(nb);
-                } else if v == color && !stones.contains(&nb) {
-                    stack.push(nb);
-                }
-            }
-        }
-        (stones, libs)
-    }
-    pub(crate) fn setup(&mut self, color: u8, pts: &[Point]) -> bool {
-        for &(r, c) in pts {
-            if !(0..self.n).contains(&r) || !(0..self.n).contains(&c) || self.at((r, c)) != EMPTY {
-                return false;
-            }
-            self.set((r, c), color);
-        }
-        true
-    }
-    /// false = illegal (board unchanged)
-    pub(crate) fn play(&mut self, color: u8, p: Option<Point>) -> bool {
-        let Some((r, c)) = p else {
-            self.ko = None;
-            return true;
-        };
-        if !(0..self.n).contains(&r) || !(0..self.n).contains(&c) || self.at((r, c)) != EMPTY || self.ko == Some((r, c)) {
-            return false;
-        }
-        self.set((r, c), color);
-        let opp = opponent(color);
-        let mut captured: Vec<Point> = Vec::new();
-        let mut seen: HashSet<Point> = HashSet::new();
-        for q in self.neighbors((r, c)) {
-            if self.at(q) == opp && !seen.contains(&q) {
-                let (stones, libs) = self.group(q);
-                seen.extend(stones.iter().copied());
-                if libs.is_empty() {
-                    for s in &stones {
-                        self.set(*s, EMPTY);
-                    }
-                    captured.extend(stones);
-                }
-            }
-        }
-        let (own, own_libs) = self.group((r, c));
-        if own_libs.is_empty() {
-            self.set((r, c), EMPTY);
-            return false;
-        }
-        self.ko = if captured.len() == 1 && own.len() == 1 && own_libs.len() == 1 && own_libs.contains(&captured[0]) {
-            Some(captured[0])
-        } else {
-            None
-        };
-        true
-    }
-}
+// ---------------------------------------------------------------- records
 
 fn parse_result(re: Option<&str>) -> Option<i32> {
     let s = re?.trim().to_uppercase();
@@ -505,20 +380,20 @@ fn game_to_sample(g: &SgfGame, size: i32, allow_handicap: bool, allow_no_result:
         None if allow_no_result => 0,
         None => return Err("no_result"),
     };
-    let mut b = Board::new(size);
-    if !b.setup(BLACK, &g.setup_black) || !b.setup(WHITE, &g.setup_white) {
+    // the record's game in the simulator's rules (superko off: no frame depends on how
+    // the game ends, and the converter plays on past any end the SGF goes beyond)
+    let Some(mut go) = Go::setup(&GoConfig { superko: false, ..sgf_config(g, size) }) else {
         return Err("illegal_move");
-    }
+    };
     let t = g.moves.len();
     let nn = (size * size) as usize;
-    let mut planes = vec![0f32; t * 4 * nn];
+    let mut planes = vec![0f32; t * PLANES * nn];
     let mut globals = vec![0f32; t * GLOBAL_FEATURES];
-    let consts = game_globals(g);
     let (mut idx, mut passed, mut value) = (vec![0i64; t], vec![false; t], vec![0f32; t]);
     for (k, (ch, p)) in g.moves.iter().enumerate() {
         let color = if *ch == 'B' { BLACK } else { WHITE };
-        encode_globals(color, consts, k > 0 && passed[k - 1], &mut globals[k * GLOBAL_FEATURES..(k + 1) * GLOBAL_FEATURES]);
-        encode_planes(&b, color, &mut planes[k * 4 * nn..(k + 1) * 4 * nn]);
+        go.encode_obs_as(color, &mut planes[k * PLANES * nn..(k + 1) * PLANES * nn],
+                         &mut globals[k * GLOBAL_FEATURES..(k + 1) * GLOBAL_FEATURES]);
         match p {
             None => passed[k] = true,
             Some((r, c)) => idx[k] = (r * size + c) as i64,
@@ -526,7 +401,7 @@ fn game_to_sample(g: &SgfGame, size: i32, allow_handicap: bool, allow_no_result:
         if result != 0 {
             value[k] = if (result > 0) == (color == BLACK) { 1.0 } else { -1.0 };
         }
-        if !b.play(color, *p) {
+        if !go.play_as(color, *p) {
             return Err("illegal_move");
         }
     }

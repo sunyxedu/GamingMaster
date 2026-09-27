@@ -382,6 +382,7 @@ def test_generic_spec_refuses_autoregressive_decoders(stage1, monkeypatch):
     monkeypatch.delitem(trj.GAME_SPECS, "generals")
     with pytest.raises(SystemExit, match="teacher-force"):
         trj.game_spec("generals")
+    monkeypatch.delitem(trj.GAME_SPECS, "go")                   # (go has its own GoSpec)
     assert type(trj.game_spec("go")) is trj.RLGameSpec          # no labels: generic is exact
 
 

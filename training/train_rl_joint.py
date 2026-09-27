@@ -532,6 +532,43 @@ class GomokuSpec(ForcedPassPlacementSpec):
                              f"{cfg.board_global_features} board_global_features")
 
 
+class GoSpec(RLGameSpec):
+    """go (model/games/board.py PlacementDecoder with its pass head) on the gmrules go
+    env (legal ``place`` [N·N], the pass always legal; action keys place_idx / passed):
+    μ is the decoder's pass-gated log-prob (a pass frame by the pass head alone, a move
+    by pass + placement), π its ``log_prob_entropy`` of the same action — no
+    conditioning labels (LABEL_KEYS["go"] is empty), so the replay is exact without
+    teacher forcing.  Unlike othello's forced passes a Go pass is a real choice: it is
+    part of the action.  The KL covers both heads (``il_head_terms``; the placement
+    under the env's mask).  The env is built on the network's board (``board_size`` =
+    board_h) and checked against it (board_seq [piece_channels, N, N], globals)."""
+
+    full_kl = True
+
+    def env_kwargs(self, cfg):
+        return {"board_size": int(cfg.board_h)}
+
+    def check_env(self, env, net):
+        cfg = net.cfg
+        schema = env.obs_schema()
+        have = tuple(schema["board_seq"][0])
+        want = (cfg.piece_channels, cfg.board_h, cfg.board_w)
+        g = schema["globals_seq"][0][0] if "globals_seq" in schema else 0
+        if have != want or g != getattr(cfg, "board_global_features", 0):
+            raise SystemExit(f"go env emits board_seq {have} / {g} globals, the network expects "
+                             f"{want} / {getattr(cfg, 'board_global_features', 0)} "
+                             f"(piece_channels, board_h, board_w / board_global_features)")
+
+    def kl_targets(self, actions, forced, cfg):
+        return {"place_idx": actions["place_idx"].long(), "passed": actions["passed"].bool()}
+
+    def kl_terms(self, net, pred, tgt, mask, legal):
+        terms = dict(net.action_decoder.il_head_terms(pred, tgt, mask))
+        if "place" in terms and "place" in legal:
+            terms["place"] = {**terms["place"], "mask": legal["place"].bool()}
+        return terms
+
+
 class GeneralsSpec(RLGameSpec):
     """generals: the decoder's hierarchical log-prob (μ = ``action_log_prob``),
     the replay teacher-forces the stored source (direction / split condition
