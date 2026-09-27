@@ -1481,6 +1481,35 @@ mod tests {
         assert!(!g.crawford_game && g.may_double(0));
     }
 
+    /// The edges of the scoring regions: a loser's checker on the winner's 6-point (the
+    /// last point of the winner's home board) makes a backgammon, one on the winner's
+    /// 7-point a gammon, one checker borne off a single game (also pinned to gnubg's own
+    /// match loop by tests/test_backgammon.py).
+    #[test]
+    fn gammon_and_backgammon_region_edges() {
+        let cfg = BackgammonConfig { match_length: 0, jacoby: false, ..Default::default() };
+        let multiplier = |loser: &[(usize, u8)]| {
+            let mut g = Backgammon::new_game(&cfg);
+            g.apply_chance(OPENING_BASE + 6 * 5 + 1).unwrap(); // seat 0 starts with 6-2
+            g.board[0] = [0; 25];
+            g.board[0][0] = 1; // seat 0's last checker, on its 1-point (seat 1's index 23)
+            g.board[1] = [0; 25];
+            for &(i, n) in loser {
+                g.board[1][i] += n; // seat 1's own numbering: index 18 = seat 0's 6-point
+            }
+            g.start_move(6, 2);
+            let a = g.cands[0].id;
+            g.apply_action(0, a).unwrap();
+            assert_eq!(g.phase, Phase::Over);
+            g.results[0].multiplier
+        };
+        assert_eq!(multiplier(&[(18, 1), (5, 14)]), 3, "on the winner's 6-point: backgammon");
+        assert_eq!(multiplier(&[(22, 1), (5, 14)]), 3, "on the winner's 2-point: backgammon");
+        assert_eq!(multiplier(&[(24, 1), (5, 14)]), 3, "on the bar: backgammon");
+        assert_eq!(multiplier(&[(17, 1), (5, 14)]), 2, "on the winner's 7-point: gammon");
+        assert_eq!(multiplier(&[(18, 1), (5, 13)]), 1, "one checker off: a single game");
+    }
+
     #[test]
     fn split_turns_reach_every_move() {
         // a spread position with 1-1: more distinct moves than MAX_ACTIONS
