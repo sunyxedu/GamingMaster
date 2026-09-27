@@ -75,6 +75,35 @@ def test_max_len_crop(tmp_path):
     assert ds[0]["obs"]["board_seq"].shape[0] == 8
 
 
+def test_balanced_crop_draws_the_edges_as_often_as_the_middle(tmp_path):
+    """crop="random" starts a window uniformly in [0, T − L]: the first and last frames
+    of a long record are drawn 1/L as often as its middle; "balanced" clips a start
+    drawn with L − 1 frames of slack to a full window, so no frame of a T ≥ 2L record is
+    drawn less often than the middle — the trainers' default (open_dataset)."""
+    from training.train_il_game import open_dataset
+
+    T, L, draws = 40, 8, 6000
+    s = _othello_samples(1, t0=T)[0]
+    s["tgt"]["place_idx"] = torch.arange(T)                     # frame ids
+    save_shard(str(tmp_path / "a.pt"), "othello", [s])
+
+    def counts(crop):
+        ds = GameShardDataset(str(tmp_path), max_len=L, crop=crop)
+        c = torch.zeros(T)
+        torch.manual_seed(0)
+        for _ in range(draws):
+            w = ds[0]["tgt"]["place_idx"]
+            assert w.shape == (L,) and torch.equal(w, torch.arange(int(w[0]), int(w[0]) + L))
+            c[w] += 1
+        return c / c[T // 2]
+
+    rnd, bal = counts("random"), counts("balanced")
+    assert rnd[0] < 0.25 and rnd[-1] < 0.25                     # 1/L expected
+    assert bal.min() > 0.85 and bal.max() < 2.2                 # >= 1x, <= ~2x expected
+    assert bal[0] > 0.85 and bal[-1] > 0.85
+    assert open_dataset("othello", str(tmp_path), L).crop == "balanced"   # generals: prefix
+
+
 def test_build_labels_tf_masking():
     tgt = {"from_idx": torch.arange(12).reshape(2, 6), "to_idx": torch.arange(12).reshape(2, 6)}
     fm = torch.ones(2, 6, dtype=torch.bool)

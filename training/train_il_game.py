@@ -312,12 +312,13 @@ PREFIX_CROP = frozenset({"generals"})
 
 
 def open_dataset(game: str, data_dir: str, max_len: Optional[int] = None):
-    """``game``'s dataset under ``data_dir`` with its crop policy (random
-    windows, or the first frames for PREFIX_CROP games); generals also reads
+    """``game``'s dataset under ``data_dir`` with its crop policy (edge-balanced
+    random windows — every frame of a long record drawn about as often, see
+    GameShardDataset — or the first frames for PREFIX_CROP games); generals also reads
     gio record directories (data_processing.games.dataset.open_game_dataset).
     UNCROPPABLE games are the caller's business (max_len=None)."""
     return open_game_dataset(data_dir, game, max_len=max_len,
-                             crop="prefix" if game in PREFIX_CROP else "random")
+                             crop="prefix" if game in PREFIX_CROP else "balanced")
 
 
 def _generals_obs(obs: Dict[str, torch.Tensor], cfg) -> Dict[str, torch.Tensor]:

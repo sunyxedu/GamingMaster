@@ -247,7 +247,7 @@ def test_open_game_dataset_dispatch_and_crop_modes(gio_dir, tmp_path):
     for i in range(len(sh)):
         for k, v in sh[i]["obs"].items():
             assert torch.equal(v, full[i]["obs"][k][:4])
-    assert GameShardDataset(str(tmp_path), max_len=4).crop == "random"
+    assert GameShardDataset(str(tmp_path), max_len=4).crop == "random"      # the class default
     with pytest.raises(ValueError, match="crop"):
         GameShardDataset(str(tmp_path), max_len=4, crop="middle")
 

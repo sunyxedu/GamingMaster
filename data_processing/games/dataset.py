@@ -248,11 +248,19 @@ class GameShardDataset(Dataset):
     (shuffles shard order, then sample order within each shard) to get
     shuffling with cache hits.
 
-    ``max_len`` crops longer samples: a random window (``crop="random"``,
-    re-drawn per access) or the first ``max_len`` frames (``"prefix"``).
+    ``max_len`` crops longer samples to a window of ``max_len`` frames,
+    re-drawn per access: ``crop="random"`` starts it uniformly in
+    [0, T − L], which draws the first and last frames of a long sample only
+    1/min(L, T − L + 1) as often as its middle frames (a 250-frame go game at
+    L = 64: its first 16 moves 7× less often); ``"balanced"`` draws the start
+    uniformly in [−(L − 1), T − 1] and clips it to a full window inside the
+    sample, so every frame of a sample with T ≥ 2L is drawn at least as often
+    as a middle frame (at most ~2× in the first / last L frames) and shorter
+    ones lose at most ~2× at the ends; ``"prefix"`` keeps the first
+    ``max_len`` frames.
     """
 
-    CROPS = ("random", "prefix")
+    CROPS = ("random", "balanced", "prefix")
 
     def __init__(self, data_dir: str, game: Optional[str] = None,
                  max_len: Optional[int] = None, crop: str = "random"):
@@ -398,9 +406,16 @@ class GameShardDataset(Dataset):
         if self.max_len is not None:
             T = next(iter(sample["obs"].values())).shape[0]
             if T > self.max_len:
-                # Random crop keeps late-game frames reachable across epochs.
-                t0 = (0 if self.crop == "prefix"
-                      else int(torch.randint(0, T - self.max_len + 1, ()).item()))
+                L = self.max_len
+                if self.crop == "prefix":
+                    t0 = 0
+                elif self.crop == "balanced":
+                    # edge-balanced start (class docstring): clip a start drawn with
+                    # L − 1 frames of slack on both sides to a full window
+                    u = int(torch.randint(-(L - 1), T, ()).item())
+                    t0 = min(max(u, 0), T - L)
+                else:
+                    t0 = int(torch.randint(0, T - L + 1, ()).item())
                 sample = {
                     "obs": {k: v[t0: t0 + self.max_len] for k, v in sample["obs"].items()},
                     "tgt": {k: v[t0: t0 + self.max_len] for k, v in sample["tgt"].items()},
