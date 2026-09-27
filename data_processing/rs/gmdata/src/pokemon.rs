@@ -530,15 +530,41 @@ fn f64_col(batch: &arrow_array::RecordBatch, name: &str) -> Option<Vec<Option<f6
 /// objects) and parquet dumps with its columns (id, log, rating, format / formatid, players,
 /// uploadtime) — each replay id once, from the first input that has it.  `f` returns false to
 /// stop.  Returns (records passed on, duplicates skipped, unreadable entries).
+/// A battle's identity across dumps: Showdown numbers battles per format (`gen9ou-2688866368`),
+/// and a dump may re-label the id (the merged set: `sethkarten-2383111891`), so the key is the
+/// format, the battle number and the two players.
+fn canon_key(r: &Value) -> Option<String> {
+    let id = r.get("id").and_then(|v| v.as_str())?;
+    let number = id.rsplit('-').next().filter(|x| !x.is_empty() && x.chars().all(|c| c.is_ascii_digit()));
+    let Some(number) = number else { return Some(id.to_string()) };
+    let mut players: Vec<String> = record_players(r).iter().map(|p| norm(p)).collect();
+    players.sort();
+    Some(format!("{}-{}-{}", record_format(r), number, players.join("|")))
+}
+
+/// Duplicates of one battle across dumps whose ratings agree / differ (the first copy is kept).
+pub static DUP_RATINGS: std::sync::Mutex<(usize, usize)> = std::sync::Mutex::new((0, 0));
+
 fn iter_records(inputs: &[PathBuf], f: &mut dyn FnMut(Value) -> Result<bool>) -> Result<(usize, usize, usize)> {
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    iter_records_cols(inputs, true, f)
+}
+
+/// [`iter_records`]; `need_log` false skips the parquet dumps' `log` column (most of their
+/// bytes: the players pass reads metadata only; a record then has an empty `log`).
+fn iter_records_cols(inputs: &[PathBuf], need_log: bool, f: &mut dyn FnMut(Value) -> Result<bool>) -> Result<(usize, usize, usize)> {
+    // canonical key → the first copy's rating (rounded; −1 = unrated)
+    let mut seen: HashMap<String, i64> = HashMap::new();
     let (mut n, mut dup, mut bad) = (0usize, 0usize, 0usize);
     let mut take = |r: Value, n: &mut usize, dup: &mut usize| -> Result<bool> {
-        if let Some(id) = r.get("id").and_then(|v| v.as_str()) {
-            if !seen.insert(id.to_string()) {
+        if let Some(key) = canon_key(&r) {
+            let rating = record_rating(&r).map(|x| x.round() as i64).unwrap_or(-1);
+            if let Some(&first) = seen.get(&key) {
                 *dup += 1;
+                let mut d = DUP_RATINGS.lock().unwrap();
+                if first == rating { d.0 += 1 } else { d.1 += 1 }
                 return Ok(true);
             }
+            seen.insert(key, rating);
         }
         *n += 1;
         f(r)
@@ -552,12 +578,17 @@ fn iter_records(inputs: &[PathBuf], f: &mut dyn FnMut(Value) -> Result<bool>) ->
                     .with_context(|| format!("parquet {}", path.display()))?;
                 let schema = bld.schema().clone();
                 let want = ["id", "log", "rating", "format", "formatid", "players", "uploadtime"];
-                let cols: Vec<usize> = want.iter().filter_map(|c| schema.index_of(c).ok()).collect();
+                let cols: Vec<usize> = want.iter().filter(|&&c| need_log || c != "log")
+                    .filter_map(|c| schema.index_of(c).ok()).collect();
                 let mask = parquet::arrow::ProjectionMask::roots(bld.parquet_schema(), cols);
                 for batch in bld.with_projection(mask).with_batch_size(256).build()? {
                     let batch = batch?;
                     let ids = str_col(&batch, "id");
-                    let logs = str_col(&batch, "log").context("parquet replays need a `log` column")?;
+                    let logs = if need_log {
+                        str_col(&batch, "log").context("parquet replays need a `log` column")?
+                    } else {
+                        vec![Some(String::new()); batch.num_rows()]
+                    };
                     let fmt = str_col(&batch, "format");
                     let fid = str_col(&batch, "formatid");
                     let rat = f64_col(&batch, "rating");
@@ -604,7 +635,7 @@ pub fn players(inputs: &[PathBuf], formats: &[String]) -> Result<Value> {
     // per format: battles by rating (bins of 50), unrated battles
     let mut hist: BTreeMap<String, BTreeMap<i64, usize>> = BTreeMap::new();
     let mut unrated_per: BTreeMap<String, usize> = BTreeMap::new();
-    let (n, dup, bad) = iter_records(inputs, &mut |r: Value| {
+    let (n, dup, bad) = iter_records_cols(inputs, false, &mut |r: Value| {
         let fmt = record_format(&r);
         if !formats.is_empty() && !formats.iter().any(|f| *f == fmt) {
             return Ok(true);
@@ -626,7 +657,9 @@ pub fn players(inputs: &[PathBuf], formats: &[String]) -> Result<Value> {
     })?;
     let table: BTreeMap<&String, BTreeMap<&String, [i64; 2]>> =
         t.iter().map(|(f, m)| (f, m.iter().map(|(p, &(k, peak))| (p, [k, peak])).collect())).collect();
-    Ok(json!({"records": n, "duplicates": dup, "unreadable": bad, "rated": rated, "unrated": unrated,
+    let (agree, differ) = *DUP_RATINGS.lock().unwrap();
+    Ok(json!({"records": n, "duplicates": dup, "duplicate_ratings_agree": agree, "duplicate_ratings_differ": differ,
+              "unreadable": bad, "rated": rated, "unrated": unrated,
               "players": t.iter().map(|(f, m)| (f.clone(), m.len())).collect::<BTreeMap<_, _>>(),
               "rating_hist": hist, "unrated_per_format": unrated_per, "table": table}))
 }
