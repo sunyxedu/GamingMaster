@@ -8,19 +8,25 @@
 # (~1 min, ~0.7 GB of shards).
 #
 #   scripts/fetch_xiangqi.sh [OUT_DIR] [RAW_DIR]
-#     OUT_DIR  default data/xiangqi   (OUT_DIR/train, OUT_DIR/val)
+#     OUT_DIR  default data/xiangqi under the repo   (OUT_DIR/train, OUT_DIR/val)
 #     RAW_DIR  default ~/gm-data/xiangqi (the 60 MB archive + ATTRIBUTION.txt)
+#     (relative directories are taken from the current directory)
 #   HQ=1 (default): master games (CCPD 大師對局), >= 20 plies, known result; HQ=0: every
 #   game from the initial position.  FORCE=1 replaces existing OUT_DIR/train|val
 #   (the shard writer appends to a non-empty directory, so they are refused otherwise).
+#   GMDATA=<prebuilt gmdata binary> skips the cargo build.
 #
 # Expected at CCPD commit 368a47a9 (HQ=1): train 26,980 games / 2,230,893 frames
 # (621 MB), val 567 games / 46,371 frames (13 MB); HQ=0: 27,548 / 578 games.
 set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-OUT=${1:-data/xiangqi}
-RAW=${2:-$HOME/gm-data/xiangqi}
+# absolute paths before any cd: the emptiness check (FORCE) and the converter must see
+# the same directories (a relative OUT_DIR used to be checked against the current
+# directory but written below the repo — shards appended to a non-empty directory)
+abspath() { mkdir -p "$1" && (cd -- "$1" && pwd); }
+OUT=$(abspath "${1:-$ROOT/data/xiangqi}")
+RAW=$(abspath "${2:-$HOME/gm-data/xiangqi}")
 HQ=${HQ:-1}
 FORCE=${FORCE:-0}
 COMMIT=${CCPD_COMMIT:-368a47a947773dd8692c026e286dd19b6277b993}
@@ -36,12 +42,14 @@ for d in "$OUT/train" "$OUT/val"; do
   fi
 done
 
-# a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
-command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-cd "$ROOT/data_processing"
-cargo build --release -q -p gmdata
-G="$ROOT/data_processing/target/release/gmdata"
-cd "$ROOT"
+if [ -n "${GMDATA:-}" ]; then
+  G=$GMDATA
+else
+  # a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
+  command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+  (cd "$ROOT/data_processing" && cargo build --release -q -p gmdata)
+  G="$ROOT/data_processing/target/release/gmdata"
+fi
 
 ZIP="$RAW/ccpd-${COMMIT:0:8}.zip"
 if [ ! -s "$ZIP" ]; then
