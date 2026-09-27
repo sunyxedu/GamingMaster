@@ -279,6 +279,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--rows_per_forward", action="append", default=[], metavar="GAME=N",
       help="streams per learner forward (gradient accumulation within a minibatch; "
            "default 8)")
+    a("--frames_per_forward", action="append", default=[], metavar="GAME=N",
+      help="frame budget of a learner forward instead of --rows_per_forward: as many "
+           "streams (longest first) as keep rows x padded length <= N — short-episode "
+           "games then fill a forward instead of running 8 short rows at a time")
+    a("--frames_per_forward_default", type=int, default=0, metavar="N",
+      help="--frames_per_forward of every RL game without its own (0 = off)")
     a("--clip", type=float, default=0.2)
     a("--clip_high", type=float, default=None)
     a("--is_clip", type=float, default=1.0, help="truncation of π_old/μ (0 = untruncated)")
@@ -1189,6 +1195,26 @@ def _chunks(idx: Sequence[int], n: int) -> List[List[int]]:
     return [idx[i:i + n] for i in range(0, len(idx), max(1, n))]
 
 
+def _length_chunks(idx: Sequence[int], lengths: Sequence[int], rows: int,
+                   frames: int = 0) -> List[List[int]]:
+    """Learner-forward chunks of the stream indices ``idx`` (``lengths`` indexed by
+    stream): longest first, so a chunk's rows pad to similar lengths.  A chunk
+    holds ``rows`` streams, or with a ``frames`` budget as many as keep rows x its
+    longest (first) stream's length <= frames — at least one."""
+    out: List[List[int]] = []
+    cur: List[int] = []
+    for i in sorted(idx, key=lambda j: -lengths[j]):
+        full = (len(cur) + 1) * lengths[cur[0]] > frames if frames > 0 and cur \
+            else len(cur) >= max(1, rows)
+        if cur and full:
+            out.append(cur)
+            cur = []
+        cur.append(i)
+    if cur:
+        out.append(cur)
+    return out
+
+
 def learner_forward(net, spec: RLGameSpec, b: Dict[str, Any], depth: int,
                     device: torch.device, bf16: bool, replay_routes: bool = False
                     ) -> Dict[str, torch.Tensor]:
@@ -1247,6 +1273,7 @@ DIAG_KEYS = (
     "ev_n", "ev_g", "ev_g2", "ev_e", "ev_e2",
     "il_sum", "il_n", "rkl_sum", "rkl_n", "rvl_sum",
     "gn_rl", "gn_rl_n", "gn_replay", "gn_replay_n",
+    "learn_s", "learn_fwd", "replay_s",
 )
 
 
@@ -1353,6 +1380,7 @@ class GameRL:
     lam: float
     rows_per_forward: int
     hl_gauss: bool
+    frames_per_forward: int = 0
     streams: List[Stream] = field(default_factory=list)
 
 
@@ -1415,9 +1443,11 @@ class JointRLTrainer:
         gamma = _pairs(a.gamma, float, "G")
         lam = _pairs(a.lam, float, "L")
         rpf = _pairs(a.rows_per_forward, int, "N")
+        fpf = _pairs(a.frames_per_forward, int, "N")
         self.game_weight = _pairs(a.game_weight, float, "W")
         for flag, vals in (("--envs", envs_n), ("--env_kw", env_kw), ("--mirror_prob", mirror),
                            ("--gamma", gamma), ("--lam", lam), ("--rows_per_forward", rpf),
+                           ("--frames_per_forward", fpf),
                            ("--game_weight", self.game_weight),
                            ("--share", _pairs(a.share, float, "W")),
                            ("--entropy_coef", _pairs(a.entropy_coef, float, "C")),
@@ -1468,7 +1498,8 @@ class JointRLTrainer:
                 game=g, spec=spec, env=env, actor=actor, pool_policy=pool_policy,
                 mirror_prob=p_mirror, gamma=gamma.get(g, 1.0), lam=lam.get(g, 0.95),
                 rows_per_forward=rpf.get(g, 8),
-                hl_gauss=isinstance(net.value_head, HLGaussValueHead))
+                hl_gauss=isinstance(net.value_head, HLGaussValueHead),
+                frames_per_forward=fpf.get(g, a.frames_per_forward_default))
 
         # --- replay stream ------------------------------------------------
         rw = _pairs(a.replay_weight, float, "W")
@@ -1672,7 +1703,7 @@ class JointRLTrainer:
         r = self.rl[g]
         net = self.model[g]
         with MoEFFN.inference_path("sparse"):
-            for chunk in _chunks(range(len(r.streams)), r.rows_per_forward):
+            for chunk in self._forward_chunks(g, range(len(r.streams))):
                 ss = [r.streams[i] for i in chunk]
                 b = build_batch(ss, self.device)
                 pred = learner_forward(net, r.spec, b, self.depth, self.device, self.args.bf16,
@@ -1729,6 +1760,13 @@ class JointRLTrainer:
     # ------------------------------------------------------------------
     # epochs
     # ------------------------------------------------------------------
+
+    def _forward_chunks(self, g: str, idx: Sequence[int]) -> List[List[int]]:
+        """The learner forwards over game ``g``'s streams ``idx``: longest first,
+        --rows_per_forward streams each or a --frames_per_forward budget."""
+        r = self.rl[g]
+        return _length_chunks(idx, [s.length for s in r.streams], r.rows_per_forward,
+                              r.frames_per_forward)
 
     def _minibatch_plan(self, it: int, epoch: int) -> Tuple[List[Dict[str, List[int]]],
                                                               torch.Tensor]:
@@ -1958,7 +1996,9 @@ class JointRLTrainer:
                     for g in G:
                         idx = plan[m].get(g, [])
                         ss = self.rl[g].streams
-                        for chunk in _chunks(idx, self.rl[g].rows_per_forward):
+                        tg = self._clock()
+                        chunks = self._forward_chunks(g, idx)
+                        for chunk in chunks:
                             loss = self._forward_tracked(
                                 g, diag, lambda chunk=chunk, g=g, canary=canary:
                                 self._rl_chunk_loss(g, [ss[i] for i in chunk], cnt, diag,
@@ -1969,9 +2009,11 @@ class JointRLTrainer:
                                 skipped += 1
                         if probe is not None:
                             diag.add(g, gn_rl=probe.delta_norm(), gn_rl_n=1)
+                        diag.add(g, learn_s=self._clock() - tg, learn_fwd=len(chunks))
                     t1 = self._clock()
                     t["rl"] += t1 - t0
                     for g, scale in self._replay_draws():
+                        tg = self._clock()
                         loss = self._forward_tracked(g, diag,
                                                      lambda g=g: self._replay_loss(g, diag))
                         if torch.isfinite(loss):
@@ -1980,6 +2022,7 @@ class JointRLTrainer:
                             skipped += 1
                         if probe is not None:
                             diag.add(g, gn_replay=probe.delta_norm(), gn_replay_n=1)
+                        diag.add(g, replay_s=self._clock() - tg)
                     del probe
                     t2 = self._clock()
                     t["replay"] += t2 - t1
@@ -2112,11 +2155,15 @@ class JointRLTrainer:
                     adv_std=self.advnorm.std(g))
             if g in self.rl:
                 row["core_gnorm_rl"] = diag.mean(g, "gn_rl", "gn_rl_n")
+                # per-rank learner seconds / forwards of the epochs (summed over ranks)
+                row.update(learn_s=d["learn_s"] / self.world,
+                           learn_fwd=d["learn_fwd"] / self.world)
             if g in self.replay:
                 il = diag.mean(g, "il_sum", "il_n")
                 row.update(il_loss=il, il_drift=il - self.il_baseline.get(g, il))
                 if d["gn_replay_n"] > 0:
                     row["core_gnorm_replay"] = diag.mean(g, "gn_replay", "gn_replay_n")
+                row["replay_s"] = d["replay_s"] / self.world
                 if self.replay_kl_weight[g] > 0:
                     row["replay_kl"] = diag.mean(g, "rkl_sum", "rkl_n")
             if self.n_moe[0]:

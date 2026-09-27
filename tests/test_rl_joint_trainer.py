@@ -330,6 +330,57 @@ def _first_minibatch_ratio(tr):
     return res, canary
 
 
+def test_length_chunks():
+    from training.train_rl_joint import _length_chunks
+
+    L = [3, 10, 1, 7, 7, 2]                   # stream lengths; longest first, ties in order
+    assert _length_chunks(range(6), L, rows=2) == [[1, 3], [4, 0], [5, 2]]
+    # a 14-frame budget: rows x the chunk's longest (first) length <= 14
+    assert _length_chunks(range(6), L, rows=2, frames=14) == [[1], [3, 4], [0, 5, 2]]
+    assert _length_chunks([1], L, rows=2, frames=5) == [[1]]      # over budget: alone
+    assert _length_chunks([], L, rows=2) == []
+
+
+def test_forward_chunking_leaves_the_gradient(stage1):
+    """--rows_per_forward / --frames_per_forward only regroup a minibatch's streams
+    into learner forwards: the accumulated gradient is the same up to float."""
+    from training.train_rl_joint import Diag
+
+    tr = _trainer(stage1, "rl_chunks", "--iterations", "1", "--snapshot_dir", "memory")
+    diag = Diag(tr.games, tr.n_moe)
+    tr._rollouts(0, {g: 40 for g in tr.rl_games}, diag)
+    for g in tr.rl_games:
+        tr._recompute(g)
+    tr._targets(diag)
+    plan, counts = tr._minibatch_plan(0, 0)
+    cnt = {name: {g: float(counts[0, gi, j]) for gi, g in enumerate(tr.rl_games)}
+           for j, name in enumerate(("kept", "policy", "value"))}
+
+    def grads(rows, frames):
+        tr.optimizer.zero_grad(set_to_none=True)
+        n = 0
+        with moe_load_counting(tr.model):
+            for g in tr.rl_games:
+                r = tr.rl[g]
+                r.rows_per_forward, r.frames_per_forward = rows, frames
+                for chunk in tr._forward_chunks(g, plan[0][g]):
+                    tr._rl_chunk_loss(g, [r.streams[i] for i in chunk], cnt,
+                                      Diag(tr.games, tr.n_moe), False).backward()
+                    n += 1
+        return n, {k: p.grad.clone() for k, p in tr.model.named_parameters()
+                   if p.grad is not None}
+
+    n1, one = grads(1, 0)
+    n8, eight = grads(8, 0)
+    nb, budget = grads(1, 10 ** 6)
+    assert n1 > n8 >= nb == len(tr.rl_games)          # one forward per game under the budget
+    assert one.keys() == eight.keys() == budget.keys() and one
+    for k in one:
+        torch.testing.assert_close(eight[k], one[k], rtol=1e-4, atol=1e-6)
+        torch.testing.assert_close(budget[k], one[k], rtol=1e-4, atol=1e-6)
+    tr.optimizer.zero_grad(set_to_none=True)
+
+
 @pytest.mark.parametrize("actor", ["stream", "fixed"])
 def test_first_minibatch_ratio_is_one(stage1, actor):
     if actor == "stream":
