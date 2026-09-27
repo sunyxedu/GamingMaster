@@ -927,6 +927,7 @@ dependencies = [
  "rayon",
  "reqwest",
  "riichienv-core",
+ "sc2api",
  "serde",
  "serde_json",
  "sevenz-rust",

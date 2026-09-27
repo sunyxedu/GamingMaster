@@ -21,6 +21,8 @@ gmshard = { path = "../gmshard" }
 gmrules = { path = "../gmrules" }
 gmmahjong = { path = "../gmmahjong" }
 gmpokemon = { path = "../gmpokemon" }
+# StarCraft II replays through the game itself (the replay packs: `gmdata sc2`)
+sc2api = { path = "../sc2api" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

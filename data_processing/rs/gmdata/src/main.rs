@@ -36,6 +36,7 @@ mod label;
 mod othello;
 mod pokemon;
 mod rules;
+mod sc2;
 mod shogi;
 mod chess_variants;
 mod xiangqi;
@@ -67,6 +68,11 @@ enum Game {
     Arc3 {
         #[command(subcommand)]
         cmd: arc3::Cmd,
+    },
+    /// StarCraft II replay packs (through headless SC2 of the replays' build)
+    Sc2 {
+        #[command(subcommand)]
+        cmd: sc2::Cmd,
     },
     /// Honor of Kings 1v1 (Hokoff offline datasets; `--features hok`)
     Hok {
@@ -164,6 +170,7 @@ fn main() -> Result<()> {
     match Cli::parse().game {
         Game::Generals { cmd } => generals::run(cmd),
         Game::Arc3 { cmd } => arc3::run(cmd),
+        Game::Sc2 { cmd } => sc2::run(cmd),
         Game::Hok { cmd } => hok::run(cmd),
         Game::Othello { cmd } => othello::run(cmd),
         Game::Chess { cmd } => chess::run(cmd),
