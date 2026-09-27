@@ -439,9 +439,9 @@ def test_train_multi_game_crops_clash_royale_only_when_asked_and_safe(tmp_path):
     seen = {}
     orig = train_multi_game.open_dataset
 
-    def spy(game, d, max_len=None):
+    def spy(game, d, max_len=None, **kw):
         seen[game] = max_len
-        return orig(game, d, max_len)
+        return orig(game, d, max_len, **kw)
 
     train_multi_game.open_dataset = spy
     try:

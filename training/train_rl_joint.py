@@ -130,7 +130,8 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 
-from data_processing.games.dataset import collate_game_sequences, training_sampler
+from data_processing.games.dataset import (WholeRecordBatchSampler, collate_game_sequences,
+                                           training_sampler)
 from env.league import (
     League,
     PoolPolicy,
@@ -352,6 +353,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--replay_batch", action="append", default=[], metavar="GAME=N")
     a("--replay_max_len", action="append", default=[], metavar="GAME=N",
       help="crop replay sequences (generals: its first N frames, as in train_multi_game)")
+    a("--replay_frames", action="append", default=[], metavar="GAME=N",
+      help="whole-record replay: the game's replay batches hold whole records from their "
+           "first frame (its --replay_max_len a cap), as many similar-length records as "
+           "keep records x the longest within N frames (0 = --replay_batch windows)")
+    a("--replay_frames_default", type=int, default=0, metavar="N",
+      help="--replay_frames of every replay game without its own (0 = off)")
     a("--replay_max_len_default", type=int, default=None, metavar="N",
       help="crop of every replay game without its own --replay_max_len (random windows as "
            "in pretraining, e.g. 64; games that are never cropped keep their full sequences; "
@@ -1258,18 +1265,29 @@ class ReplayStream:
     is a function of (seed, rank, iteration) and a resume reproduces it."""
 
     def __init__(self, game: str, data_dir: str, batch_size: int, max_len: Optional[int],
-                 num_workers: int):
+                 num_workers: int, frames: int = 0):
         self.game = game
-        self.dataset = open_dataset(game, data_dir, None if game in UNCROPPABLE else max_len)
+        # frames > 0: whole records from their first frame (max_len = a cap), batches of
+        # similar-length records within the frame budget (WholeRecordBatchSampler)
+        self.dataset = open_dataset(game, data_dir, None if game in UNCROPPABLE and not frames
+                                    else max_len, whole_records=frames > 0)
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.frames = frames
         self._it = None
 
     def restart(self) -> None:
-        self._loader = DataLoader(self.dataset, batch_size=self.batch_size,
-                                  sampler=training_sampler(self.dataset),
-                                  num_workers=self.num_workers,
-                                  collate_fn=collate_game_sequences)
+        if self.frames > 0:
+            self._loader = DataLoader(self.dataset,
+                                      batch_sampler=WholeRecordBatchSampler(self.dataset,
+                                                                            self.frames),
+                                      num_workers=self.num_workers,
+                                      collate_fn=collate_game_sequences)
+        else:
+            self._loader = DataLoader(self.dataset, batch_size=self.batch_size,
+                                      sampler=training_sampler(self.dataset),
+                                      num_workers=self.num_workers,
+                                      collate_fn=collate_game_sequences)
         self._it = iter(self._loader)
 
     def next(self) -> Dict:
@@ -1525,11 +1543,13 @@ class JointRLTrainer:
         rw = _pairs(a.replay_weight, float, "W")
         rb = _pairs(a.replay_batch, int, "N")
         rml = _pairs(a.replay_max_len, int, "N")
+        rfr = _pairs(a.replay_frames, int, "N")
         rtf = _pairs(a.replay_tf, float, "P")
         rvw = _pairs(a.replay_value_weight, float, "W")
         rkw = _pairs(a.replay_kl_weight, float, "W")
         for flag, vals in (("--replay_weight", rw), ("--replay_batch", rb),
-                           ("--replay_max_len", rml), ("--replay_tf", rtf),
+                           ("--replay_max_len", rml), ("--replay_frames", rfr),
+                           ("--replay_tf", rtf),
                            ("--replay_value_weight", rvw), ("--replay_kl_weight", rkw)):
             _check_games(flag, vals, list(replay_dirs), "a --data game")
         self.replay: Dict[str, ReplayStream] = {}
@@ -1546,7 +1566,8 @@ class JointRLTrainer:
                 raise SystemExit("--data generals: bound its prefix crop with "
                                  "--replay_max_len generals=N (as train_multi_game)")
             self.replay[g] = ReplayStream(g, d, rb.get(g, a.replay_batch_size),
-                                          rml.get(g, a.replay_max_len_default), a.num_workers)
+                                          rml.get(g, a.replay_max_len_default), a.num_workers,
+                                          frames=rfr.get(g, a.replay_frames_default))
             if a.replay_weight_total > 0:
                 self.replay_weight[g] = (a.replay_weight_total * rel[g] / rel_sum
                                          if rel_sum > 0 else 0.0)

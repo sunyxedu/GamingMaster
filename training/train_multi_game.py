@@ -202,7 +202,8 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import BatchSampler, DataLoader, SequentialSampler
 
-from data_processing.games.dataset import collate_game_sequences, training_sampler
+from data_processing.games.dataset import (WholeRecordBatchSampler, collate_game_sequences,
+                                           training_sampler)
 from data_processing.games.generals import GeneralsGioDataset, gio_dataset_advice
 from model.components.core import allreduce_moe_loads, update_moe_balance
 from model.components.encoder import describe_encoder_norm
@@ -304,7 +305,18 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "probability to the others, in proportion (default: no cap)")
     p.add_argument("--max_len", type=int, default=None,
                    help="crop training sequences to a random window (not generals: "
-                        "with generals in the run, bound it via --game_max_len)")
+                        "with generals in the run, bound it via --game_max_len); for a "
+                        "game with a frame budget (--frames_per_batch / --game_frames) "
+                        "a cap: records keep their first max_len frames")
+    p.add_argument("--frames_per_batch", type=int, default=0, metavar="N",
+                   help="whole-record training: every game's micro-batches hold WHOLE "
+                        "records from their first frame (each trained frame carries its "
+                        "record's full history, as in play), as many similar-length "
+                        "records as keep records x the longest within N frames "
+                        "(WholeRecordBatchSampler; --batch_size is then ignored). 0 = off")
+    p.add_argument("--game_frames", action="append", default=[], metavar="GAME=N",
+                   help="per-game --frames_per_batch (0 = that game keeps --batch_size "
+                        "windows)")
     p.add_argument("--val_max_len", type=int, default=None,
                    help="validation crop (default: full sequences, so every evaluation "
                         "sees exactly the same frames); generals ignores it and validates "
@@ -973,6 +985,7 @@ def main(argv=None) -> Dict[str, object]:
     data_dirs, val_dirs = _pairs(args.data), _pairs(args.val)
     games = list(data_dirs)
     game_batch = {g: int(n) for g, n in _pairs(args.game_batch, "N").items()}
+    game_frames = {g: int(n) for g, n in _pairs(args.game_frames, "N").items()}
     game_max_len = {g: int(n) for g, n in _pairs(args.game_max_len, "N").items()}
     game_val_max_len = {g: int(n) for g, n in _pairs(args.game_val_max_len, "N").items()}
     game_tf = {g: tf_schedule(v) for g, v in _pairs(args.game_tf, "P[:P_END]").items()}
@@ -1022,8 +1035,15 @@ def main(argv=None) -> Dict[str, object]:
             return game_val_max_len.get(g, crop(g, args.max_len, game_max_len))
         return crop(g, args.val_max_len, game_val_max_len)
 
-    datasets = {g: open_dataset(g, d, crop(g, args.max_len, game_max_len))
+    def frames_of(g: str) -> int:
+        """g's whole-record frame budget (0 = --batch_size windows)."""
+        return game_frames.get(g, args.frames_per_batch)
+
+    datasets = {g: open_dataset(g, d, crop(g, args.max_len, game_max_len),
+                                whole_records=frames_of(g) > 0)
                 for g, d in data_dirs.items()}
+    whole = {g: WholeRecordBatchSampler(ds, frames_of(g))
+             for g, ds in datasets.items() if frames_of(g) > 0}
     for g, ds in datasets.items():
         if isinstance(ds, GeneralsGioDataset):
             if dist_env.enabled:
@@ -1060,7 +1080,8 @@ def main(argv=None) -> Dict[str, object]:
             raise SystemExit(f"{flag} values must be >= 0")
     weights = mixture_weights(frames, args.sample_alpha, frame_cap=args.mixture_frame_cap,
                               game_frame_cap=game_frame_cap, game_weight=game_weight)
-    batch_of = {g: game_batch.get(g, args.batch_size) for g in games}
+    batch_of = {g: (whole[g].records_per_batch() if g in whole
+                    else game_batch.get(g, args.batch_size)) for g in games}
     draws = float(args.steps) * k_glob
     epoch_capped: List[str] = []
     if args.max_epochs is not None:
@@ -1168,7 +1189,13 @@ def main(argv=None) -> Dict[str, object]:
     log("[mixture] " + "  ".join(f"{g}: frames={frames[g]:,}{_mix_note(g)} w={weights[g]:.3f}"
                                  for g in games))
     for g in games:
-        if g in PREFIX_CROP:
+        if g in whole:
+            ml = crop(g, args.max_len, game_max_len)
+            log(f"[data] {g}: whole records from their first frame"
+                + (f" (capped at {ml})" if ml is not None else "")
+                + f", batches of <= {whole[g].frames} frames: {whole[g].records_per_batch():.1f} "
+                f"records per batch on average")
+        elif g in PREFIX_CROP:
             ml = crop(g, args.max_len, game_max_len)
             log(f"[data] {g}: {type(datasets[g]).__name__}, sequences cut to their first "
                 f"{ml} frames" if ml is not None else
@@ -1184,10 +1211,12 @@ def main(argv=None) -> Dict[str, object]:
             f"{lo if lo == hi else f'{lo}-{hi}'} (single-GPU equivalent: "
             f"--games_per_step {k_glob})")
 
-    loaders = {g: _cycle(DataLoader(ds, batch_size=game_batch.get(g, args.batch_size),
-                                    sampler=training_sampler(ds),
-                                    num_workers=args.num_workers,
-                                    collate_fn=collate_game_sequences))
+    loaders = {g: _cycle(DataLoader(ds, batch_sampler=whole[g], num_workers=args.num_workers,
+                                    collate_fn=collate_game_sequences) if g in whole
+                         else DataLoader(ds, batch_size=game_batch.get(g, args.batch_size),
+                                         sampler=training_sampler(ds),
+                                         num_workers=args.num_workers,
+                                         collate_fn=collate_game_sequences))
                for g, ds in datasets.items()}
     has_val = any(g in games for g in val_dirs)
 

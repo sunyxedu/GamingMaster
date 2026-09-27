@@ -93,8 +93,9 @@ from __future__ import annotations
 import bisect
 import glob
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
@@ -282,6 +283,9 @@ class GameShardDataset(Dataset):
         self._offsets: List[int] = [0]
         # per shard: (samples, frames capped at max_len, raw frames) — frame_stats()
         self._frame_sums: List[Tuple[int, int, int]] = []
+        # every sample's frame count (int32, shard-major: 4 B per sample — numpy, so
+        # forked DataLoader workers share it): the whole-record batch sampler
+        parts: List[np.ndarray] = []
         self.converter_version: Optional[int] = None
         self.shard_meta: Dict = {}
         self._ref_path: Optional[str] = None
@@ -296,6 +300,8 @@ class GameShardDataset(Dataset):
             capped = (sum(min(L, max_len) for L in lengths) if max_len is not None
                       else sum(lengths))
             self._frame_sums.append((len(lengths), capped, sum(lengths)))
+            parts.append(np.asarray(lengths, dtype=np.int32))
+        self._lengths = np.concatenate(parts) if parts else np.zeros(0, dtype=np.int32)
         self._cache_idx: int = -1
         self._cache: Optional[Dict] = None
 
@@ -395,6 +401,12 @@ class GameShardDataset(Dataset):
     def total_frames(self) -> int:
         """Frames the dataset supervises (each sample capped at max_len)."""
         return self.frame_stats()["frames"]
+
+    def sample_lengths(self) -> np.ndarray:
+        """Every sample's frame count as served (capped at max_len), shard-major."""
+        if self.max_len is None:
+            return self._lengths
+        return np.minimum(self._lengths, self.max_len)
 
     def __getitem__(self, idx: int) -> Dict:
         si, j = self.locate(idx)
@@ -501,6 +513,79 @@ class ShardLocalitySampler(torch.utils.data.Sampler):
 
     def __len__(self) -> int:
         return len(self.dataset)
+
+
+def whole_record_batches(lengths: np.ndarray, frames: int, max_batch: int,
+                         order: np.ndarray) -> List[List[int]]:
+    """Cut the records ``order`` (indices into ``lengths``, already shuffled) into
+    batches of similar length: sorted by length (stable, so equal lengths keep the
+    shuffled order), then greedily filled while records x the batch's longest length
+    stays within ``frames`` (and at most ``max_batch`` records).  A record longer than
+    ``frames`` gets a batch of its own."""
+    srt = order[np.argsort(lengths[order], kind="stable")]
+    out: List[List[int]] = []
+    cur: List[int] = []
+    for i in srt.tolist():
+        L = int(lengths[i])                        # ascending: the batch's longest so far
+        if cur and ((len(cur) + 1) * L > frames or len(cur) >= max_batch):
+            out.append(cur)
+            cur = []
+        cur.append(i)
+    if cur:
+        out.append(cur)
+    return out
+
+
+class WholeRecordBatchSampler(torch.utils.data.Sampler):
+    """Batches of WHOLE records (each from its first frame, up to the dataset's
+    ``max_len`` with a prefix crop), sized by a frame budget: every trained frame
+    carries its record's whole history in the recurrent state, as in play, and a
+    batch's padded size (records x its longest record) stays within ``frames`` — short
+    records many to a batch, long ones few.  Shard-local like
+    :class:`ShardLocalitySampler` (the one-shard cache stays hot): shards in a random
+    order, each shard's records shuffled and cut into similar-length batches
+    (:func:`whole_record_batches`, little padding), a shard's batches in a random order.
+    Randomness: the global torch RNG (per epoch)."""
+
+    def __init__(self, dataset: "GameShardDataset", frames: int, max_batch: int = 1024):
+        if frames <= 0:
+            raise ValueError(f"frame budget must be positive, got {frames}")
+        if dataset.max_len is not None and dataset.crop != "prefix":
+            raise ValueError("whole-record batches need the full records or a prefix crop "
+                             f"(crop={dataset.crop!r} with max_len={dataset.max_len} would cut "
+                             "random windows)")
+        self.dataset = dataset
+        self.frames = int(frames)
+        self.max_batch = int(max_batch)
+        self.lengths = dataset.sample_lengths()
+        self._n_batches: Optional[int] = None
+
+    def _shard_batches(self, si: int) -> List[List[int]]:
+        r = self.dataset.shard_range(si)
+        if not len(r):
+            return []
+        order = np.asarray(r, dtype=np.int64)[torch.randperm(len(r)).numpy()]
+        batches = whole_record_batches(self.lengths, self.frames, self.max_batch, order)
+        return [batches[b] for b in torch.randperm(len(batches)).tolist()]
+
+    def __iter__(self) -> Iterator[List[int]]:
+        for si in torch.randperm(len(self.dataset.paths)).tolist():
+            yield from self._shard_batches(si)
+
+    def __len__(self) -> int:
+        """Batches per epoch (the bucketing of one epoch; within a few of any other)."""
+        if self._n_batches is None:
+            n = 0
+            for si in range(len(self.dataset.paths)):
+                r = self.dataset.shard_range(si)
+                n += len(whole_record_batches(self.lengths, self.frames, self.max_batch,
+                                              np.asarray(r, dtype=np.int64)))
+            self._n_batches = n
+        return self._n_batches
+
+    def records_per_batch(self) -> float:
+        """Mean records per batch over an epoch (the mixture's per-draw sample count)."""
+        return len(self.dataset) / max(len(self), 1)
 
 
 def collate_game_sequences(batch: List[Dict]) -> Dict:

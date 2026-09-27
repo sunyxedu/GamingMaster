@@ -679,7 +679,7 @@ def test_multi_game_generals_recipe_defaults(gio_dir, tmp_path, capsys, monkeypa
     crops, tfs = [], []
     real_open, real_prep = tmg.open_dataset, tmg.prepare_rows
     monkeypatch.setattr(tmg, "open_dataset",
-                        lambda g, d, ml=None: crops.append((g, ml)) or real_open(g, d, ml))
+                        lambda g, d, ml=None, **kw: crops.append((g, ml)) or real_open(g, d, ml, **kw))
     monkeypatch.setattr(tmg, "prepare_rows",
                         lambda g, b, dev, tf, cfg=None, **kw: tfs.append((g, tf))
                         or real_prep(g, b, dev, tf, cfg=cfg, **kw))

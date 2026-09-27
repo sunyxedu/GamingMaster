@@ -311,14 +311,18 @@ def check_crop_policy(game: str, cfg, max_len: Optional[int]) -> None:
 PREFIX_CROP = frozenset({"generals"})
 
 
-def open_dataset(game: str, data_dir: str, max_len: Optional[int] = None):
+def open_dataset(game: str, data_dir: str, max_len: Optional[int] = None,
+                 whole_records: bool = False):
     """``game``'s dataset under ``data_dir`` with its crop policy (edge-balanced
     random windows — every frame of a long record drawn about as often, see
     GameShardDataset — or the first frames for PREFIX_CROP games); generals also reads
     gio record directories (data_processing.games.dataset.open_game_dataset).
-    UNCROPPABLE games are the caller's business (max_len=None)."""
+    ``whole_records``: every record from its first frame (``max_len`` = a cap, kept as
+    a prefix), for WholeRecordBatchSampler batches.  UNCROPPABLE games are the
+    caller's business (max_len=None)."""
+    prefix = whole_records or game in PREFIX_CROP
     return open_game_dataset(data_dir, game, max_len=max_len,
-                             crop="prefix" if game in PREFIX_CROP else "balanced")
+                             crop="prefix" if prefix else "balanced")
 
 
 def _generals_obs(obs: Dict[str, torch.Tensor], cfg) -> Dict[str, torch.Tensor]:

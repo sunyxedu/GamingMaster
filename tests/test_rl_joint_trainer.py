@@ -369,6 +369,23 @@ def test_replay_split_deals_every_game_once_per_minibatch():
     assert JointRLTrainer._replay_draws(one) == [(g, w) for g, w in weights.items()]
 
 
+def test_whole_record_replay_batches(stage1):
+    """--replay_frames: the IL replay draws whole records from their first frame,
+    batches of similar-length records within the frame budget."""
+    tr = _trainer(stage1, "rl_whole", "--iterations", "1", "--snapshot_dir", "memory",
+                  "--replay_frames", "othello=13", "--replay_frames", "chess=100")
+    rs = tr.replay["othello"]
+    assert rs.frames == 13 and rs.dataset.crop == "prefix"
+    rs.restart()
+    full = {int(L) for L in rs.dataset.sample_lengths()}
+    for _ in range(4):
+        b = rs.next()
+        lens = b["meta"]["lengths"]
+        assert set(lens) <= full                                   # whole records
+        assert len(lens) * max(lens) <= 13 or len(lens) == 1
+    assert tr.replay["generals"].frames == 0                        # windows as before
+
+
 def test_length_chunks():
     from training.train_rl_joint import _length_chunks
 
