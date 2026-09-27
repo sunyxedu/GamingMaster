@@ -55,8 +55,8 @@
 //! defenders his hand, which no frame shows: their later decisions were taken on
 //! information the frames would hide, so a record ends at its first `SC` (when moves
 //! follow it) as a claim (`traj::Record::conceded`) worth the game's verified result —
-//! the value target is unchanged, the frames after the `SC` are not written (in the
-//! first 300k archive games ~0.9% of the games, ~0.1% of the card frames; the convert
+//! the value target is unchanged, the frames after the `SC` are not written (23% of
+//! the converted archive games, 1.5% of the frames: see "Full scale"; the convert
 //! report counts them, `cut_at_shown_cards`, and the samples carry `cards_shown_at`).
 //! Games ended by a timeout / a player leaving (`TI` / `LE`, ~1%) are verified but
 //! skipped. A jump bid becomes
@@ -90,13 +90,18 @@
 //! `verify.json` + `rejected.sgf`), corpus player stats (~3 min), `convert --hq` into
 //! `data/skat/train` (~20 min at ~8k games/s) and `data/skat/val` (~3 min). Measured
 //! with `convert --count-only` on the full archive (ratings page of 2026-09-20; ~418
-//! bytes per frame on disk, bit-packed; 35.0 frames per game, 11.7 per seat stream):
+//! bytes per frame on disk, bit-packed; 34.5 frames per game, 11.5 per seat stream):
 //!
 //! | corpus                                 | games     | seat streams | frames      | disk     |
 //! |----------------------------------------|-----------|--------------|-------------|----------|
-//! | every seat (`HQ=0`, train + val)       | 8,987,195 | 26,961,585   | 314,830,960 | ~132 GB  |
-//! | `--hq --split train` (the recipe)      | 6,757,574 | 11,168,014   | 137,182,532 | ~57 GB   |
-//! | `--hq --split val` (id % 100 == 0)     | 68,225    | 113,023      | 1,388,058   | ~0.6 GB  |
+//! | every seat (`HQ=0`, train + val)       | 8,987,195 | 26,961,585   | 310,134,081 | ~130 GB  |
+//! | `--hq --split train` (the recipe)      | 6,757,574 | 11,168,014   | 137,182,532*| ~57 GB   |
+//! | `--hq --split val` (id % 100 == 0)     | 68,225    | 113,023      | 1,388,058*  | ~0.6 GB  |
+//!
+//! Of the 8,987,195 records 2,097,612 end at the declarer's `SC` (1,929,399 of the
+//! 2,492,924 resigned games and 168,213 finished ones: `conceded` 2,661,137), which
+//! drops 4,696,879 frames (1.5%, mostly the defenders' last cards before resigning).
+//! (*) measured before that cut: ~1.5% fewer frames now.
 //!
 //! The recipe keeps 69 players by corpus strength (10.4M seat-games; the programs
 //! theCount, kermit and zoot hold 7.6M of them) plus the humans rated ≥ 1050 on the
