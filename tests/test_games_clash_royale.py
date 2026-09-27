@@ -27,17 +27,32 @@ from model.games.clash_royale import (
 # Fixtures / helpers
 # ======================================================================
 
-@pytest.fixture(params=["deck", "hand"])
+#: the layout of checkpoints before the arena patches and the play trackers
+LEGACY_LAYOUT = dict(cr_arena_patch=1, cr_recent_tokens=0, cr_opp_tokens=0)
+VARIANTS = {
+    # the current design: 2x2 arena patches, recent-play and opponent-deck tokens
+    "tracked": dict(cr_card_tokens="deck", card_feature_dim=9),
+    "deck": dict(cr_card_tokens="deck", card_feature_dim=9, **LEGACY_LAYOUT),
+    "hand": dict(cr_card_tokens="hand", card_feature_dim=8, **LEGACY_LAYOUT),
+}
+
+
+@pytest.fixture(params=sorted(VARIANTS))
 def cfg(request):
-    """Tiny config for fast tests (deck tokens / legacy hand slots)."""
+    """Tiny config for fast tests (the tracked design / legacy deck tokens / legacy
+    hand slots)."""
     return ClashRoyaleConfig(
         d_model=48, n_heads=4, d_ff=64, dropout=0.0,
         n_st_layers=1, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         halt_max_steps=2, encoder_channels=24,
         arena_h=8, arena_w=6, arena_channels=5,
-        hand_size=4, n_cards=20, cr_global_features=6, cr_card_tokens=request.param,
-        card_feature_dim=9 if request.param == "deck" else 8,
+        hand_size=4, n_cards=20, cr_global_features=6, **VARIANTS[request.param],
     )
+
+
+def _n_place(cfg) -> int:
+    """Classes of placement_logits: arena cells, or patches (cr_arena_patch > 1)."""
+    return (cfg.arena_h // cfg.cr_arena_patch) * (cfg.arena_w // cfg.cr_arena_patch)
 
 
 @pytest.fixture
@@ -58,6 +73,18 @@ def _make_obs(cfg, B=2, T=3, seed=0):
         "globals_seq": torch.randn(B, T, cfg.cr_global_features, generator=g),
     }
     obs[f"{pre}_mask"][..., 0] = True  # at least one real card
+    K, O = cfg.cr_recent_tokens, cfg.cr_opp_tokens
+    if K:
+        rm = torch.rand(B, T, K, generator=g) < 0.7
+        cell = torch.randint(-1, cfg.arena_h * cfg.arena_w, (B, T, K), generator=g)
+        obs.update(recent_ids=torch.randint(1, cfg.n_cards, (B, T, K), generator=g) * rm,
+                   recent_feats=torch.rand(B, T, K, cfg.cr_recent_features, generator=g) * rm[..., None],
+                   recent_mask=rm, recent_cell=torch.where(rm, cell, torch.full_like(cell, -1)))
+    if O:
+        om = torch.arange(O) < torch.randint(0, O + 1, (B, T, 1), generator=g)
+        obs.update(opp_ids=torch.randint(1, cfg.n_cards, (B, T, O), generator=g) * om,
+                   opp_feats=torch.rand(B, T, O, cfg.cr_opp_features, generator=g) * om[..., None],
+                   opp_mask=om)
     return obs
 
 
@@ -79,8 +106,12 @@ def _make_legal(cfg, B, T=None, seed=0):
 
 def test_forward_shapes(cfg, model):
     B, T = 2, 3
-    n_arena = cfg.arena_h * cfg.arena_w
+    n_arena = _n_place(cfg)
     out = model(_make_obs(cfg, B, T))
+    if cfg.cr_arena_patch > 1:
+        p2 = cfg.cr_arena_patch ** 2
+        assert out["sub_logits"].shape == (B, T, p2) and out["patch_idx"].shape == (B, T)
+        assert model.obs_encoder.n_tokens == n_arena + 8 + cfg.cr_recent_tokens + cfg.cr_opp_tokens
     assert out["wait_logits"].shape == (B, T)
     assert out["card_logits"].shape == (B, T, n_card_tokens(cfg))
     assert out["placement_logits"].shape == (B, T, n_arena)
@@ -128,7 +159,7 @@ def test_gradient_flow(cfg, model):
 def test_step_chaining_cache_growth(cfg, model):
     model.eval()
     B = 2
-    n_arena = cfg.arena_h * cfg.arena_w
+    n_arena = _n_place(cfg)
     S = model.obs_encoder.n_tokens + 2  # + HL/LL decision tokens
     obs = _make_obs(cfg, B, T=3)
     cache = None
@@ -179,7 +210,9 @@ def test_step_vs_full_consistency_act_steps(cfg, model):
         "waited": torch.stack(waits, dim=1),
     }
     with torch.no_grad():
-        full = model(obs, labels={"card_slot": actions["card_slot"]}, act_steps=K)
+        # the stored cell teacher-forces the patch decoder's patch (the replay path)
+        full = model(obs, labels={"card_slot": actions["card_slot"],
+                                  "place_idx": actions["place_idx"]}, act_steps=K)
         lp, ent, head_ent = model.compute_log_prob(full, actions)
 
     assert torch.equal(full["card_slot"], actions["card_slot"])  # conditioning replayed
@@ -197,7 +230,7 @@ def test_sample_replay_log_prob_parity(cfg, dtype):
     torch.manual_seed(0)
     decoder = CardPlacementDecoder(cfg)
     B, T = 4, 6
-    n_arena = cfg.arena_h * cfg.arena_w
+    n_arena = _n_place(cfg)
     g = torch.Generator().manual_seed(3)
 
     wait = torch.randn(B, T, generator=g) * 5
@@ -211,6 +244,16 @@ def test_sample_replay_log_prob_parity(cfg, dtype):
         .to(dtype).requires_grad_(),
     }
     legal = _make_legal(cfg, B, T, seed=3)
+    patched = cfg.cr_arena_patch > 1
+    if patched:
+        # what decode() adds: the committed patch, the cell logits, the derived masks
+        table = decoder._cell_table(legal["placement"])                   # [B, T, P, p²]
+        pred["sub_logits"] = (torch.randn(B, T, decoder.n_sub, generator=g) * 5
+                              ).to(dtype).requires_grad_()
+        pred["patch_mask"] = table.any(-1)
+        pred["patch_idx"] = masked_sample(pred["placement_logits"], pred["patch_mask"])
+        pred["sub_mask"] = table.gather(
+            2, pred["patch_idx"][..., None, None].expand(B, T, 1, decoder.n_sub)).squeeze(2)
 
     lps, slots, places, waits = [], [], [], []
     for t in range(T):
@@ -244,7 +287,7 @@ def test_sample_replay_log_prob_parity(cfg, dtype):
     # pre-existing, so only the ratio path is checked for finite grads.)
     assert ent.requires_grad
     lp.sum().backward()
-    for key in ("wait_logits", "card_logits", "placement_logits"):
+    for key in ("wait_logits", "card_logits", "placement_logits") + (("sub_logits",) if patched else ()):
         grad = pred[key].grad
         assert grad is not None and torch.isfinite(grad).all(), key
         assert grad.abs().sum() > 0, key
@@ -294,8 +337,8 @@ def test_il_loss_finite_and_differentiable(cfg, model):
     out["loss"].backward()
     assert any(p.grad is not None and p.grad.abs().sum() > 0
                for p in model.action_decoder.parameters())
-    for k in ("wait_loss", "card_loss", "place_loss",
-              "wait_acc", "card_acc", "place_acc"):
+    accs = ("patch_acc", "sub_acc") if cfg.cr_arena_patch > 1 else ("place_acc",)
+    for k in ("wait_loss", "card_loss", "place_loss", "wait_acc", "card_acc") + accs:
         assert torch.isfinite(out[k]), f"{k} not finite"
         assert not out[k].requires_grad, f"{k} should be detached"
 
@@ -410,7 +453,15 @@ def _cr_pt_samples(n=2, T=12, seed=0):
                     "deck_mask": torch.ones(T, D, dtype=torch.bool),
                     "globals_seq": glob,
                     "legal_card": torch.ones(T, D, dtype=torch.bool),
-                    "legal_place": torch.ones(T, c.arena_h * c.arena_w, dtype=torch.bool)},
+                    "legal_place": torch.ones(T, c.arena_h * c.arena_w, dtype=torch.bool),
+                    # the play trackers (expand.recent_tokens / opponent_tokens)
+                    "recent_ids": torch.randint(1, c.n_cards, (T, 8), generator=g),
+                    "recent_feats": torch.rand(T, 8, c.cr_recent_features, generator=g),
+                    "recent_mask": torch.ones(T, 8, dtype=torch.bool),
+                    "recent_cell": torch.randint(-1, c.arena_h * c.arena_w, (T, 8), generator=g),
+                    "opp_ids": torch.randint(1, c.n_cards, (T, 8), generator=g),
+                    "opp_feats": torch.rand(T, 8, c.cr_opp_features, generator=g),
+                    "opp_mask": torch.ones(T, 8, dtype=torch.bool)},
             "tgt": {"waited": torch.rand(T, generator=g) < 0.5,
                     "card_slot": torch.randint(0, D, (T,), generator=g),
                     "place_idx": torch.randint(0, c.arena_h * c.arena_w, (T,), generator=g),

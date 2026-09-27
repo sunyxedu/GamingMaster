@@ -85,7 +85,8 @@ LABEL_KEYS = {
     "lux": (),
     "starcraft": ("action_type", "actor_idx"),
     "hearthstone": ("action_type", "actor_idx"),
-    "clash_royale": ("card_slot",),
+    # the patch placement decoder (cr_arena_patch > 1) also conditions on the cell's patch
+    "clash_royale": ("card_slot", "place_idx"),
     "mahjong": ("action_type",),
     # active_idx is state (which own slot is on the field), delivered via
     # labels because the observer-view converter stores it in tgt.

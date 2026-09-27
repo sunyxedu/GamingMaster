@@ -40,6 +40,8 @@ import torch
 from data_processing.games.clash_royale.expand import (
     DECK_OBS_KEYS,
     HAND_OBS_KEYS,
+    OPP_KEYS,
+    RECENT_KEYS,
     expand,
     obs_keys,
 )
@@ -189,30 +191,43 @@ class _Recording(dict):
         return super().get(key, default)
 
 
-def test_expand_ignores_recent_card_ids():
-    """``raw.recent_card`` does not reach the observation: only the cost of plays
-    with a cell reaches the arena planes; ability events (x = y = -1) do not.  crdata
-    converter_version 3 attributes ability events from the public record (the unique
-    candidate the side has already played, else unknown — pinned by leak_audit.rs
-    ``ability_card_is_resolved_from_public_plays``; converter_version 2 named
-    RoyaleAPI's first candidate, possibly an opponent card never played), so the ids
-    could now be wired in — with a schema bump, not silently."""
-    for schema in SCHEMAS:
-        keys, meta, _ = SCHEMAS[schema]
-        raw = _raw(seed=3, schema=schema)
-        other = dict(raw)
-        other["recent_card"] = torch.from_numpy((raw["recent_card"].numpy() % 97 + 5).astype(np.uint16))
-        assert not torch.equal(raw["recent_card"], other["recent_card"])
-        a, b = expand(raw, meta), expand(other, meta)
-        _assert_obs_equal(a, b, raw["elixir"].shape[0], keys)
-        # an ability entry (no cell) with any cost leaves the arena planes untouched
-        abil = {k: v.clone() for k, v in raw.items()}
-        abil["recent_side"][:, 0] = 1
-        abil["recent_x"][:, 0] = -1
-        abil["recent_y"][:, 0] = -1
-        abil2 = {k: v.clone() for k, v in abil.items()}
-        abil2["recent_cost"][:, 0] = abil["recent_cost"][:, 0] + 3.0
-        _assert_obs_equal(expand(abil, meta), expand(abil2, meta), raw["elixir"].shape[0], keys)
+def test_recent_card_ids_reach_only_the_play_tokens():
+    """``raw.recent_card`` (which card each recent play was) reaches the recent-play
+    and opponent-deck tokens and nothing else: the arena planes carry only the cost of
+    plays with a cell, the deck tokens and globals none of it.  An ability event (x =
+    y = -1) enters the recent-play tokens (no cell) but not the opponent's cycle.
+    crdata converter_version 3 attributes ability events from the public record (the
+    unique candidate the side has already played — leak_audit.rs
+    ``ability_card_is_resolved_from_public_plays``), so the ids are public."""
+    keys, meta, _ = SCHEMAS["deck"]
+    raw = _raw(seed=3)
+    other = dict(raw)
+    other["recent_card"] = torch.from_numpy((raw["recent_card"].numpy() % 97 + 5).astype(np.uint16))
+    assert not torch.equal(raw["recent_card"], other["recent_card"])
+    a, b = expand(raw, meta), expand(other, meta)
+    T = raw["elixir"].shape[0]
+    # the trackers key plays by card: the opponent's cycle groups its plays by card
+    card_keys = set(RECENT_KEYS) | set(OPP_KEYS)
+    _assert_obs_equal(a, b, T, [k for k in keys if k not in card_keys])
+    assert not torch.equal(a["recent_ids"], b["recent_ids"])
+    # the legacy hand schema has no play tokens: the ids do not reach it at all
+    keys_h, meta_h, _ = SCHEMAS["hand"]
+    rh = _raw(seed=3, schema="hand")
+    oh = dict(rh)
+    oh["recent_card"] = other["recent_card"]
+    _assert_obs_equal(expand(rh, meta_h), expand(oh, meta_h), T, keys_h)
+    # an ability entry (no cell) with any cost leaves the arena planes untouched and
+    # never enters the opponent's cycle
+    abil = {k: v.clone() for k, v in raw.items()}
+    abil["recent_side"][:, 0] = 1
+    abil["recent_x"][:, 0] = -1
+    abil["recent_y"][:, 0] = -1
+    abil2 = {k: v.clone() for k, v in abil.items()}
+    abil2["recent_cost"][:, 0] = abil["recent_cost"][:, 0] + 3.0
+    abil2["recent_card"][:, 0] = torch.from_numpy(abil["recent_card"][:, 0].numpy() % 97 + 5)
+    ea, eb = expand(abil, meta), expand(abil2, meta)
+    _assert_obs_equal(ea, eb, T, [k for k in keys if not k.startswith("recent_")])
+    assert (ea["recent_cell"][ea["recent_feats"][..., 2] > 0] == -1).all()
 
 
 @pytest.mark.parametrize("schema", sorted(SCHEMAS))
@@ -254,17 +269,25 @@ def test_deck_legality_is_the_belief_support_and_affordability():
 # the wait head's match-clock decode context included)
 # ======================================================================
 
-def _net_and_obs(B=2, T=6, seed=1, card_tokens="deck", norm="group"):
+#: the layout before the arena patches and the play trackers
+_LEGACY_LAYOUT = dict(cr_arena_patch=1, cr_recent_tokens=0, cr_opp_tokens=0)
+#: adapter variants: the current design, the legacy deck-token and hand-slot layouts
+VARIANTS = {"tracked": ("deck", {}), "deck": ("deck", _LEGACY_LAYOUT),
+            "hand": ("hand", _LEGACY_LAYOUT)}
+
+
+def _net_and_obs(B=2, T=6, seed=1, variant="tracked", norm="group"):
     from model.game_network import GameNetwork
     from model.games.clash_royale import CardPlacementDecoder, ClashRoyaleConfig, ClashRoyaleEncoder
 
+    card_tokens, layout = VARIANTS[variant]
     N, F = (8, 9) if card_tokens == "deck" else (4, 8)
     cfg = ClashRoyaleConfig(
         d_model=48, n_heads=4, d_ff=64, dropout=0.0, n_st_layers=1, core_type="trm",
         trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, halt_max_steps=2, encoder_channels=24,
         arena_h=8, arena_w=6, arena_channels=5, hand_size=4, n_cards=20, card_feature_dim=F,
         cr_global_features=6, cr_card_tokens=card_tokens,
-        encoder_norm=norm)
+        encoder_norm=norm, **layout)
     torch.manual_seed(0)
     net = GameNetwork(cfg, ClashRoyaleEncoder(cfg), CardPlacementDecoder(cfg))
     g = torch.Generator().manual_seed(seed)
@@ -276,7 +299,16 @@ def _net_and_obs(B=2, T=6, seed=1, card_tokens="deck", norm="group"):
         f"{pre}_mask": torch.ones(B, T, N, dtype=torch.bool),
         "globals_seq": torch.rand(B, T, 6, generator=g),
     }
-    labels = {"card_slot": torch.randint(0, N, (B, T), generator=g)}
+    if cfg.cr_recent_tokens:
+        obs.update(recent_ids=torch.randint(1, 20, (B, T, 8), generator=g),
+                   recent_feats=torch.rand(B, T, 8, 7, generator=g),
+                   recent_mask=torch.ones(B, T, 8, dtype=torch.bool),
+                   recent_cell=torch.randint(-1, 48, (B, T, 8), generator=g),
+                   opp_ids=torch.randint(1, 20, (B, T, 8), generator=g),
+                   opp_feats=torch.rand(B, T, 8, 10, generator=g),
+                   opp_mask=torch.ones(B, T, 8, dtype=torch.bool))
+    labels = {"card_slot": torch.randint(0, N, (B, T), generator=g),
+              "place_idx": torch.randint(0, 48, (B, T), generator=g)}
     return net, obs, labels
 
 
@@ -285,6 +317,8 @@ def _future_perturbed(obs, k):
     for key in out:
         if key.endswith("_ids"):
             out[key][:, k:] = (out[key][:, k:] + 7) % 19 + 1
+        elif key == "recent_cell":
+            out[key][:, k:] = (out[key][:, k:] + 13) % 48
         elif out[key].is_floating_point():      # incl. globals_seq[..., 2] = the match clock
             out[key][:, k:] = out[key][:, k:] * 3.0 + 1.0
     return out
@@ -295,13 +329,14 @@ def _max_past_change(net, obs, labels, k):
         a = net(obs, labels=labels, act_steps=2)
         b = net(_future_perturbed(obs, k), labels=labels, act_steps=2)
     return {key: float((a[key][:, :k] - b[key][:, :k]).abs().max())
-            for key in ("wait_logits", "card_logits", "placement_logits", "value")}
+            for key in ("wait_logits", "card_logits", "placement_logits", "value")
+            + (("sub_logits",) if "sub_logits" in a else ())}
 
 
 @pytest.mark.parametrize("norm", ["group", "batch"])
-@pytest.mark.parametrize("card_tokens", ["deck", "hand"])
-def test_network_outputs_are_causal_in_time_eval(card_tokens, norm):
-    net, obs, labels = _net_and_obs(card_tokens=card_tokens, norm=norm)
+@pytest.mark.parametrize("variant", sorted(VARIANTS))
+def test_network_outputs_are_causal_in_time_eval(variant, norm):
+    net, obs, labels = _net_and_obs(variant=variant, norm=norm)
     net.eval()
     change = _max_past_change(net, obs, labels, k=4)
     assert all(v == 0.0 for v in change.values()), change

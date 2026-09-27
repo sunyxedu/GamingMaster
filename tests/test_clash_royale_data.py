@@ -29,9 +29,11 @@ def _raw(T=6, K=4):
         "hand_prob": np.tile(np.array([[1.0, 0.5, 0.5, 0.5]], np.float32), (T, 1)), "next_cost": np.full(T, 2.0, np.float32),
         "recent_side": np.full((T, K), 255, np.uint8), "recent_cost": np.zeros((T, K), np.float32),
         "recent_x": np.full((T, K), -1, np.int8), "recent_y": np.full((T, K), -1, np.int8),
-        "recent_age": np.full((T, K), -1, np.int32),
+        "recent_age": np.full((T, K), -1, np.int32), "recent_card": np.zeros((T, K), np.uint16),
+        "tick": np.arange(T, dtype=np.int32) * 10,
     }
     r["recent_side"][2:, 0] = 0
+    r["recent_card"][2:, 0] = 22
     r["recent_cost"][2:, 0] = 4.0
     r["recent_x"][2:, 0] = 9
     r["recent_y"][2:, 0] = 14
@@ -77,8 +79,18 @@ def test_expand_builds_deck_obs():
     raw = _deck_raw()
     obs = expand(raw, {"arena_channels": 16, "card_feature_dim": 9, "tau_ticks": 60.0})
     assert set(obs) == {"arena_seq", "deck_ids", "deck_feats", "deck_mask", "globals_seq", "legal_card",
-                        "legal_place"}
+                        "legal_place", "recent_ids", "recent_feats", "recent_mask", "recent_cell",
+                        "opp_ids", "opp_feats", "opp_mask"}
     assert obs["deck_feats"].shape == (6, 8, 9) and obs["deck_ids"].dtype == torch.int64
+    # the own play of card 22 (tick 10, cell (9, 14)) from frame 2 on: the match's play 0,
+    # ring slot 0; no opponent play yet
+    assert not obs["recent_mask"][:2].any() and obs["recent_mask"][2:, 0].all()
+    assert obs["recent_mask"][2:].sum() == 4
+    assert (obs["recent_ids"][2:, 0] == 22).all() and (obs["recent_cell"][2:, 0] == 14 * 18 + 9).all()
+    f = obs["recent_feats"][2:, 0]
+    assert (f[:, :3] == torch.tensor([1.0, 0.0, 0.0])).all() and torch.allclose(f[:, 5], torch.tensor(0.4))
+    assert torch.allclose(f[:, 3], torch.exp(-torch.tensor([10.0, 20.0, 30.0, 40.0]) / 60.0))
+    assert not obs["opp_mask"].any() and (obs["opp_ids"] == 0).all()
     assert obs["deck_mask"].all()
     assert torch.equal(obs["deck_feats"][:, :, 7], raw["deck_in_hand"])
     assert torch.equal(obs["deck_feats"][:, :, 8], raw["deck_next"])

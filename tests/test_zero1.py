@@ -215,9 +215,11 @@ def test_production_memory_plan(capsys):
     rows, a = memory_plan(experts=(32, 64), world=12)
     r32, r64 = rows
     # registry-default adapters: pokemon's exact Showdown vocabularies (converter v3: 1493
-    # species / 956 move ids, was 512 / 256 hash buckets) add 646,204 of the 213.48M
-    assert 213e6 < r32.params < 214e6 and r32.expert_params == 8 * 32 * (384 * 1024 + 512 * 384)
-    assert 364e6 < r64.params < 365e6 and r64.expert_params == 2 * r32.expert_params
+    # species / 956 move ids, was 512 / 256 hash buckets) add 646,204; the clash_royale
+    # arena patches + play trackers (a patch projection instead of a d_model conv) save
+    # ~0.7M: 212.78M
+    assert 212.5e6 < r32.params < 213e6 and r32.expert_params == 8 * 32 * (384 * 1024 + 512 * 384)
+    assert 363.5e6 < r64.params < 364e6 and r64.expert_params == 2 * r32.expert_params
     for r in rows:
         assert r.state_unsharded == 12 * r.params           # m + v + EMA, fp32
         ideal = r.state_unsharded / 12

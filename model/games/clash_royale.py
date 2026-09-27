@@ -94,6 +94,19 @@ class ClashRoyaleConfig(ModelConfig):
     #: games; "frame" (legacy checkpoints) = the absolute frame index
     #: t0 .. t0+T-1, only correct for sequences decoded from their first frame
     cr_wait_time: str = "match"
+    #: arena tokens: p x p cells per token (the conv stack runs at full resolution,
+    #: then a stride-p patch projection); the placement is a patch pointer + the
+    #: cell inside the patch.  1 (legacy checkpoints) = one token per cell and a
+    #: pointer over the cells
+    cr_arena_patch: int = 2
+    #: recent-play tokens (expand.recent_tokens: which card each of the K latest
+    #: plays of both sides was, where and how long ago); 0 = none (legacy)
+    cr_recent_tokens: int = 8
+    cr_recent_features: int = 7
+    #: opponent-deck tokens (expand.opponent_tokens: the opponent's revealed cards
+    #: and their place in its hand cycle); 0 = none (legacy)
+    cr_opp_tokens: int = 8
+    cr_opp_features: int = 10
 
 
 #: globals_seq column holding the match clock / CR_TIME_SCALE seconds
@@ -142,19 +155,28 @@ def cr_legal_from_obs(obs: Dict[str, torch.Tensor]) -> Optional[Dict[str, torch.
 
 
 class ClashRoyaleEncoder(ObservationEncoder):
-    """Arena grid + card tokens + globals → arena_h*arena_w + n card tokens.
+    """Arena + card tokens + the play trackers + globals → tokens.
 
     obs keys (``cr_card_tokens="deck"``, D = deck_size):
-        arena_seq   [B, T, C, H, W]              arena planes
-        deck_ids    [B, T, D] long               own deck card ids (0 = empty)
-        deck_feats  [B, T, D, F]                 per-card features incl. the hand
-                                                 belief P(in hand), P(next)
-        deck_mask   [B, T, D] bool               True = real card in slot
-        globals_seq [B, T, G]                    global scalars
+        arena_seq    [B, T, C, H, W]      arena planes
+        deck_ids     [B, T, D] long       own deck card ids (0 = empty)
+        deck_feats   [B, T, D, F]         per-card features incl. the hand belief
+                                          P(in hand), P(next)
+        deck_mask    [B, T, D] bool       True = real card in slot
+        globals_seq  [B, T, G]            global scalars
+        recent_ids / recent_feats / recent_mask / recent_cell   (cr_recent_tokens K)
+                                          the K latest plays of both sides, a ring slot
+                                          per play (expand.recent_tokens)
+        opp_ids / opp_feats / opp_mask    (cr_opp_tokens) the opponent's revealed cards
+                                          and their hand cycle (expand.opponent_tokens)
     legacy ``"hand"``: hand_ids / hand_feats / hand_mask over hand_size slots.
 
-    Token order: arena tokens first, then card tokens — the decoder relies
-    on this split (``n_arena_tokens``).
+    Token order: arena tokens ((H / p) x (W / p) patches, p = ``cr_arena_patch``),
+    card tokens, recent-play tokens, opponent-deck tokens — the decoder relies on the
+    first two (``n_arena_tokens``, ``n_card_tokens``).  A play token carries its card
+    (the deck tokens' card embedding), its features and the arena position code of its
+    cell (the patch's row / column embedding + the cell inside the patch), so plays
+    and arena tokens share one spatial code; an ability has no cell.
     """
 
     def __init__(self, cfg: ClashRoyaleConfig):
@@ -162,12 +184,22 @@ class ClashRoyaleEncoder(ObservationEncoder):
         self.cfg = cfg
         self.card_tokens = card_token_mode(cfg)
         self.n_card_tokens = n_card_tokens(cfg)
-        self.n_arena_tokens = cfg.arena_h * cfg.arena_w
-        self.n_tokens = self.n_arena_tokens + self.n_card_tokens
+        p = self.patch = getattr(cfg, "cr_arena_patch", 1)
+        if cfg.arena_h % p or cfg.arena_w % p:
+            raise ValueError(f"cr_arena_patch {p} must divide the arena {cfg.arena_h}x{cfg.arena_w}")
+        self.grid_h, self.grid_w = cfg.arena_h // p, cfg.arena_w // p
+        self.n_arena_tokens = self.grid_h * self.grid_w
+        self.n_recent = getattr(cfg, "cr_recent_tokens", 0)
+        self.n_opp = getattr(cfg, "cr_opp_tokens", 0)
+        if (self.n_recent or self.n_opp) and self.card_tokens != "deck":
+            raise ValueError("recent-play / opponent-deck tokens need cr_card_tokens='deck'")
+        self.n_tokens = self.n_arena_tokens + self.n_card_tokens + self.n_recent + self.n_opp
 
         # Arena conv encoder: SpatialEncoder's Conv→Norm→ReLU→Res stack
-        # (model.components.encoder.conv_stack, cfg.encoder_norm).
-        self.arena_encoder = conv_stack(cfg.arena_channels, cfg.encoder_channels, cfg.d_model,
+        # (model.components.encoder.conv_stack, cfg.encoder_norm) at full resolution;
+        # patches: to encoder_channels, then a stride-p projection to d_model.
+        out_ch = cfg.d_model if p == 1 else cfg.encoder_channels
+        self.arena_encoder = conv_stack(cfg.arena_channels, cfg.encoder_channels, out_ch,
                                         encoder_norm_of(cfg))
         self.batch_stats = uses_batch_stats(cfg)
 
@@ -193,8 +225,8 @@ class ClashRoyaleEncoder(ObservationEncoder):
         # 2-D arena PE (learnable row + column, summed) and the card-token
         # embedding.  Both are delivered through positional_embedding() —
         # the core adds it once, so the encoder must not add them again.
-        self.row_embed = nn.Parameter(torch.randn(1, cfg.arena_h, 1, cfg.d_model) * 0.02)
-        self.col_embed = nn.Parameter(torch.randn(1, 1, cfg.arena_w, cfg.d_model) * 0.02)
+        self.row_embed = nn.Parameter(torch.randn(1, self.grid_h, 1, cfg.d_model) * 0.02)
+        self.col_embed = nn.Parameter(torch.randn(1, 1, self.grid_w, cfg.d_model) * 0.02)
         if self.card_tokens == "hand":
             self.hand_slot_embed = nn.Parameter(torch.randn(1, cfg.hand_size, cfg.d_model) * 0.02)
         else:
@@ -205,15 +237,48 @@ class ClashRoyaleEncoder(ObservationEncoder):
         # The core only re-inits Linear/Conv/Norm; Embedding is ours to init.
         nn.init.trunc_normal_(self.card_embed.weight, std=0.02)
 
+        d = cfg.d_model
+        if p > 1:
+            self.arena_patchify = nn.Conv2d(cfg.encoder_channels, d, p, stride=p)
+            # the cell inside its patch (play tokens' position code)
+            self.sub_embed = nn.Parameter(torch.randn(p * p, d) * 0.02)
+        if self.n_recent:
+            self.recent_feat_proj = nn.Linear(cfg.cr_recent_features, d)
+            self.recent_empty = nn.Parameter(torch.randn(d) * 0.02)
+            self.recent_nocell = nn.Parameter(torch.randn(d) * 0.02)
+            # ring slots carry no order: one shared embedding (the token type)
+            self.recent_token_embed = nn.Parameter(torch.randn(1, 1, d) * 0.02)
+        if self.n_opp:
+            self.opp_feat_proj = nn.Linear(cfg.cr_opp_features, d)
+            self.opp_empty = nn.Parameter(torch.randn(d) * 0.02)
+            self.opp_token_embed = nn.Parameter(torch.randn(1, 1, d) * 0.02)
+
     # ------------------------------------------------------------------
 
     def _encode_frames(self, arena_seq, frame_mask):
         """Run the arena conv encoder over every frame (a BatchNorm stack
         keeps padded frames out of its statistics:
-        ``model.components.encoder.encode_frames``)."""
+        ``model.components.encoder.encode_frames``), then the patch projection."""
         B, T, C, H, W = arena_seq.shape
-        return encode_frames(self.arena_encoder, arena_seq.reshape(B * T, C, H, W), B, T,
+        feat = encode_frames(self.arena_encoder, arena_seq.reshape(B * T, C, H, W), B, T,
                              frame_mask, self.batch_stats)
+        if self.patch == 1:
+            return feat
+        feat = self.arena_patchify(feat.reshape(B * T, *feat.shape[2:]))
+        return feat.reshape(B, T, *feat.shape[1:])
+
+    def _cell_code(self, cell: torch.Tensor) -> torch.Tensor:
+        """Arena position code [..., d] of cells y * arena_w + x (the patch's row +
+        column embedding, + the cell inside the patch); a negative cell (an ability, an
+        empty slot) gets ``recent_nocell``."""
+        cfg, p = self.cfg, self.patch
+        has = cell >= 0
+        c = cell.clamp(min=0)
+        y, x = c // cfg.arena_w, c % cfg.arena_w
+        code = self.row_embed[0, :, 0][y // p] + self.col_embed[0, 0][x // p]
+        if p > 1:
+            code = code + self.sub_embed[(y % p) * p + x % p]
+        return torch.where(has.unsqueeze(-1), code, self.recent_nocell.to(code.dtype))
 
     def forward(
         self,
@@ -224,7 +289,7 @@ class ClashRoyaleEncoder(ObservationEncoder):
         B, T = arena_seq.shape[:2]
         d = self.cfg.d_model
 
-        spatial = self._encode_frames(arena_seq, frame_mask)          # [B,T,d,H,W]
+        spatial = self._encode_frames(arena_seq, frame_mask)          # [B,T,d,h,w]
         spatial = spatial + self.global_proj(obs["globals_seq"]).unsqueeze(-1).unsqueeze(-1)
         arena_tokens = spatial.reshape(B, T, d, self.n_arena_tokens).permute(0, 1, 3, 2)
 
@@ -232,7 +297,18 @@ class ClashRoyaleEncoder(ObservationEncoder):
             cards = self.card_embed(obs["deck_ids"]) + self.deck_feat_proj(obs["deck_feats"])
             present = obs["deck_mask"].unsqueeze(-1)                  # [B,T,deck,1]
             cards = cards * present + self.deck_empty * (~present)
-            return torch.cat([arena_tokens, cards], dim=2)            # [B,T,S,d]
+            parts = [arena_tokens, cards]
+            if self.n_recent:
+                rec = (self.card_embed(obs["recent_ids"].long())
+                       + self.recent_feat_proj(obs["recent_feats"].float())
+                       + self._cell_code(obs["recent_cell"].long()))
+                present = obs["recent_mask"].bool().unsqueeze(-1)
+                parts.append(torch.where(present, rec, self.recent_empty.to(rec.dtype)))
+            if self.n_opp:
+                opp = self.card_embed(obs["opp_ids"].long()) + self.opp_feat_proj(obs["opp_feats"].float())
+                present = obs["opp_mask"].bool().unsqueeze(-1)
+                parts.append(torch.where(present, opp, self.opp_empty.to(opp.dtype)))
+            return torch.cat([t.to(arena_tokens.dtype) for t in parts], dim=2)   # [B,T,S,d]
 
         hand = self.card_embed(obs["hand_ids"]) + self.hand_feat_proj(obs["hand_feats"])
         present = obs["hand_mask"].unsqueeze(-1)                      # [B,T,hand,1]
@@ -251,12 +327,18 @@ class ClashRoyaleEncoder(ObservationEncoder):
         return {"match_time": obs["globals_seq"][..., CR_GLOBAL_TIME].float() * CR_TIME_SCALE}
 
     def positional_embedding(self) -> torch.Tensor:
-        arena_pe = (self.row_embed + self.col_embed).reshape(1, -1, self.cfg.d_model)
+        d = self.cfg.d_model
+        arena_pe = (self.row_embed + self.col_embed).reshape(1, -1, d)
         if self.card_tokens == "deck":
-            card_pe = self.deck_token_embed.expand(1, self.n_card_tokens, self.cfg.d_model)
+            card_pe = self.deck_token_embed.expand(1, self.n_card_tokens, d)
         else:
             card_pe = self.hand_slot_embed
-        return torch.cat([arena_pe, card_pe], dim=1)
+        parts = [arena_pe, card_pe]
+        if self.n_recent:
+            parts.append(self.recent_token_embed.expand(1, self.n_recent, d))
+        if self.n_opp:
+            parts.append(self.opp_token_embed.expand(1, self.n_opp, d))
+        return torch.cat(parts, dim=1)
 
 
 class CardPlacementDecoder(ActionDecoder):
@@ -266,10 +348,22 @@ class CardPlacementDecoder(ActionDecoder):
     cards (``cr_card_tokens="deck"``; ``card_slot`` = deck index) or the
     legacy hand_size hand slots (``"hand"``); N = that token count.
 
-    legal keys:   card      [B, T, N]               bool
-                  placement [B, T, n_arena_tokens]  bool
-    labels keys:  card_slot [B, T]  teacher-forcing card choice
-                  (−1 → sample from the model's own card distribution)
+    Placement, ``cr_arena_patch`` p:
+      p = 1 (legacy): a pointer over the arena cells.
+      p > 1: a pointer over the (H / p) x (W / p) arena patch tokens, then the cell
+        inside the committed patch (an MLP of the patch token, the card and the LL
+        token; the arc3 patch / sub pattern).  The patch is teacher-forced from
+        ``labels["place_idx"]`` (the cell) like the card, else sampled; its log-prob
+        is log π(patch) + log π(cell | patch).  IL scores every head under the
+        legality masks (a target outside them gets no weight: il_legal_mask
+        semantics), as sampling and replay do.
+
+    legal keys:   card      [B, T, N]      bool
+                  placement [B, T, H * W]  bool (cells; p > 1 derives the patch and
+                                           cell masks from it)
+    labels keys:  card_slot [B, T]  teacher-forcing card choice, place_idx [B, T]
+                  the cell (p > 1) — −1 → sample from the model's own distribution
+    actions keys: waited, card_slot, place_idx (the cell)
 
     Hierarchical log-prob (must match between sample() and
     log_prob_entropy() — the PPO-exactness invariant):
@@ -281,7 +375,11 @@ class CardPlacementDecoder(ActionDecoder):
         super().__init__()
         self.cfg = cfg
         self.n_card_tokens = n_card_tokens(cfg)
-        self.n_arena_tokens = cfg.arena_h * cfg.arena_w
+        p = self.patch = getattr(cfg, "cr_arena_patch", 1)
+        self.n_cells = cfg.arena_h * cfg.arena_w
+        self.grid_h, self.grid_w = cfg.arena_h // p, cfg.arena_w // p
+        self.n_arena_tokens = self.grid_h * self.grid_w
+        self.n_sub = p * p
         # Wait uses a sinusoidal time PE like generals' PassHead: whether
         # to hold elixir depends on match phase, not just the board.
         self.time_pe_dim = 32
@@ -291,6 +389,32 @@ class CardPlacementDecoder(ActionDecoder):
         self.wait_head = MLPHead(cfg.d_model + self.time_pe_dim, 1, hidden=cfg.d_model)
         self.card_head = PointerHead(cfg.d_model, n_queries=1)       # card tokens ⊗ ll
         self.place_head = PointerHead(cfg.d_model, n_queries=2)      # arena ⊗ (card, ll)
+        if p > 1:
+            self.sub_head = MLPHead(3 * cfg.d_model, self.n_sub)     # (patch, card, ll)
+
+    # -- cells <-> (patch, cell inside it) ---------------------------------
+
+    def patch_of(self, cell: torch.Tensor) -> torch.Tensor:
+        p, W = self.patch, self.cfg.arena_w
+        return (cell // W // p) * self.grid_w + (cell % W) // p
+
+    def sub_of(self, cell: torch.Tensor) -> torch.Tensor:
+        p, W = self.patch, self.cfg.arena_w
+        return (cell // W % p) * p + (cell % W) % p
+
+    def cell_of(self, patch_idx: torch.Tensor, sub: torch.Tensor) -> torch.Tensor:
+        p, W = self.patch, self.cfg.arena_w
+        y = (patch_idx // self.grid_w) * p + sub // p
+        x = (patch_idx % self.grid_w) * p + sub % p
+        return y * W + x
+
+    def _cell_table(self, cells: torch.Tensor) -> torch.Tensor:
+        """[..., H * W] cell mask → [..., patches, p²] (the cells of every patch)."""
+        p = self.patch
+        m = cells.reshape(*cells.shape[:-1], self.grid_h, p, self.grid_w, p)
+        n = m.dim()
+        m = m.permute(*range(n - 4), n - 4, n - 2, n - 3, n - 1)
+        return m.reshape(*cells.shape[:-1], self.n_arena_tokens, self.n_sub)
 
     # ------------------------------------------------------------------
     # Decode: tokens → logits
@@ -310,9 +434,11 @@ class CardPlacementDecoder(ActionDecoder):
     ) -> Dict[str, torch.Tensor]:
         BT = B * T
         device = tokens.device
+        A, N = self.n_arena_tokens, self.n_card_tokens
+        arange = torch.arange(BT, device=device)
 
-        arena_tok = tokens[:, : self.n_arena_tokens]                 # [BT, A, d]
-        card_tok = tokens[:, self.n_arena_tokens:]                   # [BT, N, d] card tokens
+        arena_tok = tokens[:, :A]                                     # [BT, A, d]
+        card_tok = tokens[:, A:A + N]                                 # [BT, N, d] card tokens
 
         card_logits = self.card_head(card_tok, ll)                   # [BT, N] raw
 
@@ -320,10 +446,10 @@ class CardPlacementDecoder(ActionDecoder):
         # fall back to the model's own masked sample), else sampled — the
         # chosen index is returned so losses can condition-weight on it.
         card_mask = legal.get("card") if legal else None
-        cm_flat = card_mask.reshape(BT, self.n_card_tokens) if card_mask is not None else None
+        cm_flat = card_mask.reshape(BT, N).bool() if card_mask is not None else None
         card_label = labels.get("card_slot") if labels else None
         if card_label is not None:
-            gt_slot = card_label.reshape(BT).long().clamp(0, self.n_card_tokens - 1)
+            gt_slot = card_label.reshape(BT).long().clamp(0, N - 1)
             needs_sample = card_label.reshape(BT) < 0
             if needs_sample.any():
                 pred_slot = masked_sample(card_logits, cm_flat)
@@ -333,7 +459,7 @@ class CardPlacementDecoder(ActionDecoder):
         else:
             card_slot = masked_sample(card_logits, cm_flat)
 
-        card_embed = card_tok[torch.arange(BT, device=device), card_slot]
+        card_embed = card_tok[arange, card_slot]
         placement_logits = self.place_head(arena_tok, card_embed, ll)  # [BT, A]
 
         # Wait PE of the match phase.  "match": the sinusoidal code of the
@@ -353,12 +479,37 @@ class CardPlacementDecoder(ActionDecoder):
             pe = pe.unsqueeze(0).expand(B, T, self.time_pe_dim).reshape(BT, self.time_pe_dim)
         wait_logits = self.wait_head(torch.cat([ll, pe], dim=-1)).squeeze(-1)
 
-        return {
+        out = {
             "wait_logits": wait_logits.reshape(B, T),
-            "card_logits": card_logits.reshape(B, T, self.n_card_tokens),
-            "placement_logits": placement_logits.reshape(B, T, self.n_arena_tokens),
+            "card_logits": card_logits.reshape(B, T, N),
+            "placement_logits": placement_logits.reshape(B, T, A),
             "card_slot": card_slot.reshape(B, T),
         }
+        if self.patch == 1:
+            return out
+
+        # patch → the cell inside it; masks from the cell mask
+        cells = legal.get("placement") if legal else None
+        table = self._cell_table(cells.reshape(BT, self.n_cells).bool()) if cells is not None else None
+        patch_mask = table.any(-1) if table is not None else None
+        place_label = labels.get("place_idx") if labels else None
+        if place_label is not None:
+            lbl = place_label.reshape(BT).long()
+            gt_patch = self.patch_of(lbl.clamp(0, self.n_cells - 1))
+            sampled = masked_sample(placement_logits, patch_mask)
+            patch_idx = torch.where(lbl >= 0, gt_patch, sampled)
+        else:
+            patch_idx = masked_sample(placement_logits, patch_mask)
+        patch_tok = arena_tok[arange, patch_idx]
+        sub_logits = self.sub_head(torch.cat([patch_tok, card_embed, ll], dim=-1))  # [BT, p²]
+        out["sub_logits"] = sub_logits.reshape(B, T, self.n_sub)
+        out["patch_idx"] = patch_idx.reshape(B, T)
+        if cm_flat is not None:
+            out["card_mask"] = cm_flat.reshape(B, T, N)
+        if table is not None:
+            out["patch_mask"] = patch_mask.reshape(B, T, A)
+            out["sub_mask"] = table[arange, patch_idx].reshape(B, T, self.n_sub)
+        return out
 
     # ------------------------------------------------------------------
     # Rollout sampling
@@ -386,8 +537,16 @@ class CardPlacementDecoder(ActionDecoder):
 
             card_lp = masked_log_prob(pred["card_logits"], card_slot, card_mask)
 
-            place_idx = masked_sample(pred["placement_logits"], place_mask)
-            place_lp = masked_log_prob(pred["placement_logits"], place_idx, place_mask)
+            if self.patch == 1:
+                place_idx = masked_sample(pred["placement_logits"], place_mask)
+                place_lp = masked_log_prob(pred["placement_logits"], place_idx, place_mask)
+            else:
+                pm, sm = pred.get("patch_mask"), pred.get("sub_mask")
+                patch_idx = pred["patch_idx"]
+                sub = masked_sample(pred["sub_logits"], sm)
+                place_idx = self.cell_of(patch_idx, sub)
+                place_lp = (masked_log_prob(pred["placement_logits"], patch_idx, pm)
+                            + masked_log_prob(pred["sub_logits"], sub, sm))
 
             total_lp = torch.where(waited, wait_lp, wait_lp + card_lp + place_lp)
 
@@ -424,12 +583,22 @@ class CardPlacementDecoder(ActionDecoder):
             _mask_logits(pred["card_logits"].float(), card_mask),
         )
 
-        place_lp = masked_log_prob(
-            pred["placement_logits"], actions["place_idx"], place_mask,
-        )
-        place_ent = categorical_entropy(
-            _mask_logits(pred["placement_logits"].float(), place_mask),
-        )
+        if self.patch == 1:
+            place_lp = masked_log_prob(
+                pred["placement_logits"], actions["place_idx"], place_mask,
+            )
+            place_ent = categorical_entropy(
+                _mask_logits(pred["placement_logits"].float(), place_mask),
+            )
+        else:
+            # replay teacher-forces the stored cell's patch (labels["place_idx"]), so
+            # the sub mask is the stored patch's
+            pm, sm = pred.get("patch_mask"), pred.get("sub_mask")
+            cell = actions["place_idx"].long().clamp(0, self.n_cells - 1)
+            place_lp = (masked_log_prob(pred["placement_logits"], self.patch_of(cell), pm)
+                        + masked_log_prob(pred["sub_logits"], self.sub_of(cell), sm))
+            place_ent = (categorical_entropy(_mask_logits(pred["placement_logits"].float(), pm))
+                         + categorical_entropy(_mask_logits(pred["sub_logits"].float(), sm)))
 
         total_lp = torch.where(waited, wait_lp, wait_lp + card_lp + place_lp)
         total_ent = torch.where(waited, wait_ent, wait_ent + card_ent + place_ent)
@@ -466,12 +635,16 @@ class CardPlacementDecoder(ActionDecoder):
         play_f = play.float()
         n_play = play_f.sum().clamp(min=1)
 
-        tgt_card = torch.where(play, tgt["card_slot"], 0).long().clamp(0, hand - 1)
-        tgt_place = torch.where(play, tgt["place_idx"], 0).long().clamp(0, n_arena - 1)
-
         wait_loss_all = F.binary_cross_entropy_with_logits(
             pred["wait_logits"], waited.float(), reduction="none",
         ).nan_to_num(0.0)
+        parts = dict(seq_f=seq_f, n_seq=n_seq, waited=waited, play_f=play_f, n_play=n_play,
+                     wait_loss_all=wait_loss_all)
+        if self.patch > 1:
+            return {**parts, **self._il_patch_parts(pred, tgt, play)}
+
+        tgt_card = torch.where(play, tgt["card_slot"], 0).long().clamp(0, hand - 1)
+        tgt_place = torch.where(play, tgt["place_idx"], 0).long().clamp(0, n_arena - 1)
 
         card_loss_all = F.cross_entropy(
             pred["card_logits"].reshape(-1, hand), tgt_card.reshape(-1),
@@ -486,10 +659,37 @@ class CardPlacementDecoder(ActionDecoder):
             pred["placement_logits"].reshape(-1, n_arena), tgt_place.reshape(-1),
             reduction="none",
         ).reshape(B, T).nan_to_num(0.0)
-        return dict(seq_f=seq_f, n_seq=n_seq, waited=waited, play_f=play_f, n_play=n_play,
-                    tgt_card=tgt_card, tgt_place=tgt_place, cond=cond, n_cond=n_cond,
-                    wait_loss_all=wait_loss_all, card_loss_all=card_loss_all,
-                    place_loss_all=place_loss_all)
+        return dict(parts, tgt_card=tgt_card, tgt_place=tgt_place, cond=cond, n_cond=n_cond,
+                    card_loss_all=card_loss_all, place_loss_all=place_loss_all)
+
+    def _il_patch_parts(self, pred, tgt, play) -> Dict[str, object]:
+        """The patch decoder's card / patch / cell heads under the legality masks
+        (:func:`model.games.board._categorical_head`: a target outside its mask gets
+        weight 0, like the other decoders' il_legal_mask semantics)."""
+        from model.games.board import _categorical_head
+
+        N = self.n_card_tokens
+        play_f = play.float()
+        tgt_card = torch.where(play, tgt["card_slot"], 0).long().clamp(0, N - 1)
+        cell = torch.where(play, tgt["place_idx"], 0).long().clamp(0, self.n_cells - 1)
+        tgt_patch, tgt_sub = self.patch_of(cell), self.sub_of(cell)
+        terms, ok, illegal = {}, {}, {}
+        n_play = play_f.sum().clamp(min=1.0)
+        terms["card"], ok["card"], illegal["card"] = _categorical_head(
+            pred["card_logits"], tgt_card, pred.get("card_mask"), play_f, n_play)
+        with torch.no_grad():
+            cond = (pred["card_slot"] == tgt_card).float() * play_f
+            if illegal["card"] is not None:
+                cond = cond * (~illegal["card"]).float()
+        n_cond = cond.sum().clamp(min=1.0)
+        terms["patch"], ok["patch"], illegal["patch"] = _categorical_head(
+            pred["placement_logits"], tgt_patch, pred.get("patch_mask"), cond, n_cond)
+        with torch.no_grad():
+            cond_sub = cond * (pred["patch_idx"] == tgt_patch).float()
+        n_sub = cond_sub.sum().clamp(min=1.0)
+        terms["sub"], ok["sub"], illegal["sub"] = _categorical_head(
+            pred["sub_logits"], tgt_sub, pred.get("sub_mask"), cond_sub, n_sub)
+        return dict(terms=terms, ok=ok, illegal=illegal, tgt_card=tgt_card)
 
     def il_head_terms(
         self,
@@ -500,11 +700,17 @@ class CardPlacementDecoder(ActionDecoder):
         """:meth:`il_loss` per head (``ActionDecoder.il_head_terms``):
         ``wait`` Bernoulli on every frame, ``card`` on play frames,
         ``placement`` on play frames whose conditioning card matched
-        (soft targets: ``tgt["placement_probs"]`` etc.)."""
+        (soft targets: ``tgt["placement_probs"]`` etc.); the patch decoder
+        (``cr_arena_patch`` > 1): ``card``, ``patch`` (the placement's patch, frames
+        whose card matched) and ``sub`` (the cell inside it, frames whose patch
+        matched too), each with its legality mask."""
         p = self._il_parts(pred, tgt, seq_mask)
+        wait = {"logits": pred["wait_logits"], "kind": "bernoulli",
+                "ce": p["wait_loss_all"], "weight": p["seq_f"], "norm": p["n_seq"]}
+        if self.patch > 1:
+            return {"wait": wait, **p["terms"]}
         return {
-            "wait": {"logits": pred["wait_logits"], "kind": "bernoulli",
-                     "ce": p["wait_loss_all"], "weight": p["seq_f"], "norm": p["n_seq"]},
+            "wait": wait,
             "card": {"logits": pred["card_logits"], "ce": p["card_loss_all"],
                      "weight": p["play_f"], "norm": p["n_play"]},
             "placement": {"logits": pred["placement_logits"], "ce": p["place_loss_all"],
@@ -527,21 +733,44 @@ class CardPlacementDecoder(ActionDecoder):
         """
         p = self._il_parts(pred, tgt, seq_mask)
         seq_f, n_seq = p["seq_f"], p["n_seq"]
+        waited = p["waited"]
+        wait_loss = (p["wait_loss_all"] * seq_f).sum() / n_seq
+        with torch.no_grad():
+            wait_acc = (((pred["wait_logits"] > 0) == waited).float() * seq_f).sum() / n_seq
+            pred_wait = pred["wait_logits"] > 0
+        if self.patch > 1:
+            terms, ok = p["terms"], p["ok"]
+            head = {k: (t["ce"] * t["weight"]).sum() / t["norm"] for k, t in terms.items()}
+            with torch.no_grad():
+                acc = {f"{k}_acc": (ok[k].float() * terms[k]["weight"]).sum() / terms[k]["norm"]
+                       for k in terms}
+                answer_ok = torch.where(waited, pred_wait,
+                                        ~pred_wait & ok["card"] & ok["patch"] & ok["sub"])
+                valid = seq_mask.bool() & ~waited
+                bad = [m for m in p["illegal"].values() if m is not None]
+                extra = {}
+                if bad:
+                    any_bad = torch.stack(bad).any(0) & valid
+                    extra["illegal_target_frac"] = (any_bad.float().sum()
+                                                    / valid.float().sum().clamp(min=1))
+            return {"answer_correct": answer_ok, "answer_mask": seq_mask.bool(),
+                    "loss": wait_loss + head["card"] + head["patch"] + head["sub"],
+                    "wait_loss": wait_loss.detach(), "card_loss": head["card"].detach(),
+                    "place_loss": (head["patch"] + head["sub"]).detach(),
+                    "patch_loss": head["patch"].detach(), "sub_loss": head["sub"].detach(),
+                    "wait_acc": wait_acc, **acc, **extra}
+
         play_f, n_play = p["play_f"], p["n_play"]
         cond, n_cond = p["cond"], p["n_cond"]
-        waited, tgt_card, tgt_place = p["waited"], p["tgt_card"], p["tgt_place"]
-
-        wait_loss = (p["wait_loss_all"] * seq_f).sum() / n_seq
+        tgt_card, tgt_place = p["tgt_card"], p["tgt_place"]
         card_loss = (p["card_loss_all"] * play_f).sum() / n_play
         place_loss = (p["place_loss_all"] * cond).sum() / n_cond
 
         loss = wait_loss + card_loss + place_loss
 
         with torch.no_grad():
-            wait_acc = (((pred["wait_logits"] > 0) == waited).float() * seq_f).sum() / n_seq
             card_acc = ((pred["card_logits"].argmax(-1) == tgt_card).float() * play_f).sum() / n_play
             place_acc = ((pred["placement_logits"].argmax(-1) == tgt_place).float() * cond).sum() / n_cond
-            pred_wait = pred["wait_logits"] > 0
             answer_ok = torch.where(
                 waited, pred_wait,
                 ~pred_wait & (pred["card_logits"].argmax(-1) == tgt_card)

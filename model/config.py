@@ -220,6 +220,10 @@ LEGACY_CONFIG_DEFAULTS = {
     "cr_wait_time": "frame",
     "cr_card_tokens": "hand",
     "card_feature_dim": 8,
+    # ... and one token per arena cell, no recent-play / opponent-deck tokens
+    "cr_arena_patch": 1,
+    "cr_recent_tokens": 0,
+    "cr_opp_tokens": 0,
     # Pokémon adapter (model/games/pokemon.py): the revealed-move slot head; crc32
     # hash buckets of the move / species names (converter v1 / v2) instead of the
     # exact Showdown vocabularies (converter v3)
@@ -238,6 +242,9 @@ LEGACY_CONFIG_SCOPE = {
     "cr_wait_time": "cr_global_features",
     "cr_card_tokens": "cr_global_features",
     "card_feature_dim": "cr_global_features",
+    "cr_arena_patch": "cr_global_features",
+    "cr_recent_tokens": "cr_global_features",
+    "cr_opp_tokens": "cr_global_features",
     # every loadable pokemon config: the slot head needs pokemon_move_buckets
     "pokemon_move_head": "pokemon_move_buckets",
     "pokemon_move_vocab": "pokemon_move_buckets",

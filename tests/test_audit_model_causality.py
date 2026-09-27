@@ -175,10 +175,20 @@ def _obs(game: str, cfg, g: torch.Generator) -> Dict[str, torch.Tensor]:
         N, pre = n_card_tokens(cfg), cfg.cr_card_tokens        # deck tokens (or legacy hand slots)
         mask = torch.rand(B, T, N, generator=g) < 0.8
         mask[..., 0] = True
-        return {"arena_seq": r(cfg.arena_channels, cfg.arena_h, cfg.arena_w),
-                f"{pre}_ids": torch.randint(0, cfg.n_cards, (B, T, N), generator=g),
-                f"{pre}_feats": r(N, cfg.card_feature_dim), f"{pre}_mask": mask,
-                "globals_seq": torch.rand(B, T, cfg.cr_global_features, generator=g)}
+        o = {"arena_seq": r(cfg.arena_channels, cfg.arena_h, cfg.arena_w),
+             f"{pre}_ids": torch.randint(0, cfg.n_cards, (B, T, N), generator=g),
+             f"{pre}_feats": r(N, cfg.card_feature_dim), f"{pre}_mask": mask,
+             "globals_seq": torch.rand(B, T, cfg.cr_global_features, generator=g)}
+        K, O, cells = cfg.cr_recent_tokens, cfg.cr_opp_tokens, cfg.arena_h * cfg.arena_w
+        if K:   # the play trackers (expand.recent_tokens / opponent_tokens)
+            rm = _mask(g, B, T, K, p=0.7)
+            o.update(recent_ids=torch.randint(1, cfg.n_cards, (B, T, K), generator=g),
+                     recent_feats=r(K, cfg.cr_recent_features), recent_mask=rm,
+                     recent_cell=torch.randint(-1, cells, (B, T, K), generator=g))
+        if O:
+            o.update(opp_ids=torch.randint(1, cfg.n_cards, (B, T, O), generator=g),
+                     opp_feats=r(O, cfg.cr_opp_features), opp_mask=_mask(g, B, T, O, p=0.6))
+        return o
     if game == "hearthstone":
         S = cfg.hand_slots + 2 * cfg.board_slots + 3
         mask = torch.rand(B, T, S, generator=g) < 0.7
@@ -281,7 +291,7 @@ def _label_highs(game: str, cfg) -> Dict[str, int]:
                 "actor_idx": cfg.hand_slots + 2 * cfg.board_slots + 3}
     if game == "clash_royale":
         from model.games.clash_royale import n_card_tokens
-        return {"card_slot": n_card_tokens(cfg)}
+        return {"card_slot": n_card_tokens(cfg), "place_idx": cfg.arena_h * cfg.arena_w}
     if game == "mahjong":
         return {"action_type": 8}
     if game == "pokemon":

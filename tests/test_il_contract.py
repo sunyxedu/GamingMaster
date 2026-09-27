@@ -528,7 +528,9 @@ def test_meta_registry_frozen_schema_keys():
 #: converter_version <= 2 inferred the hand from the whole match (a future leak),
 #: pokemon converter v1 / v2 hashed the move / species names into colliding buckets,
 #: so the default net refuses them (the legacy net still accepts them)
-REFUSE_PRE_FREEZE = {"clash_royale": {"cr_card_tokens": "hand", "card_feature_dim": 8},
+REFUSE_PRE_FREEZE = {"clash_royale": {"cr_card_tokens": "hand", "card_feature_dim": 8,
+                                      "cr_arena_patch": 1, "cr_recent_tokens": 0,
+                                      "cr_opp_tokens": 0},
                      "pokemon": {"pokemon_move_vocab": 0, "pokemon_species_vocab": 0}}
 
 
@@ -752,20 +754,34 @@ def _decoder_cases():
                             "active_idx": tgt["active_idx"]})
     out.append(("pokemon", net, pred, tgt, mask))
 
+    # the current CR design: arena patches + the play trackers, IL under the masks
     torch.manual_seed(0)
-    cfg = _small(ClashRoyaleConfig, arena_h=8, arena_w=6, n_cards=20)      # deck tokens
+    cfg = _small(ClashRoyaleConfig, arena_h=8, arena_w=6, n_cards=20)
     net = GameNetwork(cfg, ClashRoyaleEncoder(cfg), CardPlacementDecoder(cfg))
     D = cfg.deck_size
-    obs = {"arena_seq": torch.randn(B, T, cfg.arena_channels, 8, 6, generator=g),
-           "deck_ids": torch.randint(0, 20, (B, T, D), generator=g),
-           "deck_feats": torch.randn(B, T, D, cfg.card_feature_dim, generator=g),
-           "deck_mask": torch.rand(B, T, D, generator=g) < 0.8,
-           "globals_seq": torch.randn(B, T, cfg.cr_global_features, generator=g)}
-    tgt = {"waited": torch.rand(B, T, generator=g) < 0.4,
-           "card_slot": torch.randint(0, D, (B, T), generator=g),
-           "place_idx": torch.randint(0, 48, (B, T), generator=g)}
-    pred = net(obs, labels={"card_slot": drop(tgt["card_slot"])})
-    out.append(("clash_royale", net, pred, tgt, mask))
+    cr_obs = {"arena_seq": torch.randn(B, T, cfg.arena_channels, 8, 6, generator=g),
+              "deck_ids": torch.randint(0, 20, (B, T, D), generator=g),
+              "deck_feats": torch.randn(B, T, D, cfg.card_feature_dim, generator=g),
+              "deck_mask": torch.rand(B, T, D, generator=g) < 0.8,
+              "globals_seq": torch.randn(B, T, cfg.cr_global_features, generator=g),
+              "recent_ids": torch.randint(1, 20, (B, T, 8), generator=g),
+              "recent_feats": torch.rand(B, T, 8, 7, generator=g),
+              "recent_mask": torch.rand(B, T, 8, generator=g) < 0.7,
+              "recent_cell": torch.randint(-1, 48, (B, T, 8), generator=g),
+              "opp_ids": torch.randint(1, 20, (B, T, 8), generator=g),
+              "opp_feats": torch.rand(B, T, 8, 10, generator=g),
+              "opp_mask": torch.rand(B, T, 8, generator=g) < 0.7}
+    cr_tgt = {"waited": torch.rand(B, T, generator=g) < 0.4,
+              "card_slot": torch.randint(0, D, (B, T), generator=g),
+              "place_idx": torch.randint(0, 48, (B, T), generator=g)}
+    card_ok = torch.rand(B, T, D, generator=g) < 0.7
+    card_ok[..., 0] = True
+    cells_ok = torch.rand(B, T, 48, generator=g) < 0.6
+    cells_ok[..., 0] = True
+    legal = {"card": card_ok, "placement": cells_ok}
+    pred = net(cr_obs, legal=legal, labels={"card_slot": drop(cr_tgt["card_slot"]),
+                                            "place_idx": drop(cr_tgt["place_idx"])})
+    out.append(("clash_royale", net, pred, cr_tgt, mask))
 
     torch.manual_seed(0)
     cfg = _small(HearthstoneConfig)
@@ -841,13 +857,22 @@ def _decoder_cases():
     pred = net(pk_obs, labels={"action_type": drop(pk_tgt["action_type"]),
                                "active_idx": pk_tgt["active_idx"]})
     out.append(("pokemon_slot", net, pred, pk_tgt, mask))
+
+    # the legacy CR layout (one token per arena cell, no trackers): unmasked IL
+    torch.manual_seed(0)
+    cfg = _small(ClashRoyaleConfig, arena_h=8, arena_w=6, n_cards=20, cr_arena_patch=1,
+                 cr_recent_tokens=0, cr_opp_tokens=0)
+    net = GameNetwork(cfg, ClashRoyaleEncoder(cfg), CardPlacementDecoder(cfg))
+    pred = net(cr_obs, labels={"card_slot": drop(cr_tgt["card_slot"])})
+    out.append(("clash_royale_cells", net, pred, cr_tgt, mask))
     return out
 
 
 #: il_loss output keys of each decoder (unchanged by the per-head refactor)
 IL_KEYS = {
     "pokemon": {"type", "move", "switch", "tera"},
-    "clash_royale": {"wait", "card", "place"},
+    "clash_royale": {"wait", "card", "patch", "sub"},
+    "clash_royale_cells": {"wait", "card", "place"},
     "hearthstone": {"type", "actor", "target", "position"},
     "starcraft": {"type", "queued", "actor", "target", "location"},
     "generals": {"source", "direction", "split", "pass"},
@@ -855,7 +880,8 @@ IL_KEYS = {
 }
 HEADS = {
     "pokemon": {"action_type", "move", "switch", "tera"},
-    "clash_royale": {"wait", "card", "placement"},
+    "clash_royale": {"wait", "card", "patch", "sub"},
+    "clash_royale_cells": {"wait", "card", "placement"},
     "hearthstone": {"action_type", "actor", "target", "position"},
     "starcraft": {"type", "queued", "actor", "target", "location"},
     "generals": {"source", "direction", "split", "pass"},
@@ -863,7 +889,7 @@ HEADS = {
 }
 
 
-@pytest.mark.parametrize("case", range(8))
+@pytest.mark.parametrize("case", range(9))
 def test_owned_decoders_reconstruct_il_loss(case):
     name, net, pred, tgt, mask = _decoder_cases()[case]
     key = name.split("_")[0] if name.startswith(("generals", "pokemon")) else name
@@ -876,6 +902,10 @@ def test_owned_decoders_reconstruct_il_loss(case):
                      "src_acc", "dir_acc", "full_acc", "complete_acc"}
     else:
         stat_keys = {f"{h}_{s}" for h in IL_KEYS[key] for s in ("loss", "acc")}
+    if key == "clash_royale":
+        # the cell NLL (patch + cell, comparable with the legacy cell head) and the
+        # masked heads' illegal-target fraction
+        stat_keys |= {"place_loss", "illegal_target_frac"}
     assert set(il) == {"loss", "answer_correct", "answer_mask"} | stat_keys
     total = 0.0
     for h, t in terms.items():
