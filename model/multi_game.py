@@ -34,15 +34,21 @@ from model.config import upgrade_config_dict
 SHARED_CORE_ATTRS = ("st_layers", "core", "trm", "hl_token", "ll_token",
                      "hl_pos", "ll_pos", "pre_norm", "mid_norm", "post_norm")
 
-#: config fields that must agree for games to share one core
+#: config fields that must agree for games to share one core: every field the
+#: shared modules are built from or the core forward reads.  The shared
+#: modules are the FIRST game's (share_core), so a field missing here — e.g.
+#: one a module keeps at construction, like moe_bias_clip (the MoE balance-bias
+#: bound) or trm_rms_eps (the TRM block's RMSNorm eps) — could differ in
+#: another game's config without ever applying, and --init_core / games added
+#: on resume would not take it from the checkpoint's core.
 CORE_CONFIG_FIELDS = (
     "d_model", "n_heads", "d_ff", "dropout", "n_st_layers", "temporal_type",
     "temporal_mixer", "core_type", "core_expansion", "core_layers",
     "rd_prelude_layers", "rd_recurrent_layers", "rd_coda_layers",
     "rd_mean_iters", "rd_backprop_iters", "rd_max_iters", "rd_eval_iters",
-    "moe_experts", "moe_top_k", "moe_shared_experts", "moe_expansion",
+    "moe_experts", "moe_top_k", "moe_shared_experts", "moe_expansion", "moe_bias_clip",
     "trm_arch", "trm_H_cycles", "trm_L_cycles", "trm_block_layers",
-    "trm_expansion", "halt_max_steps", "qk_norm",
+    "trm_expansion", "trm_rms_eps", "halt_max_steps", "qk_norm",
 )
 
 _NORM_TYPES = (nn.LayerNorm, nn.RMSNorm)
