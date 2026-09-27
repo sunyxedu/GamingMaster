@@ -8,9 +8,12 @@
 //!   board adapter; the pattern for chess-like games).
 //! - [`chess_variants`]: the Lichess chess variants (shakmaty's rules), one game with
 //!   a variant chance event; from-to decoder over board squares + pocket slots.
+//! - [`xiangqi`]: Chinese chess (Asian rules as Fairy-Stockfish implements them, pinned to
+//!   pyffish), from-to frames; converter `gmdata xiangqi`.
 
 pub mod breakthrough;
 pub mod goofspiel;
 pub mod kuhn_poker;
 pub mod pig;
 pub mod chess_variants;
+pub mod xiangqi;
