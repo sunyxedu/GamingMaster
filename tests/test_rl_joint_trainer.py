@@ -569,11 +569,13 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _ddp_save(kind: str) -> str:
-    return "rl_ddp" if kind == "cpu" else f"rl_ddp_{kind}"
+def _ddp_save(kind: str, placement: str = "spread") -> str:
+    base = "rl_ddp" if kind == "cpu" else f"rl_ddp_{kind}"
+    return base if placement == "spread" else f"{base}_{placement}"
 
 
-def _ddp_worker(rank: int, port: int, root: str, kind: str = "cpu", lrs=(0, 1)) -> None:
+def _ddp_worker(rank: int, port: int, root: str, kind: str = "cpu", lrs=(0, 1),
+                placement: str = "spread") -> None:
     # the trainer pins a MIG slice per LOCAL_RANK before touching CUDA
     hide_gpus_if_cpu(kind)
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank),
@@ -582,17 +584,18 @@ def _ddp_worker(rank: int, port: int, root: str, kind: str = "cpu", lrs=(0, 1)) 
     from training import train_rl_joint
 
     rootp = Path(root)
-    save = _ddp_save(kind)
+    save = _ddp_save(kind, placement)
     dev = [] if kind == "cpu" else ["--device", kind, "--dist_backend", "gloo"]
     out = train_rl_joint.main(_args(rootp, save, "--iterations", "2",
                                     "--snapshot_dir", str(rootp / save / "snaps"),
-                                    "--dist_timeout", "3", *dev))
+                                    "--dist_timeout", "3", "--rl_placement", placement, *dev))
     model, ema, tr = out["model"], out["ema"], out["trainer"]
     torch.save({
         "params": {n: p.detach().clone() for n, p in model.named_parameters()},
         "buffers": {n: b.detach().clone() for n, b in model.named_buffers()},
         "ema": {n: v.clone() for n, v in ema.shadow.items()},
         "mu": {g: float(sum(s.mu.sum() for s in tr.rl[g].streams)) for g in tr.rl_games},
+        "streams": {g: len(tr.rl[g].streams) for g in tr.rl_games},
         "history": out["history"],
         "pool": tr.pool.ids(),
         "rl": {"popart": tr.popart.state_dict(), "klb": tr.klb.state_dict(),
@@ -601,12 +604,18 @@ def _ddp_worker(rank: int, port: int, root: str, kind: str = "cpu", lrs=(0, 1)) 
     }, os.path.join(root, f"{save}_rank{rank}.pt"))
 
 
-@pytest.mark.parametrize("kind", DEVICES)
-def test_two_gloo_ranks_stay_identical(stage1, kind):
+@pytest.mark.parametrize("kind,placement", [
+    *[pytest.param(*(k.values if hasattr(k, "values") else (k,)), "spread",
+                   marks=getattr(k, "marks", ())) for k in DEVICES],
+    pytest.param("cpu", "split")])
+def test_two_gloo_ranks_stay_identical(stage1, kind, placement):
+    """Two ranks end bit-identical (params, buffers, EMA, RL statistics, pool) with
+    global logs.  --rl_placement split: each game is rolled out by ONE rank (its whole
+    quota), the other rank holds no stream of it."""
     ctx = torch.multiprocessing.get_context("spawn")
     port = _free_port()
     lrs = local_ranks(WORLD, kind)
-    procs = [ctx.Process(target=_ddp_worker, args=(r, port, str(stage1), kind, lrs))
+    procs = [ctx.Process(target=_ddp_worker, args=(r, port, str(stage1), kind, lrs, placement))
              for r in range(WORLD)]
     for p in procs:
         p.start()
@@ -622,9 +631,14 @@ def test_two_gloo_ranks_stay_identical(stage1, kind):
             if p.is_alive():
                 p.terminate()
             p.join(timeout=10)
-    save = _ddp_save(kind)
+    save = _ddp_save(kind, placement)
     r0, r1 = (torch.load(stage1 / f"{save}_rank{r}.pt", weights_only=False, map_location="cpu")
               for r in range(WORLD))
+    if placement == "split":
+        for g in r0["streams"]:
+            assert (r0["streams"][g] > 0) != (r1["streams"][g] > 0), (g, r0["streams"], r1["streams"])
+        owner = r0["history"][-1]["placement"]
+        assert owner == r1["history"][-1]["placement"] and set(owner.values()) == {0, 1}
     assert r0["device"].startswith(kind) and r1["device"].startswith(kind)
     for key in ("params", "buffers", "ema"):
         assert r0[key].keys() == r1[key].keys()

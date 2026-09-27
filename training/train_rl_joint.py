@@ -239,6 +239,12 @@ def parse_args(argv=None) -> argparse.Namespace:
            "generals:memory_vision=... sets the observation the network trains on: "
            "its cfg.memory_vision, recorded in the checkpoints (default: the --init "
            "network's own setting)")
+    a("--rl_placement", choices=("spread", "split"), default="spread",
+      help="multi-GPU rollouts: 'spread' = every rank plays every RL game (quota / world "
+           "tokens each; a rank's rollouts take as long as one GPU's); 'split' = each game's "
+           "whole quota is played by one rank, the games assigned by cost — the previous "
+           "iteration's rollout + learner seconds, the quotas at first — so the ranks roll "
+           "out different games in parallel (size --envs for a game's whole quota)")
     a("--max_wave_steps", type=int, default=100000,
       help="safety cap on env steps per lockstep wave")
     a("--actor", choices=("stream", "fixed"), default="stream",
@@ -1569,6 +1575,9 @@ class JointRLTrainer:
         self.ema = ModelEMA(model, mu=a.ema_rate) if a.ema_rate > 0 else None
         self.iteration = 0
         self.il_baseline: Dict[str, float] = {}
+        #: per-game cost of the latest iteration that played it (rollout + learner
+        #: seconds, rank-identical): the --rl_placement split assignment
+        self.game_cost: Dict[str, float] = {}
         self.history: List[Dict[str, Any]] = []
         if a.resume:
             self._load_resume(a.resume)
@@ -2048,8 +2057,26 @@ class JointRLTrainer:
         if not self.rl_games:
             return {}, {}
         q = self.sched.quotas(self.args.tokens_per_iter)
-        per_rank = {g: -(-v // self.world) for g, v in q.items()}
+        if self.args.rl_placement == "split" and self.world > 1:
+            owner = self.placement(q)
+            self._owner = owner
+            per_rank = {g: (v if owner[g] == self.rank else 0) for g, v in q.items()}
+        else:
+            per_rank = {g: -(-v // self.world) for g, v in q.items()}
         return q, per_rank
+
+    def placement(self, quotas: Mapping[str, int]) -> Dict[str, int]:
+        """game → the rank that plays its whole quota (--rl_placement split):
+        longest-processing-time first over :attr:`game_cost` (rank-identical), the
+        quota for a game not measured yet; ties by name and rank (deterministic)."""
+        cost = {g: self.game_cost.get(g, float(quotas.get(g, 0))) for g in self.rl_games}
+        load = [0.0] * self.world
+        owner: Dict[str, int] = {}
+        for g in sorted(self.rl_games, key=lambda x: (-cost[x], x)):
+            r = min(range(self.world), key=lambda i: (load[i], i))
+            owner[g] = r
+            load[r] += cost[g]
+        return owner
 
     def run_iteration(self) -> Dict[str, Any]:
         a = self.args
@@ -2078,6 +2105,10 @@ class JointRLTrainer:
             if not torch.equal(m.balance_bias, b):
                 raise RuntimeError("MoE balance bias moved inside the iteration")
         diag.reduce()
+        for g in self.rl_games:             # the next --rl_placement split assignment
+            c = diag.v[g]["rollout_s"] + diag.v[g]["learn_s"]
+            if c > 0:
+                self.game_cost[g] = c
         # ---- between iterations ----------------------------------------
         if self.dist_env.enabled:
             allreduce_moe_loads(self.model)
@@ -2112,6 +2143,8 @@ class JointRLTrainer:
                 and any(r.pool_policy is not None for r in self.rl.values())):
             self._add_snapshot(tag="iter")
         rec = self._record(diag, epoch_stats, q_glob, rel, time.time() - t0, t_roll)
+        if getattr(self, "_owner", None):
+            rec["placement"] = dict(self._owner)
         self.history.append(rec)
         if self.rank0:
             with open(os.path.join(a.save_dir, "metrics.jsonl"), "a") as f:
@@ -2208,6 +2241,12 @@ class JointRLTrainer:
                  f"({rec['time']:.1f}s, rollouts {rec['rollout_time']:.1f}s"
                  + "".join(f", {k} {v:.1f}s" for k, v in rec.get("phase_time", {}).items())
                  + ")")
+        if rec.get("placement"):
+            by_rank: Dict[int, List[str]] = {}
+            for g, r in rec["placement"].items():
+                by_rank.setdefault(r, []).append(g)
+            self.log("  placement: " + "  ".join(f"rank{r}={','.join(sorted(gs))}"
+                                                 for r, gs in sorted(by_rank.items())))
         for g, row in rec["games"].items():
             self.log(f"  {g}: " + " ".join(f"{k}={f(v)}" for k, v in row.items()))
 
@@ -2220,6 +2259,7 @@ class JointRLTrainer:
                 "advnorm": self.advnorm.state_dict(), "entc": self.entc.state_dict(),
                 "klb": self.klb.state_dict(), "sched": self.sched.state_dict(),
                 "pool": self.pool.state_dict(), "il_baseline": dict(self.il_baseline),
+                "game_cost": dict(self.game_cost),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -2364,6 +2404,7 @@ class JointRLTrainer:
         self.sched.load_state_dict(st["sched"])
         self.pool.load_state_dict(st["pool"])
         self.il_baseline = dict(st.get("il_baseline", {}))
+        self.game_cost = dict(st.get("game_cost", {}))
         self._load_env_states(st.get("envs"), int(ck.get("world_size", 1)))
         self.iteration = int(st["iteration"])
         self.log(f"[resume] {path}: iteration {self.iteration} (saved with world="
