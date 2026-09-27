@@ -89,6 +89,8 @@ def test_max_epochs_caps_the_small_corpus_in_a_run(tmp_path, capsys, monkeypatch
     log = capsys.readouterr().out
     mix = next(line for line in log.splitlines() if line.startswith("[mixture]"))
     assert "epochs=" in mix and "(max)" in mix
+    step = next(line for line in log.splitlines() if line.startswith("[step 10/"))
+    assert "moe_load_cv=" in step and "moe_win_cv=" in step and "moe_win_min=" in step
     ck = torch.load(tmp_path / "out" / "multi_final.pt", map_location="cpu", weights_only=False)
     # othello: 6 samples of 6 frames (uncropped), batch 2: E = 20·2·w·2·6/36 = 3 at the cap
     w = ck["mixture"]

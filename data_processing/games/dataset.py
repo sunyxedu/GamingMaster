@@ -348,7 +348,7 @@ class GameShardDataset(Dataset):
                 f"{self.converter_version} — the directory mixes shard "
                 f"generations; re-convert everything with the current converter"
             )
-        if meta != self.shard_meta:
+        if schema_meta(meta) != schema_meta(self.shard_meta):
             raise ValueError(
                 f"{path}: shard meta {meta!r} but {self._ref_path} has "
                 f"{self.shard_meta!r} — shards were converted with different "
@@ -407,6 +407,23 @@ class GameShardDataset(Dataset):
                     "meta": sample.get("meta", {}),
                 }
         return sample
+
+
+#: ``meta["teacher"]`` fields (gmdata label) that record HOW a teacher was run, not
+#: what its columns mean: shards labelled with another search budget, frame
+#: stride, engine build or options share the tensors and their semantics (the
+#: heads / K, the policy and its temperature, the value definition stay checked).
+TEACHER_PROVENANCE = ("engine", "engine_options", "every_nth_frame", "limits", "max_samples")
+
+
+def schema_meta(meta: Dict) -> Dict:
+    """The part of a shard's meta every shard of one dataset must share: all of
+    it except the teacher's provenance (:data:`TEACHER_PROVENANCE`)."""
+    teacher = meta.get("teacher")
+    if not isinstance(teacher, dict):
+        return meta
+    return {**meta, "teacher": {k: v for k, v in teacher.items()
+                                if k not in TEACHER_PROVENANCE}}
 
 
 def has_shards(data_dir: str) -> bool:
