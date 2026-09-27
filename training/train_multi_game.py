@@ -131,13 +131,45 @@ format, so either kind of run resumes the other, at any world size.
 
 Resuming.  ``--ckpt_every N`` makes rank 0 write ``multi_latest.pt`` every N
 steps and at the last one (weights, EMA shadows, optimizer, LR schedule,
-step; written atomically).  ``--resume <that file>`` continues from it with
-the same arguments, any world size: weights, optimizer moments, EMA, balance
-biases, (legacy) BatchNorm statistics and the LR schedule continue exactly; game
-draws and data order restart from fresh RNG streams, and a TRM core's deep-
-supervision carries restart empty.  Each game's network is rebuilt from the
-config saved in the checkpoint (``--override`` values on top), so a config
-default that changed since it was written cannot reshape it.
+step, the optimizer's parameter names; written atomically).  ``--resume
+<that file>`` continues from it with the same arguments, any world size,
+sharded or not: weights, optimizer moments, EMA, balance biases, (legacy)
+BatchNorm statistics and the LR schedule continue exactly; game draws and data order
+restart from fresh RNG streams, and a TRM core's deep-supervision carries
+restart empty.  Each game's network is rebuilt from the config saved in the
+checkpoint (``--override`` values on top), so a config default that changed
+since it was written cannot reshape it.
+
+Games can JOIN a running pretraining: ``--resume`` with ``--data`` naming a
+superset of the checkpoint's games, in any order (removing a game is
+refused).  Nothing is matched by position — games by name, tensors by
+parameter name (a shared core tensor has one name per game; its canonical
+one, the EMA's and the optimizer's, lies under the run's first game):
+
+    # chess joins the othello + go run: the same command, one --data more
+    uv run torchrun --standalone --nproc_per_node=4 -m training.train_multi_game \\
+        --data othello=... --data chess=data/chess/train --data go=... \\
+        --resume checkpoints/multi/multi_latest.pt <the run's other arguments>
+
+- an added game is built from the command line and its shard meta, every
+  shared-core field (CORE_CONFIG_FIELDS) forced to the checkpoint's core as
+  with --init_core: an --override contradicting that core is refused;
+- the checkpoint's weights and buffers load exactly; it may lack exactly the
+  added games' keys, which keep their fresh initialisation;
+- the optimizer state moves by parameter name to the new layout (names saved
+  in the checkpoint, rebuilt on the meta device from its configs for older
+  checkpoints and checked against them): moments and step counters of every
+  old parameter, the param groups (decay / QK-norm no-decay) with the
+  checkpoint's hyper-parameters; the EMA shadows likewise.  The added games'
+  parameters start without optimizer state (step counter 1, fresh bias
+  correction) and with their initial weights as EMA shadows;
+- --shard_optimizer: the partition is the new model's, every rank loads its
+  share of the remapped state (from sharded or unsharded checkpoints);
+- step and LR schedule continue (no new warmup: the added games train at the
+  current LR), --freeze_core / --train_core_norms must be the checkpoint's;
+  the mixture weights are recomputed for the new game set, the log shows the
+  checkpoint's and the new ones.  The default --games_per_step is the number
+  of games: pass it (or --global_games_per_step) to keep the batch size.
 """
 
 from __future__ import annotations
@@ -208,7 +240,13 @@ from training.train_il_game import (
     prepare_rows,
     schema_freeze_warning,
 )
-from training.zero import Zero1
+from training.zero import MOMENT_KEYS, Zero1
+
+#: resumable checkpoints: the canonical names of the optimizer's parameters,
+#: per param group in ``optimizer.state_dict()`` index order — what a resume
+#: matches the saved optimizer state by (reconstructed for older checkpoints,
+#: :func:`checkpoint_param_names`)
+OPT_NAMES_KEY = "optimizer_param_names"
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -299,7 +337,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="write the resumable multi_latest.pt every N steps and at the "
                         "last step (0 = only multi_final.pt)")
     p.add_argument("--resume", default=None,
-                   help="continue from a multi_latest.pt (same arguments otherwise)")
+                   help="continue from a multi_latest.pt (same arguments otherwise; --data "
+                        "may add games, in any order: see Resuming in the module docstring)")
     p.add_argument("--num_workers", type=int, default=0)
     p.add_argument("--bf16", action="store_true")
     p.add_argument("--device", default=None)
@@ -437,6 +476,244 @@ def game_checkpoint(ck: Dict, game: str) -> Dict:
     if "train_model_state" in ck:
         out["train_model_state"] = part(ck["train_model_state"])
     return out
+
+
+# ----------------------------------------------------------------------
+# resume, possibly with games added: everything matched by game and
+# parameter NAME, never by position
+# ----------------------------------------------------------------------
+
+def _split_name(name: str) -> Tuple[str, str]:
+    """``nets.<game>.<rest>`` (a MultiGameNetwork parameter / buffer name)
+    → (game, rest); ("", name) for anything else."""
+    parts = name.split(".", 2)
+    if len(parts) < 3 or parts[0] != "nets":
+        return "", name
+    return parts[1], parts[2]
+
+
+def _is_own(name: str, games) -> bool:
+    """True for a parameter / buffer of one of ``games``' own modules
+    (encoder, decoder, value head), not of the shared core."""
+    game, rest = _split_name(name)
+    return game in games and not is_core_key(rest)
+
+
+def canonical_names(model: torch.nn.Module) -> Dict[str, str]:
+    """Every name of every parameter of ``model`` → its canonical name, the
+    first one in ``named_parameters()`` (the name ModelEMA keys its shadow
+    and :func:`optimizer_param_names` records).  A shared core tensor has one
+    name per game and its canonical one lies under the FIRST game of the
+    run, so a checkpoint's names resolve to this model's tensors whatever
+    the --data order and whichever games were added."""
+    canon = {id(p): n for n, p in model.named_parameters()}
+    return {n: canon[id(p)] for n, p in model.named_parameters(remove_duplicate=False)}
+
+
+def optimizer_param_names(model: torch.nn.Module,
+                          optimizer: torch.optim.Optimizer) -> List[List[str]]:
+    """Canonical names of ``optimizer``'s parameters per param group, in
+    ``optimizer.state_dict()`` index order (saved as :data:`OPT_NAMES_KEY`)."""
+    canon = {id(p): n for n, p in model.named_parameters()}
+    return [[canon[id(p)] for p in g["params"]] for g in optimizer.param_groups]
+
+
+def _layout_mismatch(ck: Dict, groups: List[List[torch.Tensor]],
+                     trainable: Optional[List[str]] = None) -> Optional[str]:
+    """Why ``groups`` (per param group, the parameters in index order) cannot
+    be the layout of the checkpoint's optimizer, or None: the group sizes and
+    the moment shapes must agree and, given ``trainable`` (the trainable
+    parameters' names in model order), the names of the checkpoint's EMA."""
+    opt = ck["optimizer_state"]
+    sizes = [len(g["params"]) for g in opt["param_groups"]]
+    if [len(g) for g in groups] != sizes:
+        return f"{[len(g) for g in groups]} parameters per group, the optimizer state has {sizes}"
+    shape = dict(zip((int(i) for g in opt["param_groups"] for i in g["params"]),
+                     (tuple(p.shape) for g in groups for p in g)))
+    bad = [i for i, st in opt["state"].items()
+           if any(tuple(st[k].shape) != shape[int(i)] for k in MOMENT_KEYS if k in st)]
+    if bad:
+        return f"moment shapes differ at optimizer indices {bad[:5]}"
+    ema = ck.get("ema_state")
+    if trainable is not None and ema is not None and list(ema) != trainable:
+        return "the EMA's parameter names differ from the trainable parameters'"
+    return None
+
+
+def checkpoint_param_names(ck: Dict, where: str = "checkpoint",
+                           fallback_configs: Optional[Dict[str, Dict]] = None
+                           ) -> List[List[str]]:
+    """The names of a resumable checkpoint's optimizer parameters, per param
+    group in the index order of its ``optimizer_state``.
+
+    Saved in the checkpoint (:data:`OPT_NAMES_KEY`), or — for checkpoints
+    written before it was — reconstructed the way that run built its
+    optimizer: the checkpoint's MultiGameNetwork rebuilt on the meta device
+    from its saved configs (its games, in its order; ``fallback_configs``
+    for a checkpoint without configs), frozen as its run was (saved
+    ``args``: --freeze_core / --train_core_norms) and grouped by
+    :func:`multi_game_param_groups`.  The reconstruction must reproduce the
+    saved group sizes and moment shapes, and with an EMA its names in model
+    order (every trainable parameter), else the checkpoint is refused."""
+    names = ck.get(OPT_NAMES_KEY)
+    if names is not None:
+        names = [list(n) for n in names]
+        sizes = [len(g["params"]) for g in ck["optimizer_state"]["param_groups"]]
+        if [len(n) for n in names] != sizes:
+            raise SystemExit(f"{where}: {OPT_NAMES_KEY} ({[len(n) for n in names]} names per "
+                             f"group) does not match its optimizer state ({sizes})")
+        return names
+    games = list(ck["games"])
+    configs = {**(fallback_configs or {}), **(ck.get("configs") or {})}
+    run = ck.get("args") or {}
+    # no RNG side effects (a meta build draws nothing; stay safe anyway)
+    with torch.random.fork_rng(devices=[]), torch.device("meta"):
+        old = MultiGameNetwork({g: build_net_tolerant(g, upgrade_config_dict(dict(configs[g])))[0]
+                                for g in games})
+    if run.get("freeze_core"):
+        freeze_core(old[games[0]], train_norms=bool(run.get("train_core_norms")))
+    groups = [g["params"] for g in multi_game_param_groups(old, 0.0)]
+    why = _layout_mismatch(ck, groups, [n for n, p in old.named_parameters() if p.requires_grad])
+    if why is not None:
+        raise SystemExit(f"{where} predates saved optimizer parameter names ({OPT_NAMES_KEY}) "
+                         f"and rebuilding its model from its saved configs does not reproduce "
+                         f"its optimizer ({why}); resume it with its own games and code first")
+    canon = {id(p): n for n, p in old.named_parameters()}
+    return [[canon[id(p)] for p in g] for g in groups]
+
+
+def load_resume_weights(model: MultiGameNetwork, state: Dict[str, torch.Tensor],
+                        added: List[str], where: str = "checkpoint") -> None:
+    """Load a checkpoint's ``train_model_state`` into ``model``, whose games
+    are the checkpoint's plus ``added``: every parameter and buffer of the
+    checkpoint's games and of the shared core (MoE balance biases, BatchNorm
+    statistics included) loads exactly.  The keys the checkpoint may lack
+    are exactly the added games' — their own modules, and their names of the
+    shared core, which is loaded through the checkpoint games' names — and
+    nothing may be left over."""
+    new = tuple(f"nets.{g}." for g in added)
+    keys = set(model.state_dict())
+    # decided on the key sets, not on load_state_dict's report: a module the
+    # checkpoint lacks has no version metadata there, and _BatchNorm then
+    # fills its num_batches_tracked from the module itself (unreported)
+    missing, unexpected = keys - set(state), set(state) - keys
+    want = {k for k in keys if k.startswith(new)}
+    core = {_split_name(k)[1] for k in want if is_core_key(_split_name(k)[1])}
+    loaded_core = {_split_name(k)[1] for k in state if is_core_key(_split_name(k)[1])}
+    if missing != want or unexpected or not core <= loaded_core:
+        raise SystemExit(
+            f"{where}: its weights do not fit this run's networks beyond the added games "
+            f"{added}: missing {sorted(missing - want)[:5]}, unexpected {sorted(unexpected)[:5]}, "
+            f"added games' keys present {sorted(want - missing)[:5]}, core keys without "
+            f"weights {sorted(core - loaded_core)[:5]}")
+    res = model.load_state_dict(state, strict=False)      # shapes: always strict
+    assert not res.unexpected_keys and set(res.missing_keys) <= want, res
+
+
+def resume_training_state(ck: Dict, model: MultiGameNetwork, optimizer: torch.optim.Optimizer,
+                          where: str = "checkpoint"
+                          ) -> Tuple[Dict, Optional[Dict[str, torch.Tensor]], List[str]]:
+    """The checkpoint's optimizer state and EMA shadows in THIS run's layout,
+    matched by parameter NAME (the run's games are the checkpoint's plus any
+    added ones, in any --data order): ``(optimizer state dict, EMA state,
+    fresh)``.  The checkpoint's names are its saved ones, or rebuilt
+    (:func:`checkpoint_param_names`) — except for an older checkpoint of
+    exactly this run's games in this order, whose layout is this run's own.
+
+    The optimizer state dict has the unsharded ``optimizer.state_dict()``
+    format for ``optimizer.load_state_dict`` or ``Zero1.load_optimizer_state``
+    (which keeps a rank's partition of the NEW model): each checkpoint
+    parameter's moments and step counter move to its index here, its param
+    group keeping its role (the decayed parameters, the QK-norm scales' no-
+    decay group) and the checkpoint's group hyper-parameters (lr, initial_lr,
+    betas, weight_decay).  The EMA state is keyed by this model's canonical
+    names (``ModelEMA.load_state_dict``; a partial EMA takes its own), None
+    without a checkpoint EMA.  ``fresh`` names the trainable parameters
+    without checkpoint state — which must be exactly the added games' own:
+    no optimizer state (their step counters start at 1, with the matching
+    bias correction), and an EMA initialised from their fresh weights.
+    Refused: a checkpoint parameter frozen here or in another group, a
+    trainable parameter of an old game the checkpoint did not train (changed
+    --freeze_core / --train_core_norms), mismatched shapes."""
+    saved = ck["optimizer_state"]
+    groups = optimizer.param_groups
+    if OPT_NAMES_KEY not in ck and list(ck["games"]) == model.games:
+        # an older checkpoint of exactly these games in this order: its
+        # optimizer layout is this run's own (as the resume assumed before the
+        # names were saved), no rebuild needed — sizes and shapes still checked
+        why = _layout_mismatch(ck, [g["params"] for g in groups])
+        if why is not None:
+            raise SystemExit(f"{where}: its optimizer state does not fit this run's parameters "
+                             f"({why}; resume with the checkpoint's --freeze_core / "
+                             f"--train_core_norms)")
+        names = optimizer_param_names(model, optimizer)
+    else:
+        names = checkpoint_param_names(
+            ck, where, fallback_configs={g: model[g].cfg.__dict__ for g in model.games})
+    if len(groups) != len(saved["param_groups"]):
+        raise SystemExit(f"{where}: {len(saved['param_groups'])} optimizer param group(s), this "
+                         f"run has {len(groups)} (weight-decay grouping changed)")
+    saved_state = {int(i): st for i, st in saved["state"].items()}
+    alias = dict(model.named_parameters(remove_duplicate=False))
+    canon = canonical_names(model)
+    slot: Dict[int, Tuple[int, int]] = {}            # id(p) -> (group, index here)
+    for j, g in enumerate(groups):
+        for p in g["params"]:
+            slot[id(p)] = (j, len(slot))
+    state: Dict[int, Dict] = {}
+    trained: Dict[int, str] = {}                     # id(p) -> checkpoint name
+    for j, (group_names, sg) in enumerate(zip(names, saved["param_groups"])):
+        for name, i in zip(group_names, sg["params"]):
+            p = alias.get(name)
+            if p is None:
+                raise SystemExit(f"{where}: optimizer parameter {name} is not a parameter of "
+                                 f"this run's networks")
+            if id(p) in trained:
+                raise SystemExit(f"{where}: optimizer parameters {trained[id(p)]} and {name} "
+                                 f"are the same tensor here")
+            trained[id(p)] = name
+            if id(p) not in slot:
+                raise SystemExit(f"{where}: {name} is trained in the checkpoint but frozen in "
+                                 f"this run (resume with the checkpoint's --freeze_core / "
+                                 f"--train_core_norms)")
+            jj, k = slot[id(p)]
+            if jj != j:
+                raise SystemExit(f"{where}: {name} is in optimizer param group {j} there, "
+                                 f"{jj} here (weight-decay grouping changed)")
+            st = saved_state.get(int(i))
+            if st is not None:
+                bad = [m for m in MOMENT_KEYS if tuple(st[m].shape) != tuple(p.shape)]
+                if bad:
+                    raise SystemExit(f"{where}: {name} {bad} has shape {tuple(st[bad[0]].shape)}, "
+                                     f"the parameter {tuple(p.shape)}")
+                state[k] = st
+    added = [g for g in model.games if g not in ck["games"]]
+    own_name = {id(p): n for n, p in model.named_parameters()}
+    fresh = [own_name[id(p)] for g in groups for p in g["params"] if id(p) not in trained]
+    stray = [n for n in fresh if not _is_own(n, added)]
+    if stray:
+        raise SystemExit(f"{where}: {len(stray)} trainable parameter(s) of the checkpoint's "
+                         f"games are not in its optimizer, e.g. {stray[:3]} (resume with the "
+                         f"checkpoint's --freeze_core / --train_core_norms)")
+    out_groups, start = [], 0
+    for sg, g in zip(saved["param_groups"], groups):
+        hyper = {k: v for k, v in sg.items() if k not in ("params", "param_names")}
+        out_groups.append({**hyper, "params": list(range(start, start + len(g["params"])))})
+        start += len(g["params"])
+    ema = None
+    if ck.get("ema_state") is not None:
+        ema = {}
+        for n, v in ck["ema_state"].items():
+            c = canon.get(n)
+            if c is None or c in ema or tuple(v.shape) != tuple(alias[c].shape):
+                raise SystemExit(f"{where}: EMA shadow {n} does not fit this run's networks "
+                                 f"(unknown, duplicate or reshaped)")
+            ema[c] = v
+        want = {canon[n] for n in trained.values()}
+        if set(ema) != want:
+            raise SystemExit(f"{where}: its EMA shadows {len(ema)} parameters, its optimizer "
+                             f"{len(want)}: e.g. {sorted(set(ema) ^ want)[:3]}")
+    return {"state": state, "param_groups": out_groups}, ema, fresh
 
 
 EvalSums = Dict[str, Tuple[Dict[str, float], int]]
@@ -597,14 +874,19 @@ def main(argv=None) -> Dict[str, object]:
                                         len(games), rank, world)
 
     resume = None
+    ck_games: List[str] = []
+    added: List[str] = []            # games this run adds to the resumed checkpoint's
     if args.resume:
         resume = torch.load(args.resume, map_location="cpu", weights_only=False)
         if "optimizer_state" not in resume:
             raise SystemExit(f"{args.resume} is not resumable (only --ckpt_every writes "
                              f"multi_latest.pt with the optimizer state)")
-        if resume["games"] != games:
-            raise SystemExit(f"{args.resume} trained games {resume['games']}, "
-                             f"this run has {games} (same --data order required)")
+        ck_games = list(resume["games"])
+        removed = [g for g in ck_games if g not in games]
+        if removed:
+            raise SystemExit(f"{args.resume} trained games {ck_games}, this run (--data) lacks "
+                             f"{removed}: a resume may add games, not remove them")
+        added = [g for g in games if g not in ck_games]
 
     def crop(g: str, max_len, per_game: Dict[str, int]):
         # UNCROPPABLE games ignore the global max_len; only an explicit
@@ -653,6 +935,20 @@ def main(argv=None) -> Dict[str, object]:
         if clash:
             raise SystemExit(f"--override {clash} contradicts the core in {args.init_core}")
         core_kw = {**core_kw, **fixed}
+    ck_core: Dict = {}
+    if added:
+        # games joining a resumed run are built around ITS core, like
+        # --init_core: every core field is the checkpoint's, and an
+        # --override that contradicts it would reshape the core under the
+        # old games' weights or split it from the new games'
+        src = resume.get("core_config") or (resume.get("configs") or {}).get(ck_games[0])
+        ck_core = core_config_overrides(src) if src is not None else {}
+        clash = {k: v for k, v in core_kw.items() if k in ck_core and ck_core[k] != v}
+        if clash:
+            have = {k: ck_core[k] for k in clash}
+            raise SystemExit(f"--override {clash} contradicts the core in {args.resume} "
+                             f"({have}): the games added on resume {added} share the "
+                             f"checkpoint's core")
 
     nets = {}
     for g in games:
@@ -668,10 +964,18 @@ def main(argv=None) -> Dict[str, object]:
                 log(f"[warn] {g}: --override replaces checkpoint arch values: {changed}")
             kw.update(core_kw)
         else:
-            kw = apply_meta_arch_defaults(g, dict(core_kw), datasets[g].shard_meta)
+            # fresh runs and games added on resume: command line + shard meta
+            kw = apply_meta_arch_defaults(g, {**core_kw, **ck_core} if g in added
+                                          else dict(core_kw), datasets[g].shard_meta)
         net, dropped = build_net_tolerant(g, kw)
         if dropped:
             log(f"[warn] {g}: config fields unknown to {g}'s config, ignored: {dropped}")
+        if g in added:
+            own = core_config_overrides(net.cfg)
+            off = {k: (own.get(k), v) for k, v in ck_core.items() if own.get(k) != v}
+            if off:
+                raise SystemExit(f"{g} (added on resume): its network's core differs from the "
+                                 f"checkpoint's, field: (this net, checkpoint) {off}")
         check_meta_arch(g, net.cfg, datasets[g].shard_meta)
         check_crop_policy(g, net.cfg, crop(g, args.max_len, game_max_len))
         if g in val_dirs:
@@ -684,7 +988,8 @@ def main(argv=None) -> Dict[str, object]:
     if args.freeze_core:
         freeze_core(first, train_norms=args.train_core_norms)
     if resume is not None:
-        model.load_state_dict(resume["train_model_state"])
+        # by name: the added games' own modules keep their fresh weights
+        load_resume_weights(model, resume["train_model_state"], added, args.resume)
     bn_sync = None
     if dist_env.enabled:
         # every rank initialised its per-game adapters from its own seed
@@ -760,20 +1065,35 @@ def main(argv=None) -> Dict[str, object]:
                for g in games}
     start = 1
     if resume is not None:
+        # matched by parameter name: the checkpoint's layout may differ
+        # (games added, another --data order); the added games' own
+        # parameters start without state, their EMA at their fresh weights
+        ck_opt, ck_ema, fresh = resume_training_state(resume, model, optimizer, args.resume)
         if zero is not None:
-            zero.load_optimizer_state(resume["optimizer_state"])    # own partition only
+            zero.load_optimizer_state(ck_opt)       # own partition (of this model) only
         else:
-            optimizer.load_state_dict(resume["optimizer_state"])
+            optimizer.load_state_dict(ck_opt)
         scheduler.load_state_dict(resume["scheduler_state"])
-        if ema is not None and resume.get("ema_state") is not None:
-            ema.load_state_dict(resume["ema_state"])
+        if ema is not None and ck_ema is not None:
+            ema.load_state_dict(ck_ema)             # a partial EMA takes its own shadows
         start = resume["step"] + 1
         # fresh streams: the resumed run does not replay the first steps' draws
         random.seed(rank_seed(args.seed, rank, start))
         torch.manual_seed(rank_seed(args.seed, rank, start))
         log(f"[resume] {args.resume}: step {resume['step']} "
             f"(saved with world={resume.get('world_size', 1)})")
-        resume = None                       # release the checkpoint tensors
+        if added:
+            old_w = resume.get("mixture") or {}
+            log(f"[resume] games added: {added} (checkpoint: {ck_games}); their "
+                f"{len(fresh)} parameter tensors start fresh (no optimizer state"
+                + (", EMA = their initial weights)" if ema is not None else ")"))
+            log("[resume] mixture (checkpoint → this run): " + "  ".join(
+                f"{g}: {old_w[g]:.3f}→{weights[g]:.3f}" if g in old_w
+                else f"{g}: new→{weights[g]:.3f}" for g in games))
+        elif games != ck_games:
+            log(f"[resume] --data order differs from the checkpoint's {ck_games}: "
+                f"matched by name")
+        resume = ck_opt = ck_ema = None             # release the checkpoint tensors
     names, probs = list(weights), [weights[g] for g in weights]
     max_norm = args.clip_grad if args.clip_grad > 0 else float("inf")
     if rank0:
@@ -813,6 +1133,8 @@ def main(argv=None) -> Dict[str, object]:
         if resumable:
             ck.update(step=step, optimizer_state=optimizer_state,
                       scheduler_state=scheduler.state_dict(), ema_state=ema_state)
+            # what a resume matches the optimizer state by (games may be added)
+            ck[OPT_NAMES_KEY] = optimizer_param_names(model, optimizer)
         # atomic: a job killed mid-write never leaves a truncated checkpoint
         torch.save(ck, f"{path}.tmp")
         os.replace(f"{path}.tmp", path)
