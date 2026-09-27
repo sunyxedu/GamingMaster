@@ -28,7 +28,7 @@ from torch.utils.checkpoint import checkpoint
 
 from model.components.heads import HLGaussValueHead, ValueHead
 from model.components.transformer import SpatiotemporalBlock, _sinusoidal_pe
-from model.components.core import DeepCore, RecurrentDepthCore
+from model.components.core import DeepCore, RecurrentDepthCore, record_moe_routes, stack_routes
 from model.components.trm import TRM
 from model.config import ModelConfig
 from model.games.base import ActionDecoder, ObservationEncoder
@@ -144,11 +144,20 @@ class GameNetwork(nn.Module):
         return self.core.default_iters()
 
     def _core_pass(self, x: torch.Tensor, steps: Optional[int],
-                   valid: Optional[torch.Tensor] = None
+                   valid: Optional[torch.Tensor] = None,
+                   routes: Optional[torch.Tensor] = None
                    ) -> Tuple[torch.Tensor, torch.Tensor, int]:
-        """Non-TRM cores: (z [BT, S, d], q_halt zeros [BT], depth)."""
-        z, depth = self.core(x, steps, valid)
+        """Non-TRM cores: (z [BT, S, d], q_halt zeros [BT], depth).  ``routes``
+        [BT, C, S, k]: replayed MoE routing (model.components.core)."""
+        z, depth = self.core(x, steps, valid, routes=routes)
         return z, x.new_zeros(x.shape[0]), depth
+
+    def moe_route_calls(self, act_steps: Optional[int] = None) -> int:
+        """MoE layer calls of one core forward at depth ``act_steps`` — the C
+        axis of ``step(record_routes=True)["moe_routes"]`` (0: no MoE)."""
+        if self.core_type == "trm":
+            return 0
+        return self.core.moe_calls(act_steps)
 
     # ------------------------------------------------------------------
     # Static inference state (CUDA-graph / compiled step support)
@@ -324,8 +333,14 @@ class GameNetwork(nn.Module):
         active: Optional[torch.Tensor] = None,
         return_carry: bool = False,
         reset: Optional[torch.Tensor] = None,
+        routes: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Full-sequence forward.
+
+        ``routes`` [B, T, C, S, k] replays a recorded MoE routing (what
+        ``step(record_routes=True)`` returned for each frame, at the same
+        depth): the RL learner's forward then takes exactly the actor's
+        experts (model.components.core, routing replay).
 
         ``carry`` / ``active`` / ``return_carry`` drive deep supervision
         (training.deep_supervision): ``carry`` is the detached (z_H, z_L)
@@ -373,6 +388,8 @@ class GameNetwork(nn.Module):
         x = tokens.reshape(BT, S, d)                  # input embeddings for TRM
         rows = (active.reshape(BT).nonzero().squeeze(1)
                 if active is not None else None)
+        if routes is not None and self.core_type == "trm":
+            raise ValueError("the TRM core has no MoE routing to replay")
         if self.core_type == "trm":
             self.trm.q_token_idx = self.obs_encoder.n_tokens
             z_H, q_halt, new_carry = self._trm_ponder(
@@ -382,7 +399,9 @@ class GameNetwork(nn.Module):
             # one pass per example (no carried latents); padded frames are
             # excluded from the MoE load statistics
             valid = frame_mask.reshape(BT) if frame_mask is not None else None
-            z_H, q_halt, _ = self._core_pass(x, act_steps, valid)
+            if routes is not None:
+                routes = routes.reshape((BT,) + tuple(routes.shape[2:]))
+            z_H, q_halt, _ = self._core_pass(x, act_steps, valid, routes)
             new_carry = None
         z_H = self.post_norm(z_H)
 
@@ -427,8 +446,13 @@ class GameNetwork(nn.Module):
         st_cache: Optional[List[torch.Tensor]] = None,
         step_idx: Union[int, torch.Tensor] = 0,
         act_steps: Optional[int] = None,
+        record_routes: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Single-frame inference with Stage-1 temporal cache.
+
+        ``record_routes``: also return ``moe_routes`` [B, C, S, k] — every MoE
+        call's selected experts for every token (compact integer dtype), what
+        ``forward(routes=...)`` replays; absent for cores without MoE.
 
         ``legal`` restricts sampling (IL evaluation); pass ``None`` for RL
         mode where the model may select anything.  Returns the decoder's
@@ -495,7 +519,15 @@ class GameNetwork(nn.Module):
         tokens = self.mid_norm(tokens.squeeze(1))
 
         # Stage 2: TRM with ACT
-        z_H, q_halt, act_depth = self._trm_act_loop(tokens, act_steps)
+        recorded: Dict[str, torch.Tensor] = {}
+        if record_routes and self.core_type != "trm":
+            with record_moe_routes(self.core) as calls:
+                z_H, q_halt, act_depth = self._trm_act_loop(tokens, act_steps)
+            if calls:
+                recorded["moe_routes"] = stack_routes(calls, B, tokens.shape[1],
+                                                      self.cfg.moe_experts)
+        else:
+            z_H, q_halt, act_depth = self._trm_act_loop(tokens, act_steps)
         z_H = self.post_norm(z_H)
 
         game_out = z_H[:, :S_game]
@@ -523,6 +555,7 @@ class GameNetwork(nn.Module):
             "act_depth": act_depth,
             "st_cache": new_caches,
             **rl_out,
+            **recorded,
         }
 
     # ------------------------------------------------------------------

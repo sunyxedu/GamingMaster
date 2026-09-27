@@ -37,13 +37,30 @@ balancing loss would force every single game to spread uniformly over all
 experts and forbid game specialisation.  Padded tokens are excluded from
 the loads, and loads are counted once per real forward (never during an
 activation-checkpoint recompute).
+
+Routing replay (rollout routing replay: Ma et al. 2025, "Stabilizing MoE
+Reinforcement Learning by Aligning Training and Inference Routers", arXiv
+2510.11370; the "routing replay" of GSPO, arXiv 2507.18071): top-k selection
+is discontinuous in its inputs, so two forwards of the same weights on the
+same frame — the RL actor's batched step and the learner's full-sequence
+forward, different batch shapes, kernels and precision — can pick different
+experts at a near-tie, and the learner's log π_old then differs from the
+actor's μ by a discrete jump.  :func:`record_moe_routes` captures the
+selected expert set of every token of every MoE call of a forward; a later
+forward given those ``routes`` uses them instead of its own top-k, while the
+gates are still computed from the current affinities (so the router keeps
+its gradient).  At the recording weights this reproduces the recorded
+forward exactly, and its θ-gradient equals the unreplayed one wherever the
+routing is locally constant (everywhere but the measure-zero tie set): the
+replayed surrogate is the unreplayed policy to first order, without its
+jumps.
 """
 
 from __future__ import annotations
 
 import contextlib
 import math
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 import torch
 import torch.distributed as dist
@@ -218,6 +235,10 @@ class MoEFFN(nn.Module):
     #: Set it with :func:`moe_load_counting`.
     count_eval_loads = False
 
+    #: the list :func:`record_moe_routes` collects the forwards' selected
+    #: expert indices into (instance attribute while recording, else None)
+    _route_sink = None
+
     @classmethod
     @contextlib.contextmanager
     def inference_path(cls, path: str):
@@ -266,13 +287,26 @@ class MoEFFN(nn.Module):
         self.register_buffer("balance_bias", torch.zeros(n_experts))
         self.register_buffer("load", torch.zeros(n_experts), persistent=False)
 
-    def forward(self, x: torch.Tensor, valid: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, valid: Optional[torch.Tensor] = None,
+                route: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """``route`` [..., k] integer (the leading dims flatten to x's tokens):
+        replay these experts instead of the top-k selection (module
+        docstring, routing replay); the gates still come from the current
+        affinities."""
         shape = x.shape
         d = shape[-1]
         xf = x.reshape(-1, d)
         N = xf.shape[0]
         affinity = torch.sigmoid(self.centroids(xf).float())            # [N, E]
-        _, top_i = (affinity + self.balance_bias).topk(self.top_k, dim=-1)
+        if route is None:
+            _, top_i = (affinity + self.balance_bias).topk(self.top_k, dim=-1)
+        else:
+            if route.numel() != N * self.top_k:
+                raise ValueError(f"replayed MoE route has {route.numel()} entries, the "
+                                 f"forward routes {N} tokens × top-{self.top_k}")
+            top_i = route.reshape(N, self.top_k).long()
+        if self._route_sink is not None and not _RECOMPUTING:
+            self._route_sink.append(top_i)
         top_s = affinity.gather(-1, top_i)
         gates = (top_s / top_s.sum(-1, keepdim=True)).to(xf.dtype)       # [N, k]
 
@@ -388,7 +422,9 @@ class CoreBlock(nn.Module):
         self.qk_norm = (QKNorm(d // cfg.n_heads, eps=1e-6)
                         if getattr(cfg, "qk_norm", False) else None)
 
-    def forward(self, x: torch.Tensor, valid: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, valid: Optional[torch.Tensor] = None,
+                route: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """``route`` [B, S, k]: the MoE layer's replayed experts (MoE blocks only)."""
         B, S, d = x.shape
         h = self.norms[0](x)
         q, k, v = self.qkv(h).view(B, S, 3, self.n_heads, d // self.n_heads).permute(
@@ -397,17 +433,38 @@ class CoreBlock(nn.Module):
             q, k = self.qk_norm(q, k)
         a = F.scaled_dot_product_attention(q, k, v)
         x = x + self.norms[1](self.o(a.permute(0, 2, 1, 3).reshape(B, S, d)))
-        return x + self.norms[3](self.ffn(self.norms[2](x), valid))
+        if route is None:
+            return x + self.norms[3](self.ffn(self.norms[2](x), valid))
+        if not isinstance(self.ffn, MoEFFN):
+            raise ValueError("a replayed route was given to a dense (non-MoE) block")
+        return x + self.norms[3](self.ffn(self.norms[2](x), valid, route))
 
 
-def _run_blocks(blocks: Iterable[nn.Module], x: torch.Tensor,
-                valid: Optional[torch.Tensor]) -> torch.Tensor:
-    for blk in blocks:
+def _run_blocks(blocks: Sequence[nn.Module], x: torch.Tensor,
+                valid: Optional[torch.Tensor], routes: Optional[torch.Tensor] = None,
+                first: int = 0) -> torch.Tensor:
+    """The blocks in order.  ``routes`` [N, C, S, k]: the replayed routing of
+    a whole core forward, block i taking call ``first + i`` (an explicit
+    argument of the checkpointed call, so the backward recompute replays the
+    same experts)."""
+    for i, blk in enumerate(blocks):
+        args = (x, valid) if routes is None else (x, valid, routes[:, first + i])
         if torch.is_grad_enabled() and x.requires_grad:
-            x = ckpt(blk, x, valid)
+            x = ckpt(blk, *args)
         else:
-            x = blk(x, valid)
+            x = blk(*args)
     return x
+
+
+def _check_routes(routes: Optional[torch.Tensor], x: torch.Tensor, calls: int) -> None:
+    if routes is None:
+        return
+    if routes.dim() != 4 or routes.shape[0] != x.shape[0] or routes.shape[1] != calls \
+            or routes.shape[2] != x.shape[1]:
+        raise ValueError(
+            f"replayed MoE routes {tuple(routes.shape)} do not fit this forward: expected "
+            f"[{x.shape[0]} rows, {calls} MoE calls, {x.shape[1]} tokens, top-k] (the "
+            f"recording forward must use the same core depth)")
 
 
 def _out_std(cfg: ModelConfig, effective_layers: float) -> float:
@@ -432,9 +489,16 @@ class DeepCore(nn.Module):
     def default_iters(self) -> int:
         return 1
 
+    def moe_calls(self, steps: Optional[int] = None) -> int:
+        """MoE layer calls of one forward (the routes' C axis): one per block."""
+        return len(self.blocks) if self.blocks and isinstance(self.blocks[0].ffn, MoEFFN) else 0
+
     def forward(self, x: torch.Tensor, steps: Optional[int] = None,
-                valid: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, int]:
-        return self.final_norm(_run_blocks(self.blocks, x, valid)), 1
+                valid: Optional[torch.Tensor] = None,
+                routes: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, int]:
+        """``routes`` [N, C, S, k]: replay a recorded routing (:func:`record_moe_routes`)."""
+        _check_routes(routes, x, self.moe_calls())
+        return self.final_norm(_run_blocks(self.blocks, x, valid, routes)), 1
 
 
 def sample_recurrence(mean: float, sigma: float = 0.5,
@@ -476,6 +540,14 @@ class RecurrentDepthCore(nn.Module):
     def default_iters(self) -> int:
         return int(self.cfg.rd_eval_iters or self.cfg.rd_mean_iters)
 
+    def moe_calls(self, steps: Optional[int] = None) -> int:
+        """MoE layer calls of one forward at depth ``steps`` (the routes' C
+        axis), in call order: prelude, r × recurrent, coda."""
+        if not _moe_on(self.cfg):
+            return 0
+        r = max(1, int(steps)) if steps is not None else self.default_iters()
+        return len(self.prelude) + r * len(self.recurrent) + len(self.coda)
+
     def prepare_inference(self, S: int, device: torch.device,
                           dtype: torch.dtype = torch.float32) -> None:
         """Materialise the fixed inference state for S tokens on ``device``.
@@ -510,23 +582,32 @@ class RecurrentDepthCore(nn.Module):
         return self.fixed_state(e.shape[1], e).expand_as(e)
 
     def forward(self, x: torch.Tensor, steps: Optional[int] = None,
-                valid: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, int]:
+                valid: Optional[torch.Tensor] = None,
+                routes: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, int]:
+        """``routes`` [N, C, S, k]: replay a recorded routing (needs a fixed
+        ``steps`` or eval mode: C depends on the depth)."""
         cfg = self.cfg
         if steps is not None:
             r = max(1, int(steps))
         elif self.training:
+            if routes is not None:
+                raise ValueError("replaying MoE routes needs a fixed depth (steps=...)")
             r = sample_recurrence(cfg.rd_mean_iters, max_iters=cfg.rd_max_iters)
         else:
             r = self.default_iters()
-        e = _run_blocks(self.prelude, x, valid)
+        _check_routes(routes, x, self.moe_calls(r))
+        P, R = len(self.prelude), len(self.recurrent)
+        e = _run_blocks(self.prelude, x, valid, routes, 0)
         s = self.initial_state(e)
         k = min(r, cfg.rd_backprop_iters) if torch.is_grad_enabled() else r
         with torch.no_grad():
-            for _ in range(r - k):
-                s = _run_blocks(self.recurrent, self.adapter(torch.cat([s, e], -1)), valid)
-        for _ in range(k):
-            s = _run_blocks(self.recurrent, self.adapter(torch.cat([s, e], -1)), valid)
-        return self.final_norm(_run_blocks(self.coda, s, valid)), r
+            for i in range(r - k):
+                s = _run_blocks(self.recurrent, self.adapter(torch.cat([s, e], -1)), valid,
+                                routes, P + i * R)
+        for i in range(r - k, r):
+            s = _run_blocks(self.recurrent, self.adapter(torch.cat([s, e], -1)), valid,
+                            routes, P + i * R)
+        return self.final_norm(_run_blocks(self.coda, s, valid, routes, P + r * R)), r
 
 
 def moe_layers(module: nn.Module):
@@ -548,6 +629,40 @@ def moe_load_counting(module: nn.Module, enabled: bool = True):
     finally:
         for m, p in zip(layers, prev):
             m.count_eval_loads = p
+
+
+@contextlib.contextmanager
+def record_moe_routes(module: nn.Module):
+    """Within the block every MoE layer of ``module`` appends the expert
+    indices it selected for each forward's tokens ([N_tokens, k] long) to
+    the yielded list, in call order — one core forward's list stacks into
+    the ``routes`` a later forward replays (:func:`stack_routes`).
+    Checkpoint recomputes are not recorded."""
+    layers = moe_layers(module)
+    sink: list = []
+    prev = [m._route_sink for m in layers]
+    for m in layers:
+        m._route_sink = sink
+    try:
+        yield sink
+    finally:
+        for m, p in zip(layers, prev):
+            m._route_sink = p
+
+
+def route_dtype(n_experts: int) -> torch.dtype:
+    """The narrowest integer dtype that holds expert indices 0..n_experts-1
+    (routes are stored per frame for a whole RL iteration)."""
+    if n_experts <= 256:
+        return torch.uint8
+    return torch.int16 if n_experts <= 32767 else torch.int32
+
+
+def stack_routes(calls: Sequence[torch.Tensor], rows: int, tokens: int,
+                 n_experts: int) -> torch.Tensor:
+    """A recorded core forward (the list of :func:`record_moe_routes`, each
+    call [rows·tokens, k]) → routes [rows, C, tokens, k] in :func:`route_dtype`."""
+    return torch.stack([c.view(rows, tokens, -1) for c in calls], 1).to(route_dtype(n_experts))
 
 
 @torch.no_grad()

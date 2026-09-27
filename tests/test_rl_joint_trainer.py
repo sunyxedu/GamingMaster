@@ -307,7 +307,7 @@ def _first_minibatch_ratio(tr):
             r = tr.rl[g]
             net = tr.model[g]
             b = build_batch(r.streams, CPU, ("lp_old", "mu", "pmask"))
-            pred = learner_forward(net, r.spec, b, tr.depth, CPU, False)
+            pred = learner_forward(net, r.spec, b, tr.depth, CPU, False, replay_routes=True)
             lp, _ = r.spec.logp_entropy(net, pred, b["actions"], b["legal"])
             pm = b["pmask"]
             assert lp.requires_grad and pm.any()

@@ -210,6 +210,7 @@ class GeneralsNetwork(GameNetwork):
         *,
         legal: Optional[Mapping[str, torch.Tensor]] = None,
         labels: Optional[Mapping[str, torch.Tensor]] = None,
+        routes: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Legacy tensor API (``grid_seq, globals_seq, legal_mask=...,
         source_y=..., source_x=..., direction_mask=...``), or — when the
@@ -218,7 +219,8 @@ class GeneralsNetwork(GameNetwork):
         carry=..., active=..., return_carry=..., reset=...)`` the multi-game
         trainers drive every game with (obs keys ``grid_seq`` /
         ``globals_seq``; legal keys ``source`` / ``direction``; label keys
-        ``source_y`` / ``source_x``).  Both reach the same core call."""
+        ``source_y`` / ``source_x``; ``routes`` replays a recorded MoE
+        routing).  Both reach the same core call."""
         if isinstance(grid_seq, Mapping):
             if any(x is not None for x in (globals_seq, legal_mask, source_y,
                                            source_x, direction_mask)):
@@ -230,6 +232,7 @@ class GeneralsNetwork(GameNetwork):
                 grid_seq, legal=legal, labels=labels,
                 act_steps=act_steps, frame_mask=frame_mask,
                 carry=carry, active=active, return_carry=return_carry, reset=reset,
+                routes=routes,
             )
         if legal is not None or labels is not None:
             raise TypeError("legal=/labels= dicts need an obs dict as the first "
@@ -244,6 +247,7 @@ class GeneralsNetwork(GameNetwork):
             obs, legal=legal, labels=labels,
             act_steps=act_steps, frame_mask=frame_mask,
             carry=carry, active=active, return_carry=return_carry, reset=reset,
+            routes=routes,
         )
 
     # ------------------------------------------------------------------
@@ -261,17 +265,19 @@ class GeneralsNetwork(GameNetwork):
         direction_mask: Optional[torch.Tensor] = None,
         *,
         legal: Optional[Mapping[str, torch.Tensor]] = None,
+        record_routes: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Legacy tensor API, or the generic ``step(obs, legal=...,
-        st_cache=..., step_idx=..., act_steps=...)`` when ``grid`` is an obs
-        dict (see :meth:`forward`)."""
+        st_cache=..., step_idx=..., act_steps=..., record_routes=...)`` when
+        ``grid`` is an obs dict (see :meth:`forward`)."""
         if isinstance(grid, Mapping):
             if any(x is not None for x in (globals_vec, legal_mask, direction_mask)):
                 raise TypeError(
                     "GeneralsNetwork.step(obs_dict, ...): pass legality as a "
                     "legal= dict, not legacy tensor arguments")
             return super().step(grid, legal=legal, st_cache=st_cache,
-                                step_idx=step_idx, act_steps=act_steps)
+                                step_idx=step_idx, act_steps=act_steps,
+                                record_routes=record_routes)
         if legal is not None:
             raise TypeError("legal= dict needs an obs dict as the first argument")
         if globals_vec is None:
@@ -280,7 +286,7 @@ class GeneralsNetwork(GameNetwork):
                                    direction_mask=direction_mask)
         return super().step(
             obs, legal=legal, st_cache=st_cache,
-            step_idx=step_idx, act_steps=act_steps,
+            step_idx=step_idx, act_steps=act_steps, record_routes=record_routes,
         )
 
     def step_rl(

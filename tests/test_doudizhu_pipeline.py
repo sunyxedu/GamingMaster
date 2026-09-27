@@ -515,10 +515,27 @@ def test_train_rl_joint_with_kuhn(stage1):
         # the auction is part of the RL game: bid candidates (type bit 1) appear
         auction += int((s.obs["actions"][..., 1] > 0).any())
     assert auction > 0
+    # routing replay (the stage-1 core is an MoE): every stream frame carries the
+    # actor's experts, and the learner's π_old reproduces μ even when its own routing
+    # would differ — a moved balance bias stands in for a top-k near-tie flip between
+    # the actor's batched step and the learner's sequence forward
+    from model.components.core import moe_layers
+    for g in tr.rl_games:
+        assert all(s.routes is not None and s.routes.shape[0] == s.length
+                   for s in tr.rl[g].streams)
+    gen = torch.Generator().manual_seed(5)
+    with torch.no_grad():
+        for m in moe_layers(tr.model):
+            m.balance_bias.add_(torch.randn(m.n_experts, generator=gen) * 2.0)
     for g in tr.rl_games:
         tr._recompute(g)
         for s in tr.rl[g].streams:
-            assert torch.allclose(s.lp_old, s.mu, atol=1e-4)
+            assert torch.allclose(s.lp_old, s.mu, atol=1e-5)
+    # ... which the moved bias does break without the replay (the check has teeth)
+    for s in tr.rl["doudizhu"].streams:
+        s.routes = None
+    tr._recompute("doudizhu")
+    assert not all(torch.allclose(s.lp_old, s.mu, atol=1e-3) for s in tr.rl["doudizhu"].streams)
 
 
 def test_league_scores_peasant_wins_as_team_wins():

@@ -62,6 +62,7 @@ class GraphedStep:
         act_steps: Optional[int] = None,
         autocast_dtype: Optional[torch.dtype] = None,
         warmup_iters: int = 3,
+        record_routes: bool = False,
     ):
         """
         Args:
@@ -75,6 +76,8 @@ class GraphedStep:
             autocast_dtype: e.g. torch.bfloat16 to capture under autocast
                             (with the weight-cast cache disabled, as graph
                             capture requires).
+            record_routes:  also output ``moe_routes`` (the MoE routing of
+                            the frame, ``GameNetwork.step(record_routes=True)``).
         """
         device = next(net.parameters()).device
         if device.type != "cuda":
@@ -85,6 +88,7 @@ class GraphedStep:
         self.net = net
         self.device = device
         self.act_steps = act_steps
+        self.record_routes = bool(record_routes)
         self.batch = next(iter(example_obs.values())).shape[0]
         with torch.no_grad():
             self.obs = {k: v.detach().to(device).clone() for k, v in example_obs.items()}
@@ -121,7 +125,8 @@ class GraphedStep:
         with torch.no_grad(), self._autocast:
             out = GameNetwork.step(self.net, self.obs, legal=self.legal,
                                    st_cache=self.st_cache, step_idx=self.step_idx,
-                                   act_steps=self.act_steps)
+                                   act_steps=self.act_steps,
+                                   record_routes=self.record_routes)
             for static, new in zip(self.st_cache, out.pop("st_cache")):
                 static.copy_(new)
         return out

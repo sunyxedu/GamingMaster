@@ -167,12 +167,15 @@ class StreamStepper:
     the held cache is at most twice what the live streams need.
     ``n_calls`` / ``n_rows`` count the ``net.step`` calls and the rows they
     carried (mean batch = n_rows / n_calls: 1 call per env step in lockstep).
+    ``record_routes``: each call also records the MoE routing
+    (``GameNetwork.step(record_routes=True)``, output ``moe_routes``).
     """
 
     def __init__(self, net: nn.Module, *, act_steps: Optional[int] = None,
-                 device: Optional[torch.device] = None):
+                 device: Optional[torch.device] = None, record_routes: bool = False):
         self.net = net
         self.act_steps = act_steps
+        self._step_kw = {"record_routes": True} if record_routes else {}
         self.device = torch.device(device) if device is not None else next(net.parameters()).device
         self._blocks: Dict[int, _Block] = {}
         self._where: Dict[int, Tuple[int, int]] = {}      # stream → (block id, row)
@@ -299,7 +302,7 @@ class StreamStepper:
                   if legal else None)
             cache = None if t == 0 else self._gather(ss)
             out = self.net.step(o, legal=lg, st_cache=cache, step_idx=t,
-                                act_steps=self.act_steps)
+                                act_steps=self.act_steps, **self._step_kw)
             self.n_calls += 1
             self.n_rows += len(ks)
             self._store(ss, out.pop("st_cache"), t + 1)

@@ -27,7 +27,9 @@ rollout step to the last minibatch of the iteration):
                  GameNetwork.step per env step (per-stream Stage-1 state;
                  --actor fixed: one fixed-shape batch, capturable with
                  --cuda_graph); it stores the behaviour log-prob μ of its
-                 sampled action, the value, masks and rewards.  League: mirror
+                 sampled action, the value, masks and rewards — and, for MoE
+                 cores, every token's selected experts (--routing_replay).
+                 League: mirror
                  self-play (--mirror_prob) or learner vs a snapshot-pool
                  opponent (PoolPolicy; one snapshot every --snapshot_every
                  iterations, the Stage-1 policy first).  Board games are ONE
@@ -36,7 +38,13 @@ rollout step to the last minibatch of the iteration):
                  keep only the value loss).
   3. π_old       the learner recomputes log π_old and V on every stored frame
                  with the SAME weights and frozen routing (sparse MoE path,
-                 exactly the training forward), before epoch 1.
+                 exactly the training forward), before epoch 1.  With routing
+                 replay every learner forward of the iteration (π_old and the
+                 epochs) takes the actor's recorded experts, the gates from
+                 the current router: a top-k near-tie cannot select different
+                 experts in the actor's batched step and the learner's
+                 sequence forward (π_old = μ up to float), and π stays smooth
+                 in θ over the epochs (model.components.core, routing replay).
   4. targets     per-game γ/λ seat_gae (interleaved streams: every seat its own
                  chain) on V = popart.denormalize(v); PopArt statistics update
                  (heads + EMA shadow rescaled, outputs preserved) or HL-Gauss
@@ -237,6 +245,10 @@ def parse_args(argv=None) -> argparse.Namespace:
            "all rows in one fixed-shape batch (recurrent temporal mixer; --cuda_graph)")
     a("--cuda_graph", action="store_true",
       help="with --actor fixed on CUDA: replay the step from a CUDA graph (GraphedStep)")
+    a("--routing_replay", type=int, default=1,
+      help="MoE cores: the actor records every token's experts and every learner "
+           "forward of the iteration replays them (1, default); 0 = the learner routes "
+           "on its own (a top-k near-tie can then flip experts between actor and learner)")
     # --- league ---
     a("--mirror_prob", action="append", default=[], metavar="GAME=P",
       help="probability of a mirror self-play episode (default 1.0 = pure mirror); "
@@ -779,13 +791,18 @@ class LearnerActor:
     tensor step index (recurrent temporal mixer; rows the learner does not
     play are computed and discarded), optionally replayed from a CUDA graph
     (``cuda_graph``, :class:`model.cuda_graph.GraphedStep`).  Must be called
-    once per env step of a wave in fixed mode (also with no rows)."""
+    once per env step of a wave in fixed mode (also with no rows).
+    ``record_routes`` (MoE cores): the output also holds ``moe_routes``
+    [rows, C, S, k], the experts the step routed every token to."""
 
     def __init__(self, net, spec: RLGameSpec, act_steps: int, device: torch.device, *,
-                 bf16: bool = False, mode: str = "stream", cuda_graph: bool = False):
+                 bf16: bool = False, mode: str = "stream", cuda_graph: bool = False,
+                 record_routes: bool = False):
         self.net, self.spec, self.act_steps, self.device = net, spec, act_steps, device
         self.bf16, self.mode = bf16, mode
         self.cuda_graph = bool(cuda_graph)
+        #: also return ``moe_routes`` (routing replay; MoE cores only)
+        self.record_routes = bool(record_routes) and net.moe_route_calls(act_steps) > 0
         if mode not in ("stream", "fixed"):
             raise ValueError(f"actor mode must be 'stream' or 'fixed', got {mode!r}")
         if mode == "fixed" and net.cfg.temporal_mixer != "recurrent":
@@ -797,7 +814,8 @@ class LearnerActor:
         self.begin_wave()
 
     def begin_wave(self) -> None:
-        self.stepper = StreamStepper(self.net, act_steps=self.act_steps, device=self.device)
+        self.stepper = StreamStepper(self.net, act_steps=self.act_steps, device=self.device,
+                                     record_routes=self.record_routes)
         self._cache: Optional[List[torch.Tensor]] = None
         self._t = 0
 
@@ -813,7 +831,8 @@ class LearnerActor:
                 cpu_rng = torch.get_rng_state()
                 cuda_rng = torch.cuda.get_rng_state(self.device)
                 self._graph = GraphedStep(self.net, o, lg, act_steps=self.act_steps,
-                                          autocast_dtype=torch.bfloat16 if self.bf16 else None)
+                                          autocast_dtype=torch.bfloat16 if self.bf16 else None,
+                                          record_routes=self.record_routes)
                 torch.set_rng_state(cpu_rng)
                 torch.cuda.set_rng_state(cuda_rng, self.device)
             if self._t == 0:
@@ -825,7 +844,7 @@ class LearnerActor:
             step_idx = torch.tensor([self._t], dtype=torch.long, device=self.device)
             with _autocast(self.device, self.bf16):
                 out = self.net.step(o, legal=lg, st_cache=self._cache, step_idx=step_idx,
-                                    act_steps=self.act_steps)
+                                    act_steps=self.act_steps, record_routes=self.record_routes)
             self._cache = out.pop("st_cache")
         self._t += 1
         return out
@@ -880,6 +899,7 @@ class Stream:
     forced: torch.Tensor      # [T]
     rewards: torch.Tensor     # [T, S] reward of every seat after the frame
     done: torch.Tensor        # [T] episode ended after the frame
+    routes: Optional[torch.Tensor] = None   # [T, C, S_tok, k] actor's MoE experts (replay)
     # learner-side, filled before the epochs
     lp_old: Optional[torch.Tensor] = None
     v_old: Optional[torch.Tensor] = None
@@ -923,8 +943,10 @@ def _assemble_streams(recs: List[Dict[str, Any]]) -> List[Stream]:
         return [{k: parts[k][i] for k in keys} for i in range(len(counts))]
 
     obs, legal, actions = cat_dict("obs"), cat_dict("legal"), cat_dict("actions")
-    fields_ = {k: cat(lambda r, k=k: r[k]) for k in
-               ("mu", "value", "seat", "vmask", "pmask", "forced", "rewards", "done")}
+    keys = ["mu", "value", "seat", "vmask", "pmask", "forced", "rewards", "done"]
+    if "routes" in recs[0]:
+        keys.append("routes")
+    fields_ = {k: cat(lambda r, k=k: r[k]) for k in keys}
     return [Stream(obs=obs[i], legal=legal[i], actions=actions[i],
                    **{k: fields_[k][i] for k in fields_}) for i in range(len(counts))]
 
@@ -970,6 +992,8 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
                     "seat": obs.to_play[rows].long(), "vmask": acting.bool(),
                     "pmask": pmask.bool(), "forced": obs.forced[rows].bool(),
                     "rewards": rew[env_rows].float(), "done": done[env_rows].bool()})
+                if "moe_routes" in out:
+                    recs[-1]["routes"] = out["moe_routes"]
                 for pos, r in enumerate(rows.tolist()):
                     last[r] = (len(recs) - 1, pos)
             # per-seat streams of alternating games (env/vec_gmsim.py): a learner
@@ -1022,7 +1046,8 @@ def _pad(ts: Sequence[torch.Tensor], T: int) -> torch.Tensor:
 def build_batch(streams: Sequence[Stream], device: torch.device,
                 extra: Sequence[str] = ()) -> Dict[str, Any]:
     """Tail-padded [B, T, ...] tensors of ``streams`` on ``device``: obs,
-    legal, actions, frame_mask and the per-frame fields in ``extra``."""
+    legal, actions, frame_mask, the recorded MoE ``routes`` (when the
+    streams carry them) and the per-frame fields in ``extra``."""
     T = max(s.length for s in streams)
 
     def stack(get) -> torch.Tensor:
@@ -1034,6 +1059,8 @@ def build_batch(streams: Sequence[Stream], device: torch.device,
         "actions": {k: stack(lambda s, k=k: s.actions[k]) for k in streams[0].actions},
         "frame_mask": stack(lambda s: torch.ones(s.length, dtype=torch.bool)),
     }
+    if streams[0].routes is not None:
+        b["routes"] = stack(lambda s: s.routes)
     for k in extra:
         b[k] = stack(lambda s, k=k: getattr(s, k))
     return b
@@ -1045,10 +1072,15 @@ def _chunks(idx: Sequence[int], n: int) -> List[List[int]]:
 
 
 def learner_forward(net, spec: RLGameSpec, b: Dict[str, Any], depth: int,
-                    device: torch.device, bf16: bool) -> Dict[str, torch.Tensor]:
+                    device: torch.device, bf16: bool, replay_routes: bool = False
+                    ) -> Dict[str, torch.Tensor]:
+    """``replay_routes``: take the batch's recorded actor routing (the
+    learner network only — another network, e.g. the frozen reference,
+    routes on its own)."""
+    routes = b.get("routes") if replay_routes else None
     with _autocast(device, bf16):
         return net(b["obs"], legal=b["legal"], labels=spec.labels(b["actions"], net.cfg),
-                   act_steps=depth, frame_mask=b["frame_mask"])
+                   act_steps=depth, frame_mask=b["frame_mask"], routes=routes)
 
 
 # ======================================================================
@@ -1304,7 +1336,7 @@ class JointRLTrainer:
                                  f"on different turns); use --actor stream")
             spec.check_env(env, net)
             actor = LearnerActor(net, spec, self.depth, device, bf16=a.bf16, mode=a.actor,
-                                 cuda_graph=a.cuda_graph)
+                                 cuda_graph=a.cuda_graph, record_routes=bool(a.routing_replay))
             p_mirror = mirror.get(g, 1.0)
             pool_policy = None
             if p_mirror < 1.0:
@@ -1403,7 +1435,8 @@ class JointRLTrainer:
         self.log(f"[init] games={self.games} rl={self.rl_games} replay={list(self.replay)} "
                  f"core={first.cfg.core_type} moe={first.cfg.moe_experts} depth={self.depth} "
                  f"params={n_total:,} device={device.type} world={self.world} "
-                 f"actor={a.actor}{'+graph' if a.cuda_graph else ''}")
+                 f"actor={a.actor}{'+graph' if a.cuda_graph else ''} "
+                 f"routing_replay={'on' if any(r.actor.record_routes for r in self.rl.values()) else 'off'}")
         for g, r in self.rl.items():
             self.log(f"[rl] {g}: envs={r.env.num_envs} gamma={r.gamma} lam={r.lam} "
                      f"mirror={r.mirror_prob} value={'hl_gauss' if r.hl_gauss else 'popart'} "
@@ -1516,14 +1549,16 @@ class JointRLTrainer:
     @torch.no_grad()
     def _recompute(self, g: str) -> None:
         """log π_old and V of every stored frame: the iteration's weights and
-        routing bias, the same (sparse-MoE, eval) forward the epochs use."""
+        routing bias (or the actor's replayed routing), the same (sparse-MoE,
+        eval) forward the epochs use."""
         r = self.rl[g]
         net = self.model[g]
         with MoEFFN.inference_path("sparse"):
             for chunk in _chunks(range(len(r.streams)), r.rows_per_forward):
                 ss = [r.streams[i] for i in chunk]
                 b = build_batch(ss, self.device)
-                pred = learner_forward(net, r.spec, b, self.depth, self.device, self.args.bf16)
+                pred = learner_forward(net, r.spec, b, self.depth, self.device, self.args.bf16,
+                                       replay_routes=True)
                 lp, _ = r.spec.logp_entropy(net, pred, b["actions"], b["legal"])
                 v = pred["value"].float()
                 for j, s in enumerate(ss):
@@ -1650,7 +1685,8 @@ class JointRLTrainer:
         net = self.model[g]
         extra = ("mu", "lp_old", "adv", "ret", "keep", "old_pred", "vmask", "pmask", "forced")
         b = build_batch(ss, self.device, extra)
-        pred = learner_forward(net, r.spec, b, self.depth, self.device, a.bf16)
+        pred = learner_forward(net, r.spec, b, self.depth, self.device, a.bf16,
+                               replay_routes=True)
         lp, ent = r.spec.logp_entropy(net, pred, b["actions"], b["legal"])
         pm, vm = b["pmask"], b["vmask"]
         pol = decoupled_ppo_loss(lp, b["lp_old"], b["mu"], b["adv"], pm, policy_mask=b["keep"],
