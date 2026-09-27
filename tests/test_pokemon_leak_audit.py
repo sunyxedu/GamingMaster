@@ -839,7 +839,10 @@ def _forced_commits(lines: List[str]) -> List[Tuple[int, int]]:
             last = None
         elif cmd == "switch" and commit is not None:
             last = i
-        if cmd not in ("", "t:", "j", "J", "l", "L", "c", "c:", "inactive", "inactiveoff", "raw"):
+        # room / connection lines are no battle events: a player leaving and rejoining during
+        # team preview (|player|p2| ... |player|p2|NAME|...) does not make its commit a switch
+        if cmd not in ("", "t:", "j", "J", "l", "L", "c", "c:", "chat", "n", "N", "inactive",
+                       "inactiveoff", "raw", "html", "uhtml", "badge", "player"):
             prev = cmd
     return out
 
