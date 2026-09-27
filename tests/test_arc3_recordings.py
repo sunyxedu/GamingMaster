@@ -9,8 +9,12 @@ give the frames env/vec_arc3.py gives the network for the same actions.
   converter's frames — the game versions match and the row semantics (the starting
   RESET, forced RESETs after a GAME_OVER, bookkeeping rows) are the env's.
 
-Both need the ARC-AGI-3 SDK and the cached games (ENVIRONMENTS_DIR); the second also the
-recordings.
+* Retrodict's winning runs (``GM_ARC3_RETRODICT``, default data/arc3/retrodict/release-runs:
+  its release-runs archive) of the cached games replay through the env, reproduce every
+  logged board and win.
+
+All need the ARC-AGI-3 SDK and the cached games (ENVIRONMENTS_DIR); the last two also their
+data.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ CARGO = shutil.which("cargo") or os.path.expanduser("~/.cargo/bin/cargo")
 ENV_DIR = os.environ.get("ENVIRONMENTS_DIR") or os.path.expanduser("~/Documents/arc3-wm/environment_files")
 HUMAN_ZIP = os.environ.get("GM_ARC3_HUMAN_ZIP") or os.path.expanduser(
     "~/Documents/arc3-wm/data/replays/arc_agi_3_public_demo_human_testing.zip")
+RETRODICT = os.environ.get("GM_ARC3_RETRODICT") or os.path.join(ROOT, "data", "arc3", "retrodict", "release-runs")
 MAX_ACTIONS = 2048
 
 
@@ -171,3 +176,32 @@ def test_human_sessions_replay_through_the_env(gmdata, tmp_path):
         checked += len(frames)
         env.close()
     assert len(per_game) == len(LOCAL) and checked > 2000, (per_game, checked)
+
+
+@needs_sdk
+@pytest.mark.skipif(not os.path.isdir(RETRODICT), reason="the Retrodict release runs are not available")
+def test_retrodict_runs_replay_through_the_env_and_win(gmdata, tmp_path):
+    """Retrodict's winning runs (github.com/ryanbbrown/Retrodict release-runs) of the cached
+    games: their actions replayed through the env reproduce every logged settled board and win
+    the game — the logs and the env are the same game versions."""
+    games = [g for g in LOCAL if os.path.isdir(os.path.join(RETRODICT, g))]
+    st, samples = _convert(gmdata, [RETRODICT], tmp_path / "out", "--games", ",".join(games))
+    assert st["errors"] == 0
+    won = set()
+    for s in samples:
+        g = s["meta"]["game"]
+        env = _env(g)
+        obs = env.reset()
+        frames, actions = [], []
+        for t in range(int(s["tgt"]["type_idx"].shape[0])):
+            frames.append(_frame(obs))
+            typ, click = int(s["tgt"]["type_idx"][t]), int(s["tgt"]["click_idx"][t])
+            actions.append((typ, click))
+            obs, _, done, info = env.step({"type_idx": torch.tensor([typ]), "click_idx": torch.tensor([click])})
+            if bool(done[0]):
+                break
+        _check(s, frames, actions)
+        if bool(info["terminated"][0]):
+            won.add(g)
+        env.close()
+    assert won == set(games), (sorted(won), games)

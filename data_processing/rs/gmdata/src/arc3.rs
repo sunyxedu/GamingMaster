@@ -8,6 +8,9 @@
 //! 340 first-time sessions of the 25 public games) and agents' recordings (the toolkit's
 //! recorder; e.g. the ARA Labs trajectories on Hugging Face).  Directories are searched
 //! recursively; zip archives are read in place (macOS `__MACOSX/` / `._*` entries skipped).
+//! Also read: Retrodict's run logs (`<game>/<run>/workspace/log.txt` of its release-runs
+//! archive — an agent that solves all 183 levels of the 25 public games at 99.86% RHAE;
+//! `parse_retrodict`).
 //!
 //! One sample per session: the whole play, resets and game overs included, as one stream —
 //! what a player learns from a failed attempt stays in its memory.  Frames are the frames
@@ -92,6 +95,16 @@ pub enum Cmd {
         #[arg(long, default_value = "recording")]
         source: String,
     },
+    /// Download the files of a Hugging Face dataset whose paths contain one of `--match`
+    /// (e.g. the `recordings/` of an agent-trajectory dataset; resumable, SHA-256 checked)
+    FetchHf {
+        #[arg(long)]
+        dataset: String,
+        #[arg(long = "match")]
+        matches: Vec<String>,
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 /// One recording line with a frame.
@@ -161,6 +174,83 @@ fn parse_row(line: &str) -> Result<Option<Row>> {
         available: d["available_actions"].as_array().map(|a| a.iter().filter_map(action_id).collect()).unwrap_or_default(),
         action: (typ, x, y),
     }))
+}
+
+/// The rows of a Retrodict run log (`runs/<game>/<run>/workspace/log.txt`, github.com/ryanbbrown/
+/// Retrodict release-runs): per step `[STEP k]`, `[ACTION] RESET | ACTIONn [x=.. y=..]`, the
+/// frame's boards `[BOARD] i/n intermediate|settled` + 64 rows of 64 palette indices (the last
+/// is the settled one — a recording's last layer), `[LEVELS] a/b`, `[STATE] s`, `[AVAILABLE]
+/// ACTIONn ...`; `[DIFF]` / `[PLAN] .. [END PLAN]` lines are the agent's notes.  `game_id` is
+/// the game's name (the logs carry no version).
+fn parse_retrodict(text: &str, game: &str) -> Result<Vec<Row>> {
+    let mut rows: Vec<Row> = Vec::new();
+    let mut cur: Option<Row> = None;
+    let mut board: Vec<u8> = Vec::new();
+    let mut in_board = false;
+    let finish = |cur: &mut Option<Row>, board: &mut Vec<u8>, rows: &mut Vec<Row>| -> Result<()> {
+        if let Some(mut r) = cur.take() {
+            if board.len() == CELLS {
+                r.grid = Some(std::mem::take(board));
+            } else if !board.is_empty() {
+                bail!("a board of {} cells", board.len());
+            }
+            rows.push(r);
+        }
+        board.clear();
+        Ok(())
+    };
+    for line in text.lines() {
+        if in_board {
+            let cells: Vec<&str> = line.split_whitespace().collect();
+            if cells.len() == GRID && cells.iter().all(|c| c.parse::<u8>().is_ok()) {
+                for c in cells {
+                    let x: u8 = c.parse()?;
+                    if x > 15 {
+                        bail!("palette index {x}");
+                    }
+                    board.push(x);
+                }
+                continue;
+            }
+            in_board = false;
+        }
+        if line.starts_with("[STEP ") {
+            finish(&mut cur, &mut board, &mut rows)?;
+            cur = Some(Row { game_id: game.to_string(), guid: String::new(), grid: None, state: String::new(), levels: 0,
+                             win_levels: 0, available: vec![], action: (-1, 0, 0) });
+        } else if let Some(r) = cur.as_mut() {
+            if let Some(a) = line.strip_prefix("[ACTION] ") {
+                let mut it = a.split_whitespace();
+                let name = it.next().unwrap_or("");
+                let typ = action_id(&json!(name)).with_context(|| format!("action {a:?}"))?;
+                let (mut x, mut y) = (0, 0);
+                for kv in it {
+                    if let Some(v) = kv.strip_prefix("x=") {
+                        x = v.parse()?;
+                    } else if let Some(v) = kv.strip_prefix("y=") {
+                        y = v.parse()?;
+                    }
+                }
+                r.action = (typ, x, y);
+            } else if line.starts_with("[BOARD] ") {
+                board.clear(); // an earlier (intermediate) board of the step is superseded
+                in_board = true;
+            } else if let Some(l) = line.strip_prefix("[LEVELS] ") {
+                let (a, b) = l.trim().split_once('/').context("[LEVELS] a/b")?;
+                r.levels = a.trim().parse()?;
+                r.win_levels = b.trim().parse()?;
+            } else if let Some(st) = line.strip_prefix("[STATE] ") {
+                r.state = st.trim().to_string();
+            } else if let Some(av) = line.strip_prefix("[AVAILABLE] ") {
+                r.available = av.split_whitespace().filter_map(|n| action_id(&json!(n))).collect();
+            }
+        }
+    }
+    finish(&mut cur, &mut board, &mut rows)?;
+    if rows.iter().any(|r| r.action.0 < 0) {
+        bail!("a step without an [ACTION]");
+    }
+    Ok(rows)
 }
 
 /// A session's frames and labels (module docs).
@@ -250,8 +340,8 @@ impl Env {
     }
 }
 
-/// The frames of one recording (module docs); None = no frame to learn from.
-fn session(lines: &[String], max_actions: usize) -> Result<Option<Session>> {
+/// The rows of a recording file (one JSON object per line).
+fn recording_rows(lines: &[String]) -> Result<Vec<Row>> {
     let mut rows = Vec::new();
     for (i, l) in lines.iter().enumerate() {
         if l.trim().is_empty() {
@@ -261,6 +351,16 @@ fn session(lines: &[String], max_actions: usize) -> Result<Option<Session>> {
             rows.push(r);
         }
     }
+    Ok(rows)
+}
+
+/// The frames of one recording (module docs); None = no frame to learn from.
+#[cfg(test)]
+fn session(lines: &[String], max_actions: usize) -> Result<Option<Session>> {
+    session_of(recording_rows(lines)?, max_actions)
+}
+
+fn session_of(rows: Vec<Row>, max_actions: usize) -> Result<Option<Session>> {
     let Some(first) = rows.first() else { return Ok(None) };
     let game_id = first.game_id.clone();
     let game = game_id.split('-').next().unwrap_or("").to_string();
@@ -356,16 +456,26 @@ fn session(lines: &[String], max_actions: usize) -> Result<Option<Session>> {
     Ok(Some(s))
 }
 
-/// Every recording of the inputs: (name, lines).
-fn for_each_recording(inputs: &[PathBuf], f: &mut dyn FnMut(&str, Vec<String>) -> Result<()>) -> Result<usize> {
+/// Every recording of the inputs: (name, its rows or the error reading them).
+fn for_each_recording(inputs: &[PathBuf], f: &mut dyn FnMut(&str, Result<Vec<Row>>) -> Result<()>) -> Result<usize> {
     let mut n = 0;
     let is_rec = |name: &str| {
         let base = name.rsplit('/').next().unwrap_or(name);
-        !name.contains("__MACOSX/") && !base.starts_with("._") && (name.ends_with(".jsonl") || name.ends_with(".jsonl.gz"))
+        !name.contains("__MACOSX/") && !base.starts_with("._")
+            && (name.ends_with(".recording.jsonl") || name.ends_with(".recording.jsonl.gz"))
     };
     for input in inputs {
-        for p in common::find_files(input, &[".jsonl", ".jsonl.gz", ".zip"])? {
+        for p in common::find_files(input, &[".jsonl", ".jsonl.gz", ".zip", "log.txt"])? {
             let name = p.to_string_lossy().to_string();
+            if name.ends_with("/workspace/log.txt") {
+                // a Retrodict run: runs/<game>/<run id>/workspace/log.txt
+                let parts: Vec<&str> = name.rsplit('/').collect();
+                let game = parts.get(3).copied().unwrap_or("").to_string();
+                let text = std::fs::read_to_string(&p)?;
+                f(&name, parse_retrodict(&text, &game))?;
+                n += 1;
+                continue;
+            }
             if name.ends_with(".zip") {
                 let mut z = zip::ZipArchive::new(std::fs::File::open(&p)?)?;
                 let mut names: Vec<String> = (0..z.len()).filter_map(|i| z.by_index(i).ok().map(|m| m.name().to_string())).collect();
@@ -377,12 +487,14 @@ fn for_each_recording(inputs: &[PathBuf], f: &mut dyn FnMut(&str, Vec<String>) -
                     let mut buf = Vec::new();
                     z.by_name(&m)?.read_to_end(&mut buf)?;
                     let text = String::from_utf8(common::read_maybe_gz(buf)?)?;
-                    f(&format!("{name}!{m}"), text.lines().map(str::to_string).collect())?;
+                    let lines: Vec<String> = text.lines().map(str::to_string).collect();
+                    f(&format!("{name}!{m}"), recording_rows(&lines))?;
                     n += 1;
                 }
             } else if is_rec(&name) {
                 let text = String::from_utf8(common::read_maybe_gz(std::fs::read(&p)?)?)?;
-                f(&name, text.lines().map(str::to_string).collect())?;
+                let lines: Vec<String> = text.lines().map(str::to_string).collect();
+                f(&name, recording_rows(&lines))?;
                 n += 1;
             }
         }
@@ -418,9 +530,9 @@ pub fn convert(inputs: &[PathBuf], out: Option<&Path>, shard_size: usize, max_ac
     let mut per_game: BTreeMap<String, (usize, usize, usize, i64)> = BTreeMap::new(); // sessions, frames, wins, levels
     let mut versions: BTreeMap<String, usize> = BTreeMap::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let n = for_each_recording(inputs, &mut |name, lines| {
+    let n = for_each_recording(inputs, &mut |name, rows| {
         *st.get_mut("sessions").unwrap() += 1;
-        let s = match session(&lines, max_actions) {
+        let s = match rows.and_then(|rows| session_of(rows, max_actions)) {
             Ok(Some(s)) => s,
             Ok(None) => {
                 *st.get_mut("empty").unwrap() += 1;
@@ -432,7 +544,8 @@ pub fn convert(inputs: &[PathBuf], out: Option<&Path>, shard_size: usize, max_ac
                 return Ok(());
             }
         };
-        if !s.guid.is_empty() && !seen.insert(s.guid.clone()) {
+        let s = Session { guid: if s.guid.is_empty() { name.to_string() } else { s.guid }, ..s };
+        if !seen.insert(s.guid.clone()) {
             *st.get_mut("empty").unwrap() += 1;
             return Ok(());
         }
@@ -504,6 +617,12 @@ pub fn run(cmd: Cmd) -> Result<()> {
                                    split.as_deref(), val_every, &source)?);
             Ok(())
         }
+        Cmd::FetchHf { dataset, matches, out } => {
+            println!("{}", common::fetch_hf_files(&dataset, &|name: &str| {
+                matches.is_empty() || matches.iter().any(|m| name.contains(m.as_str()))
+            }, &out)?);
+            Ok(())
+        }
     }
 }
 
@@ -565,6 +684,26 @@ mod tests {
         // the return still to come: 2 levels over win_levels 2 before frame 3's click
         assert_eq!(s.value, [1.0, 1.0, 1.0, 1.0, 0.5]);
         assert_eq!(&s.grid[..4], &[9, 9, 9, 9]);
+    }
+
+    #[test]
+    fn retrodict_logs_are_sessions() {
+        let board = |c: u8| (0..GRID).map(|_| vec![c.to_string(); GRID].join(" ")).collect::<Vec<_>>().join("\n");
+        let log = format!(
+            "[STEP 0]\n[ACTION] RESET\n[BOARD] 1/1 settled\n{}\n[LEVELS] 0/2\n[STATE] NOT_FINISHED\n[AVAILABLE] ACTION1 ACTION6\n\n\
+             [PLAN] invocation 1\nsome notes\nplan: ACTION6(x=3,y=4)\n[END PLAN]\n\n\
+             [STEP 1]\n[ACTION] ACTION6 x=3 y=4\n[BOARD] 1/2 intermediate\n{}\n[BOARD] 2/2 settled\n{}\n[LEVELS] 1/2\n\
+             [STATE] NOT_FINISHED\n[AVAILABLE] ACTION1 ACTION6\n[DIFF] 4096 cells changed\n\n\
+             [STEP 2]\n[ACTION] ACTION1\n[BOARD] 1/1 settled\n{}\n[LEVELS] 2/2\n[STATE] WIN\n[AVAILABLE] ACTION1 ACTION6\n",
+            board(1), board(2), board(3), board(4));
+        let rows = parse_retrodict(&log, "tt01").unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!((rows[1].action, rows[1].levels, rows[1].win_levels), ((6, 3, 4), 1, 2));
+        assert_eq!(rows[1].grid.as_ref().unwrap()[0], 3, "the settled board");
+        assert_eq!(rows[0].available, [1, 6]);
+        let s = session_of(rows, 100).unwrap().unwrap();
+        assert_eq!((s.type_idx.clone(), s.click_idx.clone(), s.won), (vec![6, 1], vec![4 * 64 + 3, 0], true));
+        assert_eq!(s.value, [1.0, 0.5]);
     }
 
     #[test]
