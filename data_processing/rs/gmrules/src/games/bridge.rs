@@ -1576,6 +1576,67 @@ mod tests {
         assert!(Bridge::perturb_hidden(&script, &ev, 0, &mut rng).is_none());
     }
 
+    /// The privacy battery catches an encoder that shows dummy's hand to the opening
+    /// leader — information the opening lead itself exposes, so no record containing
+    /// that decision can hide it: only the frontier sweep (the record cut BEFORE the
+    /// lead, the lead as the pending frame) sees the leak.
+    #[test]
+    fn privacy_check_catches_dummy_shown_to_the_opening_leader() {
+        #[derive(Clone, Debug)]
+        struct Leaky(Bridge);
+        impl Game for Leaky {
+            type Config = BridgeConfig;
+            const NAME: &'static str = "leaky_bridge";
+            const VERSION: u32 = 0;
+            fn spec(c: &BridgeConfig) -> FrameSpec { Bridge::spec(c) }
+            fn teams(c: &BridgeConfig) -> Option<Vec<usize>> { Bridge::teams(c) }
+            fn new_game(c: &BridgeConfig) -> Self { Leaky(Bridge::new_game(c)) }
+            fn turn(&self) -> Turn { self.0.turn() }
+            fn chance_outcomes(&self, o: &mut Vec<(u32, f64)>) { self.0.chance_outcomes(o) }
+            fn apply_chance(&mut self, o: u32) -> Result<(), RulesError> { self.0.apply_chance(o) }
+            fn legal_actions(&self, s: Seat, o: &mut Vec<u32>) { self.0.legal_actions(s, o) }
+            fn apply_action(&mut self, s: Seat, a: u32) -> Result<(), RulesError> { self.0.apply_action(s, a) }
+            fn outcome(&self) -> Vec<f32> { self.0.outcome() }
+            fn returns(&self) -> Vec<f64> { self.0.returns() }
+            fn encode_obs(&self, s: Seat, obs: &mut ObsView<'_>) {
+                self.0.encode_obs(s, obs);
+                // leak: the opening leader already sees dummy's cards
+                if self.0.phase == Phase::Play && self.0.n_played == 0 {
+                    let dummy = partner(self.0.declarer);
+                    for c in (0..52u8).filter(|&c| self.0.holder[c as usize] == dummy) {
+                        let f = obs.entity(c as usize, 0);
+                        f[C_DUMMY] = 1.0;
+                        f[C_UNSEEN] = 0.0;
+                    }
+                }
+            }
+            fn encode_action(&self, s: Seat, a: u32, f: &mut [f32]) { self.0.encode_action(s, a, f) }
+            fn state_string(&self) -> String { self.0.state_string() }
+            fn perturb_hidden(c: &BridgeConfig, e: &[Event], s: Seat, r: &mut Rng) -> Option<Vec<Event>> {
+                Bridge::perturb_hidden(c, e, s, r)
+            }
+        }
+        let cfg = BridgeConfig::default();
+        // records that contain the opening lead cannot move dummy's cards: the checks on
+        // whole records and on records cut after the lead pass
+        let mut rng = Rng::new(9);
+        for _ in 0..10 {
+            let ev = random_trajectory::<Leaky>(&cfg, &mut rng, 10_000);
+            let r = replay::<Leaky>(&cfg, &ev).unwrap();
+            let Some(lead) = r.decisions.iter().find(|d| d.action < 52) else { continue };
+            let cut = &ev[..=lead.event];
+            let p = Leaky::perturb_hidden(&cfg, cut, lead.seat, &mut rng).expect("hidden cards to re-deal");
+            check_privacy::<Leaky>(&cfg, cut, &p, lead.seat).unwrap();
+            // cut right before the lead: the lead is the leader's pending decision
+            let before = &ev[..lead.event];
+            let p = Leaky::perturb_hidden(&cfg, before, lead.seat, &mut rng).expect("hidden cards to re-deal");
+            let err = check_privacy::<Leaky>(&cfg, before, &p, lead.seat).unwrap_err();
+            assert!(err.contains("pending decision"), "{err}");
+        }
+        let err = check_game::<Leaky>(&cfg, 20, 5).unwrap_err();
+        assert!(err.contains("pending decision") && err.contains("hidden from it"), "{err}");
+    }
+
     #[test]
     fn frames_hide_what_the_viewer_cannot_see() {
         let cfg = BridgeConfig { board: 1, ..Default::default() };
