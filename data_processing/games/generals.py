@@ -340,3 +340,10 @@ class GeneralsGioDataset(Dataset):
         """Frames the dataset supervises (each record capped at max_len)."""
         return sum(min(n, self.max_len) if self.max_len is not None else n
                    for n in self.lengths())
+
+    def frame_stats(self) -> Dict[str, int]:
+        """``samples`` (records), ``frames`` (capped at max_len), ``raw_frames``
+        (GameShardDataset.frame_stats)."""
+        lengths = self.lengths()
+        return {"samples": len(lengths), "frames": self.total_frames(),
+                "raw_frames": sum(lengths)}

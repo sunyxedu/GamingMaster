@@ -90,6 +90,7 @@ Design notes:
 
 from __future__ import annotations
 
+import bisect
 import glob
 import os
 from typing import Dict, List, Optional, Tuple
@@ -266,8 +267,11 @@ class GameShardDataset(Dataset):
         self.game = game
         self.max_len = max_len
 
-        # Build the (shard_idx, sample_idx) index once up front.
-        self._index: List[Tuple[int, int]] = []
+        # Samples are numbered shard-major: shard si holds the global indices
+        # [_offsets[si], _offsets[si + 1]).  O(#shards) memory — a per-sample
+        # index would cost ~150 B per sample in every process (the trainer's
+        # ranks and each DataLoader worker), gigabytes for 1e7-sample corpora.
+        self._offsets: List[int] = [0]
         self.converter_version: Optional[int] = None
         self.shard_meta: Dict = {}
         self._ref_path: Optional[str] = None
@@ -276,7 +280,7 @@ class GameShardDataset(Dataset):
         for si, p in enumerate(self.paths):
             shard = self._open(p, header_only=True)
             self._check(shard, p)
-            self._index.extend((si, j) for j in range(shard["n_samples"]))
+            self._offsets.append(self._offsets[-1] + int(shard["n_samples"]))
         self._cache_idx: int = -1
         self._cache: Optional[Dict] = None
 
@@ -352,25 +356,42 @@ class GameShardDataset(Dataset):
                 )
 
     def __len__(self) -> int:
-        return len(self._index)
+        return self._offsets[-1]
 
-    def total_frames(self) -> int:
-        """Frames the dataset supervises (each sample capped at max_len).
+    def shard_range(self, si: int) -> range:
+        """The global sample indices of shard ``si`` (contiguous)."""
+        return range(self._offsets[si], self._offsets[si + 1])
+
+    def locate(self, idx: int) -> Tuple[int, int]:
+        """Global sample index → (shard index, sample index within the shard)."""
+        if not 0 <= idx < len(self):
+            raise IndexError(f"sample {idx} out of range for {len(self)} samples")
+        si = bisect.bisect_right(self._offsets, idx) - 1
+        return si, idx - self._offsets[si]
+
+    def frame_stats(self) -> Dict[str, int]:
+        """``samples``, ``frames`` (each sample capped at max_len: what the
+        dataset supervises per draw at most) and ``raw_frames`` (uncapped).
         Cheap for gm-shard directories (index only); .pt shards are loaded."""
-        total = 0
+        n = capped = raw = 0
         for p in self.paths:
             if os.path.isdir(p):
                 lengths = [int(s["length"]) for s in GmShard(p).index["samples"]]
             else:
                 lengths = [next(iter(s["obs"].values())).shape[0]
                            for s in torch.load(p, map_location="cpu", weights_only=False)["samples"]]
-            if self.max_len is not None:
-                lengths = [min(L, self.max_len) for L in lengths]
-            total += sum(lengths)
-        return total
+            n += len(lengths)
+            raw += sum(lengths)
+            capped += (sum(min(L, self.max_len) for L in lengths) if self.max_len is not None
+                       else sum(lengths))
+        return {"samples": n, "frames": capped, "raw_frames": raw}
+
+    def total_frames(self) -> int:
+        """Frames the dataset supervises (each sample capped at max_len)."""
+        return self.frame_stats()["frames"]
 
     def __getitem__(self, idx: int) -> Dict:
-        si, j = self._index[idx]
+        si, j = self.locate(idx)
         if si != self._cache_idx:
             self._cache = self._open(self.paths[si])
             self._cache_idx = si
@@ -438,16 +459,11 @@ class ShardLocalitySampler(torch.utils.data.Sampler):
 
     def __init__(self, dataset: GameShardDataset):
         self.dataset = dataset
-        # global index ranges per shard (dataset._index is built in
-        # shard-major order, so each shard's samples are contiguous)
-        self._by_shard: Dict[int, List[int]] = {}
-        for gi, (si, _) in enumerate(dataset._index):
-            self._by_shard.setdefault(si, []).append(gi)
 
     def __iter__(self):
         shard_order = torch.randperm(len(self.dataset.paths)).tolist()
         for si in shard_order:
-            idxs = self._by_shard.get(si, [])
+            idxs = self.dataset.shard_range(si)     # contiguous (shard-major numbering)
             if not idxs:
                 continue
             for j in torch.randperm(len(idxs)).tolist():

@@ -129,7 +129,7 @@ def test_shard_locality_sampler_coverage_and_locality(tmp_path):
     order = list(iter(sampler))
     assert sorted(order) == list(range(len(ds)))
     # shard-contiguous: one cache reload per shard per epoch, no more
-    shards = [ds._index[i][0] for i in order]
+    shards = [ds.locate(i)[0] for i in order]
     switches = sum(1 for x, y in zip(shards, shards[1:]) if x != y)
     assert switches == len(ds.paths) - 1
     # reshuffles from the global RNG between epochs
