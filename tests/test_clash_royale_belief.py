@@ -290,11 +290,15 @@ def test_legacy_hand_network_computes_what_it_computed(case):
     obs["hand_mask"][..., 0] = True
     with torch.no_grad():
         o = net(obs, labels={"card_slot": _ints((B, T), 6, 0, 4)}, act_steps=2)
-    close = dict(rtol=1e-9, atol=1e-10)
+    # float64 weights and inputs, but a few ops compute in float32 by design (the
+    # RMSNorms, the match clock, the sinusoidal PEs), and float32 kernels differ across
+    # CPUs (x86 CI vs arm64: ~2e-7 here).  The whole network in float32 is within 8e-7
+    # of the reference; any change of the computation moves these outputs by >= 1e-3.
+    close = dict(rtol=1e-6, atol=5e-6)
     np.testing.assert_allclose(o["wait_logits"].flatten().numpy(), ref["wait"], **close)
     np.testing.assert_allclose(o["card_logits"].flatten()[:8].numpy(), ref["card"], **close)
     np.testing.assert_allclose(o["value"].flatten().numpy(), ref["value"], **close)
-    np.testing.assert_allclose(float(o["placement_logits"].sum()), ref["place_sum"], rtol=1e-9)
+    np.testing.assert_allclose(float(o["placement_logits"].sum()), ref["place_sum"], rtol=1e-5)
 
 
 def _deck_net(**kw):

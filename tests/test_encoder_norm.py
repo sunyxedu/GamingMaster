@@ -342,7 +342,9 @@ def test_encode_frames_mask_handling():
     gstack = nn.Sequential(nn.Conv2d(3, 8, 3, padding=1), make_encoder_norm("group", 8))
     full = encode_frames(gstack, frames, 2, 4, None, batch_stats=False)
     assert torch.equal(encode_frames(gstack, frames, 2, 4, fm, batch_stats=False), full)
-    assert torch.equal(full.reshape(8, 8, 5, 5)[5], gstack(frames[5:6])[0])
+    # frame 5 alone: the same values (a convolution may pick another kernel for
+    # another batch size — oneDNN on x86 does — so equal up to float, not bitwise)
+    torch.testing.assert_close(full.reshape(8, 8, 5, 5)[5], gstack(frames[5:6])[0])
 
 
 @pytest.mark.parametrize("game", CONV_GAMES)
