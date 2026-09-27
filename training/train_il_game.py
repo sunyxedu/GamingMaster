@@ -48,11 +48,13 @@ from data_processing.games.dataset import (
 )
 from data_processing.games.generals import GeneralsGioDataset, gio_dataset_advice
 from model.components.core import update_moe_balance
-from model.config import upgrade_config_dict
+from model.components.encoder import describe_encoder_norm
+from model.config import checkpoint_config_dict, upgrade_config_dict
 from model.games import build_game_network
 from model.games import generals as generals_adapter
 from model.games import lux as lux_adapter
 from model.games.base import densify_soft_target, soft_cross_entropy
+from model.games.clash_royale import cr_legal_from_obs
 from model.losses import hl_gauss_cross_entropy
 from model.optim import (
     TRM_BETAS,
@@ -126,6 +128,10 @@ LEGAL_FROM_OBS = {
     "pokemon": lambda obs: (
         {"move_ids": obs["move_ids"]} if "move_ids" in obs else None
     ),
+    # deck-token shards: a deck card is playable iff P(in hand) > 0 and
+    # affordable (expand.py); keeps self-sampled cards (tf_prob < 1, waited
+    # frames) on cards the player may hold.  Legacy hand shards: None.
+    "clash_royale": cr_legal_from_obs,
 }
 
 # Shard-level meta facts (written by the converters) that must match the
@@ -134,12 +140,18 @@ LEGAL_FROM_OBS = {
 META_ARCH_KEYS = {
     "gomoku": {"board_size": ("board_h", "board_w")},
     # crdata writes the arena geometry and the card vocabulary of the
-    # catalog it converted with (n_cards grows when cards are added)
-    "clash_royale": {k: (k,) for k in (
+    # catalog it converted with (n_cards grows when cards are added), and
+    # (converter_version >= 3) the card tokens: 8 deck tokens with the causal
+    # hand belief ("deck") — older shards imply the legacy "hand" slots
+    "clash_royale": {**{k: (k,) for k in (
         "arena_h", "arena_w", "arena_channels", "hand_size", "n_cards",
-        "card_feature_dim", "cr_global_features")},
+        "card_feature_dim", "cr_global_features", "deck_size")},
+        "card_tokens": ("cr_card_tokens",)},
+    # converter v2 records the field-token width (v1: 20; v2 appends the
+    # forced-switch / team-preview request flags → 22)
     "pokemon": {"move_buckets": ("pokemon_move_buckets",),
-                "species_buckets": ("pokemon_species_buckets",)},
+                "species_buckets": ("pokemon_species_buckets",),
+                "field_features": ("pokemon_field_features",)},
     # gio records (GeneralsGioDataset.shard_meta / `gmdata generals shard`);
     # with turn_globals the net has TURN_GLOBAL_FEATURES more globals than
     # the data (meta_arch_value), appended at batch time (OBS_HOOKS)
@@ -163,25 +175,37 @@ META_ARCH_KEYS = {
 # checkpoint on old shards (or an old one on new shards) fails loudly.
 # These equal the config dataclass / registry defaults, so a fresh run on
 # old shards builds the legacy architecture without injecting anything
-# (apply_meta_arch_defaults only reads keys the meta actually has).
+# (apply_meta_arch_defaults only reads keys the meta actually has) — except
+# (1) clash_royale: its converter_version <= 2 shards carry a hindsight hand (a
+# future leak), so a fresh default ("deck") net on them fails loudly instead;
+# --override cr_card_tokens=hand trains the legacy net on them; (2) config
+# defaults that changed with the new generation, which META_LEGACY_IMPLIES
+# injects (pokemon's move head).
 META_LEGACY = {
     "go": {"global_features": 0},
     "chess": {"global_features": 8},
     "shogi": {"global_features": 4},
     "lux": {"global_features": 6, "sap_range": 0},
+    "clash_royale": {"card_tokens": "hand"},
+    "pokemon": {"field_features": 20},
 }
 
 # First converter generation of the frozen pre-training schema per game:
 # older shards still train (their META_LEGACY architecture), but they lack
 # the frozen inputs / targets, so the trainers warn (or, with
 # --require_frozen_schema, refuse).
-SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 2, "lux": 2}
+SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 3, "lux": 2,
+                                   "clash_royale": 3, "pokemon": 2}
 _SCHEMA_FREEZE_CONTENT = {
     "chess": "repetition flags + legal masks",
     "go": "side-to-move/komi globals",
     "shogi": "repetition + legal masks",
-    "mahjong": "legal masks",
+    "mahjong": "exact legal masks, leak-free claim frames + il_weight",
     "lux": "env-param globals + sap targets",
+    "clash_royale": "deck tokens with the causal hand belief; older shards infer the hand "
+                    "from the whole match",
+    "pokemon": "move-identity targets, forced-switch / lead / unlabelled-turn frames, "
+               "request-phase flags + legal masks",
 }
 
 
@@ -256,11 +280,17 @@ def open_dataset(game: str, data_dir: str, max_len: Optional[int] = None):
 
 
 def _generals_obs(obs: Dict[str, torch.Tensor], cfg) -> Dict[str, torch.Tensor]:
-    """turn_globals nets expect 3 more globals than the records carry:
-    derive them from the frame index (records are prefix-truncated, so
-    frame t is turn t) — the same features training/train_rl.py appends to
-    its IL batches."""
-    if cfg is None or not getattr(cfg, "turn_globals", False):
+    """The recorded frames as the network's config expects them (the same
+    transforms training/train_rl.py applies to its IL batches; records are
+    prefix-truncated, so frame t is turn t): memory_vision nets see the
+    sighted-mountain memory, derived from the frames so far
+    (model.games.generals.apply_memory_vision); turn_globals nets expect 3
+    more globals than the records carry, derived from the frame index."""
+    if cfg is None:
+        return obs
+    if getattr(cfg, "memory_vision", False):
+        obs = {**obs, "grid_seq": generals_adapter.apply_memory_vision(obs["grid_seq"])}
+    if not getattr(cfg, "turn_globals", False):
         return obs
     g = obs["globals_seq"]
     if g.shape[-1] + generals_adapter.TURN_GLOBAL_FEATURES != cfg.global_features:
@@ -284,14 +314,28 @@ def meta_arch_value(game: str, meta_key: str, value, cfg_get):
     return value
 
 
+# Config fields an old converter generation implies without a meta key of
+# their own: when the shard meta lacks META key K (the converter predates it),
+# a fresh run also defaults these fields, so pre-freeze shards keep training
+# the architecture they were made for.  pokemon: converter v1 shards (no
+# "field_features") carry only the revealed-move slot target tgt.move_idx —
+# the identity move head (the config default) trains on v2's tgt.move_id.
+META_LEGACY_IMPLIES = {"pokemon": {"field_features": {"pokemon_move_head": "slot"}}}
+
+
 def apply_meta_arch_defaults(game: str, kw: Dict, shard_meta: Dict) -> Dict:
     """Fresh runs: default ``game``'s data-dependent config fields
-    (META_ARCH_KEYS) from the shard meta; explicit values in ``kw`` win
-    (check_meta_arch then rejects a contradiction)."""
+    (META_ARCH_KEYS) from the shard meta, plus META_LEGACY_IMPLIES when the
+    meta predates a key; explicit values in ``kw`` win (check_meta_arch then
+    rejects a contradiction)."""
     for meta_key, cfg_keys in META_ARCH_KEYS.get(game, {}).items():
         if meta_key in shard_meta:
             v = meta_arch_value(game, meta_key, shard_meta[meta_key], kw.get)
             for ck in cfg_keys:
+                kw.setdefault(ck, v)
+    for meta_key, implied in META_LEGACY_IMPLIES.get(game, {}).items():
+        if meta_key not in shard_meta:
+            for ck, v in implied.items():
                 kw.setdefault(ck, v)
     return kw
 
@@ -405,14 +449,16 @@ def resume_arch_overrides(resume_ckpt: Dict, cli_overrides: Dict) -> Dict:
     Explicit CLI overrides still apply on top (loudly): they are the
     escape hatch when the saved config itself must be corrected.
     """
-    arch = resume_ckpt.get("config")
-    if arch is None:
+    if resume_ckpt.get("config") is not None:
+        # Fields newer than the checkpoint take their legacy value (e.g. the
+        # TRM block layout, or the observation a train_rl lineage played
+        # with), so the rebuilt net matches the saved weights and inputs.
+        arch = checkpoint_config_dict(resume_ckpt)
+    else:
         arch = resume_ckpt.get("config_overrides", {})
         print(f"[warn] checkpoint predates full-config saving; rebuilding "
               f"from saved overrides + current defaults: {arch}")
-    # Fields newer than the checkpoint take their legacy value (e.g. the
-    # TRM block layout), so the rebuilt net matches the saved weights.
-    arch = upgrade_config_dict(arch)
+        arch = upgrade_config_dict(arch)
     if cli_overrides:
         changed = {k: v for k, v in cli_overrides.items() if arch.get(k) != v}
         if changed:
@@ -1033,6 +1079,7 @@ def main() -> None:
     if args.halt_max_steps > 0:
         cfg.halt_max_steps = args.halt_max_steps
     print(f"[init] core={cfg.core_type} moe_experts={cfg.moe_experts} qk_norm={cfg.qk_norm} "
+          f"encoder_norm={describe_encoder_norm(cfg)} "
           f"supervision_steps={net.supervision_steps} inference_depth={net.default_depth} "
           f"value_head={describe_value_head(cfg)}")
     if args.resume and not cfg.qk_norm:

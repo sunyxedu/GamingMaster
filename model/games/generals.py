@@ -1,7 +1,7 @@
 """Generals.io game adapter — observation encoder and action decoder.
 
 This module contains exactly the game-specific logic that used to live
-inside ``GeneralsNetwork``: the conv grid encoder with masked BatchNorm,
+inside ``GeneralsNetwork``: the conv grid encoder (``cfg.encoder_norm``),
 the 2-D positional embedding, the next-observation world-model head, and
 the autoregressive Source → Direction / Split / Pass action decoder.
 
@@ -13,8 +13,9 @@ by the multi-game trainers (training/train_il_game.py, train_multi_game.py):
 :func:`generals_il_loss` (both decoders' ``il_loss``) and
 :func:`generals_il_head_terms` (their ``il_head_terms``), the teacher-forcing
 labels derived from the stored targets (:func:`source_labels`), the legality
-dict read from the observation (:func:`legal_from_obs`) and the
-``turn_globals`` features for recorded games (:func:`append_turn_globals`).
+dict read from the observation (:func:`legal_from_obs`), and the
+``turn_globals`` features and ``memory_vision`` encoding for recorded games
+(:func:`append_turn_globals`, :func:`apply_memory_vision`).
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.components.encoder import SpatialEncoder
+from model.components.encoder import SpatialEncoder, encode_frames, uses_batch_stats
 from model.components.heads import DirectionHead, PassHead, SourceHead, SplitHead
 from model.components.transformer import sinusoidal_pe_rows
 from model.config import ModelConfig
@@ -55,6 +56,33 @@ def append_turn_globals(globals_seq: torch.Tensor) -> torch.Tensor:
     t = t.view(1, T, 1).expand(B, -1, -1)
     extra = torch.cat([(t % 50) / 50.0, t % 2, t / 500.0], dim=-1)
     return torch.cat([globals_seq, extra.to(globals_seq.dtype)], dim=-1)
+
+
+#: one-hot grid channels of the fog obstacle (a never-seen city or mountain,
+#: out of vision) and of a mountain in vision
+FOG_OBSTACLE_CHANNEL, MOUNTAIN_CHANNEL = 1, 4
+
+
+def apply_memory_vision(grid_seq: torch.Tensor) -> torch.Tensor:
+    """Pure-fog frames [..., T, C, H, W] (the IL records' encoding, frame 0 =
+    the game's first frame — generals records are only prefix-cropped) →
+    the env's ``memory_vision`` encoding (cfg.memory_vision,
+    env/generals_env.py): a fog-obstacle cell that showed a mountain in any
+    frame ≤ t shows a mountain at t.
+
+    Causal (frame t reads frames 0..t only) and exact: in pure fog a
+    mountain is state 4 exactly while in vision and the fog obstacle
+    (state 1) while not, cities are never state 4, and terrain is static —
+    the cumulative mountain sightings ARE the env's per-player memory.
+    Tail padding (all-zero frames) stays zero."""
+    seen = torch.cumsum(grid_seq[..., MOUNTAIN_CHANNEL, :, :].float(), dim=-3) > 0
+    remembered = seen & (grid_seq[..., FOG_OBSTACLE_CHANNEL, :, :] > 0)
+    out = grid_seq.clone()
+    out[..., FOG_OBSTACLE_CHANNEL, :, :] = grid_seq[..., FOG_OBSTACLE_CHANNEL, :, :].masked_fill(
+        remembered, 0)
+    out[..., MOUNTAIN_CHANNEL, :, :] = grid_seq[..., MOUNTAIN_CHANNEL, :, :].masked_fill(
+        remembered, 1)
+    return out
 
 
 def source_labels(tgt: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -146,6 +174,7 @@ class GeneralsEncoder(ObservationEncoder):
         # defines the RAW obs format (next-obs head target, env, IL data).
         in_channels = cfg.grid_channels + (3 if cfg.derive_army_channels else 0)
         self.spatial_encoder = SpatialEncoder(cfg, in_channels=in_channels)
+        self.batch_stats = uses_batch_stats(cfg)
         self.global_proj = nn.Sequential(
             nn.Linear(cfg.global_features, cfg.d_model),
             nn.ReLU(),
@@ -192,22 +221,15 @@ class GeneralsEncoder(ObservationEncoder):
         return torch.cat([grid, extra.to(grid.dtype)], dim=-3)
 
     def _encode_frames(self, grid_seq, frame_mask):
-        """Run the spatial encoder, excluding padded frames from BatchNorm
-        statistics when ``frame_mask`` ([B, T] bool, True = real frame) is
-        given.  Padded frames get zero features; they are masked in the loss
-        and cannot influence real frames because collate pads only at the
-        sequence TAIL and both temporal mixers are causal (attention masks
-        the future; the recurrence only carries state forward)."""
+        """Run the spatial encoder over every frame.  A legacy BatchNorm
+        encoder (``cfg.encoder_norm="batch"``) excludes padded frames
+        (``frame_mask`` [B, T] bool, True = real frame) from its batch
+        statistics and gives them zero features; they are masked in the loss
+        and cannot influence real frames
+        (``model.components.encoder.encode_frames``)."""
         B, T, C, H, W = grid_seq.shape
-        BT = B * T
-        flat = self._augment(grid_seq.reshape(BT, C, H, W))
-        if frame_mask is None or bool(frame_mask.all()):
-            return self.spatial_encoder(flat).reshape(B, T, -1, H, W)
-        fm = frame_mask.reshape(BT)
-        enc = self.spatial_encoder(flat[fm])
-        feat = enc.new_zeros(BT, enc.shape[1], H, W)
-        feat[fm] = enc
-        return feat.reshape(B, T, -1, H, W)
+        flat = self._augment(grid_seq.reshape(B * T, C, H, W))
+        return encode_frames(self.spatial_encoder, flat, B, T, frame_mask, self.batch_stats)
 
     def forward(
         self,

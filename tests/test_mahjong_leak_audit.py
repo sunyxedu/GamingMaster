@@ -18,25 +18,31 @@ be information that seat really has at the decision:
              (initial hands and draws, reassigned consistently with every public event) and the
              ura-dora.
 
-Known leaks are strict xfails.  Each one XPASSes (and so fails) once the converter is fixed; then
-drop the marker and the matching exclusion in :func:`_known_leak`.
-  * test_ron_frames_exist_regardless_of_the_response: a claim frame exists for a seat that is not
-    pon/chi-eligible (in riichi, houtei, or no pair / run partner) only when it rons.
+The audit found three leaks in converter_version 2, fixed in version 3 and pinned here:
+  * test_ron_frames_exist_regardless_of_the_response: a claim frame existed for a seat that was not
+    pon/chi-eligible (in riichi, houtei, or no pair / run partner) only when it ronned (v3: claim
+    frames exist by exact legality, ron included).
   * test_riichi_declaration_claims_precede_the_stick: claim frames on a riichi declaration tile
-    show the stick deposited (declarer -1000, kyotaku +1), which happens only if nobody rons.
+    showed the stick deposited (declarer -1000, kyotaku +1), which happens only if nobody rons.
   * test_minkan_dora_is_revealed_after_the_rinshan_decision: the rinshan-draw frame after a
-    daiminkan / kakan shows that kan's new dora, which Tenhou flips only with the following
+    daiminkan / kakan showed that kan's new dora, which Tenhou flips only with the following
     discard (test_minkan_dora_follows_the_rinshan_response pins that from the logs).
   * test_declaration_tile_claims_do_not_reveal_a_ron / test_rinshan_frame_does_not_reveal_the_response
     re-check the last two by comparing two futures of one decision point (the real response and a
     counterfactual one) instead of a cut log.
 test_legal_masks_never_fall_back_to_all_true guards the label-dependent all-true mask fallback.
 
-Data: tests/fixtures/mahjong (the golden set) and tests/fixtures/mahjong_audit, four Tenhou Houou
+A discard decision point includes a dora event the log writes right after the dahai: Tenhou flips an
+open kan's new dora together with the following discard, and one spelling of the Houou corpus (the
+akochan-reviewer converter's) logs it just after that dahai, the other just before it.
+
+Data: tests/fixtures/mahjong (the golden set) and tests/fixtures/mahjong_audit, seven Tenhou Houou
 games of the same public HF mirror (hhim8826/tenhou-houou-mjai) chosen for rinshan kaihou after a
-kakan / daiminkan, rons on a riichi declaration tile and a pending open-kan dora flipped by a second
-kan.  GM_MAHJONG_AUDIT_RAW=<directory of .mjson> repeats every test on more games (skipped when
-unset; GM_MAHJONG_AUDIT_MAX_GAMES / _SPECIAL / _PLAIN size the sweep).
+kakan / daiminkan, rons on a riichi declaration tile, a pending open-kan dora flipped by a second
+kan, legal rons declined by a riichi and a dama seat, and a triple ron (三家和, logged as a bare
+ryukyoku after the discard).  GM_MAHJONG_AUDIT_RAW=<directory of
+.mjson> repeats every test on more games (skipped when unset; GM_MAHJONG_AUDIT_MAX_GAMES /
+_SPECIAL / _PLAIN size the sweep).
 """
 from __future__ import annotations
 
@@ -196,13 +202,14 @@ def _is_minkan_rinshan_with_dora(ky: List[dict], i: int) -> bool:
     return ky[i]["type"] == "tsumo" and i + 1 < len(ky) and ky[i + 1]["type"] == "dora"
 
 
-def _known_leak(kind: str, ky: List[dict], i: int) -> Optional[str]:
-    """Decision points test_frames_are_causal skips: a strict xfail documents their leak."""
-    if kind == "discard" and _is_riichi_declaration(ky, i):
-        return "test_riichi_declaration_claims_precede_the_stick"
-    if kind == "draw" and _is_minkan_rinshan_with_dora(ky, i):
-        return "test_minkan_dora_is_revealed_after_the_rinshan_decision"
-    return None
+def _discard_end(ky: List[dict], i: int) -> int:
+    """End of the discard decision point at ``i``: the dahai plus the dora events the log writes
+    right after it (an open kan's dora, which Tenhou flips together with this discard; the other
+    log spelling writes it right before the dahai)."""
+    j = i + 1
+    while j < len(ky) and ky[j]["type"] == "dora":
+        j += 1
+    return j
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +345,7 @@ def test_each_sample_is_one_seats_view(gmdata, games, tmp_path):  # noqa: F811
 
 def _causal_cases(games: Dict[str, List[dict]]):
     """Whole-kyoku records + (kyoku key, cut key, cut log, seats checked, seats whose last label
-    may be cut off) per decision point outside the known leaks."""
+    may be cut off) per decision point."""
     records: Dict[str, List[dict]] = {}
     special, plain = [], []
     for g, evs in games.items():
@@ -346,8 +353,6 @@ def _causal_cases(games: Dict[str, List[dict]]):
             base = f"{g}~k{k}"
             records[base] = ky
             for kind, i in _decision_points(ky):
-                if _known_leak(kind, ky, i):
-                    continue
                 actor = ky[i]["actor"]
                 key = f"{base}~{kind}{i}"
                 if kind == "draw":
@@ -360,7 +365,7 @@ def _causal_cases(games: Dict[str, List[dict]]):
                     special.append((base, key, ky[:i + 2], [actor], ()))
                 else:
                     others = tuple((actor + r) % 4 for r in (1, 2, 3))
-                    case = (base, key, ky[:i + 1], [actor, *others], others)
+                    case = (base, key, ky[:_discard_end(ky, i)], [actor, *others], others)
                     _, ron, called = _claim_response(ky, i)
                     (special if ron or called else plain).append(case)
     return records, _budget(special, plain)
@@ -369,8 +374,8 @@ def _causal_cases(games: Dict[str, List[dict]]):
 def test_frames_are_causal(gmdata, games, tmp_path):  # noqa: F811
     """Every frame, cut right after its decision point (own turns: + the seat's own response), is
     a bit-exact prefix of the full conversion: obs, legal_action_type, and (where the response is
-    kept) labels and legal_tile_of.  Covers draws / calls / discards outside the known-leak
-    decision points (:func:`_known_leak`)."""
+    kept) labels and legal_tile_of.  Covers draws / calls / discards, riichi declaration tiles and
+    rinshan draws after an open kan included."""
     records, cases = _causal_cases(games)
     for _, key, cut, _, _ in cases:
         records[key] = cut
@@ -396,10 +401,11 @@ def _check_claim_existence(gmdata, games, tmp_path, ron: bool):  # noqa: F811
                 if kind != "discard":
                     continue
                 end, is_ron, _ = _claim_response(ky, i)
-                if is_ron != ron or end == i + 1:
+                cut = _discard_end(ky, i)
+                if is_ron != ron or end <= cut:
                     continue
                 key = f"{g}~k{k}~discard{i}"
-                records[key + "~cut"] = ky[:i + 1]
+                records[key + "~cut"] = ky[:cut]
                 records[key + "~resp"] = ky[:end]
                 cases.append(key)
     if not cases:
@@ -422,23 +428,18 @@ def test_claim_frames_exist_regardless_of_the_call(gmdata, games, tmp_path):  # 
     _check_claim_existence(gmdata, games, tmp_path, ron=False)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "LEAK: discard_calls() emits a claim frame for a ron even when the seat is not pon/chi-eligible"
-    " (in riichi, houtei, or no pair / run partner), so that frame exists only because the seat"
-    " rons (~71% of ron frames); ron-shaped discards the seat passed on get no frame"))
 def test_ron_frames_exist_regardless_of_the_response(gmdata, games, tmp_path):  # noqa: F811
-    """Same invariant on the discards somebody rons: the frame of a seat with a ron shape must
-    exist whether or not it rons (fix: emit a claim frame whenever the claim mask allows HORA)."""
+    """Same invariant on the discards somebody rons: the frame of a seat with a legal ron must
+    exist whether or not it rons (v2 emitted it only for the ron when the seat had no chi / pon
+    option; v3 emits a claim frame whenever the exact claim mask allows anything but pass)."""
     _check_claim_existence(gmdata, games, tmp_path, ron=True)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "LEAK: the dahai arm applies the following reach_accepted (declarer -1000, kyotaku +1) before"
-    " emitting the claim frames of a riichi declaration tile; the stick is deposited only if nobody"
-    " rons, so these frames reveal the claim outcome (and never match the live client)"))
 def test_riichi_declaration_claims_precede_the_stick(gmdata, games, tmp_path):  # noqa: F811
     """Claim frames on a riichi declaration tile are decided before the riichi stick is
-    deposited: the log cut right after the declaration discard gives the full log's frames."""
+    deposited: the log cut right after the declaration discard gives the full log's frames (v2
+    applied the following reach_accepted — declarer -1000, kyotaku +1 — first; the stick is
+    deposited only if nobody rons)."""
     records, cases = {}, []
     for g, evs in games.items():
         for k, ky in enumerate(_kyokus(evs)):
@@ -447,7 +448,7 @@ def test_riichi_declaration_claims_precede_the_stick(gmdata, games, tmp_path):  
                 if kind == "discard" and _is_riichi_declaration(ky, i):
                     records[base] = ky
                     key = f"{base}~discard{i}"
-                    records[key] = ky[:i + 1]
+                    records[key] = ky[:_discard_end(ky, i)]
                     a = ky[i]["actor"]
                     cases.append((base, key, a, tuple((a + r) % 4 for r in (1, 2, 3))))
     if not cases:
@@ -467,9 +468,10 @@ def test_riichi_declaration_claims_precede_the_stick(gmdata, games, tmp_path):  
 
 def test_minkan_dora_follows_the_rinshan_response(games):
     """Why the rinshan-draw frame must not show a daiminkan / kakan dora: in the logs that dora is
-    flipped by the drawer's next action — it precedes a dahai / ankan, never a rinshan kaihou or a
-    second kakan (Tenhou flips an open kan's dora after the discard)."""
-    before, after_or_never = set(), set()
+    flipped by the drawer's next action — it comes with a dahai / ankan (written just before it,
+    or in the akochan-reviewer spelling of the Houou corpus just after it), never with a rinshan
+    kaihou or a second kakan (Tenhou flips an open kan's dora after the discard)."""
+    before, after_or_never, spelled_after = set(), set(), set()
     for evs in games.values():
         for i, e in enumerate(evs):
             h = i - 1
@@ -481,21 +483,23 @@ def test_minkan_dora_follows_the_rinshan_response(games):
             while j < len(evs) and evs[j]["type"] == "dora":
                 j += 1
             nxt = evs[j]["type"] if j < len(evs) else "end"
+            if j == i + 1 and nxt in ("dahai", "ankan") and j + 1 < len(evs) \
+                    and evs[j + 1]["type"] == "dora":
+                spelled_after.add(nxt)                  # the dora written after the action
+                continue
             (before if j > i + 1 else after_or_never).add(nxt)
     assert before <= {"dahai", "ankan"}, before
     assert after_or_never <= {"hora", "kakan", "end"}, after_or_never
     if not after_or_never:
         pytest.skip("no rinshan kaihou / second kakan after an open kan in the data")
-    assert before, "no discard after an open kan in the data"
+    assert before or spelled_after, "no discard after an open kan in the data"
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "LEAK: the tsumo arm consumes the dora event the log puts between a daiminkan / kakan rinshan"
-    " draw and the drawer's discard, so that frame shows a dead-wall tile the seat has not seen"
-    " yet, and whether it shows it tells dahai / ankan (shown) from hora / kakan (not)"))
 def test_minkan_dora_is_revealed_after_the_rinshan_decision(gmdata, games, tmp_path):  # noqa: F811
     """The rinshan-draw frame after an open kan is the log up to that tsumo plus the drawer's own
-    response: dropping the dora event the log places before the response must not change it."""
+    response: dropping the dora event the log places before the response must not change it (v2
+    applied that dora to the frame: a dead-wall tile the seat has not seen yet, shown only when
+    the drawer then discards / ankans)."""
     records, cases = {}, []
     for g, evs in games.items():
         for k, ky in enumerate(_kyokus(evs)):
@@ -543,9 +547,6 @@ def _same_obs(x: Optional[dict], y: Optional[dict], tgt_keys: Tuple[str, ...] = 
     return None
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "LEAK (same as test_riichi_declaration_claims_precede_the_stick): a third seat's claim frame on"
-    " a riichi declaration tile shows the stick only in the future where nobody rons"))
 def test_declaration_tile_claims_do_not_reveal_a_ron(gmdata, games, tmp_path):  # noqa: F811
     """A riichi declaration tile somebody really ronned, against the counterfactual where nobody
     rons (the log's reach_accepted instead of the hora events): the seats that are neither the
@@ -564,7 +565,7 @@ def test_declaration_tile_claims_do_not_reveal_a_ron(gmdata, games, tmp_path):  
                 ronners = {e["actor"] for e in ky[i + 1:end] if e["type"] == "hora"}
                 key = f"{g}~k{k}~discard{i}"
                 records[key + "~ron"] = ky[:end]
-                records[key + "~noron"] = ky[:i + 1] + [{"type": "reach_accepted", "actor": a}]
+                records[key + "~noron"] = ky[:_discard_end(ky, i)] + [{"type": "reach_accepted", "actor": a}]
                 records[key + "~pre"] = ky[:i]      # before the declaration tile
                 cases.append((key, [s for s in range(4) if s != a and s not in ronners]))
     if not cases:
@@ -583,9 +584,6 @@ def test_declaration_tile_claims_do_not_reveal_a_ron(gmdata, games, tmp_path):  
     _fail(problems, "third-seat claim frames on a declaration tile tell whether somebody rons")
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "LEAK (same as test_minkan_dora_is_revealed_after_the_rinshan_decision): the rinshan-draw frame"
-    " after an open kan shows the kan's dora when the drawer then discards, not when it wins"))
 def test_rinshan_frame_does_not_reveal_the_response(gmdata, games, tmp_path):  # noqa: F811
     """A rinshan draw after a daiminkan / kakan whose drawer really discarded (the log flips the
     kan's dora in between), against the counterfactual rinshan kaihou (a tsumo hora right after

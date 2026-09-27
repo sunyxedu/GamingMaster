@@ -5,10 +5,17 @@ Game mechanics are adapted from ``data_processing/processing/simulator.py``
 (the verified replay simulator) into a Gym-like interface that supports
 two-player simultaneous-move self-play.
 
-Observation format matches the model's ``step()`` input:
+Observation format matches the model's ``step()`` input — one player's own
+fog-of-war view and nothing it could not know:
     grid       [C, H, W]     12-channel one-hot + army
     globals    [G]            4 log-normalised stats
     legal_mask [1, H, W]     owned tiles with army > 1
+    dir_mask   [4, H, W]     legal directions at the player's own tiles
+                             (destination in bounds, not a mountain), False
+                             elsewhere — see _get_observation
+With ``memory_vision`` (off by default, the IL records' encoding) a
+mountain the player has seen stays a mountain after vision moves on;
+which of the two a network expects is its ``cfg.memory_vision``.
 
 Reward design (per step; discounted returns are NOT bounded to [-1, 1] —
 the value head is deliberately unbounded):
@@ -131,10 +138,16 @@ class GeneralsEnv:
         self.turn: int = 0
         self.done: bool = True
         self.winner: Optional[int] = None
-        # Per-player sighted-mountain memory (see reset / _get_observation);
-        # memory_vision=False restores pure instantaneous fog encoding.
+        # Per-player sighted-mountain memory (see reset / _get_observation).
+        # memory_vision=False (the default) is pure instantaneous fog — the
+        # IL records' encoding; True keeps sighted mountains encoded as
+        # mountains.  Which of the two a network was trained on is its
+        # cfg.memory_vision (model/config.py): env builders set this from
+        # the checkpoint.  A (seat 0, seat 1) pair sets it per seat — two
+        # networks trained with different settings in one game
+        # (training.train_rl.collect_selfplay_episode).
         self.seen_mountains: List[set] = [set(), set()]
-        self.memory_vision: bool = True
+        self.memory_vision: bool = False
 
         # Heuristic tracking for dense reward
         self.prev_heuristic: Dict[int, float] = {0: 0.0, 1: 0.0}
@@ -271,8 +284,10 @@ class GeneralsEnv:
 
         # Direction-validity grid [4, H, W]: moving from (r, c) in direction
         # d stays in real bounds and does not enter a mountain. Static per
-        # map and player-independent — used to hard-mask the direction head
-        # so illegal moves are never sampled.
+        # map and player-independent: the FULL map, so never handed to a
+        # player as is — each observation's dir_mask is this table at the
+        # player's own tiles only (_get_observation), which hard-masks the
+        # direction head so illegal moves are never sampled.
         dir_valid = torch.zeros(4, self.grid_h, self.grid_w, dtype=torch.bool)
         for r in range(self.real_h):
             for c in range(self.real_w):
@@ -527,6 +542,14 @@ class GeneralsEnv:
         self.obs_state_arrays = arrays
         return {0: self._get_observation(0, arrays), 1: self._get_observation(1, arrays)}
 
+    def memory_vision_for(self, player_id: int) -> bool:
+        """Whether ``player_id``'s observation keeps sighted mountains
+        (``memory_vision``: one bool for both seats, or a per-seat pair)."""
+        mv = getattr(self, "memory_vision", False)
+        if isinstance(mv, (tuple, list)):
+            return bool(mv[player_id])
+        return bool(mv)
+
     def _get_observation(
         self, player_id: int,
         arrays: Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]] = None,
@@ -534,7 +557,12 @@ class GeneralsEnv:
         """One player's observation, whole-grid numpy (``_tile_to_state`` is
         the per-tile reference of the state encoding;
         tests/test_generals_obs_vectorised.py pins this to the original
-        per-tile implementation bit for bit, memory updates included)."""
+        per-tile implementation bit for bit, memory updates included).
+
+        Everything in it is information the player has at this point
+        (tests/test_audit_generals_leaks.py): its own fog-of-war view, the
+        public leaderboard totals, and masks / labels at its own tiles —
+        whose neighbours are always in its vision."""
         H, W = self.grid_h, self.grid_w  # 25, 25 (padded)
         rH, rW = self.real_h, self.real_w  # real map bounds
         terrain, army, occ = arrays if arrays is not None else self._state_arrays()
@@ -568,7 +596,7 @@ class GeneralsEnv:
                          np.where(visible, seen_state,
                                   np.where(unseen, np.where(blank | gen, 0, 1), -1)))
         memory = (self.seen_mountains[player_id]
-                  if getattr(self, "memory_vision", True) else None)
+                  if self.memory_vision_for(player_id) else None)
         if memory is not None:
             sighted = (own | visible) & inb & mtn
             if sighted.any():
@@ -611,6 +639,15 @@ class GeneralsEnv:
         movable = own & (army > 1)
         legal = torch.from_numpy(movable[None].copy())
 
+        # --- direction mask: the legal directions at the player's OWN
+        # tiles (destination in bounds and not a mountain), False elsewhere.
+        # Every destination of an owned tile lies in its 3x3 vision, so
+        # this is exactly what the player's grid shows there; the full-map
+        # table off its own tiles would tell a never-seen mountain from a
+        # never-seen city.  Only own tiles can be move sources, so the
+        # decoders' masked policies are unchanged.
+        dir_mask = torch.from_numpy(self.dir_valid.numpy() & own[None])
+
         # --- capture-feasibility labels (auxiliary supervision) ---
         # For each movable owned tile and direction onto a DEFENDED
         # neighbour (neutral city or enemy tile): would a full move capture
@@ -638,7 +675,7 @@ class GeneralsEnv:
 
         return {"grid": grid, "globals": globals_vec, "legal_mask": legal,
                 "capture_label": cap_label, "capture_mask": cap_mask,
-                "dir_mask": self.dir_valid}
+                "dir_mask": dir_mask}
 
     # ==================================================================
     # Internal: state encoding (same as simulator)

@@ -517,13 +517,27 @@ def test_meta_registry_frozen_schema_keys():
     assert META_ARCH_KEYS["shogi"] == {"global_features": ("shogi_global_features",)}
     assert META_ARCH_KEYS["lux"] == {"global_features": ("lux_global_features",),
                                      "sap_range": ("lux_sap_range",)}
+    assert META_ARCH_KEYS["pokemon"] == {"move_buckets": ("pokemon_move_buckets",),
+                                         "species_buckets": ("pokemon_species_buckets",),
+                                         "field_features": ("pokemon_field_features",)}
+
+
+#: games whose pre-freeze shards must NOT train a fresh default net: clash_royale
+#: converter_version <= 2 inferred the hand from the whole match (a future leak),
+#: so the default deck-token net refuses them (the legacy net still accepts them)
+REFUSE_PRE_FREEZE = {"clash_royale": {"cr_card_tokens": "hand", "card_feature_dim": 8}}
 
 
 def test_meta_legacy_values_are_the_registry_defaults():
     """A fresh run on pre-freeze shards (no meta key) builds the legacy
-    architecture without anything being injected."""
+    architecture without anything being injected — except REFUSE_PRE_FREEZE
+    games, where it fails loudly and only the legacy config passes."""
     for game, legacy in META_LEGACY.items():
         cfg = build_game_network(game, **TINY).cfg
+        if game in REFUSE_PRE_FREEZE:
+            with pytest.raises(ValueError, match="implied"):
+                check_meta_arch(game, cfg, {})
+            cfg = build_game_network(game, **TINY, **REFUSE_PRE_FREEZE[game]).cfg
         for meta_key, want in legacy.items():
             for ck in META_ARCH_KEYS[game][meta_key]:
                 if hasattr(cfg, ck):
@@ -569,14 +583,49 @@ def test_go_and_lux_meta():
         check_meta_arch("lux", SimpleNamespace(lux_global_features=6, lux_sap_range=7), {})
 
 
+def test_pokemon_meta():
+    """converter v2 shards (field_features 22: + forced-switch / team-preview flags) build the
+    v2 field token in fresh runs; v1 shards (no key) are held to the legacy 20."""
+    v2 = {"field_features": 22, "move_buckets": 1024, "species_buckets": 512}
+    kw = apply_meta_arch_defaults("pokemon", dict(TINY), v2)
+    assert (kw["pokemon_field_features"], kw["pokemon_move_buckets"]) == (22, 1024)
+    net = build_game_network("pokemon", **kw)
+    check_meta_arch("pokemon", net.cfg, v2)
+    legacy = build_game_network("pokemon", **TINY).cfg
+    check_meta_arch("pokemon", legacy, {"move_buckets": 256, "species_buckets": 512})
+    with pytest.raises(ValueError, match="pokemon_field_features=20"):
+        check_meta_arch("pokemon", SimpleNamespace(pokemon_field_features=20,
+                                                   pokemon_move_buckets=1024,
+                                                   pokemon_species_buckets=512), v2)
+    with pytest.raises(ValueError, match="field_features=20 .implied"):
+        check_meta_arch("pokemon", net.cfg, {"move_buckets": 1024, "species_buckets": 512})
+    # the move head: v2 shards take the config default (identity); v1 shards (no
+    # field_features, no tgt.move_id) keep the legacy slot head in fresh runs — the identity
+    # head cannot train on them — unless the command line says otherwise
+    assert net.cfg.pokemon_move_head == "identity" and "pokemon_move_head" not in kw
+    v1 = {"move_buckets": 256, "species_buckets": 512}
+    old = build_game_network("pokemon", **apply_meta_arch_defaults("pokemon", dict(TINY), v1)).cfg
+    assert (old.pokemon_move_head, old.pokemon_field_features) == ("slot", 20)
+    check_meta_arch("pokemon", old, v1)
+    explicit = apply_meta_arch_defaults("pokemon", {**TINY, "pokemon_move_head": "identity"}, v1)
+    assert explicit["pokemon_move_head"] == "identity"
+
+
 def test_schema_freeze_warning():
     assert SCHEMA_FREEZE_CONVERTER_VERSION == {"chess": 3, "go": 2, "shogi": 2,
-                                               "mahjong": 2, "lux": 2}
+                                               "mahjong": 3, "lux": 2, "clash_royale": 3,
+                                               "pokemon": 2}
+    assert "move-identity" in schema_freeze_warning("pokemon",
+                                                    SimpleNamespace(converter_version=1))
+    assert schema_freeze_warning("pokemon", SimpleNamespace(converter_version=2)) is None
     msg = schema_freeze_warning("chess", SimpleNamespace(converter_version=2))
     assert msg.startswith("chess shards have converter_version 2 < 3: they predate the "
                           "frozen pre-training schema")
     assert "repetition flags + legal masks" in msg and "re-convert" in msg
     assert "komi" in schema_freeze_warning("go", SimpleNamespace(converter_version=None))
+    msg = schema_freeze_warning("mahjong", SimpleNamespace(converter_version=2))
+    assert msg.startswith("mahjong shards have converter_version 2 < 3") and "il_weight" in msg
+    assert schema_freeze_warning("mahjong", SimpleNamespace(converter_version=3)) is None
     assert schema_freeze_warning("chess", SimpleNamespace(converter_version=3)) is None
     assert schema_freeze_warning("othello", SimpleNamespace(converter_version=1)) is None
     assert schema_freeze_warning("generals", SimpleNamespace(converter_version=1)) is None
@@ -650,25 +699,31 @@ def _decoder_cases():
            "poke_feats": torch.randn(B, T, S, cfg.pokemon_feature_dim, generator=g),
            "slot_mask": torch.rand(B, T, S, generator=g) < 0.7,
            "field_seq": torch.randn(B, T, cfg.pokemon_field_features, generator=g)}
+    # converter v2 targets: move identity (−1 = none), unlabelled frames
     tgt = {"action_type": torch.randint(0, 2, (B, T), generator=g),
            "move_idx": torch.randint(-1, 4, (B, T), generator=g),
+           "move_id": torch.randint(-1, cfg.pokemon_move_buckets, (B, T), generator=g),
            "switch_idx": torch.randint(0, 6, (B, T), generator=g),
            "tera": torch.randint(0, 2, (B, T), generator=g),
-           "active_idx": torch.randint(0, 6, (B, T), generator=g)}
+           "active_idx": torch.randint(0, 6, (B, T), generator=g),
+           "action_known": torch.rand(B, T, generator=g) < 0.8}
+    tgt["action_type"][0, 1] = -1
+    pk_obs, pk_tgt = obs, tgt
     pred = net(obs, labels={"action_type": drop(tgt["action_type"]),
                             "active_idx": tgt["active_idx"]})
     out.append(("pokemon", net, pred, tgt, mask))
 
     torch.manual_seed(0)
-    cfg = _small(ClashRoyaleConfig, arena_h=8, arena_w=6, n_cards=20)
+    cfg = _small(ClashRoyaleConfig, arena_h=8, arena_w=6, n_cards=20)      # deck tokens
     net = GameNetwork(cfg, ClashRoyaleEncoder(cfg), CardPlacementDecoder(cfg))
+    D = cfg.deck_size
     obs = {"arena_seq": torch.randn(B, T, cfg.arena_channels, 8, 6, generator=g),
-           "hand_ids": torch.randint(0, 20, (B, T, cfg.hand_size), generator=g),
-           "hand_feats": torch.randn(B, T, cfg.hand_size, cfg.card_feature_dim, generator=g),
-           "hand_mask": torch.rand(B, T, cfg.hand_size, generator=g) < 0.8,
+           "deck_ids": torch.randint(0, 20, (B, T, D), generator=g),
+           "deck_feats": torch.randn(B, T, D, cfg.card_feature_dim, generator=g),
+           "deck_mask": torch.rand(B, T, D, generator=g) < 0.8,
            "globals_seq": torch.randn(B, T, cfg.cr_global_features, generator=g)}
     tgt = {"waited": torch.rand(B, T, generator=g) < 0.4,
-           "card_slot": torch.randint(0, 4, (B, T), generator=g),
+           "card_slot": torch.randint(0, D, (B, T), generator=g),
            "place_idx": torch.randint(0, 48, (B, T), generator=g)}
     pred = net(obs, labels={"card_slot": drop(tgt["card_slot"])})
     out.append(("clash_royale", net, pred, tgt, mask))
@@ -740,6 +795,13 @@ def _decoder_cases():
     pred = net(obs, legal={"unit": unit_mask})
     out.append(("lux", net, pred, tgt, mask))
 
+    # the legacy pokemon slot head (configs saved before pokemon_move_head)
+    torch.manual_seed(0)
+    cfg = _small(PokemonConfig, pokemon_species_buckets=64, pokemon_move_head="slot")
+    net = GameNetwork(cfg, PokemonEncoder(cfg), PokemonDecoder(cfg))
+    pred = net(pk_obs, labels={"action_type": drop(pk_tgt["action_type"]),
+                               "active_idx": pk_tgt["active_idx"]})
+    out.append(("pokemon_slot", net, pred, pk_tgt, mask))
     return out
 
 
@@ -762,10 +824,10 @@ HEADS = {
 }
 
 
-@pytest.mark.parametrize("case", range(7))
+@pytest.mark.parametrize("case", range(8))
 def test_owned_decoders_reconstruct_il_loss(case):
     name, net, pred, tgt, mask = _decoder_cases()[case]
-    key = "generals" if name.startswith("generals") else name
+    key = name.split("_")[0] if name.startswith(("generals", "pokemon")) else name
     dec = net.action_decoder
     il = dec.il_loss(pred, tgt, mask)
     terms = dec.il_head_terms(pred, tgt, mask)

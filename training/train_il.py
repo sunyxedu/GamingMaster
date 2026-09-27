@@ -19,7 +19,8 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
-from model.config import ModelConfig, config_from_dict
+from model.config import ModelConfig, checkpoint_config
+from model.games.generals import apply_memory_vision
 from model.losses import ImitationLoss, next_obs_loss
 from model.network import GeneralsNetwork
 from model.optim import (
@@ -35,6 +36,7 @@ from model.optim import (
 )
 from model.rl_utils import load_model_state, sync_gradients
 from model.components.core import allreduce_moe_loads, update_moe_balance
+from model.components.encoder import describe_encoder_norm
 from training.deep_supervision import BatchCarry, split_rows
 
 
@@ -107,6 +109,17 @@ def parse_args():
              "gated linear recurrence (fixed-size neural memory, full BPTT)",
     )
     p.add_argument(
+        "--encoder_norm", type=str, default="group", choices=["group", "batch"],
+        help="Conv encoder normalisation of a from-scratch model: per-frame "
+             "GroupNorm (causal in train mode) or the legacy BatchNorm "
+             "(model.config.ModelConfig.encoder_norm); checkpoints carry their own",
+    )
+    p.add_argument(
+        "--encoder_norm_groups", type=int, default=1,
+        help="GroupNorm groups of --encoder_norm group (1 = LayerNorm over C, H, W; "
+             "must divide the encoder widths)",
+    )
+    p.add_argument(
         "--world_model_weight", type=float, default=0.0,
         help="Weight of the self-supervised next-observation loss (memory pressure "
              "on the temporal state; 0 = off). Adds a next_obs head to the model — "
@@ -152,6 +165,10 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, epoch, a
         example (kept for all of its supervision steps)."""
         tgt = {k: v.to(device) for k, v in batch["tgt"].items()}
         obs = {k: v.to(device) for k, v in batch["obs"].items()}
+        if getattr(model.cfg, "memory_vision", False):
+            # the observation a memory_vision network plays on, derived
+            # causally from the records' pure-fog frames
+            obs["grid_seq"] = apply_memory_vision(obs["grid_seq"])
         aux = {}
         if tf_ratio > 0:
             source_y = tgt["src_y"][:, :, 0]
@@ -339,7 +356,7 @@ def main():
         resume_ckpt = torch.load(arch_ckpt_path, map_location="cpu", weights_only=False)
 
     if resume_ckpt is not None and "config" in resume_ckpt:
-        cfg = config_from_dict(resume_ckpt["config"])
+        cfg = checkpoint_config(resume_ckpt)
         # Enabling the world-model loss on a lineage without the head fails
         # loudly at weight load (documented in --world_model_weight help).
         cfg.predict_next_obs = cfg.predict_next_obs or (args.world_model_weight > 0)
@@ -356,13 +373,16 @@ def main():
             trm_L_cycles=args.trm_L_cycles,
             trm_block_layers=args.trm_block_layers,
             temporal_mixer=args.temporal_mixer,
+            encoder_norm=args.encoder_norm,
+            encoder_norm_groups=args.encoder_norm_groups,
             predict_next_obs=(args.world_model_weight > 0),
         )
     if args.halt_max_steps > 0:
         cfg.halt_max_steps = args.halt_max_steps
     if rank0:
         print(f"Model config: d={cfg.d_model}, heads={cfg.n_heads}, core={cfg.core_type}, "
-              f"moe_experts={cfg.moe_experts}, qk_norm={cfg.qk_norm}")
+              f"moe_experts={cfg.moe_experts}, qk_norm={cfg.qk_norm}, "
+              f"encoder_norm={describe_encoder_norm(cfg)}")
 
     model = GeneralsNetwork(cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters())

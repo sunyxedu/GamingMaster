@@ -65,6 +65,10 @@ training/train_il_game.py ``batch_loss``, contract in
     legal_<key>            IL legality mask (bool, or packbits-stored {0, 1}
                            float) → the decoder's ``legal["<key>"]`` under the
                            trainers' --il_legal_mask; never a soft target
+    il_weight              optional float [T]: per-frame weight of the decoder's
+                           imitation terms (mahjong, converter v3: 0 on a recorded
+                           pass whose choice the log does not show — a call it
+                           could make was pre-empted); the value target is kept
 
 Collate pads all of them with zeros (False), i.e. "no teacher / no engine
 value / nothing legal" on padded frames, which the frame mask excludes anyway.
@@ -165,13 +169,19 @@ class GmShard:
 
 def _expander(game: str):
     """Load-time expanders: games whose gm-shards store compact ``raw.*`` fields
-    and build their dense observation when a sample is read."""
+    and build their dense observation when a sample is read.  Returns
+    ``(expand(raw, shard_meta), obs_keys(raw column names))`` or None."""
     if game == "clash_royale":
         from data_processing.games.clash_royale import expand
-        return expand.expand, frozenset(expand.OBS_KEYS)
+        return expand.expand, expand.obs_keys
     if game == "generals":
         from data_processing.games import generals
-        return generals.expand, frozenset(generals.OBS_KEYS)
+        return generals.expand, lambda raw_names: frozenset(generals.OBS_KEYS)
+    if game == "mahjong":
+        from data_processing.games import mahjong
+        # converter_version >= 3 stores raw.tiles_q; older shards carry obs.tiles_seq
+        return mahjong.expand, (lambda raw_names: frozenset(mahjong.OBS_KEYS)
+                                if "tiles_q" in raw_names else frozenset())
     return None
 
 
@@ -284,7 +294,8 @@ class GameShardDataset(Dataset):
                 obs_keys = frozenset(n.split(".", 1)[1] for n in names if n.startswith("obs."))
                 exp = _expander(sh.game)
                 if exp is not None:
-                    obs_keys = obs_keys | exp[1]
+                    raw_names = [n.split(".", 1)[1] for n in names if n.startswith("raw.")]
+                    obs_keys = obs_keys | exp[1](raw_names)
                 head["_keys"] = (obs_keys, frozenset(n.split(".", 1)[1] for n in names if n.startswith("tgt.")))
             return head
         shard = torch.load(path, map_location="cpu", weights_only=False)

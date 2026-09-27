@@ -125,6 +125,9 @@ class EnvWorkerPool:
             raise ValueError("EnvWorkerPool needs n_envs >= 2 "
                              "(slot 0 lives in the parent)")
         self.n_envs = n_envs
+        # what the remote envs were configured with (the collector checks
+        # e.g. memory_vision against the model's config)
+        self.env_attrs: Dict[str, Any] = dict(env_attrs)
         remote = list(range(1, n_envs))
         n_workers = max(1, min(n_workers, len(remote)))
         self._slot_groups: List[List[int]] = [

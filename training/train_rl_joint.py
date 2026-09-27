@@ -86,8 +86,11 @@ iterations, and at the end) holds weights, EMA, optimizer, PopArt, advantage
 statistics, entropy / KL controllers, the quota ledger, the snapshot pool,
 every rank's simulator state (lux waves continue the envs' 5-match games) and
 a fingerprint of the frozen reference (a resume against a different --init is
-refused).  Randomness is re-derived from (seed, rank, iteration) at every
-iteration start (rollouts, league, opponent draws, replay data order), so
+refused, and so is one that would switch the generals observation: an
+``--env_kw generals:memory_vision=`` is adopted into the network's recorded
+cfg.memory_vision, the setting a resume must keep).  Randomness is re-derived
+from (seed, rank, iteration) at every iteration start (rollouts, league,
+opponent draws, replay data order), so
 ``--resume rl_latest.pt`` reproduces the next iteration exactly on the same
 world size: evicted pool files are deleted only after the next rl_latest.pt is
 written (older rl_iter<N>.pt files may refer to deleted snapshots, which a
@@ -129,6 +132,7 @@ from model.components.core import (
     update_moe_balance,
 )
 from model.components.heads import HLGaussValueHead
+from model.config import checkpoint_config_dict
 from model.games.base import categorical_entropy, masked_log_prob
 from model.multi_game import MultiGameNetwork, core_config_overrides, is_core_key
 from model.optim import TRM_BETAS, AdamATan2, ModelEMA
@@ -214,7 +218,10 @@ def parse_args(argv=None) -> argparse.Namespace:
            "episodes finish: size N for the tail of the episode-length distribution, "
            "not its mean")
     a("--env_kw", action="append", default=[], metavar="GAME:KEY=VALUE",
-      help="adapter option, e.g. generals:max_turns=500 (Python literal values)")
+      help="adapter option, e.g. generals:max_turns=500 (Python literal values). "
+           "generals:memory_vision=... sets the observation the network trains on: "
+           "its cfg.memory_vision, recorded in the checkpoints (default: the --init "
+           "network's own setting)")
     a("--max_wave_steps", type=int, default=100000,
       help="safety cap on env steps per lockstep wave")
     a("--actor", choices=("stream", "fixed"), default="stream",
@@ -408,6 +415,13 @@ class RLGameSpec:
 
     full_kl = False
 
+    def adopt_env_kw(self, net, overrides: Mapping[str, Any]) -> Optional[str]:
+        """Apply the ``--env_kw`` ``overrides`` that are a property of the
+        network's observation to its config (so the env built from
+        :meth:`env_kwargs`, the IL replay batches and the checkpoints follow);
+        returns a log line when that changes the config."""
+        return None
+
     def env_kwargs(self, cfg) -> Dict[str, Any]:
         return {}
 
@@ -500,9 +514,28 @@ class GeneralsSpec(RLGameSpec):
 
     full_kl = True
 
+    def adopt_env_kw(self, net, overrides):
+        # --env_kw generals:memory_vision= is the run's observation, i.e. the
+        # network's cfg.memory_vision (as training/train_rl.py --memory_vision):
+        # a run launched with it before the field existed recorded it only in
+        # its args (model.config.legacy_memory_vision) and resumes with them.
+        # Parsed as GeneralsVecEnv reads it (bool of the literal).
+        if "memory_vision" not in overrides:
+            return None
+        want = bool(overrides["memory_vision"])
+        have = bool(getattr(net.cfg, "memory_vision", False))
+        if want == have:
+            return None
+        net.cfg.memory_vision = want
+        return (f"generals: --env_kw memory_vision={want} switches the observation "
+                f"(cfg.memory_vision {have} -> {want}; not what the --init network "
+                f"trained on — recorded in this run's checkpoints, the replay batches "
+                f"follow)")
+
     def env_kwargs(self, cfg):
         return {"grid_h": cfg.grid_h, "grid_w": cfg.grid_w,
-                "turn_globals": bool(getattr(cfg, "turn_globals", False))}
+                "turn_globals": bool(getattr(cfg, "turn_globals", False)),
+                "memory_vision": bool(getattr(cfg, "memory_vision", False))}
 
     def check_env(self, env, net):
         schema = env.obs_schema()
@@ -513,6 +546,14 @@ class GeneralsSpec(RLGameSpec):
             raise SystemExit(f"generals env emits {c} grid channels / {g} globals, the network "
                              f"expects {cfg.grid_channels} / {cfg.global_features} "
                              f"(turn_globals={getattr(cfg, 'turn_globals', False)})")
+        # same shapes either way, so the schema check cannot see it: the
+        # sighted-mountain memory must be the network's (adopt_env_kw has
+        # already applied an --env_kw generals:memory_vision to its config)
+        mv = bool(getattr(cfg, "memory_vision", False))
+        if bool(getattr(env, "memory_vision", False)) != mv:
+            raise SystemExit(f"generals env memory_vision={getattr(env, 'memory_vision', None)}, "
+                             f"but the network's cfg.memory_vision (the observation it "
+                             f"trains on) is {mv}")
 
     def labels(self, actions, cfg):
         src = actions["source_idx"].long()
@@ -1112,6 +1153,9 @@ class JointRLTrainer:
         for gi, g in enumerate(self.rl_games):
             net = model[g]
             spec = game_spec(g)
+            note = spec.adopt_env_kw(net, env_kw.get(g, {}))
+            if note:
+                self.log(f"[rl] {note}")
             kw = {**spec.env_kwargs(net.cfg), **env_kw.get(g, {})}
             env = make_vec_env(g, envs_n.get(g, 8), seed=derive_seed(a.seed, self.rank, gi),
                                **kw)
@@ -1901,6 +1945,17 @@ class JointRLTrainer:
             self.log(f"[resume] note: --init {self.args.init} != the checkpoint's {saved_init}"
                      + (" (same weights)" if saved_hash is not None else
                         " (no fingerprint in this checkpoint: make sure it is the same file)"))
+        if "generals" in ck["games"]:
+            # the observation is part of the run (--env_kw generals:memory_vision,
+            # adopted into the config): a resume must not switch it mid-run.
+            # Checkpoints written before cfg.memory_vision carry it in their args.
+            saved_mv = bool(checkpoint_config_dict(ck, "generals").get("memory_vision", False))
+            mv = bool(getattr(self.model["generals"].cfg, "memory_vision", False))
+            if saved_mv != mv:
+                raise SystemExit(f"{path}: its generals network trained with memory_vision="
+                                 f"{saved_mv} (the sighted-mountain memory), this run's is {mv} "
+                                 f"— resume with the run's own arguments (--env_kw "
+                                 f"generals:memory_vision={saved_mv})")
         # the train_multi_game fields are PopArt-folded; the normalised value
         # heads the RL state assumes are in rl_state["raw_heads"]
         raw = st.get("raw_heads") or {}

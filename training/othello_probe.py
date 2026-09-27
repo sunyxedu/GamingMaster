@@ -416,8 +416,9 @@ class NetEvaluator:
     independent of the depth r used to read it, and cloning a history for
     each candidate move is an index-select of its cache rows (cache layout:
     ``[batch * S, ...]`` with S = game tokens + 2 decision tokens).  Rows
-    are evaluated independently (eval-mode BatchNorm, per-token MoE
-    routing), so batching changes results only up to float summation order.
+    are evaluated independently (per-frame GroupNorm or a legacy encoder's
+    eval-mode BatchNorm, per-token MoE routing), so batching changes results
+    only up to float summation order.
 
     ``bf16``: bf16 autocast for the trunk, with the value head and the
     decoder kept in fp32 (:func:`fp32_heads`).

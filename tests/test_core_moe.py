@@ -212,6 +212,23 @@ def test_core_config_mismatch_is_rejected():
         build_multi_game(["othello", "chess"], CORE, {"chess": {"moe_experts": 2}})
 
 
+@pytest.mark.parametrize("field,value", [("moe_bias_clip", 0.5), ("trm_rms_eps", 1e-6)])
+def test_core_module_constructor_fields_are_core_fields(field, value):
+    """The shared core modules keep these at construction (MoE balance-bias
+    clip, the TRM block's RMSNorm eps): the core the games share is built from
+    the FIRST game's config, so another value in a later game would silently
+    not apply — they must agree like every core field, and --init_core /
+    games added on resume take them from the checkpoint (core_config_overrides)."""
+    from model.multi_game import CORE_CONFIG_FIELDS, core_config_overrides
+
+    assert field in CORE_CONFIG_FIELDS
+    assert core_config_overrides(ModelConfig(**{field: value}))[field] == value
+    with pytest.raises(ValueError, match=f"disagree on core field {field}"):
+        build_multi_game(["othello", "chess"], CORE, {"chess": {field: value}})
+    mg = build_multi_game(["othello", "chess"], {**CORE, "moe_bias_clip": 0.5})
+    assert {m.bias_clip for m in core_mod.moe_layers(mg)} == {0.5}
+
+
 def test_core_transfer_and_freeze():
     mg = build_multi_game(["othello", "chess"], CORE)
     src = core_state_dict(mg["othello"])

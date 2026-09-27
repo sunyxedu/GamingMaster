@@ -729,7 +729,8 @@ def test_rl_trainers_balance_moe_experts(gio_dir):
 # data parallel
 # ---------------------------------------------------------------------------
 
-def _ddp_worker(rank: int, port: int, gio: str, othello: str, out: str) -> None:
+def _ddp_worker(rank: int, port: int, gio: str, othello: str, out: str,
+                norm: str = "group") -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = ""            # a CPU run (see tests/gloo_devices.py)
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank),
                       LOCAL_RANK=str(rank), WORLD_SIZE="2")
@@ -748,7 +749,8 @@ def _ddp_worker(rank: int, port: int, gio: str, othello: str, out: str) -> None:
         return res
 
     tmg.evaluate_sharded = checking_eval
-    core = [f"{k}={v}" for k, v in {**TINY, **CORES["recurrent_depth"], "moe_experts": 2}.items()]
+    core = [f"{k}={v}" for k, v in {**TINY, **CORES["recurrent_depth"], "moe_experts": 2,
+                                     "encoder_norm": norm}.items()]
     res = tmg.main([
         "--data", f"generals={gio}", "--data", f"othello={othello}",
         "--val", f"generals={gio}", "--batch_size", "2", "--games_per_step", "1",
@@ -763,12 +765,14 @@ def _ddp_worker(rank: int, port: int, gio: str, othello: str, out: str) -> None:
                 "evals": evals}, os.path.join(out, f"rank{rank}.pt"))
 
 
-def test_ddp_generals_othello_ranks_stay_identical(gio_dir, tmp_path):
+@pytest.mark.parametrize("norm", ["group", "batch"])
+def test_ddp_generals_othello_ranks_stay_identical(gio_dir, tmp_path, norm):
     """2 gloo ranks, one micro-batch each per step (the ranks draw different
     games, so generals' adapter often has a gradient on one rank only):
-    parameters, buffers (generals BatchNorm statistics, MoE biases) and EMA
-    stay bit-identical, and sharded generals validation equals the
-    single-process one."""
+    parameters, buffers (MoE biases; the legacy encoder_norm="batch" layout's
+    BatchNorm statistics, merged by BatchNormStatSync) and EMA stay
+    bit-identical, and sharded generals validation equals the single-process
+    one."""
     from multiprocessing.connection import wait
 
     from tests.test_multi_game_ddp import _assert_rank_identical, _free_port
@@ -778,7 +782,8 @@ def test_ddp_generals_othello_ranks_stay_identical(gio_dir, tmp_path):
     ctx = torch.multiprocessing.get_context("spawn")
     port = _free_port()
     procs = [ctx.Process(target=_ddp_worker,
-                         args=(r, port, gio_dir, str(tmp_path / "othello"), str(tmp_path)))
+                         args=(r, port, gio_dir, str(tmp_path / "othello"), str(tmp_path),
+                               norm))
              for r in range(2)]
     for p in procs:
         p.start()
@@ -796,7 +801,10 @@ def test_ddp_generals_othello_ranks_stay_identical(gio_dir, tmp_path):
     _assert_rank_identical(r0, r1)
     bn = [n for n in r0["buffers"] if n.startswith("nets.generals.obs_encoder")
           and n.endswith("running_mean")]
-    assert bn and any(r0["buffers"][n].abs().sum() > 0 for n in bn)
+    if norm == "batch":
+        assert bn and any(r0["buffers"][n].abs().sum() > 0 for n in bn)
+    else:                                   # per-frame GroupNorm: no running statistics
+        assert not any(n.endswith(("running_mean", "running_var")) for n in r0["buffers"])
     assert len(r0["evals"]) == 2
     for sharded, full in r0["evals"]:
         assert sharded.keys() == full.keys() == {"generals"}

@@ -279,10 +279,17 @@ class TestDirMask:
                 assert bool(dirm[d, r, c]) == valid[d]
 
     def test_masked_direction_logits_suppressed(self, model, cfg):
-        """Direction logits at the chosen source are -1e9 on invalid dirs."""
+        """Direction logits at the chosen source are -1e9 on invalid dirs.
+
+        Seat 0's general sits in the top-left corner with a mountain to its
+        right, so its only legal move is down; by turn 2 it is the one
+        movable tile, i.e. the source (the per-seat mask is False off the
+        seat's own tiles, where an unmasked dead row keeps the raw logits)."""
         env = GeneralsEnv(grid_h=cfg.grid_h, grid_w=cfg.grid_w)
-        obs = env.reset(seed=3)
-        # find an owned movable tile on the map edge (has an invalid dir)
+        obs = env.reset(map_data={"map_w": 6, "map_h": 5, "generals": [0, 29],
+                                  "cities": [], "city_armies": [], "mountains": [1]})
+        for _ in range(2):                  # the generals grow to army 2
+            obs, _, _, _ = env.step(None, None)
         with torch.no_grad():
             out = model.step(
                 obs[0]["grid"].unsqueeze(0), obs[0]["globals"].unsqueeze(0),
@@ -290,6 +297,8 @@ class TestDirMask:
                 act_steps=1,
                 direction_mask=obs[0]["dir_mask"].unsqueeze(0))
         src = out["action_source"].item()
+        assert src == 0 and obs[0]["legal_mask"][0, 0, 0]
+        assert obs[0]["dir_mask"][:, 0, 0].tolist() == [True, False, False, False]
         r, c = divmod(src, cfg.grid_w)
         dl = out["direction_logits"][0]
         for d in range(4):

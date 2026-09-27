@@ -1,6 +1,8 @@
 """Tests for the Clash Royale game adapter.
 
-Covers the adapter contract against the game-agnostic core:
+Covers the adapter contract against the game-agnostic core, for both card-token
+variants (``cr_card_tokens``: the 8 deck tokens with the causal hand belief, and
+the legacy 4 hand slots):
   1. forward output shapes (all pred keys, value, q_halt)
   2. gradient flow into encoder, decoder, and the shared core
   3. step() chaining with the Stage-1 attention cache
@@ -18,22 +20,23 @@ from model.games.clash_royale import (
     CardPlacementDecoder,
     ClashRoyaleConfig,
     ClashRoyaleEncoder,
+    n_card_tokens,
 )
-
 
 # ======================================================================
 # Fixtures / helpers
 # ======================================================================
 
-@pytest.fixture
-def cfg():
-    """Tiny config for fast tests."""
+@pytest.fixture(params=["deck", "hand"])
+def cfg(request):
+    """Tiny config for fast tests (deck tokens / legacy hand slots)."""
     return ClashRoyaleConfig(
         d_model=48, n_heads=4, d_ff=64, dropout=0.0,
         n_st_layers=1, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
         halt_max_steps=2, encoder_channels=24,
         arena_h=8, arena_w=6, arena_channels=5,
-        hand_size=4, n_cards=20, card_feature_dim=8, cr_global_features=6,
+        hand_size=4, n_cards=20, cr_global_features=6, cr_card_tokens=request.param,
+        card_feature_dim=9 if request.param == "deck" else 8,
     )
 
 
@@ -44,16 +47,17 @@ def model(cfg):
 
 def _make_obs(cfg, B=2, T=3, seed=0):
     g = torch.Generator().manual_seed(seed)
+    N, pre = n_card_tokens(cfg), cfg.cr_card_tokens
     obs = {
         "arena_seq": torch.randn(B, T, cfg.arena_channels, cfg.arena_h, cfg.arena_w,
                                  generator=g),
-        "hand_ids": torch.randint(0, cfg.n_cards, (B, T, cfg.hand_size), generator=g),
-        "hand_feats": torch.randn(B, T, cfg.hand_size, cfg.card_feature_dim, generator=g),
+        f"{pre}_ids": torch.randint(0, cfg.n_cards, (B, T, N), generator=g),
+        f"{pre}_feats": torch.randn(B, T, N, cfg.card_feature_dim, generator=g),
         # Some empty slots so the "empty" embedding participates
-        "hand_mask": torch.rand(B, T, cfg.hand_size, generator=g) < 0.8,
+        f"{pre}_mask": torch.rand(B, T, N, generator=g) < 0.8,
         "globals_seq": torch.randn(B, T, cfg.cr_global_features, generator=g),
     }
-    obs["hand_mask"][..., 0] = True  # at least one real card
+    obs[f"{pre}_mask"][..., 0] = True  # at least one real card
     return obs
 
 
@@ -62,7 +66,7 @@ def _make_legal(cfg, B, T=None, seed=0):
     g = torch.Generator().manual_seed(seed)
     shape = (B,) if T is None else (B, T)
     n_arena = cfg.arena_h * cfg.arena_w
-    card = torch.rand(*shape, cfg.hand_size, generator=g) < 0.5
+    card = torch.rand(*shape, n_card_tokens(cfg), generator=g) < 0.5
     place = torch.rand(*shape, n_arena, generator=g) < 0.3
     card[..., 0] |= ~card.any(-1)
     place[..., 0] |= ~place.any(-1)
@@ -78,17 +82,17 @@ def test_forward_shapes(cfg, model):
     n_arena = cfg.arena_h * cfg.arena_w
     out = model(_make_obs(cfg, B, T))
     assert out["wait_logits"].shape == (B, T)
-    assert out["card_logits"].shape == (B, T, cfg.hand_size)
+    assert out["card_logits"].shape == (B, T, n_card_tokens(cfg))
     assert out["placement_logits"].shape == (B, T, n_arena)
     assert out["card_slot"].shape == (B, T)
     assert out["value"].shape == (B, T)
     assert out["q_halt"].shape == (B, T)
-    assert (out["card_slot"] >= 0).all() and (out["card_slot"] < cfg.hand_size).all()
+    assert (out["card_slot"] >= 0).all() and (out["card_slot"] < n_card_tokens(cfg)).all()
 
 
 def test_forward_teacher_forcing_uses_labels(cfg, model):
     B, T = 2, 3
-    labels = {"card_slot": torch.randint(0, cfg.hand_size, (B, T))}
+    labels = {"card_slot": torch.randint(0, n_card_tokens(cfg), (B, T))}
     out = model(_make_obs(cfg, B, T), labels=labels)
     assert torch.equal(out["card_slot"], labels["card_slot"])
 
@@ -136,7 +140,7 @@ def test_step_chaining_cache_growth(cfg, model):
         assert len(cache) == cfg.n_st_layers
         assert cache[0].shape == (B * S, t + 1, cfg.d_model)  # attention KV cache grows
         assert out["wait_logits"].shape == (B,)
-        assert out["card_logits"].shape == (B, cfg.hand_size)
+        assert out["card_logits"].shape == (B, n_card_tokens(cfg))
         assert out["placement_logits"].shape == (B, n_arena)
         assert out["value"].shape == (B,)
         assert out["q_halt"].shape == (B,)
@@ -201,7 +205,7 @@ def test_sample_replay_log_prob_parity(cfg, dtype):
     wait[:, 1] = -20.0  # sigmoid ≈ 0: guaranteed-play frames
     pred = {
         "wait_logits": wait.to(dtype).requires_grad_(),
-        "card_logits": (torch.randn(B, T, cfg.hand_size, generator=g) * 5)
+        "card_logits": (torch.randn(B, T, n_card_tokens(cfg), generator=g) * 5)
         .to(dtype).requires_grad_(),
         "placement_logits": (torch.randn(B, T, n_arena, generator=g) * 5)
         .to(dtype).requires_grad_(),
@@ -273,7 +277,7 @@ def _make_tgt(cfg, B, T, seed=0):
     n_arena = cfg.arena_h * cfg.arena_w
     return {
         "waited": torch.rand(B, T, generator=g) < 0.4,
-        "card_slot": torch.randint(0, cfg.hand_size, (B, T), generator=g),
+        "card_slot": torch.randint(0, n_card_tokens(cfg), (B, T), generator=g),
         "place_idx": torch.randint(0, n_arena, (B, T), generator=g),
     }
 
@@ -333,7 +337,7 @@ def test_wait_pe_reads_the_match_clock_not_the_frame_index(cfg):
     torch.manual_seed(0)
     dec = CardPlacementDecoder(cfg).eval()
     B, T, d = 2, 3, cfg.d_model
-    tokens = torch.randn(B * T, cfg.arena_h * cfg.arena_w + cfg.hand_size, d)
+    tokens = torch.randn(B * T, cfg.arena_h * cfg.arena_w + n_card_tokens(cfg), d)
     hl, ll = torch.randn(B * T, d), torch.randn(B * T, d)
     clock = torch.tensor([[10.0, 11.0, 12.0], [100.0, 101.0, 102.0]])
     with torch.no_grad():
@@ -363,13 +367,20 @@ def test_decode_context_is_the_clock_in_seconds(cfg):
     assert ClashRoyaleEncoder(legacy).decode_context(obs) is None
 
 
-def test_legacy_configs_keep_the_frame_wait_pe():
+def test_legacy_configs_keep_the_frame_wait_pe_and_the_hand_slots():
     from model.config import upgrade_config_dict
 
     old = {"d_model": 48, "cr_global_features": 6}            # a pre-field CR config
-    assert upgrade_config_dict(old)["cr_wait_time"] == "frame"
-    assert "cr_wait_time" not in upgrade_config_dict({"d_model": 48})   # other games
-    assert ClashRoyaleConfig().cr_wait_time == "match"
+    up = upgrade_config_dict(old)
+    assert (up["cr_wait_time"], up["cr_card_tokens"], up["card_feature_dim"]) == \
+        ("frame", "hand", 8)
+    other = upgrade_config_dict({"d_model": 48})               # other games
+    assert not {"cr_wait_time", "cr_card_tokens", "card_feature_dim"} & set(other)
+    new = ClashRoyaleConfig()
+    assert (new.cr_wait_time, new.cr_card_tokens, new.deck_size, new.card_feature_dim) == \
+        ("match", "deck", 8, 9)
+    with pytest.raises(ValueError, match="cr_card_tokens"):
+        ClashRoyaleEncoder(ClashRoyaleConfig(cr_card_tokens="slots"))
 
 
 def test_crop_policy_refuses_frame_time_nets_on_windows(cfg):
@@ -384,24 +395,32 @@ def test_crop_policy_refuses_frame_time_nets_on_windows(cfg):
 
 
 def _cr_pt_samples(n=2, T=12, seed=0):
+    """Deck-token samples (crdata converter_version 3 observation)."""
     g = torch.Generator().manual_seed(seed)
     c = ClashRoyaleConfig()
+    D = c.deck_size
     out = []
     for _ in range(n):
         glob = torch.rand(T, c.cr_global_features, generator=g)
         glob[:, 2] = torch.arange(T) / 300.0                    # match clock
         out.append({
             "obs": {"arena_seq": torch.rand(T, c.arena_channels, c.arena_h, c.arena_w, generator=g),
-                    "hand_ids": torch.randint(1, c.n_cards, (T, c.hand_size), generator=g),
-                    "hand_feats": torch.rand(T, c.hand_size, c.card_feature_dim, generator=g),
-                    "hand_mask": torch.ones(T, c.hand_size, dtype=torch.bool),
-                    "globals_seq": glob},
+                    "deck_ids": torch.randint(1, c.n_cards, (T, D), generator=g),
+                    "deck_feats": torch.rand(T, D, c.card_feature_dim, generator=g),
+                    "deck_mask": torch.ones(T, D, dtype=torch.bool),
+                    "globals_seq": glob,
+                    "legal_card": torch.ones(T, D, dtype=torch.bool),
+                    "legal_place": torch.ones(T, c.arena_h * c.arena_w, dtype=torch.bool)},
             "tgt": {"waited": torch.rand(T, generator=g) < 0.5,
-                    "card_slot": torch.randint(0, c.hand_size, (T,), generator=g),
+                    "card_slot": torch.randint(0, D, (T,), generator=g),
                     "place_idx": torch.randint(0, c.arena_h * c.arena_w, (T,), generator=g),
                     "value": torch.ones(T)},
             "meta": {}})
     return out
+
+
+#: the shard meta crdata converter_version 3 writes (the fields the trainers check)
+CR_V3_META = {"card_tokens": "deck", "deck_size": 8, "card_feature_dim": 9, "hand_size": 4}
 
 
 def test_train_multi_game_crops_clash_royale_only_when_asked_and_safe(tmp_path):
@@ -410,7 +429,8 @@ def test_train_multi_game_crops_clash_royale_only_when_asked_and_safe(tmp_path):
     from data_processing.games.dataset import save_shard
     from training import train_multi_game
 
-    save_shard(str(tmp_path / "cr" / "a.pt"), "clash_royale", _cr_pt_samples())
+    save_shard(str(tmp_path / "cr" / "a.pt"), "clash_royale", _cr_pt_samples(), converter_version=3,
+               meta=CR_V3_META)
     base = ["--data", f"clash_royale={tmp_path / 'cr'}", "--steps", "1", "--batch_size", "1",
             "--warmup_steps", "1", "--ema_rate", "0", "--device", "cpu", "--eval_every", "100",
             "--save_dir", str(tmp_path / "ck"), "--max_len", "4", "--override",

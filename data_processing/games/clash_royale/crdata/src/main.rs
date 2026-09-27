@@ -5,9 +5,23 @@
 //!   crdata stats   --input data/cr/raw [--limit 1]
 //!
 //! Input: RoyaleAPI action replays (`royaleapi-battle-replay.v1` payloads in
-//! Parquet). Output: gm-shard.v1 directories (compact per-frame `raw.*` fields +
-//! IL targets); `GameShardDataset` expands `raw.*` into the
-//! `model/games/clash_royale.py` observation at load time.
+//! Parquet, or JSON lines `{"tag", "payload"}` like the test fixture). Output:
+//! gm-shard.v1 directories (compact per-frame `raw.*` fields + IL targets);
+//! `GameShardDataset` expands `raw.*` into the `model/games/clash_royale.py`
+//! observation at load time.
+//!
+//! Converter versions ([`CONVERTER_VERSION`]; `GameShardDataset` refuses to mix them):
+//!   2  gm-shard output; the 4 hand slots, the next card and "P(card really in hand)"
+//!      came from a hand-cycle inference over the WHOLE match (a future leak: the
+//!      card about to be played was marked certain), ability events named RoyaleAPI's
+//!      first ability-source candidate (possibly an opponent card not played yet).
+//!   3  causal: 8 deck tokens with P(in hand) / P(next) given the own plays before
+//!      the frame (`hand::CycleBelief`), label `card_slot` = deck index, ability
+//!      sources resolved from the public record (`replay::resolve_ability_sources`).
+//!      Shard meta `card_tokens = "deck"`, `deck_size = 8`, `card_feature_dim = 9`.
+//!
+//! Full re-conversion (all of `VanguardX101/IL_Replay`; the high-quality preset the
+//! training runs use): see `../README.md`.
 
 #![allow(dead_code)]
 mod catalog;
@@ -26,6 +40,11 @@ use frames::FrameConfig;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+/// Shard `converter_version` (history in the crate docs).
+pub const CONVERTER_VERSION: u32 = 3;
+/// Deck-token features `expand.py` builds (shard meta `card_feature_dim`).
+pub const CARD_FEATURE_DIM: usize = 9;
 
 #[derive(Parser)]
 #[command(name = "crdata", version, about = "Clash Royale replay → training frames")]
@@ -49,9 +68,9 @@ enum Cmd {
         #[arg(long)]
         limit: Option<usize>,
     },
-    /// Convert Parquet parts to `cr-frames.v1` shards
+    /// Convert Parquet parts (or JSON-lines files) to gm-shard directories
     Convert {
-        /// a directory (all `**/part-*.parquet` under it) or one Parquet file
+        /// a directory (all `**/*.parquet` under it) or one Parquet / `.jsonl` file
         #[arg(long)]
         input: PathBuf,
         #[arg(long)]
@@ -121,7 +140,7 @@ fn parquet_parts(input: &Path) -> Result<Vec<PathBuf>> {
                     continue;
                 }
                 walk(&p, out)?;
-            } else if p.extension().map(|e| e == "parquet").unwrap_or(false) {
+            } else if p.extension().map(|e| e == "parquet" || e == "jsonl").unwrap_or(false) {
                 out.push(p);
             }
         }
@@ -129,7 +148,7 @@ fn parquet_parts(input: &Path) -> Result<Vec<PathBuf>> {
     }
     walk(input, &mut out)?;
     out.sort();
-    anyhow::ensure!(!out.is_empty(), "no .parquet files under {}", input.display());
+    anyhow::ensure!(!out.is_empty(), "no .parquet / .jsonl files under {}", input.display());
     Ok(out)
 }
 
@@ -150,11 +169,12 @@ fn cmd_convert(
     let modes: Option<Vec<String>> = game_modes.map(|s| s.split(',').map(|m| m.trim().to_string()).collect());
     let parts = parquet_parts(&input)?;
     let shard_meta = serde_json::json!({
-        "arena_h": 32, "arena_w": 18, "arena_channels": 16, "hand_size": 4, "n_cards": cat.len() + 2,
-        "card_feature_dim": 8, "cr_global_features": 6, "step_ticks": step_ticks, "recent": recent,
+        "arena_h": 32, "arena_w": 18, "arena_channels": 16, "hand_size": frames::HAND, "n_cards": cat.len() + 2,
+        "card_tokens": "deck", "deck_size": frames::DECK, "card_feature_dim": CARD_FEATURE_DIM,
+        "cr_global_features": 6, "step_ticks": step_ticks, "recent": recent,
         "tau_ticks": 60.0, "catalog_version": cat.version,
     });
-    let mut writer = gmshard::ShardWriter::new(&out, "clash_royale", 2, shard_meta, samples_per_shard)?;
+    let mut writer = gmshard::ShardWriter::new(&out, "clash_royale", CONVERTER_VERSION, shard_meta, samples_per_shard)?;
     let mut n_rows = 0usize;
     let mut n_parse_err = 0usize;
     let mut n_mode_skip = 0usize;
@@ -167,7 +187,7 @@ fn cmd_convert(
         if remaining == 0 {
             break;
         }
-        let rows = replay::read_rows(part).with_context(|| format!("read {}", part.display()))?;
+        let rows = replay::read_input_rows(part).with_context(|| format!("read {}", part.display()))?;
         let rows: Vec<_> = rows.into_iter().take(remaining).collect();
         remaining -= rows.len();
         n_rows += rows.len();
@@ -219,7 +239,7 @@ fn cmd_convert(
     }
     writer.flush()?;
     let summary = serde_json::json!({
-        "format": "gm-shard.v1", "input": input, "parts": parts.len(), "rows": n_rows,
+        "format": "gm-shard.v1", "converter_version": CONVERTER_VERSION, "input": input, "parts": parts.len(), "rows": n_rows,
         "parse_errors": n_parse_err, "mode_skipped": n_mode_skip, "hand_inference_failed": n_hand_fail,
         "elixir_violation_dropped": n_viol_drop, "low_quality_dropped": n_low_quality, "shards": writer.written_shards,
         "samples": writer.written_samples, "frames": writer.written_frames,
@@ -242,7 +262,7 @@ fn cmd_stats(input: PathBuf, catalog: Option<PathBuf>, limit: Option<usize>) -> 
     let mut durations = Vec::new();
     let mut n = 0usize;
     for part in parts.iter().take(limit.unwrap_or(usize::MAX)) {
-        for (tag, payload) in replay::read_rows(part)? {
+        for (tag, payload) in replay::read_input_rows(part)? {
             let Ok(r) = replay::parse_payload(&tag, &payload, &cat) else { continue };
             n += 1;
             *modes.entry(r.game_mode.clone()).or_default() += 1;

@@ -87,6 +87,8 @@ def main() -> None:
             for _ in range(args.envs)]
     for e in envs:
         e.turn_globals = bool(getattr(t_cfg, "turn_globals", False))
+        # the teacher's observation (the student inherits t_cfg.memory_vision)
+        e.memory_vision = bool(getattr(t_cfg, "memory_vision", False))
     if args.replay_dir and args.filtered_file:
         n = envs[0].load_map_pool(args.replay_dir, args.filtered_file)
         for e in envs[1:]:

@@ -277,6 +277,10 @@ def broadcast_module_state(module: nn.Module, src: int = 0) -> None:
 class BatchNormStatSync:
     """Keep BatchNorm running statistics identical across ranks.
 
+    Only legacy conv encoders have BatchNorm (``cfg.encoder_norm="batch"``);
+    the default per-frame GroupNorm keeps no running statistics, and with no
+    BatchNorm layer (``bns`` empty) a call is a no-op.
+
     Running statistics are forward-side state: each rank updates them on its
     own micro-batches only (and only for the games it drew), so without a
     sync they drift apart and the checkpoint would carry rank 0's view.

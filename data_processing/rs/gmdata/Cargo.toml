@@ -31,3 +31,6 @@ arrow-array = "54"
 crc32fast = "1.5.2"
 arrow-cast = "54"
 arrow-schema = "54"
+# riichi mahjong hand evaluation (yaku / yakuman) for exact hora legality; Apache-2.0,
+# https://github.com/smly/RiichiEnv (default features only: no Python bindings)
+riichienv-core = "=0.4.10"

@@ -1,11 +1,16 @@
-"""`gmdata mahjong convert` v2 legality masks on the committed fixture games.
+"""`gmdata mahjong convert` v3 legality masks and loss weights on the committed
+fixture games.
 
-tgt.legal_action_type [T, 8] marks the action types legal at the frame and
+tgt.legal_action_type [T, 8] marks the action types legal at the frame (exact
+under Tenhou's rules: the one-han minimum and furiten included) and
 tgt.legal_tile_of [T, 34] the legal tile arguments of the ground-truth type
 (all true for the tile-less hora / ryukyoku / pass).  Every recorded action
 must lie inside its masks (the converter's `mask_mismatch` stat is 0), the
 masks must actually constrain, and they must drive the decoder's IL legality
-path (tgt.legal_<key> → legal[<key>])."""
+path (tgt.legal_<key> → legal[<key>]).  tgt.il_weight [T] is 0 only on claim
+frames whose recorded pass does not show the seat's choice: pre-empted by
+another seat's call, or a triple ron (logged as a bare draw; none in the golden
+set, see the Rust test triple_ron_claims_are_legal_rons_with_weight_zero)."""
 from __future__ import annotations
 
 import json
@@ -19,6 +24,7 @@ from model.games.mahjong import (
     ACTION_CHI,
     ACTION_DAHAI,
     ACTION_HORA,
+    ACTION_KAN,
     ACTION_PASS,
     ACTION_PON,
     ACTION_RIICHI,
@@ -50,14 +56,35 @@ def test_schema_and_mismatch_stat(converted):
     assert stats["mask_mismatch"] == 0
     assert stats["frames"] > 0
     ds = GameShardDataset(out)
-    assert ds.converter_version == 2 and ds.shard_meta == {}
+    assert ds.converter_version == 3 and ds.shard_meta == {}
+    # the tile planes are stored as u8 quarters and expanded (exactly) at load
+    import json as _json
+    import os
+    idx = _json.load(open(os.path.join(out, "mahjong_00000", "index.json")))
+    assert idx["tensors"]["raw.tiles_q"]["dtype"] == "uint8" and "obs.tiles_seq" not in idx["tensors"]
     for s in load_gm_samples(out):
         T = s["tgt"]["action_type"].shape[0]
         assert s["tgt"]["legal_action_type"].shape == (T, N_ACTION_TYPES)
         assert s["tgt"]["legal_tile_of"].shape == (T, N_TILE_KINDS)
-        for k in ("legal_action_type", "legal_tile_of"):   # packed bits → float {0, 1}
+        assert s["tgt"]["il_weight"].shape == (T,)
+        for k in ("legal_action_type", "legal_tile_of", "il_weight"):   # packed bits → float {0, 1}
             v = s["tgt"][k]
             assert v.dtype == torch.float32 and ((v == 0) | (v == 1)).all()
+        tiles = s["obs"]["tiles_seq"]
+        assert tiles.dtype == torch.float32 and tiles.shape == (T, N_TILE_KINDS, 16)
+        assert torch.equal(tiles * 4, (tiles * 4).round()) and "raw" not in s
+
+
+def test_tile_planes_expand_exactly():
+    """raw.tiles_q (u8 quarters) → float32 tiles_seq, bit-exact; older shards (obs.tiles_seq on
+    disk, no raw field) pass through untouched."""
+    from data_processing.games.mahjong import expand
+    q = torch.randint(0, 5, (3, N_TILE_KINDS, 16), dtype=torch.uint8)
+    out = expand({"tiles_q": q}, {})
+    ref = torch.tensor([[[v / 4.0 for v in row] for row in f] for f in q.tolist()], dtype=torch.float64)
+    assert out["tiles_seq"].dtype == torch.float32
+    assert torch.equal(out["tiles_seq"], ref.to(torch.float32))
+    assert expand({}, {}) == {}
 
 
 def test_every_ground_truth_inside_its_masks(converted):
@@ -92,11 +119,28 @@ def test_masks_constrain(converted):
     # pon: exactly the called kind; chi: at most 3 run bases
     assert (tiles[at == ACTION_PON].sum(-1) == 1).all()
     assert (tiles[at == ACTION_CHI].sum(-1) <= 3).all()
-    # hora is legal on every winning frame, rarely elsewhere (superset: yaku unchecked)
+    # hora is legal on every winning frame and exact (yaku, furiten): experts decline few
     hora_legal = types[:, ACTION_HORA]
     assert hora_legal[at == ACTION_HORA].all()
-    assert hora_legal.sum() < 2 * (at == ACTION_HORA).sum()
+    assert hora_legal.sum() < 1.1 * (at == ACTION_HORA).sum()
     assert not types[claim, ACTION_RYUKYOKU].any() and not types[claim, ACTION_RIICHI].any()
+    # every claim frame offers something besides pass (v3: claim frames exist by legality)
+    assert (types[claim][:, [ACTION_CHI, ACTION_PON, ACTION_KAN, ACTION_HORA]].any(-1)).all()
+
+
+def test_il_weight_marks_only_pre_empted_passes(converted):
+    """Weight 0 only on claim frames labelled pass whose chi / pon / kan was pre-empted by a
+    higher-priority call (the golden set holds no triple ron); own-turn frames and every other
+    claim keep weight 1."""
+    samples = load_gm_samples(converted[0])
+    types = _frames(samples, "legal_action_type").bool()
+    at = _frames(samples, "action_type")
+    w = _frames(samples, "il_weight")
+    zero = w == 0
+    assert zero.any() and zero.float().mean() < 0.05
+    assert (at[zero] == ACTION_PASS).all()
+    assert types[zero][:, [ACTION_CHI, ACTION_PON, ACTION_KAN]].any(-1).all()
+    assert not zero[types[:, ACTION_DAHAI]].any()
 
 
 def test_masks_feed_the_decoder_il_path(converted):

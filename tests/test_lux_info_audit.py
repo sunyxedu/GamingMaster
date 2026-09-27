@@ -35,12 +35,14 @@ Two leak classes, each tested mathematically:
       The recorded observations themselves are fog-of-war views
       (data invariants on the fixture and, if present, raw replays).
 
-Known train-time channel (strict xfail, flips when fixed): in train mode the
-encoder's BatchNorm normalises frame t with batch statistics that include the
-sample's later frames (inference uses running stats and is causal).  It is the
-only one: with BatchNorm on running stats the whole network is causal in train
-mode too (dropout, sampled depth, MoE), and the MoE core is causal at inference
-on both expert paths.
+Train mode: the map encoder's default per-frame GroupNorm
+(``cfg.encoder_norm="group"``) keeps the whole network causal in train mode too
+(dropout, sampled depth, MoE), and the MoE core is causal at inference on both
+expert paths.  Legacy checkpoints (``encoder_norm="batch"``, configs predating
+the field) keep their BatchNorm, which in train mode normalises frame t with
+batch statistics that include the sample's later frames (inference uses running
+stats and is causal): pinned as a strict xfail.  It is that layout's only
+train-time channel: with BatchNorm on running stats it is causal as well.
 
 Data: tests/fixtures/lux_kaggle/episode-71896508.json.gz (a real Kaggle
 episode, always); with raw replays present (``LUX_RAW_DIR``, default
@@ -670,14 +672,14 @@ def test_env_cfg_given_to_agents_is_pinned():
 # model: the network's frame-t outputs ignore later frames
 # ---------------------------------------------------------------------------
 
-def _lux_net(mixer: str, core: str, head: str) -> GameNetwork:
+def _lux_net(mixer: str, core: str, head: str, norm: str = "group") -> GameNetwork:
     cfg = LuxConfig(
         d_model=32, n_heads=4, d_ff=64, dropout=0.0, n_st_layers=2, temporal_mixer=mixer,
         core_type=core, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, halt_max_steps=2,
         rd_prelude_layers=1, rd_recurrent_layers=1, rd_coda_layers=1, rd_mean_iters=2,
         rd_backprop_iters=1, core_layers=1, encoder_channels=16,
         map_h=8, map_w=8, map_channels=12, max_units=6, unit_feature_dim=16,
-        lux_global_features=11, lux_sap_range=7, lux_sap_head=head)
+        lux_global_features=11, lux_sap_range=7, lux_sap_head=head, encoder_norm=norm)
     return GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg)).eval()
 
 
@@ -701,16 +703,18 @@ def _frames(cfg, B: int, T: int, g: torch.Generator) -> dict:
 OUT_KEYS = ("unit_action_logits", "unit_present", "sap_logits", "sap_mask", "value", "q_halt")
 
 
+@pytest.mark.parametrize("norm", ["group", "batch"])
 @pytest.mark.parametrize("head", ["pointer", "mlp"])
 @pytest.mark.parametrize("mixer,core", [("attention", "trm"), ("recurrent", "recurrent_depth")])
-def test_network_frame_outputs_ignore_later_frames(mixer, core, head):
+def test_network_frame_outputs_ignore_later_frames(mixer, core, head, norm):
     """In inference mode, every decoder input and output at frame t — the IL
     legal masks derived from the obs (units + the episode's sap range), the
     sap decode context, the unit / sap logits, the value — is unchanged when
     frames t+1.. are replaced, and equals the forward over the prefix alone
-    (so neither later frames nor the sequence length reach frame t)."""
+    (so neither later frames nor the sequence length reach frame t).  Both
+    encoder layouts: the default GroupNorm and legacy BatchNorm checkpoints."""
     torch.manual_seed(0)
-    net = _lux_net(mixer, core, head)
+    net = _lux_net(mixer, core, head, norm)
     cfg = net.cfg
     g = torch.Generator().manual_seed(1)
     B, T = 2, 9
@@ -745,14 +749,15 @@ def test_network_frame_outputs_ignore_later_frames(mixer, core, head):
                                       out2["unit_action_logits"][:, t + 1:])
 
 
-def _lux_net_cfg(mixer: str, core: str, head: str, moe: int = 0, dropout: float = 0.0) -> LuxConfig:
+def _lux_net_cfg(mixer: str, core: str, head: str, moe: int = 0, dropout: float = 0.0,
+                 norm: str = "group") -> LuxConfig:
     return LuxConfig(
         d_model=32, n_heads=4, d_ff=64, dropout=dropout, n_st_layers=2, temporal_mixer=mixer,
         core_type=core, trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1, halt_max_steps=2,
         rd_prelude_layers=1, rd_recurrent_layers=1, rd_coda_layers=1, rd_mean_iters=2,
         rd_backprop_iters=1, core_layers=1, encoder_channels=16, moe_experts=moe, moe_top_k=2,
         map_h=8, map_w=8, map_channels=12, max_units=6, unit_feature_dim=16,
-        lux_global_features=11, lux_sap_range=7, lux_sap_head=head)
+        lux_global_features=11, lux_sap_range=7, lux_sap_head=head, encoder_norm=norm)
 
 
 def _assert_prefix_outputs_equal(a: dict, b: dict, t: int, what: str) -> None:
@@ -802,22 +807,27 @@ def _freeze_batchnorm(net: torch.nn.Module) -> torch.nn.Module:
     return net
 
 
+@pytest.mark.parametrize("norm", ["group", "batch"])
 @pytest.mark.parametrize("mixer,core,head,moe", [
     ("attention", "trm", "pointer", 0),
     ("recurrent", "recurrent_depth", "mlp", 0),
     ("attention", "recurrent_depth", "pointer", 4),
 ])
-def test_network_train_mode_is_causal_apart_from_batchnorm(mixer, core, head, moe):
+def test_network_train_mode_is_causal(mixer, core, head, moe, norm):
     """IL forwards run in TRAIN mode (dropout, a sampled recurrence depth, a
-    random initial recurrent state, MoE load tallies).  With the BatchNorm
-    layers on running statistics — the one known train-time channel (strict
-    xfail below) — frame t's outputs ignore later frames under the same RNG
-    stream, so no OTHER train-only op couples frames (a capacity-limited MoE,
-    a batch-level halting / depth rule or a sequence-wide normaliser would
-    fail here)."""
+    random initial recurrent state, MoE load tallies).  Frame t's outputs
+    ignore later frames under the same RNG stream: with the default per-frame
+    GroupNorm encoder as it is, and with a legacy BatchNorm encoder ("batch")
+    once its layers run on running statistics — the one train-time channel of
+    that layout (strict xfail below).  So no OTHER train-only op couples frames
+    (a capacity-limited MoE, a batch-level halting / depth rule or a
+    sequence-wide normaliser would fail here)."""
     torch.manual_seed(0)
-    cfg = _lux_net_cfg(mixer, core, head, moe=moe, dropout=0.1)
-    net = _freeze_batchnorm(GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg)).train())
+    cfg = _lux_net_cfg(mixer, core, head, moe=moe, dropout=0.1, norm=norm)
+    net = GameNetwork(cfg, LuxEncoder(cfg), LuxDecoder(cfg)).train()
+    has_bn = any(isinstance(m, torch.nn.modules.batchnorm._BatchNorm) for m in net.modules())
+    assert has_bn == (norm == "batch")
+    net = _freeze_batchnorm(net)
     g = torch.Generator().manual_seed(4)
     B, T = 3, 9
     obs = _frames(cfg, B, T, g)
@@ -834,18 +844,11 @@ def test_network_train_mode_is_causal_apart_from_batchnorm(mixer, core, head, mo
                                   out2["unit_action_logits"][:, t + 1:])
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "known train-time channel: LuxEncoder.map_conv's BatchNorm2d normalises each frame with "
-    "statistics over all real frames of the batch, later frames of the same sample included "
-    "(eval mode uses running stats: clean, test above)"))
-def test_encoder_train_mode_ignores_later_frames():
-    """IL runs the encoder in train mode: frame t's map tokens then depend on
-    frames > t through the BatchNorm batch statistics (a weak, batch-pooled
-    future signal; B = 8 sequences by default).  Flips to XPASS — i.e.
-    fails — once the map conv uses a per-frame normaliser."""
+def _check_encoder_train_mode_ignores_later_frames(norm: str, exact: bool = False) -> None:
     torch.manual_seed(0)
     cfg = LuxConfig(d_model=32, n_heads=4, d_ff=64, encoder_channels=16, map_h=8, map_w=8,
-                    map_channels=12, max_units=6, unit_feature_dim=16, lux_global_features=11)
+                    map_channels=12, max_units=6, unit_feature_dim=16, lux_global_features=11,
+                    encoder_norm=norm)
     enc = LuxEncoder(cfg).train()
     g = torch.Generator().manual_seed(2)
     obs = _frames(cfg, 4, 9, g)
@@ -856,4 +859,25 @@ def test_encoder_train_mode_ignores_later_frames():
         obs2[k][:, t + 1:] = other[k][:, t + 1:]
     with torch.no_grad():
         a, b = enc(obs)[:, : t + 1], enc(obs2)[:, : t + 1]
+    if exact:
+        assert torch.equal(a, b), float((a - b).abs().max())
     assert torch.allclose(a, b, atol=1e-5, rtol=0), float((a - b).abs().max())
+
+
+def test_encoder_train_mode_ignores_later_frames():
+    """IL runs the encoder in train mode: with the default per-frame GroupNorm
+    (``encoder_norm="group"``) frame t's map tokens are a function of frame t
+    alone, so frames > t cannot reach them (bit-exact)."""
+    _check_encoder_train_mode_ignores_later_frames("group", exact=True)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "legacy train-time channel (encoder_norm='batch', checkpoints predating the field): "
+    "LuxEncoder.map_conv's BatchNorm2d normalises each frame with statistics over all real "
+    "frames of the batch, later frames of the same sample included (eval mode uses running "
+    "stats: clean, tests above)"))
+def test_encoder_train_mode_ignores_later_frames_legacy_batchnorm():
+    """The legacy BatchNorm map conv in train mode: frame t's map tokens depend
+    on frames > t through the batch statistics (a weak, batch-pooled future
+    signal; B = 8 sequences by default).  Kept bit-exact for old checkpoints."""
+    _check_encoder_train_mode_ignores_later_frames("batch")

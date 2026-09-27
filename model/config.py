@@ -1,6 +1,8 @@
 """Model configuration for the Generals.io neural network."""
 
+import ast
 from dataclasses import dataclass
+from typing import Any, Mapping, Optional
 
 
 @dataclass
@@ -31,6 +33,15 @@ class ModelConfig:
     #     otherwise cannot see the 50-tick production cycle at all.
     derive_army_channels: bool = False
     turn_globals: bool = False
+    # Generals observation, sighted-mountain memory: True = a mountain the
+    # player has seen stays encoded as a mountain (state 4) after vision
+    # moves on (env.generals_env memory_vision; recorded games get it
+    # causally from their frames, model.games.generals.apply_memory_vision);
+    # False = pure instantaneous fog, the IL records' own encoding.  Which
+    # observation the network was trained on — sticky in checkpoints like
+    # turn_globals, and every env builder sets the env from it.  Configs
+    # saved before this field existed: legacy_memory_vision below.
+    memory_vision: bool = False
 
     # Core model dimensions
     d_model: int = 384
@@ -111,6 +122,26 @@ class ModelConfig:
 
     # Spatial encoder
     encoder_channels: int = 192
+    # Normalisation of the conv observation encoders (generals SpatialEncoder,
+    # board / shogi / lux / clash_royale / starcraft), one factory:
+    # model.components.encoder.make_encoder_norm.
+    #   "group" — per-frame GroupNorm with encoder_norm_groups groups: each
+    #             frame is normalised on its own, identically in train and
+    #             eval mode, so frame t of a training sequence never sees
+    #             statistics of its later frames or of other samples
+    #   "batch" — BatchNorm2d: in train mode its statistics pool every frame
+    #             of every sequence of the batch (a future / cross-sample
+    #             channel, and a train/eval mismatch); padded frames are kept
+    #             out of them and DDP merges the running statistics
+    # Checkpoints saved before this field existed load as "batch".
+    encoder_norm: str = "group"
+    # GroupNorm groups of encoder_norm="group"; must divide encoder_channels
+    # and d_model.  1 = LayerNorm over (C, H, W) per frame (per-channel
+    # affine), the default: it keeps board-wide totals (counts, material) that
+    # smaller groups normalise away (rationale and numbers in
+    # model/components/encoder.py).  Changing it changes what a "group"
+    # checkpoint computes (it is read from the saved config).
+    encoder_norm_groups: int = 1
 
     # Action space
     n_directions: int = 4
@@ -164,11 +195,25 @@ LEGACY_CONFIG_DEFAULTS = {
     "trm_arch": "legacy",
     "halt_exploration_prob": 0.0,
     "qk_norm": False,
+    # Generals sighted-mountain memory: off for a config dict on its own —
+    # the IL records have none and GeneralsVecEnv / train_rl_joint defaulted
+    # off.  The training/train_rl.py checkpoints that played with it on are
+    # recognised from the whole checkpoint (legacy_memory_vision, applied by
+    # checkpoint_config / checkpoint_config_dict).
+    "memory_vision": False,
+    # conv observation encoders: BatchNorm2d (model/components/encoder.py)
+    "encoder_norm": "batch",
     # Lux adapter (model/games/lux.py): no unit-cell PE, the MLP sap head
     "lux_unit_cell_pe": False,
     "lux_sap_head": "mlp",
-    # Clash Royale adapter (model/games/clash_royale.py): frame-index wait PE
+    # Clash Royale adapter (model/games/clash_royale.py): frame-index wait PE;
+    # the 4 reconstructed hand slots (8 features each) instead of the 8 deck
+    # tokens with the causal hand belief (crdata converter_version 3)
     "cr_wait_time": "frame",
+    "cr_card_tokens": "hand",
+    "card_feature_dim": 8,
+    # Pokémon adapter (model/games/pokemon.py): the revealed-move slot head
+    "pokemon_move_head": "slot",
 }
 
 #: LEGACY_CONFIG_DEFAULTS keys of ONE game's config class → a marker field
@@ -179,6 +224,10 @@ LEGACY_CONFIG_SCOPE = {
     "lux_unit_cell_pe": "n_unit_actions",
     "lux_sap_head": "n_unit_actions",
     "cr_wait_time": "cr_global_features",
+    "cr_card_tokens": "cr_global_features",
+    "card_feature_dim": "cr_global_features",
+    # every loadable pokemon config: the slot head needs pokemon_move_buckets
+    "pokemon_move_head": "pokemon_move_buckets",
 }
 
 
@@ -200,3 +249,95 @@ def config_from_dict(d: dict, cls=None):
     cls = cls or ModelConfig
     d = upgrade_config_dict(d)
     return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+
+# ----------------------------------------------------------------------
+# Legacy rules that need the whole checkpoint, not just its config dict
+# ----------------------------------------------------------------------
+
+#: the config field that landed 24 minutes after GeneralsEnv's sighted-
+#: mountain memory went in, ON by default (2026-08-11: memory c56c5e2 at
+#: 21:07, joint_decoder 164e37d at 21:32).  training/train_rl.py never set
+#: the env's memory_vision, so a train_rl config dict carrying this key was
+#: written by code whose env had the memory on; one without it was written
+#: by older code — which, but for that 24-minute window, had no memory
+#: (phases 1-7, run-4/4b/4c, run5b; see legacy_memory_vision's caveat).
+MEMORY_VISION_ERA_FIELD = "joint_decoder"
+
+
+def is_train_rl_checkpoint(ckpt: Mapping[str, Any]) -> bool:
+    """A training/train_rl.py checkpoint (``rl_checkpoint_iter*.pt``,
+    ``rl_ema_iter*.pt``) or a scripts/distill_joint_head.py seed (distilled
+    in the same env): one ``config`` next to an ``iteration`` counter — IL
+    checkpoints count ``epoch`` / ``step``, train_rl_game ``iter``, the
+    multi-game trainers write ``configs`` and single-game exports ``game``."""
+    return ("config" in ckpt and "iteration" in ckpt
+            and "game" not in ckpt and "games" not in ckpt)
+
+
+def legacy_memory_vision(ckpt: Mapping[str, Any]) -> bool:
+    """cfg.memory_vision of a generals checkpoint written before the field
+    existed: the observation it was actually trained on.
+
+    * training/train_rl.py checkpoints (:func:`is_train_rl_checkpoint`)
+      whose config carries :data:`MEMORY_VISION_ERA_FIELD`: True —
+      GeneralsEnv defaulted to the memory from 2026-08-11 until this field
+      existed, and train_rl.py never switched it off.  Older train_rl
+      configs predate the memory: False.
+    * train_rl_joint checkpoints: what ``--env_kw generals:memory_vision=``
+      gave the env (parsed as the trainer parsed it), else False —
+      GeneralsVecEnv defaulted off and GeneralsSpec never set it.
+    * everything else — the IL checkpoints (train_il, train_il_game,
+      train_multi_game and their exports): False, the IL records have no
+      memory.
+
+    A blanket legacy True (GeneralsEnv's old default) would feed every
+    IL-only network an observation it never saw; a blanket False would take
+    the memory away from the train_rl lineages that trained with it.
+
+    Caveat: the marker dates the CODE that wrote a config, not the run.  A
+    train_rl process started from code between c56c5e2 and 164e37d
+    (2026-08-11 21:07-21:31) played with the memory but wrote no
+    joint_decoder field — most likely the run5c lineage (job 45756, launched
+    from 34f8b07) — and resolves to False here, as does any
+    checkpoint such a process wrote before a requeue onto newer code.  Its
+    checkpoints cannot be told from the pre-memory run5b ones by content:
+    record the setting before resuming or playing them, e.g.
+    ``ck = torch.load(p, weights_only=False); ck["config"]["memory_vision"]
+    = True; torch.save(ck, p)`` (or pass training/train_rl.py
+    --memory_vision 1)."""
+    if is_train_rl_checkpoint(ckpt):
+        return MEMORY_VISION_ERA_FIELD in ckpt["config"]
+    if ckpt.get("stage") == "rl_joint":
+        on = False
+        for item in (ckpt.get("args") or {}).get("env_kw") or ():
+            game, _, kv = str(item).partition(":")
+            key, sep, raw = kv.partition("=")
+            if game == "generals" and key == "memory_vision" and sep:
+                try:
+                    val = ast.literal_eval(raw)
+                except (ValueError, SyntaxError):
+                    val = raw                    # the trainer kept the string
+                on = bool(val)                   # the last one wins, as there
+        return on
+    return False
+
+
+def checkpoint_config_dict(ckpt: Mapping[str, Any], game: Optional[str] = None) -> dict:
+    """A checkpoint's config dict — ``config`` of a single-game checkpoint,
+    ``configs[game]`` of a multi-game one — upgraded like
+    :func:`upgrade_config_dict`, plus the legacy rules that need the whole
+    checkpoint (a generals network's memory_vision:
+    :func:`legacy_memory_vision`)."""
+    d = dict(ckpt["config"] if game is None else ckpt["configs"][game])
+    if "memory_vision" not in d and game in (None, "generals"):
+        d["memory_vision"] = legacy_memory_vision(ckpt)
+    return upgrade_config_dict(d)
+
+
+def checkpoint_config(ckpt: Mapping[str, Any], cls=None):
+    """``cls`` (default ModelConfig) from a single-game checkpoint dict:
+    :func:`config_from_dict` of its ``config`` with the checkpoint-level
+    legacy rules (:func:`checkpoint_config_dict`) — what every loader of a
+    network that will play in an env must use."""
+    return config_from_dict(checkpoint_config_dict(ckpt), cls)
