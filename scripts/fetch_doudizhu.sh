@@ -11,7 +11,8 @@
 #   OUT_DIR default data/doudizhu, GAMES default 1000000 (+ GAMES/50 validation games)
 #   env: WORKERS (default: all cores), SEED (default 0), AGENTS (default adp,wp),
 #        PYTHON (default "uv run python"; Slurm jobs: .venv/bin/python),
-#        GM_REFERENCE_CACHE (download cache, default ~/.cache/gm-reference)
+#        GM_REFERENCE_CACHE (download cache, default ~/.cache/gm-reference),
+#        GMDATA (a prebuilt gmdata binary: skips the cargo build)
 #
 # Compute nodes without internet: run `$PYTHON scripts/generate_doudizhu.py --fetch_only`
 # on a login node first (the downloads land in the cache).  Expected full scale (1M
@@ -27,11 +28,14 @@ AGENTS=${AGENTS:-adp,wp}
 WORKERS=${WORKERS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
 PYTHON=${PYTHON:-uv run python}
 
-# a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
-command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-cd "$ROOT/data_processing"
-cargo build --release -q -p gmdata
-G="$ROOT/data_processing/target/release/gmdata"
+if [ -n "${GMDATA:-}" ]; then
+  G=$GMDATA
+else
+  # a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
+  command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+  (cd "$ROOT/data_processing" && cargo build --release -q -p gmdata)
+  G="$ROOT/data_processing/target/release/gmdata"
+fi
 cd "$ROOT"
 
 VAL=$((GAMES / 50 + 1))

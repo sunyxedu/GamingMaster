@@ -11,6 +11,7 @@
 #   HQ=0 scripts/fetch_skat.sh ...           every seat (no quality filter)
 #   MAX_RECORDS=100000 scripts/fetch_skat.sh a quick partial run
 #   CONVERT_FLAGS="--min-money 10" ...       extra `gmdata skat convert` flags
+#   GMDATA=<prebuilt gmdata binary>          skips the cargo build
 #
 # Output: OUT/raw (archive + ratings page), OUT/verify.json + OUT/rejected.sgf (the
 # parity report), OUT/players.json, OUT/train, OUT/val (gm-shards, game "skat"),
@@ -25,11 +26,14 @@ MAX=()
 if [ -n "${MAX_RECORDS:-}" ]; then MAX=(--max-records "$MAX_RECORDS"); fi
 read -r -a EXTRA <<< "${CONVERT_FLAGS:-}"
 
-# a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
-command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-cd "$ROOT/data_processing"
-cargo build --release -q -p gmdata
-G="$ROOT/data_processing/target/release/gmdata"
+if [ -n "${GMDATA:-}" ]; then
+  G=$GMDATA
+else
+  # a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
+  command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+  (cd "$ROOT/data_processing" && cargo build --release -q -p gmdata)
+  G="$ROOT/data_processing/target/release/gmdata"
+fi
 cd "$ROOT"
 
 mkdir -p "$OUT/raw"

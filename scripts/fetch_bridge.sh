@@ -17,6 +17,7 @@
 #                                            10: see `gmdata bridge fetch --help`)
 #   MAX_RECORDS=N                            cap every conversion (smoke runs)
 #   KEEP_RAW=0                               delete the downloads after converting
+#   GMDATA=<prebuilt gmdata binary>          skips the cargo build
 #
 # Output (one shard family: same meta and tensors, so one --data root per split):
 #   OUT/train/{openspiel,ben,bba}  OUT/val/{openspiel,ben,bba}  OUT/test/openspiel
@@ -38,10 +39,14 @@ if [ -n "${MAX_RECORDS:-}" ]; then
     MAX=(--max-records "$MAX_RECORDS")
 fi
 
-# a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
-command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-(cd "$ROOT/data_processing" && cargo build --release -q -p gmdata)
-G="$ROOT/data_processing/target/release/gmdata"
+if [ -n "${GMDATA:-}" ]; then
+  G=$GMDATA
+else
+  # a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
+  command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+  (cd "$ROOT/data_processing" && cargo build --release -q -p gmdata)
+  G="$ROOT/data_processing/target/release/gmdata"
+fi
 
 # convert <dest> <gmdata bridge convert args...>: skipped when finished before; an
 # interrupted conversion is redone from scratch (the writer appends to a directory)

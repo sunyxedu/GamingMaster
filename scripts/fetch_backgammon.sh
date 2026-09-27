@@ -13,7 +13,8 @@
 #   scripts/fetch_backgammon.sh [OUT_DIR] [MATCHES] [WORKERS]
 #   OUT_DIR default data/backgammon, MATCHES default 100000, WORKERS default = CPUs
 #   env: SEED (1), PLIES (2), MATCH_LENGTH (7), VAL_EVERY (50: one val match per 50),
-#        FIRST (0: global index of the first match), RAW_ONLY=1 / CONVERT_ONLY=1
+#        FIRST (0: global index of the first match), RAW_ONLY=1 / CONVERT_ONLY=1,
+#        GMDATA (a prebuilt gmdata binary: skips the cargo build)
 #
 # Full scale (cluster, one job per node; ~13 s per 7-point match per worker, one core
 # and ~80 MB each): 100k matches ≈ 36M frames ≈ 80 GB of shards + ~1 GB of gz
@@ -36,13 +37,17 @@ MATCH_LENGTH=${MATCH_LENGTH:-7}
 VAL_EVERY=${VAL_EVERY:-50}
 FIRST=${FIRST:-0}
 
-# user-level rustup / uv installs (the cluster's ~/.cargo, ~/.local) when not on PATH
-command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+# user-level uv install (the cluster's ~/.local) when not on PATH
 command -v uv >/dev/null || export PATH="$HOME/.local/bin:$PATH"
 command -v uv >/dev/null || { echo "uv not found (https://docs.astral.sh/uv/)" >&2; exit 1; }
-cd "$ROOT/data_processing"
-cargo build --release -q -p gmdata
-G="$ROOT/data_processing/target/release/gmdata"
+if [ -n "${GMDATA:-}" ]; then
+  G=$GMDATA
+else
+  # a user-level rustup (the cluster's ~/.cargo) when cargo is not on PATH
+  command -v cargo >/dev/null || export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+  (cd "$ROOT/data_processing" && cargo build --release -q -p gmdata)
+  G="$ROOT/data_processing/target/release/gmdata"
+fi
 cd "$ROOT"
 
 VAL=$(( MATCHES / VAL_EVERY ))
