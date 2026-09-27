@@ -50,9 +50,16 @@
 //! frames): games that end normally (incl. games passed in: three pass frames, value
 //! 0) and games ended by resignations (the declarer's, or both defenders': scored by
 //! ISS's rules on the final state — `traj::Record::conceded`) are converted; a single
-//! defender's `RE` and `SC` are not moves of the game (dropped; a defender's frames
-//! after an `SC` do not show the declarer's cards). Games ended by a timeout / a
-//! player leaving (`TI` / `LE`, ~1%) are verified but skipped. A jump bid becomes
+//! defender's `RE` is not a move of the game (dropped). `SC` — the declarer shows his
+//! cards, a claim — is not one either, but from then on the ISS server shows the
+//! defenders his hand, which no frame shows: their later decisions were taken on
+//! information the frames would hide, so a record ends at its first `SC` (when moves
+//! follow it) as a claim (`traj::Record::conceded`) worth the game's verified result —
+//! the value target is unchanged, the frames after the `SC` are not written (23% of
+//! the converted archive games, 1.5% of the frames: see "Full scale"; the convert
+//! report counts them, `cut_at_shown_cards`, and the samples carry `cards_shown_at`).
+//! Games ended by a timeout / a player leaving (`TI` / `LE`, ~1%) are verified but
+//! skipped. A jump bid becomes
 //! MORE sub-decisions + the bid; a hand declaration its type + modifier; a pickup
 //! declaration the game + both discards in the recorded order.
 //!
@@ -83,13 +90,18 @@
 //! `verify.json` + `rejected.sgf`), corpus player stats (~3 min), `convert --hq` into
 //! `data/skat/train` (~20 min at ~8k games/s) and `data/skat/val` (~3 min). Measured
 //! with `convert --count-only` on the full archive (ratings page of 2026-09-20; ~418
-//! bytes per frame on disk, bit-packed; 35.0 frames per game, 11.7 per seat stream):
+//! bytes per frame on disk, bit-packed; 34.5 frames per game, 11.5 per seat stream):
 //!
 //! | corpus                                 | games     | seat streams | frames      | disk     |
 //! |----------------------------------------|-----------|--------------|-------------|----------|
-//! | every seat (`HQ=0`, train + val)       | 8,987,195 | 26,961,585   | 314,830,960 | ~132 GB  |
-//! | `--hq --split train` (the recipe)      | 6,757,574 | 11,168,014   | 137,182,532 | ~57 GB   |
-//! | `--hq --split val` (id % 100 == 0)     | 68,225    | 113,023      | 1,388,058   | ~0.6 GB  |
+//! | every seat (`HQ=0`, train + val)       | 8,987,195 | 26,961,585   | 310,134,081 | ~130 GB  |
+//! | `--hq --split train` (the recipe)      | 6,757,574 | 11,168,014   | 137,182,532*| ~57 GB   |
+//! | `--hq --split val` (id % 100 == 0)     | 68,225    | 113,023      | 1,388,058*  | ~0.6 GB  |
+//!
+//! Of the 8,987,195 records 2,097,612 end at the declarer's `SC` (1,929,399 of the
+//! 2,492,924 resigned games and 168,213 finished ones: `conceded` 2,661,137), which
+//! drops 4,696,879 frames (1.5%, mostly the defenders' last cards before resigning).
+//! (*) measured before that cut: ~1.5% fewer frames now.
 //!
 //! The recipe keeps 69 players by corpus strength (10.4M seat-games; the programs
 //! theCount, kermit and zoot hold 7.6M of them) plus the humans rated ≥ 1050 on the
@@ -223,6 +235,9 @@ pub struct Replayed {
     pub half_moves: usize,
     /// declarations whose shown cards are not the declarer's hand (unchecked by ISS)
     pub shown_mismatch: usize,
+    /// number of events before the declarer's first `SC` (he showed his cards: the ISS
+    /// server shows the defenders his hand from then on), if any
+    pub shown_at: Option<usize>,
 }
 
 fn seat_of(s: &str) -> std::result::Result<Seat, String> {
@@ -376,6 +391,7 @@ pub fn replay_record(rec: &IssRecord) -> std::result::Result<Replayed, String> {
     let mut ending = IssEnding::default();
     let (mut over, mut resigned_end, mut awaiting_skat) = (false, false, false);
     let (mut jump_bids, mut dropped, mut half_moves, mut shown_bad) = (0, 0, 0, 0);
+    let mut shown_at: Option<usize> = None;
     for (k, (who, mv)) in it.enumerate() {
         let at = |m: String| format!("move {} ({who} {mv}): {m}", k + 1);
         if over {
@@ -421,6 +437,7 @@ pub fn replay_record(rec: &IssRecord) -> std::result::Result<Replayed, String> {
                 return Err(at("only the declarer shows his cards, in card play".into()));
             }
             dropped += 1;
+            shown_at.get_or_insert(events.len());
             continue;
         }
         if g.turn() != Turn::Act(gmrules::SeatSet::single(s)) {
@@ -448,7 +465,7 @@ pub fn replay_record(rec: &IssRecord) -> std::result::Result<Replayed, String> {
         EndKind::Truncated
     };
     let result = (kind != EndKind::Truncated).then(|| g.iss_result(&ending));
-    Ok(Replayed { events, state: g, ending, kind, result, jump_bids, dropped, half_moves, shown_mismatch: shown_bad })
+    Ok(Replayed { events, state: g, ending, kind, result, jump_bids, dropped, half_moves, shown_mismatch: shown_bad, shown_at })
 }
 
 fn card_str_mask(m: u32) -> String {
@@ -832,6 +849,8 @@ pub struct ConvertCtx {
     pub st: RefCell<VerifyStats>,
     /// finished / resigned games whose seats were all filtered out
     pub filtered: RefCell<usize>,
+    /// records ended at the declarer's `SC` (moves followed it; see [`to_record`])
+    pub cut_at_shown: RefCell<usize>,
 }
 
 /// The traj record of a verified replay (None: not converted — aborted, truncated
@@ -855,7 +874,7 @@ pub fn to_record(ctx: &ConvertCtx, id: &str, rec: &IssRecord, r: Replayed) -> Op
         return None;
     }
     let money = r.result.as_ref().map(|x| x.money().to_vec());
-    let meta = json!({
+    let mut meta = json!({
         "iss_id": rec.id,
         "date": rec.date,
         "players": rec.players,
@@ -865,14 +884,27 @@ pub fn to_record(ctx: &ConvertCtx, id: &str, rec: &IssRecord, r: Replayed) -> Op
         "ending": r.kind,
         "resigned": (0..3).filter(|&s| r.ending.resigned[s]).collect::<Vec<_>>(),
     });
+    // The declarer showed his cards (`SC`, a claim): from then on the ISS server shows
+    // the defenders his hand, which no frame of the rules does — the defenders' later
+    // decisions were taken on information their frames would hide. The record ends at
+    // the `SC` as a claim (Record::conceded) worth the game's recorded result (the rules'
+    // result of the whole record, verified; the value target is unchanged).
+    let mut events = r.events;
+    let cut = r.shown_at.filter(|&k| events[k..].iter().any(|e| matches!(e, Event::Act(..))));
+    if let Some(k) = cut {
+        events.truncate(k);
+        meta["cards_shown_at"] = json!(k);
+        *ctx.cut_at_shown.borrow_mut() += 1;
+    }
+    let concession = r.kind == EndKind::Resigned || (cut.is_some() && r.kind != EndKind::Truncated);
     Some(Record {
         id: format!("{id}#{}", rec.id),
-        events: r.events,
+        events,
         meta,
         seats: ctx.filter.active().then_some(seats),
         expected_returns: money.clone().filter(|_| r.kind != EndKind::Truncated),
-        conceded: (r.kind == EndKind::Resigned).then(|| {
-            let m = money.expect("result of a resigned game");
+        conceded: concession.then(|| {
+            let m = money.expect("result of a resigned / finished game");
             Concession { outcome: m.iter().map(|&x| (x / MONEY_SCALE) as f32).collect(), returns: m }
         }),
         ..Default::default()
@@ -1206,6 +1238,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
                 let mut v = serde_json::to_value(&c)?;
                 v["iss"] = serde_json::to_value(&*ctx.st.borrow())?;
                 v["filtered_out"] = json!(*ctx.filtered.borrow());
+                v["cut_at_shown_cards"] = json!(*ctx.cut_at_shown.borrow());
                 println!("{v}");
                 return Ok(());
             }
@@ -1214,6 +1247,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
             let mut v = serde_json::to_value(&st)?;
             v["iss"] = serde_json::to_value(&*ctx.st.borrow())?;
             v["filtered_out"] = json!(*ctx.filtered.borrow());
+            v["cut_at_shown_cards"] = json!(*ctx.cut_at_shown.borrow());
             println!("{v}");
             Ok(())
         }
@@ -1347,7 +1381,14 @@ mod tests {
         let iss = ctx.st.borrow().clone();
         assert_eq!((st.illegal, st.returns_mismatch, st.unparseable), (0, 0, 0), "{st:?}");
         assert_eq!(st.converted, iss.finished + iss.passed + iss.resigned);
-        assert_eq!(st.conceded, iss.resigned);
+        // conceded: the resigned games + the finished games cut at the declarer's `SC`
+        let shown_finished = records(&fixture(), &ConvertCtx::default(), None)
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|r| r.meta.get("cards_shown_at").is_some() && r.meta["ending"] == "finished")
+            .count();
+        assert!(shown_finished > 0 && *ctx.cut_at_shown.borrow() > shown_finished);
+        assert_eq!(st.conceded, iss.resigned + shown_finished);
         // every seat decides at least once (bids or passes)
         assert_eq!(st.samples, 3 * st.converted);
         let sh = gmshard::ShardReader::open(&dir.join("skat_00000")).unwrap();
@@ -1375,6 +1416,49 @@ mod tests {
             std::fs::remove_dir_all(&d).unwrap();
         }
         assert_eq!(n, st.converted);
+    }
+
+    /// The declarer's `SC` shows the defenders his hand (ISS server): moves after it were
+    /// taken on information no frame shows, so the converted record ends at the `SC` — a
+    /// claim worth the game's verified result; an `SC` with nothing after it cuts nothing.
+    #[test]
+    fn shown_cards_end_the_converted_record() {
+        let game9 = "(;GM[Skat]PC[Internet Skat Server]CO[]SE[53]ID[9]DT[2007-10-29/04:58:00/UTC]P0[jeff]P1[Montana]P2[vaun]R0[0.0]R1[0.0]R2[0.0]MV[w S7.ST.CA.DT.CQ.S8.C8.D9.HT.SQ.HQ.DK.H9.DJ.HK.HJ.C9.DQ.HA.H8.SA.CJ.CK.DA.H7.C7.S9.CT.SK.D7.SJ.D8 1 18 0 p 2 20 1 p 2 CH 0 SQ 1 H9 2 SA 2 SK 0 ST 1 HK 0 D9 1 DQ 2 DA 2 D7 0 DT 1 DK 0 HT 1 H8 2 H7 0 S8 1 HQ 2 S9 2 C7 0 CA 1 DJ 1 C9 2 CT 0 C8 2 CK 0 CQ 1 HJ 1 HA 2 CJ 0 S7 ]R[d:2 loss v:-96 m:2 bidok p:56 t:5 s:0 z:0 p0:0 p1:0 p2:0 l:-1 to:-1 r:0] ;)";
+        // the declarer (rearhand) shows his cards after the first trick; play goes on
+        let shown = game9.replace("2 SA 2 SK", "2 SA 2 SC 2 SK");
+        let rec = parse_line(&shown).unwrap().unwrap();
+        let r = replay_record(&rec).unwrap();
+        assert_eq!((r.kind, r.shown_at), (EndKind::Finished, Some(32 + 6 + 3)));
+        assert_eq!(r.result.as_ref().unwrap().iss_string(), rec.result, "the whole game is verified");
+        let money = r.result.as_ref().unwrap().money().to_vec();
+        let ctx = ConvertCtx::default();
+        let out = to_record(&ctx, "t", &rec, r).unwrap();
+        assert_eq!((out.events.len(), out.meta["cards_shown_at"].as_u64()), (41, Some(41)));
+        let c = out.conceded.clone().expect("a claim");
+        assert_eq!((c.returns.clone(), out.expected_returns.clone()), (money.clone(), Some(money.clone())));
+        assert_eq!(*ctx.cut_at_shown.borrow(), 1);
+        // converted: the frames before the SC, valued by the game's result
+        let dir = std::env::temp_dir().join(format!("gmdata-skat-sc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let st = traj::convert::<Skat>(&SkatConfig {}, std::iter::once(Ok(out.clone())), &dir, &ConvertOptions::default())
+            .unwrap();
+        // bidding + declaration (6 decisions) + the first trick (3): 9 frames, none after the SC
+        assert_eq!((st.converted, st.conceded, st.frames), (1, 1, 9), "{st:?}");
+        let sh = gmshard::ShardReader::open(&dir.join("skat_00000")).unwrap();
+        let v = sh.read_f32("tgt.value").unwrap();
+        for s in &sh.samples {
+            let seat = s.meta["seat"].as_u64().unwrap() as usize;
+            assert!(v[s.range()].iter().all(|&x| x == (money[seat] / MONEY_SCALE) as f32), "{:?}", s.meta);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        // an SC followed only by the defenders' resignations cuts nothing
+        let head = &game9[..game9.find("2 SA").unwrap() + "2 SA".len()];
+        let rec = parse_line(&format!("{head} 2 SC 0 RE 1 RE ]R[x] ;)")).unwrap().unwrap();
+        let r = replay_record(&rec).unwrap();
+        assert_eq!((r.kind, r.shown_at), (EndKind::Resigned, Some(41)));
+        let n = r.events.len();
+        let out = to_record(&ConvertCtx::default(), "t", &rec, r).unwrap();
+        assert!(out.meta.get("cards_shown_at").is_none() && out.events.len() == n && out.conceded.is_some());
     }
 
     #[test]

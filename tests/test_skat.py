@@ -132,7 +132,14 @@ def test_shards_schema_and_meta(shards):
     iss = st["iss"]
     assert (st["illegal"], st["returns_mismatch"], st["unparseable"]) == (0, 0, 0)
     assert st["converted"] == iss["finished"] + iss["passed"] + iss["resigned"]
-    assert st["conceded"] == iss["resigned"] and st["samples"] == 3 * st["converted"]
+    assert st["samples"] == 3 * st["converted"]
+    # conceded: the resigned games and the finished games ended at the declarer's SC (he
+    # showed his cards: the frames after it would hide what the defenders saw)
+    metas = [s["meta"] for s in load_gm_samples(str(out / "train"))]
+    shown = {m["record"]: m["ending"] for m in metas if "cards_shown_at" in m}
+    shown_finished = sum(1 for e in shown.values() if e == "finished")
+    assert st["cut_at_shown_cards"] == len(shown) > shown_finished > 0
+    assert st["conceded"] == iss["resigned"] + shown_finished
     ds = GameShardDataset(str(out / "train"), game="skat")
     assert len(ds) == st["samples"] and ds.total_frames() == st["frames"]
     spec = gmsim.game_info("skat", {})["spec"]
@@ -169,8 +176,11 @@ def test_converter_frames_are_the_rules_frames(shards):
         assert s["tgt"]["value"].numpy() == pytest.approx(np.full(len(idx), want), abs=1e-6)
         assert meta["returns"] == pytest.approx(money)
         kinds.add(meta["ending"])
-        # resigned games stop before the rules' end; the others replay to it
-        assert r["terminal"] == (meta["ending"] != "resigned")
+        # resigned games and games whose declarer showed his cards (SC) stop before the
+        # rules' end (their value is still the game's result); the others replay to it
+        assert r["terminal"] == (meta["ending"] != "resigned" and "cards_shown_at" not in meta)
+        if "cards_shown_at" in meta:
+            assert len(meta["events"]) == meta["cards_shown_at"]
     assert kinds == {"finished", "passed", "resigned"}
 
 
@@ -205,7 +215,8 @@ def test_simulator_frames_are_the_converter_frames(gmdata, tmp_path):
 def test_render_roundtrip_of_real_records(gmdata, shards, tmp_path):
     """ISS record → trajectory → rendered ISS record → the same frames (finished games)."""
     out, _ = shards
-    samples = [s for s in load_gm_samples(str(out / "train")) if s["meta"]["ending"] == "finished"]
+    samples = [s for s in load_gm_samples(str(out / "train"))
+               if s["meta"]["ending"] == "finished" and "cards_shown_at" not in s["meta"]]
     trajs = {s["meta"]["iss_id"]: np.asarray(s["meta"]["events"]) for s in samples[:60]}
     back = _convert(gmdata, tmp_path, _render(gmdata, tmp_path, trajs))
     orig = {(s["meta"]["iss_id"], s["meta"]["seat"]): s for s in samples}

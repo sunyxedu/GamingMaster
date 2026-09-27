@@ -7,7 +7,14 @@
 //! - privacy (hidden-information games): perturbing information hidden from seat s
 //!   ([`Game::perturb_hidden`]) leaves every frame and target of s bit-identical — on
 //!   whole records and on records cut after a decision (information revealed later,
-//!   like the cards of a bridge deal, is hidden only in a prefix);
+//!   like the cards of a bridge deal, is hidden only in a prefix) — and so is the frame
+//!   of the decision s faces at the end of the record (its PENDING frame). The pending
+//!   frame closes a blind spot: information revealed by a decision's own action
+//!   (bridge: dummy's hand, exposed by the opening lead; Dou Dizhu: the kitty, shown by
+//!   the auction's last call; skat: the skat, picked up) is known at the end of every
+//!   record that contains the decision, so no perturbation of such a record can move
+//!   it — only the record cut right BEFORE the decision's action can. [`check_game`]
+//!   therefore also cuts before every decision (a frontier sweep);
 //! - conformance: the spec validates; finite f32 values, 0/1 in bit-stored and bool
 //!   tensors; candidate schema: legal ids within `max_actions`, the legality mask =
 //!   the first n slots, entity type ids below `entity_types`, absent entities zero;
@@ -89,8 +96,23 @@ pub fn check_causality<G: Game>(cfg: &G::Config, events: &[Event]) -> Result<(),
     Ok(())
 }
 
+/// The frame of the decision `seat` faces in `state` (None: `seat` is not to act).
+fn pending_frame<G: Game>(spec: &FrameSpec, state: &G, seat: Seat) -> Result<Option<Frame>, String> {
+    match state.turn() {
+        Turn::Act(seats) if seats.contains(seat) => {
+            let mut f = Frame::new(spec);
+            crate::frame::encode_frame(state, seat, spec, &mut f.as_mut(spec)).map_err(|e| e.0)?;
+            Ok(Some(f))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Privacy: every frame and target of `seat` is bit-identical in `events` and
-/// `perturbed` (which must differ, and must give `seat` the same number of decisions).
+/// `perturbed` (which must differ, and must give `seat` the same number of decisions),
+/// and so is the frame of the decision `seat` faces at the end of both records, if any
+/// (its pending frame: see the module docs; alternating games — a simultaneous record
+/// may end inside a turn).
 pub fn check_privacy<G: Game>(cfg: &G::Config, events: &[Event], perturbed: &[Event], seat: Seat) -> Result<(), String> {
     if events == perturbed {
         return Err("privacy: the perturbed trajectory equals the original".into());
@@ -107,7 +129,45 @@ pub fn check_privacy<G: Game>(cfg: &G::Config, events: &[Event], perturbed: &[Ev
         same_decision(&spec, x, y)
             .map_err(|e| format!("privacy: seat {seat}'s decision {k} depends on information hidden from it: {e}"))?;
     }
+    if !spec.simultaneous {
+        match (pending_frame::<G>(&spec, &a.state, seat)?, pending_frame::<G>(&spec, &b.state, seat)?) {
+            (None, None) => {}
+            (Some(x), Some(y)) => x.check_equal(&y, &spec).map_err(|e| {
+                format!("privacy: seat {seat}'s pending decision (after {} events) depends on information hidden from it: {e}",
+                        events.len())
+            })?,
+            (x, _) => {
+                let (before, after) = if x.is_some() { ("is", "is not") } else { ("is not", "is") };
+                return Err(format!("privacy: seat {seat} {before} to act at the end of the record and {after} after the \
+                                    perturbation (the existence of its decision depends on hidden information)"));
+            }
+        }
+    }
     Ok(())
+}
+
+/// The frontier sweep of the privacy check: for every decision of `events`, the record
+/// cut right before its action, perturbed for the deciding seat ([`Game::perturb_hidden`],
+/// `tries` attempts), must leave that seat's frames — the decision's own frame as the
+/// pending frame included — bit-identical. Every frame is thereby checked against
+/// everything hidden from its seat at its own time, also what its action reveals.
+/// Returns the number of perturbations checked.
+pub fn check_privacy_frontier<G: Game>(cfg: &G::Config, events: &[Event], rng: &mut Rng, tries: usize) -> Result<usize, String> {
+    if G::spec(cfg).simultaneous {
+        return Ok(0);
+    }
+    let r = replay::<G>(cfg, events).map_err(|e| format!("replay: {e}"))?;
+    let mut n = 0;
+    for d in &r.decisions {
+        let cut = &events[..d.event];
+        for _ in 0..tries {
+            if let Some(p) = G::perturb_hidden(cfg, cut, d.seat, rng) {
+                check_privacy::<G>(cfg, cut, &p, d.seat).map_err(|e| format!("(record cut before event {}) {e}", d.event))?;
+                n += 1;
+            }
+        }
+    }
+    Ok(n)
 }
 
 /// [`check_privacy`] for `tries` perturbations ([`Game::perturb_hidden`]) of every
@@ -306,6 +366,10 @@ pub fn check_game<G: Game>(cfg: &G::Config, n_games: usize, seed: u64) -> Result
                 let cut = &events[..=d.event];
                 rep.privacy_checks += check_privacy_random::<G>(cfg, cut, &mut prng, 2)
                     .map_err(|e| format!("game {gi} (cut after event {}): {e}", d.event))?;
+                // every frame against what its seat has not seen at its own time (what
+                // the decision's action reveals included): cut before every decision
+                rep.privacy_checks += check_privacy_frontier::<G>(cfg, &events, &mut prng, 1)
+                    .map_err(|e| format!("game {gi} (frontier): {e}"))?;
             }
         }
     }

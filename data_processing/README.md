@@ -281,7 +281,11 @@ hunl` (ACPC logs), `scripts/fetch_hunl.sh`, optional evaluation against Slumbot
      state and actions); `outcome()` in [-1, 1] is both the IL value target and the
      RL reward; `returns()` the raw payoffs; `check_config` validates the config;
      hidden-information games implement `perturb_hidden` (re-deal what `seat` cannot
-     see, keep every recorded action legal); partnership games return their
+     see at the end of the record, keep every recorded action legal — the battery
+     also calls it on records cut BEFORE every decision, whose frame is then the
+     seat's pending frame: so information a decision's own action reveals, like
+     dummy's hand at the opening lead, is checked too; cuts may fall inside a
+     factored decision); partnership games return their
      `teams` (teammates share one outcome: the simulator reports the winning team,
      the league assigns whole teams, a team row's `stream_seats` is its team);
    - register: `pub mod <game>;` in `games/mod.rs` + one line in

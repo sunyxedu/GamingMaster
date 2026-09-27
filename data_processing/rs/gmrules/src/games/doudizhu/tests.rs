@@ -136,6 +136,13 @@ fn auction_variants() {
     let g = run(&[(1, PASS), (2, PASS), (0, PASS)]);
     assert_eq!(g.turn(), Turn::Terminal);
     assert_eq!((g.returns(), g.outcome()), (vec![0.0; 3], vec![0.0; 3]));
+    // ... worth nothing under "wp" scoring too (not a win for every seat)
+    let wp = DouDizhuConfig { scoring: "wp".into(), ..cfg() };
+    let mut ev = deal(4, hands);
+    ev.extend([Event::Act(1, PASS), Event::Act(2, PASS), Event::Act(0, PASS)]);
+    let r = replay::<DouDizhu>(&wp, &ev).unwrap();
+    assert!(r.terminal());
+    assert_eq!(r.state.outcome(), vec![0.0; 3]);
     // a seat that passed may bid later; the bid must rise
     let g = run(&[(1, PASS), (2, 1), (0, PASS), (1, 2)]);
     let mut legal = Vec::new();
@@ -318,6 +325,71 @@ fn privacy_perturbation_and_a_leak() {
         }
     }
     assert!(check_game::<Leaky>(&c, 40, 9).unwrap_err().contains("hidden from it"));
+}
+
+/// The privacy battery catches an encoder that shows the kitty at an auction frame
+/// whose every legal action ends the auction (a bid of 2 standing, one pass since:
+/// pass or 3) — the kitty is shown right after such a decision, so no record
+/// containing it can hide the kitty: only the frontier sweep (the record cut BEFORE
+/// the decision, which is then the seat's pending frame) sees the leak.
+#[test]
+fn privacy_check_catches_the_kitty_shown_at_the_auctions_last_call() {
+    #[derive(Clone, Debug)]
+    struct Leaky(DouDizhu);
+    impl Game for Leaky {
+        type Config = DouDizhuConfig;
+        const NAME: &'static str = "leaky_doudizhu_kitty";
+        const VERSION: u32 = 0;
+        fn spec(c: &DouDizhuConfig) -> FrameSpec { DouDizhu::spec(c) }
+        fn new_game(c: &DouDizhuConfig) -> Self { Leaky(DouDizhu::new_game(c)) }
+        fn turn(&self) -> Turn { self.0.turn() }
+        fn chance_outcomes(&self, o: &mut Vec<(u32, f64)>) { self.0.chance_outcomes(o) }
+        fn apply_chance(&mut self, o: u32) -> Result<(), RulesError> { self.0.apply_chance(o) }
+        fn legal_actions(&self, s: Seat, o: &mut Vec<u32>) { self.0.legal_actions(s, o) }
+        fn apply_action(&mut self, s: Seat, a: u32) -> Result<(), RulesError> { self.0.apply_action(s, a) }
+        fn outcome(&self) -> Vec<f32> { self.0.outcome() }
+        fn returns(&self) -> Vec<f64> { self.0.returns() }
+        fn encode_obs(&self, s: Seat, obs: &mut ObsView<'_>) {
+            self.0.encode_obs(s, obs);
+            let g = &self.0;
+            if g.phase == Phase::Auction && g.winning_bid == 2 && g.passes == 1 {
+                obs.globals()[23] = (g.kitty[TWO as usize] > 0) as u8 as f32; // leak: a 2 in the kitty
+            }
+        }
+        fn encode_action(&self, s: Seat, a: u32, f: &mut [f32]) { self.0.encode_action(s, a, f) }
+        fn state_string(&self) -> String { self.0.state_string() }
+        fn perturb_hidden(c: &DouDizhuConfig, e: &[Event], s: Seat, r: &mut Rng) -> Option<Vec<Event>> {
+            DouDizhu::perturb_hidden(c, e, s, r)
+        }
+    }
+    // the bidder faces [pass, 3] after "2, pass": either call ends the auction
+    let hands = ["45678TTJJQQKKAA22", "33334455667788999", "456789TTJJQQKKAA2"];
+    let mut ev = deal(0, hands);
+    ev.extend([Event::Act(0, 2), Event::Act(1, PASS)]);
+    let c = cfg();
+    let mut rng = Rng::new(3);
+    // whichever call follows, the kitty is shown at the end of the record: the checks of
+    // records containing the decision cannot move it
+    for last in [PASS, 3] {
+        let mut whole = ev.clone();
+        whole.push(Event::Act(2, last));
+        if let Some(p) = Leaky::perturb_hidden(&c, &whole, 2, &mut rng) {
+            check_privacy::<Leaky>(&c, &whole, &p, 2).unwrap();
+        }
+    }
+    // cut before it, the decision is seat 2's pending frame: the kitty is still hidden
+    let mut caught = false;
+    for _ in 0..16 {
+        let p = Leaky::perturb_hidden(&c, &ev, 2, &mut rng).expect("hidden cards to re-deal");
+        if let Err(e) = check_privacy::<Leaky>(&c, &ev, &p, 2) {
+            assert!(e.contains("pending decision"), "{e}");
+            caught = true;
+            break;
+        }
+    }
+    assert!(caught, "a re-deal that moves the kitty's 2 exposes the leak");
+    let err = check_game::<Leaky>(&c, 120, 7).unwrap_err();
+    assert!(err.contains("pending decision") && err.contains("hidden from it"), "{err}");
 }
 
 #[test]
