@@ -325,12 +325,19 @@ def _make_lux(n_envs: int = 1, **kw) -> VecGameEnv:
     return LuxVecEnv(n_envs, **kw)
 
 
+def _make_arc3(n_envs: int = 1, **kw) -> VecGameEnv:
+    """Needs the ``arc3`` extra (the offline ARC-AGI-3 SDK) and ENVIRONMENTS_DIR."""
+    from env.vec_arc3 import Arc3VecEnv
+    return Arc3VecEnv(n_envs, **kw)
+
+
 #: games with a simulator (the others train on their IL replay stream only)
 VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
     "generals": _make_generals,
     "othello": _make_othello,
     "gomoku": _make_gomoku,
     "lux": _make_lux,
+    "arc3": _make_arc3,
 }
 
 

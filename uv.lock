@@ -191,13 +191,13 @@ name = "arc-agi"
 version = "0.9.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "arcengine", marker = "python_full_version >= '3.13'" },
-    { name = "flask", marker = "python_full_version >= '3.13'" },
-    { name = "matplotlib", marker = "python_full_version >= '3.13'" },
-    { name = "pillow", marker = "python_full_version >= '3.13'" },
-    { name = "pydantic", marker = "python_full_version >= '3.13'" },
-    { name = "python-dotenv", marker = "python_full_version >= '3.13'" },
-    { name = "requests", marker = "python_full_version >= '3.13'" },
+    { name = "arcengine", marker = "python_full_version >= '3.12'" },
+    { name = "flask", marker = "python_full_version >= '3.12'" },
+    { name = "matplotlib", marker = "python_full_version >= '3.12'" },
+    { name = "pillow", marker = "python_full_version >= '3.12'" },
+    { name = "pydantic", marker = "python_full_version >= '3.12'" },
+    { name = "python-dotenv", marker = "python_full_version >= '3.12'" },
+    { name = "requests", marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f3/7d/503f6fc60e6ae28d65502d1225ed4723fa83246c48041b7b169dd12bd212/arc_agi-0.9.9.tar.gz", hash = "sha256:ee822d83f4ea4ccb96377ecbc81ffe1e9e7ded15300aedf88150b7f4743a2bc8", size = 35253, upload-time = "2026-06-10T21:35:17.84Z" }
 wheels = [
@@ -209,8 +209,9 @@ name = "arcengine"
 version = "0.9.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "numpy", version = "1.26.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.12.*'" },
     { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
-    { name = "pydantic", marker = "python_full_version >= '3.13'" },
+    { name = "pydantic", marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/dd/16/35b3087ac0661f8373530d83e1d2907dc7f281255698f024bd4eb3fe548d/arcengine-0.9.3.tar.gz", hash = "sha256:76441c15fde092a071ca95edce5e643385ab270304f59c1172b460048fffcdfe", size = 29544, upload-time = "2026-01-29T03:06:32.086Z" }
 wheels = [
@@ -804,12 +805,12 @@ name = "flask"
 version = "3.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "blinker", marker = "python_full_version >= '3.13'" },
-    { name = "click", marker = "python_full_version >= '3.13'" },
-    { name = "itsdangerous", marker = "python_full_version >= '3.13'" },
-    { name = "jinja2", marker = "python_full_version >= '3.13'" },
-    { name = "markupsafe", marker = "python_full_version >= '3.13'" },
-    { name = "werkzeug", marker = "python_full_version >= '3.13'" },
+    { name = "blinker", marker = "python_full_version >= '3.12'" },
+    { name = "click", marker = "python_full_version >= '3.12'" },
+    { name = "itsdangerous", marker = "python_full_version >= '3.12'" },
+    { name = "jinja2", marker = "python_full_version >= '3.12'" },
+    { name = "markupsafe", marker = "python_full_version >= '3.12'" },
+    { name = "werkzeug", marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/26/00/35d85dcce6c57fdc871f3867d465d780f302a175ea360f62533f12b27e2b/flask-3.1.3.tar.gz", hash = "sha256:0ef0e52b8a9cd932855379197dd8f94047b359ca0a78695144304cb45f87c9eb", size = 759004, upload-time = "2026-02-19T05:00:57.678Z" }
 wheels = [
@@ -1113,7 +1114,8 @@ dependencies = [
 
 [package.optional-dependencies]
 arc3 = [
-    { name = "arc-agi", marker = "python_full_version >= '3.13'" },
+    { name = "arc-agi", marker = "python_full_version >= '3.12'" },
+    { name = "arcengine", marker = "python_full_version >= '3.12'" },
 ]
 lux = [
     { name = "luxai-s3" },
@@ -1128,7 +1130,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.0" },
-    { name = "arc-agi", marker = "python_full_version >= '3.13' and extra == 'arc3'" },
+    { name = "arc-agi", marker = "python_full_version >= '3.12' and extra == 'arc3'", specifier = "==0.9.9" },
+    { name = "arcengine", marker = "python_full_version >= '3.12' and extra == 'arc3'", specifier = "==0.9.3" },
     { name = "gmsim", directory = "data_processing/rs/gmsim" },
     { name = "luxai-s3", marker = "extra == 'lux'", specifier = "==0.2.1" },
     { name = "lzstring", specifier = ">=1.0.4" },
@@ -2977,10 +2980,10 @@ name = "pydantic"
 version = "2.13.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "annotated-types", marker = "python_full_version >= '3.13'" },
-    { name = "pydantic-core", marker = "python_full_version >= '3.13'" },
-    { name = "typing-extensions", marker = "python_full_version >= '3.13'" },
-    { name = "typing-inspection", marker = "python_full_version >= '3.13'" },
+    { name = "annotated-types", marker = "python_full_version >= '3.12'" },
+    { name = "pydantic-core", marker = "python_full_version >= '3.12'" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.12'" },
+    { name = "typing-inspection", marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/53/ef/fc4f868f4e2cee79f863883abffceff107875f569b848507319842d2a681/pydantic-2.13.5.tar.gz", hash = "sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08", size = 845750, upload-time = "2026-08-28T14:04:00.916Z" }
 wheels = [
@@ -2992,7 +2995,7 @@ name = "pydantic-core"
 version = "2.46.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version >= '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/af/f9/8a06bea35ef8daf588f707784c973a7046e0034c8d8cfb08828eeffb8b75/pydantic_core-2.46.5.tar.gz", hash = "sha256:10416c15b8839ecc4ef4d0885da76da6fd0f67333a0eb8aff6d93c4b8f2910fc", size = 472262, upload-time = "2026-08-28T10:01:31.677Z" }
 wheels = [
@@ -3259,10 +3262,10 @@ name = "requests"
 version = "2.34.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "certifi", marker = "python_full_version >= '3.13'" },
-    { name = "charset-normalizer", marker = "python_full_version >= '3.13'" },
-    { name = "idna", marker = "python_full_version >= '3.13'" },
-    { name = "urllib3", marker = "python_full_version >= '3.13'" },
+    { name = "certifi", marker = "python_full_version >= '3.12'" },
+    { name = "charset-normalizer", marker = "python_full_version >= '3.12'" },
+    { name = "idna", marker = "python_full_version >= '3.12'" },
+    { name = "urllib3", marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz", hash = "sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed", size = 142856, upload-time = "2026-05-14T19:25:27.735Z" }
 wheels = [
@@ -3921,7 +3924,7 @@ name = "typing-inspection"
 version = "0.4.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version >= '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a3/26/b09b8010994eccc3c09092e6b34058f36a460eea2d4c3e8b910c695975a0/typing_inspection-0.4.4.tar.gz", hash = "sha256:547274fa6b0a561ccf549cc9524b999a578e737d015d8709d021f9d0d13bea47", size = 76928, upload-time = "2026-08-12T12:37:25.997Z" }
 wheels = [
@@ -4009,7 +4012,7 @@ name = "werkzeug"
 version = "3.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markupsafe", marker = "python_full_version >= '3.13'" },
+    { name = "markupsafe", marker = "python_full_version >= '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/dd/b2/381be8cfdee792dd117872481b6e378f85c957dd7c5bca38897b08f765fd/werkzeug-3.1.8.tar.gz", hash = "sha256:9bad61a4268dac112f1c5cd4630a56ede601b6ed420300677a869083d70a4c44", size = 875852, upload-time = "2026-04-02T18:49:14.268Z" }
 wheels = [
