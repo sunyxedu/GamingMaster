@@ -339,10 +339,19 @@ class MoEFFN(nn.Module):
         out = xf.new_zeros(xf.shape)
         w_gate_up = self.w_gate_up.to(xf.dtype).unbind(0)
         w_down = self.w_down.to(xf.dtype).unbind(0)
-        for e in range(self.n_experts):
-            rows, slot = (top_i == e).nonzero(as_tuple=True)
-            if rows.numel() == 0:
+        # every expert's (token, slot) pairs in (token, slot) order — what
+        # (top_i == e).nonzero() lists — from ONE stable sort and ONE host sync
+        # (the counts), instead of one nonzero() sync per expert
+        k = top_i.shape[-1]
+        flat = top_i.reshape(-1)
+        order = torch.argsort(flat, stable=True)
+        rows_all, slot_all = order // k, order % k
+        start = 0
+        for e, c in enumerate(torch.bincount(flat, minlength=self.n_experts).tolist()):
+            if c == 0:
                 continue
+            rows, slot = rows_all[start:start + c], slot_all[start:start + c]
+            start += c
             h = xf.index_select(0, rows)
             g, u = (h @ w_gate_up[e]).chunk(2, dim=-1)
             h = (F.silu(g) * u) @ w_down[e]

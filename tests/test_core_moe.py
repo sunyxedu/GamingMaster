@@ -352,9 +352,39 @@ def test_sparse_experts_unbind_matches_indexed_reference(dtype):
     grads = []
     for fn in (moe._sparse_experts, lambda x, t, g: _sparse_experts_indexed(moe, x, t, g)):
         moe.zero_grad(set_to_none=True)
-        out = fn(xf, top_i, gates)
+        x = xf.clone().requires_grad_(True)
+        g = gates.clone().requires_grad_(True)
+        out = fn(x, top_i, g)
         (out.float() * torch.linspace(-1, 1, out.numel()).reshape(out.shape)).sum().backward()
-        grads.append((out.detach().clone(), moe.w_gate_up.grad.clone(), moe.w_down.grad.clone()))
+        grads.append((out.detach().clone(), moe.w_gate_up.grad.clone(), moe.w_down.grad.clone(),
+                      x.grad.clone(), g.grad.clone()))
     for a, b in zip(*grads):
         assert torch.equal(a, b)
     assert not grads[0][1][6:].any()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_sparse_experts_one_host_sync_per_layer_on_cuda():
+    """The routed path lists every expert's tokens with one sort and syncs the host
+    once (the counts) instead of once per expert, bit-identically to the reference."""
+    from model.components.core import MoEFFN
+
+    torch.manual_seed(0)
+    dev = torch.device("cuda")
+    moe = MoEFFN(64, 16, 2, 1, 2.0, 0.02, 0.02).to(dev)
+    xf = torch.randn(300, 64, device=dev)
+    top_i = torch.randint(0, 16, (300, 2), device=dev)
+    gates = torch.rand(300, 2, device=dev)
+    ref = _sparse_experts_indexed(moe, xf, top_i, gates)
+    torch.cuda.synchronize()
+    torch.cuda.set_sync_debug_mode("warn")
+    try:
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            out = moe._sparse_experts(xf, top_i, gates)
+        syncs = [x for x in w if "synchroniz" in str(x.message)]
+    finally:
+        torch.cuda.set_sync_debug_mode(0)
+    assert torch.equal(out, ref)
+    assert len(syncs) <= 2, [str(x.message) for x in syncs]
