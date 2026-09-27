@@ -195,6 +195,70 @@ impl Sc2 {
         }
     }
 
+    /// The game's static data (abilities, unit types, upgrades, buffs): available once a game
+    /// or replay runs.
+    pub fn data(&mut self) -> Result<proto::ResponseData> {
+        let req = proto::RequestData { ability_id: Some(true), unit_type_id: Some(true), upgrade_id: Some(true),
+                                       buff_id: Some(true), effect_id: Some(false) };
+        match self.request(request::Request::Data(req))? {
+            response::Response::Data(r) => Ok(r),
+            other => bail!("data: unexpected response {other:?}"),
+        }
+    }
+
+    /// A single-player game on the local `map_path` (relative to Maps/ or absolute) against
+    /// the built-in AI of `ai_race` / `difficulty`, seeded; then `join_game` as `race`.
+    pub fn create_vs_ai(&mut self, map_path: &str, ai_race: proto::Race, difficulty: proto::Difficulty, seed: u32) -> Result<()> {
+        let req = proto::RequestCreateGame {
+            map: Some(proto::request_create_game::Map::LocalMap(proto::LocalMap { map_path: Some(map_path.to_string()), map_data: None })),
+            player_setup: vec![
+                proto::PlayerSetup { r#type: Some(proto::PlayerType::Participant as i32), ..Default::default() },
+                proto::PlayerSetup { r#type: Some(proto::PlayerType::Computer as i32), race: Some(ai_race as i32),
+                                     difficulty: Some(difficulty as i32), ..Default::default() },
+            ],
+            disable_fog: Some(false),
+            random_seed: Some(seed),
+            realtime: Some(false),
+        };
+        match self.request(request::Request::CreateGame(req))? {
+            response::Response::CreateGame(r) => {
+                if r.error.is_some() {
+                    bail!("create game: {:?} {}", r.error(), r.error_details());
+                }
+                Ok(())
+            }
+            other => bail!("create_game: unexpected response {other:?}"),
+        }
+    }
+
+    /// Join the created game as a participant of `race` with the raw interface (+ score);
+    /// returns our player id.
+    pub fn join_game(&mut self, race: proto::Race) -> Result<u32> {
+        let options = proto::InterfaceOptions { raw: Some(true), score: Some(true), show_cloaked: Some(false), ..Default::default() };
+        let req = proto::RequestJoinGame {
+            participation: Some(proto::request_join_game::Participation::Race(race as i32)),
+            options: Some(options),
+            ..Default::default()
+        };
+        match self.request(request::Request::JoinGame(req))? {
+            response::Response::JoinGame(r) => {
+                if r.error.is_some() {
+                    bail!("join game: {:?} {}", r.error(), r.error_details());
+                }
+                Ok(r.player_id.unwrap_or(1))
+            }
+            other => bail!("join_game: unexpected response {other:?}"),
+        }
+    }
+
+    /// Send raw actions (the per-action results: Success or an error code).
+    pub fn act(&mut self, actions: Vec<proto::Action>) -> Result<Vec<i32>> {
+        match self.request(request::Request::Action(proto::RequestAction { actions }))? {
+            response::Response::Action(r) => Ok(r.result),
+            other => bail!("action: unexpected response {other:?}"),
+        }
+    }
+
     /// Leave (the process exits); also on drop.
     pub fn quit(&mut self) {
         let _ = self.request(request::Request::Quit(proto::RequestQuit {}));

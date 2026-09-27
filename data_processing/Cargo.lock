@@ -919,6 +919,7 @@ dependencies = [
  "gmmahjong",
  "gmpokemon",
  "gmrules",
+ "gmsc2",
  "gmshard",
  "hdf5-metno",
  "hex",
@@ -962,6 +963,15 @@ dependencies = [
  "serde",
  "serde_json",
  "shakmaty",
+]
+
+[[package]]
+name = "gmsc2"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sc2api",
+ "serde_json",
 ]
 
 [[package]]
