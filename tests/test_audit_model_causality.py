@@ -121,14 +121,14 @@ def _obs(game: str, cfg, g: torch.Generator) -> Dict[str, torch.Tensor]:
                 "players_seq": r(N_MJ_PLAYERS, cfg.mahjong_player_feature_dim),
                 "table_seq": r(cfg.mahjong_table_feature_dim)}
     if game == "pokemon":
-        from model.games.pokemon import POKE_FEAT_ACTIVE
+        from model.games.pokemon import POKE_FEAT_ACTIVE, n_species_ids
         S = 2 * cfg.team_slots
         feats = r(S, cfg.pokemon_feature_dim)
         feats[..., POKE_FEAT_ACTIVE] = 0.0
         feats[..., 0, POKE_FEAT_ACTIVE] = 1.0
         mask = torch.rand(B, T, S, generator=g) < 0.7
         mask[..., :cfg.team_slots] = True
-        ids = torch.randint(1, cfg.pokemon_species_buckets, (B, T, S), generator=g)
+        ids = torch.randint(1, n_species_ids(cfg), (B, T, S), generator=g)
         return {"species_ids": ids, "poke_feats": feats, "slot_mask": mask,
                 "field_seq": r(cfg.pokemon_field_features)}
     if game == "clash_royale":
@@ -182,11 +182,12 @@ def _legal(game: str, cfg, obs, g) -> Optional[Dict[str, torch.Tensor]]:
     if game == "pokemon":
         # both move heads' masks (identity: move_id over the vocabulary) and the
         # revealed-move ids the decoder conditions on (state, from obs)
+        from model.games.pokemon import n_move_ids
         return {"action_type": m(cfg.n_action_types), "move": m(cfg.n_move_slots),
-                "move_id": m(cfg.pokemon_move_buckets),
+                "move_id": m(n_move_ids(cfg)),
                 "switch": m(cfg.team_slots), "tera": torch.rand(B, T, generator=g) < 0.5,
                 "active_idx": torch.randint(0, cfg.team_slots, (B, T), generator=g),
-                "move_ids": torch.randint(0, cfg.pokemon_move_buckets, (B, T, cfg.n_move_slots),
+                "move_ids": torch.randint(0, n_move_ids(cfg), (B, T, cfg.n_move_slots),
                                           generator=g)}
     if game == "clash_royale":
         from model.games.clash_royale import n_card_tokens

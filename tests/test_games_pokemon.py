@@ -15,8 +15,9 @@ Hearthstone suite), for both move heads (``pokemon_move_head`` "identity"
      decode()/sample(); frames without an observed choice (converter v2
      action_type −1 / action_known 0) carry no policy loss; echoed legal
      masks give masked CE with illegal targets unsupervised
-  7. the deploy hook (legal_from_request / request_move_mask /
-     move_bucket) and legacy configs rebuilding the slot head
+  7. the deploy hook (legal_from_request / request_move_mask / move_id:
+     the exact Showdown vocabulary, or the legacy hash buckets of a hashed
+     net) and legacy configs rebuilding the slot head / the hashed tables
 
 Plus the ARG_USES invariant: the move head + tera Bernoulli contribute
 log-prob only on move frames, the switch pointer only on switch frames,
@@ -32,6 +33,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from data_processing.games.pokemon import ID_UNK, MOVE_VOCAB_SIZE, SPECIES_VOCAB_SIZE, VOCAB
 from model.config import upgrade_config_dict
 from model.game_network import GameNetwork
 from model.games.pokemon import (
@@ -42,7 +44,11 @@ from model.games.pokemon import (
     PokemonEncoder,
     legal_from_request,
     move_bucket,
+    move_id,
+    n_move_ids,
+    n_species_ids,
     request_move_mask,
+    species_id,
 )
 
 HEADS = ("identity", "slot")
@@ -73,14 +79,14 @@ def model(cfg):
 
 
 def _n_move(cfg):
-    return cfg.pokemon_move_buckets if cfg.pokemon_move_head == "identity" else cfg.n_move_slots
+    return n_move_ids(cfg) if cfg.pokemon_move_head == "identity" else cfg.n_move_slots
 
 
 def _make_obs(cfg, B=2, T=3, seed=0):
     g = torch.Generator().manual_seed(seed)
     S = 2 * cfg.team_slots
     obs = {
-        "species_ids": torch.randint(1, cfg.pokemon_species_buckets, (B, T, S), generator=g),
+        "species_ids": torch.randint(1, n_species_ids(cfg), (B, T, S), generator=g),
         "poke_feats": torch.randn(B, T, S, cfg.pokemon_feature_dim, generator=g),
         # some unknown opponent slots so the "empty" embedding participates
         "slot_mask": torch.rand(B, T, S, generator=g) < 0.7,
@@ -100,11 +106,11 @@ def _make_legal(cfg, B, T=None, seed=0):
     legal = {
         "action_type": torch.rand(*shape, cfg.n_action_types, generator=g) < 0.5,
         "move": torch.rand(*shape, cfg.n_move_slots, generator=g) < 0.5,
-        "move_id": torch.rand(*shape, cfg.pokemon_move_buckets, generator=g) < 0.2,
+        "move_id": torch.rand(*shape, n_move_ids(cfg), generator=g) < 0.2,
         "switch": torch.rand(*shape, cfg.team_slots, generator=g) < 0.4,
         "tera": torch.rand(*shape, generator=g) < 0.5,
         "active_idx": torch.randint(0, cfg.team_slots, shape, generator=g),
-        "move_ids": torch.randint(0, cfg.pokemon_move_buckets, (*shape, cfg.n_move_slots),
+        "move_ids": torch.randint(0, n_move_ids(cfg), (*shape, cfg.n_move_slots),
                                   generator=g),
     }
     legal["move_id"][..., 0] = False                 # id 0 = no move
@@ -351,7 +357,7 @@ def _make_tgt(cfg, B, T, seed=0):
     return {
         "action_type": torch.randint(0, cfg.n_action_types, (B, T), generator=g),
         "move_idx": torch.randint(0, cfg.n_move_slots, (B, T), generator=g),
-        "move_id": torch.randint(1, cfg.pokemon_move_buckets, (B, T), generator=g),
+        "move_id": torch.randint(1, n_move_ids(cfg), (B, T), generator=g),
         "switch_idx": torch.randint(0, cfg.team_slots, (B, T), generator=g),
         "tera": torch.randint(0, 2, (B, T), generator=g),
         "active_idx": torch.randint(0, cfg.team_slots, (B, T), generator=g),
@@ -552,7 +558,7 @@ def test_identity_head_scores_the_whole_vocabulary():
         a = net(obs, legal={"move_ids": ids}, labels={"action_type": torch.zeros(B, T).long()})
         net.action_decoder.move_revealed.fill_(0.0)
         b = net(obs, legal={"move_ids": ids}, labels={"action_type": torch.zeros(B, T).long()})
-    assert a["move_logits"].shape == (B, T, cfg.pokemon_move_buckets)
+    assert a["move_logits"].shape == (B, T, n_move_ids(cfg))
     assert (a["move_logits"][..., 0] == NO_MOVE_LOGIT).all()
     diff = a["move_logits"] - b["move_logits"]
     torch.testing.assert_close(diff[..., [5, 9]], torch.full((B, T, 2), 2.0))
@@ -601,27 +607,47 @@ def _request(**kw):
     return {"side": {"pokemon": side}, "active": active, **kw}
 
 
-def test_legal_from_request():
-    V = 64
+def _exact_cfg(**kw):
+    """A tiny identity-head net on the vendored exact vocabularies."""
+    return _cfg("identity", **{"pokemon_move_vocab": MOVE_VOCAB_SIZE,
+                               "pokemon_species_vocab": SPECIES_VOCAB_SIZE, **kw})
+
+
+def _hashed_cfg(**kw):
+    """A tiny identity-head net on the legacy hash buckets (converter v2 shards)."""
+    return _cfg("identity", **{"pokemon_move_vocab": 0, "pokemon_species_vocab": 0,
+                               "pokemon_move_buckets": 64, **kw})
+
+
+@pytest.mark.parametrize("scheme", ["exact", "hashed"])
+def test_legal_from_request(scheme):
+    cfg = _exact_cfg() if scheme == "exact" else _hashed_cfg()
+    V = n_move_ids(cfg)
     # the model's slots: the team-preview order (Showdown reorders side.pokemon later)
     slot_of = {"p1: Corviknight": 0, "p1: Garchomp": 1, "p1: Ditto": 2}
-    lg = legal_from_request(_request(), slot_of, V, move_ids=torch.tensor([7, 0, 0, 0]))
+    lg = legal_from_request(_request(), slot_of, cfg, move_ids=torch.tensor([7, 0, 0, 0]))
     assert lg["action_type"].tolist() == [[True, True]]
     assert lg["switch"].tolist() == [[True, False, False, False, False, False]]
     assert lg["active_idx"].tolist() == [1] and lg["tera"].tolist() == [True]
-    want = {move_bucket("Earthquake", V), move_bucket("U-turn", V)}
+    want = {move_id("Earthquake", cfg), move_id("U-turn", cfg)}
+    if scheme == "exact":
+        assert V == MOVE_VOCAB_SIZE
+        assert want == {VOCAB.move_id("Earthquake"), VOCAB.move_id("uturn")}
+    else:
+        assert V == 64 and want == {move_bucket("Earthquake", V), move_bucket("U-turn", V)}
+    assert lg["move_id"].shape == (1, V)
     assert set(lg["move_id"][0].nonzero().squeeze(1).tolist()) == want
     assert lg["move_ids"].tolist() == [[7, 0, 0, 0]]
-    assert torch.equal(lg["move_id"], request_move_mask([["earthquake", "U-turn"]], V))
+    assert torch.equal(lg["move_id"], request_move_mask([["earthquake", "U-turn"]], cfg))
     # forced switch: switch only; trapped: move only; team preview: every present slot
-    forced = legal_from_request(_request(forceSwitch=[True]), slot_of, V)
+    forced = legal_from_request(_request(forceSwitch=[True]), slot_of, cfg)
     assert forced["action_type"].tolist() == [[False, True]] and not forced["move_id"].any()
     assert forced["switch"].tolist() == [[True, False, False, False, False, False]]
     req = _request()
     req["active"][0]["trapped"] = True
-    assert legal_from_request(req, slot_of, V)["action_type"].tolist() == [[True, False]]
+    assert legal_from_request(req, slot_of, cfg)["action_type"].tolist() == [[True, False]]
     tp = legal_from_request({"teamPreview": True, "side": {"pokemon": [
-        {"ident": k, "condition": "100/100"} for k in slot_of]}}, slot_of, V)
+        {"ident": k, "condition": "100/100"} for k in slot_of]}}, slot_of, cfg)
     assert tp["action_type"].tolist() == [[False, True]]
     assert tp["switch"].tolist() == [[True, True, True, False, False, False]]
     assert tp["active_idx"].tolist() == [0]
@@ -629,19 +655,47 @@ def test_legal_from_request():
     # (Showdown's side.ts rejects any other choice)
     rb = _request(forceSwitch=[True])
     rb["side"]["pokemon"][0]["reviving"] = True
-    lg = legal_from_request(rb, slot_of, V)
+    lg = legal_from_request(rb, slot_of, cfg)
     assert lg["action_type"].tolist() == [[False, True]] and not lg["move_id"].any()
     assert lg["switch"].tolist() == [[False, False, True, False, False, False]]   # Ditto
     assert lg["active_idx"].tolist() == [1]
 
 
-def test_request_masks_drive_step_sampling():
+def test_exact_vocabulary_deploy_mapping():
+    """An exact net maps request / log names like the converter: no two moves or species
+    share an id (the legacy buckets merged Swords Dance / Fire Blast, Dragonite /
+    Hoopa-Unbound), a request move the vocabulary does not know is offered as UNK, and a
+    name newer than the (smaller, older — the vocabulary is append-only) vocabulary a net
+    was built with is UNK for that net."""
+    cfg = _exact_cfg()
+    assert move_bucket("Swords Dance", 1024) == move_bucket("Fire Blast", 1024)
+    assert move_id("Swords Dance", cfg) != move_id("Fire Blast", cfg)
+    assert move_bucket("Dragonite", 512) == move_bucket("Hoopa-Unbound", 512)
+    assert species_id("Dragonite", cfg) != species_id("Hoopa-Unbound", cfg)
+    assert species_id("Urshifu-*", cfg) != species_id("Urshifu", cfg) > ID_UNK
+    assert species_id("Gastrodon-East", cfg) == species_id("Gastrodon", cfg)
+    eq = VOCAB.move_id("Earthquake")
+    m = request_move_mask([["earthquake", "Zz Brand New Move"], []], cfg)
+    assert m.shape == (2, MOVE_VOCAB_SIZE) and not m[1].any()
+    assert m[0].nonzero().squeeze(1).tolist() == [ID_UNK, eq]
+    old = _cfg("identity", pokemon_move_vocab=eq + 1, pokemon_species_vocab=16)
+    assert move_id("Earthquake", old) == eq and move_id("Tidy Up", old) == ID_UNK
+    assert VOCAB.move_id("Tidy Up") > eq
+    assert request_move_mask([["tidyup"]], old)[0].nonzero().squeeze(1).tolist() == [ID_UNK]
+    assert species_id("Rillaboom", old) == ID_UNK and species_id("Ivysaur", old) == 3
+    assert (move_id("", cfg), species_id("", cfg)) == (0, 0)
+    with pytest.raises(TypeError, match="pokemon config"):
+        request_move_mask([["earthquake"]], 1024)
+
+
+@pytest.mark.parametrize("scheme", ["exact", "hashed"])
+def test_request_masks_drive_step_sampling(scheme):
     """The deploy path: GameNetwork.step with legal_from_request samples one
     of the request's usable moves (identity head) and its log-prob is exact."""
-    cfg = _cfg("identity", pokemon_move_buckets=64)
+    cfg = _exact_cfg() if scheme == "exact" else _hashed_cfg()
     net = GameNetwork(cfg, PokemonEncoder(cfg), PokemonDecoder(cfg)).eval()
     slot_of = {"p1: Garchomp": 0, "p1: Ditto": 1, "p1: Corviknight": 2}
-    lg = legal_from_request(_request(), slot_of, 64, move_ids=torch.tensor([3, 0, 0, 0]))
+    lg = legal_from_request(_request(), slot_of, cfg, move_ids=torch.tensor([3, 0, 0, 0]))
     lg["action_type"] = torch.tensor([[True, False]])                # force a move
     obs = {k: v[:, 0] for k, v in _make_obs(cfg, 1, T=1).items()}
     allowed = set(lg["move_id"][0].nonzero().squeeze(1).tolist())
@@ -668,15 +722,22 @@ SLOT_HEAD_KEYS = {
 }
 
 
+#: config fields newer than the checkpoints of each legacy pokemon generation
+V1_ERA_MISSING = ("pokemon_move_head", "pokemon_move_vocab", "pokemon_species_vocab")
+V2_ERA_MISSING = ("pokemon_move_vocab", "pokemon_species_vocab")
+
+
 def test_legacy_configs_rebuild_the_slot_head():
     """A config saved before pokemon_move_head existed (it has
-    pokemon_move_buckets) rebuilds the slot head: same state-dict keys, the
-    checkpoint loads strictly and computes the same outputs."""
-    cfg = _cfg("slot")
-    old = {k: v for k, v in cfg.__dict__.items() if k != "pokemon_move_head"}
+    pokemon_move_buckets) rebuilds the slot head on its hashed tables: same
+    state-dict keys, the checkpoint loads strictly and computes the same
+    outputs."""
+    cfg = _cfg("slot", pokemon_move_vocab=0, pokemon_species_vocab=0)
+    old = {k: v for k, v in cfg.__dict__.items() if k not in V1_ERA_MISSING}
     up = upgrade_config_dict(old)
-    assert up["pokemon_move_head"] == "slot"
-    assert "pokemon_move_head" not in upgrade_config_dict({"d_model": 48})   # other games
+    assert (up["pokemon_move_head"], up["pokemon_move_vocab"], up["pokemon_species_vocab"]) == (
+        "slot", 0, 0)
+    assert not set(V1_ERA_MISSING) & set(upgrade_config_dict({"d_model": 48}))  # other games
     assert PokemonConfig().pokemon_move_head == "identity"                  # fresh configs
     torch.manual_seed(0)
     src = GameNetwork(cfg, PokemonEncoder(cfg), PokemonDecoder(cfg)).eval()
@@ -695,6 +756,38 @@ def test_legacy_configs_rebuild_the_slot_head():
     ident = _cfg("identity")
     with pytest.raises(RuntimeError):
         GameNetwork(ident, PokemonEncoder(ident), PokemonDecoder(ident)).load_state_dict(
+            src.state_dict(), strict=True)
+
+
+def test_hashed_identity_configs_load_and_compute_exactly():
+    """A converter-v2-era checkpoint (identity head over the hashed buckets, saved
+    before the vocabulary fields) rebuilds its hash-bucket tables: the same
+    state-dict, a strict load, bit-identical outputs, and the legacy deploy
+    mapping (crc32 buckets).  Exact-vocabulary tables do not fit it."""
+    cfg = _hashed_cfg(pokemon_species_buckets=512, pokemon_move_buckets=1024)
+    old = {k: v for k, v in cfg.__dict__.items() if k not in V2_ERA_MISSING}
+    up = upgrade_config_dict(old)
+    assert (up["pokemon_move_vocab"], up["pokemon_species_vocab"]) == (0, 0)
+    torch.manual_seed(0)
+    src = GameNetwork(cfg, PokemonEncoder(cfg), PokemonDecoder(cfg)).eval()
+    rebuilt = PokemonConfig(**up)
+    dst = GameNetwork(rebuilt, PokemonEncoder(rebuilt), PokemonDecoder(rebuilt)).eval()
+    dst.load_state_dict(src.state_dict(), strict=True)
+    assert (dst.obs_encoder.species_embed.num_embeddings,
+            dst.action_decoder.move_embed.num_embeddings) == (512, 1024)
+    B, T = 2, 3
+    obs = _make_obs(rebuilt, B, T)
+    legal = _make_legal(rebuilt, B, T)
+    labels = {"action_type": torch.zeros(B, T).long(), "active_idx": torch.zeros(B, T).long()}
+    with torch.no_grad():
+        a, b = src(obs, legal=legal, labels=labels), dst(obs, legal=legal, labels=labels)
+    for k in ("action_type_logits", "move_logits", "switch_logits", "tera_logit", "value"):
+        assert torch.equal(a[k], b[k]), k
+    assert move_id("Swords Dance", rebuilt) == move_bucket("Swords Dance", 1024)
+    assert species_id("Rillaboom", rebuilt) == move_bucket("Rillaboom", 512)
+    ex = _exact_cfg()
+    with pytest.raises(RuntimeError):
+        GameNetwork(ex, PokemonEncoder(ex), PokemonDecoder(ex)).load_state_dict(
             src.state_dict(), strict=True)
 
 

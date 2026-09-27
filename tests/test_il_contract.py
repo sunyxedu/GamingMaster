@@ -678,7 +678,7 @@ def _decoder_cases():
         HearthstoneEncoder,
     )
     from model.games.lux import LuxConfig, LuxDecoder, LuxEncoder, lux_sap_legal
-    from model.games.pokemon import PokemonConfig, PokemonDecoder, PokemonEncoder
+    from model.games.pokemon import PokemonConfig, PokemonDecoder, PokemonEncoder, n_move_ids
     from model.games.starcraft import RTSDecoder, StarCraftConfig, StarCraftEncoder
     from model.network import GeneralsNetwork
 
@@ -702,7 +702,7 @@ def _decoder_cases():
     # converter v2 targets: move identity (−1 = none), unlabelled frames
     tgt = {"action_type": torch.randint(0, 2, (B, T), generator=g),
            "move_idx": torch.randint(-1, 4, (B, T), generator=g),
-           "move_id": torch.randint(-1, cfg.pokemon_move_buckets, (B, T), generator=g),
+           "move_id": torch.randint(-1, n_move_ids(cfg), (B, T), generator=g),
            "switch_idx": torch.randint(0, 6, (B, T), generator=g),
            "tera": torch.randint(0, 2, (B, T), generator=g),
            "active_idx": torch.randint(0, 6, (B, T), generator=g),
