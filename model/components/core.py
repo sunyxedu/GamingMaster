@@ -541,7 +541,12 @@ class DeepCore(nn.Module):
                     x, mem_states[j] = mem.step(x, mem_states[j])
                 else:
                     B, T = bt
-                    x = mem(x.reshape(B, T, *x.shape[1:])).reshape(x.shape)
+                    x4 = x.reshape(B, T, *x.shape[1:])
+                    # recomputed in the backward like the blocks: a scan's saved
+                    # gates / states would cost several activations per sub-layer
+                    x4 = (ckpt(mem, x4) if torch.is_grad_enabled() and x4.requires_grad
+                          else mem(x4))
+                    x = x4.reshape(x.shape)
         return self.final_norm(x), 1
 
 
