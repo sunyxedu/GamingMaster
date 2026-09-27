@@ -133,7 +133,9 @@ pub fn convert(input: &Path, out: &Path, name: &str, shard_size: usize, val_ever
     let shape = ds.shape();
     ensure!(shape.len() == 2 && shape[1] == ROW, "datas has shape {shape:?}, expected [N, {ROW}]");
     let n = shape[0];
-    let meta = json!({"features": FEATURES, "source": "hokoff", "dataset": name,
+    // the same for every Hokoff dataset (a dataset's name is per sample: meta.source), so
+    // several datasets' shards form one training set
+    let meta = json!({"features": FEATURES, "source": "hokoff",
                       "dropped_constant_columns": [FEATURES, OBS]});
     let mut train = ShardWriter::new(&out.join("train"), "hok", 1, meta.clone(), shard_size)?;
     let mut val = ShardWriter::new(&out.join("val"), "hok", 1, meta, shard_size)?;
