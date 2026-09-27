@@ -21,7 +21,9 @@ Hearthstone suite), for both move heads (``pokemon_move_head`` "identity"
 
 Plus the ARG_USES invariant: the move head + tera Bernoulli contribute
 log-prob only on move frames, the switch pointer only on switch frames,
-and an end-to-end run: gmdata pokemon convert (v2) → train_il_game → resume.
+and end-to-end runs: gmdata pokemon convert (v3, exact ids) → train_il_game
+→ resume; hashed pre-v3 shards refused by a fresh net unless the legacy
+hashed net is asked for.
 """
 
 import os
@@ -59,11 +61,11 @@ HEADS = ("identity", "slot")
 # ======================================================================
 
 def _cfg(head, **kw):
-    """Tiny config for fast tests."""
+    """Tiny config for fast tests (the default id scheme: the exact vocabularies)."""
     return PokemonConfig(**{**dict(
         d_model=48, n_heads=4, d_ff=64, dropout=0.0,
         n_st_layers=1, core_type="trm", trm_H_cycles=2, trm_L_cycles=2, trm_block_layers=1,
-        halt_max_steps=2, pokemon_species_buckets=64, pokemon_move_buckets=32,
+        halt_max_steps=2,
         pokemon_move_head=head,
     ), **kw})
 
@@ -839,15 +841,19 @@ def test_slot_head_il_loss_is_the_legacy_objective():
 
 
 # ======================================================================
-# 8. End to end: gmdata pokemon convert (converter v2) → train_il_game
+# 8. End to end: gmdata pokemon convert (converter v3) → train_il_game
 # ======================================================================
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CARGO = shutil.which("cargo") or os.path.expanduser("~/.cargo/bin/cargo")
+TINY_NET = ["d_model=32", "n_heads=4", "d_ff=64", "n_st_layers=1", "dropout=0.0",
+            "core_type=transformer", "core_layers=1"]
+#: the explicit request for the legacy hashed-bucket net (pre-v3 shards)
+HASHED_NET = ["pokemon_move_vocab=0", "pokemon_species_vocab=0"]
 
 
 @pytest.fixture(scope="module")
-def v2_shards(tmp_path_factory):
+def v3_shards(tmp_path_factory):
     if not os.path.exists(CARGO):
         pytest.skip("cargo not installed")
     ws = os.path.join(ROOT, "data_processing")
@@ -855,75 +861,122 @@ def v2_shards(tmp_path_factory):
                        capture_output=True, text=True)
     if b.returncode != 0:
         pytest.skip(f"cargo build failed: {b.stderr[-500:]}")
-    out = tmp_path_factory.mktemp("pk_v2") / "shards"
+    out = tmp_path_factory.mktemp("pk_v3") / "shards"
     subprocess.run([os.path.join(ws, "target", "release", "gmdata"), "pokemon", "convert",
                     "--input", os.path.join(ROOT, "tests", "fixtures", "showdown"),
                     "--out", str(out)], check=True, capture_output=True)
     return out
 
 
-def test_train_il_game_on_converter_v2_shards(v2_shards, tmp_path, monkeypatch, capsys):
-    """A fresh run takes the v2 field width and move vocabulary from the shard
-    meta, trains the identity head with IL legality masks (no label outside
-    them) and passes --require_frozen_schema; its checkpoint resumes."""
+def _train(monkeypatch, capsys, data, save, *extra, epochs=1, override=()):
     from training import train_il_game
 
     monkeypatch.setattr(train_il_game, "pick_device", lambda: torch.device("cpu"))
-    tiny = dict(d_model=32, n_heads=4, d_ff=64, n_st_layers=1, dropout=0.0,
-                core_type="transformer", core_layers=1)
+    monkeypatch.setattr(sys, "argv", [
+        "train_il_game", "--game", "pokemon", "--data_dir", str(data), "--epochs", str(epochs),
+        "--batch_size", "2", "--warmup_steps", "1", "--ema_rate", "0", "--save_dir", str(save),
+        *extra, "--override", *TINY_NET, *override])
+    train_il_game.main()
+    return capsys.readouterr().out
 
-    def run(epochs, *extra):
-        monkeypatch.setattr(sys, "argv", [
-            "train_il_game", "--game", "pokemon", "--data_dir", str(v2_shards),
-            "--val_dir", str(v2_shards), "--epochs", str(epochs), "--batch_size", "2",
-            "--warmup_steps", "1", "--ema_rate", "0", "--il_legal_mask",
-            "--require_frozen_schema", "--save_dir", str(tmp_path / "ck"), *extra,
-            "--override", *[f"{k}={v}" for k, v in tiny.items()]])
-        train_il_game.main()
-        return capsys.readouterr().out
 
-    log = run(1)
+def test_train_il_game_on_converter_v3_shards(v3_shards, tmp_path, monkeypatch, capsys):
+    """A fresh run takes the field width and the exact vocabulary sizes from the shard
+    meta, trains the identity head with IL legality masks (no label outside them) and
+    passes --require_frozen_schema; its checkpoint resumes."""
+    from data_processing.games.dataset import GameShardDataset
+
+    meta = GameShardDataset(str(v3_shards)).shard_meta
+    assert meta == {"field_features": 22, "move_vocab": MOVE_VOCAB_SIZE,
+                    "species_vocab": SPECIES_VOCAB_SIZE, "vocab_version": VOCAB.version}
+    args = ("--val_dir", str(v3_shards), "--il_legal_mask", "--require_frozen_schema")
+    log = _train(monkeypatch, capsys, v3_shards, tmp_path / "ck", *args)
     ck = torch.load(tmp_path / "ck" / "pokemon_epoch0.pt", map_location="cpu", weights_only=False)
     cfg = ck["config"]
-    assert (cfg["pokemon_field_features"], cfg["pokemon_move_buckets"],
-            cfg["pokemon_move_head"]) == (22, 1024, "identity")
+    assert (cfg["pokemon_field_features"], cfg["pokemon_move_vocab"], cfg["pokemon_species_vocab"],
+            cfg["pokemon_move_head"]) == (22, MOVE_VOCAB_SIZE, SPECIES_VOCAB_SIZE, "identity")
     val = next(ln for ln in log.splitlines() if ln.startswith("[e0 val]"))
     assert "illegal_target_frac=0.0000" in val and "move_loss=" in val
-    log = run(2, "--resume", str(tmp_path / "ck" / "pokemon_epoch0.pt"))
+    log = _train(monkeypatch, capsys, v3_shards, tmp_path / "ck", *args, "--resume",
+                 str(tmp_path / "ck" / "pokemon_epoch0.pt"), epochs=2)
     assert "[resume]" in log and (tmp_path / "ck" / "pokemon_epoch1.pt").exists()
+
+
+def _hash_ids(ids: torch.Tensor, names, n_buckets: int) -> torch.Tensor:
+    """Exact ids → the converter-v2 crc32 buckets of their names (0 / −1 kept)."""
+    out = ids.clone()
+    for i in ids.unique().tolist():
+        if i > 0:
+            out[ids == i] = move_bucket(names[i], n_buckets)
+    return out
+
+
+def _legacy_shards(v3_shards, path, version):
+    """Pre-v3 shards rebuilt from the v3 conversion: hashed move / species ids (v2: 1024 /
+    512 buckets, v1: 256 / 512); v1 besides keeps only turn frames with a visible choice, 20
+    field features and the v1 keys (no tgt.move_id)."""
+    from data_processing.games.dataset import load_gm_samples, save_shard
+
+    mb = 1024 if version == 2 else 256
+    out = []
+    for s in load_gm_samples(str(v3_shards)):
+        obs, tgt = dict(s["obs"]), dict(s["tgt"])
+        obs["species_ids"] = _hash_ids(obs["species_ids"], VOCAB.species_names, 512)
+        obs["move_ids"] = _hash_ids(obs["move_ids"], VOCAB.move_names, mb)
+        tgt["move_id"] = _hash_ids(tgt["move_id"], VOCAB.move_names, mb)
+        if version == 1:
+            fs = obs["field_seq"]
+            keep = (fs[:, 20] == 0) & (fs[:, 21] == 0) & (tgt["action_type"] >= 0)
+            obs = {k: obs[k][keep] for k in V1_KEYS["obs"]}
+            tgt = {k: tgt[k][keep] for k in V1_KEYS["tgt"]}
+            obs["field_seq"] = obs["field_seq"][:, :20].contiguous()
+        out.append({"obs": obs, "tgt": tgt, "meta": s["meta"]})
+    meta = {"move_buckets": mb, "species_buckets": 512}
+    if version == 2:
+        meta["field_features"] = 22
+    save_shard(str(path / "pokemon_00000.pt"), "pokemon", out, converter_version=version,
+               meta=meta)
+    return path
 
 
 V1_KEYS = {"obs": ("species_ids", "move_ids", "poke_feats", "slot_mask", "field_seq"),
            "tgt": ("action_type", "move_idx", "switch_idx", "tera", "active_idx", "value")}
 
 
-def test_train_il_game_fresh_on_converter_v1_shards(v2_shards, tmp_path, monkeypatch, capsys):
-    """Pre-freeze shards still train (with the schema-freeze warning) the architecture they
-    were made for: a fresh run on converter-v1 shards (meta without field_features, no
-    tgt.move_id — rebuilt here from the v2 conversion: turn frames with a visible choice,
-    20 field features, the v1 keys) builds the slot move head on 20 field features instead of
-    the identity head, which cannot train on them."""
-    from data_processing.games.dataset import load_gm_samples, save_shard
-    from training import train_il_game
-
-    v1 = []
-    for s in load_gm_samples(str(v2_shards)):
-        fs = s["obs"]["field_seq"]
-        keep = (fs[:, 20] == 0) & (fs[:, 21] == 0) & (s["tgt"]["action_type"] >= 0)
-        v1.append({"obs": {k: s["obs"][k][keep] for k in V1_KEYS["obs"]},
-                   "tgt": {k: s["tgt"][k][keep] for k in V1_KEYS["tgt"]}, "meta": s["meta"]})
-        v1[-1]["obs"]["field_seq"] = v1[-1]["obs"]["field_seq"][:, :20].contiguous()
-    data = tmp_path / "v1"
-    save_shard(str(data / "pokemon_00000.pt"), "pokemon", v1, converter_version=1,
-               meta={"move_buckets": 256, "species_buckets": 512})
-    monkeypatch.setattr(train_il_game, "pick_device", lambda: torch.device("cpu"))
-    monkeypatch.setattr(sys, "argv", [
-        "train_il_game", "--game", "pokemon", "--data_dir", str(data), "--epochs", "1",
-        "--batch_size", "2", "--warmup_steps", "1", "--ema_rate", "0",
-        "--save_dir", str(tmp_path / "ck"), "--override", "d_model=32", "n_heads=4", "d_ff=64",
-        "n_st_layers=1", "dropout=0.0", "core_type=transformer", "core_layers=1"])
-    train_il_game.main()
-    assert "converter_version 1 < 2" in capsys.readouterr().out
+def test_train_il_game_refuses_hashed_v2_shards_unless_asked(v3_shards, tmp_path, monkeypatch,
+                                                             capsys):
+    """Converter-v2 shards hash names into colliding buckets: a fresh default (exact
+    vocabulary) net refuses them, naming the way out; the legacy hashed net, asked for
+    explicitly, still trains on them (with the schema-freeze warning), its tables sized by
+    the shard meta's buckets."""
+    data = _legacy_shards(v3_shards, tmp_path / "v2", 2)
+    with pytest.raises(ValueError, match="move_vocab=0 .implied.*--override pokemon_move_vocab"):
+        _train(monkeypatch, capsys, data, tmp_path / "ck")
+    log = _train(monkeypatch, capsys, data, tmp_path / "ck", "--il_legal_mask",
+                 override=HASHED_NET)
+    assert "converter_version 2 < 3" in log and "exact Showdown move / species ids" in log
     cfg = torch.load(tmp_path / "ck" / "pokemon_epoch0.pt", map_location="cpu",
                      weights_only=False)["config"]
-    assert (cfg["pokemon_move_head"], cfg["pokemon_field_features"]) == ("slot", 20)
+    assert (cfg["pokemon_move_vocab"], cfg["pokemon_species_vocab"], cfg["pokemon_move_buckets"],
+            cfg["pokemon_species_buckets"], cfg["pokemon_move_head"]) == (0, 0, 1024, 512,
+                                                                          "identity")
+    # the hashed checkpoint does not train on exact-id shards
+    with pytest.raises(ValueError, match="pokemon_move_vocab=0.*fresh pokemon adapter"):
+        _train(monkeypatch, capsys, v3_shards, tmp_path / "ck2", "--resume",
+               str(tmp_path / "ck" / "pokemon_epoch0.pt"), epochs=2)
+
+
+def test_train_il_game_fresh_on_converter_v1_shards(v3_shards, tmp_path, monkeypatch, capsys):
+    """Pre-freeze shards still train (with the schema-freeze warning) the architecture they
+    were made for, once the legacy hashed net is asked for: a fresh run on converter-v1
+    shards (meta without field_features, no tgt.move_id) builds the slot move head on 20
+    field features instead of the identity head, which cannot train on them."""
+    data = _legacy_shards(v3_shards, tmp_path / "v1", 1)
+    with pytest.raises(ValueError, match="implied"):
+        _train(monkeypatch, capsys, data, tmp_path / "ck")
+    log = _train(monkeypatch, capsys, data, tmp_path / "ck", override=HASHED_NET)
+    assert "converter_version 1 < 3" in log
+    cfg = torch.load(tmp_path / "ck" / "pokemon_epoch0.pt", map_location="cpu",
+                     weights_only=False)["config"]
+    assert (cfg["pokemon_move_head"], cfg["pokemon_field_features"],
+            cfg["pokemon_move_vocab"]) == ("slot", 20, 0)

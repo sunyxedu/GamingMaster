@@ -148,10 +148,14 @@ META_ARCH_KEYS = {
         "card_feature_dim", "cr_global_features", "deck_size")},
         "card_tokens": ("cr_card_tokens",)},
     # converter v2 records the field-token width (v1: 20; v2 appends the
-    # forced-switch / team-preview request flags → 22)
+    # forced-switch / team-preview request flags → 22); v1 / v2 the hash
+    # buckets of the move / species names, v3 instead the sizes of the exact
+    # Showdown vocabularies (data_processing/games/pokemon; 0 = hashed)
     "pokemon": {"move_buckets": ("pokemon_move_buckets",),
                 "species_buckets": ("pokemon_species_buckets",),
-                "field_features": ("pokemon_field_features",)},
+                "field_features": ("pokemon_field_features",),
+                "move_vocab": ("pokemon_move_vocab",),
+                "species_vocab": ("pokemon_species_vocab",)},
     # gio records (GeneralsGioDataset.shard_meta / `gmdata generals shard`);
     # with turn_globals the net has TURN_GLOBAL_FEATURES more globals than
     # the data (meta_arch_value), appended at batch time (OBS_HOOKS)
@@ -178,16 +182,37 @@ META_ARCH_KEYS = {
 # (apply_meta_arch_defaults only reads keys the meta actually has) — except
 # (1) clash_royale: its converter_version <= 2 shards carry a hindsight hand (a
 # future leak), so a fresh default ("deck") net on them fails loudly instead;
-# --override cr_card_tokens=hand trains the legacy net on them; (2) config
-# defaults that changed with the new generation, which META_LEGACY_IMPLIES
-# injects (pokemon's move head).
+# --override cr_card_tokens=hand trains the legacy net on them; (2) pokemon:
+# converter v1 / v2 shards hash the move / species names into crc32 buckets
+# (distinct names share ids and labels), so a fresh default (exact-vocabulary)
+# net on them fails loudly (META_MISMATCH_HINTS); --override
+# pokemon_move_vocab=0 pokemon_species_vocab=0 trains the legacy hashed net;
+# (3) config defaults that changed with the new generation, which
+# META_LEGACY_IMPLIES injects (pokemon's move head).
 META_LEGACY = {
     "go": {"global_features": 0},
     "chess": {"global_features": 8},
     "shogi": {"global_features": 4},
     "lux": {"global_features": 6, "sap_range": 0},
     "clash_royale": {"card_tokens": "hand"},
-    "pokemon": {"field_features": 20},
+    "pokemon": {"field_features": 20, "move_vocab": 0, "species_vocab": 0},
+}
+
+_POKEMON_VOCAB_HINT = (
+    "pokemon move / species ids: 0 = the crc32 hash buckets of converter v1 / v2 (distinct "
+    "names share an id), else the size of the exact Showdown vocabulary of converter v3 "
+    "(data_processing/games/pokemon).  Re-convert old shards with the current gmdata "
+    "(`gmdata pokemon convert`, module docs of data_processing/rs/gmdata/src/pokemon.rs); "
+    "train the legacy hashed net on them only on purpose (--override pokemon_move_vocab=0 "
+    "pokemon_species_vocab=0).  A hashed checkpoint needs a fresh pokemon adapter for v3 "
+    "shards; an exact net and shards of different sizes come from different vocabulary "
+    "versions (append-only): convert with the vocabulary the net was built with")
+
+# What a META mismatch means and the ways out, where "re-convert or use a
+# matching checkpoint" is not the whole story: {game: {meta_key: hint}}
+# (check_meta_arch appends the hint to its error).
+META_MISMATCH_HINTS = {
+    "pokemon": {"move_vocab": _POKEMON_VOCAB_HINT, "species_vocab": _POKEMON_VOCAB_HINT},
 }
 
 # First converter generation of the frozen pre-training schema per game:
@@ -195,7 +220,7 @@ META_LEGACY = {
 # the frozen inputs / targets, so the trainers warn (or, with
 # --require_frozen_schema, refuse).
 SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 3, "lux": 2,
-                                   "clash_royale": 3, "pokemon": 2}
+                                   "clash_royale": 3, "pokemon": 3}
 _SCHEMA_FREEZE_CONTENT = {
     "chess": "repetition flags + legal masks",
     "go": "side-to-move/komi globals",
@@ -204,8 +229,9 @@ _SCHEMA_FREEZE_CONTENT = {
     "lux": "env-param globals + sap targets",
     "clash_royale": "deck tokens with the causal hand belief; older shards infer the hand "
                     "from the whole match",
-    "pokemon": "move-identity targets, forced-switch / lead / unlabelled-turn frames, "
-               "request-phase flags + legal masks",
+    "pokemon": "exact Showdown move / species ids (older shards hash the names into "
+               "colliding buckets), move-identity targets, forced-switch / lead / "
+               "unlabelled-turn frames, request-phase flags + legal masks",
 }
 
 
@@ -472,8 +498,10 @@ def check_meta_arch(game: str, cfg, shard_meta: Dict) -> None:
     config (e.g. 20×20 gomoku shards vs a 15×15 net).  A key the shard
     meta lacks is held to its META_LEGACY value (the pre-key converter
     output) when one is defined, else skipped; a config field the config
-    object does not have (a config class older than the field) is skipped."""
+    object does not have (a config class older than the field) is skipped.
+    The error carries the key's META_MISMATCH_HINTS entry, if any."""
     legacy = META_LEGACY.get(game, {})
+    hints = META_MISMATCH_HINTS.get(game, {})
     for meta_key, cfg_keys in META_ARCH_KEYS.get(game, {}).items():
         if meta_key in shard_meta:
             have, note = shard_meta[meta_key], ""
@@ -489,10 +517,11 @@ def check_meta_arch(game: str, cfg, shard_meta: Dict) -> None:
             if not hasattr(cfg, ck):
                 continue
             if getattr(cfg, ck) != want:
+                hint = f". {hints[meta_key]}" if meta_key in hints else ""
                 raise ValueError(
                     f"shards were converted with {meta_key}={have}{note} but the "
                     f"model has {ck}={getattr(cfg, ck)}; re-convert the data or "
-                    f"use a matching checkpoint/--override"
+                    f"use a matching checkpoint/--override{hint}"
                 )
 
 

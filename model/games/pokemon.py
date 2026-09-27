@@ -46,8 +46,8 @@ the single source of truth shared with the converter via the
     16     tera                     is terastallized
 
 Field-token features (``pokemon_field_features``: 20 for converter v1
-shards and legacy configs, 22 for converter v2 — the trainers take it from
-the shard meta ``field_features``):
+shards and legacy configs, 22 from converter v2 on — the trainers take it
+from the shard meta ``field_features``):
 
     0-4    weather one-hot          sun/rain/sand/snow/other (all 0 = clear)
     5-8    terrain one-hot          electric/grassy/misty/psychic
@@ -70,12 +70,16 @@ obs keys:
                                     forwarded as ``legal["move_ids"]``
                                     (training.train_il_game.LEGAL_FROM_OBS)
 
-Frames (converter v2, data_processing/rs/gmdata/src/pokemon.rs): one per
-request the player answers — the team-preview lead, every turn (with a
+Frames (converter v2 / v3, data_processing/rs/gmdata/src/pokemon.rs): one
+per request the player answers — the team-preview lead, every turn (with a
 masked label, ``tgt.action_known`` 0 / ``action_type`` −1, when the choice
 is not visible in the log) and every forced switch, snapshotted when the
 request is issued.  A live bot calls the network at every request with the
-same flags (field 20 on ``forceSwitch`` requests, 21 at team preview).
+same flags (field 20 on ``forceSwitch`` requests, 21 at team preview), and
+builds ``species_ids`` / ``move_ids`` from its battle-log tracker through
+:func:`species_id` / :func:`move_id` — converter v3's exact ids (a slot shows
+the forme the log last revealed: the team-preview ``Urshifu-*`` until the
+switch-in names the forme, permanent ``|detailschange|`` formes).
 
 ``frame_mask`` is intentionally a no-op: the encoder has no batch
 statistics (no BatchNorm — only per-frame pointwise Linear/Embedding),
@@ -130,7 +134,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from data_processing.games.pokemon import ID_UNK, VOCAB
+from data_processing.games.pokemon import ID_UNK, MOVE_VOCAB_SIZE, SPECIES_VOCAB_SIZE, VOCAB
 from model.config import ModelConfig
 from model.games.base import (
     ActionDecoder,
@@ -235,13 +239,14 @@ class PokemonConfig(ModelConfig):
     pokemon_feature_dim: int = POKE_FEATURE_DIM
     #: exact species vocabulary: id count (reserved 0 none / 1 UNK included) of
     #: data_processing/games/pokemon's table the shards were converted with
-    #: (converter v3 shard meta "species_vocab"); 0 = the legacy hash buckets
-    #: below (model.config.LEGACY_CONFIG_DEFAULTS: configs saved before the field)
-    pokemon_species_vocab: int = 0
+    #: (converter v3 shard meta "species_vocab"; default: the vendored table);
+    #: 0 = the legacy hash buckets below (model.config.LEGACY_CONFIG_DEFAULTS:
+    #: configs saved before the field)
+    pokemon_species_vocab: int = SPECIES_VOCAB_SIZE
     #: exact move vocabulary: id count (shard meta "move_vocab") — embeds the
     #: revealed moves (obs move_ids) and, with the identity head, is its output
     #: space; 0 = the legacy hash buckets below
-    pokemon_move_vocab: int = 0
+    pokemon_move_vocab: int = MOVE_VOCAB_SIZE
     #: legacy (converter v1 / v2) hash buckets of the species names (id 0 =
     #: unknown); unused with an exact species vocabulary
     pokemon_species_buckets: int = 512

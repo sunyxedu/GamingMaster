@@ -9,11 +9,14 @@ from __future__ import annotations
 import glob
 import json
 import os
+import shutil
+import subprocess
 import zlib
 from typing import Dict, Set
 
 import pytest
 
+from data_processing.games.dataset import load_gm_samples
 from data_processing.games.pokemon import (
     ID_NONE,
     ID_UNK,
@@ -144,6 +147,72 @@ def test_every_fixture_move_and_species_has_a_distinct_exact_id():
         shared = {i: k for i, k in by_id.items() if len(k) > 1}
         assert not shared, f"{kind} sharing an id: {shared}"
     assert {"Greninja-*", "Greninja", "Zamazenta-*"} <= names["species"]
+
+
+@pytest.fixture(scope="module")
+def converted(tmp_path_factory):
+    """(stats, samples, replays) of `gmdata pokemon convert` over both fixture directories."""
+    cargo = shutil.which("cargo") or os.path.expanduser("~/.cargo/bin/cargo")
+    if not os.path.exists(cargo):
+        pytest.skip("cargo not installed")
+    ws = os.path.join(ROOT, "data_processing")
+    b = subprocess.run([cargo, "build", "--release", "-q", "-p", "gmdata"], cwd=ws,
+                       capture_output=True, text=True)
+    if b.returncode != 0:
+        pytest.skip(f"cargo build failed: {b.stderr[-500:]}")
+    root = tmp_path_factory.mktemp("pk_vocab")
+    (root / "in").mkdir()
+    replays = {}
+    for d in FIXTURES:
+        for f in sorted(glob.glob(os.path.join(d, "*.json"))):
+            shutil.copy(f, root / "in")
+            with open(f, encoding="utf-8") as fh:
+                r = json.load(fh)
+            replays[r["id"]] = r
+    res = subprocess.run([os.path.join(ws, "target", "release", "gmdata"), "pokemon", "convert",
+                          "--input", str(root / "in"), "--out", str(root / "out")],
+                         check=True, capture_output=True, text=True)
+    return json.loads(res.stdout), load_gm_samples(str(root / "out")), replays
+
+
+def test_the_converter_writes_the_vocabulary_ids(converted):
+    """gmdata (Rust, the table embedded at build time) and this module (Python) give every
+    logged name the same id: each side's lead frame shows the ``|poke|`` species of both
+    teams in preview order, every move label is the id of a move the side logged, no fixture
+    name is UNK, and the shard meta / convert stats record this vocabulary."""
+    stats, samples, replays = converted
+    assert stats["vocab"] == {"version": VOCAB_VERSION, "move_vocab": MOVE_VOCAB_SIZE,
+                              "species_vocab": SPECIES_VOCAB_SIZE}
+    assert stats["unk_moves"] == {} and stats["unk_species"] == {}
+    assert stats["samples"] == len(samples) > 40
+    labels = 0
+    for s in samples:
+        log = replays[s["meta"]["replay_id"]]["log"].split("\n")
+        me = s["meta"]["side"]
+        other = "p2" if me == "p1" else "p1"
+        poke = {p: [ln.split("|")[3].split(",")[0].strip() for ln in log
+                    if ln.startswith(f"|poke|{p}|")] for p in (me, other)}
+        want = [VOCAB.species_id(n) for n in poke[me]] + [0] * (6 - len(poke[me]))
+        want += [VOCAB.species_id(n) for n in poke[other]] + [0] * (6 - len(poke[other]))
+        assert s["obs"]["species_ids"][0].tolist() == want, s["meta"]
+        ids, mask = s["obs"]["species_ids"], s["obs"]["slot_mask"]
+        assert bool((ids[mask] > ID_UNK).all()) and bool((ids[~mask] == ID_NONE).all())
+        used = set()
+        for ln in log:
+            p = ln.split("|")
+            if len(p) > 3 and p[2].startswith(me) and p[1] in ("move", "cant"):
+                used.add(VOCAB.move_id(p[3] if p[1] == "move" else (p[4] if len(p) > 4 else "")))
+        got = s["tgt"]["move_id"][s["tgt"]["action_type"] == 0]
+        assert set(got.tolist()) <= used, s["meta"]
+        seen = s["obs"]["move_ids"]
+        assert set(seen[seen > 0].tolist()) <= used | {VOCAB.move_id(n) for n in _foe_moves(log)}
+        labels += int(got.numel())
+    assert labels > 1000, labels
+
+
+def _foe_moves(log):
+    """Moves a Transform can copy into a side's revealed moves: every logged move."""
+    return {ln.split("|")[3] for ln in log if ln.startswith("|move|") and len(ln.split("|")) > 3}
 
 
 # ------------------------------------------------------------------------------------------
