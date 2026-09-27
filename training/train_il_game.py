@@ -53,6 +53,7 @@ from model.games import build_game_network
 from model.games import generals as generals_adapter
 from model.games import lux as lux_adapter
 from model.games.base import densify_soft_target, soft_cross_entropy
+from model.games.clash_royale import cr_legal_from_obs
 from model.losses import hl_gauss_cross_entropy
 from model.optim import (
     TRM_BETAS,
@@ -126,6 +127,10 @@ LEGAL_FROM_OBS = {
     "pokemon": lambda obs: (
         {"move_ids": obs["move_ids"]} if "move_ids" in obs else None
     ),
+    # deck-token shards: a deck card is playable iff P(in hand) > 0 and
+    # affordable (expand.py); keeps self-sampled cards (tf_prob < 1, waited
+    # frames) on cards the player may hold.  Legacy hand shards: None.
+    "clash_royale": cr_legal_from_obs,
 }
 
 # Shard-level meta facts (written by the converters) that must match the
@@ -134,10 +139,13 @@ LEGAL_FROM_OBS = {
 META_ARCH_KEYS = {
     "gomoku": {"board_size": ("board_h", "board_w")},
     # crdata writes the arena geometry and the card vocabulary of the
-    # catalog it converted with (n_cards grows when cards are added)
-    "clash_royale": {k: (k,) for k in (
+    # catalog it converted with (n_cards grows when cards are added), and
+    # (converter_version >= 3) the card tokens: 8 deck tokens with the causal
+    # hand belief ("deck") — older shards imply the legacy "hand" slots
+    "clash_royale": {**{k: (k,) for k in (
         "arena_h", "arena_w", "arena_channels", "hand_size", "n_cards",
-        "card_feature_dim", "cr_global_features")},
+        "card_feature_dim", "cr_global_features", "deck_size")},
+        "card_tokens": ("cr_card_tokens",)},
     "pokemon": {"move_buckets": ("pokemon_move_buckets",),
                 "species_buckets": ("pokemon_species_buckets",)},
     # gio records (GeneralsGioDataset.shard_meta / `gmdata generals shard`);
@@ -163,25 +171,32 @@ META_ARCH_KEYS = {
 # checkpoint on old shards (or an old one on new shards) fails loudly.
 # These equal the config dataclass / registry defaults, so a fresh run on
 # old shards builds the legacy architecture without injecting anything
-# (apply_meta_arch_defaults only reads keys the meta actually has).
+# (apply_meta_arch_defaults only reads keys the meta actually has) — except
+# clash_royale: its converter_version <= 2 shards carry a hindsight hand (a
+# future leak), so a fresh default ("deck") net on them fails loudly instead;
+# --override cr_card_tokens=hand trains the legacy net on them.
 META_LEGACY = {
     "go": {"global_features": 0},
     "chess": {"global_features": 8},
     "shogi": {"global_features": 4},
     "lux": {"global_features": 6, "sap_range": 0},
+    "clash_royale": {"card_tokens": "hand"},
 }
 
 # First converter generation of the frozen pre-training schema per game:
 # older shards still train (their META_LEGACY architecture), but they lack
 # the frozen inputs / targets, so the trainers warn (or, with
 # --require_frozen_schema, refuse).
-SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 2, "lux": 2}
+SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 2, "lux": 2,
+                                   "clash_royale": 3}
 _SCHEMA_FREEZE_CONTENT = {
     "chess": "repetition flags + legal masks",
     "go": "side-to-move/komi globals",
     "shogi": "repetition + legal masks",
     "mahjong": "legal masks",
     "lux": "env-param globals + sap targets",
+    "clash_royale": "deck tokens with the causal hand belief; older shards infer the hand "
+                    "from the whole match",
 }
 
 

@@ -36,7 +36,8 @@ pub struct Side {
 pub enum EventKind {
     /// card id, form at play (0 unknown/base), grid x, grid y (team-frame: team half is y < 16)
     Play { card: u16, form: u8, gx: i8, gy: i8 },
-    /// champion ability; card id of the champion when the source is known
+    /// champion / hero ability: the card whose ability it is, resolved from the public
+    /// record up to the event ([`resolve_ability_sources`]); `unknown_id` when ambiguous
     Ability { card: u16 },
 }
 
@@ -184,7 +185,8 @@ pub fn parse_payload(tag: &str, payload_json: &str, cat: &Catalog) -> Result<Rep
         "defeat" => -1,
         _ => 0,
     };
-    let mut events = Vec::with_capacity(p.events.len());
+    // (event, ability source candidates as card ids — empty for plays)
+    let mut parsed: Vec<(Event, Vec<u16>)> = Vec::with_capacity(p.events.len());
     for e in &p.events {
         let side = match e.side.as_str() {
             "team" => SideId::Team,
@@ -193,7 +195,7 @@ pub fn parse_payload(tag: &str, payload_json: &str, cat: &Catalog) -> Result<Rep
         };
         // the deck key carries the form the player owns; the event key is the base card
         let key_with_form = e.deck_card_key_candidates.first().or(e.card_key.as_ref());
-        let kind = match e.kind.as_str() {
+        let (kind, candidates) = match e.kind.as_str() {
             "play_card" => {
                 let Some(key) = key_with_form else { continue };
                 let (card, mut form) = cat.resolve(key);
@@ -208,21 +210,18 @@ pub fn parse_payload(tag: &str, payload_json: &str, cat: &Catalog) -> Result<Rep
                 }
                 let gx = c.grid_cell_floor.x.clamp(0, 17) as i8;
                 let gy = c.grid_cell_floor.y.clamp(0, 31) as i8;
-                EventKind::Play { card, form, gx, gy }
+                (EventKind::Play { card, form, gx, gy }, Vec::new())
             }
-            "activate_ability" => {
-                let card = e
-                    .ability_source_candidates
-                    .first()
-                    .map(|k| cat.resolve(k).0)
-                    .unwrap_or(cat.unknown_id);
-                EventKind::Ability { card }
-            }
+            "activate_ability" => (
+                EventKind::Ability { card: cat.unknown_id },
+                e.ability_source_candidates.iter().map(|k| cat.resolve(k).0).collect(),
+            ),
             _ => continue,
         };
-        events.push(Event { tick: e.replay_tick_20hz, side, kind });
+        parsed.push((Event { tick: e.replay_tick_20hz, side, kind }, candidates));
     }
-    events.sort_by_key(|e| e.tick);
+    parsed.sort_by_key(|(e, _)| e.tick);
+    let events = resolve_ability_sources(parsed, cat.unknown_id);
     let duration_s = if p.replay.duration.timeline_seconds > 0.0 {
         p.replay.duration.timeline_seconds
     } else {
@@ -238,6 +237,39 @@ pub fn parse_payload(tag: &str, payload_json: &str, cat: &Catalog) -> Result<Rep
         duration_s,
         events,
     })
+}
+
+/// Attribute every ability event causally. RoyaleAPI's `ability_source_candidates`
+/// is the acting side's ability-capable DECK cards (sorted by key, one list per side
+/// and match), so its first entry can name a card that side has not played yet —
+/// private deck information. The source is instead the candidate the side has
+/// already played (a play strictly before the event's tick): the unique one, or
+/// `unknown` when none or several qualify. Public record up to the event only;
+/// nothing later decides it. `parsed` is sorted by tick.
+pub fn resolve_ability_sources(parsed: Vec<(Event, Vec<u16>)>, unknown: u16) -> Vec<Event> {
+    let side_ix = |s: SideId| if s == SideId::Team { 0 } else { 1 };
+    let mut played: [Vec<u16>; 2] = [Vec::new(), Vec::new()];
+    let mut applied = 0usize; // parsed[..applied] (all ticks < the current one) are in `played`
+    let mut out = Vec::with_capacity(parsed.len());
+    for i in 0..parsed.len() {
+        let tick = parsed[i].0.tick;
+        while applied < parsed.len() && parsed[applied].0.tick < tick {
+            if let EventKind::Play { card, .. } = parsed[applied].0.kind {
+                played[side_ix(parsed[applied].0.side)].push(card);
+            }
+            applied += 1;
+        }
+        let (mut e, candidates) = (parsed[i].0, &parsed[i].1);
+        if let EventKind::Ability { .. } = e.kind {
+            let mine = &played[side_ix(e.side)];
+            let mut hits: Vec<u16> = candidates.iter().copied().filter(|c| mine.contains(c)).collect();
+            hits.sort_unstable();
+            hits.dedup();
+            e.kind = EventKind::Ability { card: if hits.len() == 1 { hits[0] } else { unknown } };
+        }
+        out.push(e);
+    }
+    out
 }
 
 /// Accessor over a Utf8 or LargeUtf8 column: index -> Option<&str>.
@@ -274,6 +306,34 @@ pub fn read_rows(path: &Path) -> Result<Vec<(String, String)>> {
         }
     }
     Ok(out)
+}
+
+/// Raw (tag, payload_json) rows of a JSON-lines file: one object per line with the tag
+/// under `tag` / `replay_tag` and the payload under `payload` (an object or a JSON
+/// string) / `payload_json` — the format of `tests/fixtures/clash_royale/replays.jsonl`.
+pub fn read_jsonl(path: &Path) -> Result<Vec<(String, String)>> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+        let v: serde_json::Value = serde_json::from_str(line).with_context(|| format!("{}:{}", path.display(), i + 1))?;
+        let tag = v.get("tag").or_else(|| v.get("replay_tag")).and_then(|t| t.as_str()).unwrap_or_default();
+        let payload = match v.get("payload").or_else(|| v.get("payload_json")) {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(p) => p.to_string(),
+            None => anyhow::bail!("{}:{}: no payload", path.display(), i + 1),
+        };
+        out.push((tag.to_string(), payload));
+    }
+    Ok(out)
+}
+
+/// Rows of one input part: Parquet (the dataset) or JSON lines ([`read_jsonl`]).
+pub fn read_input_rows(path: &Path) -> Result<Vec<(String, String)>> {
+    if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
+        read_jsonl(path)
+    } else {
+        read_rows(path)
+    }
 }
 
 #[cfg(test)]
@@ -344,5 +404,31 @@ mod tests {
             _ => panic!(),
         }
         assert_eq!(r.team.final_tower_hp, Some((4000.0, 0.0, 2000.0)));
+    }
+
+    #[test]
+    fn ability_source_is_the_unique_candidate_played_before() {
+        const UNK: u16 = 999;
+        let play = |tick, side, card| (Event { tick, side, kind: EventKind::Play { card, form: 0, gx: 0, gy: 0 } }, vec![]);
+        let abil = |tick, side, cands: &[u16]| (Event { tick, side, kind: EventKind::Ability { card: UNK } }, cands.to_vec());
+        let (t, o) = (SideId::Team, SideId::Opp);
+        let parsed = vec![
+            abil(5, t, &[7, 9]),  // nothing played yet
+            play(10, t, 7),
+            abil(10, t, &[7, 9]), // same tick as the play: not before it
+            play(12, o, 9),       // the other side's 9 does not count for team
+            abil(20, t, &[7, 9]), // 7 is the only played candidate
+            play(30, t, 9),
+            abil(40, t, &[7, 9]), // both played: ambiguous
+            abil(41, o, &[9, 3]), // opponent: its own 9
+        ];
+        let got: Vec<u16> = resolve_ability_sources(parsed, UNK)
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Ability { card } => Some(card),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(got, vec![UNK, UNK, 7, UNK, 9]);
     }
 }

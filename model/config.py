@@ -167,8 +167,12 @@ LEGACY_CONFIG_DEFAULTS = {
     # Lux adapter (model/games/lux.py): no unit-cell PE, the MLP sap head
     "lux_unit_cell_pe": False,
     "lux_sap_head": "mlp",
-    # Clash Royale adapter (model/games/clash_royale.py): frame-index wait PE
+    # Clash Royale adapter (model/games/clash_royale.py): frame-index wait PE;
+    # the 4 reconstructed hand slots (8 features each) instead of the 8 deck
+    # tokens with the causal hand belief (crdata converter_version 3)
     "cr_wait_time": "frame",
+    "cr_card_tokens": "hand",
+    "card_feature_dim": 8,
 }
 
 #: LEGACY_CONFIG_DEFAULTS keys of ONE game's config class → a marker field
@@ -179,6 +183,8 @@ LEGACY_CONFIG_SCOPE = {
     "lux_unit_cell_pe": "n_unit_actions",
     "lux_sap_head": "n_unit_actions",
     "cr_wait_time": "cr_global_features",
+    "cr_card_tokens": "cr_global_features",
+    "card_feature_dim": "cr_global_features",
 }
 
 
