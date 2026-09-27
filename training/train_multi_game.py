@@ -403,6 +403,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--resume", default=None,
                    help="continue from a multi_latest.pt (same arguments otherwise; --data "
                         "may add games, in any order: see Resuming in the module docstring)")
+    p.add_argument("--reinit_game", action="append", default=[], metavar="GAME[,GAME]",
+                   help="with --resume: rebuild these games' own modules (encoder, decoder, "
+                        "value head) from the command line and their shard meta, fresh, around "
+                        "the checkpoint's core — as if they joined the run now (a game whose "
+                        "adapter or observation changed); repeatable")
     p.add_argument("--num_workers", type=int, default=0)
     p.add_argument("--bf16", action="store_true")
     p.add_argument("--device", default=None)
@@ -731,6 +736,54 @@ def checkpoint_param_names(ck: Dict, where: str = "checkpoint",
     return [[canon[id(p)] for p in g] for g in groups]
 
 
+def forget_games(ck: Dict, games: List[str], where: str = "checkpoint") -> Dict:
+    """``ck`` as if it had never trained ``games``' own modules (--reinit_game): the
+    resume then treats them as games joining the run — built from the command line
+    and their shard meta around the checkpoint's core, their own parameters fresh
+    (no optimizer state, EMA = their initial weights).  Dropped: their configs, every
+    weight and buffer under their names (their aliases of the shared core too — the
+    core loads through the other games' names), the optimizer state and EMA shadows
+    of their own parameters.  The core's optimizer state and shadows stay, also where
+    their canonical names are one of these games' (the run's first game)."""
+    unknown = [g for g in games if g not in ck["games"]]
+    if unknown:
+        raise SystemExit(f"--reinit_game {unknown}: not trained by {where} ({ck['games']})")
+    keep = [g for g in ck["games"] if g not in games]
+    if not keep:
+        raise SystemExit("--reinit_game: at least one game must keep its weights (the core "
+                         "loads through them)")
+    names = ck.get(OPT_NAMES_KEY)
+    if names is None:
+        raise SystemExit(f"--reinit_game: {where} predates saved optimizer parameter names "
+                         f"({OPT_NAMES_KEY}); resume it once without --reinit_game first")
+    out = dict(ck)
+    out["games"] = keep
+    out["configs"] = {g: c for g, c in (ck.get("configs") or {}).items() if g not in games}
+    out["train_model_state"] = {k: v for k, v in ck["train_model_state"].items()
+                                if _split_name(k)[0] not in games}
+    opt = ck["optimizer_state"]
+    saved_state = {int(i): st for i, st in opt["state"].items()}
+    state: Dict[int, Dict] = {}
+    groups, group_names_out, n = [], [], 0          # n: the new flat parameter index
+    for group_names, sg in zip(names, opt["param_groups"]):
+        idx, kept = [], []
+        for name, i in zip(group_names, sg["params"]):
+            if _is_own(name, games):
+                continue
+            if int(i) in saved_state:
+                state[n] = saved_state[int(i)]
+            idx.append(n)
+            kept.append(name)
+            n += 1
+        groups.append({**sg, "params": idx})
+        group_names_out.append(kept)
+    out["optimizer_state"] = {"state": state, "param_groups": groups}
+    out[OPT_NAMES_KEY] = group_names_out
+    if ck.get("ema_state") is not None:
+        out["ema_state"] = {n: v for n, v in ck["ema_state"].items() if not _is_own(n, games)}
+    return out
+
+
 def load_resume_weights(model: MultiGameNetwork, state: Dict[str, torch.Tensor],
                         added: List[str], where: str = "checkpoint") -> None:
     """Load a checkpoint's ``train_model_state`` into ``model``, whose games
@@ -1037,6 +1090,11 @@ def main(argv=None) -> Dict[str, object]:
         if "optimizer_state" not in resume:
             raise SystemExit(f"{args.resume} is not resumable (only --ckpt_every writes "
                              f"multi_latest.pt with the optimizer state)")
+        reinit = [g for arg in args.reinit_game for g in arg.split(",") if g]
+        if reinit:
+            resume = forget_games(resume, reinit, args.resume)
+            log(f"[resume] --reinit_game {reinit}: their own modules start fresh around the "
+                f"checkpoint's core")
         ck_games = list(resume["games"])
         removed = [g for g in ck_games if g not in games]
         if removed:

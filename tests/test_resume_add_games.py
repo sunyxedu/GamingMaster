@@ -542,3 +542,46 @@ def test_dist_sharded_ranks_load_their_share_of_an_old_checkpoint(dist_runs, sha
             if k in r["params"] or k in r["buffers"]:
                 assert torch.equal(r["params"].get(k, r["buffers"].get(k)), v), k
     assert sorted(owned) == list(range(len(ranks[0]["ema_names"])))
+
+
+@pytest.mark.parametrize("reinit", ["othello", "chess"])
+def test_resume_reinitialises_a_game(source, shards, tmp_path, reinit):
+    """--reinit_game G: G's own modules (encoder, decoder, value head) start as a fresh
+    build's around the checkpoint's core — no optimizer state, EMA = the fresh weights —
+    while the other game and the whole core load exactly; othello is the checkpoint's
+    first game, so the core's canonical names (optimizer state, EMA) are its own names
+    and must survive the reinit."""
+    ck = source["ck"]
+    fresh = tmg.main(_args(shards, tmp_path / "fresh", OLD, "--steps", "0"))
+    out = tmg.main(_args(shards, tmp_path / "load", OLD, "--steps", str(STEPS),
+                         "--resume", str(source["names"]), "--reinit_game", reinit))
+    model, ema, opt = out["model"], out["ema"], out["optimizer"]
+    keep = [g for g in OLD if g != reinit][0]
+    state, fresh_state = model.state_dict(), fresh["model"].state_dict()
+    for k, v in state.items():
+        if _own(k, reinit):
+            assert torch.equal(v, fresh_state[k]), k                   # a fresh build's
+        else:
+            assert torch.equal(v, ck["train_model_state"][k]), k       # the checkpoint's
+    assert any(_own(k, reinit) for k in state) and any(_own(k, keep) for k in state)
+    # optimizer: no state for the reinitialised game's own parameters; the core's and the
+    # other game's moments by name
+    names = _flat(tmg.optimizer_param_names(model, opt))
+    got = opt.state_dict()["state"]
+    at = {_canon(n, OLD): i for i, n in enumerate(_flat(ck[OPT_NAMES_KEY]))}
+    moved = 0
+    for i, n in enumerate(names):
+        if _own(n, reinit):
+            assert i not in got, n
+        elif at.get(n) in ck["optimizer_state"]["state"]:
+            _assert_same(got[i], ck["optimizer_state"]["state"][at[n]], n)
+            moved += 1
+    assert moved > 0 and any(is_core_key(n.split(".", 2)[2]) and i in got
+                             for i, n in enumerate(names))
+    fresh_params = dict(fresh["model"].named_parameters())
+    for n, v in ema.shadow.items():
+        want = fresh_params[n] if _own(n, reinit) else ck["ema_state"][n]
+        assert torch.equal(v, want), n
+    for bad, match in ((["go"], "not trained by"), (OLD, "at least one game")):
+        with pytest.raises(SystemExit, match=match):
+            tmg.forget_games(ck, bad)
