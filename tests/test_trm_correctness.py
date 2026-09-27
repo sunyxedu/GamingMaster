@@ -123,3 +123,51 @@ def test_halt_loss_on_joint_decoder():
     assert math.isfinite(metrics["halt_loss"])
     assert metrics["halt_loss"] > 0
     assert 0.0 <= metrics["halt_acc"] <= 1.0
+
+
+def test_wsd_schedule_warmup_stable_decay():
+    """Warmup-Stable-Decay: the reference warmup, a constant rate until the
+    last decay_frac of the steps, then a decay to min_ratio; nothing before
+    the decay depends on total_steps (an extended run is the same until its
+    own decay)."""
+    import math
+
+    from model.optim import wsd_lr_lambda
+
+    f = wsd_lr_lambda(10, 100, 0.2, 0.1)
+    assert f(0) == 0.0 and f(5) == 0.5 and f(10) == 1.0
+    assert f(79) == 1.0 and f(80) == 1.0                     # decay starts at step 80
+    assert math.isclose(f(90), 0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * 0.5)))
+    assert math.isclose(f(100), 0.1) and math.isclose(f(150), 0.1)
+    lin = wsd_lr_lambda(10, 100, 0.2, 0.0, shape="linear")
+    assert math.isclose(lin(90), 0.5) and lin(100) == 0.0
+    longer = wsd_lr_lambda(10, 1000, 0.1, 0.1)
+    assert all(f(s) == longer(s) for s in range(0, 80))     # same until the decay
+    with pytest.raises(ValueError):
+        wsd_lr_lambda(10, 100, 0.0, 0.1)
+
+
+def test_wsd_takes_over_on_resume():
+    """A resumed run's LambdaLR follows the NEW run's lambda (the state dict
+    carries the step and base rates, not the function): a constant run
+    resumed with --lr_schedule wsd and a larger --steps anneals at its end."""
+    import torch
+
+    from model.optim import trm_lr_lambda, wsd_lr_lambda
+
+    p = torch.nn.Parameter(torch.zeros(1))
+    opt = torch.optim.SGD([p], lr=1.0)
+    s1 = torch.optim.lr_scheduler.LambdaLR(opt, trm_lr_lambda(2, 10, 1.0))
+    for _ in range(10):
+        opt.step()
+        s1.step()
+    assert s1.get_last_lr()[0] == 1.0
+    opt2 = torch.optim.SGD([p], lr=1.0)
+    s2 = torch.optim.lr_scheduler.LambdaLR(opt2, wsd_lr_lambda(2, 20, 0.5, 0.0, "linear"))
+    s2.load_state_dict(s1.state_dict())
+    lrs = []
+    for _ in range(10):
+        opt2.step()
+        s2.step()
+        lrs.append(s2.get_last_lr()[0])
+    assert lrs[0] == 0.9 and lrs[-1] == 0.0 and lrs == sorted(lrs, reverse=True)

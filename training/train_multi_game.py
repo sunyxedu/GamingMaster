@@ -207,6 +207,7 @@ from model.optim import (
     AdamATan2,
     ModelEMA,
     trm_lr_lambda,
+    wsd_lr_lambda,
 )
 from model.rl_utils import qk_norm_param_ids, sync_gradients
 from training.deep_supervision import Q_HALT_WEIGHT, BatchCarry
@@ -316,6 +317,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--weight_decay", type=float, default=TRM_WEIGHT_DECAY)
     p.add_argument("--warmup_steps", type=int, default=TRM_WARMUP_STEPS)
     p.add_argument("--lr_min_ratio", type=float, default=TRM_LR_MIN_RATIO)
+    p.add_argument("--lr_schedule", choices=("cosine", "wsd"), default="cosine",
+                   help="cosine: the reference warmup + cosine to --lr_min_ratio over --steps "
+                        "(constant with the default ratio 1); wsd: warmup, constant, then a "
+                        "decay to --lr_min_ratio over the last --lr_decay_frac of --steps "
+                        "(extend a run by resuming with a larger --steps)")
+    p.add_argument("--lr_decay_frac", type=float, default=0.1,
+                   help="wsd: fraction of --steps the final decay spans")
+    p.add_argument("--lr_decay_shape", choices=("cosine", "linear"), default="cosine")
     p.add_argument("--beta1", type=float, default=TRM_BETAS[0])
     p.add_argument("--beta2", type=float, default=TRM_BETAS[1])
     p.add_argument("--clip_grad", type=float, default=0.0)
@@ -1062,8 +1071,14 @@ def main(argv=None) -> Dict[str, object]:
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = AdamATan2(multi_game_param_groups(model, args.weight_decay), lr=args.lr,
                           betas=(args.beta1, args.beta2), weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer, trm_lr_lambda(args.warmup_steps, args.steps, args.lr_min_ratio))
+    if args.lr_schedule == "wsd":
+        if args.lr_min_ratio >= 1.0:
+            log("[warn] --lr_schedule wsd with --lr_min_ratio >= 1 never decays")
+        lr_lambda = wsd_lr_lambda(args.warmup_steps, args.steps, args.lr_decay_frac,
+                                  args.lr_min_ratio, args.lr_decay_shape)
+    else:
+        lr_lambda = trm_lr_lambda(args.warmup_steps, args.steps, args.lr_min_ratio)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     # --shard_optimizer: this rank's partition of the optimizer state and EMA
     zero = (Zero1(model, optimizer, rank, world, bucket_mb=args.bucket_mb)
             if args.shard_optimizer else None)

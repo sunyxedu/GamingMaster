@@ -121,6 +121,36 @@ def trm_lr_lambda(warmup_steps: int, total_steps: int, min_ratio: float):
     return fn
 
 
+def wsd_lr_lambda(warmup_steps: int, total_steps: int, decay_frac: float,
+                  min_ratio: float, shape: str = "cosine"):
+    """Warmup-Stable-Decay multiplier (MiniCPM, arXiv 2404.06395; Hägele et
+    al. 2024): the reference's linear warmup, then a CONSTANT rate, then a
+    decay to ``min_ratio`` over the last ``decay_frac`` of ``total_steps``.
+
+    Unlike the cosine schedule nothing before the decay depends on
+    ``total_steps``, so a run can be extended (resumed with a larger
+    ``--steps``) and only the final stretch anneals — the schedule is a pure
+    function of the step, so a resume continues it exactly.  ``shape``:
+    "cosine" (half cosine) or "linear"."""
+    if not 0.0 < decay_frac <= 1.0:
+        raise ValueError(f"decay_frac must be in (0, 1], got {decay_frac}")
+    if shape not in ("cosine", "linear"):
+        raise ValueError(f"shape must be 'cosine' or 'linear', got {shape!r}")
+    decay_start = max(warmup_steps, total_steps - int(round(decay_frac * total_steps)))
+    span = max(1, total_steps - decay_start)
+
+    def fn(step: int) -> float:
+        if step < warmup_steps:
+            return float(step) / float(max(1, warmup_steps))
+        if step < decay_start:
+            return 1.0
+        p = min(1.0, float(step - decay_start) / span)
+        if shape == "linear":
+            return 1.0 - (1.0 - min_ratio) * p
+        return min_ratio + (1.0 - min_ratio) * 0.5 * (1.0 + math.cos(math.pi * p))
+    return fn
+
+
 class ModelEMA:
     """Reference models/ema.py: shadow = mu·shadow + (1-mu)·param over the
     trainable parameters, updated after every optimizer step.
