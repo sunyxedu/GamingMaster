@@ -326,6 +326,19 @@ impl FrameSpec {
     }
 }
 
+/// Checks a [`Game::teams`] table: one entry per seat, team ids `0..n_teams` all
+/// used, at least two teams.
+pub fn validate_teams(teams: &[usize], n_seats: usize) -> Result<(), String> {
+    if teams.len() != n_seats {
+        return Err(format!("teams {teams:?}: {} entries for {n_seats} seats", teams.len()));
+    }
+    let n_teams = teams.iter().max().map_or(0, |&t| t + 1);
+    if n_teams < 2 || (0..n_teams).any(|t| !teams.contains(&t)) {
+        return Err(format!("teams {teams:?}: ids must be 0..n_teams (every id used, at least 2 teams)"));
+    }
+    Ok(())
+}
+
 /// A game's rules and its frame encoders.
 ///
 /// One implementation serves BOTH the converter (gmdata: replay + verification of
@@ -371,6 +384,16 @@ pub trait Game: Clone + Send + Sync + 'static {
 
     /// The frame schema: [`FrameSpec::candidate`] or a custom [`FrameSpec`].
     fn spec(cfg: &Self::Config) -> FrameSpec;
+
+    /// Fixed teams — the team id of every seat (`n_seats` entries, ids `0..n_teams`)
+    /// when teammates share one outcome (bridge partnerships: `[0, 1, 0, 1]`) — or
+    /// None (every seat plays for itself; the default). Teammates must get equal
+    /// outcomes (checked by [`crate::invariance::check_game`]); the simulator reports
+    /// the winning TEAM as `winner` (its lowest seat) and the Python league gives a
+    /// policy whole teams (env/league.py).
+    fn teams(_cfg: &Self::Config) -> Option<Vec<usize>> {
+        None
+    }
 
     /// The initial state (before any chance event).
     fn new_game(cfg: &Self::Config) -> Self;

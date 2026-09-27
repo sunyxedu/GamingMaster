@@ -15,10 +15,12 @@
 //! - [`doudizhu`]: Dou Dizhu (3 players, auction, landlord vs peasants; OpenSpiel's
 //!   `dou_dizhu` + four-with-two), candidate schema with factored kicker decisions.
 //! - [`skat`]: Skat (3 players, ISS rules; converter from the ISS game archive).
+//! - [`bridge`]: contract bridge (auction + card play, duplicate scoring; a team game).
 
 pub mod backgammon;
 pub mod breakthrough;
 pub mod doudizhu;
+pub mod bridge;
 pub mod goofspiel;
 pub mod kuhn_poker;
 pub mod pig;

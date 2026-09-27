@@ -565,8 +565,21 @@ impl Game for DouDizhu {
             })
             .collect();
         // each other seat keeps cards covering what it played (the shown kitty counts
-        // for the landlord)
+        // for the landlord) — including a combination whose kickers are still being
+        // chosen: its main part and chosen kickers are committed but not yet executed
+        // (`played` counts them only once the play completes), so a record cut inside
+        // a factored play must keep those cards with their seat
         let mut need = g.played;
+        if let Some(pd) = g.pending {
+            let cur = g.current as usize;
+            for (r, &n) in pd.main.counts().iter().enumerate() {
+                need[cur][r] += n;
+            }
+            let per = if pd.main.unit() == Unit::Pair { 2 } else { 1 };
+            for &r in pd.chosen() {
+                need[cur][r as usize] += per;
+            }
+        }
         if let Some(l) = g.landlord() {
             for (n, &k) in need[l].iter_mut().zip(&g.kitty) {
                 *n = n.saturating_sub(k);
@@ -618,6 +631,18 @@ impl Game for DouDizhu {
                 out[1 + i] = Event::Chance(DEAL_BASE + c as u32);
             }
             if out == events {
+                continue;
+            }
+            // the recorded actions constrain the hidden hands beyond the cards played
+            // (e.g. an airplane main part is legal only for a hand without four of its
+            // starting rank): keep only worlds in which every recorded action stays legal
+            // — a perturbation must be consistent with what the observing seat saw
+            let mut h = Self::new_game(cfg);
+            let consistent = out.iter().all(|e| match *e {
+                Event::Chance(o) => h.apply_chance(o).is_ok(),
+                Event::Act(s, a) => h.apply_action(s, a).is_ok(),
+            });
+            if !consistent {
                 continue;
             }
             if ranks_changed {

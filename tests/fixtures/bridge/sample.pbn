@@ -1,0 +1,66 @@
+% PBN 2.1
+% GamingMaster bridge fixture
+[Event "fixture"]
+[Board "2"]
+[West "w"]
+[North "n"]
+[East "e"]
+[South "s"]
+[Dealer "E"]
+[Vulnerable "NS"]
+[Deal "N:T43.KQ964.86.A54 QJ6.JT.9532.K762 AK97.73.A7.JT983 852.A852.KQJT4.Q"]
+[Declarer "E"]
+[Contract "2D"]
+[Result "8"]
+[Auction "E"]
+Pass 1C X 1H
+2D Pass Pass Pass
+[Play "S"]
+CJ CQ CA C6
+SK S2 S4 SQ
+SA S8 S3 S6
+S7 S5 ST SJ
+DA D4 D8 D2
+D7 DK D6 D9
+H3 H5 HQ HT
+C8 DQ C5 C7
+C3 DJ H6 D5
+H7 HA H4 HJ
+S9 H8 HK D3
+C9 H2 C4 CK
+CT DT H9 C2
+*
+
+[Event "fixture"]
+[Board "3"]
+[Dealer "E"]
+[Vulnerable "NS"]
+[Deal "W:852.A852.KQJT4.Q T43.KQ964.86.A54 QJ6.JT.9532.K762 AK97.73.A7.JT983"]
+[Auction "E"]
+Pass 1C X 1H 2D AP
+
+[Event "fixture"]
+[Board "1"]
+[Dealer "N"]
+[Vulnerable "None"]
+[Deal "N:KJ.J8654.AJ95.J7 AT43.Q73.KT72.T4 Q2.K2.8643.AQ953 98765.AT9.Q.K862"]
+[Contract "Pass"]
+[Auction "N"]
+Pass Pass Pass Pass
+
+[Event "fixture (claimed after three tricks)"]
+[Board "2"]
+[Dealer "E"]
+[Vulnerable "NS"]
+[Deal "N:T43.KQ964.86.A54 QJ6.JT.9532.K762 AK97.73.A7.JT983 852.A852.KQJT4.Q"]
+[Declarer "E"]
+[Contract "2D"]
+[Result "8"]
+[Auction "E"]
+Pass 1C X 1H
+2D Pass Pass Pass
+[Play "S"]
+CJ CQ CA C6
+SK S2 S4 SQ
+SA S8 S3 S6
+*

@@ -74,6 +74,7 @@ behaviour, which is what the golden parity tests pin.
 | Kuhn poker (toy) | `$G kuhn-poker generate` (synthetic hand logs; `scripts/fetch_kuhn_poker.sh`) | `convert --hq`: the scripted expert's seats only | gmrules reference game (below); rules pinned to OpenSpiel |
 | backgammon | `scripts/fetch_backgammon.sh OUT MATCHES WORKERS` = `$G backgammon generate` (gnubg 2-ply self-play, 7-point matches; our engine runs the matches and checks gnubg's legal list at every move) + `convert` | engine play only (no human corpus): gnubg 2-ply both seats; `convert --soft-k 8 --engine-values` (gnubg's equities / match-winning chances) | gmrules game; rules pinned to gnubg (legal moves, its own match loop). Data: generated here, no third-party records; gnubg (GPL-3.0-or-later) runs as an external process in a throw-away uv env, never linked or vendored |
 | Skat | `$G skat fetch --out D` (ISS game archive `iss-games-07-2024.sgf.bz2`, 545 MiB, 9.1M games 2007-2024, humans and programs, "available for free to everyone"; + the ISS ratings page); end to end `scripts/fetch_skat.sh D` | `convert --hq --players P --ratings R`: the seats of players with ≥ 2000 games and ≥ 5 money points per game in the corpus (`skat stats`) or ISS Elo ≥ 1050 (± ≤ 60); `--split train\|val` (1% val by game id) | gmrules game (ISS rules; every record replayed, its recorded result reproduced; pinned to the ISS engine by `tests/test_skat_reference.py`); see `rs/gmdata/src/skat.rs` |
+| contract bridge | `$G bridge fetch --source openspiel` (OpenSpiel's WBridge5 dataset, GCS: 1.16M deals) and `--source ben` (Ben's WBC play data, GitHub release: 1.89M boards); optional `--source bba` (Ben's BBA bidding sets: ~1.15M EPBot auctions + results per set, no play); `scripts/fetch_bridge.sh` end to end | every board: robot play at world-championship level (WBridge5 at its strongest setting, SAYC; World Computer Bridge Championship robots); `convert --complete-only` drops records that stop without a result | gmrules game (below), rules pinned to OpenSpiel. Licences: the OpenSpiel dataset's README states none (DeepMind research data published with OpenSpiel, Apache-2.0); Ben's data is a release asset of lorserker/ben (GPL-3.0), with no separate data licence. BBO vugraph (LIN) is not fetched (pending a decision); `convert --format lin` reads it |
 
 Measured on real data (kept / seen): chess elite 2021-06 601k / 781k games;
 go KGS 2019-04 202 / 1255; shogi 2025-06-01 158 / 447; othello 2019–21
@@ -91,6 +92,10 @@ schema; details in the `pokemon.rs` module docs.
 8456 / 9392 player sequences (4186 with `--winner-only`); skat, the full ISS
 archive: 9,094,590 / 9,094,699 records verified (0 result mismatches), `--hq` train
 11.2 M / 27.0 M seat streams (137 M / 315 M frames, ~57 GB).
+8456 / 9392 player sequences (4186 with `--winner-only`); bridge WBridge5 test set
+10,000 / 10,000 deals, Ben WBC 1,883,853 / 1,887,139 boards (3,286 rejected by the
+verifying replay as data errors; 291 kept as auction-only records), Ben BBA
+WBridge5-Sayc set 1,154,937 / 1,154,937 auctions.
 
 ## Engine teacher labels
 
@@ -230,6 +235,13 @@ every recorded result reproduced — 9,094,590 of 9,094,699 records, 0 result
 mismatches), `scripts/fetch_skat.sh`; parity with the ISS rule engine itself
 (its GPLv3 client classes, fetched at test time) by randomized differential tests in
 both directions (`tests/test_skat_reference.py`, live with `GM_REFERENCE=1` + a JDK).
+Full games: `bridge` (contract bridge: the auction with doubles / redoubles, dummy
+exposed after the opening lead and played by declarer, duplicate scoring by
+vulnerability; 4 seats in two partnerships, `Game::teams`). Rules and frames are in
+`rs/gmrules/src/games/bridge.rs`, pinned to OpenSpiel by `tests/test_bridge_reference.py`.
+The converter is `gmdata bridge fetch|check|convert` (OpenSpiel WBridge5 lines, Ben
+Jack-format boards, PBN, BBO LIN; `rs/gmdata/src/bridge.rs`), end to end in
+`scripts/fetch_bridge.sh`; tests are in `tests/test_bridge_pipeline.py`.
 
 ### Adding a game
 
@@ -255,7 +267,9 @@ both directions (`tests/test_skat_reference.py`, live with `GM_REFERENCE=1` + a 
      state and actions); `outcome()` in [-1, 1] is both the IL value target and the
      RL reward; `returns()` the raw payoffs; `check_config` validates the config;
      hidden-information games implement `perturb_hidden` (re-deal what `seat` cannot
-     see, keep every recorded action legal);
+     see, keep every recorded action legal); partnership games return their
+     `teams` (teammates share one outcome: the simulator reports the winning team,
+     the league assigns whole teams, a team row's `stream_seats` is its team);
    - register: `pub mod <game>;` in `games/mod.rs` + one line in
      `registry::GAMES`;
    - unit tests: hand-checked rule examples + `invariance::check_game::<G>(&cfg, n,

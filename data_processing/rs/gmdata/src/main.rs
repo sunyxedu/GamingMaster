@@ -19,6 +19,7 @@
 
 mod traj;
 mod backgammon;
+mod bridge;
 mod chess;
 mod common;
 mod doudizhu;
@@ -124,6 +125,11 @@ enum Game {
         #[command(subcommand)]
         cmd: skat::Cmd,
     },
+    /// Contract bridge (OpenSpiel WBridge5 / Ben WBC / PBN / LIN records)
+    Bridge {
+        #[command(subcommand)]
+        cmd: bridge::Cmd,
+    },
     /// Generic tools for every gmrules game: list, check, random-play / JSONL → shards
     Rules {
         #[command(subcommand)]
@@ -153,6 +159,7 @@ fn main() -> Result<()> {
         Game::Xiangqi { cmd } => xiangqi::run(cmd),
         Game::Backgammon { cmd } => backgammon::run(cmd),
         Game::Skat { cmd } => skat::run(cmd),
+        Game::Bridge { cmd } => bridge::run(cmd),
         Game::Rules { cmd } => rules::run(cmd),
         Game::Label { cmd } => label::run(cmd),
     }

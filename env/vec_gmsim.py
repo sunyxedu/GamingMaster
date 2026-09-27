@@ -17,7 +17,8 @@ Rows / streams / seats (see env/vec_game.py), from the game's FrameSpec layout:
   * per-seat (hidden-information or simultaneous games): ``rows_per_env =
     n_seats``, row ``env * n_seats + seat`` is that seat's OWN stream — its own
     decision frames only, so no stream ever carries another seat's private
-    information in its temporal state; ``stream_seats`` = the row's seat.  A row
+    information in its temporal state; ``stream_seats`` = the row's seat (team
+    games: its team, see below).  A row
     is ``active`` only when its seat is to act (alternating games: one row per
     env and step; simultaneous turns: several), and its ``step_idx`` counts its
     own frames — rows are therefore NOT in lockstep (``lockstep = False``: the
@@ -30,6 +31,13 @@ Rows / streams / seats (see env/vec_game.py), from the game's FrameSpec layout:
     games' layout; ``lockstep = True``).
 
 ``forced`` = a single legal action (the env applies it whatever is sent).
+Team games (``teams``: the team id of every seat, from the game's rules; e.g.
+bridge partnerships): teammates share one outcome and ``info["winner"]`` is
+the lowest seat of the winning team (−1: a tie); a per-seat row's
+``stream_seats`` is its seat's whole TEAM — a stream may act for a
+teammate's hand (bridge: the declarer's stream plays dummy's cards,
+``to_play`` = declarer, as in OpenSpiel), so one controller must own the
+team (env/league.py assigns whole teams).
 Actions: the decoder's ``sample()`` output or its replay keys — ``ACTION_KEYS``
 maps the former to the game's action keys (the entry's ``sample_keys``); keys
 that are no legal action of an acting row raise.  Rewards [N, n_seats] are the
@@ -97,6 +105,11 @@ class GmSimVecEnv(VecEnvBase):
             raise ValueError(f"{game}: sample_keys map to {bad}, not action keys "
                              f"{list(self.action_keys)}")
         self.n_seats = int(self.spec["n_seats"])
+        # team games (gmrules Game::teams, e.g. bridge partnerships [0, 1, 0, 1]):
+        # teammates share one outcome, info["winner"] is the winning team's lowest
+        # seat, and env/league.py gives a policy whole teams
+        teams = gmsim.game_info(game, cfg)["teams"]
+        self.teams: Optional[Tuple[int, ...]] = tuple(teams) if teams is not None else None
         self.layout = self.spec["layout"]
         self.interleaved = self.layout == "interleaved"
         self.rows_per_env = 1 if self.interleaved else self.n_seats
@@ -156,6 +169,9 @@ class GmSimVecEnv(VecEnvBase):
         rows = torch.arange(R, dtype=torch.long)
         if self.interleaved:
             stream_seats = torch.ones(R, self.n_seats, dtype=torch.bool)
+        elif self.teams is not None:        # a stream may act for a teammate's hand
+            team = torch.tensor(self.teams)
+            stream_seats = team[rows % self.n_seats].unsqueeze(1) == team.unsqueeze(0)
         else:
             stream_seats = torch.nn.functional.one_hot(rows % self.n_seats, self.n_seats).bool()
         return VecObs(

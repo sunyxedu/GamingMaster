@@ -495,7 +495,7 @@ mod tests {
             e
         };
         let recs = vec![
-            Record { id: "a".into(), events: ev([1, 2], &[0, 1, 1]), meta: json!({"x": 1}), seats: None, expected_returns: Some(vec![-2.0, 2.0]), soft_targets: vec![(3, vec![(0, 0.25), (1, 0.75)]), (4, vec![(1, 1.0), (7, 0.5)])], final_outcome: None, engine_values: vec![(2, -0.5), (3, 0.25)] },
+            Record { id: "a".into(), events: ev([1, 2], &[0, 1, 1]), meta: json!({"x": 1}), seats: None, expected_returns: Some(vec![-2.0, 2.0]), soft_targets: vec![(3, vec![(0, 0.25), (1, 0.75)]), (4, vec![(1, 1.0), (7, 0.5)])], final_outcome: None, engine_values: vec![(2, -0.5), (3, 0.25)], conceded: None },
             Record { id: "b".into(), events: ev([1, 2], &[0, 1]), meta: Value::Null, seats: None, expected_returns: None, ..Default::default() },
             Record { id: "c".into(), events: ev([1, 1], &[]), meta: Value::Null, seats: None, expected_returns: None, ..Default::default() },
             Record { id: "d".into(), events: ev([2, 0], &[1, 0]), meta: Value::Null, seats: Some(vec![1]), expected_returns: Some(vec![9.0, -1.0]), ..Default::default() },
@@ -600,4 +600,5 @@ mod tests {
         assert!(sh.index["tensors"].get("tgt.value_mask").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
 }
