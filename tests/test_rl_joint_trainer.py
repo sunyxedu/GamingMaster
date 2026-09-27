@@ -381,6 +381,59 @@ def test_forward_chunking_leaves_the_gradient(stage1):
     tr.optimizer.zero_grad(set_to_none=True)
 
 
+def test_cached_reference_kl_matches_the_per_forward_reference(stage1):
+    """--cache_ref_kl: the frozen reference's KL inputs computed once with π_old give
+    the loss, KL and gradient of a reference forward in every learner forward."""
+    from training.train_rl_joint import Diag
+
+    tr = _trainer(stage1, "rl_refcache", "--iterations", "1", "--snapshot_dir", "memory")
+    diag = Diag(tr.games, tr.n_moe)
+    tr._rollouts(0, {g: 40 for g in tr.rl_games}, diag)
+    for g in tr.rl_games:
+        tr._recompute(g)
+    tr._targets(diag)
+    cached = [g for g in tr.rl_games if not tr.kl_off[g]]
+    assert cached and all(s.ref_logits is not None or s.ref_lp is not None
+                          for g in cached for s in tr.rl[g].streams)
+    plan, counts = tr._minibatch_plan(0, 0)
+    cnt = {name: {g: float(counts[0, gi, j]) for gi, g in enumerate(tr.rl_games)}
+           for j, name in enumerate(("kept", "policy", "value"))}
+    # move the policy away from the reference (the cache is the reference's alone)
+    ref_params = {id(p) for g in cached for p in tr.ref[g].parameters()}
+    torch.manual_seed(3)
+    with torch.no_grad():
+        for p in tr.model.parameters():
+            assert id(p) not in ref_params
+            p.add_(0.05 * torch.randn_like(p) * p.abs().mean().clamp(min=1e-3))
+
+    def run():
+        tr.optimizer.zero_grad(set_to_none=True)
+        d = Diag(tr.games, tr.n_moe)
+        loss = 0.0
+        with moe_load_counting(tr.model):
+            for g in tr.rl_games:
+                ss = [tr.rl[g].streams[i] for i in plan[0][g]]
+                if ss:
+                    l = tr._rl_chunk_loss(g, ss, cnt, d, False)
+                    l.backward()
+                    loss += float(l.detach())
+        grads = {k: p.grad.clone() for k, p in tr.model.named_parameters() if p.grad is not None}
+        return loss, {g: d.v[g]["kl_sum"] for g in cached}, grads
+
+    with_cache = run()
+    for g in cached:
+        for s in tr.rl[g].streams:
+            s.ref_logits = s.ref_lp = None
+    without = run()
+    assert all(v > 1e-4 for v in without[1].values()), without[1]     # a real KL
+    assert with_cache[0] == pytest.approx(without[0], rel=1e-5, abs=1e-7)
+    for g in cached:
+        assert with_cache[1][g] == pytest.approx(without[1][g], rel=1e-3, abs=1e-5)  # float noise
+    for k in without[2]:
+        torch.testing.assert_close(with_cache[2][k], without[2][k], rtol=1e-4, atol=1e-7)
+    tr.optimizer.zero_grad(set_to_none=True)
+
+
 @pytest.mark.parametrize("actor", ["stream", "fixed"])
 def test_first_minibatch_ratio_is_one(stage1, actor):
     if actor == "stream":

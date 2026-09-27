@@ -252,6 +252,10 @@ def parse_args(argv=None) -> argparse.Namespace:
            "all rows in one fixed-shape batch (recurrent temporal mixer; --cuda_graph)")
     a("--cuda_graph", action="store_true",
       help="with --actor fixed on CUDA: replay the step from a CUDA graph (GraphedStep)")
+    a("--cache_ref_kl", type=int, default=1,
+      help="compute the frozen reference's KL inputs once per iteration, with π_old, and "
+           "reuse them in every epoch (1, default) instead of a reference forward per "
+           "learner forward (0)")
     a("--routing_replay", type=int, default=1,
       help="MoE cores: the actor records every token's experts and every learner "
            "forward of the iteration replays them (1, default); 0 = the learner routes "
@@ -1037,6 +1041,11 @@ class Stream:
     ret: Optional[torch.Tensor] = None
     keep: Optional[torch.Tensor] = None
     old_pred: Optional[torch.Tensor] = None
+    # the frozen reference's KL inputs (--cache_ref_kl): per-head logits [T, ...] of
+    # its il_head_terms (full-head KL) or its log-prob of the taken action [T] (k3),
+    # on the learner device
+    ref_logits: Optional[Dict[str, torch.Tensor]] = None
+    ref_lp: Optional[torch.Tensor] = None
 
     @property
     def length(self) -> int:
@@ -1713,10 +1722,11 @@ class JointRLTrainer:
         eval) forward the epochs use."""
         r = self.rl[g]
         net = self.model[g]
+        ref = self.ref[g] if self.args.cache_ref_kl and not self.kl_off[g] else None
         with MoEFFN.inference_path("sparse"):
             for chunk in self._forward_chunks(g, range(len(r.streams))):
                 ss = [r.streams[i] for i in chunk]
-                b = build_batch(ss, self.device)
+                b = build_batch(ss, self.device, ("forced",))
                 pred = learner_forward(net, r.spec, b, self.depth, self.device, self.args.bf16,
                                        replay_routes=True)
                 lp, _ = r.spec.logp_entropy(net, pred, b["actions"], b["legal"])
@@ -1724,6 +1734,20 @@ class JointRLTrainer:
                 for j, s in enumerate(ss):
                     s.lp_old = lp[j, :s.length].detach().cpu()
                     s.v_old = v[j, :s.length].detach().cpu()
+                if ref is not None:
+                    # the reference routes on its own (no replay), as in _rl_chunk_loss
+                    ref_pred = learner_forward(ref, r.spec, b, self.depth, self.device,
+                                               self.args.bf16)
+                    if r.spec.full_kl:
+                        tgt = r.spec.kl_targets(b["actions"], b["forced"], net.cfg)
+                        ref_t = r.spec.kl_terms(ref, ref_pred, tgt, b["frame_mask"], b["legal"])
+                        for j, s in enumerate(ss):
+                            s.ref_logits = {h: t["logits"][j, :s.length].detach()
+                                            for h, t in ref_t.items()}
+                    else:
+                        ref_lp, _ = r.spec.logp_entropy(ref, ref_pred, b["actions"], b["legal"])
+                        for j, s in enumerate(ss):
+                            s.ref_lp = ref_lp[j, :s.length].detach()
 
     def _targets(self, diag: Diag) -> None:
         """GAE per game (reward units), PopArt + advantage statistics (one
@@ -1876,13 +1900,21 @@ class JointRLTrainer:
         n_p, n_v = float(pm.sum()), float(vm.sum())
         if not self.kl_off[g]:
             ref = self.ref[g]
-            with torch.no_grad():
-                ref_pred = learner_forward(ref, r.spec, b, self.depth, self.device, a.bf16)
+            T = b["frame_mask"].shape[1]
+            cached = (all(s.ref_logits is not None for s in ss) if r.spec.full_kl
+                      else all(s.ref_lp is not None for s in ss))
+            if not cached:
+                with torch.no_grad():
+                    ref_pred = learner_forward(ref, r.spec, b, self.depth, self.device, a.bf16)
             if r.spec.full_kl:
                 tgt = r.spec.kl_targets(b["actions"], b["forced"], net.cfg)
                 cur_t = r.spec.kl_terms(net, pred, tgt, vm, b["legal"])
-                with torch.no_grad():
-                    ref_t = r.spec.kl_terms(ref, ref_pred, tgt, vm, b["legal"])
+                if cached:          # the iteration's reference logits (_recompute)
+                    ref_t = {h: {**cur_t[h], "logits": _pad([s.ref_logits[h] for s in ss], T)}
+                             for h in cur_t}
+                else:
+                    with torch.no_grad():
+                        ref_t = r.spec.kl_terms(ref, ref_pred, tgt, vm, b["legal"])
                 # sum reduction = β·(this chunk's head-normalised KL)·frames: the
                 # heads' denominators (valid / conditioned / pass frames) are the
                 # chunk's own, so across chunks this is a frame-weighted mean of
@@ -1892,8 +1924,11 @@ class JointRLTrainer:
                 loss = loss + combine_game_losses({g: kl}, wv, counts=counts["value"])
                 diag.add(g, kl_sum=float(kl["kl"]) * n_v, kl_n=n_v)
             else:
-                with torch.no_grad():
-                    ref_lp, _ = r.spec.logp_entropy(ref, ref_pred, b["actions"], b["legal"])
+                if cached:
+                    ref_lp = _pad([s.ref_lp for s in ss], T)
+                else:
+                    with torch.no_grad():
+                        ref_lp, _ = r.spec.logp_entropy(ref, ref_pred, b["actions"], b["legal"])
                 kl = kl_penalty(lp, ref_lp, pm, beta=self.klb[g], estimator="k3",
                                 reduction="sum")
                 loss = loss + combine_game_losses({g: kl}, wp, counts=counts["policy"])
