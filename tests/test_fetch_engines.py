@@ -31,6 +31,7 @@ def _host(snippet, tmp_path, os_="Linux", arch="x86_64", flags="", vendor=""):
     env.pop("KATAGO_BACKEND", None)
     env.pop("STOCKFISH_ARCH", None)
     env.pop("YANEURAOU_TARGET_CPU", None)
+    env.pop("PIKAFISH_ARCH", None)
     r = subprocess.run([BASH, "-c", cmd], capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
     return r.stdout.split()
@@ -70,6 +71,17 @@ def test_old_x86_and_macos_picks(tmp_path):
     assert mac == ["stockfish-macos-universal.tar.gz", "stockfish-macos-m1-apple-silicon.tar", "APPLEM1"]
     forced = _host("STOCKFISH_ARCH=x86-64-avx2; stockfish_x86_arches", tmp_path, flags=EPYC_9355)
     assert forced == ["avx2"]
+
+
+def test_pikafish_arch(tmp_path):
+    """Stockfish-style ARCH names: AVX-512 ICL on the EPYC 9355 nodes, the SSE2 cpu-node VMs
+    get the portable build."""
+    assert _host("pikafish_arch", tmp_path, flags=EPYC_9355) == ["x86-64-avx512icl"]
+    assert _host("pikafish_arch", tmp_path, flags=OLD_X86) == ["x86-64-sse41-popcnt"]
+    assert _host("pikafish_arch", tmp_path, flags="fpu sse sse2") == ["x86-64"]
+    assert _host("pikafish_arch", tmp_path, flags="sse4_1 popcnt avx avx2 bmi2") == ["x86-64-bmi2"]
+    assert _host("pikafish_arch", tmp_path, os_="Darwin", arch="arm64") == ["apple-silicon"]
+    assert _host("PIKAFISH_ARCH=x86-64-avx2; pikafish_arch", tmp_path, flags=EPYC_9355) == ["x86-64-avx2"]
 
 
 def test_egaroucid_build_flags(tmp_path):

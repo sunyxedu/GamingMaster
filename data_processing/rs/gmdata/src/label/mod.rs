@@ -93,6 +93,7 @@ pub mod testkit;
 pub mod toy;
 pub mod transform;
 pub mod uci;
+pub mod xiangqi;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -253,6 +254,8 @@ pub enum Cmd {
     Go(go::Args),
     /// Shogi shards via a USI engine (YaneuraOu NNUE)
     Shogi(shogi::Args),
+    /// Xiangqi shards via a UCI engine (Pikafish)
+    Xiangqi(xiangqi::Args),
     /// Label toy shards with the built-in fake engine (no engine binary needed)
     #[command(hide = true)]
     Selftest {
@@ -279,6 +282,8 @@ pub enum FakeKind {
     Toy,
     /// a chess UCI engine scoring every legal move (label/chess.rs `fake_engine`)
     Chess,
+    /// a xiangqi UCI engine in Pikafish notation (label/xiangqi.rs `fake_engine`)
+    Xiangqi,
     /// rule-table engine (see label/fake.rs for the script format)
     Canned {
         #[arg(long)]
@@ -307,6 +312,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
         Cmd::Othello(a) => othello::run(a),
         Cmd::Go(a) => go::run(a),
         Cmd::Shogi(a) => shogi::run(a),
+        Cmd::Xiangqi(a) => xiangqi::run(a),
         Cmd::Selftest { out, workers, in_process } => {
             if out.exists() && std::fs::read_dir(&out)?.next().is_some() {
                 bail!("--out {} is not empty", out.display());
@@ -328,6 +334,7 @@ pub fn run(cmd: Cmd) -> Result<()> {
         Cmd::FakeEngine { kind } => match kind {
             FakeKind::Toy => fake::run_stdio(&mut toy::fake_engine()),
             FakeKind::Chess => fake::run_stdio(&mut chess::fake_engine()),
+            FakeKind::Xiangqi => fake::run_stdio(&mut xiangqi::fake_engine()),
             FakeKind::Canned { script } => {
                 let text = std::fs::read_to_string(&script).with_context(|| format!("read {}", script.display()))?;
                 fake::run_stdio(&mut fake::Canned::parse(&text)?)

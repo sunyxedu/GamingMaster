@@ -110,8 +110,8 @@ decoder head) and engine values to existing gm-shards, as overlay shards that
 hard-link the base tensors (the base is never modified) and that the trainers
 read unchanged (`--soft_target_weight`, `--engine_value_weight`). Engines are
 external processes installed outside the repo by
-`scripts/engines/fetch_engines.sh` (Stockfish, Egaroucid, YaneuraOu, KataGo;
-licences in its header). Columns, options and the per-game extension point are
+`scripts/engines/fetch_engines.sh` (Stockfish, Egaroucid, YaneuraOu, KataGo,
+Pikafish; licences in its header). Columns, options and the per-game extension point are
 documented in `rs/gmdata/src/label/mod.rs`; `gmdata label selftest --out DIR`
 exercises the whole pipeline with a built-in fake engine.
 
@@ -122,6 +122,9 @@ $G label chess --input data/chess/train --out data/chess_sf/train \
 scripts/engines/fetch_engines.sh egaroucid
 $G label othello --input data/othello/train --out data/othello_ega/train \
    --engine ~/gm-engines/bin/egaroucid --workers 64   # Egaroucid level 15, exact <= 20 empties
+scripts/engines/fetch_engines.sh pikafish
+$G label xiangqi --input data/xiangqi/train --out data/xiangqi_pf/train \
+   --engine ~/gm-engines/bin/pikafish --workers 32      # defaults: nodes=100000, MultiPV 8
 ```
 
 The teacher policy is `π ∝ exp(Q/τ + w·u)` over the scored moves (`--tau`,
@@ -137,6 +140,7 @@ moves are ordered by Q and, among equal Q, by u:
 | chess | mate in n moves: ±(0.5 + 0.5·5/(n + 4)); else 0.5·tanh(cp / 1000) |
 | shogi | mate in p plies → n = (p + 1)/2 (mating) or p/2 (mated) moves, same mate formula; else 0.5·tanh(cp / 3000) |
 | othello | tanh(discs / 16) (exact and midgame scores) |
+| xiangqi | as chess (Pikafish cp and mates in moves) |
 | go | none (the default policy is KataGo's visits) |
 
 Every mate ranks above every non-mate score; within one Q class the preference

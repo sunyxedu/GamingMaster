@@ -23,8 +23,10 @@ tests/fixtures/xiangqi/CCPD_ATTRIBUTION.txt):
 - invariance: simulator battery (causality; perfect information — nothing to perturb)
   and converter causality on real records (their truncations are frame prefixes);
 - IL contract on real batches: il_head_terms decomposes il_loss, the shards' IL masks
-  make every target legal, soft targets (the tensors a Pikafish labeller would write:
+  make every target legal, soft targets (the tensors the Pikafish labeller writes:
   from / to heads, sparse) — one-hot teachers = the hard loss;
+- `gmdata label xiangqi` overlays (the gmdata binary as a fake Pikafish; the real
+  engine when installed) replay, verify and drive the soft-target losses;
 - train_multi_game with existing games (the gomoku fixture shards, kuhn_poker), then
   train_rl_joint on xiangqi + kuhn_poker: μ = π_old, finite losses, the compact
   FromToSpec replay legality.
@@ -425,7 +427,7 @@ def test_il_contract_on_real_batches(shards):
     assert float(il["illegal_target_frac"]) == 0.0
     assert torch.equal(pred["from_idx"][mask], mb["tgt"]["from_idx"][mask])
     assert bool(terms["to"]["weight"][mask].eq(1).all())
-    # soft targets as a Pikafish labeller would write them (sparse from / to heads):
+    # soft targets as the Pikafish labeller writes them (sparse from / to heads):
     # a one-hot teacher on the recorded move = the hard objective exactly
     tgt = dict(mb["tgt"])
     pad = torch.full_like(tgt["from_idx"], -1)
@@ -457,6 +459,63 @@ def test_il_contract_on_real_batches(shards):
     assert torch.isfinite(g2).all() and np.isfinite(s2["to_teacher_kl"])
     assert s2["to_teacher_illegal_mass"] == pytest.approx(0.0)
     assert s2["to_teacher_frac"] == pytest.approx(1.0)
+
+
+def _pikafish():
+    p = os.environ.get("PIKAFISH") or os.path.join(
+        os.environ.get("GM_ENGINES", os.path.expanduser("~/gm-engines")), "bin", "pikafish")
+    return p if os.path.isfile(p) else None
+
+
+@pytest.mark.parametrize("engine", ["fake"] + (["pikafish"] if _pikafish() else []))
+def test_engine_labels_reach_the_il_losses(gmdata, shards, tmp_path, engine):
+    """`gmdata label xiangqi` (the gmdata binary as a fake Pikafish; the real engine at
+    a small node budget when installed) overlays the real shards: every sample replays
+    and verifies, the teacher columns load next to the base columns, the from / to
+    rows are distributions over the frame's legal moves (the to row conditioned on the
+    recorded from-square), and they drive train_il_game's soft-target losses."""
+    from training.train_il_game import batch_loss, prepare_batch
+
+    root, _, _ = shards
+    if engine == "fake":
+        cmd = ["--engine", gmdata, "--engine-arg", "label", "--engine-arg", "fake-engine",
+               "--engine-arg", "xiangqi"]
+    else:
+        cmd = ["--engine", _pikafish(), "--limit", "nodes=5000"]
+    out = tmp_path / "lab"
+    summary = _run(gmdata, "label", "xiangqi", "--input", root / "hq", "--out", out, *cmd,
+                   "--workers", "2", "--progress-s", "0")
+    st = summary["stats"]
+    assert st["verify_failed"] == st["replay_failed"] == st["engine_errors"] == 0
+    assert st["labelled"] > 0 and set(st["skipped"]) <= {"forced"}
+    t = summary["teacher"]
+    assert t["heads"] == {"from": {"kind": "categorical", "n": 90, "k": 8, "storage": "sparse"},
+                          "to": {"kind": "categorical", "n": 90, "k": 8, "storage": "sparse"}}
+    assert t["raw_unit"] == "cp" and t["policy"]["kind"] == "softmax"
+    ds = GameShardDataset(str(out), game="xiangqi")
+    s = ds[0]
+    tg = s["tgt"]
+    lab = tg["engine_value_mask"].bool()
+    assert lab.any() and bool((tg["engine_value"][lab].abs() <= 1).all())
+    fi, fv = tg["from_probs_idx"], tg["from_probs_val"]
+    assert torch.allclose(fv[lab].sum(-1), torch.ones(int(lab.sum())), atol=1e-5)
+    legal_from = tg["legal_from"].bool()
+    for tt in torch.nonzero(lab).flatten().tolist():
+        for i, v in zip(fi[tt].tolist(), fv[tt].tolist()):
+            if v > 0:
+                assert legal_from[tt, i], (tt, i)
+    # the soft targets drive the IL losses of the xiangqi network
+    torch.manual_seed(0)
+    net = build_game_network("xiangqi", **TINY)
+    batch = collate_game_sequences([ds[i] for i in range(min(4, len(ds)))])
+    mb = prepare_batch("xiangqi", batch, CPU, tf_prob=1.0, cfg=net.cfg, il_legal_mask=True)
+    loss, stats, _ = batch_loss(net, mb, CPU, 1.0, 0.0, False, soft_target_weight=1.0,
+                                engine_value_weight=0.5)
+    assert torch.isfinite(loss)
+    assert 0 < stats["from_teacher_frac"] <= 1 and 0 < stats["to_teacher_frac"] <= 1
+    assert stats["from_teacher_illegal_mass"] == pytest.approx(0.0, abs=1e-6)
+    assert stats["to_teacher_illegal_mass"] == pytest.approx(0.0, abs=1e-6)
+    assert np.isfinite(stats["from_teacher_kl"]) and np.isfinite(stats["to_teacher_kl"])
 
 
 # ---------------------------------------------------------------------------

@@ -7,11 +7,13 @@
 #   scripts/engines/fetch_engines.sh egaroucid     # Othello: clone + build the console engine
 #   scripts/engines/fetch_engines.sh yaneuraou     # Shogi: clone + build NNUE edition + download eval
 #   scripts/engines/fetch_engines.sh katago        # Go: release binary (backend by host) + network
+#   scripts/engines/fetch_engines.sh pikafish      # Xiangqi: clone + build + NNUE network
 #   scripts/engines/fetch_engines.sh all           # all of the above
 #   scripts/engines/fetch_engines.sh paths         # print what is installed
 #
 # Layout (root = ${GM_ENGINES:-$HOME/gm-engines}):
-#   bin/stockfish  bin/egaroucid  bin/yaneuraou  bin/katago   entry points (symlinks / small
+#   bin/stockfish  bin/egaroucid  bin/yaneuraou  bin/katago  bin/pikafish
+#                                                             entry points (symlinks / small
 #                                                             wrappers that cd into the engine dir)
 #   <engine>/<version>/...                                    the installs themselves
 #   nets/...                                                  NNUE evals / KataGo networks
@@ -40,6 +42,11 @@
 #              download; the archive ships gpl-3.0.txt: GPL-3.0; about as strong as tanuki-'s
 #              WCSC33 eval "Lí" per its authors; needs the USI option FV_SCALE=20, which
 #              `gmdata label shogi` sets by default).
+#   Pikafish   GPL-3.0. Built from source, github.com/official-pikafish/Pikafish (a release
+#              tag, Stockfish's Makefile: ARCH by CPU flags). Its NNUE network (pikafish.nnue,
+#              GPL-3.0) comes from the Networks repository's master-net release, which the
+#              build downloads; the install records the network's SHA-256 (the release
+#              asset is replaced as the network improves).
 #   KataGo     Engine: github.com/lightvector/KataGo (see its LICENSE: MIT-style, with
 #              separately licensed third-party parts). Networks from katagotraining.org
 #              under the "KataGo Neural Network License" (MIT-style,
@@ -57,6 +64,8 @@
 #                          version, and later versions may drop the halfkp_256x2-32-32 edition)
 #   YANEURAOU_TARGET_CPU   Makefile TARGET_CPU (default: from the CPU flags)
 #   YANEURAOU_EVAL_URL     .7z / .zip archive containing nn.bin (default: Háo)
+#   PIKAFISH_REF           git tag (default: Pikafish-2026-09-06)
+#   PIKAFISH_ARCH          Makefile ARCH (default: from the CPU flags, e.g. x86-64-avx512icl)
 #   KATAGO_TAG             release tag (default: v1.18.1 for every Linux backend — the newest
 #                          tag with CPU / OpenCL / TensorRT / ROCm assets; pinned so that labels
 #                          from GPU and CPU nodes share one engine version in meta.teacher)
@@ -527,6 +536,60 @@ install_yaneuraou() {
     echo "yaneuraou: $BIN/yaneuraou -> $dir/YaneuraOu ($id; eval $dir/eval/nn.bin -> $(readlink "$dir/eval/nn.bin"), FV_SCALE=20 for Háo; GPL-3.0)"
 }
 
+# ------------------------------------------------------------------ Pikafish
+
+# Pikafish keeps Stockfish's Makefile ARCH names.
+pikafish_arch() {
+    if [ -n "${PIKAFISH_ARCH:-}" ]; then echo "$PIKAFISH_ARCH"; return; fi
+    case "$OS-$ARCH" in
+        Darwin-arm64) echo apple-silicon ;;
+        Linux-aarch64 | Linux-arm64) if has_flag asimddp; then echo armv8-dotprod; else echo armv8; fi ;;
+        *)
+            if has_flag avx512_vnni && has_flag avx512_vbmi2 && has_flag avx512_vpopcntdq; then echo x86-64-avx512icl
+            elif has_flag avx512_vnni && has_flag avx512bw; then echo x86-64-vnni512
+            elif has_flag avx512bw && has_flag avx512f; then echo x86-64-avx512
+            elif has_flag avx_vnni; then echo x86-64-avxvnni
+            elif has_flag bmi2 && has_flag avx2; then echo x86-64-bmi2
+            elif has_flag avx2; then echo x86-64-avx2
+            elif has_flag sse4_1 && has_flag popcnt; then echo x86-64-sse41-popcnt
+            else echo x86-64; fi ;;
+    esac
+}
+
+install_pikafish() {
+    have git || die "pikafish needs git"
+    have make || die "pikafish needs make"
+    local ref arch dir comp id sha
+    ref="${PIKAFISH_REF:-Pikafish-2026-09-06}"
+    arch="$(pikafish_arch)"
+    dir="$ROOT/pikafish/$ref-$arch"
+    if [ -x "$dir/pikafish" ] && [ -s "$dir/pikafish.nnue" ]; then
+        log "Pikafish $ref ($arch) already built"
+    else
+        rm -rf "$dir.tmp"
+        git -c advice.detachedHead=false clone -q --depth 1 --branch "$ref" https://github.com/official-pikafish/Pikafish.git "$dir.tmp"
+        if [ "$OS" = Darwin ] || ! have g++; then comp=clang; else comp=gcc; fi
+        log "building Pikafish $ref, ARCH=$arch, COMP=$comp (log: $dir/build.log)"
+        make -C "$dir.tmp/src" -j"$(jobs)" build ARCH="$arch" COMP="$comp" > "$dir.tmp/build.log" 2>&1 \
+            || { tail -30 "$dir.tmp/build.log" >&2; die "Pikafish build failed (see $dir.tmp/build.log)"; }
+        [ -x "$dir.tmp/src/pikafish" ] && [ -s "$dir.tmp/src/pikafish.nnue" ] \
+            || die "the Pikafish build left no executable / network in $dir.tmp/src"
+        mkdir -p "$dir.tmp/install"
+        mv "$dir.tmp/src/pikafish" "$dir.tmp/src/pikafish.nnue" "$dir.tmp/build.log" "$dir.tmp/install/"
+        cp "$dir.tmp/Copying.txt" "$dir.tmp/install/" 2>/dev/null || true
+        rm -rf "$dir"
+        mv "$dir.tmp/install" "$dir"
+        rm -rf "$dir.tmp"
+    fi
+    # the binary finds pikafish.nnue in its working directory
+    wrap_bin pikafish "$dir" ./pikafish
+    id="$(printf 'uci\nisready\nquit\n' | "$BIN/pikafish" 2>/dev/null | awk '/^id name/{sub(/^id name /,""); print; exit}')"
+    [ -n "$id" ] || die "$BIN/pikafish does not answer the UCI handshake"
+    printf 'uci\nisready\nquit\n' | "$BIN/pikafish" 2>/dev/null | grep -q '^readyok' || die "$BIN/pikafish: isready failed"
+    if have sha256sum; then sha="$(sha256sum "$dir/pikafish.nnue" | cut -c1-16)"; else sha="$(shasum -a 256 "$dir/pikafish.nnue" | cut -c1-16)"; fi
+    echo "pikafish: $BIN/pikafish -> $dir/pikafish ($id, ARCH=$arch; network pikafish.nnue sha256 $sha...; GPL-3.0)"
+}
+
 # ------------------------------------------------------------------ KataGo
 
 # The ldconfig cache listing (empty when unavailable). ldconfig lives in /sbin on
@@ -635,7 +698,7 @@ install_katago() {
 
 show_paths() {
     local e
-    for e in stockfish egaroucid yaneuraou katago; do
+    for e in stockfish egaroucid yaneuraou katago pikafish; do
         if [ -e "$BIN/$e" ]; then echo "$e: $BIN/$e"; else echo "$e: (not installed)"; fi
     done
     [ -e "$ROOT/nets/katago/default.bin.gz" ] && echo "katago network: $(readlink "$ROOT/nets/katago/default.bin.gz")"
@@ -654,7 +717,8 @@ main() {
             egaroucid) install_egaroucid ;;
             yaneuraou) install_yaneuraou ;;
             katago) install_katago ;;
-            all) install_stockfish; install_egaroucid; install_yaneuraou; install_katago ;;
+            pikafish) install_pikafish ;;
+            all) install_stockfish; install_egaroucid; install_yaneuraou; install_katago; install_pikafish ;;
             paths) show_paths ;;
             -h | --help | help) usage ;;
             *) usage; die "unknown engine: $what" ;;
