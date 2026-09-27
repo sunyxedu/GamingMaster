@@ -2,23 +2,27 @@
 ``hok.hok1v1.HoK1v1``), driven by env/vec_hok.py over stdin / stdout.
 
 Runs under the SDK's own interpreter (Python 3.6-3.9, the compiled ``interface``
-module), NOT the repo's: a standalone script without torch or repo imports.  Messages
+module), NOT the repo's: a standalone script without torch or repo imports.  Works with
+the current hok_env and with 2.0.0 (the Hokoff datasets' SDK); on gamecore 20260420 both
+emit 705 features per player (FEATURES).  Messages
 are pickled (protocol 4) with an 8-byte little-endian length prefix:
 
     ← {"gamecore": "host:port", "aiserver_ip": ip, "ports": [p0, p1],
-       "runtime_id": str, "req_timeout_ms": int}                      → ("ok", {})
+       "runtime_id": str, "req_timeout_ms": int, "workdir": dir,
+       "reward_config": {key: value} or None}                          → ("ok", {})
     ← ("reset", {"camp": camp_config, "eval": bool})                  → ("ok", frame)
     ← ("step", [action_p0, action_p1])  (6 ints each)                 → ("ok", frame)
     ← ("end", None)   the game is over: release it in the gamecore     → ("ok", {})
     ← ("close", None) end the process                                  → ("ok", {})
     any failure                                                       → ("error", traceback)
 
-frame = {"players": [per player: features [725] f32, legal [172] f32, sub [12, 6] f32,
+frame = {"players": [per player: features [705] f32, legal [172] f32, sub [12, 6] f32,
          reward (the SDK's component list; [-1] = the weighted sum), done],
          "frame_no": int, "done": bool, "camps": [camp of player 0, 1],
          "loss_camp": camp whose crystal fell (-1: none yet / timeout)}
 """
 
+import json
 import os
 import pickle
 import struct
@@ -28,7 +32,7 @@ import traceback
 import numpy as np
 
 CRYSTAL = 24          # organ type of the base crystal (aiarena/1v1/actor/actor.py)
-FEATURES = 725
+FEATURES = 705
 
 
 def _read(stream):
@@ -63,33 +67,53 @@ def _frame(env, state):
                         "done": bool(s["done"])})
     done = any(p["done"] for p in players)
     loss_camp = -1
-    camps = [env.player_camp.get(env.player_list[i], -1) for i in range(env.PLAYER_NUM)]
+    # plain ints: the SDK's camp values are extension types the repo side cannot unpickle
+    camps = [int(env.player_camp.get(env.player_list[i], -1)) for i in range(env.PLAYER_NUM)]
     if done:
         req = next(r for r in env.cur_req_pb if r is not None)
         for organ in req.organ_list:
-            if organ.type == CRYSTAL and organ.hp <= 0:
-                loss_camp = organ.camp
+            if int(organ.type) == CRYSTAL and organ.hp <= 0:
+                loss_camp = int(organ.camp)
     return {"players": players, "frame_no": int(env.cur_frame_no), "done": done,
             "camps": camps, "loss_camp": loss_camp}
 
 
 def main():
-    stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
-    # the SDK logs to stdout: keep the protocol stream private
+    stdin = sys.stdin.buffer
+    # the protocol gets a private copy of fd 1; the SDK and its C++ library log to stdout
+    # (Python prints and raw fd-1 writes), which now land in stderr
+    stdout = os.fdopen(os.dup(1), "wb")
+    os.dup2(2, 1)
     sys.stdout = sys.stderr
     init = _read(stdin)
     try:
-        from hok.common.gamecore_client import GamecoreClient
+        import hok.hok1v1 as sdk
+        # the SDK's C++ library reads ./config.json (reward weights, log level): each
+        # worker runs in its own directory holding the SDK's defaults + any overrides
+        workdir = init.get("workdir") or "/tmp/hok-%s" % init["runtime_id"]
+        os.makedirs(workdir, exist_ok=True)
+        with open(os.path.join(os.path.dirname(sdk.__file__), "config.json")) as fh:
+            conf = json.load(fh)
+        conf.update(init.get("reward_config") or {})
+        with open(os.path.join(workdir, "config.json"), "w") as fh:
+            json.dump(conf, fh)
+        os.chdir(workdir)
+
         from hok.hok1v1 import HoK1v1
         from hok.hok1v1.env1v1 import interface_default_config
-        from hok.hok1v1.hero_config import get_default_hero_config
         import hok.hok1v1.lib.interface as interface
 
         lib = interface.Interface()
         lib.Init(interface_default_config)
-        launcher = GamecoreClient(server_addr=init["gamecore"],
-                                  gamecore_req_timeout=init.get("req_timeout_ms", 30000),
-                                  default_hero_config=get_default_hero_config())
+        timeout = init.get("req_timeout_ms", 30000)
+        try:                                   # hok_env >= 2.1: the gamecore client
+            from hok.common.gamecore_client import GamecoreClient
+            from hok.hok1v1.hero_config import get_default_hero_config
+            launcher = GamecoreClient(server_addr=init["gamecore"], gamecore_req_timeout=timeout,
+                                      default_hero_config=get_default_hero_config())
+        except ImportError:                    # hok_env 2.0.0 (the Hokoff datasets' SDK)
+            from hok.hok1v1.battle import Battle
+            launcher = Battle(server_addr=init["gamecore"], gamecore_req_timeout=timeout)
         addrs = ["tcp://0.0.0.0:%d" % p for p in init["ports"]]
         env = HoK1v1(init["runtime_id"], launcher, lib, addrs,
                      aiserver_ip=init.get("aiserver_ip", "127.0.0.1"))

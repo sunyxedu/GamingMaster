@@ -17,7 +17,11 @@
 //!               skill_x, skill_z, target)
 //!
 //! Output (one sample per trajectory):
-//!   obs.features                 [T,725] f32
+//!   obs.features                 [T,705] f32  the observation without its last 20 global
+//!                                columns: constant over the Hokoff datasets (1, then zeros)
+//!                                and absent from what gamecore 20260420 emits (705 values);
+//!                                a row where they are not constant is counted
+//!                                (`nonconstant_dropped`)
 //!   tgt.button_idx … target_idx  [T] i64   (−1 where the taken button does not use the head)
 //!   tgt.legal_button [T,12], tgt.legal_move_x / move_z / skill_x / skill_z [T,16],
 //!   tgt.legal_target [T,12,8], tgt.legal_sub_of [T,6]   bool
@@ -34,9 +38,11 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub const FEATURES: usize = 725;
+/// features kept (the environment's width) and the row's observation width
+pub const FEATURES: usize = 705;
+const OBS: usize = 725;
 pub const ROW: usize = 911;
-const ACT: usize = 725;
+const ACT: usize = OBS;
 const REWARD: usize = 731;
 const DONE: usize = 732;
 const LEGAL: usize = 733;
@@ -65,6 +71,9 @@ pub fn trajectory_to_sample(rows: &[f32], source: &str, episode: usize,
     let mut ret = 0.0f64;
     for r in rows.as_chunks::<ROW>().0 {
         features.extend_from_slice(&r[..FEATURES]);
+        if r[FEATURES] != 1.0 || r[FEATURES + 1..OBS].iter().any(|&v| v != 0.0) {
+            *stats.entry("nonconstant_dropped".into()).or_default() += 1;
+        }
         ret += r[REWARD] as f64;
         let legal = &r[LEGAL..SUB];
         let sub = &r[SUB..ROW];
@@ -124,7 +133,8 @@ pub fn convert(input: &Path, out: &Path, name: &str, shard_size: usize, val_ever
     let shape = ds.shape();
     ensure!(shape.len() == 2 && shape[1] == ROW, "datas has shape {shape:?}, expected [N, {ROW}]");
     let n = shape[0];
-    let meta = json!({"features": FEATURES, "source": "hokoff", "dataset": name});
+    let meta = json!({"features": FEATURES, "source": "hokoff", "dataset": name,
+                      "dropped_constant_columns": [FEATURES, OBS]});
     let mut train = ShardWriter::new(&out.join("train"), "hok", 1, meta.clone(), shard_size)?;
     let mut val = ShardWriter::new(&out.join("val"), "hok", 1, meta, shard_size)?;
     let mut stats: BTreeMap<String, usize> = BTreeMap::new();
@@ -202,6 +212,7 @@ mod tests {
         for (i, v) in r[..FEATURES].iter_mut().enumerate() {
             *v = (i % 7) as f32 / 7.0;
         }
+        r[FEATURES] = 1.0; // the dropped global columns: 1, then zeros
         r[ACT] = button as f32;
         for h in 0..5 {
             r[ACT + 1 + h] = args[h] as f32;
@@ -232,12 +243,15 @@ mod tests {
         assert_eq!(get("tgt.target_idx").col.as_i64().unwrap(), &[-1, 2]);
         assert_eq!(get("tgt.legal_target").frame_shape, vec![BUTTONS, TARGETS]);
         assert_eq!(get("obs.features").frame_shape, vec![FEATURES]);
+        assert_eq!(get("obs.features").col.as_f32().unwrap().len(), 2 * 705);
         assert!(stats.is_empty(), "{stats:?}");
         // a label outside its mask is counted
         let mut bad = row(0, [3, 4, 5, 6, 1], [true, true, true, false, false, false], true);
         bad[LEGAL + 12 + 3] = 0.0;
+        bad[FEATURES + 3] = 0.5;
         let _ = trajectory_to_sample(&bad, "unit", 1, &mut stats).unwrap();
         assert_eq!(stats.get("illegal_button"), Some(&1));
         assert_eq!(stats.get("illegal_move_x"), Some(&1));
+        assert_eq!(stats.get("nonconstant_dropped"), Some(&1));
     }
 }

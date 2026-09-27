@@ -1,10 +1,12 @@
 """Honor of Kings (王者荣耀) 1v1 adapter of the tier-3 network (env/vec_hok.py is its
 environment: Tencent's Honor of Kings AI Open Research Environment, hok_env ``hok1v1``).
 
-Frame: ``features`` [B, T, 725] float32 — the research environment's per-player feature
+Frame: ``features`` [B, T, 705] float32 — the research environment's per-player feature
 vector, in the order its reference model splits it (hok_env aiarena/1v1/common/config.py
 ``DimConfig``): own hero 235 | enemy hero 235 | main-hero 14 | own soldiers 4 × 18 | enemy
-soldiers 4 × 18 | own towers 2 × 18 | enemy towers 2 × 18 | global 25.
+soldiers 4 × 18 | own towers 2 × 18 | enemy towers 2 × 18 | global 5.  (The gamecore
+20260420 emits 705; the Hokoff datasets' 725 carry 20 more global columns that are constant
+over them — 1 then zeros — and are dropped by the converter.)
 
 Encoder: one token per entity — the two heroes, the main-hero vector, 8 soldiers, 4 towers
 and the global vector (16 tokens).  A per-kind MLP (shared by the own and the enemy
@@ -61,13 +63,13 @@ from model.games.base import (
 )
 from model.games.board import _categorical_head, _log_prob_and_entropy, _pick_index
 
-#: (name, start, per-entity width, count) of the 725-d feature vector, in order
+#: (name, start, per-entity width, count) of the 705-d feature vector, in order
 SEGMENTS = (
     ("hero", 0, 235, 1), ("hero", 235, 235, 1), ("main", 470, 14, 1),
     ("soldier", 484, 18, 4), ("soldier", 556, 18, 4),
-    ("organ", 628, 18, 2), ("organ", 664, 18, 2), ("global", 700, 25, 1),
+    ("organ", 628, 18, 2), ("organ", 664, 18, 2), ("global", 700, 5, 1),
 )
-N_FEATURES = 725
+N_FEATURES = 705
 N_TOKENS = 16
 BUTTONS = 12
 DIR_BINS = 16
@@ -103,7 +105,7 @@ class HokEncoder(ObservationEncoder):
         self.cfg = cfg
         self.n_tokens = N_TOKENS
         d = cfg.d_model
-        widths = {"hero": 235, "main": 14, "soldier": 18, "organ": 18, "global": 25}
+        widths = {"hero": 235, "main": 14, "soldier": 18, "organ": 18, "global": 5}
         self.proj = nn.ModuleDict({
             k: nn.Sequential(nn.Linear(w, d), nn.ReLU(), nn.Linear(d, d)) for k, w in widths.items()})
         self.slot_embed = nn.Parameter(torch.randn(1, N_TOKENS, d) * 0.02)

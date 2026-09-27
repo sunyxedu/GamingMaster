@@ -62,8 +62,8 @@ def test_encoder_tokens_and_shapes():
     assert out["button_logits"].shape == (2, 3, BUTTONS)
     assert out["target_logits"].shape == (2, 3, N_TARGETS)
     assert out["target_mask"].shape == (2, 3, N_TARGETS) and out["sub_mask"].shape == (2, 3, 6)
-    with pytest.raises(ValueError, match="725"):
-        net({"features": torch.rand(1, 1, 700)})
+    with pytest.raises(ValueError, match="705"):
+        net({"features": torch.rand(1, 1, 725)})
 
 
 def test_rollout_logprob_is_the_replay_logprob_and_samples_are_legal():

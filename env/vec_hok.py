@@ -5,7 +5,7 @@ by its Linux gamecore server) and the hok_env SDK, one SDK worker process per ga
 
 Simultaneous: ``rows_per_env = n_seats = 2``, row ``(env, seat)`` is that hero's own
 feature view, one frame per decision (every 3 game frames, the SDK's predict frequency).
-Observation ``features`` [725] and the legal dict of model/games/hok.py (``button``,
+Observation ``features`` [705] and the legal dict of model/games/hok.py (``button``,
 ``move_x`` / ``move_z`` / ``skill_x`` / ``skill_z``, the per-button ``target`` [12, 8] and
 ``sub`` [12, 6] tables).  Heroes: each episode draws both from ``heroes`` (default: every
 1v1 hero the gamecore ships a scene for).
@@ -16,7 +16,9 @@ crystal falls, to the winner / loser).  ``max_steps`` truncates an episode (a so
 terminal worth 0: the shaped rewards already scored the lead).
 
 Needs the research environment (``hok_root``, default ``$HOK_ROOT`` or ``~/hok``):
-``venv38`` (the SDK installed), ``wine-root`` (the SDK's bundled Wine debs, extracted),
+the SDK's venv (``sdk_venv``, default ``$HOK_SDK_VENV`` or ``venv38``: hok_env installed —
+the current SDK or 2.0.0 both emit 705 features on gamecore 20260420; ``venv38`` also runs
+the gamecore server's conf rewriter), ``wine-root`` (the SDK's bundled Wine debs, extracted),
 ``hok_env`` (the SDK repo, for the gamecore server's conf rewriter) and a gamecore
 ``gamecore_<version>/gamecore`` with ``core_assets/license.dat``.  ``gamecore="host:port"``
 uses a running gamecore server instead of starting one.
@@ -40,7 +42,7 @@ import torch
 
 from env.vec_game import StepResult, VecEnvBase, VecObs
 
-FEATURES = 725
+FEATURES = 705
 BUTTONS = 12
 DIRS = 16
 TARGETS = 8
@@ -199,6 +201,7 @@ class HokVecEnv(VecEnvBase):
                  shaping: float = 1.0, outcome: float = 1.0, port_base: int = 35300,
                  gamecore_port: int = 23432, runtime_prefix: str = "gm",
                  worker_cmd: Optional[Sequence[str]] = None, eval_mode: bool = False,
+                 reward_config: Optional[Mapping[str, Any]] = None, sdk_venv: Optional[str] = None,
                  log: Optional[str] = None):
         super().__init__(n_envs, autoreset, seed)
         self.root = resolve_root(hok_root)
@@ -209,14 +212,19 @@ class HokVecEnv(VecEnvBase):
         if gamecore is None and worker_cmd is None:
             self._server = GamecoreServer(self.root, gamecore_port)
             gamecore = self._server.address
+        sdk = sdk_venv or os.environ.get("HOK_SDK_VENV", "venv38")
         self._gamecore = gamecore or "127.0.0.1:0"
         pool = list(heroes) if heroes else (self._server.heroes() if self._server else sorted(HERO_IDS))
         unknown = [h for h in pool if h not in HERO_IDS]
         if unknown:
             raise ValueError(f"unknown 1v1 heroes {unknown}; have {sorted(HERO_IDS)}")
         self.heroes = pool
-        self._cmd = list(worker_cmd) if worker_cmd else [os.path.join(self.root, "venv38", "bin", "python"), _WORKER]
+        self._cmd = list(worker_cmd) if worker_cmd else [
+            os.path.join(sdk if os.path.isabs(sdk) else os.path.join(self.root, sdk), "bin", "python"), _WORKER]
         self._port_base, self._prefix = int(port_base), runtime_prefix
+        self._workroot = f"/tmp/{os.environ.get('USER', 'user')}-hok/work"
+        #: the SDK's shaped-reward weights (hok1v1/config.json keys, e.g. reward_money)
+        self._reward_config = dict(reward_config or {})
         self._log = open(log, "ab") if log else subprocess.DEVNULL
         self._workers: List[_Worker] = []
         self._spawn(n_envs)
@@ -231,9 +239,12 @@ class HokVecEnv(VecEnvBase):
     def _spawn(self, n: int) -> None:
         while len(self._workers) < n:
             i = len(self._workers)
+            rid = f"{self._prefix}-{self._port_base}-{i}"
             init = {"gamecore": self._gamecore, "aiserver_ip": "127.0.0.1",
                     "ports": [self._port_base + 2 * i, self._port_base + 2 * i + 1],
-                    "runtime_id": f"{self._prefix}-{self._port_base}-{i}", "req_timeout_ms": 30000}
+                    "runtime_id": rid, "req_timeout_ms": 30000,
+                    "workdir": os.path.join(self._workroot, rid),
+                    "reward_config": self._reward_config}
             self._workers.append(_Worker(self._cmd, init, self._log))
         while len(self._workers) > n:
             self._workers.pop().close()
@@ -370,9 +381,14 @@ class HokVecEnv(VecEnvBase):
                 self._workers[e].send(("end", None))
                 self._workers[e].recv()
                 self._finished[e] = True
+        episode_len = torch.from_numpy(np.where(done.numpy(), self._steps, 0))
         if self.autoreset and bool(done.any()):
             self.reset(env_ids=[int(e) for e in torch.nonzero(done).flatten()])
+        acted = torch.zeros(self._n, dtype=torch.bool)
+        acted[live] = True
         info = {"terminated": terminated, "truncated": truncated, "winner": winner,
+                "episode_len": episode_len, "acted": acted,
+                "illegal": torch.zeros(self._n, dtype=torch.bool),
                 "applied": {k: torch.from_numpy(a[:, j]) for j, k in enumerate(keys)}}
         return self.observe(), rewards, done, info
 

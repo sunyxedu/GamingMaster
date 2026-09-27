@@ -633,6 +633,37 @@ class Arc3Spec(RLGameSpec):
         return {"type_idx": actions["type_idx"].long(), "click_idx": actions["click_idx"].long()}
 
 
+class HokSpec(RLGameSpec):
+    """Honor of Kings 1v1 (model/games/hok.py HokDecoder on env/vec_hok.py): the rollout
+    samples the button, then its argument heads under the env's tables; the replay
+    teacher-forces the stored button under the masks the rollout sampled with
+    (``hok_replay_legal``: the button / direction masks, the button's target and sub
+    rows), so log π_old = μ; full-head KL (the button and the heads it uses).  The env
+    is checked against the network (feature width)."""
+
+    full_kl = True
+    ACTIONS = ("button_idx", "move_x_idx", "move_z_idx", "skill_x_idx", "skill_z_idx",
+               "target_idx")
+
+    def check_env(self, env, net):
+        have = tuple(env.obs_schema()["features"][0])
+        want = (getattr(net.cfg, "hok_features", 725),)
+        if have != want:
+            raise SystemExit(f"hok env emits {have} features, the network expects {want}")
+
+    def rollout_legal(self, legal, out):
+        from model.games.hok import hok_replay_legal
+
+        stored = hok_replay_legal(out)
+        return stored if {"button", "target_of", "sub_of"} <= set(stored) else legal
+
+    def labels(self, actions, cfg):
+        return {"button_idx": actions["button_idx"].long()}
+
+    def kl_targets(self, actions, forced, cfg):
+        return {k: actions[k].long() for k in self.ACTIONS}
+
+
 class GeneralsSpec(RLGameSpec):
     """generals: the decoder's hierarchical log-prob (μ = ``action_log_prob``),
     the replay teacher-forces the stored source (direction / split condition
@@ -878,6 +909,7 @@ GAME_SPECS: Dict[str, RLGameSpec] = {
     "gomoku": GomokuSpec(),
     "lux": LuxSpec(),
     "arc3": Arc3Spec(),
+    "hok": HokSpec(),
 }
 
 

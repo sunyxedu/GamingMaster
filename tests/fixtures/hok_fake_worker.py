@@ -41,7 +41,7 @@ def main():
             legal[76:172].reshape(12, 8)[:, 0] = 1.0  # target "none" for every button
             sub = (rng.random((12, 6)) < 0.5).astype(np.float32)
             sub[:, 0] = 1.0
-            players.append({"features": rng.random(725).astype(np.float32), "legal": legal,
+            players.append({"features": rng.random(705).astype(np.float32), "legal": legal,
                             "sub": sub, "reward": [0.0] * 8 + [0.01], "done": done})
         return {"players": players, "frame_no": 3 * state["t"], "done": done, "camps": [1, 2],
                 "loss_camp": loss_camp if done else -1}

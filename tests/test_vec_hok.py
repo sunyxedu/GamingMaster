@@ -27,13 +27,13 @@ def env():
 
 def test_layout_and_legal_tables(env):
     obs = env.reset()
-    assert obs.n_rows == 6 and obs.obs["features"].shape == (6, 725)
+    assert obs.n_rows == 6 and obs.obs["features"].shape == (6, 705)
     assert obs.legal["button"].shape == (6, 12) and obs.legal["target"].shape == (6, 12, 8)
     assert obs.legal["sub"].shape == (6, 12, 6) and obs.legal["sub"][..., 0].all()
     assert torch.equal(obs.to_play, torch.tensor([0, 1, 0, 1, 0, 1]))
     assert obs.active.all() and obs.new_episode.all() and not obs.forced.any()
     assert torch.equal(obs.stream_seats.long().argmax(-1), obs.to_play)
-    assert env.obs_schema() == {"features": ((725,), torch.float32)}
+    assert env.obs_schema() == {"features": ((705,), torch.float32)}
 
 
 def test_rewards_outcome_and_finish(env):
@@ -58,6 +58,7 @@ def test_truncation_and_autoreset():
         assert not done.any()
         obs, rew, done, info = e.step(e.random_actions(obs))
         assert done.all() and info["truncated"].all() and not info["terminated"].any()
+        assert (info["episode_len"] == 2).all()
         assert obs.active.all() and obs.new_episode.all() and (obs.step_idx == 0).all()
     finally:
         e.close()
@@ -78,3 +79,29 @@ def test_network_rollout_through_the_env(env):
         assert bool(obs.legal["button"][torch.arange(6), b].all())
         obs, rew, done, info = env.step(out)
         assert torch.equal(info["applied"]["button_idx"], b)
+
+
+def test_rl_joint_on_hok_with_the_stand_in_worker(tmp_path):
+    """train_rl_joint --rl hok: μ = π_old (the replay teacher-forces the stored button
+    under the rollout's masks), one PPO iteration end to end."""
+    from data_processing.games.dataset import save_shard
+    from tests.test_hok import TINY, _hok_records
+    from training import train_multi_game, train_rl_joint
+
+    g = torch.Generator().manual_seed(0)
+    (tmp_path / "hok").mkdir()
+    save_shard(str(tmp_path / "hok" / "a.pt"), "hok", _hok_records(3, (7, 9, 6), g),
+               meta={"features": 705})
+    train_multi_game.main(["--data", f"hok={tmp_path / 'hok'}", "--steps", "2",
+                           "--batch_size", "2", "--warmup_steps", "1", "--eval_every", "0",
+                           "--device", "cpu", "--il_legal_mask", "--save_dir", str(tmp_path / "ck"),
+                           "--override", *[f"{k}={v}" for k, v in TINY.items()]])
+    res = train_rl_joint.main([
+        "--init", str(tmp_path / "ck" / "multi_final.pt"), "--rl", "hok",
+        "--tokens_per_iter", "40", "--envs", "hok=2", "--env_kw", f"hok:worker_cmd={FAKE!r}",
+        "--env_kw", "hok:port_base=42000", "--epochs", "1", "--minibatches", "2",
+        "--snapshot_dir", "memory", "--device", "cpu", "--seed", "1", "--iterations", "1",
+        "--save_dir", str(tmp_path / "rl")])
+    row = res["history"][-1]["games"]["hok"]
+    assert row["tokens"] >= 1 and row["episodes"] > 0
+    assert abs(row["canary_log_old_mu"]) < 1e-4 and abs(row["canary_log_ratio"]) < 1e-4
