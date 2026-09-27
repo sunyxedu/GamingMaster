@@ -162,8 +162,14 @@ def test_shard_meta_and_dataset(shards):
     ds = GameShardDataset(str(root), game="go")
     assert ds.converter_version == 2 and ds.shard_meta == {"board_size": 19,
                                                            "global_features": 6}
-    assert len(ds) == st["converted"]
+    # every record served as its two seat streams (dataset.SEAT_SPLIT_GAMES): one mover
+    # (globals 0: the mover is black) and one value sign per stream
+    assert ds.seat_split and len(ds) == 2 * st["converted"]
     assert {"place_idx", "passed", "value"} <= set(ds[0]["tgt"])
+    for j in range(len(ds)):
+        s = ds[j]
+        assert s["obs"]["globals_seq"][:, 0].unique().numel() == 1, j
+        assert s["tgt"]["value"].unique().numel() == 1, j
 
 
 # ---------------------------------------------------------------------------

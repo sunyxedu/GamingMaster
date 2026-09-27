@@ -111,7 +111,8 @@ def test_loader_sees_teacher_columns(labelled):
     root, _ = labelled
     base = GameShardDataset(str(root / "base"), game="chess")
     lab = GameShardDataset(str(root / "lab"), game="chess")
-    assert len(base) == len(lab) == 6 and lab.converter_version == base.converter_version == 3
+    # 6 records, two seat streams each (dataset.SEAT_SPLIT_GAMES)
+    assert len(base) == len(lab) == 12 and lab.converter_version == base.converter_version == 3
     new = {
         "teacher_idx": (torch.int64, (K,)), "teacher_q": (torch.float32, (K,)),
         "teacher_raw": (torch.float32, (K,)), "engine_value": (torch.float32, ()),

@@ -69,7 +69,8 @@ def test_teacher_provenance_may_differ_across_shards(tmp_path):
     save_shard(str(tmp_path / "a" / "b.pt"), "othello", _board_samples("othello", 2, 3),
                meta=teacher(engine="E 1.1", limits={"nodes": "250000"}, every_nth_frame=4))
     ds = GameShardDataset(str(tmp_path / "a"), game="othello")
-    assert len(ds) == 4 and ds.shard_meta["teacher"]["every_nth_frame"] == 1
+    # 4 othello records, each served as its two seat streams (dataset.SEAT_SPLIT_GAMES)
+    assert len(ds) == 8 and ds.shard_meta["teacher"]["every_nth_frame"] == 1
     assert schema_meta(teacher()) == schema_meta(teacher(every_nth_frame=4))
     for i, bad in enumerate((teacher(policy={"kind": "softmax", "tau": 0.05}),
                              teacher(heads={"from": {"k": 16}}))):

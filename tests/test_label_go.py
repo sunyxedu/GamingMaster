@@ -101,7 +101,8 @@ def test_loader_columns(labelled):
     root, _ = labelled
     base = GameShardDataset(str(root / "base"), game="go")
     lab = GameShardDataset(str(root / "out"), game="go")
-    assert len(lab) == len(base) == 4 and lab.shard_meta["board_size"] == N
+    # 4 records, two seat streams each (dataset.SEAT_SPLIT_GAMES)
+    assert len(lab) == len(base) == 8 and lab.shard_meta["board_size"] == N
     new = {"teacher_idx": (torch.int64, (K,)), "teacher_q": (torch.float32, (K,)),
            "teacher_raw": (torch.float32, (K,)), "teacher_visits": (torch.float32, (K,)),
            "teacher_prior": (torch.float32, (K,)), "engine_value": (torch.float32, ()),
@@ -128,11 +129,13 @@ def test_loader_columns(labelled):
         sums = s["tgt"]["place_probs_val"].sum(-1)
         assert (((sums - 1).abs() < 1e-5) | (sums == 0)).all() and (sums[~m] == 0).all()
         assert not (s["tgt"]["place_probs_idx"] == PASS).any()
-    # scenario checks: capture = top move, no ko retake, pass-scenario frame mask
-    cap, ko, passes = lab[0]["tgt"], lab[1]["tgt"], lab[2]["tgt"]
+    # scenario checks on the whole records (frame t = ply t): capture = top move, no ko
+    # retake, pass-scenario frame mask
+    rec = GameShardDataset(str(root / "out"), game="go", seat_split=False)
+    cap, ko, passes = rec[0]["tgt"], rec[1]["tgt"], rec[2]["tgt"]
     assert int(cap["teacher_idx"][0, 0]) == CAPTURE_POINT and int(cap["place_probs_idx"][0, 0]) == CAPTURE_POINT
     assert bool(ko["engine_value_mask"][1]) and KO_POINT not in ko["teacher_idx"][1].tolist()
-    assert lab[1]["obs"]["board_seq"][1, 3].flatten()[KO_POINT] == 1       # the shard's ko plane
+    assert rec[1]["obs"]["board_seq"][1, 3].flatten()[KO_POINT] == 1       # the shard's ko plane
     assert passes["engine_value_mask"].tolist() == PASSES_MASK
 
 

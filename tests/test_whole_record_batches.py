@@ -32,7 +32,9 @@ def shards(tmp_path):
                rng.integers(50, 200, 9).tolist()]
     start = 0
     for i, ls in enumerate(lengths):
-        save_shard(str(tmp_path / f"s{i}.pt"), "othello", _records(ls, start))
+        # served as they are (layout per_seat: no seat split, dataset.SEAT_SPLIT_GAMES)
+        save_shard(str(tmp_path / f"s{i}.pt"), "othello", _records(ls, start),
+                   meta={"layout": "per_seat"})
         start += len(ls)
     return tmp_path, [x for ls in lengths for x in ls]
 
@@ -121,3 +123,32 @@ def test_train_multi_game_trains_long_records_in_chunks(shards, tmp_path, monkey
         "core_delta_dk=8", "core_delta_writes=2"])
     assert (tmp_path / "ck" / "multi_final.pt").is_file()
     assert any(s > 0 for s in starts) and all(s % 48 == 0 for s in starts)
+
+
+def test_alternating_records_are_served_as_seat_streams(tmp_path):
+    """A two-player perfect-information record (both movers' frames, alternating) is
+    served as its two seat streams: frames 0, 2, … and 1, 3, … of the record, whole
+    from their first frame, with their own lengths in the whole-record sampler; a
+    one-frame record's second stream repeats its frame."""
+    lengths = [7, 1, 12, 2]
+    save_shard(str(tmp_path / "a.pt"), "othello", _records(lengths))
+    ds = GameShardDataset(str(tmp_path), game="othello")
+    assert ds.seat_split and len(ds) == 2 * len(lengths)
+    want = [(7 + 1) // 2, 7 // 2, 1, 1, 6, 6, 1, 1]
+    assert ds.sample_lengths().tolist() == want
+    assert ds.frame_stats() == {"samples": 8, "frames": sum(want), "raw_frames": sum(want)}
+    for r, T in enumerate(lengths):
+        for seat in (0, 1):
+            s = ds[2 * r + seat]
+            frames = list(range(seat, T, 2)) or [0]
+            assert s["tgt"]["place_idx"].tolist() == [f % 64 for f in frames]
+            assert s["tgt"]["value"].tolist() == [float(r)] * len(frames)
+            assert s["meta"] == {"id": r, "seat_stream": seat}
+    capped = GameShardDataset(str(tmp_path), game="othello", max_len=4, crop="prefix")
+    assert capped.sample_lengths().tolist() == [min(L, 4) for L in want]
+    assert capped[4]["tgt"]["place_idx"].tolist() == [0, 2, 4, 6]
+    batches = list(WholeRecordBatchSampler(ds, frames=8, max_batch=4))
+    assert sorted(i for b in batches for i in b) == list(range(8))
+    # the switch: shards that are per-seat already, or seat_split=False
+    plain = GameShardDataset(str(tmp_path), game="othello", seat_split=False)
+    assert not plain.seat_split and len(plain) == len(lengths)

@@ -42,8 +42,8 @@ def test_shard_roundtrip_and_index(tmp_path):
     save_shard(str(tmp_path / "a.pt"), "othello", _othello_samples(3))
     save_shard(str(tmp_path / "b.pt"), "othello", _othello_samples(2))
     ds = GameShardDataset(str(tmp_path), game="othello")
-    assert len(ds) == 5
-    s = ds[4]
+    assert len(ds) == 10                      # 5 records x 2 seat streams
+    s = ds[9]
     assert set(s["obs"]) == {"board_seq"}
     assert s["obs"]["board_seq"].shape[1:] == (3, 8, 8)
 
@@ -88,7 +88,7 @@ def test_balanced_crop_draws_the_edges_as_often_as_the_middle(tmp_path):
     save_shard(str(tmp_path / "a.pt"), "othello", [s])
 
     def counts(crop):
-        ds = GameShardDataset(str(tmp_path), max_len=L, crop=crop)
+        ds = GameShardDataset(str(tmp_path), max_len=L, crop=crop, seat_split=False)
         c = torch.zeros(T)
         torch.manual_seed(0)
         for _ in range(draws):

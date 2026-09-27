@@ -36,10 +36,11 @@ for lux) from the perspective of the player acting in that frame, in
                          w_t = (t / (T − 1))², outcome ±1 for the recorded
                          player (the training/train_il.py target) — in [-1, 1]
 
-The board-game samples (chess, shogi, go, othello, gomoku) hold both players'
-moves, so the sign alternates with the mover; the other games' samples hold
-one player's view, so their value is constant over the sample (except the
-generals blend above).
+The board-game records (chess, shogi, go, othello, gomoku, ...) hold both
+players' moves, so the sign alternates with the mover; GameShardDataset serves
+them as per-seat streams (:data:`SEAT_SPLIT_GAMES`), one player's frames each,
+like the other games' samples: their value is constant over the sample (except
+the generals blend above).
 training/train_il_game.py rejects targets outside an HL-Gauss value head's
 support (check_value_support).
 
@@ -239,6 +240,43 @@ def save_shard(path: str, game: str, samples: List[Dict],
     )
 
 
+#: Two-player perfect-information games whose records hold BOTH movers' frames, each
+#: from its mover's view, with strictly alternating movers (chess, chess variants,
+#: shogi, xiangqi and gomoku alternate every ply; othello's converter inserts the forced
+#: pass frames; go-kgs: 6400 of 6400 records checked).  :class:`GameShardDataset` serves
+#: each such record as TWO samples, one per mover: frames 0, 2, 4, … and 1, 3, 5, ….
+#: The network's Stage-1 memory runs per token slot across frames, and a record that
+#: switches the view every frame (ranks mirrored or the board rotated for the second
+#: player, own / opponent planes swapped) would make a slot's memory mix two squares or
+#: two colours.  A per-seat stream keeps one view throughout; the opponent's replies
+#: show as the change between consecutive frames, as they do for an agent that plays
+#: one side.  Shards whose meta says ``layout: per_seat`` are served as they are.
+SEAT_SPLIT_GAMES = frozenset({"chess", "chess_variants", "go", "gomoku", "othello",
+                              "shogi", "xiangqi"})
+
+
+def seat_stream_lengths(lengths: np.ndarray) -> np.ndarray:
+    """Record lengths → the lengths of their two seat streams, interleaved
+    (first mover, second mover per record).  A one-frame record's second stream
+    repeats its frame (no empty samples)."""
+    lengths = np.asarray(lengths, dtype=np.int32)
+    out = np.empty(2 * len(lengths), dtype=np.int32)
+    out[0::2] = (lengths + 1) // 2
+    out[1::2] = np.maximum(lengths // 2, 1)
+    return out
+
+
+def seat_stream(sample: Dict, seat: int) -> Dict:
+    """The frames of ``seat`` (0 = the record's first mover) of an alternating
+    record: every second frame from frame ``seat``; the sample meta gains
+    ``seat_stream``."""
+    T = next(iter(sample["obs"].values())).shape[0]
+    idx = torch.arange(seat, T, 2) if T > seat else torch.zeros(1, dtype=torch.long)
+    return {"obs": {k: v.index_select(0, idx) for k, v in sample["obs"].items()},
+            "tgt": {k: v.index_select(0, idx) for k, v in sample["tgt"].items()},
+            "meta": {**(sample.get("meta") or {}), "seat_stream": seat}}
+
+
 class GameShardDataset(Dataset):
     """Index over every sample in every ``*.pt`` shard under ``data_dir``.
 
@@ -259,12 +297,18 @@ class GameShardDataset(Dataset):
     as a middle frame (at most ~2× in the first / last L frames) and shorter
     ones lose at most ~2× at the ends; ``"prefix"`` keeps the first
     ``max_len`` frames.
+
+    ``seat_split`` (default: the game is in :data:`SEAT_SPLIT_GAMES` and its shards
+    are not ``layout: per_seat``) serves every record as its two seat streams
+    (:func:`seat_stream`): sample ``2r`` / ``2r + 1`` = record ``r``'s first /
+    second mover, cropped like any sample.
     """
 
     CROPS = ("random", "balanced", "prefix")
 
     def __init__(self, data_dir: str, game: Optional[str] = None,
-                 max_len: Optional[int] = None, crop: str = "random"):
+                 max_len: Optional[int] = None, crop: str = "random",
+                 seat_split: Optional[bool] = None):
         if crop not in self.CROPS:
             raise ValueError(f"crop must be one of {self.CROPS}, got {crop!r}")
         self.crop = crop
@@ -291,16 +335,24 @@ class GameShardDataset(Dataset):
         self._ref_path: Optional[str] = None
         self._obs_keys: Optional[frozenset] = None
         self._tgt_keys: Optional[frozenset] = None
+        self.seat_split = False
         for si, p in enumerate(self.paths):
             shard = self._open(p, header_only=True)
             self._check(shard, p)
-            self._offsets.append(self._offsets[-1] + int(shard["n_samples"]))
-            lengths = (shard["_lengths"] if "_lengths" in shard
-                       else [next(iter(x["obs"].values())).shape[0] for x in shard["samples"]])
-            capped = (sum(min(L, max_len) for L in lengths) if max_len is not None
-                      else sum(lengths))
-            self._frame_sums.append((len(lengths), capped, sum(lengths)))
-            parts.append(np.asarray(lengths, dtype=np.int32))
+            if si == 0:        # one decision per dataset (_check: one meta, one game)
+                self.seat_split = (seat_split if seat_split is not None else
+                                   shard["game"] in SEAT_SPLIT_GAMES
+                                   and (shard.get("meta") or {}).get("layout") != "per_seat")
+            lengths = np.asarray(shard["_lengths"] if "_lengths" in shard
+                                 else [next(iter(x["obs"].values())).shape[0]
+                                       for x in shard["samples"]], dtype=np.int32)
+            if self.seat_split:
+                lengths = seat_stream_lengths(lengths)
+            self._offsets.append(self._offsets[-1] + len(lengths))
+            capped = (int(np.minimum(lengths, max_len).sum()) if max_len is not None
+                      else int(lengths.sum()))
+            self._frame_sums.append((len(lengths), capped, int(lengths.sum())))
+            parts.append(lengths)
         self._lengths = np.concatenate(parts) if parts else np.zeros(0, dtype=np.int32)
         self._cache_idx: int = -1
         self._cache: Optional[Dict] = None
@@ -413,8 +465,11 @@ class GameShardDataset(Dataset):
         if si != self._cache_idx:
             self._cache = self._open(self.paths[si])
             self._cache_idx = si
-        sample = (self._cache["_gm"].sample(j) if "_gm" in self._cache
-                  else self._cache["samples"][j])
+        rec = j // 2 if self.seat_split else j
+        sample = (self._cache["_gm"].sample(rec) if "_gm" in self._cache
+                  else self._cache["samples"][rec])
+        if self.seat_split:
+            sample = seat_stream(sample, j % 2)
         if self.max_len is not None:
             T = next(iter(sample["obs"].values())).shape[0]
             if T > self.max_len:

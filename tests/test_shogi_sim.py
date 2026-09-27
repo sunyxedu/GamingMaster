@@ -172,7 +172,7 @@ def test_shard_meta_and_dataset(shards):
     root, st = shards
     ds = GameShardDataset(str(root), game="shogi")
     assert ds.converter_version == 2 and ds.shard_meta == {"global_features": 7}
-    assert len(ds) == st["converted"]
+    assert ds.seat_split and len(ds) == 2 * st["converted"]     # two seat streams per record
     s = ds[0]
     assert set(s["obs"]) == {"board_seq", "hand_seq", "globals_seq"}
     assert set(KEYS) <= set(s["tgt"])

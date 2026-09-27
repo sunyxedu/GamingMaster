@@ -211,12 +211,18 @@ def test_shard_meta_and_dataset(shards):
     root, st = shards
     ds = GameShardDataset(str(root), game="chess")
     assert ds.converter_version == 3 and ds.shard_meta == {"global_features": 10}
-    assert len(ds) == st["kept"]
+    # every record served as its two seat streams (dataset.SEAT_SPLIT_GAMES)
+    assert ds.seat_split and len(ds) == 2 * st["kept"]
     assert ds.total_frames() == sum(s["obs"]["board_seq"].shape[0] for s in load_gm_samples(str(root)))
     s = ds[0]
     assert set(s["obs"]) == {"board_seq", "globals_seq"}
     assert {"from_idx", "to_idx", "promotion", "legal_from", "legal_to_of",
             "legal_promotion_of", "value"} <= set(s["tgt"])
+    # one mover per stream: white to move (globals 4) and the value are constant
+    for j, seat in ((0, 0), (1, 1)):
+        g = ds[j]["obs"]["globals_seq"][:, 4]
+        assert bool((g == 1 - seat).all()) and ds[j]["meta"]["seat_stream"] == seat
+        assert ds[j]["tgt"]["value"].unique().numel() == 1
 
 
 # ---------------------------------------------------------------------------

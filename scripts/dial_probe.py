@@ -233,7 +233,8 @@ def main(argv: Optional[List[str]] = None) -> Dict:
     if a.bf16 and not bf16:
         print(f"[warn] --bf16 ignored on {device.type} (CUDA only)", flush=True)
     ev = NetEvaluator(net, device, max_batch=a.max_batch, bf16=bf16)
-    ds = GameShardDataset(a.val_dir, game="othello")
+    # whole games (the openings are their first plies), not the per-seat training streams
+    ds = GameShardDataset(a.val_dir, game="othello", seat_split=False)
     order = np.random.RandomState(a.seed).permutation(len(ds)).tolist()
     skipped: Dict[int, str] = {}
     results: Dict = {"ckpt": a.ckpt, "args": vars(a), "default_depth": net.default_depth,

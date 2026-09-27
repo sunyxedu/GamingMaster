@@ -99,7 +99,7 @@ def test_loader_columns(base, labelled):
     kind, out, _ = labelled
     b_ds = GameShardDataset(str(base), game="othello")
     ds = GameShardDataset(str(out), game="othello")
-    assert len(ds) == len(b_ds) == 8
+    assert len(ds) == len(b_ds) == 16         # 8 records x 2 seat streams
     new = {"teacher_idx": (torch.int64, (K,)), "teacher_q": (torch.float32, (K,)), "teacher_raw": (torch.float32, (K,)),
            "engine_value": (torch.float32, ()), "engine_value_mask": (torch.bool, ()),
            "place_probs": (torch.float32, (64,)), "pass_probs": (torch.float32, ()), "pass_probs_mask": (torch.bool, ())}

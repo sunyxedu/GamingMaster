@@ -63,7 +63,8 @@ def stage1(tmp_path_factory):
     write_gio_dir(str(root / "generals"), [9, 7, 8], H=6, W=6)
     for g in ("othello", "chess"):
         (root / g).mkdir()
-        save_shard(str(root / g / "a.pt"), g, _board_samples(g, 4, 6))
+        # random frames: served as they are (layout per_seat, no seat split)
+        save_shard(str(root / g / "a.pt"), g, _board_samples(g, 4, 6), meta={"layout": "per_seat"})
     torch.manual_seed(0)
     train_multi_game.main([
         "--data", f"generals={root / 'generals'}", "--data", f"othello={root / 'othello'}",

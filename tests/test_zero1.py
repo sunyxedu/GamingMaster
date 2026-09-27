@@ -548,8 +548,10 @@ def root(tmp_path_factory):
         for g in GAMES:
             (root / data / g).mkdir(parents=True)
             kw = {"board": 9} if g == "gomoku" else {}
-            save_shard(str(root / data / g / "a.pt"), g, _board_samples(g, n, 6, **kw),
-                       **({"meta": {"board_size": 9}} if g == "gomoku" else {}))
+            # layout per_seat: random frames, served as they are (no seat split,
+            # dataset.SEAT_SPLIT_GAMES), so the one "aligned" sample stays one sample
+            meta = {"layout": "per_seat", **({"board_size": 9} if g == "gomoku" else {})}
+            save_shard(str(root / data / g / "a.pt"), g, _board_samples(g, n, 6, **kw), meta=meta)
     return root
 
 

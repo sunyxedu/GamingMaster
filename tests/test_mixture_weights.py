@@ -79,7 +79,8 @@ def test_max_epochs_caps_the_small_corpus_in_a_run(tmp_path, capsys, monkeypatch
     monkeypatch.delenv("WORLD_SIZE", raising=False)
     for g, n in (("othello", 6), ("chess", 40)):
         (tmp_path / g).mkdir()
-        save_shard(str(tmp_path / g / "a.pt"), g, _board_samples(g, n, 6))
+        # random frames, served as they are (layout per_seat: no seat split)
+        save_shard(str(tmp_path / g / "a.pt"), g, _board_samples(g, n, 6), meta={"layout": "per_seat"})
     steps, per_step, bs, cap = 20, 2, 2, 3.0
     tmg.main(["--data", f"othello={tmp_path}/othello", "--data", f"chess={tmp_path}/chess",
               "--steps", str(steps), "--games_per_step", str(per_step), "--batch_size", str(bs),
