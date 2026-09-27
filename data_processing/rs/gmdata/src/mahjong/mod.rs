@@ -38,7 +38,9 @@
 //!   * a draw straight after a discard with live-wall tiles left and no abortive draw
 //!     pending (or straight after a kakan) can only be the triple ron (三家和), which the
 //!     logs write as a bare ryukyoku: the claim frames on that tile get weight 0 (their
-//!     outcome is unknown).
+//!     outcome is unknown).  After the last discard the draw is the exhaustive one, unless
+//!     all three other seats could ron that tile (the triple ron again: three legal rons all
+//!     declined is no real alternative).
 //!
 //! Legality, exact under Tenhou's rules (https://tenhou.net/man/): `legal_action_type` = the
 //! action types legal at the frame, `legal_tile_of` = the legal tile arguments of the
