@@ -14,7 +14,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -25,6 +25,9 @@ jobs:
         run: |
           uv venv --clear
           uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # the gmrules simulators: a PyO3 extension built from source (cargo is
+          # preinstalled on the runner; maturin comes as its build backend)
+          uv pip install ./data_processing/rs/gmsim
           uv pip install -e .
           uv pip install pytest
       - name: Run tests
