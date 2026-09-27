@@ -105,18 +105,41 @@ fn hf_path_url(path: &str) -> String {
 /// Download the files of a Hugging Face dataset repo whose path `want` accepts into `out`
 /// (same relative paths), each checked against the SHA-256 of the Hub's LFS pointer (files
 /// without one: against their size).  Resumable: a file already present with the right
-/// checksum is skipped; a failed download is retried 5 times.  Writes `out/hf_files.json`
+/// checksum is skipped; a failed download is retried 10 times, backing off from 30 s to 15 min
+/// (the Hub rate-limits bursts with 429); `HF_TOKEN` (optional) authenticates.  Writes `out/hf_files.json`
 /// (repo, commit, every file's path / size / sha256).
 pub fn fetch_hf_files(repo: &str, want: &dyn Fn(&str) -> bool, out: &Path) -> Result<serde_json::Value> {
     use sha2::{Digest, Sha256};
     use std::io::Write;
     let client = http()?;
-    let info: serde_json::Value = client.get(format!("https://huggingface.co/api/datasets/{repo}"))
-        .send()?.error_for_status()?.json()?;
+    // an access token (HF_TOKEN) raises the Hub's rate limits; anonymous access works too
+    let token = std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty());
+    let get = |url: &str| {
+        let r = client.get(url);
+        match &token {
+            Some(t) => r.bearer_auth(t),
+            None => r,
+        }
+    };
+    let get_json = |url: &str| -> Result<serde_json::Value> {
+        let mut wait = 30;
+        for attempt in 0..10 {
+            match get(url).send().and_then(|r| r.error_for_status()).and_then(|r| r.json::<serde_json::Value>()) {
+                Ok(v) => return Ok(v),
+                Err(e) if attempt < 9 => {
+                    eprintln!("[fetch-hf] {url}: {e}; retrying in {wait}s");
+                    std::thread::sleep(Duration::from_secs(wait));
+                    wait = (wait * 2).min(900);
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        unreachable!()
+    };
+    let info = get_json(&format!("https://huggingface.co/api/datasets/{repo}"))?;
     let commit = info["sha"].as_str().unwrap_or("main").to_string();
-    let tree: Vec<serde_json::Value> = client
-        .get(format!("https://huggingface.co/api/datasets/{repo}/tree/{commit}?recursive=true"))
-        .send()?.error_for_status()?.json()?;
+    let tree: Vec<serde_json::Value> = serde_json::from_value(
+        get_json(&format!("https://huggingface.co/api/datasets/{repo}/tree/{commit}?recursive=true"))?)?;
     let files: Vec<(String, u64, Option<String>)> = tree.iter()
         .filter(|x| x["type"] == "file")
         .filter_map(|x| {
@@ -150,9 +173,11 @@ pub fn fetch_hf_files(repo: &str, want: &dyn Fn(&str) -> bool, out: &Path) -> Re
         let tmp = PathBuf::from(format!("{}.part", dest.display()));
         let url = format!("https://huggingface.co/datasets/{repo}/resolve/{commit}/{}", hf_path_url(path));
         let mut last_err = None;
-        for attempt in 0..5 {
+        // the Hub answers 429 (too many requests) to bursts: back off for minutes, not seconds
+        let mut wait = 30u64;
+        for attempt in 0..10 {
             let r = (|| -> Result<String> {
-                let mut resp = client.get(&url).send()?.error_for_status()?;
+                let mut resp = get(&url).send()?.error_for_status()?;
                 let mut file = std::fs::File::create(&tmp)?;
                 let mut h = Sha256::new();
                 let mut buf = vec![0u8; 1 << 20];
@@ -175,8 +200,9 @@ pub fn fetch_hf_files(repo: &str, want: &dyn Fn(&str) -> bool, out: &Path) -> Re
                 Ok(digest) => last_err = Some(anyhow::anyhow!("{path}: sha256 {digest} != {}", sha.as_deref().unwrap_or(""))),
                 Err(e) => last_err = Some(e),
             }
-            eprintln!("[fetch-hf] {path}: attempt {} failed: {}", attempt + 1, last_err.as_ref().unwrap());
-            std::thread::sleep(Duration::from_secs(10 * (attempt + 1) as u64));
+            eprintln!("[fetch-hf] {path}: attempt {} failed: {}; retrying in {wait}s", attempt + 1, last_err.as_ref().unwrap());
+            std::thread::sleep(Duration::from_secs(wait));
+            wait = (wait * 2).min(900);
         }
         if let Some(e) = last_err {
             std::fs::remove_file(&tmp).ok();
@@ -185,6 +211,7 @@ pub fn fetch_hf_files(repo: &str, want: &dyn Fn(&str) -> bool, out: &Path) -> Re
         std::fs::rename(&tmp, &dest)?;
         got += 1;
         eprintln!("[{}/{}] {path} {:.1} MB", i + 1, files.len(), *size as f64 / 1e6);
+        std::thread::sleep(Duration::from_secs(2)); // polite: no bursts
     }
     Ok(serde_json::json!({"repo": repo, "commit": commit, "files": files.len(), "downloaded": got, "cached": cached,
                           "bytes": total}))
