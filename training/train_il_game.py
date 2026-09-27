@@ -239,14 +239,15 @@ META_MISMATCH_HINTS = {
 # older shards still train (their META_LEGACY architecture), but they lack
 # the frozen inputs / targets, so the trainers warn (or, with
 # --require_frozen_schema, refuse).
-SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 3, "lux": 2,
+SCHEMA_FREEZE_CONVERTER_VERSION = {"chess": 3, "go": 2, "shogi": 2, "mahjong": 3, "lux": 3,
                                    "clash_royale": 3, "pokemon": 3}
 _SCHEMA_FREEZE_CONTENT = {
     "chess": "repetition flags + legal masks",
     "go": "side-to-move/komi globals",
     "shogi": "repetition + legal masks",
     "mahjong": "exact legal masks, leak-free claim frames + il_weight",
-    "lux": "env-param globals + sap targets",
+    "lux": "env-param globals + sap targets; one sample per game (older shards cut it into "
+           "matches, restarting the memory the game keeps) with team 1's reflected view",
     "clash_royale": "deck tokens with the causal hand belief; older shards infer the hand "
                     "from the whole match",
     "pokemon": "exact Showdown move / species ids (older shards hash the names into "

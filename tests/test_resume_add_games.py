@@ -545,7 +545,7 @@ def test_dist_sharded_ranks_load_their_share_of_an_old_checkpoint(dist_runs, sha
 
 
 @pytest.mark.parametrize("reinit", ["othello", "chess"])
-def test_resume_reinitialises_a_game(source, shards, tmp_path, reinit):
+def test_resume_reinitialises_a_game(source, shards, tmp_path, monkeypatch, reinit):
     """--reinit_game G: G's own modules (encoder, decoder, value head) start as a fresh
     build's around the checkpoint's core — no optimizer state, EMA = the fresh weights —
     while the other game and the whole core load exactly; othello is the checkpoint's
@@ -585,3 +585,24 @@ def test_resume_reinitialises_a_game(source, shards, tmp_path, reinit):
     for bad, match in ((["go"], "not trained by"), (OLD, "at least one game")):
         with pytest.raises(SystemExit, match=match):
             tmg.forget_games(ck, bad)
+    # once per GAME:TAG: the reinitialised run's checkpoint records it, so resuming it
+    # with the same command keeps the (already fresh) weights; a new tag reinitialises
+    monkeypatch.setattr(tmg, "random", _AllGames())        # every game trains every step
+    again = tmg.main(_args(shards, tmp_path / "again", OLD, "--steps", str(STEPS + 1),
+                           "--ckpt_every", str(STEPS + 1), "--resume", str(source["names"]),
+                           "--reinit_game", reinit))
+    latest = _load(tmp_path / "again" / "multi_latest.pt")
+    assert latest["reinit_log"] == [reinit]
+    kept = tmg.main(_args(shards, tmp_path / "kept", OLD, "--steps", str(STEPS + 1),
+                          "--resume", str(tmp_path / "again" / "multi_latest.pt"),
+                          "--reinit_game", reinit))
+    for k, v in kept["model"].state_dict().items():
+        assert torch.equal(v, latest["train_model_state"][k]), k
+    tagged = tmg.main(_args(shards, tmp_path / "tagged", OLD, "--steps", str(STEPS + 1),
+                            "--resume", str(tmp_path / "again" / "multi_latest.pt"),
+                            "--reinit_game", f"{reinit}:w5"))
+    own = [k for k in latest["train_model_state"] if _own(k, reinit) and k.endswith("weight")]
+    assert own and any(not torch.equal(tagged["model"].state_dict()[k],
+                                       latest["train_model_state"][k]) for k in own)
+    final = _load(tmp_path / "tagged" / "multi_final.pt")
+    assert final["reinit_log"] == [reinit, f"{reinit}:w5"] and again["model"] is not None

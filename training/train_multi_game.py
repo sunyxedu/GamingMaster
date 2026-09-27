@@ -403,11 +403,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--resume", default=None,
                    help="continue from a multi_latest.pt (same arguments otherwise; --data "
                         "may add games, in any order: see Resuming in the module docstring)")
-    p.add_argument("--reinit_game", action="append", default=[], metavar="GAME[,GAME]",
+    p.add_argument("--reinit_game", action="append", default=[], metavar="GAME[:TAG][,...]",
                    help="with --resume: rebuild these games' own modules (encoder, decoder, "
                         "value head) from the command line and their shard meta, fresh, around "
                         "the checkpoint's core — as if they joined the run now (a game whose "
-                        "adapter or observation changed); repeatable")
+                        "adapter changed).  Once per GAME:TAG: the checkpoints record it "
+                        "(reinit_log), so resuming the same command again keeps the weights; "
+                        "a new TAG reinitialises again.  Repeatable")
     p.add_argument("--num_workers", type=int, default=0)
     p.add_argument("--bf16", action="store_true")
     p.add_argument("--device", default=None)
@@ -1085,16 +1087,23 @@ def main(argv=None) -> Dict[str, object]:
     resume = None
     ck_games: List[str] = []
     added: List[str] = []            # games this run adds to the resumed checkpoint's
+    reinit_log: List[str] = []       # GAME:TAG entries --reinit_game applied in this line
     if args.resume:
         resume = torch.load(args.resume, map_location="cpu", weights_only=False)
         if "optimizer_state" not in resume:
             raise SystemExit(f"{args.resume} is not resumable (only --ckpt_every writes "
                              f"multi_latest.pt with the optimizer state)")
-        reinit = [g for arg in args.reinit_game for g in arg.split(",") if g]
-        if reinit:
-            resume = forget_games(resume, reinit, args.resume)
-            log(f"[resume] --reinit_game {reinit}: their own modules start fresh around the "
+        requested = [e for arg in args.reinit_game for e in arg.split(",") if e]
+        done_before = list(resume.get("reinit_log") or [])
+        todo = [e for e in requested if e not in done_before]
+        if requested and not todo:
+            log(f"[resume] --reinit_game {requested}: done by an earlier run of this "
+                f"checkpoint's line (reinit_log {done_before}); weights kept")
+        if todo:
+            resume = forget_games(resume, [e.split(":", 1)[0] for e in todo], args.resume)
+            log(f"[resume] --reinit_game {todo}: their own modules start fresh around the "
                 f"checkpoint's core")
+        reinit_log = done_before + todo
         ck_games = list(resume["games"])
         removed = [g for g in ck_games if g not in games]
         if removed:
@@ -1405,6 +1414,7 @@ def main(argv=None) -> Dict[str, object]:
             "mixture": weights,
             "args": vars(args),
             "world_size": dist_env.world,
+            "reinit_log": reinit_log,
         }
         if resumable:
             ck.update(step=step, optimizer_state=optimizer_state,
