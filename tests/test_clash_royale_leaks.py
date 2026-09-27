@@ -272,8 +272,8 @@ def test_deck_legality_is_the_belief_support_and_affordability():
 #: the layout before the arena patches and the play trackers
 _LEGACY_LAYOUT = dict(cr_arena_patch=1, cr_recent_tokens=0, cr_opp_tokens=0)
 #: adapter variants: the current design, the legacy deck-token and hand-slot layouts
-VARIANTS = {"tracked": ("deck", {}), "deck": ("deck", _LEGACY_LAYOUT),
-            "hand": ("hand", _LEGACY_LAYOUT)}
+VARIANTS = {"tracked": ("deck", {}), "patched": ("deck", {"cr_arena_patch": 2}),
+            "deck": ("deck", _LEGACY_LAYOUT), "hand": ("hand", _LEGACY_LAYOUT)}
 
 
 def _net_and_obs(B=2, T=6, seed=1, variant="tracked", norm="group"):

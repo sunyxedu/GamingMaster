@@ -303,10 +303,12 @@ def test_legacy_hand_network_computes_what_it_computed(case):
     np.testing.assert_allclose(float(o["placement_logits"].sum()), ref["place_sum"], rtol=1e-5)
 
 
-#: deck-token layouts: the current one (2x2 arena patches, recent-play and
-#: opponent-deck tokens) and the one before it
-LAYOUTS = {"tracked": {},
+#: deck-token layouts: the current one (per-cell arena, recent-play and opponent-deck
+#: tokens), the same with 2x2 arena patches, and the one before the trackers
+LAYOUTS = {"tracked": {}, "patched": dict(cr_arena_patch=2),
            "deck": dict(cr_arena_patch=1, cr_recent_tokens=0, cr_opp_tokens=0)}
+#: their game tokens: arena cells or patches + the 8 deck cards + the trackers
+LAYOUT_TOKENS = {"tracked": 48 + 8 + 16, "patched": 12 + 8 + 16, "deck": 48 + 8}
 
 
 def _deck_net(layout="tracked", **kw):
@@ -355,8 +357,7 @@ def test_deck_tokens_carry_no_order_semantics(mixer, core, layout):
     """The deck index is only a pointer: permuting the deck tokens permutes the card
     logits (the label follows its card) and leaves wait / placement / value alone."""
     net = _deck_net(layout, temporal_mixer=mixer, **_EQUIVARIANT_CORES[core]).eval()
-    n_arena = 48 if layout == "deck" else 12 + 8 + 8        # cells, or patches + trackers
-    assert net.cfg.cr_card_tokens == "deck" and net.obs_encoder.n_tokens == n_arena + 8
+    assert net.cfg.cr_card_tokens == "deck" and net.obs_encoder.n_tokens == LAYOUT_TOKENS[layout]
     obs = _deck_obs()
     labels = torch.randint(0, 8, (2, 4), generator=torch.Generator().manual_seed(1))
     perm = torch.tensor([5, 2, 7, 0, 1, 6, 3, 4])
@@ -368,7 +369,7 @@ def test_deck_tokens_carry_no_order_semantics(mixer, core, layout):
         b = net(pobs, labels={"card_slot": inv[labels], "place_idx": cells}, act_steps=2)
     close = dict(rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(b["card_logits"], a["card_logits"][:, :, perm], **close)
-    for k in ("wait_logits", "placement_logits", "value") + (("sub_logits",) if layout != "deck" else ()):
+    for k in ("wait_logits", "placement_logits", "value") + (("sub_logits",) if layout == "patched" else ()):
         torch.testing.assert_close(b[k], a[k], **close)
 
 

@@ -94,11 +94,15 @@ class ClashRoyaleConfig(ModelConfig):
     #: games; "frame" (legacy checkpoints) = the absolute frame index
     #: t0 .. t0+T-1, only correct for sequences decoded from their first frame
     cr_wait_time: str = "match"
-    #: arena tokens: p x p cells per token (the conv stack runs at full resolution,
-    #: then a stride-p patch projection); the placement is a patch pointer + the
-    #: cell inside the patch.  1 (legacy checkpoints) = one token per cell and a
-    #: pointer over the cells
-    cr_arena_patch: int = 2
+    #: arena tokens: 1 (the default, and legacy checkpoints) = one token per cell and a
+    #: pointer over the cells; p > 1 = p x p cells per token (the conv stack at full
+    #: resolution, then a stride-p patch projection) and the placement a patch pointer +
+    #: the cell inside the patch — p = 2: 144 arena tokens instead of 576, but the cell
+    #: choice then comes from one patch token and a small head, not from 576 tokens the
+    #: core reasons over one by one.  Placement precision is most of Clash Royale's skill,
+    #: so the per-cell layout stays the default until an A/B shows the patches lose
+    #: nothing (they only save compute)
+    cr_arena_patch: int = 1
     #: recent-play tokens (expand.recent_tokens: which card each of the K latest
     #: plays of both sides was, where and how long ago); 0 = none (legacy)
     cr_recent_tokens: int = 8

@@ -30,8 +30,10 @@ from model.games.clash_royale import (
 #: the layout of checkpoints before the arena patches and the play trackers
 LEGACY_LAYOUT = dict(cr_arena_patch=1, cr_recent_tokens=0, cr_opp_tokens=0)
 VARIANTS = {
-    # the current design: 2x2 arena patches, recent-play and opponent-deck tokens
+    # the current design: one token per arena cell, recent-play and opponent-deck tokens
     "tracked": dict(cr_card_tokens="deck", card_feature_dim=9),
+    # the same with 2x2 arena patches and the patch / cell placement
+    "patched": dict(cr_card_tokens="deck", card_feature_dim=9, cr_arena_patch=2),
     "deck": dict(cr_card_tokens="deck", card_feature_dim=9, **LEGACY_LAYOUT),
     "hand": dict(cr_card_tokens="hand", card_feature_dim=8, **LEGACY_LAYOUT),
 }
@@ -108,10 +110,10 @@ def test_forward_shapes(cfg, model):
     B, T = 2, 3
     n_arena = _n_place(cfg)
     out = model(_make_obs(cfg, B, T))
+    assert model.obs_encoder.n_tokens == n_arena + n_card_tokens(cfg) + cfg.cr_recent_tokens + cfg.cr_opp_tokens
     if cfg.cr_arena_patch > 1:
         p2 = cfg.cr_arena_patch ** 2
         assert out["sub_logits"].shape == (B, T, p2) and out["patch_idx"].shape == (B, T)
-        assert model.obs_encoder.n_tokens == n_arena + 8 + cfg.cr_recent_tokens + cfg.cr_opp_tokens
     assert out["wait_logits"].shape == (B, T)
     assert out["card_logits"].shape == (B, T, n_card_tokens(cfg))
     assert out["placement_logits"].shape == (B, T, n_arena)

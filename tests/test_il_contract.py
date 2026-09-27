@@ -763,9 +763,9 @@ def _decoder_cases():
                             "active_idx": tgt["active_idx"]})
     out.append(("pokemon", net, pred, tgt, mask))
 
-    # the current CR design: arena patches + the play trackers, IL under the masks
+    # the CR patch decoder (cr_arena_patch 2) with the play trackers, IL under the masks
     torch.manual_seed(0)
-    cfg = _small(ClashRoyaleConfig, arena_h=8, arena_w=6, n_cards=20)
+    cfg = _small(ClashRoyaleConfig, arena_h=8, arena_w=6, n_cards=20, cr_arena_patch=2)
     net = GameNetwork(cfg, ClashRoyaleEncoder(cfg), CardPlacementDecoder(cfg))
     D = cfg.deck_size
     cr_obs = {"arena_seq": torch.randn(B, T, cfg.arena_channels, 8, 6, generator=g),
