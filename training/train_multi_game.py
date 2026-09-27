@@ -1302,6 +1302,10 @@ def main(argv=None) -> Dict[str, object]:
     model.train()
     t0 = time.time()
     window: Dict[str, List[float]] = {}
+    # Σ over the log window of the steps' relative MoE loads [L, E]: the per-step
+    # moe_load_cv mixes in which games the step drew (experts specialise); the
+    # window sum shows whether the balance bias evens the load out over time
+    load_window: Optional[torch.Tensor] = None
     for step in range(start, args.steps + 1):
         drawn = random.choices(names, weights=probs, k=K)
         for g in drawn:
@@ -1345,6 +1349,8 @@ def main(argv=None) -> Dict[str, object]:
             if dist_env.enabled:
                 allreduce_moe_loads(model)      # balance on the global load
             loads = update_moe_balance(model, args.moe_balance_rate)
+            if loads is not None:
+                load_window = loads.clone() if load_window is None else load_window + loads
         else:
             loads = None
             log(f"[step {step}] non-finite grad norm, step dropped")
@@ -1359,6 +1365,11 @@ def main(argv=None) -> Dict[str, object]:
             extra = ""
             if loads is not None:
                 extra = f"  moe_load_cv={float(loads.std(-1).mean()):.3f}"
+            if load_window is not None:
+                rel = load_window / load_window.mean(-1, keepdim=True)
+                extra += (f"  moe_win_cv={float(rel.std(-1).mean()):.3f}"
+                          f"  moe_win_min={float(rel.min()):.3f}")
+                load_window = None
             caps = qk_caps(first)
             if caps:
                 extra += f"  qk_cap_max={max(caps.values()):.2f}"
