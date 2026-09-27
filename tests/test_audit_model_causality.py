@@ -73,6 +73,7 @@ GAME_OVERRIDES = {
     "hearthstone": dict(hand_slots=5, board_slots=3),
     "starcraft": dict(minimap_h=16, minimap_w=16, max_units=6),
     "arc3": dict(arc_patch=8),
+    "hok": {},
 }
 
 #: games with a normalised conv encoder (cfg.encoder_norm): per-frame GroupNorm
@@ -196,6 +197,8 @@ def _obs(game: str, cfg, g: torch.Generator) -> Dict[str, torch.Tensor]:
         return {"grid": torch.randint(0, cfg.arc_colours, (B, T, G, G), generator=g).to(torch.uint8),
                 "delta": torch.rand(B, T, G, G, generator=g) < 0.1,
                 "globals": torch.rand(B, T, cfg.arc_global_features, generator=g)}
+    if game == "hok":
+        return {"features": torch.rand(B, T, cfg.hok_features, generator=g)}
     raise KeyError(game)
 
 
@@ -252,6 +255,12 @@ def _legal(game: str, cfg, obs, g) -> Optional[Dict[str, torch.Tensor]]:
                 "location": m((cfg.minimap_h // d) * (cfg.minimap_w // d))}
     if game == "arc3":
         return {"type": m(8), "click": m(cfg.arc_grid * cfg.arc_grid)}
+    if game == "hok":
+        from model.games.hok import ARG_HEADS, BUTTONS, DIR_BINS, N_TARGETS
+        out = {"button": m(BUTTONS), "target": m(BUTTONS, N_TARGETS),
+               "sub": m(BUTTONS, 1 + len(ARG_HEADS))}
+        out.update({h: m(DIR_BINS) for h in ARG_HEADS[:4]})
+        return out
     raise KeyError(game)
 
 
@@ -279,6 +288,9 @@ def _label_highs(game: str, cfg) -> Dict[str, int]:
         return {"action_type": cfg.n_action_types, "active_idx": cfg.team_slots}
     if game == "arc3":
         return {"click_idx": cfg.arc_grid * cfg.arc_grid}
+    if game == "hok":
+        from model.games.hok import BUTTONS
+        return {"button_idx": BUTTONS}
     return {}
 
 
@@ -671,5 +683,7 @@ def _conditioned_on_sample(game: str, key: str) -> bool:
              # the cell head conditions on the committed (sampled) patch
              "arc3": ("type_logits", "patch_logits"),
              # the move / switch heads condition on the sampled type; tera does not
-             "pokemon": ("action_type_logits", "tera_logit")}
+             "pokemon": ("action_type_logits", "tera_logit"),
+             # the direction / target heads condition on the sampled button
+             "hok": ("button_logits",)}
     return game in first and key not in first[game]

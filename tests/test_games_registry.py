@@ -27,6 +27,7 @@ GAME_OVERRIDES = {
     "hearthstone": {},
     "starcraft": dict(minimap_h=16, minimap_w=16, max_units=8),
     "arc3": dict(arc_patch=8),
+    "hok": {},
 }
 # gmrules games register themselves (model/games/gmrules/): every one
 # must build with its simulator's frame dims
