@@ -54,7 +54,8 @@ def to_id(text: str) -> str:
 
 
 def species_key(name: str) -> str:
-    """The vocabulary key of a species name as the battle log spells it."""
+    """The vocabulary key of a species name as the battle log spells it: the species
+    part of a details string ("Urshifu-*" of ``|poke|p1|Urshifu-*, M|``)."""
     t = name.strip()
     key = to_id(t)
     if key == "nidoran" and t.endswith("♀"):

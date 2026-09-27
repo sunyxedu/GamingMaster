@@ -219,8 +219,9 @@ def move_id(name: str, cfg) -> int:
 
 def species_id(name: str, cfg) -> int:
     """The id ``cfg``'s network gives a species name as the battle log spells
-    it ("Urshifu-Rapid-Strike", the team-preview "Urshifu-*"): exact (UNK past
-    the net's table) or the legacy hash bucket."""
+    it — the species part of a details string ("Urshifu-Rapid-Strike", the
+    team-preview "Urshifu-*"): exact (UNK past the net's table) or the legacy
+    hash bucket."""
     _check_cfg(cfg)
     n = getattr(cfg, "pokemon_species_vocab", 0)
     if not n:

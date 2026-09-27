@@ -71,8 +71,8 @@
 //! a Pokémon faints) from its line on; temporary ones (`-formechange`) are not tracked.
 //! Replays without a `|win|` yield no samples.
 //!
-//! Vocabulary (v3; v1 / v2 hashed names into crc32 buckets — 1024 moves / 512 species, where
-//! e.g. Swords Dance and Fire Blast, or Dragonite and Hoopa-Unbound, shared an id): every
+//! Vocabulary (v3; v1 / v2 hashed names into crc32 buckets — v2: 1024 moves / 512 species —
+//! where e.g. Swords Dance and Fire Blast, or Dragonite and Hoopa-Unbound, shared an id): every
 //! move / species name maps to an exact id of data_processing/games/pokemon/showdown_vocab.json,
 //! generated from Pokémon Showdown's data (data/moves.ts, data/pokedex.ts, the team-preview
 //! forme hiding of data/rulesets.ts) at a pinned commit by make_vocab.py next to it, and
