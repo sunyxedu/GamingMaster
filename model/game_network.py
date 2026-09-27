@@ -68,6 +68,10 @@ class GameNetwork(nn.Module):
 
         # --- Stage 2: core (model/components/core.py; "trm" = legacy) ---
         self.core_type = getattr(cfg, "core_type", "trm")
+        if (getattr(cfg, "core_gated_memory", "") or getattr(cfg, "core_delta_memory", "")) \
+                and self.core_type != "transformer":
+            raise ValueError("core memory sub-layers (core_gated_memory / core_delta_memory) "
+                             f"need core_type='transformer', not {self.core_type!r}")
         if self.core_type == "trm":
             if getattr(cfg, "moe_experts", 0):
                 raise ValueError("MoE is implemented for the transformer / "
@@ -110,6 +114,11 @@ class GameNetwork(nn.Module):
             )
 
         self._init_weights()
+        # the core's memory sub-layers start as identities (zero outputs), which the
+        # network-wide Linear re-init above would undo
+        mem = self._core_memory()
+        if mem is not None:
+            mem.reset_parameters()
 
     def _init_weights(self):
         for m in self.modules():
@@ -145,12 +154,24 @@ class GameNetwork(nn.Module):
 
     def _core_pass(self, x: torch.Tensor, steps: Optional[int],
                    valid: Optional[torch.Tensor] = None,
-                   routes: Optional[torch.Tensor] = None
+                   routes: Optional[torch.Tensor] = None,
+                   bt: Optional[Tuple[int, int]] = None,
+                   mem_states: Optional[List[Optional[torch.Tensor]]] = None
                    ) -> Tuple[torch.Tensor, torch.Tensor, int]:
         """Non-TRM cores: (z [BT, S, d], q_halt zeros [BT], depth).  ``routes``
-        [BT, C, S, k]: replayed MoE routing (model.components.core)."""
-        z, depth = self.core(x, steps, valid, routes=routes)
+        [BT, C, S, k]: replayed MoE routing (model.components.core).  ``bt`` /
+        ``mem_states``: the core's episode-memory sub-layers (sequence layout of a
+        full forward, or one step's states, updated in place)."""
+        if self._core_memory() is not None:
+            z, depth = self.core(x, steps, valid, routes=routes, bt=bt, mem_states=mem_states)
+        else:
+            z, depth = self.core(x, steps, valid, routes=routes)
         return z, x.new_zeros(x.shape[0]), depth
+
+    def _core_memory(self):
+        """The core's episode-memory sub-layers (model.components.memory), or None."""
+        mem = getattr(getattr(self, "core", None), "memory", None)
+        return mem if mem else None
 
     def moe_route_calls(self, act_steps: Optional[int] = None) -> int:
         """MoE layer calls of one core forward at depth ``act_steps`` — the C
@@ -184,7 +205,9 @@ class GameNetwork(nn.Module):
     @torch.no_grad()
     def initial_st_cache(self, batch: int) -> List[torch.Tensor]:
         """Materialised Stage-1 state at t=0 for ``batch`` streams: one
-        [batch * S, d] float32 tensor per spatiotemporal layer.
+        [batch * S, d] float32 tensor per spatiotemporal layer, then the core's
+        episode-memory states (model.components.memory; [batch * S, d] per gated
+        sub-layer, [batch, heads, dv, dk] per delta sub-layer).
 
         It holds the same state as ``st_cache=None`` (the recurrence starts
         from its learned h_init either way), but the tensors have a fixed
@@ -203,9 +226,13 @@ class GameNetwork(nn.Module):
                 f"(got {self.cfg.temporal_mixer!r}: the attention mixer's KV "
                 "cache grows every step, so its shapes cannot be captured)")
         S = self.obs_encoder.n_tokens + 2
-        return [layer.temporal_rnn.initial_state(batch * S)
-                .clone(memory_format=torch.contiguous_format)
-                for layer in self.st_layers]
+        states = [layer.temporal_rnn.initial_state(batch * S)
+                  .clone(memory_format=torch.contiguous_format)
+                  for layer in self.st_layers]
+        mem = self._core_memory()
+        if mem is not None:
+            states.extend(mem.initial_states(batch, S))
+        return states
 
     def _decode_ctx(self, obs: Dict[str, torch.Tensor],
                     step: bool = False) -> Dict[str, Dict[str, torch.Tensor]]:
@@ -296,6 +323,7 @@ class GameNetwork(nn.Module):
         self,
         x: torch.Tensor,
         act_steps: Optional[int],
+        mem_states: Optional[List[Optional[torch.Tensor]]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Inference: a FIXED number of TRM supervision steps.
 
@@ -306,7 +334,7 @@ class GameNetwork(nn.Module):
         Returns (z_H, q_halt, act_depth[B]).
         """
         if self.core_type != "trm":
-            z, q, r = self._core_pass(x, act_steps)
+            z, q, r = self._core_pass(x, act_steps, mem_states=mem_states)
             return z, q, torch.full((x.shape[0],), r, dtype=torch.long, device=x.device)
         self.trm.q_token_idx = self.obs_encoder.n_tokens
         steps = max(1, act_steps if act_steps is not None
@@ -401,7 +429,7 @@ class GameNetwork(nn.Module):
             valid = frame_mask.reshape(BT) if frame_mask is not None else None
             if routes is not None:
                 routes = routes.reshape((BT,) + tuple(routes.shape[2:]))
-            z_H, q_halt, _ = self._core_pass(x, act_steps, valid, routes)
+            z_H, q_halt, _ = self._core_pass(x, act_steps, valid, routes, bt=(B, T))
             new_carry = None
         z_H = self.post_norm(z_H)
 
@@ -517,17 +545,26 @@ class GameNetwork(nn.Module):
             tokens, cache_i = layer.forward_step(tokens, prev)
             new_caches.append(cache_i)
         tokens = self.mid_norm(tokens.squeeze(1))
+        # the core's episode-memory states follow the Stage-1 ones in the cache
+        mem = self._core_memory()
+        mem_states: Optional[List[Optional[torch.Tensor]]] = None
+        if mem is not None:
+            n_st = len(self.st_layers)
+            mem_states = (list(st_cache[n_st:]) if st_cache is not None
+                          else [None] * len(mem.ordered()))
 
         # Stage 2: TRM with ACT
         recorded: Dict[str, torch.Tensor] = {}
         if record_routes and self.core_type != "trm":
             with record_moe_routes(self.core) as calls:
-                z_H, q_halt, act_depth = self._trm_act_loop(tokens, act_steps)
+                z_H, q_halt, act_depth = self._trm_act_loop(tokens, act_steps, mem_states)
             if calls:
                 recorded["moe_routes"] = stack_routes(calls, B, tokens.shape[1],
                                                       self.cfg.moe_experts)
         else:
-            z_H, q_halt, act_depth = self._trm_act_loop(tokens, act_steps)
+            z_H, q_halt, act_depth = self._trm_act_loop(tokens, act_steps, mem_states)
+        if mem_states is not None:
+            new_caches.extend(mem_states)
         z_H = self.post_norm(z_H)
 
         game_out = z_H[:, :S_game]

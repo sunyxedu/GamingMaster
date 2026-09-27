@@ -151,6 +151,9 @@ export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
 # node-local scratch for torchrun / DataLoader workers (NFS temp dirs trip
 # ".nfs* Device or resource busy" at teardown)
 export TMPDIR=/tmp
+# variable-length batches (whole-record training) fragment the caching allocator's
+# segments: expandable segments reuse them (override by exporting another value)
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}
 echo "[$(date)] $RUN on $(hostname) ngpu=$NGPU gpu=${CUDA_VISIBLE_DEVICES:-?} commit=$(git rev-parse --short HEAD) resume=${RESUME_FROM:-none}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 nvidia-smi -L 2>/dev/null | grep MIG || true

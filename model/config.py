@@ -75,6 +75,14 @@ class ModelConfig:
     moe_shared_experts: int = 1
     moe_expansion: float = 2.0           # per-expert SwiGLU width
     moe_bias_clip: float = 0.0           # bound on |balance bias| (0 = unbounded)
+    # Episode memory inside the "transformer" core (model/components/memory.py):
+    # sub-layers after the listed core blocks ("2,5,8" = after blocks 2, 5 and 8),
+    # zero-initialised outputs so they can join a trained core.  "" = none.
+    core_gated_memory: str = ""          # per-position gated recurrence
+    core_delta_memory: str = ""          # global gated-delta associative memory
+    core_delta_heads: int = 8
+    core_delta_dk: int = 64
+    core_delta_writes: int = 4           # key / value writes per frame
     # QK-normalisation: per-head RMSNorm (learnable scales over head_dim,
     # initial cap √head_dim·g_q·g_k ≥ 8, see core.qk_norm_init_scale) of
     # queries and keys before the dot product, in the Stage-2

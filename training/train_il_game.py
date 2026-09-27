@@ -461,11 +461,17 @@ def parse_args() -> argparse.Namespace:
 
 
 def parse_overrides(pairs) -> Dict:
+    from model.config import ModelConfig
+    str_fields = {k for k, f in ModelConfig.__dataclass_fields__.items() if f.type in ("str", str)}
     out = {}
     for pair in pairs:
         key, _, raw = pair.partition("=")
         if not _:
             raise ValueError(f"--override expects KEY=VALUE, got {pair!r}")
+        if key in str_fields:
+            # a string field stays a string (core_gated_memory=2,5 is a spec, not a tuple)
+            out[key] = raw
+            continue
         if raw.lower() in ("true", "false"):
             # any spelling: the string 'false' would be truthy (qk_norm=false
             # silently building QK-norm)

@@ -60,7 +60,7 @@ from __future__ import annotations
 
 import contextlib
 import math
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
 import torch.distributed as dist
@@ -449,6 +449,9 @@ class CoreBlock(nn.Module):
         return x + self.norms[3](self.ffn(self.norms[2](x), valid, route))
 
 
+from model.components.memory import CoreMemory, split_blocks  # noqa: E402
+
+
 def _run_blocks(blocks: Sequence[nn.Module], x: torch.Tensor,
                 valid: Optional[torch.Tensor], routes: Optional[torch.Tensor] = None,
                 first: int = 0) -> torch.Tensor:
@@ -494,6 +497,14 @@ class DeepCore(nn.Module):
         self.blocks = nn.ModuleList(
             [CoreBlock(cfg, out_std, _moe_on(cfg)) for _ in range(cfg.core_layers)])
         self.final_norm = RMSNorm(cfg.d_model, eps=1e-6)
+        # episode-memory sub-layers between blocks (no parameters when off, so a
+        # core without them keeps its state dict)
+        self.memory = CoreMemory(cfg.d_model, cfg.core_layers,
+                                 getattr(cfg, "core_gated_memory", ""),
+                                 getattr(cfg, "core_delta_memory", ""),
+                                 getattr(cfg, "core_delta_heads", 8),
+                                 getattr(cfg, "core_delta_dk", 64),
+                                 getattr(cfg, "core_delta_writes", 4))
 
     def default_iters(self) -> int:
         return 1
@@ -504,10 +515,34 @@ class DeepCore(nn.Module):
 
     def forward(self, x: torch.Tensor, steps: Optional[int] = None,
                 valid: Optional[torch.Tensor] = None,
-                routes: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, int]:
-        """``routes`` [N, C, S, k]: replay a recorded routing (:func:`record_moe_routes`)."""
+                routes: Optional[torch.Tensor] = None,
+                bt: Optional[Tuple[int, int]] = None,
+                mem_states: Optional[List[Optional[torch.Tensor]]] = None
+                ) -> Tuple[torch.Tensor, int]:
+        """``routes`` [N, C, S, k]: replay a recorded routing (:func:`record_moe_routes`).
+
+        With memory sub-layers (model.components.memory): ``bt`` = (B, T), the
+        sequence layout of the N = B·T frames (full-sequence forward), or
+        ``mem_states`` = the sub-layers' states for one frame per row (step; the
+        list, in :meth:`CoreMemory.ordered` order, is updated in place)."""
         _check_routes(routes, x, self.moe_calls())
-        return self.final_norm(_run_blocks(self.blocks, x, valid, routes)), 1
+        if not self.memory:
+            return self.final_norm(_run_blocks(self.blocks, x, valid, routes)), 1
+        if mem_states is None and bt is None:
+            raise ValueError("a core with memory sub-layers needs the (B, T) sequence layout "
+                             "(forward) or the memory states (step)")
+        order = {id(m): j for j, m in enumerate(self.memory.ordered())}
+        cuts = sorted(set(self.memory.gated_at) | set(self.memory.delta_at))
+        for s, e in split_blocks(self.blocks, cuts):
+            x = _run_blocks(self.blocks[s:e], x, valid, routes, first=s)
+            for mem in self.memory.modules_after(e - 1):
+                if mem_states is not None:                       # one frame per row
+                    j = order[id(mem)]
+                    x, mem_states[j] = mem.step(x, mem_states[j])
+                else:
+                    B, T = bt
+                    x = mem(x.reshape(B, T, *x.shape[1:])).reshape(x.shape)
+        return self.final_norm(x), 1
 
 
 def sample_recurrence(mean: float, sigma: float = 0.5,

@@ -124,6 +124,9 @@ def test_build_labels_tf_masking():
 def test_parse_overrides():
     out = parse_overrides(["d_model=64", "temporal_mixer=recurrent", "dropout=0.0"])
     assert out == {"d_model": 64, "temporal_mixer": "recurrent", "dropout": 0.0}
+    # string config fields stay strings (a comma list is a spec, not a tuple)
+    assert parse_overrides(["core_gated_memory=2,5", "core_delta_memory=1"]) == {
+        "core_gated_memory": "2,5", "core_delta_memory": "1"}
 
 
 def test_run_batch_trains_othello(tmp_path):

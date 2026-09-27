@@ -625,6 +625,12 @@ def _split_name(name: str) -> Tuple[str, str]:
     return parts[1], parts[2]
 
 
+def _is_core_memory(name: str) -> bool:
+    """A parameter / buffer of the core's episode-memory sub-layers
+    (model.components.memory) — zero-output modules a resume may add to a core."""
+    return _split_name(name)[1].startswith("core.memory.")
+
+
 def _is_own(name: str, games) -> bool:
     """True for a parameter / buffer of one of ``games``' own modules
     (encoder, decoder, value head), not of the shared core."""
@@ -731,7 +737,12 @@ def load_resume_weights(model: MultiGameNetwork, state: Dict[str, torch.Tensor],
     # fills its num_batches_tracked from the module itself (unreported)
     missing, unexpected = keys - set(state), set(state) - keys
     want = {k for k in keys if k.startswith(new)}
-    core = {_split_name(k)[1] for k in want if is_core_key(_split_name(k)[1])}
+    # core memory sub-layers joining the run: absent from a checkpoint that has none
+    # (their zero outputs leave the loaded network's function unchanged)
+    if not any(_is_core_memory(k) for k in state):
+        want |= {k for k in keys if _is_core_memory(k)}
+    core = {_split_name(k)[1] for k in want
+            if is_core_key(_split_name(k)[1]) and not _is_core_memory(k)}
     loaded_core = {_split_name(k)[1] for k in state if is_core_key(_split_name(k)[1])}
     if missing != want or unexpected or not core <= loaded_core:
         raise SystemExit(
@@ -762,7 +773,8 @@ def resume_training_state(ck: Dict, model: MultiGameNetwork, optimizer: torch.op
     betas, weight_decay).  The EMA state is keyed by this model's canonical
     names (``ModelEMA.load_state_dict``; a partial EMA takes its own), None
     without a checkpoint EMA.  ``fresh`` names the trainable parameters
-    without checkpoint state — which must be exactly the added games' own:
+    without checkpoint state — which must be exactly the added games' own (and core
+    memory sub-layers the checkpoint lacks):
     no optimizer state (their step counters start at 1, with the matching
     bias correction), and an EMA initialised from their fresh weights.
     Refused: a checkpoint parameter frozen here or in another group, a
@@ -823,7 +835,7 @@ def resume_training_state(ck: Dict, model: MultiGameNetwork, optimizer: torch.op
     added = [g for g in model.games if g not in ck["games"]]
     own_name = {id(p): n for n, p in model.named_parameters()}
     fresh = [own_name[id(p)] for g in groups for p in g["params"] if id(p) not in trained]
-    stray = [n for n in fresh if not _is_own(n, added)]
+    stray = [n for n in fresh if not _is_own(n, added) and not _is_core_memory(n)]
     if stray:
         raise SystemExit(f"{where}: {len(stray)} trainable parameter(s) of the checkpoint's "
                          f"games are not in its optimizer, e.g. {stray[:3]} (resume with the "

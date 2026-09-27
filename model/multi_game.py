@@ -47,6 +47,8 @@ CORE_CONFIG_FIELDS = (
     "rd_prelude_layers", "rd_recurrent_layers", "rd_coda_layers",
     "rd_mean_iters", "rd_backprop_iters", "rd_max_iters", "rd_eval_iters",
     "moe_experts", "moe_top_k", "moe_shared_experts", "moe_expansion", "moe_bias_clip",
+    "core_gated_memory", "core_delta_memory", "core_delta_heads", "core_delta_dk",
+    "core_delta_writes",
     "trm_arch", "trm_H_cycles", "trm_L_cycles", "trm_block_layers",
     "trm_expansion", "trm_rms_eps", "halt_max_steps", "qk_norm",
 )
