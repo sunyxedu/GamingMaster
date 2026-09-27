@@ -19,6 +19,7 @@ hok = ["dep:hdf5"]
 hdf5 = { package = "hdf5-metno", version = "0.15", optional = true, features = ["static", "zlib"] }
 gmshard = { path = "../gmshard" }
 gmrules = { path = "../gmrules" }
+gmmahjong = { path = "../gmmahjong" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

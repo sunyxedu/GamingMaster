@@ -116,8 +116,9 @@
 mod game;
 #[cfg(test)]
 mod reference;
-mod rules;
-mod state;
+#[cfg(test)]
+mod sim_parity;
+use gmmahjong::{rules, state};
 
 use crate::common;
 use anyhow::{Context, Result};

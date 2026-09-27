@@ -13,6 +13,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 gmrules = { path = "../gmrules" }
+# riichi mahjong (not a gmrules game: its own batched simulator, env/vec_mahjong.py)
+gmmahjong = { path = "../gmmahjong" }
 pyo3 = { version = "0.29", features = ["abi3-py310"] }
 serde_json.workspace = true
 # (no `extension-module` feature: maturin sets PYO3_BUILD_EXTENSION_MODULE, pyo3 >= 0.26)

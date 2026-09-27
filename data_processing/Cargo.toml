@@ -4,6 +4,7 @@ members = [
     "rs/gmshard",
     "rs/sc2api",
     "rs/gmrules",
+    "rs/gmmahjong",
     "rs/gmdata",
     "rs/gmsim",
     "games/clash_royale/crdata",
@@ -15,6 +16,7 @@ default-members = [
     "rs/gmshard",
     "rs/sc2api",
     "rs/gmrules",
+    "rs/gmmahjong",
     "rs/gmdata",
     "games/clash_royale/crdata",
 ]

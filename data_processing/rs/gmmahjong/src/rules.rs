@@ -8,14 +8,14 @@
 use riichienv_core::hand_evaluator::HandEvaluator;
 use riichienv_core::types::{Conditions, Meld as RMeld, MeldType, Wind};
 
-pub(super) const NK: usize = 34;
+pub const NK: usize = 34;
 
 /// A malformed or unsupported record: the game is skipped (counted, never half-converted).
-pub(super) struct Skip;
-pub(super) type R<T> = std::result::Result<T, Skip>;
+pub struct Skip;
+pub type R<T> = std::result::Result<T, Skip>;
 
 /// mjai tile name ("1m".."9s", "5mr" / "0m" red fives, "E" "S" "W" "N" "P" "F" "C") → kind 0..33.
-pub(super) fn tile_kind(p: &str) -> R<usize> {
+pub fn tile_kind(p: &str) -> R<usize> {
     let b = p.as_bytes();
     let honors = ["E", "S", "W", "N", "P", "F", "C"];
     if let Some(i) = honors.iter().position(|&h| h == p) {
@@ -41,11 +41,11 @@ pub(super) fn tile_kind(p: &str) -> R<usize> {
     }
 }
 
-pub(super) fn is_red(p: &str) -> bool {
+pub fn is_red(p: &str) -> bool {
     p.ends_with('r') || p.starts_with('0')
 }
 
-pub(super) fn dora_from_marker(k: usize) -> usize {
+pub fn dora_from_marker(k: usize) -> usize {
     if k < 27 {
         let base = (k / 9) * 9;
         base + (k - base + 1) % 9
@@ -56,7 +56,7 @@ pub(super) fn dora_from_marker(k: usize) -> usize {
     }
 }
 
-pub(super) fn is_terminal_or_honor(k: usize) -> bool {
+pub fn is_terminal_or_honor(k: usize) -> bool {
     k >= 27 || k.is_multiple_of(9) || k % 9 == 8
 }
 
@@ -116,7 +116,7 @@ fn kokushi(c: &[i64; NK]) -> bool {
 }
 
 /// Winning shape of the concealed tiles `c` next to `meld_n` fixed melds (yaku not checked).
-pub(super) fn is_agari(c: &[i64; NK], meld_n: i64) -> bool {
+pub fn is_agari(c: &[i64; NK], meld_n: i64) -> bool {
     if c.iter().any(|&x| x < 0) || c.iter().sum::<i64>() != 14 - 3 * meld_n {
         return false;
     }
@@ -127,7 +127,7 @@ pub(super) fn is_agari(c: &[i64; NK], meld_n: i64) -> bool {
 /// winning shape, except kinds the concealed hand already holds four of (形式聴牌: a wait
 /// on a fifth copy counts only while the concealed tiles do not use all four; the same set
 /// RiichiEnv's `get_waits` returns).  Furiten and riichi tenpai are judged on this set.
-pub(super) fn waits(c: &[i64; NK], meld_n: i64) -> [bool; NK] {
+pub fn waits(c: &[i64; NK], meld_n: i64) -> [bool; NK] {
     let mut w = *c;
     std::array::from_fn(|k| {
         if w[k] >= 4 {
@@ -140,12 +140,12 @@ pub(super) fn waits(c: &[i64; NK], meld_n: i64) -> [bool; NK] {
     })
 }
 
-pub(super) fn is_tenpai(c: &[i64; NK], meld_n: i64) -> bool {
+pub fn is_tenpai(c: &[i64; NK], meld_n: i64) -> bool {
     waits(c, meld_n).iter().any(|&x| x)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum MeldKind {
+pub enum MeldKind {
     Chi,
     Pon,
     Daiminkan,
@@ -155,7 +155,7 @@ pub(super) enum MeldKind {
 
 /// A fixed meld: its kind and tile kinds (3, or 4 for a kan).
 #[derive(Clone, Debug)]
-pub(super) struct Meld {
+pub struct Meld {
     pub kind: MeldKind,
     pub tiles: Vec<usize>,
 }
@@ -163,7 +163,7 @@ pub(super) struct Meld {
 /// Situation of a win declaration (everything the one-han minimum can depend on besides
 /// the tiles).  Dora never count as yaku, so no dora information is needed.
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct WinCtx {
+pub struct WinCtx {
     pub tsumo: bool,
     pub riichi: bool,
     /// tsumo on the last live-wall draw (not a rinshan draw)
@@ -184,7 +184,7 @@ pub(super) struct WinCtx {
 /// Whether the winning shape `concealed` (13-tile equivalent, the winning tile excluded) +
 /// `win` next to `melds` has at least one yaku under `ctx`.  Tile identities (which copy,
 /// red or not) cannot change the answer: red fives are dora, not yaku.
-pub(super) fn has_yaku(concealed: &[i64; NK], melds: &[Meld], win: usize, ctx: &WinCtx) -> bool {
+pub fn has_yaku(concealed: &[i64; NK], melds: &[Meld], win: usize, ctx: &WinCtx) -> bool {
     // a distinct 136-format id per physical copy; ids k*4 are the red fives, used last
     let mut used = [0usize; NK];
     let mut id = |k: usize| -> Option<u8> {
@@ -239,7 +239,7 @@ pub(super) fn has_yaku(concealed: &[i64; NK], melds: &[Meld], win: usize, ctx: &
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub mod tests {
     use super::*;
 
     /// "123m456p789s1122z" → kind counts (z: 1..7 = E S W N P F C).

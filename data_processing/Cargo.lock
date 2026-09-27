@@ -916,6 +916,7 @@ dependencies = [
  "clap",
  "encoding_rs",
  "flate2",
+ "gmmahjong",
  "gmrules",
  "gmshard",
  "hdf5-metno",
@@ -933,6 +934,14 @@ dependencies = [
  "tar",
  "zip",
  "zstd 0.14.0",
+]
+
+[[package]]
+name = "gmmahjong"
+version = "0.1.0"
+dependencies = [
+ "riichienv-core",
+ "serde_json",
 ]
 
 [[package]]
@@ -958,6 +967,7 @@ dependencies = [
 name = "gmsim"
 version = "0.1.0"
 dependencies = [
+ "gmmahjong",
  "gmrules",
  "pyo3",
  "serde_json",

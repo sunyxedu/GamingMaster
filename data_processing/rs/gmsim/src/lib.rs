@@ -477,6 +477,103 @@ impl State {
     }
 }
 
+/// N riichi mahjong hanchan games (gmmahjong::vec::MjVec: riichienv-core's engine observed
+/// through the converter's state — a frame is the gmdata converter's frame).  Rows are
+/// `env * 4 + seat`; buffers as in gmmahjong's `vec` module docs.
+#[pyclass(module = "gmsim._native")]
+struct MahjongSim {
+    inner: gmmahjong::vec::MjVec,
+}
+
+#[pymethods]
+impl MahjongSim {
+    #[new]
+    #[pyo3(signature = (n_envs=1, seeds=vec![], autoreset=false, threads=1))]
+    fn new(n_envs: usize, seeds: Vec<u64>, autoreset: bool, threads: usize) -> PyResult<Self> {
+        Ok(MahjongSim { inner: guard(|| gmmahjong::vec::MjVec::new(n_envs, &seeds, autoreset, threads))? })
+    }
+
+    #[getter]
+    fn n_envs(&self) -> usize {
+        self.inner.n_envs()
+    }
+
+    #[getter]
+    fn n_rows(&self) -> usize {
+        self.inner.n_rows()
+    }
+
+    #[getter]
+    fn failures(&self) -> usize {
+        self.inner.failures
+    }
+
+    #[getter]
+    fn last_error(&self) -> Option<String> {
+        self.inner.last_error.clone()
+    }
+
+    fn resize(&mut self, n: usize) -> PyResult<()> {
+        guard(|| self.inner.resize(n))
+    }
+
+    fn reset(&mut self, py: Python<'_>, env_ids: Vec<usize>, seeds: Vec<u64>) -> PyResult<()> {
+        let inner = &mut self.inner;
+        py.detach(|| guard(|| inner.reset(&env_ids, &seeds)))
+    }
+
+    fn done(&self, env: usize) -> PyResult<bool> {
+        if env >= self.inner.n_envs() {
+            return Err(PyValueError::new_err(format!("env {env} out of range")));
+        }
+        Ok(self.inner.done(env))
+    }
+
+    fn scores(&self, env: usize) -> PyResult<Vec<i64>> {
+        if env >= self.inner.n_envs() {
+            return Err(PyValueError::new_err(format!("env {env} out of range")));
+        }
+        Ok(self.inner.scores(env).to_vec())
+    }
+
+    /// Every row's current frame (fresh buffers each call).
+    fn observe<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let b = py.detach(|| self.inner.observe());
+        let d = PyDict::new(py);
+        d.set_item("tiles_seq", bytearray(py, &b.tiles))?;
+        d.set_item("players_seq", bytearray(py, &b.players))?;
+        d.set_item("table_seq", bytearray(py, &b.table))?;
+        d.set_item("action_type", bytearray(py, &b.legal_type))?;
+        d.set_item("tile_cond", bytearray(py, &b.tile_cond))?;
+        d.set_item("active", bytearray(py, &b.active))?;
+        d.set_item("forced", bytearray(py, &b.forced))?;
+        d.set_item("to_play", bytearray(py, &b.to_play))?;
+        d.set_item("step_idx", bytearray(py, &b.step_idx))?;
+        d.set_item("new_episode", bytearray(py, &b.new_episode))?;
+        Ok(d)
+    }
+
+    /// Apply every acting row's (action_type, tile_idx) (int64 bytes, one per row).
+    fn step<'py>(&mut self, py: Python<'py>, action_type: &[u8], tile_idx: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+        let at = parse_i64(action_type, "action_type")?;
+        let tl = parse_i64(tile_idx, "tile_idx")?;
+        let inner = &mut self.inner;
+        let info = py.detach(|| guard(|| inner.step(&at, &tl)))?;
+        let d = PyDict::new(py);
+        d.set_item("rewards", bytearray(py, &info.rewards))?;
+        d.set_item("returns", bytearray(py, &info.returns))?;
+        d.set_item("done", bytearray(py, &info.done))?;
+        d.set_item("terminated", bytearray(py, &info.terminated))?;
+        d.set_item("truncated", bytearray(py, &info.truncated))?;
+        d.set_item("winner", bytearray(py, &info.winner))?;
+        d.set_item("episode_len", bytearray(py, &info.episode_len))?;
+        d.set_item("applied_type", bytearray(py, &info.applied_type))?;
+        d.set_item("applied_tile", bytearray(py, &info.applied_tile))?;
+        d.set_item("acted", bytearray(py, &info.acted))?;
+        Ok(d)
+    }
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(games, m)?)?;
@@ -487,5 +584,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(check_game, m)?)?;
     m.add_class::<Sim>()?;
     m.add_class::<State>()?;
+    m.add_class::<MahjongSim>()?;
     Ok(())
 }

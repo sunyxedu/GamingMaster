@@ -105,7 +105,7 @@ fn actor(ev: &Value) -> usize {
 /// `GameState::_initialize_round` takes it (it reverses the vector: the deal and the live
 /// draws pop from the end, rinshan draws come from the front, dora / ura indicators sit at
 /// 4, 6, .. / 5, 7, ..).
-fn build_wall(ky: &[Value]) -> Result<Vec<u8>, String> {
+pub(super) fn build_wall(ky: &[Value]) -> Result<Vec<u8>, String> {
     let sk = &ky[0];
     let oya = i64_of(sk, "oya") as usize;
     let mut pool = Pool::new();

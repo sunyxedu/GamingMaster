@@ -859,6 +859,36 @@ class FromToSpec(RLGameSpec):
         return tgt
 
 
+class MahjongSpec(RLGameSpec):
+    """Riichi mahjong (model/games/mahjong.py MahjongDecoder on env/vec_mahjong.py): the
+    rollout samples type → tile under the env's tables (legal ``action_type`` [8],
+    ``tile_cond`` [8, 34]); the replay teacher-forces the stored type (the tile head
+    conditions on it) under the masks the rollout sampled with (the decoder's
+    ``legal_action_type`` / ``legal_tile``, stored as ``action_type`` / ``tile_of``), so
+    log π_old = μ.  The KL covers both heads (``il_head_terms``: type, tile | stored type).
+    The env is checked against the network's tile planes."""
+
+    full_kl = True
+
+    def check_env(self, env, net):
+        have = tuple(env.obs_schema()["tiles_seq"][0])
+        want = (34, net.cfg.mahjong_tile_feature_dim)
+        if have != want:
+            raise SystemExit(f"mahjong env emits tiles_seq {have}, the network expects {want} "
+                             f"(mahjong_tile_feature_dim: converter v4 shards have 37)")
+
+    def rollout_legal(self, legal, out):
+        if "legal_action_type" in out and "legal_tile" in out:
+            return {"action_type": out["legal_action_type"], "tile_of": out["legal_tile"]}
+        return legal
+
+    def labels(self, actions, cfg):
+        return {"action_type": actions["action_type"].long()}
+
+    def kl_targets(self, actions, forced, cfg):
+        return {"action_type": actions["action_type"].long(), "tile_idx": actions["tile_idx"].long()}
+
+
 class ShogiSpec(RLGameSpec):
     """The shogi move-or-drop decoder (model/games/shogi.py ShogiDecoder) on the gmrules
     shogi env (legal ``mode`` / ``from`` / ``to_cond`` / ``promo_cond`` / ``drop_piece`` /
@@ -910,6 +940,7 @@ GAME_SPECS: Dict[str, RLGameSpec] = {
     "lux": LuxSpec(),
     "arc3": Arc3Spec(),
     "hok": HokSpec(),
+    "mahjong": MahjongSpec(),
 }
 
 

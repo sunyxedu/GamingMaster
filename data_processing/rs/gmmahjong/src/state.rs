@@ -1,34 +1,34 @@
 //! Per-kyoku game state tracked from the mjai events, the observation encoding, and the
 //! exact legality of every decision under Tenhou's rules (see the module doc in `mod.rs`).
 
-use super::rules::*;
+use crate::rules::*;
 use serde_json::Value;
 use std::collections::HashSet;
 
-pub(super) const DAHAI: i64 = 0;
-pub(super) const RIICHI: i64 = 1;
-pub(super) const CHI: i64 = 2;
-pub(super) const PON: i64 = 3;
-pub(super) const KAN: i64 = 4;
-pub(super) const HORA: i64 = 5;
-pub(super) const RYUKYOKU: i64 = 6;
-pub(super) const PASS: i64 = 7;
-pub(super) const ACTION_NAMES: [&str; 8] = ["dahai", "riichi", "chi", "pon", "kan", "hora", "ryukyoku", "pass"];
+pub const DAHAI: i64 = 0;
+pub const RIICHI: i64 = 1;
+pub const CHI: i64 = 2;
+pub const PON: i64 = 3;
+pub const KAN: i64 = 4;
+pub const HORA: i64 = 5;
+pub const RYUKYOKU: i64 = 6;
+pub const PASS: i64 = 7;
+pub const ACTION_NAMES: [&str; 8] = ["dahai", "riichi", "chi", "pon", "kan", "hora", "ryukyoku", "pass"];
 /// Whether an action type takes a tile argument (the decoder's ARG_USES table).
-pub(super) const USES_TILE: [bool; 8] = [true, true, true, true, true, false, false, false];
-pub(super) const N_TYPES: usize = 8;
+pub const USES_TILE: [bool; 8] = [true, true, true, true, true, false, false, false];
+pub const N_TYPES: usize = 8;
 /// Live-wall draws of a kyoku (136 − 52 dealt − 14 dead wall); rinshan draws count too.
-pub(super) const WALL: i64 = 70;
+pub const WALL: i64 = 70;
 /// Tile-plane features per kind: the 16 of converter_version 3, then the public discard
 /// history of each opponent (shimocha, toimen, kamicha), [`OPP_TILE_FEATURES`] each.
-pub(super) const TILE_FEATURES: usize = 16 + 3 * OPP_TILE_FEATURES;
-pub(super) const OPP_TILE_FEATURES: usize = 7;
+pub const TILE_FEATURES: usize = 16 + 3 * OPP_TILE_FEATURES;
+pub const OPP_TILE_FEATURES: usize = 7;
 /// Discards of a seat the "recent" column looks back on (about one and a half go-arounds).
-pub(super) const RECENT_DISCARDS: usize = 6;
+pub const RECENT_DISCARDS: usize = 6;
 
 /// Decision context of a frame (what just happened to the acting seat).
 #[derive(Clone, Debug)]
-pub(super) enum Ctx {
+pub enum Ctx {
     /// own draw of kind `drawn`
     Draw { drawn: usize },
     /// forced discard after a chi/pon of `called` with the `consumed` hand kinds
@@ -39,7 +39,7 @@ pub(super) enum Ctx {
 
 /// Legal action types and, per type, legal tile arguments.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Legal {
+pub struct Legal {
     pub types: [bool; N_TYPES],
     pub tiles: [[bool; NK]; N_TYPES],
 }
@@ -65,13 +65,13 @@ impl Legal {
     }
 }
 
-pub(super) fn s<'a>(ev: &'a Value, k: &str) -> R<&'a str> {
+pub fn s<'a>(ev: &'a Value, k: &str) -> R<&'a str> {
     ev.get(k).and_then(|v| v.as_str()).ok_or(Skip)
 }
-pub(super) fn n(ev: &Value, k: &str) -> R<i64> {
+pub fn n(ev: &Value, k: &str) -> R<i64> {
     ev.get(k).and_then(|v| v.as_i64()).ok_or(Skip)
 }
-pub(super) fn seat(ev: &Value, k: &str) -> R<usize> {
+pub fn seat(ev: &Value, k: &str) -> R<usize> {
     let v = n(ev, k)?;
     if (0..4).contains(&v) {
         Ok(v as usize)
@@ -82,14 +82,14 @@ pub(super) fn seat(ev: &Value, k: &str) -> R<usize> {
 
 /// Observation buffers of one seat's frames (layouts in `Kyoku::encode`).
 #[derive(Default)]
-pub(super) struct ObsBuf {
+pub struct ObsBuf {
     /// tile planes [T, 34, TILE_FEATURES] as u8 quarters (value × 4)
     pub tiles_q: Vec<u8>,
     pub players: Vec<f32>,
     pub table: Vec<f32>,
 }
 
-pub(super) struct Kyoku {
+pub struct Kyoku {
     pub oya: usize,
     pub bakaze: String,
     pub kyoku: i64,
@@ -663,7 +663,7 @@ impl Kyoku {
 
 #[cfg(test)]
 mod tests {
-    use super::super::rules::tests::hand;
+    use crate::rules::tests::hand;
     use super::*;
     use serde_json::json;
 
