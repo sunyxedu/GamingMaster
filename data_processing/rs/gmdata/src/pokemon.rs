@@ -132,8 +132,8 @@
 //!     stores is `min(p1, p2)` of the players' Elo (server/ladders-remote.ts: `room.rated =
 //!     Math.min(p1NewElo, p2NewElo)` after the battle, the lower pre-battle Elo before), so R
 //!     bounds BOTH players.  Two dumps holding one battle agree on it in 55% of 4.0M cases,
-//!     else they differ by one battle's Elo change (median 21: an upload at the battle's end
-//!     and a later re-upload) — immaterial next to the bars;
+//!     else they differ by about one battle's Elo change (median |Δ| 21: one copy carries the
+//!     rating before the battle's ladder update, the other after) — immaterial next to the bars;
 //!   * peak route `--players P --min-peak K [--min-peak-games N]`: both players' highest battle
 //!     rating in the format (the `players` table over the same inputs; a lower bound of their
 //!     peak Elo, robust to accounts still climbing from 1000) reaches K with ≥ N rated battles
