@@ -174,9 +174,19 @@ fn passes_quality(g: &Game, q: &Quality) -> bool {
     true
 }
 
+/// A player with Lichess's BOT title: an engine account (rated games against humans and
+/// other bots; not human data — in Lichess's 2025-06 database they are most of the games
+/// between players rated 2600+ at blitz and slower, scripts/quality_by_rating.py).
+fn has_bot(h: &HashMap<String, String>) -> bool {
+    ["WhiteTitle", "BlackTitle"].iter().any(|k| h.get(*k).map(|t| t == "BOT").unwrap_or(false))
+}
+
 fn passes(g: &Game, min_elo: i64, min_plies: usize, skip_bullet: bool) -> bool {
     let h = &g.headers;
     if h.get("Variant").map(|s| s.as_str()).unwrap_or("Standard") != "Standard" {
+        return false;
+    }
+    if has_bot(h) {
         return false;
     }
     if h.contains_key("FEN") || h.get("SetUp").map(|s| s.as_str()) == Some("1") {
@@ -462,6 +472,23 @@ mod tests {
     /// POV square of (file 0..7, rank 1..8) for the side to move (`black` → rank mirror).
     fn sq(file: i64, rank: i64, black: bool) -> usize {
         (if black { (rank - 1) * 8 + file } else { (8 - rank) * 8 + file }) as usize
+    }
+
+    #[test]
+    fn bot_accounts_are_not_human_games() {
+        let game = |title: &str| {
+            let mut headers = HashMap::new();
+            for (k, v) in [("Result", "1-0"), ("WhiteElo", "2500"), ("BlackElo", "2450"), ("TimeControl", "600+5")] {
+                headers.insert(k.to_string(), v.to_string());
+            }
+            if !title.is_empty() {
+                headers.insert("BlackTitle".to_string(), title.to_string());
+            }
+            Game { headers, moves: play(&["e4", "e5", "Nf3", "Nc6"]), bad: false }
+        };
+        assert!(passes(&game(""), 2200, 2, true));
+        assert!(passes(&game("GM"), 2200, 2, true));
+        assert!(!passes(&game("BOT"), 2200, 2, true));
     }
 
     #[test]
