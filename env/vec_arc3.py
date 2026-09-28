@@ -111,6 +111,15 @@ class Arc3VecEnv(VecEnvBase):
                  environments_dir: Optional[str] = None, autoreset: bool = False,
                  seed: Optional[int] = 0):
         super().__init__(n_envs, autoreset, seed)
+        if isinstance(games, str):
+            # "all": every game cached under the environments dir (a directory per game —
+            # the 25 official ones and the community ones of data/arc3/env_all);
+            # "a,b,c": a list
+            if games == "all":
+                root = environments_dir or os.environ.get("ENVIRONMENTS_DIR") or ""
+                games = sorted(g for g in os.listdir(root) if os.path.isdir(os.path.join(root, g))) if root else []
+            else:
+                games = [g for g in games.split(",") if g]
         if not games:
             raise ValueError("arc3: at least one game")
         if int(max_actions) < 1:
@@ -149,6 +158,10 @@ class Arc3VecEnv(VecEnvBase):
     def _wrapper(self, i: int, game: str):
         key = (i, game)
         w = self._wrappers.get(key)
+        if w is None and len(self.games) > 8:
+            # a large game pool (games="all"): one live game per env, the last one dropped
+            for k in [k for k in self._wrappers if k[0] == i]:
+                del self._wrappers[k]
         if w is None:
             w = self._arcade.make(game, seed=0)
             if w is None:
