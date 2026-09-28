@@ -129,106 +129,113 @@ pub fn deck_token_order(ids: &[u16], forms: &[u8]) -> Vec<usize> {
     order
 }
 
-/// Build the sequence for `me`; None when the deck is not 8 cards or no hand cycle
-/// explains the own plays (a corrupt record).
-pub fn build_side(r: &Replay, me: SideId, cat: &Catalog, tl: &Timeline, cfg: &FrameConfig) -> Option<Sample> {
-    let (own, other) = match me {
-        SideId::Team => (&r.team, &r.opp),
-        SideId::Opp => (&r.opp, &r.team),
-    };
-    if own.deck.len() != DECK {
-        return None;
+/// One player's frames as the match goes — the converter's (a replay's events) and the
+/// simulator's (a live battle's): events are observed in tick order, and a frame read at a
+/// tick holds the events strictly before it.
+pub struct SideFrames<'a> {
+    pub me: SideId,
+    cat: &'a Catalog,
+    tl: &'a Timeline,
+    pub cfg: FrameConfig,
+    pub tok_ids: Vec<u16>,
+    pub tok_form: Vec<u8>,
+    tok_kind: Vec<u8>,
+    tok_cost: Vec<f32>,
+    pub belief: CycleBelief,
+    pub my_elixir: ElixirSim<'a>,
+    pub opp_elixir: ElixirSim<'a>,
+    recent: Vec<Event>,
+    pub n_plays: usize,
+    pub n_abilities: usize,
+}
+
+impl<'a> SideFrames<'a> {
+    /// `deck`: the own 8 (card id, form) in the record's order (tokens are re-ordered by
+    /// [`deck_token_order`]); None unless there are 8.
+    pub fn new(deck: &[(u16, u8)], me: SideId, cat: &'a Catalog, tl: &'a Timeline, cfg: FrameConfig) -> Option<Self> {
+        if deck.len() != DECK {
+            return None;
+        }
+        let ids: Vec<u16> = deck.iter().map(|c| c.0).collect();
+        let forms: Vec<u8> = deck.iter().map(|c| c.1).collect();
+        let order = deck_token_order(&ids, &forms);
+        let tok_ids: Vec<u16> = order.iter().map(|&i| ids[i]).collect();
+        let tok_form: Vec<u8> = order.iter().map(|&i| forms[i]).collect();
+        let tok_kind: Vec<u8> = tok_ids.iter().map(|&c| cat.kind(c) as u8).collect();
+        let tok_cost: Vec<f32> = tok_ids.iter().map(|&c| cat.cost(c)).collect();
+        let belief = CycleBelief::new(&tok_ids)?;
+        Some(SideFrames { me, cat, tl, cfg, tok_ids, tok_form, tok_kind, tok_cost, belief, my_elixir: ElixirSim::new(tl),
+                          opp_elixir: ElixirSim::new(tl), recent: Vec::new(), n_plays: 0, n_abilities: 0 })
     }
-    let deck_ids: Vec<u16> = own.deck.iter().map(|c| c.id).collect();
-    let deck_forms: Vec<u8> = own.deck.iter().map(|c| c.form).collect();
-    let order = deck_token_order(&deck_ids, &deck_forms);
-    let tok_ids: Vec<u16> = order.iter().map(|&i| deck_ids[i]).collect();
-    let tok_form: Vec<u8> = order.iter().map(|&i| deck_forms[i]).collect();
-    let tok_kind: Vec<u8> = tok_ids.iter().map(|&c| cat.kind(c) as u8).collect();
-    let tok_cost: Vec<f32> = tok_ids.iter().map(|&c| cat.cost(c)).collect();
-    let mut belief = CycleBelief::new(&tok_ids)?;
-    let tps = tl.ticks_per_second();
-    let total_ticks = (r.duration_s * tps).ceil() as u32;
-    let n_frames = (total_ticks / cfg.step_ticks) as usize + 1;
 
-    let mut my_elixir = ElixirSim::new(tl);
-    let mut opp_elixir = ElixirSim::new(tl);
-    let mut cols = FrameColumns::default();
-    let mut ev_i = 0usize; // events consumed (tick < frame tick)
-    let mut recent: Vec<&Event> = Vec::new();
-    let mut n_plays = 0usize;
-    let mut n_abilities = 0usize;
-    let evs = &r.events;
-
-    for f in 0..n_frames {
-        let t = (f as u32) * cfg.step_ticks;
-        let t_s = t as f64 / tps;
-        // apply every event strictly before this frame
-        while ev_i < evs.len() && evs[ev_i].tick < t {
-            let e = &evs[ev_i];
-            let e_s = e.tick as f64 / tps;
-            match e.kind {
-                EventKind::Play { card, .. } => {
-                    let cost = cat.cost(card) as f64;
-                    if e.side == me {
-                        my_elixir.advance(e_s);
-                        my_elixir.spend(cost);
-                        if belief.observe(card) == Observed::Inconsistent {
-                            return None;
-                        }
-                        n_plays += 1;
-                    } else {
-                        opp_elixir.advance(e_s);
-                        opp_elixir.spend(cost);
+    /// Apply one event (in tick order); false when no hand cycle explains the own plays.
+    pub fn observe(&mut self, e: &Event) -> bool {
+        let e_s = e.tick as f64 / self.tl.ticks_per_second();
+        match e.kind {
+            EventKind::Play { card, .. } => {
+                let cost = self.cat.cost(card) as f64;
+                if e.side == self.me {
+                    self.my_elixir.advance(e_s);
+                    self.my_elixir.spend(cost);
+                    if self.belief.observe(card) == Observed::Inconsistent {
+                        return false;
                     }
-                    recent.push(e);
-                }
-                EventKind::Ability { .. } => {
-                    // champion abilities cost elixir too (catalog knows the champion's ability cost only
-                    // through the card; use 1 elixir as the common value when unknown)
-                    let cost = 1.0f64;
-                    if e.side == me {
-                        my_elixir.advance(e_s);
-                        my_elixir.spend(cost);
-                        n_abilities += 1;
-                    } else {
-                        opp_elixir.advance(e_s);
-                        opp_elixir.spend(cost);
-                    }
-                    recent.push(e);
+                    self.n_plays += 1;
+                } else {
+                    self.opp_elixir.advance(e_s);
+                    self.opp_elixir.spend(cost);
                 }
             }
-            ev_i += 1;
+            EventKind::Ability { .. } => {
+                // champion abilities cost elixir too (catalog knows the champion's ability cost only
+                // through the card; use 1 elixir as the common value when unknown)
+                let cost = 1.0f64;
+                if e.side == self.me {
+                    self.my_elixir.advance(e_s);
+                    self.my_elixir.spend(cost);
+                    self.n_abilities += 1;
+                } else {
+                    self.opp_elixir.advance(e_s);
+                    self.opp_elixir.spend(cost);
+                }
+            }
         }
-        my_elixir.advance(t_s);
-        opp_elixir.advance(t_s);
+        self.recent.push(*e);
+        true
+    }
 
+    /// Append the input columns of the frame at tick `t` (every observed event is before it;
+    /// the label columns are the caller's).
+    pub fn push_frame(&mut self, t: u32, cols: &mut FrameColumns) {
+        let t_s = t as f64 / self.tl.ticks_per_second();
+        self.my_elixir.advance(t_s);
+        self.opp_elixir.advance(t_s);
         cols.tick.push(t as i32);
         cols.time_s.push(t_s as f32);
-        cols.phase.push(tl.phase_at(t_s));
-        cols.overtime.push(tl.is_overtime(t_s) as u8);
-        cols.elixir.push(my_elixir.elixir as f32);
-        cols.opp_elixir.push(opp_elixir.elixir as f32);
-        cols.deck_ids.extend_from_slice(&tok_ids);
-        cols.deck_form.extend_from_slice(&tok_form);
-        cols.deck_kind.extend_from_slice(&tok_kind);
-        cols.deck_cost.extend_from_slice(&tok_cost);
-        cols.deck_in_hand.extend_from_slice(belief.in_hand());
-        cols.deck_next.extend_from_slice(belief.next());
+        cols.phase.push(self.tl.phase_at(t_s));
+        cols.overtime.push(self.tl.is_overtime(t_s) as u8);
+        cols.elixir.push(self.my_elixir.elixir as f32);
+        cols.opp_elixir.push(self.opp_elixir.elixir as f32);
+        cols.deck_ids.extend_from_slice(&self.tok_ids);
+        cols.deck_form.extend_from_slice(&self.tok_form);
+        cols.deck_kind.extend_from_slice(&self.tok_kind);
+        cols.deck_cost.extend_from_slice(&self.tok_cost);
+        cols.deck_in_hand.extend_from_slice(self.belief.in_hand());
+        cols.deck_next.extend_from_slice(self.belief.next());
         // recent plays, newest first
-        let k = cfg.recent;
-        let start = recent.len().saturating_sub(k);
-        let window = &recent[start..];
+        let k = self.cfg.recent;
+        let start = self.recent.len().saturating_sub(k);
+        let window = &self.recent[start..];
         for j in 0..k {
             if let Some(e) = window.iter().rev().nth(j) {
                 let (card, gx, gy) = match e.kind {
                     EventKind::Play { card, gx, gy, .. } => {
-                        let (x, y) = to_own_frame(me, gx, gy);
+                        let (x, y) = to_own_frame(self.me, gx, gy);
                         (card, x, y)
                     }
                     EventKind::Ability { card } => (card, -1, -1),
                 };
-                cols.recent_side.push(if e.side == me { 0 } else { 1 });
+                cols.recent_side.push(if e.side == self.me { 0 } else { 1 });
                 cols.recent_card.push(card);
                 cols.recent_x.push(gx);
                 cols.recent_y.push(gy);
@@ -241,6 +248,43 @@ pub fn build_side(r: &Replay, me: SideId, cat: &Catalog, tl: &Timeline, cfg: &Fr
                 cols.recent_age.push(-1);
             }
         }
+    }
+}
+
+/// A grid cell (team frame) in `side`'s own frame (own half rows 0..16, x mirrored for the
+/// opponent), and back.
+pub fn own_frame(side: SideId, gx: i8, gy: i8) -> (i8, i8) {
+    to_own_frame(side, gx, gy)
+}
+
+/// Build the sequence for `me`; None when the deck is not 8 cards or no hand cycle
+/// explains the own plays (a corrupt record).
+pub fn build_side(r: &Replay, me: SideId, cat: &Catalog, tl: &Timeline, cfg: &FrameConfig) -> Option<Sample> {
+    let (own, other) = match me {
+        SideId::Team => (&r.team, &r.opp),
+        SideId::Opp => (&r.opp, &r.team),
+    };
+    let deck: Vec<(u16, u8)> = own.deck.iter().map(|c| (c.id, c.form)).collect();
+    let mut sf = SideFrames::new(&deck, me, cat, tl, *cfg)?;
+    let deck_ids: Vec<u16> = own.deck.iter().map(|c| c.id).collect();
+    let deck_forms: Vec<u8> = own.deck.iter().map(|c| c.form).collect();
+    let tps = tl.ticks_per_second();
+    let total_ticks = (r.duration_s * tps).ceil() as u32;
+    let n_frames = (total_ticks / cfg.step_ticks) as usize + 1;
+    let mut cols = FrameColumns::default();
+    let mut ev_i = 0usize; // events consumed (tick < frame tick)
+    let evs = &r.events;
+
+    for f in 0..n_frames {
+        let t = (f as u32) * cfg.step_ticks;
+        // apply every event strictly before this frame
+        while ev_i < evs.len() && evs[ev_i].tick < t {
+            if !sf.observe(&evs[ev_i]) {
+                return None;
+            }
+            ev_i += 1;
+        }
+        sf.push_frame(t, &mut cols);
         // label: first own action in [t, t + step)
         let mut label: Option<&Event> = None;
         for e in &evs[ev_i..] {
@@ -256,7 +300,7 @@ pub fn build_side(r: &Replay, me: SideId, cat: &Catalog, tl: &Timeline, cfg: &Fr
             Some(EventKind::Play { card, gx, gy, .. }) => {
                 // the deck token of the played card (the belief holds the plays before
                 // it: with repeated ids — unknown cards — the copy it can hold)
-                let slot = belief.attribute(card).map(|s| s as i8).unwrap_or(-1);
+                let slot = sf.belief.attribute(card).map(|s| s as i8).unwrap_or(-1);
                 let (x, y) = to_own_frame(me, gx, gy);
                 cols.waited.push((slot < 0) as u8);
                 cols.card_slot.push(slot);
@@ -288,7 +332,7 @@ pub fn build_side(r: &Replay, me: SideId, cat: &Catalog, tl: &Timeline, cfg: &Fr
     // drop; the selection is on data integrity, never on a frame's content).
     for e in &evs[ev_i..] {
         if let (true, EventKind::Play { card, .. }) = (e.side == me, e.kind) {
-            if belief.observe(card) == Observed::Inconsistent {
+            if sf.belief.observe(card) == Observed::Inconsistent {
                 return None;
             }
         }
@@ -313,13 +357,13 @@ pub fn build_side(r: &Replay, me: SideId, cat: &Catalog, tl: &Timeline, cfg: &Fr
         tower_key: own.tower_key.clone(),
         opp_deck_ids: other.deck.iter().map(|c| c.id).collect(),
         duration_s: r.duration_s,
-        n_plays,
-        n_abilities,
-        hand_consistent_states: belief.n_consistent() as usize,
-        skipped_plays: belief.skipped,
-        elixir_violations: my_elixir.violations,
-        opp_elixir_violations: opp_elixir.violations,
-        elixir_leaked: my_elixir.leaked as f32,
+        n_plays: sf.n_plays,
+        n_abilities: sf.n_abilities,
+        hand_consistent_states: sf.belief.n_consistent() as usize,
+        skipped_plays: sf.belief.skipped,
+        elixir_violations: sf.my_elixir.violations,
+        opp_elixir_violations: sf.opp_elixir.violations,
+        elixir_leaked: sf.my_elixir.leaked as f32,
     };
     Some(Sample { meta, cols })
 }
