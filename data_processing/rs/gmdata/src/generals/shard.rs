@@ -182,6 +182,13 @@ fn record_to_sample(r: &Record, file: &str) -> Result<(Sample, Value, usize)> {
     Ok((sample, meta, t))
 }
 
+/// A gio record in memory → (sample, shard meta, frames): what its JSON file converts to
+/// (the same serde round trip, without the file — `gmdata generals ladder --shards`).
+pub fn gio_to_sample<T: serde::Serialize>(g: &T, file: &str) -> Result<(Sample, Value, usize)> {
+    let rec: Record = serde_json::from_value(serde_json::to_value(g)?).context("not a gio record")?;
+    record_to_sample(&rec, file)
+}
+
 fn convert_file(path: &Path) -> Result<(Sample, Value, usize)> {
     let bytes = std::fs::read(path)?;
     let rec: Record = serde_json::from_slice(&bytes).context("not a gio record")?;
@@ -283,6 +290,52 @@ mod tests {
             "value": vec![-0.5f32; t],
             "enemy_heatmap": vec![vec![vec![vec![0.0f32; w]; h]]; t],
         })
+    }
+
+    #[test]
+    fn a_record_in_memory_converts_like_its_file() {
+        use crate::generals::gio::Gio;
+        let (t, h, w) = (3usize, 25usize, 25usize);
+        let mut grid = vec![vec![vec![vec![0.0f64; w]; h]; GRID_CHANNELS]; t];
+        for (ti, f) in grid.iter_mut().enumerate() {
+            f[ti % ONEHOT][0][0] = 1.0;
+            for (y, row) in f[ONEHOT].iter_mut().enumerate() {
+                for (x, a) in row.iter_mut().enumerate() {
+                    *a = ((1 + y * w + x + ti) as f64).ln_1p() / 10.0; // f64 values with no exact f32
+                }
+            }
+        }
+        let g = Gio {
+            grid_seq: grid,
+            globals_seq: (0..t).map(|i| [0.1 * i as f64, 1.0 / 3.0, 0.7, 2.0f64.sqrt()]).collect(),
+            legal_source_mask_seq: vec![vec![vec![vec![true; w]; h]]; t],
+            max_actions_per_tick: 2,
+            count: vec![1, 0, 1],
+            src_y: vec![vec![1, 0]; t], src_x: vec![vec![0, 0]; t],
+            dir_id: vec![vec![3, 0]; t], ratio_id: vec![vec![1, 0]; t],
+            value: vec![-0.123456789; t],
+            tick_seq: vec![0, 1, 2], tick_bucket_seq: vec![0; t],
+            enemy_heatmap: Vec::new(), next_visibility: Vec::new(),
+        };
+        let dir = std::env::temp_dir().join(format!("gmdata-gio-mem-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("r.json");
+        std::fs::write(&path, serde_json::to_vec(&g).unwrap()).unwrap();
+        let (a, ma, ta) = convert_file(&path).unwrap();
+        let (b, mb, tb) = gio_to_sample(&g, "r.json").unwrap();
+        assert_eq!((ma, ta), (mb, tb));
+        let (wa, wb) = (dir.join("a"), dir.join("b"));
+        for (out, s) in [(&wa, a), (&wb, b)] {
+            let mut sw = ShardWriter::new(out, "generals", CONVERTER_VERSION, json!({}), 8).unwrap();
+            sw.push(s).unwrap();
+            sw.flush().unwrap();
+        }
+        for f in std::fs::read_dir(wa.join("generals_00000")).unwrap() {
+            let f = f.unwrap().path();
+            let other = wb.join("generals_00000").join(f.file_name().unwrap());
+            assert_eq!(std::fs::read(&f).unwrap(), std::fs::read(&other).unwrap(), "{}", f.display());
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

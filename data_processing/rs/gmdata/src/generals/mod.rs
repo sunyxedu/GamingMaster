@@ -100,6 +100,10 @@ pub enum Cmd {
         /// write 1 game in N (by id) to out/training_val instead of out/training
         #[arg(long, default_value_t = 0)]
         val_every: u64,
+        /// write gm-shards to DIR/train and DIR/val instead of gio JSON records (resumes by
+        /// the manifest: its games are skipped)
+        #[arg(long)]
+        shards: Option<PathBuf>,
     },
     /// Save a ladder's whole global index (every game's metadata: players, stars, result,
     /// turns) to out/index.jsonl; resumable
@@ -215,10 +219,10 @@ pub fn run(cmd: Cmd) -> Result<()> {
             write_json(&out, &g)?;
         }
         Cmd::Ladder { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency, index,
-                      each, min_opponent_stars, val_every } => {
+                      each, min_opponent_stars, val_every, shards } => {
             anyhow::ensure!(!(each && both), "--each and --both exclude each other");
             let a = ladder::LadderArgs { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages,
-                                         concurrency, index, each, min_opponent_stars, val_every };
+                                         concurrency, index, each, min_opponent_stars, val_every, shards };
             println!("{}", ladder::run(&a)?);
         }
         Cmd::Index { out, ladder, max_pages, parallel } => {

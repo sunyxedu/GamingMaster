@@ -42,6 +42,16 @@ pub struct LadderArgs {
     pub min_opponent_stars: i64,
     /// 1 game in N (by id) is written to `training_val/` instead of `training/`
     pub val_every: u64,
+    /// write gm-shards (`<dir>/train`, `<dir>/val`) instead of gio JSON records — a gio
+    /// record is ~15 MB of JSON, its shard sample ~1.5 MB; a game already in the manifest
+    /// is skipped (a resumed run appends shards)
+    pub shards: Option<PathBuf>,
+}
+
+/// What one game produced: gio files written / already there, or shard samples.
+enum Made {
+    Files { written: usize, existing: usize },
+    Samples(Vec<(gmshard::Sample, Value, usize)>),
 }
 
 fn client() -> Result<reqwest::blocking::Client> {
@@ -133,14 +143,29 @@ pub fn run(a: &LadderArgs) -> Result<Value> {
     let c = client()?;
     let (replays, training, training_val) = (a.out.join("replays"), a.out.join("training"), a.out.join("training_val"));
     std::fs::create_dir_all(&replays)?;
-    std::fs::create_dir_all(&training)?;
-    if a.val_every > 0 {
-        std::fs::create_dir_all(&training_val)?;
+    if a.shards.is_none() {
+        std::fs::create_dir_all(&training)?;
+        if a.val_every > 0 {
+            std::fs::create_dir_all(&training_val)?;
+        }
     }
     let mut bots = BotCache::load(a.out.join("botcache.json"));
-    let mut manifest = std::fs::OpenOptions::new().create(true).append(true).open(a.out.join("manifest.jsonl"))?;
+    let manifest_path = a.out.join("manifest.jsonl");
+    // shards mode resumes by the manifest: its games are in the shards already
+    let mut done_ids: HashSet<String> = HashSet::new();
+    if a.shards.is_some() && manifest_path.exists() {
+        for line in std::io::BufReader::new(std::fs::File::open(&manifest_path)?).lines() {
+            if let Some(id) = serde_json::from_str::<Value>(&line?).ok().and_then(|v| v["id"].as_str().map(String::from)) {
+                done_ids.insert(id);
+            }
+        }
+    }
+    let mut manifest = std::fs::OpenOptions::new().create(true).append(true).open(&manifest_path)?;
+    let mut writers: [Option<gmshard::ShardWriter>; 2] = [None, None];
+    let mut shard_meta: Option<Value> = None;
     let saved = a.index.as_deref().map(index_pages).transpose()?;
     let (mut kept, mut seen, mut rejected, mut records, mut sim_skip, mut existing) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+    let (mut frames, mut records_val, mut meta_mismatch, mut convert_failed) = (0usize, 0usize, 0usize, 0usize);
     for page in 0..a.max_pages {
         if kept >= a.max_games {
             break;
@@ -167,6 +192,11 @@ pub fn run(a: &LadderArgs) -> Result<Value> {
         let mut batch: Vec<(String, Vec<String>, Value)> = Vec::new();
         for g in games {
             seen += 1;
+            if g["id"].as_str().is_some_and(|id| done_ids.contains(id)) {
+                existing += 1;
+                kept += 1;
+                continue;
+            }
             let who = imitated(&g, a, &c, &mut bots);
             if who.is_empty() {
                 rejected += 1;
@@ -182,27 +212,36 @@ pub fn run(a: &LadderArgs) -> Result<Value> {
         bots.save();
         let ids: Vec<String> = batch.iter().map(|b| b.0.clone()).collect();
         let failed = api::download_replays(&ids, &replays, &a.server, a.concurrency)?;
-        // simulate + convert the batch in parallel; manifest lines in batch order
-        let done: Vec<(String, Vec<String>, Value, usize, usize, usize, Value)> = batch.into_par_iter()
+        // simulate + convert the batch in parallel; manifest lines and shard samples in batch order
+        let done: Vec<(String, Vec<String>, Value, Made, usize, Value)> = batch.into_par_iter()
             .filter(|(id, _, _)| !failed.contains(id))
             .filter_map(|(id, who, meta)| {
                 let r = std::fs::read(replays.join(format!("{id}.json"))).ok()
                     .and_then(|b| serde_json::from_slice::<Replay>(&b).ok())?;
                 let dir = if a.val_every > 0 && crate::common::hash_bucket(&id, a.val_every) { &training_val } else { &training };
-                let (mut n, mut have, mut skip) = (0usize, 0usize, 0usize);
+                let (mut written, mut have, mut skip) = (0usize, 0usize, 0usize);
+                let mut samples = Vec::new();
                 let mut sums = serde_json::Map::new();
                 for player in &who {
                     let safe: String = player.chars().map(|ch| if ch.is_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' }).collect();
-                    let path = dir.join(format!("{id}__{safe}.json"));
+                    let name = format!("{id}__{safe}.json");
+                    let path = dir.join(&name);
                     match sim::Simulator::new(&r, player, true) {
                         Ok(s) => {
                             let out = s.simulate();
                             sums.insert(player.clone(), summary(&out));
-                            if path.exists() {
+                            if a.shards.is_none() && path.exists() {
                                 have += 1;
                                 continue;
                             }
                             let g = gio::convert(&out, 4, true);
+                            if a.shards.is_some() {
+                                match super::shard::gio_to_sample(&g, &name) {
+                                    Ok(x) => samples.push(x),
+                                    Err(e) => eprintln!("  {name}: not converted: {e:#}"),
+                                }
+                                continue;
+                            }
                             let tmp = path.with_extension("json.tmp");
                             let ok = std::fs::File::create(&tmp).map_err(anyhow::Error::from).and_then(|f| {
                                 let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
@@ -211,7 +250,7 @@ pub fn run(a: &LadderArgs) -> Result<Value> {
                                 Ok(())
                             }).and_then(|_| std::fs::rename(&tmp, &path).map_err(anyhow::Error::from));
                             if ok.is_ok() {
-                                n += 1;
+                                written += 1;
                             }
                         }
                         Err(e) => {
@@ -221,26 +260,73 @@ pub fn run(a: &LadderArgs) -> Result<Value> {
                         }
                     }
                 }
-                Some((id, who, meta, n, have, skip, Value::Object(sums)))
+                let made = if a.shards.is_some() { Made::Samples(samples) } else { Made::Files { written, existing: have } };
+                Some((id, who, meta, made, skip, Value::Object(sums)))
             })
             .collect();
-        for (id, who, meta, n, have, skip, sums) in done {
-            records += n;
-            existing += have;
+        for (id, who, meta, made, skip, sums) in done {
             sim_skip += skip;
-            if n + have > 0 {
-                kept += 1;
-                if n > 0 {
-                    writeln!(manifest, "{}", json!({"id": id, "imitated": who, "meta": meta, "summary": sums}))?;
+            let n = match made {
+                Made::Files { written, existing: have } => {
+                    records += written;
+                    existing += have;
+                    if written + have > 0 {
+                        kept += 1;
+                    }
+                    written
                 }
+                Made::Samples(samples) => {
+                    let val = a.val_every > 0 && crate::common::hash_bucket(&id, a.val_every);
+                    let mut n = 0;
+                    for (sample, m, t) in samples {
+                        if shard_meta.is_none() {
+                            let root = a.shards.as_ref().unwrap();
+                            writers[0] = Some(gmshard::ShardWriter::new(&root.join("train"), "generals",
+                                                                        super::shard::CONVERTER_VERSION, m.clone(), 128)?);
+                            writers[1] = Some(gmshard::ShardWriter::new(&root.join("val"), "generals",
+                                                                        super::shard::CONVERTER_VERSION, m.clone(), 128)?);
+                            shard_meta = Some(m.clone());
+                        }
+                        if Some(&m) != shard_meta.as_ref() {
+                            meta_mismatch += 1;
+                            continue;
+                        }
+                        writers[val as usize].as_mut().unwrap().push(sample)?;
+                        n += 1;
+                        frames += t;
+                        if val {
+                            records_val += 1;
+                        } else {
+                            records += 1;
+                        }
+                    }
+                    if n == 0 {
+                        convert_failed += 1;
+                    } else {
+                        kept += 1;
+                    }
+                    n
+                }
+            };
+            if n > 0 {
+                writeln!(manifest, "{}", json!({"id": id, "imitated": who, "meta": meta, "summary": sums}))?;
             }
         }
+        manifest.flush()?;
         if page % 20 == 0 {
-            eprintln!("  page {page}: seen {seen}, kept {kept}, training records {records} (+{existing} existing)");
+            eprintln!("  page {page}: seen {seen}, kept {kept}, training records {records} (+{records_val} val, {existing} existing)");
+        }
+    }
+    let mut shards = [0usize; 2];
+    for (i, w) in writers.iter_mut().enumerate() {
+        if let Some(w) = w {
+            w.flush()?;
+            shards[i] = w.written_shards;
         }
     }
     Ok(json!({"seen": seen, "rejected": rejected, "kept": kept, "simulator_skipped": sim_skip, "training_records": records,
-              "existing_records": existing}))
+              "existing": existing, "val_records": records_val, "frames": frames, "shards": shards,
+              "meta_mismatch": meta_mismatch, "convert_failed": convert_failed, "shard_meta": shard_meta}))
 }
 
 /// One page of a ladder's global index (newest first), retried with a growing pause.
