@@ -14,6 +14,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// The right-click command.
+pub const SMART: u32 = 1;
+
 /// AbilityData.Target: what a general ability's command takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -99,6 +102,12 @@ impl Vocab {
                 let id = a.ability_id.unwrap_or(0);
                 general.get(&id).copied().unwrap_or(id)
             }).collect();
+        // Smart (1, the right-click: move / attack / gather / rally by target) is marked
+        // unavailable in the data, yet it is the commonest human command
+        if general.contains_key(&SMART) || by_id.contains_key(&SMART) {
+            gen_ids.push(SMART);
+            general.insert(SMART, SMART);
+        }
         gen_ids.sort();
         gen_ids.dedup();
         let actions = gen_ids.into_iter().map(|g| {
@@ -107,7 +116,10 @@ impl Vocab {
                 let f = a.friendly_name.clone().unwrap_or_default();
                 if f.is_empty() { a.link_name.clone().unwrap_or_default() } else { f }
             }).unwrap_or_default();
-            Action { id: g, name, target: Target::of(a.and_then(|a| a.target).unwrap_or(1)) }
+            let (name, target) = if g == SMART && name.is_empty() { ("Smart".to_string(), 4) } else {
+                (name, a.and_then(|a| a.target).unwrap_or(if g == SMART { 4 } else { 1 }))
+            };
+            Action { id: g, name, target: Target::of(target) }
         }).collect();
         let mut buffs: Vec<(u32, String)> = d.buffs.iter().filter(|b| named(&b.name))
             .map(|b| (b.buff_id.unwrap_or(0), b.name.clone().unwrap_or_default())).collect();
