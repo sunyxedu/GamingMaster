@@ -10,7 +10,9 @@ ranks 1-10 from Red's side — ``gmdata xiangqi convert`` reads them; Pikafish's
 within ``--window`` centipawns of the best (softmax at ``--temperature``), so no two games
 are alike; the rest are the engine's best move.  A game ends by the rules (mate, stalemate,
 the rules' repetition / move-count draws), or is adjudicated: a side the engine scores at
-<= -``--resign_cp`` for ``--resign_plies`` plies in a row loses, and a game past
+<= -``--resign_cp`` for ``--resign_plies`` plies in a row loses, a game past ``--draw_after``
+plies the engine scores within ``--draw_cp`` for ``--draw_plies`` plies in a row is a draw (the
+engines otherwise shuffle to the rules' move limit: 27 of 59 test games), and a game past
 ``--max_plies`` is a draw (``[Termination]`` says which).
 
     uv run python scripts/engine_selfplay.py --game xiangqi --engine ~/gm-engines/bin/pikafish \\
@@ -116,6 +118,7 @@ def play_xiangqi(engine: Uci, rng: random.Random, a) -> Tuple[List[str], str, st
     st = gmsim.State("xiangqi", {})
     moves: List[str] = []
     losing = [0, 0]
+    level = 0
     termination = "rules"
     while True:
         kind, seats = st.turn()
@@ -142,6 +145,12 @@ def play_xiangqi(engine: Uci, rng: random.Random, a) -> Tuple[List[str], str, st
         if losing[seat] >= a.resign_plies:
             termination = "resign"
             return moves, ("0-1" if seat == 0 else "1-0"), termination
+        # a dead-level game past --draw_after plies: a draw once the engine has scored it
+        # within --draw_cp for --draw_plies plies in a row
+        level = level + 1 if (len(moves) >= a.draw_after and abs(score) <= a.draw_cp) else 0
+        if a.draw_plies > 0 and level >= a.draw_plies:
+            termination = "draw_adjudicated"
+            return moves, "1/2-1/2", termination
         st.apply_action(seat, legal[choice])
         moves.append(choice)
     ret = st.returns() if st.turn()[0] != "act" else [0.0, 0.0]
@@ -206,6 +215,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--resign_cp", type=int, default=1500)
     ap.add_argument("--resign_plies", type=int, default=8)
     ap.add_argument("--max_plies", type=int, default=300)
+    ap.add_argument("--draw_after", type=int, default=80)
+    ap.add_argument("--draw_cp", type=int, default=20)
+    ap.add_argument("--draw_plies", type=int, default=30, help="0 = no draw adjudication")
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
