@@ -94,8 +94,11 @@ impl Vocab {
             general.insert(id, g);
         }
         let mut gen_ids: Vec<u32> = d.abilities.iter()
-            .filter(|a| a.available.unwrap_or(false) && named(&a.link_name))
-            .map(|a| general[&a.ability_id.unwrap_or(0)]).collect();
+            .filter(|a| a.available.unwrap_or(false) && named(&a.link_name) && a.ability_id.unwrap_or(0) != 0)
+            .map(|a| {
+                let id = a.ability_id.unwrap_or(0);
+                general.get(&id).copied().unwrap_or(id)
+            }).collect();
         gen_ids.sort();
         gen_ids.dedup();
         let actions = gen_ids.into_iter().map(|g| {
