@@ -40,6 +40,12 @@ import unicodedata
 import urllib.request
 from typing import Dict, Iterable, List, Optional, Tuple
 
+#: formes Showdown renamed after replays had been saved under the old names (old key → current
+#: key): the Paldean Tauros breeds' Gen 9 launch names (Tauros-Paldea, -Fire, -Water; renamed
+#: Combat / Blaze / Aqua in 2023) — 8,265 species slots of the v5 conversion
+RENAMED_SPECIES = {"taurospaldea": "taurospaldeacombat", "taurospaldeafire": "taurospaldeablaze",
+                   "taurospaldeawater": "taurospaldeaaqua"}
+
 #: smogon/pokemon-showdown master of 2026-09-23 ("Teams: Tweak user feedback")
 SHOWDOWN_COMMIT = "a5df8274e85b0889bf2a9b3422a08b39732374fc"
 SHOWDOWN_REPO = "https://github.com/smogon/pokemon-showdown"
@@ -264,6 +270,8 @@ def build(texts: Dict[str, str], commit: str, old: Optional[Dict] = None,
             if to_id(n) != k and k not in _variants(n):
                 raise SystemExit(f"{name}: key {k!r} is not the toID of its name {n!r}")
         extra[name] = table
+    keys = {k for k, _, _ in species}
+    renamed = {a: k for a, k in RENAMED_SPECIES.items() if k in keys}
     if old is not None:
         moves = _merge([tuple(e) for e in old["moves"]], moves, "moves")
         species = _merge([tuple(e) for e in old["species"]], species, "species")
@@ -277,7 +285,7 @@ def build(texts: Dict[str, str], commit: str, old: Optional[Dict] = None,
         "moves": [list(e) for e in moves],
         "move_aliases": [list(a) for a in _aliases(moves, {}, {}, "moves")],
         "species": [list(e) for e in species],
-        "species_aliases": [list(a) for a in _aliases(species, cosmetic, cosmetic_names,
+        "species_aliases": [list(a) for a in _aliases(species, {**cosmetic, **renamed}, cosmetic_names,
                                                       "species")],
         **{name: [list(e) for e in table] for name, table in extra.items()},
     }
