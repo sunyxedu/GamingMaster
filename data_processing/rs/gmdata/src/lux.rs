@@ -358,8 +358,22 @@ fn kaggle_token() -> Result<String> {
     Ok(std::fs::read_to_string(&p).map_err(|_| anyhow::anyhow!("set KAGGLE_API_TOKEN or create ~/.kaggle/access_token"))?.trim().to_string())
 }
 
+/// One Kaggle API call, retried (5, 10, 20, 40 s) on a server error or a failed connection;
+/// a client error (4xx) is returned at once.
 fn kaggle_call(client: &reqwest::blocking::Client, token: &str, method: &str, body: Value) -> Result<reqwest::blocking::Response> {
-    Ok(client.post(format!("{KAGGLE}/{method}")).bearer_auth(token).json(&body).send()?.error_for_status()?)
+    let mut last = None;
+    for attempt in 0..5u32 {
+        match client.post(format!("{KAGGLE}/{method}")).bearer_auth(token).json(&body).send() {
+            Ok(r) if r.status().is_client_error() => return Ok(r.error_for_status()?),
+            Ok(r) if r.status().is_success() => return Ok(r),
+            Ok(r) => last = Some(anyhow::anyhow!("{method}: HTTP {}", r.status())),
+            Err(e) => last = Some(anyhow::anyhow!("{method}: {e}")),
+        }
+        if attempt < 4 {
+            std::thread::sleep(std::time::Duration::from_secs(5 << attempt));
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("{method}: failed")))
 }
 
 /// High-quality episodes: both agents belong to the top `top_teams` of the final
@@ -380,7 +394,15 @@ pub fn fetch(out: &Path, competition: &str, top_teams: usize, max_episodes: usiz
     'teams: for (team, _, _) in &teams {
         let subs: Value = kaggle_call(&client, &token, "ListTeamPublicSubmissions", json!({"teamId": team}))?.json()?;
         for sub in subs["submissions"].as_array().cloned().unwrap_or_default() {
-            let eps: Value = kaggle_call(&client, &token, "ListSubmissionEpisodes", json!({"submissionId": sub["id"]}))?.json()?;
+            // one submission's episode list failing (after retries) skips that submission only
+            let eps: Value = match kaggle_call(&client, &token, "ListSubmissionEpisodes", json!({"submissionId": sub["id"]}))
+                .and_then(|r| r.json().map_err(anyhow::Error::from)) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("  submission {}: {e:#} (skipped)", sub["id"]);
+                    continue;
+                }
+            };
             for ep in eps["episodes"].as_array().cloned().unwrap_or_default() {
                 let id = ep["id"].as_i64().unwrap_or(0);
                 let agents = ep["agents"].as_array().cloned().unwrap_or_default();
@@ -391,11 +413,17 @@ pub fn fetch(out: &Path, competition: &str, top_teams: usize, max_episodes: usiz
                 manifest.push(json!({"id": id, "agents": agents}));
                 let dest = out.join(format!("episode-{id}-replay.json"));
                 if !dest.exists() {
-                    let mut resp = kaggle_call(&client, &token, "GetEpisodeReplay", json!({"episodeId": id}))?;
-                    let tmp = dest.with_extension("part");
-                    std::io::copy(&mut resp, &mut std::fs::File::create(&tmp)?)?;
-                    std::fs::rename(&tmp, &dest)?;
+                    let got = kaggle_call(&client, &token, "GetEpisodeReplay", json!({"episodeId": id})).and_then(|mut resp| {
+                        let tmp = dest.with_extension("part");
+                        std::io::copy(&mut resp, &mut std::fs::File::create(&tmp)?)?;
+                        std::fs::rename(&tmp, &dest)?;
+                        Ok(())
+                    });
                     std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                    if let Err(e) = got {
+                        eprintln!("  episode {id}: {e:#} (skipped)");
+                        continue;
+                    }
                 }
                 downloaded += 1;
                 eprintln!("[{downloaded}/{max_episodes}] episode {id}: {}", agents.iter().map(|a| a["teamName"].as_str().unwrap_or("?")).collect::<Vec<_>>().join(" vs "));
