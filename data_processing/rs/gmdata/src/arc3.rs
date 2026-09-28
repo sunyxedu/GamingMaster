@@ -276,6 +276,8 @@ struct Session {
     resets: usize,
     /// the recording starts after the first action (no starting RESET row)
     missing_start: bool,
+    /// that first action (type, x, y), for a replay from the game's start
+    first_action: Option<(i64, i64, i64)>,
 }
 
 impl Session {
@@ -368,6 +370,7 @@ fn session_of(rows: Vec<Row>, max_actions: usize) -> Result<Option<Session>> {
         game, game_id, guid: first.guid.clone(), grid: vec![], delta: vec![], globals: vec![], legal_type: vec![],
         legal_click: vec![], type_idx: vec![], click_idx: vec![], value: vec![], levels: 0, win_levels: 0, won: false,
         rows: rows.len(), noise_rows: 0, empty_frames: 0, game_overs: 0, resets: 0, missing_start: false,
+        first_action: None,
     };
     let mut env = Env { grid: vec![0; CELLS], available: [false; N_TYPES], levels: 0, win_levels: 1, actions: 0, last_type: -1,
                         last_click: (0.0, 0.0), just_leveled: false, game_over: false };
@@ -383,6 +386,7 @@ fn session_of(rows: Vec<Row>, max_actions: usize) -> Result<Option<Session>> {
             bail!("the first row is action {typ}");
         }
         s.missing_start = true;
+        s.first_action = Some((typ, x, y));
         env.actions = 1;
         env.last_type = typ;
         if typ as usize == CLICK {
@@ -574,7 +578,7 @@ pub fn convert(inputs: &[PathBuf], out: Option<&Path>, shard_size: usize, max_ac
             let t = s.frames();
             let sample = Sample::new(json!({"game": s.game, "game_id": s.game_id, "guid": s.guid, "source": source,
                                             "levels": s.levels, "win_levels": s.win_levels, "won": s.won, "rows": s.rows,
-                                            "missing_start": s.missing_start, "file": name}))
+                                            "missing_start": s.missing_start, "first_action": s.first_action, "file": name}))
                 .u8("obs.grid", &[GRID, GRID], s.grid)
                 .bits("obs.delta", &[GRID, GRID], &s.delta)
                 .f32("obs.globals", &[N_GLOBALS], s.globals)

@@ -31,7 +31,13 @@ import torch
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WS = os.path.join(ROOT, "data_processing")
 CARGO = shutil.which("cargo") or os.path.expanduser("~/.cargo/bin/cargo")
-ENV_DIR = os.environ.get("ENVIRONMENTS_DIR") or os.path.expanduser("~/Documents/arc3-wm/environment_files")
+#: the official games' files: all 25 from the ARC API (scripts/arc3_fetch_games.py), else the
+#: arc3-wm checkout's 8
+OFFICIAL_DIR = os.path.join(ROOT, "data", "arc3", "official")
+ENV_DIR = os.environ.get("ENVIRONMENTS_DIR") or (
+    OFFICIAL_DIR if os.path.isdir(OFFICIAL_DIR) else os.path.expanduser("~/Documents/arc3-wm/environment_files"))
+#: GM_ARC3_FULL=1: every human session to its end (else 2 per game, 300 frames each)
+FULL = os.environ.get("GM_ARC3_FULL") == "1"
 HUMAN_ZIP = os.environ.get("GM_ARC3_HUMAN_ZIP") or os.path.expanduser(
     "~/Documents/arc3-wm/data/replays/arc_agi_3_public_demo_human_testing.zip")
 RETRODICT = os.environ.get("GM_ARC3_RETRODICT") or os.path.join(ROOT, "data", "arc3", "retrodict", "release-runs")
@@ -81,13 +87,14 @@ def _frame(obs):
             "legal_click": obs.legal["click"][0].clone(), "forced": bool(obs.forced[0])}
 
 
-def _check(sample, frames, actions):
+def _check(sample, frames, actions, first_delta=True):
     obs, tgt = sample["obs"], sample["tgt"]
     T = len(frames)
     assert obs["grid"].shape[0] == T, (obs["grid"].shape, T)
     for t, f in enumerate(frames):
         assert torch.equal(obs["grid"][t], f["grid"]), t
-        assert torch.equal(obs["delta"][t].bool(), f["delta"]), t
+        if t or first_delta:
+            assert torch.equal(obs["delta"][t].bool(), f["delta"]), t
         torch.testing.assert_close(obs["globals"][t], f["globals"], rtol=0, atol=1e-6, msg=f"globals {t}")
         assert torch.equal(tgt["legal_type"][t].bool(), f["legal_type"]), t
         assert torch.equal(tgt["legal_click"][t].bool(), f["legal_click"]), t
@@ -144,24 +151,36 @@ def test_a_recording_of_the_env_converts_to_the_envs_frames(gmdata, tmp_path, ga
     torch.testing.assert_close(s["tgt"]["value"], togo.float(), rtol=0, atol=1e-6)
 
 
-LOCAL = ("cd82", "lf52", "ls20", "sb26", "sp80", "tn36", "tu93", "vc33")
+OFFICIAL = ("ar25", "bp35", "cd82", "cn04", "dc22", "ft09", "g50t", "ka59", "lf52", "lp85", "ls20", "m0r0", "r11l",
+            "re86", "s5i5", "sb26", "sc25", "sk48", "sp80", "su15", "tn36", "tr87", "tu93", "vc33", "wa30")
+LOCAL = tuple(g for g in OFFICIAL if os.path.isdir(os.path.join(ENV_DIR, g)))
+#: games patched after the human testing without a new version id: their recordings do not
+#: replay exactly (scripts/arc3_resimulate.py re-records them on the current files)
+PATCHED = {"ft09": "ACTION1-5 no longer available (the players pressed keys)",
+           "s5i5": "up to 22 cells drawn differently, the same levels and wins"}
 
 
 @needs_sdk
 @pytest.mark.skipif(not os.path.exists(HUMAN_ZIP), reason="the human baseline recordings are not available")
 def test_human_sessions_replay_through_the_env(gmdata, tmp_path):
-    st, samples = _convert(gmdata, [HUMAN_ZIP], tmp_path / "out", "--games", ",".join(LOCAL))
+    games = [g for g in LOCAL if g not in PATCHED]
+    st, samples = _convert(gmdata, [HUMAN_ZIP], tmp_path / "out", "--games", ",".join(games))
     assert st["errors"] == 0
     checked = 0
     per_game = {}
     for s in samples:
         g = s["meta"]["game"]
-        if s["meta"]["missing_start"] or per_game.get(g, 0) >= 2:
+        if per_game.get(g, 0) >= 2 and not FULL:
             continue
         per_game[g] = per_game.get(g, 0) + 1
         env = _env(g)
         obs = env.reset()
-        T = min(int(s["tgt"]["type_idx"].shape[0]), 300)
+        if s["meta"]["missing_start"]:
+            # the recorder missed the starting RESET: the session's first frame is the state
+            # after its first action
+            typ, x, y = s["meta"]["first_action"]
+            obs, _, _, _ = env.step({"type_idx": torch.tensor([typ]), "click_idx": torch.tensor([y * 64 + x])})
+        T = int(s["tgt"]["type_idx"].shape[0]) if FULL else min(int(s["tgt"]["type_idx"].shape[0]), 300)
         frames, actions = [], []
         for t in range(T):
             frames.append(_frame(obs))
@@ -172,10 +191,53 @@ def test_human_sessions_replay_through_the_env(gmdata, tmp_path):
                 break
         cut = {"obs": {k: v[:len(frames)] for k, v in s["obs"].items()},
                "tgt": {k: v[:len(frames)] for k, v in s["tgt"].items()}}
-        _check(cut, frames, actions)
+        # a missing-start session's first frame has no delta (the converter never saw the
+        # frame before the first action)
+        _check(cut, frames, actions, first_delta=not s["meta"]["missing_start"])
         checked += len(frames)
         env.close()
-    assert len(per_game) == len(LOCAL) and checked > 2000, (per_game, checked)
+    assert len(per_game) == len(games) and checked > 2000, (per_game, checked)
+
+
+@needs_sdk
+@pytest.mark.skipif(not os.path.exists(HUMAN_ZIP), reason="the human baseline recordings are not available")
+def test_resimulated_sessions_are_the_envs_frames(gmdata, tmp_path):
+    """scripts/arc3_resimulate.py on a patched game (s5i5, ft09) and a clean one: the
+    re-recorded sessions convert to exactly the env's frames, and a clean game's sessions come
+    out as recorded (all of their frames, the same wins)."""
+    games = [g for g in ("s5i5", "ft09", "vc33") if g in LOCAL]
+    if not games:
+        pytest.skip("no official game files")
+    from scripts.arc3_resimulate import convert, resimulate, write_recording
+
+    _, samples = convert(gmdata, [HUMAN_ZIP], str(tmp_path / "rec_shards"), MAX_ACTIONS, games)
+    picked = {}
+    for s in samples:
+        picked.setdefault(s["meta"]["game"], []).append(s)
+    out = tmp_path / "resim"
+    for g, ss in picked.items():
+        for s in ss[:2]:
+            rows, actions, stop, st = resimulate(s, ENV_DIR, MAX_ACTIONS, 32, 3)
+            write_recording(str(out / g / f"{s['meta']['guid']}.recording.jsonl"), s["meta"]["game_id"],
+                            s["meta"]["guid"], rows, actions)
+            if g == "vc33":
+                assert stop in ("end", "env_done") and st["frames_differing"] == 0 and len(actions) - 1 == \
+                    st["recorded_frames"], (stop, st)
+    st, resim = _convert(gmdata, [out], tmp_path / "out")
+    assert st["errors"] == 0 and st["noise_rows"] == 0 and st["kept"] == len(resim) > 0
+    for s in resim:
+        env = _env(s["meta"]["game"])
+        obs = env.reset()
+        frames, actions = [], []
+        for t in range(int(s["tgt"]["type_idx"].shape[0])):
+            frames.append(_frame(obs))
+            typ, click = int(s["tgt"]["type_idx"][t]), int(s["tgt"]["click_idx"][t])
+            actions.append((typ, click))
+            obs, _, done, _ = env.step({"type_idx": torch.tensor([typ]), "click_idx": torch.tensor([click])})
+            if bool(done[0]):
+                break
+        _check(s, frames, actions)
+        env.close()
 
 
 @needs_sdk
