@@ -39,8 +39,11 @@
 //! unit: `gmrules::games::doudizhu::play_events`).
 //!
 //! Filters: `--agent NAME` (repeatable) keeps only the per-seat streams of seats
-//! whose cards NAME played; `--hq` = `--agent douzero_adp --agent douzero_wp` (the
-//! strong DouZero agents; drops e.g. the supervised `douzero_sl` or `random` seats).
+//! whose cards NAME played; `--hq` = `--agent douzero_adp --agent douzero_wp --agent
+//! perfectdou` (the strong agents: the DouZero RL checkpoints and PerfectDou, measured
+//! through scripts/generate_doudizhu.py as strong as DouZero WP — landlord win rates
+//! within 2 points over 3000 games, decision log 97; drops e.g. the supervised
+//! `douzero_sl` or `random` seats).
 //! Games nobody bid on (no play phase) are kept: their streams are auction frames
 //! of the same bidding policy as every other record's.
 //!
@@ -72,8 +75,8 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
-/// The strong DouZero agents (the `--hq` preset).
-pub const HQ_AGENTS: [&str; 2] = ["douzero_adp", "douzero_wp"];
+/// The strong agents (the `--hq` preset).
+pub const HQ_AGENTS: [&str; 3] = ["douzero_adp", "douzero_wp", "perfectdou"];
 
 /// Which seats to keep, and the soft-target options.
 #[derive(Default)]
@@ -374,7 +377,7 @@ pub enum Cmd {
         /// keep only the seats these agents played (repeatable)
         #[arg(long)]
         agent: Vec<String>,
-        /// high-quality preset: --agent douzero_adp --agent douzero_wp
+        /// high-quality preset: --agent douzero_adp --agent douzero_wp --agent perfectdou
         #[arg(long)]
         hq: bool,
         /// teacher soft targets: the K most probable legal candidates per labelled

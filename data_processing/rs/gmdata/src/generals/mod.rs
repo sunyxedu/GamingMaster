@@ -89,6 +89,16 @@ pub enum Cmd {
         #[arg(long, default_value_t = 8)]
         concurrency: usize,
     },
+    /// Save a ladder's whole global index (every game's metadata: players, stars, result,
+    /// turns) to out/index.jsonl; resumable
+    Index {
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "duel")]
+        ladder: String,
+        #[arg(long, default_value_t = usize::MAX)]
+        max_pages: usize,
+    },
     /// End-to-end resumable pipeline per player (fetch → filter → download → simulate → convert)
     Pipeline(PipelineCli),
     /// gio training records → gm-shard directories (GameShardDataset, train_multi_game)
@@ -192,6 +202,9 @@ pub fn run(cmd: Cmd) -> Result<()> {
         Cmd::Ladder { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency } => {
             let a = ladder::LadderArgs { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency };
             println!("{}", ladder::run(&a)?);
+        }
+        Cmd::Index { out, ladder, max_pages } => {
+            println!("{}", ladder::index(&out, &ladder, max_pages)?);
         }
         Cmd::Shard { input, out, shard_size, seed, keep_order } => {
             let order = if keep_order { None } else { Some(seed) };

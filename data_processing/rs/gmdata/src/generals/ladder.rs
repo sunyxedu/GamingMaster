@@ -9,13 +9,17 @@
 //! Each kept game is downloaded, simulated from the imitated perspective(s) with the
 //! strict simulator, and written as a gio training record
 //! `training/<id>__<player>.json` (one flat directory for SeqReplayDataset).
+//!
+//! [`index`] (`gmdata generals index`) saves the whole index instead — every game's
+//! metadata, ~1.75 M duel games from 2024-08 on (2026-09) — for the star statistics that
+//! choose the thresholds; `ladder --index` then selects from that file.
 
 use super::{api, gio, gior::Replay, sim};
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::io::Write;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 
@@ -162,4 +166,75 @@ pub fn run(a: &LadderArgs) -> Result<Value> {
         eprintln!("  page {page}: seen {seen}, kept {kept}, training records {records}");
     }
     Ok(json!({"seen": seen, "rejected": rejected, "kept": kept, "simulator_skipped": sim_skip, "training_records": records}))
+}
+
+/// One page of a ladder's global index (newest first), retried with a growing pause.
+fn index_page(c: &reqwest::blocking::Client, ladder: &str, page: usize) -> Result<Vec<Value>> {
+    let url = format!("https://generals.io/api/replays?count=200&offset={}&l={ladder}", page * 200);
+    let mut last = None;
+    for attempt in 0..10u64 {
+        match c.get(&url).send().and_then(|r| r.error_for_status()).and_then(|r| r.text()) {
+            Ok(t) => match serde_json::from_str::<Value>(&t) {
+                Ok(v) => return Ok(v.as_array().cloned().unwrap_or_default()),
+                Err(e) => last = Some(anyhow::anyhow!("page {page}: JSON: {e}")),
+            },
+            Err(e) => last = Some(anyhow::anyhow!("page {page}: {e}")),
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5 * (attempt + 1)));
+    }
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("page {page}: failed")))
+}
+
+/// Save the whole ladder index: every game's metadata (id, type, started, turns, ranking
+/// with each player's stars at the time and kills), one JSON object per line in
+/// `out/index.jsonl`, pages read in order (the index grows at its head while it is read,
+/// which only repeats games across a page boundary: written once, by id). Resumable:
+/// `out/index.state.json` holds the next page; `max_pages` bounds this run.
+pub fn index(out: &Path, ladder: &str, max_pages: usize) -> Result<Value> {
+    std::fs::create_dir_all(out)?;
+    let c = client()?;
+    let (path, state) = (out.join("index.jsonl"), out.join("index.state.json"));
+    let mut next = std::fs::read(&state).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v["next_page"].as_u64()).unwrap_or(0) as usize;
+    let mut ids: HashSet<String> = HashSet::new();
+    if path.exists() {
+        for line in std::io::BufReader::new(std::fs::File::open(&path)?).lines() {
+            if let Some(id) = serde_json::from_str::<Value>(&line?).ok().and_then(|v| v["id"].as_str().map(String::from)) {
+                ids.insert(id);
+            }
+        }
+    }
+    let mut f = std::io::BufWriter::new(std::fs::OpenOptions::new().create(true).append(true).open(&path)?);
+    let (mut written, mut repeated, mut pages, mut done) = (0usize, 0usize, 0usize, false);
+    while pages < max_pages {
+        let mut games = index_page(&c, ladder, next)?;
+        if games.is_empty() {
+            // the end, unless the API hiccuped: ask once more
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            games = index_page(&c, ladder, next)?;
+            if games.is_empty() {
+                done = true;
+                break;
+            }
+        }
+        for g in games {
+            let Some(id) = g["id"].as_str() else { continue };
+            if !ids.insert(id.to_string()) {
+                repeated += 1;
+                continue;
+            }
+            serde_json::to_writer(&mut f, &g)?;
+            f.write_all(b"\n")?;
+            written += 1;
+        }
+        f.flush()?;
+        next += 1;
+        pages += 1;
+        std::fs::write(&state, serde_json::to_vec(&json!({"next_page": next, "done": false}))?)?;
+        if pages % 200 == 0 {
+            eprintln!("  index page {next}: {} games", ids.len());
+        }
+    }
+    std::fs::write(&state, serde_json::to_vec(&json!({"next_page": next, "done": done}))?)?;
+    Ok(json!({"games": ids.len(), "written": written, "repeated": repeated, "pages": pages, "next_page": next, "done": done}))
 }
