@@ -7,7 +7,9 @@ Chess, Lichess's database (Hugging Face ``Lichess/standard-chess-games`` parquet
 WhiteElo / BlackElo / TimeControl / movetext).  A game's bucket is the LOWER of the two
 ratings (both players at least that), its speed Lichess's own (estimated duration base +
 40 × increment: < 29 s ultrabullet, < 180 bullet, < 480 blitz, < 1500 rapid, else classical).
-Per position: the engine's evaluation of the best move and of the move played (the position
+Games with a BOT account (Lichess's ``BOT`` title: engines play rated games there too) are
+left out and counted — at the top of the blitz / rapid / classical ladders they are most of
+the games.  Per position: the engine's evaluation of the best move and of the move played (the position
 after it, from the mover's side), both at ``--nodes``; the loss in centipawns (mates at
 ±1000, capped at 1000) and in Lichess's win probability (their accuracy model: win% = 50 + 50
 · (2 / (1 + exp(−0.00368208 · cp)) − 1)); a blunder = a win-probability loss ≥ 30 points
@@ -78,7 +80,8 @@ def _init(engine_path: str, nodes: int):
     global _ENGINE, _NODES
     import chess.engine
 
-    _ENGINE = chess.engine.SimpleEngine.popen_uci(engine_path)
+    # a slow start on a loaded node (the default 10 s timeout is not enough there)
+    _ENGINE = chess.engine.SimpleEngine.popen_uci(engine_path, timeout=300)
     _ENGINE.configure({"Threads": 1, "Hash": 64})
     _NODES = nodes
 
@@ -109,17 +112,19 @@ def _eval(job):
     return key, min(loss, 1000.0), max(0.0, win_pct(best) - win_pct(played))
 
 
-def collect(paths, per_cell: int, per_game: int, seed: int):
+def collect(paths, per_cell: int, per_game: int, seed: int, keep_bots: bool = False):
     import chess
     import pyarrow.parquet as pq
 
     rng = random.Random(seed)
     games = collections.defaultdict(list)
     seen = collections.Counter()
+    bots = collections.Counter()
     for path in paths:
         pf = pq.ParquetFile(path)
         for rg in range(pf.num_row_groups):
-            t = pf.read_row_group(rg, columns=["WhiteElo", "BlackElo", "TimeControl", "movetext", "Termination"])
+            t = pf.read_row_group(rg, columns=["WhiteElo", "BlackElo", "TimeControl", "movetext", "Termination",
+                                               "WhiteTitle", "BlackTitle"])
             for r in t.to_pylist():
                 try:
                     lo = min(int(r["WhiteElo"]), int(r["BlackElo"]))
@@ -128,6 +133,10 @@ def collect(paths, per_cell: int, per_game: int, seed: int):
                 key = (bucket_of(lo), speed_of(r["TimeControl"]))
                 if key[1] not in SPEEDS:
                     continue
+                if "BOT" in (r.get("WhiteTitle"), r.get("BlackTitle")):
+                    bots[key] += 1
+                    if not keep_bots:
+                        continue
                 seen[key] += 1
                 # reservoir sample per cell
                 cell = games[key]
@@ -155,7 +164,7 @@ def collect(paths, per_cell: int, per_game: int, seed: int):
                 continue
             for fen, uci in rng.sample(pos, min(per_game, len(pos))):
                 jobs.append((f"{key[0]}|{key[1]}", fen, uci))
-    return jobs, seen
+    return jobs, seen, bots
 
 
 def main(argv=None):
@@ -167,9 +176,10 @@ def main(argv=None):
     p.add_argument("--per-game", type=int, default=4, help="positions per game")
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--keep-bots", action="store_true", help="keep games with a BOT account")
     p.add_argument("--out", required=True)
     a = p.parse_args(argv)
-    jobs, seen = collect(a.parquet, a.per_cell, a.per_game, a.seed)
+    jobs, seen, bots = collect(a.parquet, a.per_cell, a.per_game, a.seed, a.keep_bots)
     print(f"[quality] {len(jobs)} positions from {sum(seen.values())} games", file=sys.stderr)
     agg = collections.defaultdict(lambda: [0, 0.0, 0.0, 0, 0])
     with mp.Pool(a.workers, initializer=_init, initargs=(a.engine, a.nodes)) as pool:
@@ -187,13 +197,14 @@ def main(argv=None):
         b, s = key.split("|")
         table.setdefault(s, {})[b] = {"positions": n, "acpl": round(cp / n, 1), "win_loss": round(wp / n, 2),
                                       "blunder_rate": round(blunders / n, 4), "mistake_rate": round(mistakes / n, 4),
-                                      "games_in_data": seen[(int(b), s)]}
-    out = {"engine": a.engine, "nodes": a.nodes, "parquet": a.parquet, "table": table}
+                                      "games_in_data": seen[(int(b), s)], "bot_games": bots[(int(b), s)]}
+    out = {"engine": a.engine, "nodes": a.nodes, "parquet": a.parquet, "keep_bots": a.keep_bots, "table": table}
     with open(a.out, "w") as f:
         json.dump(out, f, indent=1)
     for s in SPEEDS:
         if s in table:
-            row = " ".join(f"{b}:{v['acpl']}/{v['blunder_rate']:.3f}({v['positions']})" for b, v in sorted(table[s].items(), key=lambda kv: int(kv[0])))
+            row = " ".join(f"{b}:{v['acpl']}/{v['blunder_rate']:.3f}({v['positions']}; bots {v['bot_games']}/{v['games_in_data'] + v['bot_games']})"
+                           for b, v in sorted(table[s].items(), key=lambda kv: int(kv[0])))
             print(s, row)
 
 
