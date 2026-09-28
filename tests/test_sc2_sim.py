@@ -30,7 +30,7 @@ TINY = dict(d_model=32, n_heads=4, d_ff=64, n_st_layers=1, dropout=0.0, encoder_
 def env():
     from env.vec_sc2 import Sc2VecEnv
 
-    e = Sc2VecEnv(2, difficulty="very_easy", races=("terran", "zerg"), max_loops=22 * 60 * 3, seed=0)
+    e = Sc2VecEnv(2, autoreset=True, difficulty="very_easy", races=("terran", "zerg"), max_loops=22 * 60 * 3, seed=0)
     yield e
     del e
 

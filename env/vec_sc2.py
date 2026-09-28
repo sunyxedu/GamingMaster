@@ -67,7 +67,7 @@ class Sc2VecEnv(VecEnvBase):
                    "action_queued": "queued"}
     game = "sc2"
 
-    def __init__(self, n_envs: int = 1, *, autoreset: bool = True, seed: Optional[int] = 0,
+    def __init__(self, n_envs: int = 1, *, autoreset: bool = False, seed: Optional[int] = 0,
                  install: Optional[str] = None, vocab: Optional[str] = None, maps: Optional[Sequence[str]] = None,
                  races: Sequence = ("terran", "zerg", "protoss"), ai_race="random", difficulty="medium",
                  max_loops: int = 22 * 60 * 30, port: Optional[int] = None):
