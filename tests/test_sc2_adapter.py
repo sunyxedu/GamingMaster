@@ -158,7 +158,7 @@ def test_teacher_forcing_commits_the_labels(net):
         out = net(obs, labels=labels)
         pred = out["pred"] if "pred" in out else out
     assert torch.equal(pred["type_idx"], tgt["action_type"])
-    assert torch.equal(pred["actors"], tgt["actors"] > 0.5)
+    assert torch.equal(pred["actors_used"], tgt["actors"] > 0.5)
     has_pt = tgt["target_point"] >= 0
     assert torch.equal(pred["coarse_idx"][has_pt], coarse_of(tgt["target_point"][has_pt], net.cfg))
     # a −1 label (dropped by the teacher-forcing schedule) samples instead
@@ -166,4 +166,4 @@ def test_teacher_forcing_commits_the_labels(net):
     with torch.no_grad():
         out = net(obs, labels=labels)
         pred = out["pred"] if "pred" in out else out
-    assert not (pred["actors"] & ~obs["unit_own"]).any()
+    assert not (pred["actors_used"] & ~obs["unit_own"]).any()

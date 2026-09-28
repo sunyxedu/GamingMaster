@@ -351,7 +351,7 @@ class Sc2Decoder(ActionDecoder):
         r = lambda x, *s: x.reshape(B, T, *s)
         return {"type_logits": r(type_logits, A), "type_mask": r(tmask, A), "type_idx": r(type_idx),
                 "kind_logits": r(kind_logits, N_KINDS), "kind_mask": r(kind_mask, N_KINDS),
-                "actor_logits": r(actor_logits, n_units), "actors": r(actors, n_units), "own": r(own, n_units),
+                "actor_logits": r(actor_logits, n_units), "actors_used": r(actors, n_units), "own": r(own, n_units),
                 "unit_logits": r(unit_logits, n_units), "unit_mask": r(present, n_units),
                 "coarse_logits": r(coarse_logits, self.n_map), "coarse_idx": r(coarse_idx),
                 "fine_logits": r(fine_logits, self.n_fine), "queued_logits": r(queued_logits)}
@@ -397,7 +397,7 @@ class Sc2Decoder(ActionDecoder):
                 unit = masked_sample(pred["unit_logits"], pred["unit_mask"])
                 fine = masked_sample(pred["fine_logits"], None)
             point = point_of(pred["coarse_idx"], fine, cfg)
-            actors = pred["actors"]
+            actors = pred["actors_used"]
             a_lp, _, _ = self._arg_lp(pred, kind, actors, queued, unit, point)
             cmd = type_idx >= 2
             lp = lp + torch.where(cmd, a_lp, torch.zeros_like(a_lp))
