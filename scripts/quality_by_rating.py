@@ -7,6 +7,10 @@ Chess, Lichess's database (Hugging Face ``Lichess/standard-chess-games`` parquet
 WhiteElo / BlackElo / TimeControl / movetext).  A game's bucket is the LOWER of the two
 ratings (both players at least that), its speed Lichess's own (estimated duration base +
 40 × increment: < 29 s ultrabullet, < 180 bullet, < 480 blitz, < 1500 rapid, else classical).
+``--pgn`` reads PGN files instead (``.pgn`` / ``.pgn.zst``); with ``--broadcast`` they are
+Lichess's broadcast database (over-the-board events: FIDE ratings, a free-text TimeControl
+read by :func:`broadcast_speed` into FIDE's classes — base + 60 × increment ≥ 60 min
+classical, > 10 min rapid, else blitz; Chess960 dropped).
 Games with a BOT account (Lichess's ``BOT`` title: engines play rated games there too) are
 left out and counted — at the top of the blitz / rapid / classical ladders they are most of
 the games.  Per position: the engine's evaluation of the best move and of the move played (the position
@@ -44,6 +48,34 @@ def speed_of(tc: str) -> str:
     except ValueError:
         return "correspondence"
     return "ultrabullet" if t < 29 else "bullet" if t < 180 else "blitz" if t < 480 else "rapid" if t < 1500 else "classical"
+
+
+def broadcast_speed(tc):
+    """FIDE's speed class of a broadcast's free-text TimeControl ("90+30" = 90 min + 30 s,
+    "5400+30", "1h30 + 30s", "90min/40moves + 30min + 30sec/move", "600" ...): base + 60 x
+    increment >= 3600 s classical, > 600 s rapid, else blitz; None without a base time.
+    A leading number below 180 is minutes, from 180 on seconds ("180+2" is 3+2 blitz)."""
+    t = (tc or "").strip().lower()
+    if not t or t in ("-", "?"):
+        return None
+    m = re.match(r"^\D*?(\d+)\s*h\s*(\d*)", t)
+    m2 = re.match(r"^\D*?(\d+):(\d\d)", t)
+    if m:
+        base = int(m.group(1)) * 3600 + int(m.group(2) or 0) * 60
+    elif m2:
+        base = int(m2.group(1)) * 3600 + int(m2.group(2)) * 60
+    else:
+        m = re.search(r"\d+", t)
+        if not m:
+            return None
+        n = int(m.group(0))
+        base = n if n >= 180 else n * 60
+    inc = 0
+    m = re.search(r"\+\s*(\d+)\s*(s|sec|''|\"|$|\s*(?:sec|seconds|s/|each|per|incr|por|sg|inc))", t)
+    if m:
+        inc = int(m.group(1))
+    d = base + 60 * inc
+    return "classical" if d >= 3600 else "rapid" if d > 600 else "blitz"
 
 
 def bucket_of(r: int) -> int:
@@ -112,6 +144,77 @@ def _eval(job):
     return key, min(loss, 1000.0), max(0.0, win_pct(best) - win_pct(played))
 
 
+def _open_text(path):
+    import io
+    if path.endswith(".zst"):
+        import zstandard
+        return io.TextIOWrapper(zstandard.ZstdDecompressor(max_window_size=2 ** 31).stream_reader(open(path, "rb")),
+                                encoding="utf-8", errors="replace")
+    return open(path, encoding="utf-8", errors="replace")
+
+
+def collect_pgn(paths, per_cell: int, per_game: int, seed: int, broadcast: bool, keep_bots: bool = False):
+    """The jobs of PGN files: games bucketed by (lower Elo, speed), reservoir-sampled per
+    cell; a broadcast game repeated in several broadcasts (same players, date, moves) once."""
+    import chess.pgn
+
+    rng = random.Random(seed)
+    games = collections.defaultdict(list)
+    seen = collections.Counter()
+    bots = collections.Counter()
+    dup = set()
+    for path in paths:
+        f = _open_text(path)
+        while True:
+            g = chess.pgn.read_game(f)
+            if g is None:
+                break
+            h = g.headers
+            if h.get("Variant", "Standard") != "Standard" or h.get("SetUp") == "1" or "FEN" in h:
+                continue
+            if h.get("Result") not in ("1-0", "0-1", "1/2-1/2"):
+                continue
+            try:
+                lo = min(int(h.get("WhiteElo")), int(h.get("BlackElo")))
+            except (TypeError, ValueError):
+                continue
+            speed = broadcast_speed(h.get("TimeControl")) if broadcast else speed_of(h.get("TimeControl"))
+            key = (bucket_of(lo), speed)
+            if speed not in SPEEDS:
+                continue
+            if "BOT" in (h.get("WhiteTitle"), h.get("BlackTitle")):
+                bots[key] += 1
+                if not keep_bots:
+                    continue
+            moves = [m.uci() for m in g.mainline_moves()]
+            ident = (h.get("White"), h.get("Black"), h.get("Date"), tuple(moves[:40]))
+            if broadcast and ident in dup:
+                continue
+            dup.add(ident)
+            seen[key] += 1
+            cell = games[key]
+            if len(cell) < per_cell:
+                cell.append(moves)
+            else:
+                j = rng.randrange(seen[key])
+                if j < per_cell:
+                    cell[j] = moves
+    jobs = []
+    for key, lines in games.items():
+        for ucis in lines:
+            if len(ucis) < 20:
+                continue
+            board = chess.Board()
+            pos = []
+            for i, u in enumerate(ucis):
+                if 12 <= i < len(ucis) - 4:
+                    pos.append((board.fen(), u))
+                board.push_uci(u)
+            for fen, uci in rng.sample(pos, min(per_game, len(pos))):
+                jobs.append((f"{key[0]}|{key[1]}", fen, uci))
+    return jobs, seen, bots
+
+
 def collect(paths, per_cell: int, per_game: int, seed: int, keep_bots: bool = False):
     import chess
     import pyarrow.parquet as pq
@@ -169,7 +272,10 @@ def collect(paths, per_cell: int, per_game: int, seed: int, keep_bots: bool = Fa
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--parquet", action="append", required=True)
+    p.add_argument("--parquet", action="append", default=[])
+    p.add_argument("--pgn", action="append", default=[], help="PGN files (.pgn / .pgn.zst) instead of parquet")
+    p.add_argument("--broadcast", action="store_true",
+                   help="the PGNs are Lichess broadcasts: FIDE ratings, free-text time controls")
     p.add_argument("--engine", required=True)
     p.add_argument("--nodes", type=int, default=200_000)
     p.add_argument("--per-cell", type=int, default=150, help="games sampled per (bucket, speed)")
@@ -179,7 +285,10 @@ def main(argv=None):
     p.add_argument("--keep-bots", action="store_true", help="keep games with a BOT account")
     p.add_argument("--out", required=True)
     a = p.parse_args(argv)
-    jobs, seen, bots = collect(a.parquet, a.per_cell, a.per_game, a.seed, a.keep_bots)
+    if a.pgn:
+        jobs, seen, bots = collect_pgn(a.pgn, a.per_cell, a.per_game, a.seed, a.broadcast, a.keep_bots)
+    else:
+        jobs, seen, bots = collect(a.parquet, a.per_cell, a.per_game, a.seed, a.keep_bots)
     print(f"[quality] {len(jobs)} positions from {sum(seen.values())} games", file=sys.stderr)
     agg = collections.defaultdict(lambda: [0, 0.0, 0.0, 0, 0])
     with mp.Pool(a.workers, initializer=_init, initargs=(a.engine, a.nodes)) as pool:
@@ -198,7 +307,8 @@ def main(argv=None):
         table.setdefault(s, {})[b] = {"positions": n, "acpl": round(cp / n, 1), "win_loss": round(wp / n, 2),
                                       "blunder_rate": round(blunders / n, 4), "mistake_rate": round(mistakes / n, 4),
                                       "games_in_data": seen[(int(b), s)], "bot_games": bots[(int(b), s)]}
-    out = {"engine": a.engine, "nodes": a.nodes, "parquet": a.parquet, "keep_bots": a.keep_bots, "table": table}
+    out = {"engine": a.engine, "nodes": a.nodes, "parquet": a.parquet, "pgn": a.pgn, "broadcast": a.broadcast,
+           "keep_bots": a.keep_bots, "table": table}
     with open(a.out, "w") as f:
         json.dump(out, f, indent=1)
     for s in SPEEDS:

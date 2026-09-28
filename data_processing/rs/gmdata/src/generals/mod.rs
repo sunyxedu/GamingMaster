@@ -88,6 +88,18 @@ pub enum Cmd {
         max_pages: usize,
         #[arg(long, default_value_t = 8)]
         concurrency: usize,
+        /// read the games from a saved index (`gmdata generals index`) instead of the live one
+        #[arg(long)]
+        index: Option<PathBuf>,
+        /// imitate EVERY player with --min-stars whose opponent has --min-opponent-stars
+        /// (winners and losers alike), not only the winner
+        #[arg(long)]
+        each: bool,
+        #[arg(long, default_value_t = 0)]
+        min_opponent_stars: i64,
+        /// write 1 game in N (by id) to out/training_val instead of out/training
+        #[arg(long, default_value_t = 0)]
+        val_every: u64,
     },
     /// Save a ladder's whole global index (every game's metadata: players, stars, result,
     /// turns) to out/index.jsonl; resumable
@@ -98,6 +110,9 @@ pub enum Cmd {
         ladder: String,
         #[arg(long, default_value_t = usize::MAX)]
         max_pages: usize,
+        /// pages requested at a time
+        #[arg(long, default_value_t = 3)]
+        parallel: usize,
     },
     /// End-to-end resumable pipeline per player (fetch → filter → download → simulate → convert)
     Pipeline(PipelineCli),
@@ -199,12 +214,15 @@ pub fn run(cmd: Cmd) -> Result<()> {
             let g = gio::convert(&s, max_actions_per_tick, true);
             write_json(&out, &g)?;
         }
-        Cmd::Ladder { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency } => {
-            let a = ladder::LadderArgs { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency };
+        Cmd::Ladder { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages, concurrency, index,
+                      each, min_opponent_stars, val_every } => {
+            anyhow::ensure!(!(each && both), "--each and --both exclude each other");
+            let a = ladder::LadderArgs { out, ladder, server, min_stars, both, allow_bots, min_turns, max_games, max_pages,
+                                         concurrency, index, each, min_opponent_stars, val_every };
             println!("{}", ladder::run(&a)?);
         }
-        Cmd::Index { out, ladder, max_pages } => {
-            println!("{}", ladder::index(&out, &ladder, max_pages)?);
+        Cmd::Index { out, ladder, max_pages, parallel } => {
+            println!("{}", ladder::index(&out, &ladder, max_pages, parallel)?);
         }
         Cmd::Shard { input, out, shard_size, seed, keep_order } => {
             let order = if keep_order { None } else { Some(seed) };

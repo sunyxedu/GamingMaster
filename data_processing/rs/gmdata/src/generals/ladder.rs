@@ -34,6 +34,14 @@ pub struct LadderArgs {
     pub max_games: usize,
     pub max_pages: usize,
     pub concurrency: usize,
+    /// the games of a saved index ([`index`]) instead of the live one
+    pub index: Option<PathBuf>,
+    /// imitate every player at `min_stars` or more whose opponent has
+    /// `min_opponent_stars` or more — the winner and the loser alike
+    pub each: bool,
+    pub min_opponent_stars: i64,
+    /// 1 game in N (by id) is written to `training_val/` instead of `training/`
+    pub val_every: u64,
 }
 
 fn client() -> Result<reqwest::blocking::Client> {
@@ -81,8 +89,15 @@ fn imitated(g: &Value, a: &LadderArgs, c: &reqwest::blocking::Client, bots: &mut
     let stars = |p: &Value| p["stars"].as_i64().unwrap_or(0);
     let name = |p: &Value| p["name"].as_str().unwrap_or("").to_string();
     let winner = ranking.iter().find(|p| p["kills"].as_i64() == Some(1)).unwrap_or(&ranking[0]).clone();
-    let cands: Vec<Value> = if a.both { ranking.clone() } else { vec![winner] };
-    if cands.iter().any(|p| stars(p) < a.min_stars) {
+    let cands: Vec<Value> = if a.each {
+        (0..2).filter(|&i| stars(&ranking[i]) >= a.min_stars && stars(&ranking[1 - i]) >= a.min_opponent_stars)
+            .map(|i| ranking[i].clone()).collect()
+    } else if a.both {
+        ranking.clone()
+    } else {
+        vec![winner]
+    };
+    if cands.is_empty() || cands.iter().any(|p| stars(p) < a.min_stars) {
         return Vec::new();
     }
     if !a.allow_bots && ranking.iter().any(|p| bots.is_bot(c, &name(p))) {
@@ -91,24 +106,59 @@ fn imitated(g: &Value, a: &LadderArgs, c: &reqwest::blocking::Client, bots: &mut
     cands.iter().map(name).collect()
 }
 
+/// The imitated player's land and army at ticks 50 / 100 / 200 (turns 25 / 50 / 100) and
+/// the game's length: the opening's efficiency, for star-level comparisons.
+fn summary(s: &sim::SimOutput) -> Value {
+    let at = |v: &[i64]| [50usize, 100, 200].map(|t| v.get(t).copied());
+    let (land, army) = (at(&s.info_my_land), at(&s.info_my_army));
+    json!({"land": land, "army": army, "ticks": s.info_my_land.len(), "won": s.winner.as_deref() == Some(s.player.as_str())})
+}
+
+/// The games of a saved index, deduplicated by id, in pages of 200 (the file's order:
+/// newest first).
+fn index_pages(path: &Path) -> Result<Vec<Vec<Value>>> {
+    let mut seen = HashSet::new();
+    let mut games = Vec::new();
+    for line in std::io::BufReader::new(std::fs::File::open(path)?).lines() {
+        let Ok(g) = serde_json::from_str::<Value>(&line?) else { continue };
+        if g["id"].as_str().is_some_and(|id| seen.insert(id.to_string())) {
+            games.push(g);
+        }
+    }
+    Ok(games.chunks(200).map(|c| c.to_vec()).collect())
+}
+
 pub fn run(a: &LadderArgs) -> Result<Value> {
+    use rayon::prelude::*;
     let c = client()?;
-    let (replays, training) = (a.out.join("replays"), a.out.join("training"));
+    let (replays, training, training_val) = (a.out.join("replays"), a.out.join("training"), a.out.join("training_val"));
     std::fs::create_dir_all(&replays)?;
     std::fs::create_dir_all(&training)?;
+    if a.val_every > 0 {
+        std::fs::create_dir_all(&training_val)?;
+    }
     let mut bots = BotCache::load(a.out.join("botcache.json"));
     let mut manifest = std::fs::OpenOptions::new().create(true).append(true).open(a.out.join("manifest.jsonl"))?;
-    let (mut kept, mut seen, mut rejected, mut records, mut sim_skip) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    let saved = a.index.as_deref().map(index_pages).transpose()?;
+    let (mut kept, mut seen, mut rejected, mut records, mut sim_skip, mut existing) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     for page in 0..a.max_pages {
         if kept >= a.max_games {
             break;
         }
-        let url = format!("https://generals.io/api/replays?count=200&offset={}&l={}", page * 200, a.ladder);
-        let games: Vec<Value> = match c.get(&url).send().and_then(|r| r.error_for_status()).and_then(|r| r.text()) {
-            Ok(t) => serde_json::from_str(&t).unwrap_or_default(),
-            Err(e) => {
-                eprintln!("  index page {page} failed: {e}");
-                break;
+        let games: Vec<Value> = match &saved {
+            Some(pages) => match pages.get(page) {
+                Some(p) => p.clone(),
+                None => break,
+            },
+            None => {
+                let url = format!("https://generals.io/api/replays?count=200&offset={}&l={}", page * 200, a.ladder);
+                match c.get(&url).send().and_then(|r| r.error_for_status()).and_then(|r| r.text()) {
+                    Ok(t) => serde_json::from_str(&t).unwrap_or_default(),
+                    Err(e) => {
+                        eprintln!("  index page {page} failed: {e}");
+                        break;
+                    }
+                }
             }
         };
         if games.is_empty() {
@@ -132,40 +182,65 @@ pub fn run(a: &LadderArgs) -> Result<Value> {
         bots.save();
         let ids: Vec<String> = batch.iter().map(|b| b.0.clone()).collect();
         let failed = api::download_replays(&ids, &replays, &a.server, a.concurrency)?;
-        for (id, who, meta) in batch {
-            if failed.contains(&id) {
-                continue;
-            }
-            let Ok(r) = std::fs::read(replays.join(format!("{id}.json"))).map_err(anyhow::Error::from)
-                .and_then(|b| serde_json::from_slice::<Replay>(&b).map_err(anyhow::Error::from)) else { continue };
-            let mut ok_any = false;
-            for player in &who {
-                match sim::Simulator::new(&r, player, true) {
-                    Ok(s) => {
-                        let g = gio::convert(&s.simulate(), 4, true);
-                        let safe: String = player.chars().map(|ch| if ch.is_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' }).collect();
-                        let path = training.join(format!("{id}__{safe}.json"));
-                        let mut w = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&path)?);
-                        serde_json::to_writer(&mut w, &g)?;
-                        w.flush()?;
-                        records += 1;
-                        ok_any = true;
-                    }
-                    Err(e) => {
-                        sim_skip += 1;
-                        eprintln!("  skipped {id} ({player}): {e}");
-                        break;
+        // simulate + convert the batch in parallel; manifest lines in batch order
+        let done: Vec<(String, Vec<String>, Value, usize, usize, usize, Value)> = batch.into_par_iter()
+            .filter(|(id, _, _)| !failed.contains(id))
+            .filter_map(|(id, who, meta)| {
+                let r = std::fs::read(replays.join(format!("{id}.json"))).ok()
+                    .and_then(|b| serde_json::from_slice::<Replay>(&b).ok())?;
+                let dir = if a.val_every > 0 && crate::common::hash_bucket(&id, a.val_every) { &training_val } else { &training };
+                let (mut n, mut have, mut skip) = (0usize, 0usize, 0usize);
+                let mut sums = serde_json::Map::new();
+                for player in &who {
+                    let safe: String = player.chars().map(|ch| if ch.is_alphanumeric() || ch == '-' || ch == '_' { ch } else { '_' }).collect();
+                    let path = dir.join(format!("{id}__{safe}.json"));
+                    match sim::Simulator::new(&r, player, true) {
+                        Ok(s) => {
+                            let out = s.simulate();
+                            sums.insert(player.clone(), summary(&out));
+                            if path.exists() {
+                                have += 1;
+                                continue;
+                            }
+                            let g = gio::convert(&out, 4, true);
+                            let tmp = path.with_extension("json.tmp");
+                            let ok = std::fs::File::create(&tmp).map_err(anyhow::Error::from).and_then(|f| {
+                                let mut w = std::io::BufWriter::with_capacity(1 << 20, f);
+                                serde_json::to_writer(&mut w, &g)?;
+                                w.flush()?;
+                                Ok(())
+                            }).and_then(|_| std::fs::rename(&tmp, &path).map_err(anyhow::Error::from));
+                            if ok.is_ok() {
+                                n += 1;
+                            }
+                        }
+                        Err(e) => {
+                            skip += 1;
+                            eprintln!("  skipped {id} ({player}): {e}");
+                            break;
+                        }
                     }
                 }
-            }
-            if ok_any {
+                Some((id, who, meta, n, have, skip, Value::Object(sums)))
+            })
+            .collect();
+        for (id, who, meta, n, have, skip, sums) in done {
+            records += n;
+            existing += have;
+            sim_skip += skip;
+            if n + have > 0 {
                 kept += 1;
-                writeln!(manifest, "{}", json!({"id": id, "imitated": who, "meta": meta}))?;
+                if n > 0 {
+                    writeln!(manifest, "{}", json!({"id": id, "imitated": who, "meta": meta, "summary": sums}))?;
+                }
             }
         }
-        eprintln!("  page {page}: seen {seen}, kept {kept}, training records {records}");
+        if page % 20 == 0 {
+            eprintln!("  page {page}: seen {seen}, kept {kept}, training records {records} (+{existing} existing)");
+        }
     }
-    Ok(json!({"seen": seen, "rejected": rejected, "kept": kept, "simulator_skipped": sim_skip, "training_records": records}))
+    Ok(json!({"seen": seen, "rejected": rejected, "kept": kept, "simulator_skipped": sim_skip, "training_records": records,
+              "existing_records": existing}))
 }
 
 /// One page of a ladder's global index (newest first), retried with a growing pause.
@@ -187,10 +262,12 @@ fn index_page(c: &reqwest::blocking::Client, ladder: &str, page: usize) -> Resul
 
 /// Save the whole ladder index: every game's metadata (id, type, started, turns, ranking
 /// with each player's stars at the time and kills), one JSON object per line in
-/// `out/index.jsonl`, pages read in order (the index grows at its head while it is read,
-/// which only repeats games across a page boundary: written once, by id). Resumable:
-/// `out/index.state.json` holds the next page; `max_pages` bounds this run.
-pub fn index(out: &Path, ladder: &str, max_pages: usize) -> Result<Value> {
+/// `out/index.jsonl`. Pages are read in order, `parallel` at a time (the index grows at its
+/// head while it is read — ~1 game a minute — which repeats games across page boundaries,
+/// written once by id, and could skip only the few games that arrive between the reads of
+/// two neighbouring pages of one batch). Resumable: `out/index.state.json` holds the next
+/// page; `max_pages` bounds this run.
+pub fn index(out: &Path, ladder: &str, max_pages: usize, parallel: usize) -> Result<Value> {
     std::fs::create_dir_all(out)?;
     let c = client()?;
     let (path, state) = (out.join("index.jsonl"), out.join("index.state.json"));
@@ -206,33 +283,44 @@ pub fn index(out: &Path, ladder: &str, max_pages: usize) -> Result<Value> {
     }
     let mut f = std::io::BufWriter::new(std::fs::OpenOptions::new().create(true).append(true).open(&path)?);
     let (mut written, mut repeated, mut pages, mut done) = (0usize, 0usize, 0usize, false);
-    while pages < max_pages {
-        let mut games = index_page(&c, ladder, next)?;
-        if games.is_empty() {
-            // the end, unless the API hiccuped: ask once more
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            games = index_page(&c, ladder, next)?;
+    let k = parallel.max(1);
+    'scan: while pages < max_pages {
+        let n = k.min(max_pages - pages);
+        let got: Vec<Result<Vec<Value>>> = std::thread::scope(|sc| {
+            let hs: Vec<_> = (0..n).map(|i| {
+                let c = &c;
+                sc.spawn(move || index_page(c, ladder, next + i))
+            }).collect();
+            hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(anyhow::anyhow!("page thread panicked")))).collect()
+        });
+        for res in got {
+            let mut games = res?;
             if games.is_empty() {
-                done = true;
-                break;
+                // the end, unless the API hiccuped: ask once more
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                games = index_page(&c, ladder, next)?;
+                if games.is_empty() {
+                    done = true;
+                    break 'scan;
+                }
             }
-        }
-        for g in games {
-            let Some(id) = g["id"].as_str() else { continue };
-            if !ids.insert(id.to_string()) {
-                repeated += 1;
-                continue;
+            for g in games {
+                let Some(id) = g["id"].as_str() else { continue };
+                if !ids.insert(id.to_string()) {
+                    repeated += 1;
+                    continue;
+                }
+                serde_json::to_writer(&mut f, &g)?;
+                f.write_all(b"\n")?;
+                written += 1;
             }
-            serde_json::to_writer(&mut f, &g)?;
-            f.write_all(b"\n")?;
-            written += 1;
-        }
-        f.flush()?;
-        next += 1;
-        pages += 1;
-        std::fs::write(&state, serde_json::to_vec(&json!({"next_page": next, "done": false}))?)?;
-        if pages % 200 == 0 {
-            eprintln!("  index page {next}: {} games", ids.len());
+            f.flush()?;
+            next += 1;
+            pages += 1;
+            std::fs::write(&state, serde_json::to_vec(&json!({"next_page": next, "done": false}))?)?;
+            if pages % 200 == 0 {
+                eprintln!("  index page {next}: {} games", ids.len());
+            }
         }
     }
     std::fs::write(&state, serde_json::to_vec(&json!({"next_page": next, "done": done}))?)?;
