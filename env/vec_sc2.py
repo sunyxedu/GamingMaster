@@ -66,6 +66,9 @@ class Sc2VecEnv(VecEnvBase):
                    "action_target_unit": "target_unit", "action_target_point": "target_point",
                    "action_queued": "queued"}
     game = "sc2"
+    n_seats = 1
+    rows_per_env = 1
+    interleaved = False
 
     def __init__(self, n_envs: int = 1, *, autoreset: bool = False, seed: Optional[int] = 0,
                  install: Optional[str] = None, vocab: Optional[str] = None, maps: Optional[Sequence[str]] = None,
