@@ -492,6 +492,39 @@ def test_stop_file_stops_at_its_step_with_a_resumable_checkpoint(shards, tmp_pat
     assert tmg.stop_step(str(stop)) == 1
 
 
+def _stop_worker(rank: int, port: int, root: str, stop: str, out_dir: str) -> None:
+    hide_gpus_if_cpu("cpu")
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank),
+                      LOCAL_RANK=str(rank), WORLD_SIZE=str(WORLD))
+    torch.set_num_threads(1)
+    from training import train_multi_game as tmg
+
+    out = tmg.main([*_common_args(root, out_dir), "--steps", "40", "--games_per_step", "1",
+                    "--ckpt_every", "25", "--stop_file", stop, "--dist_timeout", "2"])
+    torch.save({"stopped": out.get("stopped")}, os.path.join(out_dir, f"stop_rank{rank}.pt"))
+
+
+def test_stop_file_stops_every_rank_at_the_same_step(shards, tmp_path):
+    """Under data parallelism rank 0 reads the stop file and every rank stops at the same
+    step (no rank left waiting in a collective); the checkpoint of that step exists."""
+    stop = tmp_path / "STOP"
+    stop.write_text("20")
+    out_dir = str(tmp_path / "ck")
+    ctx = torch.multiprocessing.get_context("spawn")
+    port = _free_port()
+    procs = [ctx.Process(target=_stop_worker, args=(r, port, str(shards), str(stop), out_dir))
+             for r in range(WORLD)]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=TIMEOUT_S)
+    assert all(p.exitcode == 0 for p in procs), [p.exitcode for p in procs]
+    got = [torch.load(os.path.join(out_dir, f"stop_rank{r}.pt"))["stopped"] for r in range(WORLD)]
+    assert got == [20] * WORLD
+    assert torch.load(os.path.join(out_dir, "multi_latest.pt"), weights_only=False)["step"] == 20
+    assert not os.path.exists(os.path.join(out_dir, "multi_final.pt"))
+
+
 def test_rank_seeds_of_a_seed_sweep_do_not_overlap():
     """rank 0 keeps --seed (single-process streams); the ranks of neighbouring
     seeds (a sweep) and of a resumed run get streams of their own."""
