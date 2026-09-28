@@ -1542,6 +1542,14 @@ def main(argv=None) -> Dict[str, object]:
                 f"gnorm={float(grad_norm):.3f} {msg}{extra}  ({time.time() - t0:.0f}s)",
                 flush=True)
             window = {}
+        # the checkpoint first: a validation that fails (a batch out of memory) costs the
+        # evaluation, not the steps since the last checkpoint
+        # sharded: every rank takes part in the gather, rank 0 writes
+        writes = rank0 or zero is not None
+        saved_now = False
+        if args.ckpt_every and (step % args.ckpt_every == 0 or step == args.steps) and writes:
+            save("latest", step, resumable=True)
+            saved_now = True
         if has_val and (step % args.eval_every == 0 or step == args.steps):
             if zero is not None and ema is not None:
                 # the gathered EMA swapped into the live model (no model copy)
@@ -1570,12 +1578,6 @@ def main(argv=None) -> Dict[str, object]:
                     flush=True)
                 if diag.get(g):
                     log(f"[attn {step}] {g}: {diag[g]}", flush=True)
-        # sharded: every rank takes part in the gather, rank 0 writes
-        writes = rank0 or zero is not None
-        saved_now = False
-        if args.ckpt_every and (step % args.ckpt_every == 0 or step == args.steps) and writes:
-            save("latest", step, resumable=True)
-            saved_now = True
         if args.stop_file and step % 10 == 0:
             # rank 0 reads the file (one view of it for every rank), all ranks agree
             at = stop_step(args.stop_file) if rank0 else 0
