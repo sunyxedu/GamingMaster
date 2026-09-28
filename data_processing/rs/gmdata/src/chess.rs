@@ -177,6 +177,13 @@ pub const SPEEDS: [&str; 5] = ["ultrabullet", "bullet", "blitz", "rapid", "class
 /// like 1600–2000; bullet stays above 60 even at 2600, so it is never kept.
 pub const MEASURED_SPEED_ELO: &str = "blitz=2400,rapid=2200,classical=2000";
 
+/// The per-speed minimum FIDE rating of BOTH players measured for `--broadcast --hq` (the
+/// same method on Lichess's broadcast database — over-the-board events, 2025-01 to 2026-08,
+/// FIDE's speed classes): Stockfish's average centipawn loss is 29.0 at classical ≥ 2000
+/// (1800: 29.7, 2200: 22.2), 22.4 at rapid ≥ 2200 (2000: 32.0) and 37.5 at blitz ≥ 2400
+/// (2200: 40.3) — at or below the online `--hq` level (≈ 40) at master-class ratings.
+pub const MEASURED_BROADCAST_ELO: &str = "blitz=2400,rapid=2200,classical=2000";
+
 /// Extra quality filters (all off by default; `--hq` turns on a strong preset).
 #[derive(Clone, Copy, Default)]
 pub struct Quality {
@@ -189,6 +196,9 @@ pub struct Quality {
     /// per speed class ([`SPEEDS`]) the minimum Elo of both players; a speed without one
     /// (and correspondence / an unparsable time control) is dropped
     pub speed_elo: Option<[Option<i64>; 5]>,
+    /// the games are Lichess broadcasts (over-the-board events): the speed class is FIDE's
+    /// of the free-text TimeControl ([`broadcast_speed`]), the ratings FIDE's
+    pub broadcast: bool,
 }
 
 fn duration_s(h: &HashMap<String, String>) -> Option<i64> {
@@ -202,6 +212,54 @@ fn duration_s(h: &HashMap<String, String>) -> Option<i64> {
 fn speed_of(h: &HashMap<String, String>) -> Option<usize> {
     let d = duration_s(h)?;
     Some([29, 180, 480, 1500].iter().position(|&x| d < x).unwrap_or(4))
+}
+
+/// FIDE's speed class (an index into [`SPEEDS`]: 2 blitz, 3 rapid, 4 classical) of a
+/// broadcast's free-text TimeControl ("90+30" = 90 min + 30 s, "5400+30", "1h30 + 30s",
+/// "1:30:30", "90min/40moves + 30min + 30sec/move", "600", ...): base + 60 × increment
+/// ≥ 3600 s classical, > 600 s rapid, else blitz (FIDE's 60-move rule); `None` without a
+/// number. The base: hours and minutes for "1h30" / "1:30"; else the first number, minutes
+/// below 180, seconds from 180 on ("180+2" is 3+2 blitz, "600" 10 minutes). The increment:
+/// the first number after a '+' followed by a seconds marker (s, '', ", each, per, inc,
+/// incr, por, sg) or by the end ("90+30"); "+ 30 min" is a second period, not an increment.
+/// scripts/quality_by_rating.py `broadcast_speed` is the same function.
+pub fn broadcast_speed(tc: &str) -> Option<usize> {
+    let t = tc.trim().to_lowercase();
+    if t.is_empty() || t == "-" || t == "?" {
+        return None;
+    }
+    let digits = |s: &str| -> (Option<i64>, usize) {
+        let n = s.bytes().take_while(|c| c.is_ascii_digit()).count();
+        (s[..n].parse().ok(), n)
+    };
+    let start = t.bytes().position(|c| c.is_ascii_digit())?;
+    let (n, len) = digits(&t[start..]);
+    let n = n?;
+    let rest = &t[start + len..];
+    let base = if let Some(after) = rest.trim_start().strip_prefix('h') {
+        n * 3600 + digits(after.trim_start()).0.unwrap_or(0) * 60
+    } else if rest.len() >= 3 && rest.as_bytes()[0] == b':' && rest.as_bytes()[1].is_ascii_digit()
+        && rest.as_bytes()[2].is_ascii_digit() {
+        n * 3600 + rest[1..3].parse::<i64>().unwrap_or(0) * 60
+    } else if n >= 180 {
+        n
+    } else {
+        n * 60
+    };
+    let mut inc = 0;
+    for (i, _) in t.match_indices('+') {
+        let r = t[i + 1..].trim_start();
+        let (x, len) = digits(r);
+        let Some(x) = x else { continue };
+        let tail = r[len..].trim_start();
+        let marker = tail.is_empty() || ["s", "''", "\"", "each", "per", "incr", "inc", "por", "sg"].iter().any(|m| tail.starts_with(m));
+        if marker {
+            inc = x;
+            break;
+        }
+    }
+    let d = base + 60 * inc;
+    Some(if d >= 3600 { 4 } else if d > 600 { 3 } else { 2 })
 }
 
 /// `blitz=2400,rapid=2200,classical=2000` → the per-speed thresholds of [`Quality`].
@@ -229,7 +287,8 @@ fn passes_quality(h: &HashMap<String, String>, q: &Quality) -> bool {
         return false;
     }
     if let Some(thr) = &q.speed_elo {
-        let Some(t) = speed_of(h).and_then(|s| thr[s]) else { return false };
+        let speed = if q.broadcast { h.get("TimeControl").and_then(|t| broadcast_speed(t)) } else { speed_of(h) };
+        let Some(t) = speed.and_then(|s| thr[s]) else { return false };
         match (elo(h, "WhiteElo"), elo(h, "BlackElo")) {
             (Some(w), Some(b)) if w >= t && b >= t => {}
             _ => return false,
@@ -412,10 +471,16 @@ pub enum Cmd {
         /// 2000; no bullet); --speed-elo replaces the thresholds
         #[arg(long)]
         hq: bool,
-        /// hold out every game whose Site (else its tags) hashes into 1 of N buckets:
+        /// hold out every game whose Lichess URL (else its tags) hashes into 1 of N buckets:
         /// out/train and out/val (0 = everything into out)
         #[arg(long, default_value_t = 0)]
         val_every: u64,
+        /// the input is Lichess's broadcast database (over-the-board events, CC BY-SA 4.0):
+        /// FIDE ratings and speed classes of the free-text TimeControl; a game repeated in
+        /// several broadcasts is kept once; with --hq: >= 20 plies and MEASURED_BROADCAST_ELO
+        /// (classical 2000, rapid 2200, blitz 2400), no Rated / Termination requirement
+        #[arg(long)]
+        broadcast: bool,
     },
 }
 
@@ -445,9 +510,13 @@ fn open(path: &Path) -> Result<Box<dyn Read>> {
 /// Games encoded per parallel chunk.
 const CHUNK: usize = 512;
 
-/// The split key of a game: Lichess's game URL, else all its tags.
+/// The split key of a game: its Lichess URL (a broadcast game's `GameURL`, an online game's
+/// `Site`), else all its tags.
 fn split_key(h: &HashMap<String, String>) -> String {
-    if let Some(s) = h.get("Site") {
+    if let Some(s) = h.get("GameURL") {
+        return s.clone();
+    }
+    if let Some(s) = h.get("Site").filter(|s| s.starts_with("https://lichess.org/")) {
         return s.clone();
     }
     let mut kv: Vec<_> = h.iter().collect();
@@ -471,6 +540,21 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_elo: i64, max_ga
     let mut collector = Collector { filter: Some(Filter { min_elo, skip_bullet, q }) };
     let (mut seen, mut kept, mut kept_val, mut mask_mismatch, mut tag_rejected) = (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut by_speed = [0usize; 6];
+    // a broadcast game can appear in several broadcasts (mirrors of one event): kept once,
+    // by its players, date and moves
+    let mut repeated = 0usize;
+    let mut game_keys: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let game_key = |g: &Game| -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hs = std::collections::hash_map::DefaultHasher::new();
+        for t in ["White", "Black", "UTCDate", "Date"] {
+            g.headers.get(t).hash(&mut hs);
+        }
+        for m in &g.moves {
+            m.to_string().hash(&mut hs);
+        }
+        hs.finish()
+    };
     // games that pass the filters are read in chunks, encoded in parallel and written in
     // input order (the output never depends on the thread count); with --max-games a
     // chunk holds at most the games still missing, so exactly the games of a
@@ -494,6 +578,10 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_elo: i64, max_ga
                 continue;
             }
             if passes(&g, min_elo, min_plies, skip_bullet) && passes_quality(&g.headers, &q) {
+                if q.broadcast && !game_keys.insert(game_key(&g)) {
+                    repeated += 1;
+                    continue;
+                }
                 chunk.push((seen, g));
             }
         }
@@ -501,7 +589,12 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_elo: i64, max_ga
         for ((seen_at, g), s) in chunk.iter().zip(samples) {
             match s {
                 Ok(s) => {
-                    by_speed[speed_of(&g.headers).unwrap_or(5)] += 1;
+                    let speed = if q.broadcast {
+                        g.headers.get("TimeControl").and_then(|t| broadcast_speed(t))
+                    } else {
+                        speed_of(&g.headers)
+                    };
+                    by_speed[speed.unwrap_or(5)] += 1;
                     match wv.as_mut() {
                         Some(v) if crate::common::hash_bucket(&split_key(&g.headers), val_every) => {
                             v.push(s)?;
@@ -525,6 +618,9 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_elo: i64, max_ga
     w.flush()?;
     let mut stats = json!({"seen": seen, "kept": kept, "mask_mismatch": mask_mismatch, "shards": w.written_shards,
                            "tag_rejected": tag_rejected});
+    if q.broadcast {
+        stats["repeated"] = Value::from(repeated);
+    }
     let speeds: serde_json::Map<String, Value> = SPEEDS.iter().chain(["correspondence"].iter()).zip(by_speed)
         .filter(|(_, n)| *n > 0).map(|(k, n)| (k.to_string(), Value::from(n))).collect();
     stats["kept_by_speed"] = Value::Object(speeds);
@@ -550,11 +646,14 @@ pub fn run(cmd: Cmd) -> Result<()> {
             Ok(())
         }
         Cmd::Convert { input, out, shard_size, min_elo, max_games, min_plies, skip_bullet, rated_only, normal_termination,
-                       min_duration_s, speed_elo, hq, val_every } => {
+                       min_duration_s, speed_elo, hq, val_every, broadcast } => {
             let speed_elo = speed_elo.as_deref().map(parse_speed_elo).transpose()?;
-            let mut q = Quality { rated_only, normal_termination, min_duration_s, speed_elo };
+            let mut q = Quality { rated_only, normal_termination, min_duration_s, speed_elo, broadcast };
             let mut min_plies = min_plies;
-            if hq {
+            if hq && broadcast {
+                q.speed_elo = Some(speed_elo.unwrap_or(parse_speed_elo(MEASURED_BROADCAST_ELO)?));
+                min_plies = min_plies.max(20);
+            } else if hq {
                 q = Quality { rated_only: true, normal_termination: true,
                               speed_elo: Some(speed_elo.unwrap_or(parse_speed_elo(MEASURED_SPEED_ELO)?)), ..q };
                 min_plies = min_plies.max(20);
@@ -655,6 +754,34 @@ mod tests {
         assert!(parse_speed_elo("hyperbullet=2000").is_err());
         assert!(parse_speed_elo("blitz=high").is_err());
         assert!(parse_speed_elo(" , ").is_err());
+    }
+
+    #[test]
+    fn broadcast_time_controls_read_as_fide_speed_classes() {
+        let (b, r, c) = (Some(2), Some(3), Some(4));
+        for (tc, want) in [("90+30", c), ("15+10", r), ("3+2", b), ("10+5", r), ("50+10", c), ("5+3", b), ("60+30", c),
+                           ("90min/40moves + 30min + 30sec/move", c), ("1:30:30", c), ("1:30 fb 30", c), ("45+10", r),
+                           ("10'+5", r), ("5+0", b), ("600", b), ("90' + 30'' each move", c), ("60+0", c), ("5400+30", c),
+                           ("180+2", b), ("3600+30", c), ("480+4", r), ("8+3", r), ("1H30 min + 30 sec / move", c),
+                           ("G/90;+30", c), ("25+10", r), ("3 minutes + 2 seconds per move", b),
+                           ("10 minutes + 5 seconds per move", r), ("900+5", r), ("1800+30", c), ("12+5", r),
+                           ("20 minutes + 5 seconds incr. from move 1", r), ("90", c), ("91+10", c), ("5+2", b),
+                           ("10+2", r), ("55+5", c), ("40+10", r), ("3 min + 2 s", b), ("900 + 5 sec", r),
+                           ("90 min / 40 moves + 30 min + 30 s/move", c), ("1h30m + 30m + 30s/move", c),
+                           ("15 minutes + 5 seconds per move from move one (Round 1 - 4) / 90 minutes + 30 seconds per move from move one (Round 5 - 8)", r),
+                           ("", None), ("-", None), ("?", None), ("classical", None)] {
+            assert_eq!(broadcast_speed(tc), want, "{tc:?}");
+        }
+        let q = Quality { speed_elo: Some(parse_speed_elo(MEASURED_BROADCAST_ELO).unwrap()), broadcast: true,
+                          ..Quality::default() };
+        let pass = |t: &str, w: &str, b: &str| {
+            passes_quality(&tags(&[("TimeControl", t), ("WhiteElo", w), ("BlackElo", b)]), &q)
+        };
+        assert!(pass("90+30", "2000", "2105"));
+        assert!(!pass("90+30", "1999", "2600"));
+        assert!(pass("15+10", "2200", "2250") && !pass("15+10", "2100", "2250"));
+        assert!(pass("3+2", "2400", "2500") && !pass("3+2", "2300", "2500"));
+        assert!(!pass("", "2700", "2700"), "no time control");
     }
 
     /// The tag pre-filter (movetext skipped unparsed) keeps exactly the games the full
