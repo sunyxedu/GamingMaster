@@ -345,6 +345,12 @@ def _make_pokemon(n_envs: int = 1, **kw) -> VecGameEnv:
     return PokemonVecEnv(n_envs, **kw)
 
 
+def _make_clash_royale(n_envs: int = 1, **kw) -> VecGameEnv:
+    """Clash Royale battles in RoyaleSim (``import royalesim``), frames from crdata's builder."""
+    from env.vec_cr import ClashRoyaleVecEnv
+    return ClashRoyaleVecEnv(n_envs, **kw)
+
+
 def _make_sc2(n_envs: int = 1, **kw) -> VecGameEnv:
     """StarCraft II against the built-in AI (gmsim's Sc2Sim: headless SC2 processes of the
     3.16.1 Linux client; frames from gmsc2, the converter's)."""
@@ -370,6 +376,7 @@ VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
     "mahjong": _make_mahjong,
     "pokemon": _make_pokemon,
     "sc2": _make_sc2,
+    "clash_royale": _make_clash_royale,
 }
 
 

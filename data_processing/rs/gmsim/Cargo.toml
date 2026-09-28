@@ -19,6 +19,9 @@ gmmahjong = { path = "../gmmahjong" }
 gmpokemon = { path = "../gmpokemon" }
 # StarCraft II against the built-in AI (env/vec_sc2.py; SC2 processes of the install)
 gmsc2 = { path = "../gmsc2" }
+# Clash Royale frames of a live battle (env/vec_cr.py; the battles run in RoyaleSim) — the
+# converter's frame builder without its IO
+crdata = { path = "../../games/clash_royale/crdata", default-features = false }
 pyo3 = { version = "0.29", features = ["abi3-py310"] }
 serde_json.workspace = true
 # (no `extension-module` feature: maturin sets PYO3_BUILD_EXTENSION_MODULE, pyo3 >= 0.26)

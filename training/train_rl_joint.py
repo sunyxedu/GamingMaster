@@ -935,6 +935,29 @@ class Sc2Spec(RLGameSpec):
                 "target_point": actions["target_point"].long(), "queued": actions["queued"].bool()}
 
 
+class ClashRoyaleSpec(RLGameSpec):
+    """Clash Royale (model/games/clash_royale.py CardPlacementDecoder on env/vec_cr.py): the
+    rollout commits the card (and the placement patch) in decode and samples wait / cell;
+    the replay teacher-forces the stored card and cell under the stored legal dict (the
+    env's ``card`` / ``placement``), so log π_old = μ; full-head KL (``il_head_terms``)."""
+
+    full_kl = True
+
+    def check_env(self, env, net):
+        have = env.obs_schema()
+        cfg = net.cfg
+        if tuple(have["deck_ids"][0]) != (getattr(cfg, "deck_size", 8),):
+            raise SystemExit(f"clash_royale env emits {tuple(have['deck_ids'][0])} deck tokens, the network "
+                             f"expects {getattr(cfg, 'deck_size', 8)}")
+
+    def labels(self, actions, cfg):
+        return {"card_slot": actions["card_slot"].long(), "place_idx": actions["place_idx"].long()}
+
+    def kl_targets(self, actions, forced, cfg):
+        return {"waited": actions["waited"].bool(), "card_slot": actions["card_slot"].long(),
+                "place_idx": actions["place_idx"].long()}
+
+
 class ShogiSpec(RLGameSpec):
     """The shogi move-or-drop decoder (model/games/shogi.py ShogiDecoder) on the gmrules
     shogi env (legal ``mode`` / ``from`` / ``to_cond`` / ``promo_cond`` / ``drop_piece`` /
@@ -989,6 +1012,7 @@ GAME_SPECS: Dict[str, RLGameSpec] = {
     "mahjong": MahjongSpec(),
     "pokemon": PokemonSpec(),
     "sc2": Sc2Spec(),
+    "clash_royale": ClashRoyaleSpec(),
 }
 
 

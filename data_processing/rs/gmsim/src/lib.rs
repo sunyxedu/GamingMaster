@@ -683,6 +683,117 @@ impl Sc2Sim {
     }
 }
 
+/// The Clash Royale catalog and timeline of the process (crdata's; loaded once — a live
+/// battle's frame builder borrows them for its lifetime).
+static CR_CATALOG: std::sync::OnceLock<(String, crdata::catalog::Catalog, crdata::catalog::Timeline)> = std::sync::OnceLock::new();
+
+fn cr_catalog(dir: &str) -> PyResult<&'static (String, crdata::catalog::Catalog, crdata::catalog::Timeline)> {
+    let c = CR_CATALOG.get_or_init(|| {
+        let d = std::path::Path::new(dir);
+        let cat = crdata::catalog::Catalog::load(&d.join("cards.json")).expect("clash royale catalog cards.json");
+        let tl = crdata::catalog::Timeline::load(&d.join("timeline.json")).expect("clash royale catalog timeline.json");
+        (dir.to_string(), cat, tl)
+    });
+    if c.0 != dir {
+        return Err(PyValueError::new_err(format!("clash royale: catalog {} already loaded (asked for {dir})", c.0)));
+    }
+    Ok(c)
+}
+
+/// One player's Clash Royale frames during a live battle — crdata's `SideFrames`, the
+/// converter's builder: plays / abilities are observed in tick order (grid cells in the
+/// TEAM frame, team half y < 16), a frame read at a tick holds the events before it, as the
+/// converter's `raw.*` columns of one row.
+#[pyclass(module = "gmsim._native", unsendable)]
+struct CrFrames {
+    inner: crdata::frames::SideFrames<'static>,
+    cols: crdata::frames::FrameColumns,
+}
+
+fn cr_side(side: u8) -> PyResult<crdata::replay::SideId> {
+    match side {
+        0 => Ok(crdata::replay::SideId::Team),
+        1 => Ok(crdata::replay::SideId::Opp),
+        _ => Err(PyValueError::new_err(format!("side {side} is not 0 (team) / 1 (opponent)"))),
+    }
+}
+
+#[pymethods]
+impl CrFrames {
+    #[new]
+    #[pyo3(signature = (catalog, deck_ids, deck_forms, side, step_ticks=10, recent=8))]
+    fn new(catalog: &str, deck_ids: Vec<u16>, deck_forms: Vec<u8>, side: u8, step_ticks: u32, recent: usize) -> PyResult<Self> {
+        let c = cr_catalog(catalog)?;
+        if deck_forms.len() != deck_ids.len() {
+            return Err(PyValueError::new_err("deck_ids / deck_forms lengths differ"));
+        }
+        let deck: Vec<(u16, u8)> = deck_ids.into_iter().zip(deck_forms).collect();
+        let cfg = crdata::frames::FrameConfig { step_ticks, recent };
+        let inner = crdata::frames::SideFrames::new(&deck, cr_side(side)?, &c.1, &c.2, cfg)
+            .ok_or_else(|| PyValueError::new_err("a deck of 8 cards"))?;
+        Ok(CrFrames { inner, cols: Default::default() })
+    }
+
+    /// The deck tokens' card ids / forms (the converter's token order).
+    #[getter]
+    fn tok_ids(&self) -> Vec<u16> {
+        self.inner.tok_ids.clone()
+    }
+
+    #[getter]
+    fn tok_forms(&self) -> Vec<u8> {
+        self.inner.tok_form.clone()
+    }
+
+    /// A play of `side` (0 team, 1 opponent) at `tick`, cell (gx, gy) in the team frame;
+    /// False when no hand cycle explains the own plays any more.
+    fn observe_play(&mut self, side: u8, card: u16, form: u8, tick: u32, gx: i8, gy: i8) -> PyResult<bool> {
+        let e = crdata::replay::Event { tick, side: cr_side(side)?,
+                                        kind: crdata::replay::EventKind::Play { card, form, gx, gy } };
+        Ok(self.inner.observe(&e))
+    }
+
+    fn observe_ability(&mut self, side: u8, card: u16, tick: u32) -> PyResult<bool> {
+        let e = crdata::replay::Event { tick, side: cr_side(side)?, kind: crdata::replay::EventKind::Ability { card } };
+        Ok(self.inner.observe(&e))
+    }
+
+    /// The raw columns of the frame at `tick` (one row each; the label columns are not
+    /// the builder's).
+    fn frame<'py>(&mut self, py: Python<'py>, tick: u32) -> PyResult<Bound<'py, PyDict>> {
+        let mut c = crdata::frames::FrameColumns::default();
+        self.inner.push_frame(tick, &mut c);
+        let d = PyDict::new(py);
+        d.set_item("tick", c.tick)?;
+        d.set_item("time_s", c.time_s)?;
+        d.set_item("phase", c.phase)?;
+        d.set_item("overtime", c.overtime)?;
+        d.set_item("elixir", c.elixir)?;
+        d.set_item("opp_elixir", c.opp_elixir)?;
+        d.set_item("deck_ids", c.deck_ids)?;
+        d.set_item("deck_form", c.deck_form)?;
+        d.set_item("deck_kind", c.deck_kind)?;
+        d.set_item("deck_cost", c.deck_cost)?;
+        d.set_item("deck_in_hand", c.deck_in_hand)?;
+        d.set_item("deck_next", c.deck_next)?;
+        d.set_item("recent_side", c.recent_side)?;
+        d.set_item("recent_card", c.recent_card)?;
+        d.set_item("recent_x", c.recent_x)?;
+        d.set_item("recent_y", c.recent_y)?;
+        d.set_item("recent_age", c.recent_age)?;
+        let _ = &mut self.cols;
+        Ok(d)
+    }
+}
+
+/// Clash Royale catalog facts for the env: (id, key, cost, kind) of every card, as the
+/// converter reads them.
+#[pyfunction]
+fn cr_catalog_cards(catalog: &str) -> PyResult<Vec<(u16, String, f32, u8)>> {
+    let c = cr_catalog(catalog)?;
+    Ok(c.1.cards.iter().map(|e| (e.id, e.key.clone(), c.1.cost(e.id), c.1.kind(e.id) as u8)).collect())
+}
+
 /// The frame of a live Pokémon Showdown request (gmpokemon::live_frame: the converter's frame
 /// of that request): `log` = the battle's sim protocol so far, `side` 0 / 1, `phase` "turn" /
 /// "forced" / "preview", `format` its format id (Showdown's toID: "gen9ou").  Returns the obs
@@ -738,6 +849,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<State>()?;
     m.add_class::<MahjongSim>()?;
     m.add_class::<Sc2Sim>()?;
+    m.add_class::<CrFrames>()?;
+    m.add_function(wrap_pyfunction!(cr_catalog_cards, m)?)?;
     m.add_function(wrap_pyfunction!(pokemon_live_frame, m)?)?;
     Ok(())
 }

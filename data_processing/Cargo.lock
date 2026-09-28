@@ -987,6 +987,7 @@ dependencies = [
 name = "gmsim"
 version = "0.1.0"
 dependencies = [
+ "crdata",
  "gmmahjong",
  "gmpokemon",
  "gmrules",
