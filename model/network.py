@@ -211,6 +211,9 @@ class GeneralsNetwork(GameNetwork):
         legal: Optional[Mapping[str, torch.Tensor]] = None,
         labels: Optional[Mapping[str, torch.Tensor]] = None,
         routes: Optional[torch.Tensor] = None,
+        init_cache: Optional[List[Optional[torch.Tensor]]] = None,
+        t0: int = 0,
+        return_cache: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Legacy tensor API (``grid_seq, globals_seq, legal_mask=...,
         source_y=..., source_x=..., direction_mask=...``), or — when the
@@ -220,7 +223,10 @@ class GeneralsNetwork(GameNetwork):
         trainers drive every game with (obs keys ``grid_seq`` /
         ``globals_seq``; legal keys ``source`` / ``direction``; label keys
         ``source_y`` / ``source_x``; ``routes`` replays a recorded MoE
-        routing).  Both reach the same core call."""
+        routing; ``init_cache`` / ``t0`` / ``return_cache`` run a long record in
+        chunks, each continuing from the memory state the previous one ended in —
+        the trainers' truncated BPTT, :meth:`GameNetwork.forward`).  Both reach the
+        same core call."""
         if isinstance(grid_seq, Mapping):
             if any(x is not None for x in (globals_seq, legal_mask, source_y,
                                            source_x, direction_mask)):
@@ -232,7 +238,7 @@ class GeneralsNetwork(GameNetwork):
                 grid_seq, legal=legal, labels=labels,
                 act_steps=act_steps, frame_mask=frame_mask,
                 carry=carry, active=active, return_carry=return_carry, reset=reset,
-                routes=routes,
+                routes=routes, init_cache=init_cache, t0=t0, return_cache=return_cache,
             )
         if legal is not None or labels is not None:
             raise TypeError("legal=/labels= dicts need an obs dict as the first "
@@ -247,7 +253,7 @@ class GeneralsNetwork(GameNetwork):
             obs, legal=legal, labels=labels,
             act_steps=act_steps, frame_mask=frame_mask,
             carry=carry, active=active, return_carry=return_carry, reset=reset,
-            routes=routes,
+            routes=routes, init_cache=init_cache, t0=t0, return_cache=return_cache,
         )
 
     # ------------------------------------------------------------------

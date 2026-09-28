@@ -289,3 +289,26 @@ def test_resume_adds_core_memory_to_a_trained_run(tmp_path):
     outs = [k for k in mem_keys if k.endswith("out_proj.weight")]
     assert outs and any(st[k].abs().sum() > 0 for k in outs)
     assert (ck2.get("configs") or {})["othello"]["core_delta_memory"] == "1"
+
+
+def test_generals_network_runs_in_chunks():
+    """GeneralsNetwork (the generals adapter's own forward) takes the chunk-continuation
+    cache like every game network: forward over [0, s) then [s, T) from its cache equals
+    one forward over [0, T) — records longer than the trainers' --chunk_len crashed it
+    (TypeError on init_cache) before."""
+    from model.games.registry import build_game_network as build
+
+    torch.manual_seed(0)
+    net = build("generals", **TINY).eval()
+    g = torch.Generator().manual_seed(11)
+    B, T, s, H = 2, 7, 3, 25
+    onehot = torch.zeros(B, T, 11, H, H)
+    onehot.scatter_(2, torch.randint(0, 11, (B, T, 1, H, H), generator=g), 1.0)
+    obs = {"grid_seq": torch.cat([onehot, torch.rand(B, T, 1, H, H, generator=g)], 2),
+           "globals_seq": torch.rand(B, T, 4, generator=g)}
+    with torch.no_grad():
+        full = net(obs)
+        a = net({k: v[:, :s] for k, v in obs.items()}, return_cache=True)
+        b = net({k: v[:, s:] for k, v in obs.items()}, init_cache=a["st_cache"], t0=s,
+                return_cache=True)
+    torch.testing.assert_close(torch.cat([a["value"], b["value"]], 1), full["value"], rtol=1e-5, atol=1e-5)
