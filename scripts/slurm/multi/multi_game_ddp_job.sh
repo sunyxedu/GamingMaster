@@ -72,6 +72,8 @@
 # $OUT/STOP (the step); the job's trainer (--stop_file $OUT/STOP) writes
 # multi_latest.pt at that step and exits, and the job continues from it with the
 # new arguments in the same allocation.  $OUT/STOP alone stops the job cleanly.
+# HOLD_ON_FAIL_S=<seconds> (job environment): a trainer that crashes keeps the allocation
+# that long, waiting for a fixed $OUT/handover.env (write it with HANDOVER=1, no STOP_AT).
 # New games join a running RUN: resubmit it with more --data entries in ARGS
 # (any order; the checkpoint's games must all stay) and they start fresh
 # around the trained core (train_multi_game.py docstring, "Resuming").  Pass
@@ -188,10 +190,23 @@ nvidia-smi -L 2>/dev/null | grep MIG || true
 # ARGS may override --ckpt_every (the last occurrence wins); log.txt is appended
 # to, so a resumed run keeps the earlier part
 # shellcheck disable=SC2086
+set +e
 "$GM_HOME/.venv/bin/torchrun" --standalone --nproc_per_node="$NGPU" \
     -m training.train_multi_game --ckpt_every "${CKPT_EVERY:-500}" \
     --dist_backend "${DIST_BACKEND:-auto}" ${SHARD_FLAG} --stop_file "$OUT/STOP" ${ARGS:-} \
     ${RESUME_FROM:+--resume "$RESUME_FROM"} --save_dir "$OUT" 2>&1 | tee -a "$OUT/log.txt"
+status=${PIPESTATUS[0]}
+set -e
+if [ "$status" != 0 ] && [ ! -f "$OUT/handover.env" ] && [ "${HOLD_ON_FAIL_S:-0}" -gt 0 ]; then
+    # a crashed trainer keeps the allocation: the GPUs wait (up to HOLD_ON_FAIL_S seconds)
+    # for a fixed handover ($OUT/handover.env) instead of going back to the queue
+    echo "[$(date)] trainer failed (status $status): holding the allocation up to ${HOLD_ON_FAIL_S} s for $OUT/handover.env"
+    waited=0
+    while [ ! -f "$OUT/handover.env" ] && [ "$waited" -lt "$HOLD_ON_FAIL_S" ]; do
+        sleep 30
+        waited=$((waited + 30))
+    done
+fi
 if [ -f "$OUT/handover.env" ]; then
     used="$OUT/handover.$(date +%Y%m%d-%H%M%S).env"
     mv "$OUT/handover.env" "$used"
@@ -202,6 +217,10 @@ if [ -f "$OUT/handover.env" ]; then
     continue
 fi
 rm -f "$OUT/STOP"
+if [ "$status" != 0 ]; then
+    echo "[$(date)] trainer failed (status $status)"
+    exit "$status"
+fi
 break
 done
 echo "[$(date)] done"
