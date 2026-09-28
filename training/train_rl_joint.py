@@ -907,6 +907,34 @@ class PokemonSpec(RLGameSpec):
                 "switch_idx": actions["switch_idx"].long(), "tera": actions["tera"].long()}
 
 
+class Sc2Spec(RLGameSpec):
+    """StarCraft II (model/games/sc2.py Sc2Decoder on env/vec_sc2.py): the rollout commits
+    type → actors → the coarse target cell in decode and samples the rest; the replay
+    teacher-forces the stored type, actors and target point (the argument and target heads
+    condition on them), the masks come from the obs (own units, occupied slots) and the
+    vocabulary's target kinds, so log π_old = μ; full-head KL (``il_head_terms``: type, kind,
+    actors, queued, unit, coarse, fine)."""
+
+    full_kl = True
+
+    def check_env(self, env, net):
+        have = env.obs_schema()
+        cfg = net.cfg
+        want = {"units": (cfg.sc2_units, cfg.sc2_unit_features), "upgrades": (cfg.sc2_upgrades,)}
+        for k, shape in want.items():
+            if tuple(have[k][0]) != shape:
+                raise SystemExit(f"sc2 env emits {k} {tuple(have[k][0])}, the network expects {shape}")
+
+    def labels(self, actions, cfg):
+        return {"action_type": actions["action_type"].long(), "actors": actions["actors"].float(),
+                "target_point": actions["target_point"].long()}
+
+    def kl_targets(self, actions, forced, cfg):
+        return {"action_type": actions["action_type"].long(), "actors": actions["actors"].float(),
+                "target_kind": actions["target_kind"].long(), "target_unit": actions["target_unit"].long(),
+                "target_point": actions["target_point"].long(), "queued": actions["queued"].bool()}
+
+
 class ShogiSpec(RLGameSpec):
     """The shogi move-or-drop decoder (model/games/shogi.py ShogiDecoder) on the gmrules
     shogi env (legal ``mode`` / ``from`` / ``to_cond`` / ``promo_cond`` / ``drop_piece`` /
@@ -960,6 +988,7 @@ GAME_SPECS: Dict[str, RLGameSpec] = {
     "hok": HokSpec(),
     "mahjong": MahjongSpec(),
     "pokemon": PokemonSpec(),
+    "sc2": Sc2Spec(),
 }
 
 

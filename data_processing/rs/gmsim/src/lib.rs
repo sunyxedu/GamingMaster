@@ -44,6 +44,7 @@ impl Pod for f64 {}
 impl Pod for i32 {}
 impl Pod for i64 {}
 impl Pod for u8 {}
+impl Pod for u16 {}
 
 fn as_bytes<T: Pod>(v: &[T]) -> &[u8] {
     // SAFETY: Pod types have no padding and no invalid bit patterns; u8 has alignment 1
@@ -574,6 +575,114 @@ impl MahjongSim {
     }
 }
 
+/// N StarCraft II games against the built-in AI (gmsc2::env::Sc2Vec: an SC2 process per env
+/// on its own thread; the decisions and frames of gmsc2's module docs — a frame is the gmdata
+/// converter's).  One row per env; buffers keyed like the shards' obs tensors.
+#[pyclass(module = "gmsim._native")]
+struct Sc2Sim {
+    inner: gmsc2::env::Sc2Vec,
+}
+
+fn u8s_of(b: &[u8], n: usize, what: &str) -> PyResult<Vec<u8>> {
+    if b.len() != n {
+        return Err(PyValueError::new_err(format!("{what}: {} bytes, expected {n}", b.len())));
+    }
+    Ok(b.to_vec())
+}
+
+#[pymethods]
+impl Sc2Sim {
+    #[new]
+    #[pyo3(signature = (n_envs, install, vocab, maps, races=vec![4], ai_race=4, difficulty=3, max_loops=26880,
+                        port=25000, seeds=vec![], autoreset=true, tmp=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(py: Python<'_>, n_envs: usize, install: String, vocab: String, maps: Vec<String>, races: Vec<i32>, ai_race: i32,
+           difficulty: i32, max_loops: u32, port: u16, seeds: Vec<u64>, autoreset: bool, tmp: Option<String>) -> PyResult<Self> {
+        let voc = gmsc2::Vocab::load(std::path::Path::new(&vocab)).map_err(|e| PyValueError::new_err(format!("{e:#}")))?;
+        let tmp = tmp.map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("gm-sc2-sim-{}", std::process::id())));
+        let cfg = gmsc2::env::Config { install: install.into(), maps, races, ai_race, difficulty, max_loops, port, tmp };
+        let inner = py.detach(|| gmsc2::env::Sc2Vec::new(n_envs, cfg, voc, &seeds, autoreset))
+            .map_err(|e| PyValueError::new_err(format!("{e:#}")))?;
+        Ok(Sc2Sim { inner })
+    }
+
+    #[getter]
+    fn n_envs(&self) -> usize {
+        self.inner.n_envs()
+    }
+
+    #[getter]
+    fn failures(&self) -> usize {
+        self.inner.failures
+    }
+
+    #[getter]
+    fn last_error(&self) -> Option<String> {
+        self.inner.last_error.clone()
+    }
+
+    #[getter]
+    fn n_upgrades(&self) -> usize {
+        self.inner.voc.upgrades.len()
+    }
+
+    fn reset(&mut self, py: Python<'_>, env_ids: Vec<usize>) -> PyResult<()> {
+        let inner = &mut self.inner;
+        py.detach(|| inner.reset(&env_ids)).map_err(|e| PyValueError::new_err(format!("{e:#}")))
+    }
+
+    /// Every env's current decision (fresh buffers each call).
+    fn observe<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let b = py.detach(|| self.inner.observe());
+        let d = PyDict::new(py);
+        d.set_item("units", bytearray(py, &b.units))?;
+        d.set_item("unit_xy", bytearray(py, &b.unit_xy))?;
+        d.set_item("unit_type", bytearray(py, &b.unit_type))?;
+        d.set_item("unit_order", bytearray(py, &b.unit_order))?;
+        d.set_item("unit_buffs", bytearray(py, &b.unit_buffs))?;
+        d.set_item("unit_mask", bytearray(py, &b.unit_mask))?;
+        d.set_item("unit_own", bytearray(py, &b.unit_own))?;
+        d.set_item("unit_commanded", bytearray(py, &b.unit_commanded))?;
+        d.set_item("map_bits", bytearray(py, &b.map_bits))?;
+        d.set_item("globals", bytearray(py, &b.globals))?;
+        d.set_item("upgrades", bytearray(py, &b.upgrades))?;
+        d.set_item("last_action", bytearray(py, &b.last_action))?;
+        d.set_item("window_start", bytearray(py, &b.window_start))?;
+        Ok(d)
+    }
+
+    /// One decision per env: action_type / target_kind / target_unit / target_point int64,
+    /// actors uint8 [n × U], queued uint8 (bytes).
+    #[allow(clippy::too_many_arguments)]
+    fn step<'py>(&mut self, py: Python<'py>, action_type: &[u8], actors: &[u8], target_kind: &[u8], target_unit: &[u8],
+                 target_point: &[u8], queued: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+        let n = self.inner.n_envs();
+        let (at, tk) = (parse_i64(action_type, "action_type")?, parse_i64(target_kind, "target_kind")?);
+        let (tu, tp) = (parse_i64(target_unit, "target_unit")?, parse_i64(target_point, "target_point")?);
+        let ac = u8s_of(actors, n * gmsc2::U, "actors")?;
+        let qu = u8s_of(queued, n, "queued")?;
+        if [at.len(), tk.len(), tu.len(), tp.len()].iter().any(|&l| l != n) {
+            return Err(PyValueError::new_err(format!("sc2: every action needs {n} rows")));
+        }
+        let labels: Vec<gmsc2::Label> = (0..n).map(|i| gmsc2::Label {
+            action_type: at[i], actors: ac[i * gmsc2::U..(i + 1) * gmsc2::U].iter().map(|&a| a != 0).collect(),
+            target_kind: tk[i], target_unit: tu[i], target_point: tp[i], queued: qu[i] != 0,
+        }).collect();
+        let inner = &mut self.inner;
+        let info = py.detach(|| inner.step(&labels)).map_err(|e| PyValueError::new_err(format!("{e:#}")))?;
+        let d = PyDict::new(py);
+        d.set_item("rewards", bytearray(py, &info.rewards))?;
+        d.set_item("done", bytearray(py, &info.done))?;
+        d.set_item("truncated", bytearray(py, &info.truncated))?;
+        d.set_item("sent", bytearray(py, &info.sent))?;
+        d.set_item("refused", bytearray(py, &info.refused))?;
+        d.set_item("episode_len", bytearray(py, &info.episode_len))?;
+        d.set_item("game_loop", bytearray(py, &info.game_loop))?;
+        Ok(d)
+    }
+}
+
 /// The frame of a live Pokémon Showdown request (gmpokemon::live_frame: the converter's frame
 /// of that request): `log` = the battle's sim protocol so far, `side` 0 / 1, `phase` "turn" /
 /// "forced" / "preview", `format` its format id (Showdown's toID: "gen9ou").  Returns the obs
@@ -628,6 +737,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Sim>()?;
     m.add_class::<State>()?;
     m.add_class::<MahjongSim>()?;
+    m.add_class::<Sc2Sim>()?;
     m.add_function(wrap_pyfunction!(pokemon_live_frame, m)?)?;
     Ok(())
 }

@@ -990,6 +990,7 @@ dependencies = [
  "gmmahjong",
  "gmpokemon",
  "gmrules",
+ "gmsc2",
  "pyo3",
  "serde_json",
 ]

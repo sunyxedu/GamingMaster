@@ -345,6 +345,13 @@ def _make_pokemon(n_envs: int = 1, **kw) -> VecGameEnv:
     return PokemonVecEnv(n_envs, **kw)
 
 
+def _make_sc2(n_envs: int = 1, **kw) -> VecGameEnv:
+    """StarCraft II against the built-in AI (gmsim's Sc2Sim: headless SC2 processes of the
+    3.16.1 Linux client; frames from gmsc2, the converter's)."""
+    from env.vec_sc2 import Sc2VecEnv
+    return Sc2VecEnv(n_envs, **kw)
+
+
 def _make_hok(n_envs: int = 1, **kw) -> VecGameEnv:
     """Needs Tencent's Honor of Kings research environment (HOK_ROOT: the SDK venv, Wine,
     the licensed gamecore)."""
@@ -362,6 +369,7 @@ VEC_ENV_REGISTRY: Dict[str, Callable[..., VecGameEnv]] = {
     "hok": _make_hok,
     "mahjong": _make_mahjong,
     "pokemon": _make_pokemon,
+    "sc2": _make_sc2,
 }
 
 

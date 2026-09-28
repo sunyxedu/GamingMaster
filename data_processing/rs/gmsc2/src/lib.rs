@@ -49,6 +49,7 @@
 //!   target_point  the target on a LOC × LOC grid over the map (y · LOC + x), −1 none
 //!   queued        shift-queued
 
+pub mod env;
 pub mod vocab;
 
 use sc2api::proto;

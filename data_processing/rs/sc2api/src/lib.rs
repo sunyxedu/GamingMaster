@@ -259,6 +259,19 @@ impl Sc2 {
         }
     }
 
+    /// End the running single-player game (a debug surrender), so the process takes a new
+    /// `create_game`; then step once for the game to register it.
+    pub fn end_game(&mut self) -> Result<()> {
+        let cmd = proto::DebugCommand { command: Some(proto::debug_command::Command::EndGame(proto::DebugEndGame {
+            end_result: Some(proto::debug_end_game::EndResult::Surrender as i32) })) };
+        match self.request(request::Request::Debug(proto::RequestDebug { debug: vec![cmd] }))? {
+            response::Response::Debug(_) => {}
+            other => bail!("debug: unexpected response {other:?}"),
+        }
+        let _ = self.step(1);
+        Ok(())
+    }
+
     /// Leave (the process exits); also on drop.
     pub fn quit(&mut self) {
         let _ = self.request(request::Request::Quit(proto::RequestQuit {}));
