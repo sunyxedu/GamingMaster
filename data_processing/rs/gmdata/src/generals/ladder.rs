@@ -68,15 +68,24 @@ impl BotCache {
         let map = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         BotCache { path, map }
     }
-    fn is_bot(&mut self, c: &reqwest::blocking::Client, name: &str) -> bool {
+    /// Whether `name` is a bot account (/api/starsAndRanks `isBot`), cached; `None` when the
+    /// API did not answer after retries — not cached, and the caller rejects the game (an
+    /// unanswered lookup must not pass a bot as a human).
+    fn is_bot(&mut self, c: &reqwest::blocking::Client, name: &str) -> Option<bool> {
         if let Some(&b) = self.map.get(name) {
-            return b;
+            return Some(b);
         }
         let url = format!("https://generals.io/api/starsAndRanks?u={}", urlenc(name));
-        let b = c.get(&url).send().ok().and_then(|r| r.text().ok()).and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .and_then(|v| v["isBot"].as_bool()).unwrap_or(false);
-        self.map.insert(name.to_string(), b);
-        b
+        for attempt in 0..4u64 {
+            let b = c.get(&url).send().ok().and_then(|r| r.error_for_status().ok()).and_then(|r| r.text().ok())
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["isBot"].as_bool());
+            if let Some(b) = b {
+                self.map.insert(name.to_string(), b);
+                return Some(b);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(3 * (attempt + 1)));
+        }
+        None
     }
     fn save(&self) {
         let _ = std::fs::write(&self.path, serde_json::to_vec_pretty(&self.map).unwrap_or_default());
@@ -110,7 +119,7 @@ fn imitated(g: &Value, a: &LadderArgs, c: &reqwest::blocking::Client, bots: &mut
     if cands.is_empty() || cands.iter().any(|p| stars(p) < a.min_stars) {
         return Vec::new();
     }
-    if !a.allow_bots && ranking.iter().any(|p| bots.is_bot(c, &name(p))) {
+    if !a.allow_bots && ranking.iter().any(|p| bots.is_bot(c, &name(p)) != Some(false)) {
         return Vec::new();
     }
     cands.iter().map(name).collect()
