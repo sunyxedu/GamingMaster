@@ -95,6 +95,9 @@ LABEL_KEYS = {
     "arc3": ("click_idx",),
     # the argument heads condition on the button (model/games/hok.py)
     "hok": ("button_idx",),
+    # the argument heads condition on the type, the target heads also on the actors and
+    # the fine point head on the coarse cell (model/games/sc2.py)
+    "sc2": ("action_type", "actors", "target_point"),
 }
 
 # STATE keys are facts about the position, not decisions: the decoder
@@ -188,6 +191,11 @@ META_ARCH_KEYS = {
     "arc3": {"global_features": ("arc_global_features",), "grid": ("arc_grid",)},
     # Honor of Kings 1v1 (gmdata hok convert): the research environment's feature width
     "hok": {"features": ("hok_features",)},
+    # StarCraft II (gmdata sc2 convert): gmsc2's frame layout and the build's vocabulary
+    "sc2": {"units": ("sc2_units",), "unit_features": ("sc2_unit_features",), "map_bits": ("sc2_map_bits",),
+            "globals": ("sc2_globals",), "loc": ("sc2_loc",), "unit_vocab": ("sc2_unit_vocab",),
+            "action_vocab": ("sc2_action_vocab",), "buff_vocab": ("sc2_buff_vocab",),
+            "upgrades": ("sc2_upgrades",)},
     # riichi mahjong (gmdata mahjong convert v4): the tile planes' width (v3: 16; v4 adds
     # each opponent's public discard history → 37)
     "mahjong": {"tile_features": ("mahjong_tile_feature_dim",)},
@@ -625,7 +633,9 @@ def build_labels(
         if k in state_keys:
             labels[k] = src[k]
         else:
-            labels[k] = torch.where(keep, src[k], torch.full_like(src[k], -1))
+            # a per-frame vector label (sc2's actors [B, T, U]) is kept or dropped whole
+            kk = keep.reshape(keep.shape + (1,) * (src[k].dim() - keep.dim()))
+            labels[k] = torch.where(kk, src[k], torch.full_like(src[k], -1))
     return labels
 
 

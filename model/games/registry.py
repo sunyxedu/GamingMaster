@@ -176,6 +176,14 @@ def _build_arc3(**overrides) -> nn.Module:
     return build_arc3_network(**overrides)
 
 
+def _build_sc2(**overrides) -> nn.Module:
+    """StarCraft II (gmsc2 frames: gmdata sc2 convert, env/vec_sc2.py): unit / map / global
+    tokens; type → kind, actors, target unit / point, queued."""
+    from model.games.sc2 import build_sc2_network
+
+    return build_sc2_network(**overrides)
+
+
 def _build_hok(**overrides) -> nn.Module:
     """Honor of Kings 1v1 (env/vec_hok.py): entity tokens; button → its arguments."""
     from model.games.hok import build_hok_network
@@ -198,6 +206,7 @@ GAME_REGISTRY: Dict[str, Callable[..., nn.Module]] = {
     "starcraft": _build_starcraft,
     "arc3": _build_arc3,
     "hok": _build_hok,
+    "sc2": _build_sc2,
 }
 
 

@@ -666,8 +666,8 @@ pub fn convert(install: &Path, scan: &Path, vocab: &Path, out: &Path, min_mmr: i
     let meta = json!({"units": gmsc2::U, "own": gmsc2::OWN, "enemy": gmsc2::ENEMY, "unit_features": gmsc2::F,
                       "flags": gmsc2::feature::N_FLAGS, "map": gmsc2::MAP, "map_bits": gmsc2::MAP_BITS,
                       "globals": gmsc2::G, "loc": gmsc2::LOC, "k_max": gmsc2::K_MAX, "step_mul": gmsc2::STEP_MUL,
-                      "buffs": gmsc2::BUFFS, "vocab": {"build": voc.build, "units": voc.n_units(), "actions": voc.n_actions(),
-                      "buffs": voc.n_buffs(), "upgrades": voc.upgrades.len()}, "min_mmr": min_mmr});
+                      "buffs": gmsc2::BUFFS, "build": voc.build, "unit_vocab": voc.n_units(), "action_vocab": voc.n_actions(),
+                      "buff_vocab": voc.n_buffs(), "upgrades": voc.upgrades.len(), "min_mmr": min_mmr});
     let mut train = ShardWriter::new(&out.join("train"), "sc2", CONVERTER_VERSION, meta.clone(), shard_size)?;
     let mut val = ShardWriter::new(&out.join("val"), "sc2", CONVERTER_VERSION, meta, shard_size)?;
     let jobs: Arc<Vec<(usize, usize)>> = Arc::new((0..picks.len()).flat_map(|i| [(i, 1), (i, 2)]).collect());
