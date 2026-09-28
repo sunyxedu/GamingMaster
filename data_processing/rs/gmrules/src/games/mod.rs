@@ -26,6 +26,8 @@
 //! - [`hunl`]: heads-up no-limit Texas hold'em (ACPC rules; exact bet amounts in the
 //!   rules, abstracted bet-size candidates for the policy: a custom schema with the
 //!   candidate layout).
+//! - [`tetris`]: versus Tetris (guideline garbage battle as Cold Clear's libtetris defines it;
+//!   both players place one piece per turn — a simultaneous candidate-schema game).
 
 pub mod backgammon;
 pub mod breakthrough;
@@ -41,3 +43,4 @@ pub mod chess_variants;
 pub mod xiangqi;
 pub mod skat;
 pub mod shogi;
+pub mod tetris;
