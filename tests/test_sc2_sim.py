@@ -83,3 +83,33 @@ def test_the_network_drives_the_env_and_replays_its_log_prob(env):
         torch.testing.assert_close(lp[:, 0], s["action_log_prob"], rtol=0, atol=1e-4)
         obs, _, _, info = env.step(s)
     assert env.failures == 0, env._sim.last_error
+
+
+SHARDS = os.environ.get("GM_SC2_TEST_SHARDS") or os.path.expanduser("~/gm-data/sc2/convert_test/train")
+
+
+@pytest.mark.skipif(not os.path.isdir(SHARDS), reason="needs converted sc2 shards (gmdata sc2 convert)")
+def test_il_then_rl_on_the_simulator(tmp_path):
+    """IL on converted replays, then one RL iteration against the built-in AI: the
+    learner's replay of the rollout is exact (μ = π_old)."""
+    import json
+
+    import numpy as np
+
+    from training import train_multi_game, train_rl_joint
+
+    core = ["d_model=32", "n_heads=4", "d_ff=64", "n_st_layers=1", "dropout=0.0", "encoder_channels=8",
+            "core_type=transformer", "core_layers=1", "temporal_mixer=recurrent"]
+    train_multi_game.main(["--data", f"sc2={SHARDS}", "--steps", "3", "--batch_size", "2", "--max_len", "16",
+                           "--warmup_steps", "1", "--eval_every", "0", "--device", "cpu",
+                           "--save_dir", str(tmp_path / "ck"), "--override", *core])
+    res = train_rl_joint.main([
+        "--init", str(tmp_path / "ck" / "multi_final.pt"), "--rl", "sc2", "--tokens_per_iter", "200",
+        "--envs", "sc2=2", "--env_kw", "sc2:difficulty=very_easy", "--epochs", "1", "--minibatches", "2",
+        "--snapshot_dir", "memory", "--device", "cpu", "--seed", "1", "--iterations", "1",
+        "--save_dir", str(tmp_path / "rl")])
+    row = res["history"][-1]["games"]["sc2"]
+    assert row["tokens"] >= 1
+    assert abs(row["canary_log_old_mu"]) < 1e-4 and abs(row["canary_log_ratio"]) < 1e-4
+    assert np.isfinite(row["entropy"]) and np.isfinite(row["value_loss"])
+    json.dumps(res["history"][-1])
