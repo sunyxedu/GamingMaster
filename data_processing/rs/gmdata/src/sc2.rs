@@ -107,6 +107,11 @@ pub enum Cmd {
         val_every: u64,
         #[arg(long, default_value_t = 16)]
         shard_size: usize,
+        /// convert only the selected replays i with i % parts == part (jobs side by side)
+        #[arg(long, default_value_t = 0)]
+        part: usize,
+        #[arg(long, default_value_t = 1)]
+        parts: usize,
     },
     /// Measure one replay through the game: observation cost, the actions it reports (kinds,
     /// loops, gaps), the frames and labels of gmsc2 — the numbers behind the frame design
@@ -654,13 +659,16 @@ fn convert_view(sc2: &mut Sc2, pick: &Pick, player: usize, voc: &gmsc2::Vocab, c
 #[allow(clippy::too_many_arguments)]
 pub fn convert(install: &Path, scan: &Path, vocab: &Path, out: &Path, min_mmr: i64, min_apm: i64, min_seconds: f64,
                chunks: usize, chunk_windows: usize, skip_windows: usize, workers: usize, port: u16, max: Option<usize>,
-               val_every: u64, shard_size: usize) -> Result<Value> {
+               val_every: u64, shard_size: usize, part: usize, parts: usize) -> Result<Value> {
     use std::sync::mpsc;
     let voc = Arc::new(gmsc2::Vocab::load(vocab)?);
     let inst = Install::find(install, Some(voc.build))?;
     let (mut picks, sel) = select(scan, inst.build, min_mmr, min_apm, min_seconds)?;
     if let Some(m) = max {
         picks.truncate(m);
+    }
+    if parts > 1 {
+        picks = picks.into_iter().enumerate().filter(|(i, _)| i % parts == part % parts).map(|(_, p)| p).collect();
     }
     let n_picks = picks.len();
     let meta = json!({"units": gmsc2::U, "own": gmsc2::OWN, "enemy": gmsc2::ENEMY, "unit_features": gmsc2::F,
@@ -761,9 +769,9 @@ pub fn run(cmd: Cmd) -> Result<()> {
             Ok(())
         }
         Cmd::Convert { install, scan, vocab, out, min_mmr, min_apm, min_seconds, chunks, chunk_windows, skip_windows, workers,
-                       port, max_replays, val_every, shard_size } => {
+                       port, max_replays, val_every, shard_size, part, parts } => {
             println!("{}", convert(&install, &scan, &vocab, &out, min_mmr, min_apm, min_seconds, chunks, chunk_windows,
-                                   skip_windows, workers, port, max_replays, val_every, shard_size)?);
+                                   skip_windows, workers, port, max_replays, val_every, shard_size, part, parts)?);
             Ok(())
         }
         Cmd::Probe { install, replay, vocab, player, fine_loops, step, max_loops, port } => {
