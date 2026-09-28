@@ -24,14 +24,7 @@
 //! training runs use): see `../README.md`.
 
 #![allow(dead_code)]
-mod catalog;
-mod elixir;
-mod fetch;
-mod frames;
-mod hand;
-#[cfg(test)]
-mod leak_audit;
-mod replay;
+use crdata::{catalog, fetch, frames, replay};
 
 use anyhow::{Context, Result};
 use catalog::{Catalog, Timeline};

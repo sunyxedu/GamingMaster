@@ -4,9 +4,12 @@
 
 use crate::catalog::Catalog;
 use anyhow::{Context, Result};
+#[cfg(feature = "io")]
 use arrow_array::{Array, LargeStringArray, StringArray};
+#[cfg(feature = "io")]
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::Deserialize;
+#[cfg(feature = "io")]
 use std::fs::File;
 use std::path::Path;
 
@@ -273,6 +276,7 @@ pub fn resolve_ability_sources(parsed: Vec<(Event, Vec<u16>)>, unknown: u16) -> 
 }
 
 /// Accessor over a Utf8 or LargeUtf8 column: index -> Option<&str>.
+#[cfg(feature = "io")]
 fn string_column<'a>(col: &'a dyn Array) -> Option<Box<dyn Fn(usize) -> Option<&'a str> + 'a>> {
     if let Some(a) = col.as_any().downcast_ref::<StringArray>() {
         return Some(Box::new(move |i| if a.is_null(i) { None } else { Some(a.value(i)) }));
@@ -284,6 +288,7 @@ fn string_column<'a>(col: &'a dyn Array) -> Option<Box<dyn Fn(usize) -> Option<&
 }
 
 /// Raw (tag, payload_json) rows of one Parquet part file.
+#[cfg(feature = "io")]
 pub fn read_rows(path: &Path) -> Result<Vec<(String, String)>> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
@@ -328,6 +333,7 @@ pub fn read_jsonl(path: &Path) -> Result<Vec<(String, String)>> {
 }
 
 /// Rows of one input part: Parquet (the dataset) or JSON lines ([`read_jsonl`]).
+#[cfg(feature = "io")]
 pub fn read_input_rows(path: &Path) -> Result<Vec<(String, String)>> {
     if path.extension().map(|e| e == "jsonl").unwrap_or(false) {
         read_jsonl(path)

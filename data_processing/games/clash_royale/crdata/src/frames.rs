@@ -483,6 +483,7 @@ mod tests {
 
 /// One player-sequence as a gm-shard sample: compact per-frame fields under `raw.*`
 /// (expanded into the adapter's observation by the loader) and the IL targets.
+#[cfg(feature = "io")]
 pub fn to_gm(s: Sample, cat: &Catalog) -> gmshard::Sample {
     let c = &s.cols;
     let t = c.len();
