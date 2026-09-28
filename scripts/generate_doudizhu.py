@@ -228,7 +228,7 @@ class PerfectDouAgent:
 
     FIELDS = ("player_position", "player_hand_cards", "legal_actions", "other_hand_cards", "last_move",
               "last_two_moves", "last_move_dict", "num_cards_left_dict", "played_cards", "bomb_num",
-              "card_play_action_seq", "three_landlord_cards")
+              "card_play_action_seq", "three_landlord_cards", "all_handcards", "last_pid")
 
     def __init__(self, python: str, repo: str):
         import subprocess
@@ -336,6 +336,7 @@ class Tracker:
         self.played = {p: [] for p in POSITIONS}
         self.last_move_dict = {p: [] for p in POSITIONS}
         self.seq: List[List[int]] = []
+        self.who: List[str] = []             # the position of each move of seq
         self.bombs = 0
 
     def infoset(self, seat: int, legal: List[List[int]]):
@@ -349,8 +350,18 @@ class Tracker:
             last_two = ([list(m)] + last_two)[:2]
         # GameEnv.get_infoset's order (the DouZero features count cards; PerfectDou's
         # encoder reads the order)
-        others = [c for p in ("landlord", "landlord_up", "landlord_down") if p != me for c in self.hands[p]]
-        return SimpleNamespace(three_landlord_cards=list(self.kitty),
+        order = ("landlord", "landlord_up", "landlord_down")
+        others = [c for p in order if p != me for c in self.hands[p]]
+        # all_handcards: PerfectDou's encoder indexes it but no feature depends on how the
+        # opponents' cards split between them (probed), so they get an arbitrary split of the
+        # pool (sorted, sizes kept) — never the true one
+        pool, all_hands = sorted(others), {me: list(self.hands[me])}
+        for p in order:
+            if p != me:
+                n = len(self.hands[p])
+                all_hands[p], pool = pool[:n], pool[n:]
+        last_pid = next((self.who[i] for i in range(len(self.seq) - 1, -1, -1) if self.seq[i]), "landlord")
+        return SimpleNamespace(three_landlord_cards=list(self.kitty), all_handcards=all_hands, last_pid=last_pid,
             player_position=me, player_hand_cards=list(self.hands[me]), legal_actions=legal,
             other_hand_cards=others, last_move=list(last), last_two_moves=last_two,
             last_move_dict={p: list(m) for p, m in self.last_move_dict.items()},
@@ -368,6 +379,7 @@ class Tracker:
         self.played[p] += move
         self.last_move_dict[p] = move
         self.seq.append(move)
+        self.who.append(p)
         if (len(move) == 4 and len(set(move)) == 1) or move == [20, 30]:
             self.bombs += 1
 
