@@ -74,6 +74,8 @@
 # new arguments in the same allocation.  $OUT/STOP alone stops the job cleanly.
 # HOLD_ON_FAIL_S=<seconds> (job environment): a trainer that crashes keeps the allocation
 # that long, waiting for a fixed $OUT/handover.env (write it with HANDOVER=1, no STOP_AT).
+# The held GPUs sit idle meanwhile — on a shared cluster keep it short (minutes) or off; a
+# $OUT/handover.env holding `exit 0` disarms it for a running job (the job then ends at once).
 # New games join a running RUN: resubmit it with more --data entries in ARGS
 # (any order; the checkpoint's games must all stay) and they start fresh
 # around the trained core (train_multi_game.py docstring, "Resuming").  Pass
