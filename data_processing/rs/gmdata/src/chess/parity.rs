@@ -33,7 +33,7 @@ fn fixture(name: &str) -> PathBuf {
 fn read_games(name: &str) -> Vec<Game> {
     let mut r = Reader::new(std::fs::File::open(fixture(name)).unwrap());
     let mut out = Vec::new();
-    while let Some(g) = r.read_game(&mut Collector).unwrap() {
+    while let Some(g) = r.read_game(&mut Collector::default()).unwrap() {
         if !g.bad {
             out.push(g);
         }

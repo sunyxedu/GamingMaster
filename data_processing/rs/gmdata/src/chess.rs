@@ -20,9 +20,12 @@
 //! the masks alike ([`move_target`]). Repetition = FIDE position identity (board, side to
 //! move, castling rights, legal en-passant square): globals 8/9 say the frame's position was
 //! already seen once / twice before (9 = a threefold repetition is claimable here).
-//! Filters: standard variant, no FEN/SetUp, decisive/drawn result, both Elo ≥ min
-//! (untagged skipped when min > 0), ≥ min plies, optional no-bullet
-//! (base + 40·inc < 180 s). Games with an unparsable/illegal/null move are skipped.
+//! Filters: standard variant, no FEN/SetUp, no BOT account, decisive/drawn result, both
+//! Elo ≥ min (untagged skipped when min > 0), ≥ min plies, optional no-bullet
+//! (base + 40·inc < 180 s), [`Quality`] (rated, normal termination, per-speed Elo of both
+//! players — `--hq`: the measured [`MEASURED_SPEED_ELO`]). The tag filters run before the
+//! movetext is parsed (a rejected game is skipped unparsed). Games with an
+//! unparsable/illegal/null move are skipped.
 //! converter_version 2: rank-only mirror. converter_version 3: globals 8 → 10 (repetition
 //! flags) and the legality masks; shard meta `{"global_features": 10}`.
 //!
@@ -57,9 +60,24 @@ struct Game {
     headers: HashMap<String, String>,
     moves: Vec<Move>,
     bad: bool,
+    /// the tag filters rejected the game: its movetext was skipped unparsed
+    skipped: bool,
 }
 
-struct Collector;
+/// The PGN visitor: with a filter, a game whose tags fail it is skipped before its
+/// movetext is parsed (a full monthly dump is ~100 M games, a few in a thousand kept).
+#[derive(Default)]
+struct Collector {
+    filter: Option<Filter>,
+}
+
+/// The tag filters of a conversion ([`tags_pass`] and [`passes_quality`]).
+#[derive(Clone, Copy)]
+struct Filter {
+    min_elo: i64,
+    skip_bullet: bool,
+    q: Quality,
+}
 
 impl Visitor for Collector {
     type Tags = HashMap<String, String>;
@@ -76,6 +94,11 @@ impl Visitor for Collector {
     }
 
     fn begin_movetext(&mut self, tags: Self::Tags) -> ControlFlow<Self::Output, Self::Movetext> {
+        if let Some(f) = &self.filter {
+            if !(tags_pass(&tags, f.min_elo, f.skip_bullet) && passes_quality(&tags, &f.q)) {
+                return ControlFlow::Break(Game { headers: tags, moves: Vec::new(), bad: false, skipped: true });
+            }
+        }
         ControlFlow::Continue((tags, Chess::default(), Vec::new(), false))
     }
 
@@ -98,7 +121,7 @@ impl Visitor for Collector {
     }
 
     fn end_game(&mut self, mt: Self::Movetext) -> Self::Output {
-        Game { headers: mt.0, moves: mt.2, bad: mt.3 }
+        Game { headers: mt.0, moves: mt.2, bad: mt.3, skipped: false }
     }
 }
 
@@ -143,6 +166,17 @@ fn is_bullet(h: &HashMap<String, String>) -> bool {
     }
 }
 
+/// Lichess's speed classes, by its estimated game duration base + 40 × increment seconds:
+/// < 29 ultraBullet, < 180 bullet, < 480 blitz, < 1500 rapid, else classical.
+pub const SPEEDS: [&str; 5] = ["ultrabullet", "bullet", "blitz", "rapid", "classical"];
+
+/// The per-speed minimum Elo of BOTH players measured for `--hq` (decision log 96,
+/// scripts/quality_by_rating.py): Stockfish's average centipawn loss of the moves played in
+/// Lichess's 2025-06 database, human games only, reaches about 40 at blitz ≥ 2400 (42.8),
+/// rapid ≥ 2200 (43.3) and classical ≥ 2000 (41.7) — blitz between 2200 and 2400 is 63.0,
+/// like 1600–2000; bullet stays above 60 even at 2600, so it is never kept.
+pub const MEASURED_SPEED_ELO: &str = "blitz=2400,rapid=2200,classical=2000";
+
 /// Extra quality filters (all off by default; `--hq` turns on a strong preset).
 #[derive(Clone, Copy, Default)]
 pub struct Quality {
@@ -152,6 +186,9 @@ pub struct Quality {
     pub normal_termination: bool,
     /// estimated duration base + 40·inc must be at least this many seconds
     pub min_duration_s: i64,
+    /// per speed class ([`SPEEDS`]) the minimum Elo of both players; a speed without one
+    /// (and correspondence / an unparsable time control) is dropped
+    pub speed_elo: Option<[Option<i64>; 5]>,
 }
 
 fn duration_s(h: &HashMap<String, String>) -> Option<i64> {
@@ -160,8 +197,28 @@ fn duration_s(h: &HashMap<String, String>) -> Option<i64> {
     Some(py_int(b)? + 40 * py_int(i)?)
 }
 
-fn passes_quality(g: &Game, q: &Quality) -> bool {
-    let h = &g.headers;
+/// The speed class of a game (an index into [`SPEEDS`]); `None` for correspondence ("-")
+/// or an unparsable time control.
+fn speed_of(h: &HashMap<String, String>) -> Option<usize> {
+    let d = duration_s(h)?;
+    Some([29, 180, 480, 1500].iter().position(|&x| d < x).unwrap_or(4))
+}
+
+/// `blitz=2400,rapid=2200,classical=2000` → the per-speed thresholds of [`Quality`].
+pub fn parse_speed_elo(s: &str) -> Result<[Option<i64>; 5]> {
+    let mut out = [None; 5];
+    for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (k, v) = part.split_once('=').with_context(|| format!("--speed-elo {part:?}: want <speed>=<elo>"))?;
+        let k = k.trim().to_ascii_lowercase();
+        let i = SPEEDS.iter().position(|s| *s == k)
+            .with_context(|| format!("--speed-elo: unknown speed {k:?} (one of {SPEEDS:?})"))?;
+        out[i] = Some(v.trim().parse().with_context(|| format!("--speed-elo {part:?}: the Elo is not an integer"))?);
+    }
+    anyhow::ensure!(out.iter().any(|x| x.is_some()), "--speed-elo {s:?}: no speed");
+    Ok(out)
+}
+
+fn passes_quality(h: &HashMap<String, String>, q: &Quality) -> bool {
     if q.rated_only && !h.get("Event").map(|e| e.starts_with("Rated")).unwrap_or(false) {
         return false;
     }
@@ -170,6 +227,13 @@ fn passes_quality(g: &Game, q: &Quality) -> bool {
     }
     if q.min_duration_s > 0 && duration_s(h).map(|d| d < q.min_duration_s).unwrap_or(true) {
         return false;
+    }
+    if let Some(thr) = &q.speed_elo {
+        let Some(t) = speed_of(h).and_then(|s| thr[s]) else { return false };
+        match (elo(h, "WhiteElo"), elo(h, "BlackElo")) {
+            (Some(w), Some(b)) if w >= t && b >= t => {}
+            _ => return false,
+        }
     }
     true
 }
@@ -181,8 +245,8 @@ fn has_bot(h: &HashMap<String, String>) -> bool {
     ["WhiteTitle", "BlackTitle"].iter().any(|k| h.get(*k).map(|t| t == "BOT").unwrap_or(false))
 }
 
-fn passes(g: &Game, min_elo: i64, min_plies: usize, skip_bullet: bool) -> bool {
-    let h = &g.headers;
+/// The base filters that read only the tags (checked before the movetext is parsed).
+fn tags_pass(h: &HashMap<String, String>, min_elo: i64, skip_bullet: bool) -> bool {
     if h.get("Variant").map(|s| s.as_str()).unwrap_or("Standard") != "Standard" {
         return false;
     }
@@ -201,10 +265,11 @@ fn passes(g: &Game, min_elo: i64, min_plies: usize, skip_bullet: bool) -> bool {
             _ => return false,
         }
     }
-    if skip_bullet && is_bullet(h) {
-        return false;
-    }
-    g.moves.len() >= min_plies.max(1)
+    !(skip_bullet && is_bullet(h))
+}
+
+fn passes(g: &Game, min_elo: i64, min_plies: usize, skip_bullet: bool) -> bool {
+    tags_pass(&g.headers, min_elo, skip_bullet) && g.moves.len() >= min_plies.max(1)
 }
 
 /// Why a game produced no sample.
@@ -279,12 +344,18 @@ fn encode(g: &Game) -> Result<Sample, Skip> {
     let f = encode_moves(&g.moves, wv)?;
     let h = &g.headers;
     let e = |k: &str| elo(h, k).map(Value::from).unwrap_or(Value::Null);
-    let meta = json!({
+    let mut meta = json!({
         "white": h.get("White").cloned().unwrap_or_else(|| "?".into()),
         "black": h.get("Black").cloned().unwrap_or_else(|| "?".into()),
         "elo": [e("WhiteElo"), e("BlackElo")],
         "result": h.get("Result").cloned(),
     });
+    // provenance (Lichess: the game's URL; the speed class the thresholds read)
+    for (k, tag) in [("site", "Site"), ("time_control", "TimeControl")] {
+        if let Some(v) = h.get(tag) {
+            meta[k] = Value::from(v.clone());
+        }
+    }
     Ok(Sample::new(meta)
         .bits("obs.board_seq", &[14, 8, 8], &f.planes)
         .f32("obs.globals_seq", &[GLOBAL_FEATURES], f.globals)
@@ -332,10 +403,19 @@ pub enum Cmd {
         normal_termination: bool,
         #[arg(long, default_value_t = 0)]
         min_duration_s: i64,
-        /// high-quality preset: both Elo >= 2200, rated, normal termination, no bullet
-        /// (estimated duration >= 180 s), >= 20 plies
+        /// per-speed minimum Elo of both players, e.g. "blitz=2400,rapid=2200,classical=2000"
+        /// (speeds: ultrabullet bullet blitz rapid classical; the others are dropped)
+        #[arg(long)]
+        speed_elo: Option<String>,
+        /// high-quality preset: rated, normal termination, >= 20 plies, both players at the
+        /// measured per-speed Elo (MEASURED_SPEED_ELO: blitz 2400, rapid 2200, classical
+        /// 2000; no bullet); --speed-elo replaces the thresholds
         #[arg(long)]
         hq: bool,
+        /// hold out every game whose Site (else its tags) hashes into 1 of N buckets:
+        /// out/train and out/val (0 = everything into out)
+        #[arg(long, default_value_t = 0)]
+        val_every: u64,
     },
 }
 
@@ -365,23 +445,43 @@ fn open(path: &Path) -> Result<Box<dyn Read>> {
 /// Games encoded per parallel chunk.
 const CHUNK: usize = 512;
 
+/// The split key of a game: Lichess's game URL, else all its tags.
+fn split_key(h: &HashMap<String, String>) -> String {
+    if let Some(s) = h.get("Site") {
+        return s.clone();
+    }
+    let mut kv: Vec<_> = h.iter().collect();
+    kv.sort();
+    format!("{kv:?}")
+}
+
+/// Stream a PGN into gm-shards under `out`; `val_every` > 0 writes out/train and out/val
+/// instead (a game whose [`split_key`] hashes into 1 of `val_every` buckets goes to val).
 #[allow(clippy::too_many_arguments)]
 pub fn convert(input: &Path, out: &Path, shard_size: usize, min_elo: i64, max_games: Option<usize>, min_plies: usize,
-               skip_bullet: bool, q: Quality) -> Result<Value> {
-    let mut w = ShardWriter::new(out, "chess", CONVERTER_VERSION, json!({"global_features": GLOBAL_FEATURES}),
-                                 shard_size)?;
+               skip_bullet: bool, q: Quality, val_every: u64) -> Result<Value> {
+    let meta = json!({"global_features": GLOBAL_FEATURES});
+    let (mut w, mut wv) = if val_every > 0 {
+        (ShardWriter::new(&out.join("train"), "chess", CONVERTER_VERSION, meta.clone(), shard_size)?,
+         Some(ShardWriter::new(&out.join("val"), "chess", CONVERTER_VERSION, meta, shard_size)?))
+    } else {
+        (ShardWriter::new(out, "chess", CONVERTER_VERSION, meta, shard_size)?, None)
+    };
     let mut reader = Reader::new(std::io::BufReader::with_capacity(1 << 20, open(input)?));
-    let (mut seen, mut kept, mut mask_mismatch) = (0usize, 0usize, 0usize);
+    let mut collector = Collector { filter: Some(Filter { min_elo, skip_bullet, q }) };
+    let (mut seen, mut kept, mut kept_val, mut mask_mismatch, mut tag_rejected) = (0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut by_speed = [0usize; 6];
     // games that pass the filters are read in chunks, encoded in parallel and written in
     // input order (the output never depends on the thread count); with --max-games a
     // chunk holds at most the games still missing, so exactly the games of a
-    // game-by-game loop are read (`seen` included)
+    // game-by-game loop are read (`seen` included).  `seen` counts the games read
+    // without an illegal / null move — a game the tag filters reject is counted unparsed.
     let mut eof = false;
     'chunks: while !eof {
-        let want = max_games.map_or(CHUNK, |m| m.saturating_sub(kept).clamp(1, CHUNK));
+        let want = max_games.map_or(CHUNK, |m| m.saturating_sub(kept + kept_val).clamp(1, CHUNK));
         let mut chunk: Vec<(usize, Game)> = Vec::with_capacity(want);
         while chunk.len() < want {
-            let Some(g) = reader.read_game(&mut Collector)? else {
+            let Some(g) = reader.read_game(&mut collector)? else {
                 eof = true;
                 break;
             };
@@ -389,17 +489,30 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_elo: i64, max_ga
                 continue;
             }
             seen += 1;
-            if passes(&g, min_elo, min_plies, skip_bullet) && passes_quality(&g, &q) {
+            if g.skipped {
+                tag_rejected += 1;
+                continue;
+            }
+            if passes(&g, min_elo, min_plies, skip_bullet) && passes_quality(&g.headers, &q) {
                 chunk.push((seen, g));
             }
         }
         let samples: Vec<Result<Sample, Skip>> = chunk.par_iter().map(|(_, g)| encode(g)).collect();
-        for ((seen_at, _), s) in chunk.iter().zip(samples) {
+        for ((seen_at, g), s) in chunk.iter().zip(samples) {
             match s {
                 Ok(s) => {
-                    w.push(s)?;
-                    kept += 1;
-                    if max_games.is_some_and(|m| kept >= m) {
+                    by_speed[speed_of(&g.headers).unwrap_or(5)] += 1;
+                    match wv.as_mut() {
+                        Some(v) if crate::common::hash_bucket(&split_key(&g.headers), val_every) => {
+                            v.push(s)?;
+                            kept_val += 1;
+                        }
+                        _ => {
+                            w.push(s)?;
+                            kept += 1;
+                        }
+                    }
+                    if max_games.is_some_and(|m| kept + kept_val >= m) {
                         seen = *seen_at;
                         break 'chunks;
                     }
@@ -410,7 +523,17 @@ pub fn convert(input: &Path, out: &Path, shard_size: usize, min_elo: i64, max_ga
         }
     }
     w.flush()?;
-    Ok(json!({"seen": seen, "kept": kept, "mask_mismatch": mask_mismatch, "shards": w.written_shards}))
+    let mut stats = json!({"seen": seen, "kept": kept, "mask_mismatch": mask_mismatch, "shards": w.written_shards,
+                           "tag_rejected": tag_rejected});
+    let speeds: serde_json::Map<String, Value> = SPEEDS.iter().chain(["correspondence"].iter()).zip(by_speed)
+        .filter(|(_, n)| *n > 0).map(|(k, n)| (k.to_string(), Value::from(n))).collect();
+    stats["kept_by_speed"] = Value::Object(speeds);
+    if let Some(mut v) = wv {
+        v.flush()?;
+        stats["kept_val"] = Value::from(kept_val);
+        stats["shards_val"] = Value::from(v.written_shards);
+    }
+    Ok(stats)
 }
 
 pub fn run(cmd: Cmd) -> Result<()> {
@@ -426,16 +549,17 @@ pub fn run(cmd: Cmd) -> Result<()> {
             anyhow::ensure!(crate::common::download(&crate::common::http()?, &url, &out.join(&name))?, "404: {url}");
             Ok(())
         }
-        Cmd::Convert { input, out, shard_size, min_elo, max_games, min_plies, skip_bullet, rated_only, normal_termination, min_duration_s, hq } => {
-            let mut q = Quality { rated_only, normal_termination, min_duration_s };
-            let (mut min_elo, mut min_plies, mut skip_bullet) = (min_elo, min_plies, skip_bullet);
+        Cmd::Convert { input, out, shard_size, min_elo, max_games, min_plies, skip_bullet, rated_only, normal_termination,
+                       min_duration_s, speed_elo, hq, val_every } => {
+            let speed_elo = speed_elo.as_deref().map(parse_speed_elo).transpose()?;
+            let mut q = Quality { rated_only, normal_termination, min_duration_s, speed_elo };
+            let mut min_plies = min_plies;
             if hq {
-                q = Quality { rated_only: true, normal_termination: true, min_duration_s: q.min_duration_s.max(180) };
-                min_elo = min_elo.max(2200);
+                q = Quality { rated_only: true, normal_termination: true,
+                              speed_elo: Some(speed_elo.unwrap_or(parse_speed_elo(MEASURED_SPEED_ELO)?)), ..q };
                 min_plies = min_plies.max(20);
-                skip_bullet = true;
             }
-            println!("{}", convert(&input, &out, shard_size, min_elo, max_games, min_plies, skip_bullet, q)?);
+            println!("{}", convert(&input, &out, shard_size, min_elo, max_games, min_plies, skip_bullet, q, val_every)?);
             Ok(())
         }
     }
@@ -484,11 +608,89 @@ mod tests {
             if !title.is_empty() {
                 headers.insert("BlackTitle".to_string(), title.to_string());
             }
-            Game { headers, moves: play(&["e4", "e5", "Nf3", "Nc6"]), bad: false }
+            Game { headers, moves: play(&["e4", "e5", "Nf3", "Nc6"]), bad: false, skipped: false }
         };
         assert!(passes(&game(""), 2200, 2, true));
         assert!(passes(&game("GM"), 2200, 2, true));
         assert!(!passes(&game("BOT"), 2200, 2, true));
+    }
+
+    fn tags(kv: &[(&str, &str)]) -> HashMap<String, String> {
+        kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn speed_classes_and_measured_thresholds() {
+        let tc = |t: &str| speed_of(&tags(&[("TimeControl", t)]));
+        // Lichess's estimated duration base + 40 × increment
+        assert_eq!(tc("15+0"), Some(0));
+        assert_eq!(tc("120+1"), Some(1)); // 160 s
+        assert_eq!(tc("179+0"), Some(1));
+        assert_eq!(tc("180+0"), Some(2));
+        assert_eq!(tc("180+2"), Some(2)); // 260 s
+        assert_eq!(tc("479+0"), Some(2));
+        assert_eq!(tc("480+0"), Some(3));
+        assert_eq!(tc("600+5"), Some(3)); // 800 s
+        assert_eq!(tc("1500+0"), Some(4));
+        assert_eq!(tc("-"), None);
+
+        let q = Quality { speed_elo: Some(parse_speed_elo(MEASURED_SPEED_ELO).unwrap()), ..Quality::default() };
+        let pass = |t: &str, w: &str, b: &str| {
+            passes_quality(&tags(&[("TimeControl", t), ("WhiteElo", w), ("BlackElo", b)]), &q)
+        };
+        assert!(pass("180+0", "2400", "2450"));
+        assert!(!pass("180+0", "2399", "2450"), "both players at the threshold");
+        assert!(!pass("300+3", "2450", "2350"));
+        assert!(pass("600+0", "2200", "2200"));
+        assert!(!pass("600+0", "2199", "2600"));
+        assert!(pass("1800+30", "2000", "2001"));
+        assert!(!pass("1800+30", "1999", "2500"));
+        assert!(!pass("60+0", "2900", "2900"), "bullet has no threshold: dropped");
+        assert!(!pass("15+0", "2900", "2900"));
+        assert!(!pass("-", "2900", "2900"), "correspondence dropped");
+        assert!(!pass("600+0", "?", "2400"), "an unknown rating fails");
+
+        assert_eq!(parse_speed_elo(" Blitz = 2400 , rapid=2200").unwrap(), [None, None, Some(2400), Some(2200), None]);
+        assert!(parse_speed_elo("blitz").is_err());
+        assert!(parse_speed_elo("hyperbullet=2000").is_err());
+        assert!(parse_speed_elo("blitz=high").is_err());
+        assert!(parse_speed_elo(" , ").is_err());
+    }
+
+    /// The tag pre-filter (movetext skipped unparsed) keeps exactly the games the full
+    /// reader + filters keep, in order; --val-every splits them by Site, every game once.
+    #[test]
+    fn tag_prefilter_and_val_split_on_the_fixture() {
+        let pgn = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures/chess/lichess_2013-01_head.pgn");
+        let (min_elo, min_plies) = (1500, 10);
+        let mut want = Vec::new();
+        let mut r = Reader::new(std::fs::File::open(&pgn).unwrap());
+        while let Some(g) = r.read_game(&mut Collector::default()).unwrap() {
+            if !g.bad && passes(&g, min_elo, min_plies, true) && encode(&g).is_ok() {
+                want.push(g.headers["Site"].clone());
+            }
+        }
+        assert!(want.len() >= 4, "the fixture has games above {min_elo}: {}", want.len());
+        let site = |dir: &Path| -> Vec<String> {
+            let mut shards: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+            shards.sort();
+            shards.iter().flat_map(|d| gmshard::ShardReader::open(d).unwrap().samples)
+                .map(|s| s.meta["site"].as_str().unwrap().to_string()).collect()
+        };
+        let dir = std::env::temp_dir().join(format!("gmdata-chess-split-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let st = convert(&pgn, &dir.join("all"), 3, min_elo, None, min_plies, true, Quality::default(), 0).unwrap();
+        assert_eq!(site(&dir.join("all")), want);
+        assert!(st["tag_rejected"].as_u64().unwrap() > 0);
+        let st = convert(&pgn, &dir.join("split"), 3, min_elo, None, min_plies, true, Quality::default(), 3).unwrap();
+        let (train, val) = (site(&dir.join("split/train")), site(&dir.join("split/val")));
+        assert!(!train.is_empty() && !val.is_empty(), "{} / {}", train.len(), val.len());
+        assert_eq!(st["kept"].as_u64().unwrap() as usize, train.len());
+        assert_eq!(st["kept_val"].as_u64().unwrap() as usize, val.len());
+        let bucket = |s: &String| crate::common::hash_bucket(s, 3);
+        assert_eq!(train, want.iter().filter(|s| !bucket(s)).cloned().collect::<Vec<_>>());
+        assert_eq!(val, want.iter().filter(|s| bucket(s)).cloned().collect::<Vec<_>>());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

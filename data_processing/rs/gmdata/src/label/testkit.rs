@@ -4,7 +4,7 @@
 //!
 //! ```ignore
 //! let root = tmpdir("chess-label");
-//! crate::chess::convert(&fixture_pgn, &root.join("base"), 256, 0, None, 1, false, Default::default())?;
+//! crate::chess::convert(&fixture_pgn, &root.join("base"), 256, 0, None, 1, false, Default::default(), 0)?;
 //! let cmd = EngineCommand::in_process("fake-sf", || UciFake::new(|pos: &str| Some(score_legal_moves(pos))));
 //! let summary = driver::run(ChessLabeller::default(), &quiet_opts(&root, cmd))?;
 //! let out = ShardReader::open(&root.join("out").join("chess_00000"))?;

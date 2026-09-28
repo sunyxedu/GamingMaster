@@ -716,7 +716,7 @@ mod tests {
     fn convert_games(root: &Path, games: &[(&str, &str)], per_shard: usize) {
         let src = root.join("games.pgn");
         std::fs::write(&src, pgn(games)).unwrap();
-        let s = crate::chess::convert(&src, &root.join("base"), per_shard, 0, None, 1, false, Default::default()).unwrap();
+        let s = crate::chess::convert(&src, &root.join("base"), per_shard, 0, None, 1, false, Default::default(), 0).unwrap();
         assert_eq!(s["kept"], games.len(), "{s}");
     }
 
@@ -882,7 +882,7 @@ mod tests {
     #[test]
     fn fixture_games_replay_and_verify() {
         let root = tmpdir("chess-fixture");
-        let s = crate::chess::convert(&fixture_pgn(), &root.join("base"), 64, 0, None, 1, false, Default::default()).unwrap();
+        let s = crate::chess::convert(&fixture_pgn(), &root.join("base"), 64, 0, None, 1, false, Default::default(), 0).unwrap();
         assert!(s["kept"].as_u64().unwrap() > 100, "{s}");
         let lab = ChessLabeller::default();
         let (mut samples, mut frames_n, mut promos, mut eps, mut castles) = (0, 0, 0, 0, 0);
