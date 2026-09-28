@@ -29,6 +29,16 @@ copies are on Baidu Netdisk only, the Google Drive folder is gone; the WP files 
 byte-identical to an independent 2021 copy in tianqiraf/DouZero_For_HappyDouDiZhu)
 and are loaded with ``torch.load(weights_only=True)``.
 
+``perfectdou`` (``--agents perfectdou``): PerfectDou (Netease Games AI Lab, Yang et al.,
+NeurIPS 2022, Apache-2.0 — stronger than DouZero in its paper), its pretrained ONNX policy
+per position, greedy, through ``scripts/perfectdou_worker.py``: its feature encoder is a
+CPython 3.7 extension, so the worker runs in a separate Python 3.7 (``--perfectdou_python``,
+with onnxruntime 1.7 + numpy) on a checkout of its repo (``--perfectdou_repo``, commit
+594404922ee3).  It sees the same InfoSet fields (its encoder reads no hidden card — the
+opponents' split changes no feature — but the landlord's unplayed kitty cards, kept here as
+its GameEnv does); a move outside the gmrules candidates (never seen so far) falls back to the
+first candidate, counted in the record's meta.
+
 AUCTION (DouZero has none) — ``--bidding heuristic_v1``, marked in every record's
 meta: the classic hand-strength count of the 17 dealt cards — rocket 8 (else big
 joker 4, small joker 3), each bomb 6, each 2 outside a bomb 2 — gives a maximum bid
@@ -81,7 +91,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Sequence, Tuple
 
-GENERATOR = "generate_doudizhu.py/1"
+GENERATOR = "generate_doudizhu.py/2"
+PERFECTDOU_COMMIT = "594404922ee3810e2d84b80bb2c2846cb20e5390"
 DOUZERO_COMMIT = "718a5c920bf3361e34178a38f3b80458e176b351"
 #: DouZero sources needed for inference (feature encoder, move detector, models)
 DOUZERO_FILES = {
@@ -212,6 +223,35 @@ class DouZeroAgent:
         return y.reshape(-1).cpu().tolist()
 
 
+class PerfectDouAgent:
+    """PerfectDou's greedy policy in its Python 3.7 move server (module docs)."""
+
+    FIELDS = ("player_position", "player_hand_cards", "legal_actions", "other_hand_cards", "last_move",
+              "last_two_moves", "last_move_dict", "num_cards_left_dict", "played_cards", "bomb_num",
+              "card_play_action_seq", "three_landlord_cards")
+
+    def __init__(self, python: str, repo: str):
+        import subprocess
+
+        self.name = "perfectdou"
+        worker = str(Path(__file__).resolve().parent / "perfectdou_worker.py")
+        self.proc = subprocess.Popen([python, worker, "--perfectdou", repo], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, text=True, bufsize=1, cwd=repo)
+        self.fallbacks = 0
+
+    def act(self, infoset) -> List[int]:
+        msg = {k: getattr(infoset, k) for k in self.FIELDS}
+        self.proc.stdin.write(json.dumps(msg) + "\n")
+        self.proc.stdin.flush()
+        line = self.proc.stdout.readline()
+        if not line:
+            raise RuntimeError("perfectdou worker died")
+        r = json.loads(line)
+        if "error" in r:
+            raise RuntimeError(f"perfectdou worker: {r['error']}")
+        return r["action"]
+
+
 # ---------------------------------------------------------------------------
 # cards and plays
 # ---------------------------------------------------------------------------
@@ -287,10 +327,12 @@ class Tracker:
     """DouZero's view of the play phase (its ``InfoSet`` fields), kept from the
     gmrules plays: hands, played cards, last moves, the action sequence, bombs."""
 
-    def __init__(self, hands: List[List[int]], landlord: int):
+    def __init__(self, hands: List[List[int]], landlord: int, kitty: Sequence[int] = ()):
         self.pos = {landlord: "landlord", (landlord + 1) % 3: "landlord_down",
                     (landlord + 2) % 3: "landlord_up"}
         self.hands = {self.pos[s]: sorted(card_value(c) for c in hands[s]) for s in range(3)}
+        # the kitty cards the landlord has not played yet (PerfectDou's GameEnv keeps these)
+        self.kitty = sorted(card_value(c) for c in kitty)
         self.played = {p: [] for p in POSITIONS}
         self.last_move_dict = {p: [] for p in POSITIONS}
         self.seq: List[List[int]] = []
@@ -305,8 +347,10 @@ class Tracker:
         last_two: List[List[int]] = [[], []]  # GameEnv.get_last_two_moves
         for m in self.seq[-2:]:
             last_two = ([list(m)] + last_two)[:2]
-        others = [c for p in POSITIONS if p != me for c in self.hands[p]]
-        return SimpleNamespace(
+        # GameEnv.get_infoset's order (the DouZero features count cards; PerfectDou's
+        # encoder reads the order)
+        others = [c for p in ("landlord", "landlord_up", "landlord_down") if p != me for c in self.hands[p]]
+        return SimpleNamespace(three_landlord_cards=list(self.kitty),
             player_position=me, player_hand_cards=list(self.hands[me]), legal_actions=legal,
             other_hand_cards=others, last_move=list(last), last_two_moves=last_two,
             last_move_dict={p: list(m) for p, m in self.last_move_dict.items()},
@@ -319,6 +363,8 @@ class Tracker:
         move = list(cards)
         for v in move:
             self.hands[p].remove(v)
+            if p == "landlord" and v in self.kitty:
+                self.kitty.remove(v)
         self.played[p] += move
         self.last_move_dict[p] = move
         self.seq.append(move)
@@ -366,9 +412,10 @@ def play_game(seed: int, index: int, agents: Dict[str, DouZeroAgent], mix: Seque
     if st.turn()[0] == "act":
         kitty = rec["kitty"]
         full = [h + kitty if s == landlord else h for s, h in enumerate(hands)]
-        tr = Tracker(full, landlord)
+        tr = Tracker(full, landlord, kitty)
         roles = {s: agents[rng.choice(list(mix))] for s in range(3)}
         q_rows = []
+        fallbacks = 0
         while True:
             kind, seats = st.turn()
             if kind != "act":
@@ -381,6 +428,13 @@ def play_game(seed: int, index: int, agents: Dict[str, DouZeroAgent], mix: Seque
             options = list(by_cards)
             if len(options) == 1:
                 best = 0
+            elif not hasattr(roles[seat], "q_values"):
+                # a policy (PerfectDou): its move among the candidates
+                act = tuple(roles[seat].act(tr.infoset(seat, [list(o) for o in options])))
+                if act in by_cards:
+                    best = options.index(act)
+                else:
+                    best, fallbacks = 0, fallbacks + 1
             else:
                 q = roles[seat].q_values(tr.infoset(seat, [list(o) for o in options]))
                 best = max(range(len(q)), key=lambda i: (q[i], -i))
@@ -402,6 +456,9 @@ def play_game(seed: int, index: int, agents: Dict[str, DouZeroAgent], mix: Seque
     rec["meta"] = {"bidding": "heuristic_v1", "strength": strength, "generator": GENERATOR,
                    "seed": seed, "index": index, "douzero": DOUZERO_COMMIT[:12],
                    "weights": f"{WEIGHTS_REPO}@{WEIGHTS_REVISION[:12]}"}
+    if any(a is not None and a.startswith("perfectdou") for a in rec["agents"]):
+        rec["meta"]["perfectdou"] = PERFECTDOU_COMMIT[:12]
+        rec["meta"]["perfectdou_fallbacks"] = fallbacks if roles else 0
     return rec
 
 
@@ -412,7 +469,8 @@ def play_game(seed: int, index: int, agents: Dict[str, DouZeroAgent], mix: Seque
 _W: Dict = {}
 
 
-def _init_worker(pkg: str, ckpts: Dict[str, Dict[str, str]], device: str, threads: int) -> None:
+def _init_worker(pkg: str, ckpts: Dict[str, Dict[str, str]], device: str, threads: int,
+                 perfectdou: Optional[Tuple[str, str]] = None) -> None:
     import torch
 
     torch.set_num_threads(threads)
@@ -423,6 +481,8 @@ def _init_worker(pkg: str, ckpts: Dict[str, Dict[str, str]], device: str, thread
 
     _W["agents"] = {a: DouZeroAgent(a, {p: Path(x) for p, x in paths.items()}, device)
                     for a, paths in ckpts.items()}
+    if perfectdou is not None:
+        _W["agents"]["perfectdou"] = PerfectDouAgent(*perfectdou)
     _W["md"], _W["gmsim"] = md, gmsim
 
 
@@ -440,8 +500,8 @@ def _run_part(job: Tuple[str, int, int, int, Sequence[str], int]) -> Tuple[str, 
     return str(path), hi - lo, time.time() - t0
 
 
-def _init_and_seed(pkg, ckpts, device, threads, seed):
-    _init_worker(pkg, ckpts, device, threads)
+def _init_and_seed(pkg, ckpts, device, threads, seed, perfectdou=None):
+    _init_worker(pkg, ckpts, device, threads, perfectdou)
     _W["seed"] = seed
 
 
@@ -455,7 +515,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--threads", type=int, default=1, help="torch threads per worker")
     ap.add_argument("--agents", default="adp,wp",
-                    help="checkpoints drawn per game and role: adp, wp, sl (comma list)")
+                    help="agents drawn per game and role: adp, wp, sl (DouZero checkpoints), perfectdou "
+                         "(comma list)")
+    ap.add_argument("--perfectdou_python", default=os.environ.get("GM_PERFECTDOU_PYTHON"),
+                    help="a Python 3.7 with onnxruntime 1.7 + numpy (for --agents perfectdou)")
+    ap.add_argument("--perfectdou_repo", default=os.environ.get("GM_PERFECTDOU_REPO"),
+                    help=f"a checkout of Netease-Games-AI-Lab-Guangzhou/PerfectDou at {PERFECTDOU_COMMIT[:12]}")
     ap.add_argument("--bidding", default="heuristic_v1", choices=BIDDING)
     ap.add_argument("--q_top", type=int, default=8,
                     help="record the top-K moves by DouZero Q per decision (0: none)")
@@ -466,12 +531,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                          "with internet, before generating on compute nodes)")
     args = ap.parse_args(argv)
     mix = [a.strip() for a in args.agents.split(",") if a.strip()]
-    bad = sorted(set(mix) - set(CHECKPOINTS))
+    bad = sorted(set(mix) - set(CHECKPOINTS) - {"perfectdou"})
     if bad or not mix:
-        raise SystemExit(f"--agents {args.agents}: choose from {sorted(CHECKPOINTS)}")
+        raise SystemExit(f"--agents {args.agents}: choose from {sorted(CHECKPOINTS) + ['perfectdou']}")
+    perfectdou = None
+    if "perfectdou" in mix:
+        if not (args.perfectdou_python and args.perfectdou_repo):
+            raise SystemExit("--agents perfectdou needs --perfectdou_python and --perfectdou_repo")
+        perfectdou = (args.perfectdou_python, args.perfectdou_repo)
     pkg = str(fetch_douzero(args.cache))
     ckpts = {a: {p: str(x) for p, x in paths.items()}
-             for a, paths in fetch_checkpoints(sorted(set(mix)), args.cache).items()}
+             for a, paths in fetch_checkpoints(sorted(set(mix) - {"perfectdou"}), args.cache).items()}
     if args.fetch_only:
         print(json.dumps({"douzero": pkg, "checkpoints": ckpts}), flush=True)
         return
@@ -487,7 +557,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             continue                         # resumable: parts are written atomically
         jobs.append((str(out), part, lo, hi, mix, args.q_top))
     t0, done = time.time(), 0
-    init = (pkg, ckpts, args.device, args.threads, args.seed)
+    init = (pkg, ckpts, args.device, args.threads, args.seed, perfectdou)
     if args.workers <= 1:
         _init_and_seed(*init)
         results = map(_run_part, jobs)
