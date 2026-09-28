@@ -35,7 +35,10 @@ Decoder (hierarchical; one policy for rollout, replay and IL):
     actors  [U]      an independent Bernoulli per own unit (the command's units)
     unit    [U]      the target unit: pointer over the unit tokens
     coarse  [P²]     the target point's map token, then
-    fine    [L²/P²]  its cell inside the token: point = LOC × LOC over the map
+    fine    [L²/P²]  its cell inside the token: point = LOC × LOC over the map; the
+                     add-on ``addon_fine`` adds per-cell scores from what the token blurs
+                     (units at sub-token positions, the token's raw map pixels, the
+                     offset from the committed actors)
     queued  Bernoulli
 
 The query of the argument heads is the low-level token + the committed type's embedding;
@@ -211,8 +214,10 @@ class Sc2Encoder(ObservationEncoder):
         self.global_pos = nn.Parameter(torch.randn(1, 1, d) * 0.02)
 
     def decode_context(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """The own units (the possible actors) and the occupied slots (the possible targets)."""
-        return {"own": obs["unit_own"].bool(), "present": obs["unit_mask"].bool()}
+        """The own units (the possible actors), the occupied slots (the possible targets)
+        and, for the fine head's add-on, the unit positions and the map bits."""
+        return {"own": obs["unit_own"].bool(), "present": obs["unit_mask"].bool(),
+                "unit_xy": obs["unit_xy"], "map_bits": obs["map_bits"]}
 
     def _units(self, obs: Dict[str, torch.Tensor], dtype) -> torch.Tensor:
         u = obs["units"]
@@ -268,6 +273,84 @@ class Sc2Encoder(ObservationEncoder):
         return torch.cat([self.slot_embed, mp, self.global_pos], dim=1)
 
 
+#: offsets from the actors' centroid: in fine cells / FINE_OFFSET_SCALE, clipped to
+#: [-1, 1], + sin / cos at N_FINE_FREQS frequencies (a one-cell step stays visible)
+FINE_OFFSET_SCALE = 8.0
+N_FINE_FREQS = 4
+#: per fine cell: own / other units and committed actors in it, the 9 map bits of its
+#: pixel, its offset from the actors' centroid (x, y + their Fourier features) and
+#: "has actors"
+N_FINE_FEATS = 3 + MAP_BITS + 2 + 4 * N_FINE_FREQS + 1
+
+
+def fine_cell_features(ctx: Dict[str, torch.Tensor], coarse_idx: torch.Tensor, actors: torch.Tensor,
+                       cfg: Sc2Config) -> torch.Tensor:
+    """[BT, L²/P², N_FINE_FEATS] features of every fine cell of the committed coarse
+    token: what lies inside it at sub-token resolution, which the map token (a patch
+    embedding) blurs — unit positions at 1/4 map pixel and the token's raw map pixels."""
+    n = MAP // cfg.sc2_map_patch
+    cell = cfg.sc2_loc // n                                  # fine cells per token side
+    BT = coarse_idx.shape[0]
+    n_units = cfg.sc2_units
+    dev = coarse_idx.device
+    xy = ctx["unit_xy"].reshape(BT, n_units, 2).float() / 65535.0 * cfg.sc2_loc   # LOC grid
+    oy = (coarse_idx // n * cell).float().unsqueeze(1)
+    ox = (coarse_idx % n * cell).float().unsqueeze(1)
+    rx, ry = xy[..., 0] - ox, xy[..., 1] - oy
+    inside = (rx >= 0) & (rx < cell) & (ry >= 0) & (ry < cell)
+    present = ctx["present"].reshape(BT, n_units)
+    own = ctx["own"].reshape(BT, n_units)
+    idx = (ry.clamp(0, cell - 1).long() * cell + rx.clamp(0, cell - 1).long())       # [BT, U]
+    groups = torch.stack([own & present, ~own & present, actors & present], dim=-1) & inside.unsqueeze(-1)
+    counts = torch.zeros(BT, cell * cell, 3, device=dev, dtype=torch.float32)
+    counts.scatter_add_(1, idx.unsqueeze(-1).expand(-1, -1, 3), groups.float())
+    counts = (counts / 2.0).clamp(max=1.0)
+    # the map pixel under each fine cell
+    f = torch.arange(cell * cell, device=dev)
+    per_px = cell // cfg.sc2_map_patch                       # fine cells per map pixel side
+    py = (coarse_idx // n * cfg.sc2_map_patch).unsqueeze(1) + (f // cell // per_px).unsqueeze(0)
+    px = (coarse_idx % n * cfg.sc2_map_patch).unsqueeze(1) + (f % cell // per_px).unsqueeze(0)
+    bits = ctx["map_bits"].reshape(BT, MAP_BITS, MAP * MAP).float()
+    pix = (py * MAP + px).unsqueeze(1).expand(-1, MAP_BITS, -1)
+    mbits = bits.gather(2, pix).transpose(1, 2)              # [BT, cells, 9]
+    # offset of each fine cell's centre from the committed actors' centroid
+    w = (actors & present).float()
+    has = w.sum(-1, keepdim=True) > 0
+    cen = (xy * w.unsqueeze(-1)).sum(1) / w.sum(-1, keepdim=True).clamp(min=1.0)       # [BT, 2]
+    cx = ox + (f % cell).float().unsqueeze(0) + 0.5
+    cy = oy + (f // cell).float().unsqueeze(0) + 0.5
+    off = (torch.stack([cx - cen[:, :1], cy - cen[:, 1:]], dim=-1) / FINE_OFFSET_SCALE).clamp(-1.0, 1.0)
+    freqs = (2.0 ** torch.arange(N_FINE_FREQS, device=dev)) * (math.pi / 2)
+    ang = (off.unsqueeze(-1) * freqs).flatten(-2)                            # [BT, cells, 2K]
+    geo = torch.cat([off, ang.sin(), ang.cos()], dim=-1) * has.unsqueeze(-1)
+    return torch.cat([counts, mbits, geo, has.float().unsqueeze(1).expand(-1, cell * cell, 1)], dim=-1)
+
+
+class FineContext(nn.Module):
+    """Add-on of the fine head (``addon_fine``): a per-fine-cell score from
+    :func:`fine_cell_features`, a learned cell embedding and the argument query,
+    ADDED to the fine logits.  Its output layer starts at zero, so a network trained
+    without it keeps its function when the add-on joins (model.multi_game.ADDON_PREFIX)."""
+
+    def __init__(self, d: int, n_fine: int, hidden: int = 64):
+        super().__init__()
+        self.cell_proj = nn.Linear(N_FINE_FEATS, hidden)
+        self.pos = nn.Parameter(torch.randn(n_fine, hidden) * 0.02)
+        self.query_proj = nn.Linear(d, hidden)
+        self.out = nn.Linear(hidden, 1)
+        self.reset_addon()
+
+    def reset_addon(self) -> None:
+        """Zero output (also after GameNetwork's network-wide re-init)."""
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
+
+    def forward(self, feats: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+        h = self.cell_proj(feats.to(self.cell_proj.weight.dtype)) + self.pos.to(self.cell_proj.weight.dtype)
+        h = F.gelu(h + self.query_proj(q.to(self.query_proj.weight.dtype)).unsqueeze(1))
+        return self.out(h).squeeze(-1)
+
+
 class Sc2Decoder(ActionDecoder):
     """type → kind, actors, queued, target unit / point (see the module docstring)."""
 
@@ -287,6 +370,7 @@ class Sc2Decoder(ActionDecoder):
         self.unit_head = PointerHead(d, n_queries=1)
         self.coarse_head = PointerHead(d, n_queries=1)
         self.fine_head = MLPHead(2 * d, self.n_fine)
+        self.addon_fine = FineContext(d, self.n_fine)
         self.queued_head = MLPHead(2 * d, 1)
         type_mask = torch.ones(A, dtype=torch.bool)
         type_mask[UNKNOWN] = False
@@ -347,6 +431,8 @@ class Sc2Decoder(ActionDecoder):
         else:
             coarse_idx = _pick_index(coarse_logits, lbl_coarse, None, BT, self.n_map)
         fine_logits = self.fine_head(torch.cat([map_tok[arange, coarse_idx], q2], dim=-1))
+        feats = fine_cell_features(ctx, coarse_idx, actors, cfg)
+        fine_logits = fine_logits + self.addon_fine(feats, q2).to(fine_logits.dtype)
         queued_logits = self.queued_head(arg_in).squeeze(-1)
         r = lambda x, *s: x.reshape(B, T, *s)
         return {"type_logits": r(type_logits, A), "type_mask": r(tmask, A), "type_idx": r(type_idx),

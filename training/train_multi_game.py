@@ -214,6 +214,7 @@ from model.multi_game import (
     freeze_core,
     is_core_key,
     load_core,
+    missing_addon_keys,
 )
 from model.optim import (
     TRM_BETAS,
@@ -813,6 +814,9 @@ def load_resume_weights(model: MultiGameNetwork, state: Dict[str, torch.Tensor],
     # (their zero outputs leave the loaded network's function unchanged)
     if not any(_is_core_memory(k) for k in state):
         want |= {k for k in keys if _is_core_memory(k)}
+    # a trained game's add-on modules the checkpoint predates (zero output at
+    # construction, model.multi_game.ADDON_PREFIX)
+    want |= missing_addon_keys(keys, state)
     core = {_split_name(k)[1] for k in want
             if is_core_key(_split_name(k)[1]) and not _is_core_memory(k)}
     loaded_core = {_split_name(k)[1] for k in state if is_core_key(_split_name(k)[1])}
@@ -846,7 +850,7 @@ def resume_training_state(ck: Dict, model: MultiGameNetwork, optimizer: torch.op
     names (``ModelEMA.load_state_dict``; a partial EMA takes its own), None
     without a checkpoint EMA.  ``fresh`` names the trainable parameters
     without checkpoint state — which must be exactly the added games' own (and core
-    memory sub-layers the checkpoint lacks):
+    memory sub-layers or games' add-on modules the checkpoint lacks):
     no optimizer state (their step counters start at 1, with the matching
     bias correction), and an EMA initialised from their fresh weights.
     Refused: a checkpoint parameter frozen here or in another group, a
@@ -907,7 +911,8 @@ def resume_training_state(ck: Dict, model: MultiGameNetwork, optimizer: torch.op
     added = [g for g in model.games if g not in ck["games"]]
     own_name = {id(p): n for n, p in model.named_parameters()}
     fresh = [own_name[id(p)] for g in groups for p in g["params"] if id(p) not in trained]
-    stray = [n for n in fresh if not _is_own(n, added) and not _is_core_memory(n)]
+    late = missing_addon_keys(set(fresh), ck["train_model_state"])
+    stray = [n for n in fresh if not _is_own(n, added) and not _is_core_memory(n) and n not in late]
     if stray:
         raise SystemExit(f"{where}: {len(stray)} trainable parameter(s) of the checkpoint's "
                          f"games are not in its optimizer, e.g. {stray[:3]} (resume with the "

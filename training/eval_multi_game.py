@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader
 
 from data_processing.games.dataset import collate_game_sequences
 from model.config import checkpoint_config_dict
-from model.multi_game import MultiGameNetwork
+from model.multi_game import MultiGameNetwork, with_addon_defaults
 from training.deep_supervision import Q_HALT_WEIGHT
 from training.train_il_game import (
     UNCROPPABLE,
@@ -44,7 +44,7 @@ def load_multi(path: str, device: torch.device, raw: bool = False) -> MultiGameN
         net, _ = build_net_tolerant(g, checkpoint_config_dict(ck, g))
         nets[g] = net
     model = MultiGameNetwork(nets)
-    model.load_state_dict(ck["train_model_state" if raw else "model_state"])
+    model.load_state_dict(with_addon_defaults(model, ck["train_model_state" if raw else "model_state"]))
     return model.to(device).eval()
 
 

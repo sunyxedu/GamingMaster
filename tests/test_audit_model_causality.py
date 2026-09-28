@@ -74,13 +74,15 @@ GAME_OVERRIDES = {
     "starcraft": dict(minimap_h=16, minimap_w=16, max_units=6),
     "arc3": dict(arc_patch=8),
     "hok": {},
+    "sc2": dict(sc2_units=12, sc2_unit_vocab=30, sc2_action_vocab=20,
+                sc2_buff_vocab=10, sc2_upgrades=6),
 }
 
 #: games with a normalised conv encoder (cfg.encoder_norm): per-frame GroupNorm
 #: by default, BatchNorm2d on batch statistics in train mode under "batch"
 CONV_ENCODER_GAMES = frozenset({"generals", "chess", "go", "othello", "gomoku", "shogi", "lux",
                                 "clash_royale", "starcraft", "breakthrough", "arc3",
-                                "chess_variants", "xiangqi"})
+                                "chess_variants", "xiangqi", "sc2"})
 #: cfg.encoder_norm values: the default, and the legacy layout
 NORMS = ("group", "batch")
 
@@ -209,6 +211,28 @@ def _obs(game: str, cfg, g: torch.Generator) -> Dict[str, torch.Tensor]:
                 "globals": torch.rand(B, T, cfg.arc_global_features, generator=g)}
     if game == "hok":
         return {"features": torch.rand(B, T, cfg.hok_features, generator=g)}
+    if game == "sc2":
+        from model.games.sc2 import F_UNIT, G, MAP, MAP_BITS
+        U = cfg.sc2_units
+        mask = torch.rand(B, T, U, generator=g) < 0.7
+        mask[..., 0] = True
+        own = mask & (torch.rand(B, T, U, generator=g) < 0.5)
+        own[..., 0] = True
+        units = torch.randint(0, 256, (B, T, U, F_UNIT), generator=g).to(torch.uint8)
+        units[..., 0] = torch.where(own, 0, torch.randint(2, 4, (B, T, U), generator=g)).to(torch.uint8)
+        units[..., 1:3] = torch.randint(0, 4, (B, T, U, 2), generator=g).to(torch.uint8)
+        return {"units": units * mask.unsqueeze(-1),
+                "unit_xy": torch.randint(0, 65536, (B, T, U, 2), generator=g).to(torch.int32),
+                "unit_type": (torch.randint(2, cfg.sc2_unit_vocab, (B, T, U), generator=g) * mask).to(torch.int32),
+                "unit_order": torch.randint(0, cfg.sc2_action_vocab, (B, T, U), generator=g).to(torch.int32),
+                "unit_buffs": torch.randint(0, cfg.sc2_buff_vocab, (B, T, U, 2), generator=g).to(torch.int32),
+                "unit_mask": mask, "unit_own": own,
+                "unit_commanded": (torch.rand(B, T, U, generator=g) < 0.1).float() * own,
+                "map_bits": (torch.rand(B, T, MAP_BITS, MAP, MAP, generator=g) < 0.3).float(),
+                "globals": torch.rand(B, T, G, generator=g),
+                "upgrades": (torch.rand(B, T, cfg.sc2_upgrades, generator=g) < 0.2).float(),
+                "last_action": torch.randint(0, cfg.sc2_action_vocab, (B, T), generator=g),
+                "window_start": torch.rand(B, T, generator=g) < 0.5}
     raise KeyError(game)
 
 
@@ -271,6 +295,8 @@ def _legal(game: str, cfg, obs, g) -> Optional[Dict[str, torch.Tensor]]:
                "sub": m(BUTTONS, 1 + len(ARG_HEADS))}
         out.update({h: m(DIR_BINS) for h in ARG_HEADS[:4]})
         return out
+    if game == "sc2":
+        return None          # the decoder's masks come from the vocabulary and the obs
     raise KeyError(game)
 
 
@@ -301,6 +327,10 @@ def _label_highs(game: str, cfg) -> Dict[str, int]:
     if game == "hok":
         from model.games.hok import BUTTONS
         return {"button_idx": BUTTONS}
+    if game == "sc2":
+        from model.games.sc2 import LOC
+        # actors: one 0 / 1 label per unit slot (_labels draws it [B, T, U])
+        return {"action_type": cfg.sc2_action_vocab, "actors": 2, "target_point": LOC * LOC}
     return {}
 
 
@@ -313,7 +343,8 @@ def _labels(game: str, cfg, g, self_sample: bool = True) -> Optional[Dict[str, t
         return None
     out = {}
     for k, hi in highs.items():
-        v = torch.randint(0, hi, (B, T), generator=g)
+        shape = (B, T, cfg.sc2_units) if (game, k) == ("sc2", "actors") else (B, T)
+        v = torch.randint(0, hi, shape, generator=g)
         if self_sample and k not in STATE_LABEL_KEYS.get(game, ()):
             v[:, 0] = -1
             v[0, 1] = -1
@@ -611,6 +642,8 @@ def test_labels_condition_their_own_frame_only(game, mode):
 def test_legal_masks_condition_their_own_frame_only(game, mode):
     net = _net(game, "recurrent", "trm")
     obs, legal, labels, g = _batch(game, net)
+    if legal is None:
+        pytest.skip(f"{game} has no legal-mask input")
     g2 = torch.Generator().manual_seed(5)
     legal2 = _legal(game, net.cfg, obs, g2)
     for t in (0, T_CUT, T - 1):
@@ -695,5 +728,7 @@ def _conditioned_on_sample(game: str, key: str) -> bool:
              # the move / switch heads condition on the sampled type; tera does not
              "pokemon": ("action_type_logits", "tera_logit"),
              # the direction / target heads condition on the sampled button
-             "hok": ("button_logits",)}
+             "hok": ("button_logits",),
+             # the argument heads condition on the sampled type, actors and coarse cell
+             "sc2": ("type_logits",)}
     return game in first and key not in first[game]

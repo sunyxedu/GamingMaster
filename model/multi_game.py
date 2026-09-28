@@ -60,6 +60,38 @@ def is_core_key(name: str) -> bool:
     return any(name == a or name.startswith(a + ".") for a in SHARED_CORE_ATTRS)
 
 
+#: name prefix of a game's ADD-ON modules: sub-modules added to a trained game's own
+#: modules whose output is exactly zero at construction (e.g. the SC2 decoder's
+#: addon_fine), so a checkpoint written before one existed loads with the add-on at
+#: its initial weights and the network's function unchanged
+ADDON_PREFIX = "addon_"
+
+
+def addon_module_of(name: str) -> Optional[str]:
+    """The add-on module a parameter / buffer name lies in (its name up to and
+    including the first ``addon_*`` component), or None."""
+    parts = name.split(".")
+    for i, p in enumerate(parts):
+        if p.startswith(ADDON_PREFIX):
+            return ".".join(parts[:i + 1])
+    return None
+
+
+def missing_addon_keys(keys, state: Mapping[str, object]) -> set:
+    """Keys of ``keys`` in add-on modules of which ``state`` has no key at all (a
+    checkpoint older than the add-on; a partly present add-on is not missing)."""
+    have = {addon_module_of(k) for k in state} - {None}
+    return {k for k in keys if (m := addon_module_of(k)) is not None and m not in have}
+
+
+def with_addon_defaults(module: nn.Module, state: Mapping[str, object]) -> Dict[str, object]:
+    """``state`` completed by ``module``'s own values for the add-on modules it lacks
+    (their zero output leaves the checkpoint's function unchanged) — for strict
+    ``load_state_dict`` of a checkpoint older than an add-on."""
+    own = module.state_dict()
+    return {**state, **{k: own[k] for k in missing_addon_keys(own, state)}}
+
+
 def check_core_compatible(cfgs: Mapping[str, object]) -> None:
     """Raise if the games' configs disagree on any core field."""
     names = list(cfgs)

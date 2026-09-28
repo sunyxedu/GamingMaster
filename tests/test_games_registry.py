@@ -28,6 +28,7 @@ GAME_OVERRIDES = {
     "starcraft": dict(minimap_h=16, minimap_w=16, max_units=8),
     "arc3": dict(arc_patch=8),
     "hok": {},
+    "sc2": dict(sc2_units=12, sc2_unit_vocab=30, sc2_action_vocab=20, sc2_buff_vocab=10, sc2_upgrades=6),
 }
 # gmrules games register themselves (model/games/gmrules/): every one
 # must build with its simulator's frame dims
@@ -59,7 +60,7 @@ def test_build_game_network(game):
 
 def test_unknown_game_raises():
     with pytest.raises(KeyError, match="unknown game"):
-        build_game_network("tetris")
+        build_game_network("no_such_game")
 
 
 def test_config_overrides_forwarded():

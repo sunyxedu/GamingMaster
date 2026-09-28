@@ -119,6 +119,10 @@ class GameNetwork(nn.Module):
         mem = self._core_memory()
         if mem is not None:
             mem.reset_parameters()
+        # the games' add-on modules (model.multi_game.ADDON_PREFIX) start at zero output too
+        for m in self.modules():
+            if m is not self and hasattr(m, "reset_addon"):
+                m.reset_addon()
 
     def _init_weights(self):
         for m in self.modules():
