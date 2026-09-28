@@ -466,6 +466,32 @@ def test_resume_restores_the_training_state_exactly(shards, tmp_path):
                   "--resume", str(tmp_path / "a" / "multi_latest.pt")])
 
 
+def test_stop_file_stops_at_its_step_with_a_resumable_checkpoint(shards, tmp_path):
+    """--stop_file holding a step S: the run writes multi_latest.pt at S (not a --ckpt_every
+    step here) and exits without multi_final.pt; resuming continues from S (the job wrapper's
+    handover); a file whose step has passed stops at the next check; no file = no stop."""
+    from training import train_multi_game as tmg
+
+    root = str(shards)
+    stop = tmp_path / "STOP"
+    stop.write_text("10\n")
+    out = tmg.main([*_common_args(root, str(tmp_path / "a")), "--steps", "40", "--ckpt_every", "25",
+                    "--stop_file", str(stop)])
+    assert out["stopped"] == 10
+    assert not (tmp_path / "a" / "multi_final.pt").exists()
+    assert torch.load(tmp_path / "a" / "multi_latest.pt", weights_only=False)["step"] == 10
+    stop.unlink()
+    out = tmg.main([*_common_args(root, str(tmp_path / "a")), "--steps", "20", "--stop_file", str(stop),
+                    "--resume", str(tmp_path / "a" / "multi_latest.pt")])
+    assert "stopped" not in out and (tmp_path / "a" / "multi_final.pt").exists()
+    stop.write_text("3")                 # already passed at the first check (step 10)
+    out = tmg.main([*_common_args(root, str(tmp_path / "b")), "--steps", "20", "--stop_file", str(stop)])
+    assert out["stopped"] == 10
+    assert tmg.stop_step(str(tmp_path / "missing")) == 0
+    stop.write_text("")
+    assert tmg.stop_step(str(stop)) == 1
+
+
 def test_rank_seeds_of_a_seed_sweep_do_not_overlap():
     """rank 0 keeps --seed (single-process streams); the ranks of neighbouring
     seeds (a sweep) and of a resumed run get streams of their own."""

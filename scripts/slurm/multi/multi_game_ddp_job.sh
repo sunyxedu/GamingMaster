@@ -63,6 +63,15 @@
 # after a node failure, or the same RUN resubmitted after the 24 h wall), the
 # run continues from it (--resume); RESUME=0 starts from scratch instead.
 # Size --steps to the wall anyway: a resume restarts the data order.
+#
+# Handover (new data / arguments without leaving the queue): a released allocation can
+# wait a day for its GPUs on a busy cluster, so a running RUN takes new ARGS in place —
+#   HANDOVER=1 STOP_AT=<step> RUN=<run> ARGS="..." [GM_HOME=<snapshot>] \
+#       bash scripts/slurm/multi/multi_game_ddp_job.sh
+# writes $OUT/handover.env (ARGS, GM_HOME; the snapshot needs its .venv) and
+# $OUT/STOP (the step); the job's trainer (--stop_file $OUT/STOP) writes
+# multi_latest.pt at that step and exits, and the job continues from it with the
+# new arguments in the same allocation.  $OUT/STOP alone stops the job cleanly.
 # New games join a running RUN: resubmit it with more --data entries in ARGS
 # (any order; the checkpoint's games must all stay) and they start fresh
 # around the trained core (train_multi_game.py docstring, "Resuming").  Pass
@@ -103,6 +112,21 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
         MEM_PER_GPU=${MEM_PER_GPU:-$((24 * UNITS))}
     fi
     self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    if [ "${HANDOVER:-0}" = 1 ]; then
+        # hand the RUN's running job new arguments instead of a new job: the job's trainer
+        # stops at step STOP_AT (its --stop_file, $OUT/STOP) with a resumable checkpoint and
+        # the job continues in the same allocation with ARGS / GM_HOME written here — the
+        # GPUs never go back to the queue (a released allocation can wait a day there)
+        OUT=${OUT:-$HOME/gm-runs/multi/$RUN}
+        GMH=${GM_HOME:-$HOME/gm-core}
+        [ -x "$GMH/.venv/bin/torchrun" ] || { echo "HANDOVER: no $GMH/.venv/bin/torchrun" >&2; exit 1; }
+        mkdir -p "$OUT"
+        { printf 'ARGS=%q\n' "${ARGS:-}"; printf 'GM_HOME=%q\n' "$GMH"; } > "$OUT/handover.env.part"
+        mv "$OUT/handover.env.part" "$OUT/handover.env"
+        if [ -n "${STOP_AT:-}" ]; then echo "$STOP_AT" > "$OUT/STOP"; fi
+        echo "HANDOVER: $OUT/handover.env written (GM_HOME=$GMH)${STOP_AT:+; the job stops at step $STOP_AT}"
+        exit 0
+    fi
     sinfo -p "${PARTITION:-batch}" -N -h \
         -O "NodeHost:20,Gres:40,GresUsed:50,StateCompact:10" 2>/dev/null || true
     export NGPU
@@ -139,6 +163,10 @@ if [ "${SHARD_OPTIMIZER:-0}" != 0 ]; then
     fi
 fi
 mkdir -p "$OUT"
+# a handover ($OUT/handover.env from HANDOVER=1 submission mode, applied when the trainer
+# stops at its --stop_file step) continues the RUN in this allocation with the new
+# arguments; without one the job ends when the trainer does
+while true; do
 RESUME_FROM=""
 if [ "${RESUME:-1}" != 0 ] && [ -f "$OUT/multi_latest.pt" ]; then
     RESUME_FROM="$OUT/multi_latest.pt"
@@ -162,6 +190,18 @@ nvidia-smi -L 2>/dev/null | grep MIG || true
 # shellcheck disable=SC2086
 "$GM_HOME/.venv/bin/torchrun" --standalone --nproc_per_node="$NGPU" \
     -m training.train_multi_game --ckpt_every "${CKPT_EVERY:-500}" \
-    --dist_backend "${DIST_BACKEND:-auto}" ${SHARD_FLAG} ${ARGS:-} \
+    --dist_backend "${DIST_BACKEND:-auto}" ${SHARD_FLAG} --stop_file "$OUT/STOP" ${ARGS:-} \
     ${RESUME_FROM:+--resume "$RESUME_FROM"} --save_dir "$OUT" 2>&1 | tee -a "$OUT/log.txt"
+if [ -f "$OUT/handover.env" ]; then
+    used="$OUT/handover.$(date +%Y%m%d-%H%M%S).env"
+    mv "$OUT/handover.env" "$used"
+    rm -f "$OUT/STOP"
+    # shellcheck disable=SC1090
+    source "$used"
+    echo "[$(date)] handover: continuing $RUN with $used (GM_HOME=$GM_HOME)"
+    continue
+fi
+rm -f "$OUT/STOP"
+break
+done
 echo "[$(date)] done"

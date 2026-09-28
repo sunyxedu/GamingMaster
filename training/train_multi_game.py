@@ -400,6 +400,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--ckpt_every", type=int, default=0,
                    help="write the resumable multi_latest.pt every N steps and at the "
                         "last step (0 = only multi_final.pt)")
+    p.add_argument("--stop_file", default=None,
+                   help="a file holding a step S (checked every 10 steps; empty = now): the run "
+                        "writes its resumable multi_latest.pt at step S — at the first check after "
+                        "the file appears when S has passed — and exits without the final save; "
+                        "scripts/slurm/multi/multi_game_ddp_job.sh then continues in the same "
+                        "allocation with the arguments of $OUT/handover.env (a data change without "
+                        "giving the GPUs back to the queue)")
     p.add_argument("--resume", default=None,
                    help="continue from a multi_latest.pt (same arguments otherwise; --data "
                         "may add games, in any order: see Resuming in the module docstring)")
@@ -1038,6 +1045,22 @@ def _global_window(window: Dict[str, List[float]], games: List[str],
             for i, g in enumerate(games) if t[i, 1] > 0}
 
 
+def stop_step(path: Optional[str]) -> int:
+    """The step a ``--stop_file`` asks the run to stop at: its integer content, 1 (= now) when
+    it is empty or unreadable, 0 without the file."""
+    if not path or not os.path.exists(path):
+        return 0
+    try:
+        with open(path) as f:
+            text = f.read().strip()
+    except OSError:
+        return 1
+    try:
+        return max(int(text), 1) if text else 1
+    except ValueError:
+        return 1
+
+
 def main(argv=None) -> Dict[str, object]:
     """Train; returns the live objects (``model``, ``ema``, ``optimizer``,
     ``dist``) for callers that drive the trainer in-process (tests)."""
@@ -1433,6 +1456,7 @@ def main(argv=None) -> Dict[str, object]:
     # moe_load_cv mixes in which games the step drew (experts specialise); the
     # window sum shows whether the balance bias evens the load out over time
     load_window: Optional[torch.Tensor] = None
+    stopped: Optional[int] = None
     for step in range(start, args.steps + 1):
         drawn = random.choices(names, weights=probs, k=K)
         for g in drawn:
@@ -1548,8 +1572,31 @@ def main(argv=None) -> Dict[str, object]:
                     log(f"[attn {step}] {g}: {diag[g]}", flush=True)
         # sharded: every rank takes part in the gather, rank 0 writes
         writes = rank0 or zero is not None
+        saved_now = False
         if args.ckpt_every and (step % args.ckpt_every == 0 or step == args.steps) and writes:
             save("latest", step, resumable=True)
+            saved_now = True
+        if args.stop_file and step % 10 == 0:
+            # rank 0 reads the file (one view of it for every rank), all ranks agree
+            at = stop_step(args.stop_file) if rank0 else 0
+            if dist_env.enabled:
+                t = torch.tensor([at], dtype=torch.int64, device=device)
+                dist.all_reduce(t, op=dist.ReduceOp.MAX)
+                at = int(t.item())
+            if at and step >= at:
+                if writes and not saved_now:
+                    save("latest", step, resumable=True)
+                stopped = step
+                if rank0:
+                    late = f" (asked for step {at})" if at > 1 and step > at else ""
+                    print(f"[stop] step {step}{late}: {os.path.join(args.save_dir, 'multi_latest.pt')} written, "
+                          f"exiting for the handover ({args.stop_file})", flush=True)
+                break
+    if stopped is not None:
+        dist_env.barrier()
+        dist_env.destroy()
+        return {"model": model, "ema": ema, "optimizer": optimizer, "dist": dist_env,
+                "zero": zero, "stopped": stopped}
     final = save("final") if rank0 or zero is not None else None
     if rank0:
         print(f"[done] saved {final}")
