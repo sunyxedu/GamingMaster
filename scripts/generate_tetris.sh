@@ -11,6 +11,8 @@
 #                         measurements are in docs: 50k beats 5k 83 %, 200k ~ 50k 53 %,
 #                         800k beats 200k 60 %)
 #        BATCH=500  VAL_GAMES=GAMES/50  SEED=1  NICE=19  CONVERT_ONLY=1
+#        NO_CONVERT=1   generate only (convert elsewhere: the shards are ~31 KB per frame —
+#                       160 candidates x 49 f32 features — ~190 GB for 20k games)
 set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -49,6 +51,7 @@ if [ "${CONVERT_ONLY:-0}" != 1 ]; then
   run_batches "$OUT/raw_val" "$VAL_GAMES" $(( SEED * 1000000 + 900000 ))
   run_batches "$OUT/raw" "$GAMES" $(( SEED * 1000000 ))
 fi
+[ "${NO_CONVERT:-0}" = 1 ] && { echo "NO_CONVERT=1: raw games in $OUT/raw, $OUT/raw_val"; exit 0; }
 for split in train val; do
   src=$OUT/raw; [ $split = val ] && src=$OUT/raw_val
   find "$src" -name '*.part.jsonl.gz' -delete      # an interrupted batch
