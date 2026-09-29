@@ -3,7 +3,7 @@
 by the network, until one general is captured (or ``--max_turns``), written as the
 replay JSON of scripts/view_rl_replay.py and, with ``--html``, as its HTML viewer.
 
-    uv run python scripts/generals_selfplay_replay.py --ckpt generals.pt --html game.html
+    uv run python scripts/generals_selfplay_replay.py --ckpt generals.pt --map_dir REPLAYS --html game.html
     # --ckpt: a train_multi_game checkpoint (its generals network, EMA weights) or a
     # single-game one (scripts/export_game_checkpoint.py)
 
@@ -40,9 +40,9 @@ def _action_of(applied, row):
             "split": int(applied["split"][row])}
 
 
-def play(net, *, seed: int, max_turns: int, greedy: bool, device) -> dict:
+def play(net, *, seed: int, max_turns: int, greedy: bool, device, map_dir=None) -> dict:
     mv = bool(getattr(net.cfg, "memory_vision", False))
-    env = make_vec_env("generals", n_envs=1, max_turns=max_turns, memory_vision=mv, seed=seed)
+    env = make_vec_env("generals", n_envs=1, max_turns=max_turns, memory_vision=mv, seed=seed, map_dir=map_dir)
     policy = NetworkPolicy(net, device=device, greedy=greedy)
     obs = env.reset(seed=seed)
     g = env.envs[0]
@@ -75,7 +75,8 @@ def play(net, *, seed: int, max_turns: int, greedy: bool, device) -> dict:
         if bool(done[0]):
             break
     w = steps[-1]["winner"]
-    return {"map": {"real_h": g.real_h, "real_w": g.real_w}, "steps": steps, "ep_len": turn,
+    rid = g.map_pool[g.current_map_idx]["replay_id"] if g.map_pool and g.current_map_idx is not None else None
+    return {"map": {"real_h": g.real_h, "real_w": g.real_w, "replay_id": rid}, "steps": steps, "ep_len": turn,
             "winner": w, "total_reward_p0": 0.0 if w is None else (1.0 if w == 0 else -1.0),
             "seed": seed, "greedy": greedy}
 
@@ -88,16 +89,18 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--max_turns", type=int, default=2048)
     p.add_argument("--greedy", action="store_true")
+    p.add_argument("--map_dir", help="real maps: a directory of generals.io replay JSONs (one is drawn "
+                                    "by --seed); default: a generated map")
     p.add_argument("--device", default=None, help="cpu / cuda / mps (default: the best available)")
     a = p.parse_args(argv)
     device = pick_device(a.device)
     net, info = load_policy_network(a.ckpt, "generals", device)
     net = net.float()
     print(f"loaded {a.ckpt} ({info}) on {device}", flush=True)
-    rep = play(net, seed=a.seed, max_turns=a.max_turns, greedy=a.greedy, device=device)
+    rep = play(net, seed=a.seed, max_turns=a.max_turns, greedy=a.greedy, device=device, map_dir=a.map_dir)
     with open(a.out, "w") as f:
         json.dump(rep, f)
-    print(f"{rep['ep_len']} turns, winner: {rep['winner']} -> {a.out}")
+    print(f"map {rep['map']} — {rep['ep_len']} turns, winner: {rep['winner']} -> {a.out}")
     if a.html:
         from scripts.view_rl_replay import generate_html
         generate_html(rep, a.html)

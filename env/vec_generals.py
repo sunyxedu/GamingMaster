@@ -180,6 +180,7 @@ class GeneralsVecEnv(VecEnvBase):
                  sparse_reward: bool = True, trunc_penalty: float = 0.0,
                  env_attrs: Optional[Mapping[str, Any]] = None,
                  map_pool: Optional[List[Dict[str, Any]]] = None,
+                 map_dir: Optional[str] = None, max_maps: int = 0,
                  autoreset: bool = False, seed: Optional[int] = 0):
         super().__init__(n_envs, autoreset, seed)
         self.grid_h, self.grid_w = grid_h, grid_w
@@ -197,6 +198,14 @@ class GeneralsVecEnv(VecEnvBase):
         self._env_attrs = attrs
         self.turn_globals = bool(attrs["turn_globals"])
         self.memory_vision = bool(attrs["memory_vision"])
+        # map_dir: real ladder maps (the replay JSONs of a directory; standard maps only,
+        # env.generals_env.map_entry_of) — what the IL data was played on; without a
+        # pool the maps are generated (GeneralsEnv._generate_map)
+        if map_pool is None and map_dir:
+            from env.generals_env import load_map_dir
+            map_pool = load_map_dir(map_dir, grid_h, grid_w, int(max_maps))
+            if not map_pool:
+                raise ValueError(f"generals: no usable 1v1 map in {map_dir}")
         self.map_pool = map_pool
         self._alloc(self._n)
         self.reset()

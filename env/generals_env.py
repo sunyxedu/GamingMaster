@@ -1116,33 +1116,11 @@ class GeneralsEnv:
             try:
                 with open(replay_path) as f:
                     data = _json.load(f)
-                # Only keep 1v1 maps (2 generals) that fit in grid
-                if len(data.get("generals", [])) != 2:
+                entry, why = map_entry_of(data, self.grid_h, self.grid_w, replay_id)
+                if entry is None:
+                    n_invalid += why == "invalid"
                     continue
-                if data["mapHeight"] > self.grid_h or data["mapWidth"] > self.grid_w:
-                    continue
-                # A few replays carry special-mode encodings (e.g. negative
-                # cityArmies) or out-of-range tile indices; a bad garrison
-                # poisons reset() (log1p of a negative army) mid-training,
-                # so drop the whole map loudly rather than clamp silently.
-                n_tiles = data["mapHeight"] * data["mapWidth"]
-                generals = data["generals"]
-                if (any(not (0 <= g < n_tiles) for g in generals)
-                        or generals[0] == generals[1]
-                        or any(not (0 <= c < n_tiles) for c in data.get("cities", []))
-                        or any(not (0 <= m < n_tiles) for m in data.get("mountains", []))
-                        or any(a < 0 for a in data.get("cityArmies", []))):
-                    n_invalid += 1
-                    continue
-                self.map_pool.append({
-                    "replay_id": replay_id,
-                    "map_w": data["mapWidth"],
-                    "map_h": data["mapHeight"],
-                    "generals": data["generals"],
-                    "cities": data.get("cities", []),
-                    "city_armies": data.get("cityArmies", []),
-                    "mountains": data.get("mountains", []),
-                })
+                self.map_pool.append(entry)
             except (KeyError, _json.JSONDecodeError):
                 continue
 
@@ -1202,3 +1180,57 @@ class GeneralsEnv:
                 army = city_armies[i] if i < len(city_armies) else 40
                 self.map[r][c] = _Tile(_CITY, army, -1)
                 self.cities.append(new_idx)
+
+
+#: replay fields of map features / game modes these rules do not implement: maps
+#: with any of them are left out of map pools
+_UNSUPPORTED_MAP_KEYS = ("swamps", "deserts", "lookouts", "observatories", "neutrals", "modifiers")
+
+
+def map_entry_of(data: Dict, grid_h: int = 25, grid_w: int = 25,
+                 replay_id: Optional[str] = None) -> Tuple[Optional[Dict], str]:
+    """A replay's map as a map-pool entry, or ``(None, reason)``: only standard 1v1
+    maps (two generals) that fit the grid, without the features / modifiers these
+    rules lack (swamps, deserts, lookouts, observatories, neutral armies, game
+    modifiers), with valid tile indices and garrisons (a few replays carry special-
+    mode encodings, e.g. negative cityArmies, that would poison reset())."""
+    if len(data.get("generals", [])) != 2:
+        return None, "not 1v1"
+    if data["mapHeight"] > grid_h or data["mapWidth"] > grid_w:
+        return None, "too big"
+    if any(data.get(k) for k in _UNSUPPORTED_MAP_KEYS):
+        return None, "unsupported features"
+    n_tiles = data["mapHeight"] * data["mapWidth"]
+    generals = data["generals"]
+    if (any(not (0 <= g < n_tiles) for g in generals) or generals[0] == generals[1]
+            or any(not (0 <= c < n_tiles) for c in data.get("cities", []))
+            or any(not (0 <= m < n_tiles) for m in data.get("mountains", []))
+            or any(a < 0 for a in data.get("cityArmies", []))
+            or len(data.get("cityArmies", [])) != len(data.get("cities", []))):
+        return None, "invalid"
+    return {"replay_id": replay_id or data.get("id"), "map_w": data["mapWidth"], "map_h": data["mapHeight"],
+            "generals": list(generals), "cities": list(data.get("cities", [])),
+            "city_armies": list(data.get("cityArmies", [])), "mountains": list(data.get("mountains", []))}, ""
+
+
+def load_map_dir(map_dir: str, grid_h: int = 25, grid_w: int = 25, max_maps: int = 0) -> List[Dict]:
+    """Map-pool entries of every usable replay JSON in ``map_dir`` (sorted by file
+    name; ``max_maps`` > 0 keeps the first that many) — real ladder maps for
+    self-play / RL (see :func:`map_entry_of`)."""
+    import json as _json
+
+    pool: List[Dict] = []
+    for name in sorted(os.listdir(map_dir)):
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(map_dir, name)) as f:
+                data = _json.load(f)
+            entry, _ = map_entry_of(data, grid_h, grid_w, name[:-5])
+        except (KeyError, ValueError, OSError):
+            continue
+        if entry is not None:
+            pool.append(entry)
+            if max_maps and len(pool) >= max_maps:
+                break
+    return pool
