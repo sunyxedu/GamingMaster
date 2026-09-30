@@ -1914,6 +1914,7 @@ class JointRLTrainer:
         self.eval_engine = _pairs(a.eval_engine, str, "CMD")
         self.eval_engine_go = _pairs(a.eval_engine_go, str, "LIMIT")
         self._engines: Dict[str, Any] = {}
+        self._engine_failed: Dict[str, str] = {}
         self.engine_base: Dict[str, float] = {}
         self.engine_streak: Dict[str, int] = {}
         self.stopped: Dict[str, str] = {}
@@ -2055,9 +2056,19 @@ class JointRLTrainer:
             if a.eval_every > 0 and it > 0 and it % a.eval_every == 0 and r.env.n_seats >= 2:
                 ev = self._eval_vs_init(g, r, it, gi)
                 diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n)
-                if g in self.eval_engine:
-                    ev = self._eval_against(g, r, it, gi, "engine", self._engine(g))
-                    diag.add(g, vs_engine_sum=ev.score_sum, vs_engine_n=ev.score_n)
+                if g in self.eval_engine and g not in self._engine_failed:
+                    try:
+                        ev = self._eval_against(g, r, it, gi, "engine", self._engine(g))
+                        diag.add(g, vs_engine_sum=ev.score_sum, vs_engine_n=ev.score_n)
+                    except Exception as e:      # noqa: BLE001 — a referee never stops the run
+                        self._engine_failed[g] = f"{type(e).__name__}: {e}"
+                        self.log(f"[eval] {g}: engine referee disabled ({self._engine_failed[g]})")
+                        eng = self._engines.pop(g, None)
+                        if eng is not None:
+                            try:
+                                eng.close()
+                            except Exception:   # noqa: BLE001
+                                pass
             diag.add(g, episodes=total.episodes, ep_len_sum=total.ep_len_sum,
                      score_sum=total.score_sum, score_n=total.score_n, mirror=total.mirror,
                      timeouts=total.timeouts,

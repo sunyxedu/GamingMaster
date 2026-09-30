@@ -789,3 +789,16 @@ def test_eval_vs_init_and_alarm_fields(stage1):
         assert all("applied" in st and "rewards" in st for st in tr["steps"])
     gen = json.loads((stage1 / "rl_eval" / "traces" / "generals_it0.json").read_text())
     assert "state" in gen["steps"][0]            # generals: the board after every step
+
+
+def test_a_failing_engine_referee_is_disabled_not_fatal(stage1):
+    """--eval_engine with an engine that cannot start: the run goes on, the referee is off."""
+    from training import train_rl_joint
+
+    torch.manual_seed(0)
+    out = train_rl_joint.main(_args(stage1, "rl_badengine", "--iterations", "2", "--eval_every", "1",
+                                    "--eval_episodes", "2", "--eval_engine", "othello=/no/such/engine"))
+    tr = out["trainer"]
+    assert [r["iteration"] for r in out["history"]] == [1, 2]
+    assert "othello" in tr._engine_failed and "othello" not in tr._engines
+    assert out["history"][1]["games"]["othello"]["vs_engine_n"] == 0

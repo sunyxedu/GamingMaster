@@ -133,3 +133,4 @@ def test_engine_alarm_is_relative_to_the_first_engine_evaluation():
     for ve in (0.20, 0.22):                # 0.18+ below the first evaluation, twice
         JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": ve}}})
     assert "score vs the engine" in t.stopped["chess"]
+
