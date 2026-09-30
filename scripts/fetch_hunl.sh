@@ -22,6 +22,8 @@
 #        RAW=$OUT/raw   GMDATA=<prebuilt gmdata binary>
 #        FETCH_ARGS="--max-files-per-year 3"   (a small sample run)
 #        SKIP_FETCH=1   (convert the logs already under RAW, e.g. rsynced; no network)
+#        SHARD_SIZE=1024  hands per shard (the loader opens every shard's index at start-up:
+#                         the full HQ corpus at 1024 is ~150k shards, ~45 min per process)
 #
 # Output: $OUT/train/<year>/hunl_*, $OUT/val/<year>/hunl_* (train with
 # --data hunl=$OUT/train --val hunl=$OUT/val); conversion stats (records / converted /
@@ -47,6 +49,7 @@ MIN_BB100=${MIN_BB100:-0}
 KEEP_PER_MILLE=${KEEP_PER_MILLE:-1000}
 MAX_HANDS=${MAX_HANDS:-}
 VAL_PER_MILLE=${VAL_PER_MILLE:-5}
+SHARD_SIZE=${SHARD_SIZE:-1024}
 RAW=$(abspath "${RAW:-$OUT/raw}")
 FETCH_ARGS=${FETCH_ARGS:-}
 
@@ -86,7 +89,8 @@ for y in $YEARS; do
     if [ "$split" = train ]; then limit=$TRAIN_ONLY; fi
     # shellcheck disable=SC2086
     "$G" hunl convert --input "$RAW" --years "$y" --rescale --split "$split" \
-        --val-per-mille "$VAL_PER_MILLE" $EXTRA $limit --out "$OUT/$split/$y" > "$log.part"
+        --val-per-mille "$VAL_PER_MILLE" --shard-size "$SHARD_SIZE" $EXTRA $limit \
+        --out "$OUT/$split/$y" > "$log.part"
     mv "$log.part" "$log"
     echo "$split $y: $(head -c 400 "$log")"
   done
