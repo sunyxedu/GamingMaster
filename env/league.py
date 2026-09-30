@@ -808,6 +808,12 @@ class League:
             rows = part.nonzero().squeeze(1)
             if rows.numel() == 0:
                 continue
+            if getattr(pol, "acts_only", False):
+                # a stateless opponent (an engine, env/engine_policy.py) is asked only for its
+                # own moves; a network also sees the other seats' frames of its stream
+                rows = rows[acting[rows]]
+                if rows.numel() == 0:
+                    continue
             acts = self.env.replay_actions(pol(obs, rows))
             use = acting[rows]
             for k, v in acts.items():

@@ -91,3 +91,36 @@ def test_egaroucid_beats_random_on_the_othello_env():
     finally:
         league.release_all()
         pol.close()
+
+
+@pytest.mark.skipif(not shutil.which("uv"), reason="needs uv (the gnubg wheel)")
+def test_gnubg_beats_random_on_the_backgammon_env():
+    from env.engine_policy import BackgammonEnginePolicy
+    from env.league import scatter_rows
+
+    env = make_vec_env("backgammon", 4, seed=3, match_length=1)
+    try:
+        pol = BackgammonEnginePolicy(env, plies=0)
+    except Exception as e:                      # noqa: BLE001 — no gnubg wheel offline
+        pytest.skip(f"gnubg bridge: {e}")
+    rnd = RandomPolicy(env, seed=1)
+    league = League(env, {"engine": pol}, mirror_prob=0.0, seed=5)
+    try:
+        obs = env.reset(seed=11)
+        league.update(obs)
+        winner = torch.full((env.num_envs,), -1, dtype=torch.long)
+        ended = torch.zeros(env.num_envs, dtype=torch.bool)
+        for _ in range(2000):
+            if not bool(obs.active.any()):
+                break
+            rows = league.learner_rows(obs).nonzero().squeeze(1)
+            la = scatter_rows(env.replay_actions(rnd(obs, rows)), rows, obs.n_rows) if rows.numel() else {}
+            obs, rew, done, info = env.step(league.act(obs, la))
+            winner = torch.where(done & ~ended, info["winner"].long(), winner)
+            ended |= done
+            league.update(obs)
+        assert bool(ended.all()) and pol.moves > 20
+        assert float(league.learner_score(winner).mean()) <= 0.25
+    finally:
+        league.release_all()
+        pol.close()

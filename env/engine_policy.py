@@ -221,6 +221,9 @@ class EnginePolicy:
     ``go depth D``, ``go movetime MS``, ...); ``options``: engine options (Threads, Hash,
     Skill Level, UCI_Elo, ...)."""
 
+    #: League asks only for this policy's own moves (it keeps no stream state)
+    acts_only = True
+
     def __init__(self, env, command: str, *, go: str = "go nodes 20000",
                  options: Optional[Mapping[str, str]] = None, protocol: Optional[str] = None,
                  config: str = ""):
@@ -273,6 +276,9 @@ class OthelloEnginePolicy:
     string; the reply square is ``place_idx`` (row * 8 + col).  A forced pass is answered
     with ``passed``, as the env expects."""
 
+    #: League asks only for this policy's own moves (it keeps no stream state)
+    acts_only = True
+
     def __init__(self, env, command: Optional[str] = None, *, level: int = 5):
         from training import arena_othello as ao
         from training.othello_probe import BLACK, WHITE
@@ -316,3 +322,179 @@ class OthelloEnginePolicy:
 
     def close(self) -> None:
         self.pool.close()
+
+
+# ---------------------------------------------------------------------------
+# backgammon: gnubg through scripts/reference/gnubg_bridge.py
+# ---------------------------------------------------------------------------
+
+_BG_HEAD = re.compile(r"on_roll=(\d+) roll=(\d+)-(\d+) .*cube=(\d+) owner=(-?\d+) score=\[(\d+), (\d+)\] "
+                      r"crawford=(\w+)")
+_BG_SIDE = re.compile(r"seat(\d) \[([^\]]*)\] bar (\d+) off (\d+)")
+
+
+def bg_parse(text: str) -> Dict:
+    """gmrules backgammon ``str(State)`` → on_roll, roll, cube, owner, score, crawford and each
+    seat's 25-vector (index i = point i + 1 in that seat's own numbering, 24 = the bar)."""
+    h = _BG_HEAD.search(text)
+    if h is None:
+        raise EngineError(f"unreadable backgammon state: {text[:120]!r}")
+    sides = {}
+    for m in _BG_SIDE.finditer(text):
+        v = [0] * 25
+        for pc in m[2].split():
+            p, c = pc.split(":")
+            v[int(p) - 1] = int(c)
+        v[24] = int(m[3])
+        sides[int(m[1])] = v
+    return {"on_roll": int(h[1]), "roll": (int(h[2]), int(h[3])), "cube": int(h[4]),
+            "owner": int(h[5]), "score": (int(h[6]), int(h[7])), "crawford": h[8] == "true",
+            "board": [sides[0], sides[1]]}
+
+
+def bg_apply(mover: List[int], opp: List[int], pairs: Sequence[int]):
+    """gnubg's flat (from, to, ...) move (25 = bar, 0 = off) on the mover's / opponent's
+    25-vectors; a checker landing on an opponent blot sends it to the bar."""
+    me, op = list(mover), list(opp)
+    for f, t in zip(pairs[0::2], pairs[1::2]):
+        me[24 if f == 25 else f - 1] -= 1
+        if t > 0:
+            me[t - 1] += 1
+            j = 24 - t                      # the mover's point t is the opponent's 25 - t
+            if op[j] == 1:
+                op[j], op[24] = 0, op[24] + 1
+    return me, op
+
+
+class BackgammonEnginePolicy:
+    """gnubg (``plies``-ply, cubeful, match play) as a league opponent on the gmsim
+    backgammon env: the position from the replayed trajectory (``bg_parse``), gnubg's best
+    move matched to OUR legal move with the same resulting position (both sides, bar
+    included — a hit on the way changes it), cube decisions from the bridge's ``cube``
+    reply (double if it says double; take if a double should be taken)."""
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    #: League asks only for this policy's own moves (it keeps no stream state)
+    acts_only = True
+
+    def __init__(self, env, command: Optional[str] = None, *, plies: int = 0, timeout: float = 300.0):
+        import json as _json
+        self._json = _json
+        self.env, self.plies, self.timeout = env, int(plies), float(timeout)
+        self.config = json_config = getattr(env, "config", {}) or {}
+        self.match = int(json_config.get("match_length", 7))
+        cmd = command or (f"uv run --no-project --python 3.12 --with gnubg==1.1.0a16 python "
+                          f"{os.path.join(self.ROOT, 'scripts', 'reference', 'gnubg_bridge.py')} "
+                          f"--plies {self.plies}")
+        self.proc = subprocess.Popen(shlex.split(os.path.expanduser(cmd)), stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                     bufsize=1)
+        hello = self._ask({"op": "hello"})
+        self.name = f"{hello.get('engine', 'gnubg')} {self.plies}-ply"
+        self.go = f"{self.plies}-ply"
+        self.cfg_json = self._json.dumps(json_config)
+        self.moves = 0
+
+    def _ask(self, req: Dict) -> Dict:
+        if self.proc.poll() is not None:
+            raise EngineError(f"gnubg bridge exited ({self.proc.returncode})")
+        self.proc.stdin.write(self._json.dumps(req) + "\n")
+        self.proc.stdin.flush()
+        timer = threading.Timer(self.timeout, self.proc.kill)
+        timer.start()
+        try:
+            line = self.proc.stdout.readline()
+        finally:
+            timer.cancel()
+        if not line:
+            raise EngineError("gnubg bridge: no reply")
+        rep = self._json.loads(line)
+        if "error" in rep:
+            raise EngineError(f"gnubg bridge: {rep['error']} (request {req})")
+        return rep
+
+    def _cube(self, st: Dict, doubler: int) -> Dict:
+        owner = st["owner"]
+        return {"value": st["cube"], "owner": -1 if owner < 0 else (0 if owner == doubler else 1),
+                "match": self.match, "score": [st["score"][doubler], st["score"][1 - doubler]],
+                "crawford": st["crawford"], "jacoby": False}
+
+    def _target(self, state, seat: int) -> Dict[int, List[int]]:
+        """Both seats' 25-vectors after gnubg's best move from ``state`` (start of a turn)."""
+        st = bg_parse(str(state))
+        roller = st["on_roll"]
+        board = [st["board"][1 - roller], st["board"][roller]]
+        rep = self._ask({"op": "move", "board": board, "dice": list(st["roll"]),
+                         "cube": self._cube(st, roller)})
+        me, op = bg_apply(board[1], board[0], rep["moves"][0][0])
+        return {roller: me, 1 - roller: op}
+
+    @staticmethod
+    def _reaches(state, seat: int, want: Dict[int, List[int]], depth: int = 4) -> Optional[int]:
+        """A legal (sub-)move of ``seat`` from which ``want`` is reachable this turn."""
+        for a in state.legal_actions(seat):
+            nxt = state.clone()
+            nxt.apply_action(seat, int(a))
+            b = bg_parse(str(nxt))["board"]
+            if all(b[k] == v for k, v in want.items()):
+                return int(a)
+            t = nxt.turn()
+            # the rest of the turn: more sub-moves, or (after the first die of a double) the
+            # remaining dice as full moves — the same seat still to act
+            if depth > 1 and t[0] == "act" and seat in t[1]:
+                if BackgammonEnginePolicy._reaches(nxt, seat, want, depth - 1) is not None:
+                    return int(a)
+        return None
+
+    def choose(self, state, seat: int, turn_start=None) -> int:
+        legal = state.legal_actions(seat)
+        names = {state.action_string(seat, a): a for a in legal}
+        st = bg_parse(str(state))
+        roller = st["on_roll"]
+        board = [st["board"][1 - roller], st["board"][roller]]      # [opponent, mover]
+        if set(names) <= {"no double", "double"}:
+            rep = self._ask({"op": "cube", "board": board, "cube": self._cube(st, roller)})
+            return names["double" if rep.get("double") and "double" in names else "no double"]
+        if set(names) <= {"take", "drop"}:
+            rep = self._ask({"op": "cube", "board": board, "cube": self._cube(st, roller)})
+            return names["take" if rep.get("take") else "drop"]
+        if len(legal) == 1:
+            return int(legal[0])
+        # doubles are played one die at a time (sub-moves "(from/to)"): gnubg's best whole
+        # move from the turn's start, then a sub-move that can still reach it
+        want = self._target(turn_start if turn_start is not None else state, seat)
+        a = self._reaches(state, seat, want)
+        if a is None:
+            raise EngineError(f"gnubg's move (target {want}) is reachable by none of our legal "
+                              f"moves {list(names)[:8]} ...")
+        return a
+
+    def reset_streams(self, streams: Sequence[int]) -> None:
+        pass
+
+    def release_streams(self, streams: Sequence[int]) -> None:
+        pass
+
+    def __call__(self, obs, rows: torch.Tensor) -> Dict[str, torch.Tensor]:
+        rows = torch.as_tensor(rows, dtype=torch.long).reshape(-1)
+        keys = tuple(self.env.action_keys)
+        out = {k: torch.zeros(len(rows), dtype=torch.long) for k in keys}
+        for i, r in enumerate(rows.tolist()):
+            if not bool(obs.active[r]):
+                continue
+            e, seat = int(obs.env_id[r]), int(obs.to_play[r])
+            traj = np.asarray(self.env.trajectory(e)).reshape(-1, 2)
+            state, _ = replay_state(self.env.game, traj, self.cfg_json)
+            chance = np.nonzero(traj[:, 0] < 0)[0]
+            start = (replay_state(self.env.game, traj[:chance[-1] + 1], self.cfg_json)[0]
+                     if len(chance) else None)
+            a = self.choose(state, seat, turn_start=start)
+            for k, v in action_keys(state, seat, a, keys).items():
+                out[k][i] = v
+            self.moves += 1
+        return out
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.kill()

@@ -346,10 +346,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--eval_engine", action="append", default=[], metavar="GAME=CMD",
       help="also play this engine at every --eval_every (env/engine_policy.py: chess / "
            "chess_variants Stockfish, xiangqi Pikafish, shogi YaneuraOu over UCI / USI, go "
-           "KataGo over GTP, othello Egaroucid): vs_engine, a referee of fixed strength")
+           "KataGo over GTP, othello Egaroucid, backgammon gnubg (CMD '' = its bridge)): vs_engine, "
+           "a referee of fixed strength")
     a("--eval_engine_go", action="append", default=[], metavar="GAME=LIMIT",
       help="the engine's search limit per move (default 'go nodes 20000'; othello: 'level N', "
-           "default 5)")
+           "default 5; backgammon: 'plies N', default 0)")
     a("--alarm_engine_drop", type=float, default=0.15,
       help="... or (every --eval_every) its score against --eval_engine this far below its "
            "first engine evaluation")
@@ -2593,7 +2594,12 @@ class JointRLTrainer:
     def _engine(self, g: str):
         """The game's --eval_engine (one process per rank, kept for the run)."""
         if g not in self._engines:
-            if g == "othello":          # Egaroucid; --eval_engine_go othello="level N"
+            if g == "backgammon":       # gnubg (its bridge); --eval_engine_go backgammon="plies N"
+                from env.engine_policy import BackgammonEnginePolicy
+                lim = self.eval_engine_go.get(g, "plies 0").split()
+                self._engines[g] = BackgammonEnginePolicy(self.rl[g].env, self.eval_engine[g] or None,
+                                                          plies=int(lim[-1]))
+            elif g == "othello":        # Egaroucid; --eval_engine_go othello="level N"
                 from env.engine_policy import OthelloEnginePolicy
                 lim = self.eval_engine_go.get(g, "level 5").split()
                 self._engines[g] = OthelloEnginePolicy(self.rl[g].env, self.eval_engine[g] or None,
