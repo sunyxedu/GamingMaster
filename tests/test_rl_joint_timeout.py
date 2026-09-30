@@ -70,10 +70,11 @@ def test_alarm_stops_a_game_after_patience_iterations_and_zeroes_its_quota():
     from training.train_rl_joint import JointRLTrainer
     logs = []
     t = SimpleNamespace(
-        args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_patience=2,
+        args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
+                             alarm_patience=2,
                              alarm_min_episodes=8, tokens_per_iter=100, rl_placement="all"),
         rl_games=["sc2", "chess"], kl_budget={"sc2": 0.03, "chess": 0.03}, alarm_base_len={},
-        alarm_streak={}, stopped={}, iteration=0, log=logs.append, world=1,
+        alarm_streak={}, vs_init_streak={}, stopped={}, iteration=0, log=logs.append, world=1,
         sched=SimpleNamespace(quotas=lambda n: {"sc2": 50, "chess": 50}))
     good = {"episodes": 16, "timeout_rate": 0.0, "ep_len": 100.0, "kl": 0.01}
     bad = {"episodes": 16, "timeout_rate": 0.5, "ep_len": 100.0, "kl": 0.01}
@@ -94,3 +95,20 @@ def test_alarm_stops_a_game_after_patience_iterations_and_zeroes_its_quota():
     assert rec["stopped"] == t.stopped and any("[alarm] sc2" in m for m in logs)
     q, per_rank = JointRLTrainer._global_quotas(t)
     assert q == {"sc2": 0, "chess": 50} and per_rank == q
+
+
+def test_referee_alarm_counts_evaluations_not_iterations():
+    from types import SimpleNamespace
+
+    from training.train_rl_joint import JointRLTrainer
+    t = SimpleNamespace(
+        args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
+                             alarm_patience=2, alarm_min_episodes=8),
+        rl_games=["chess"], kl_budget={"chess": 0.03}, alarm_base_len={}, alarm_streak={},
+        vs_init_streak={}, stopped={}, iteration=0, log=lambda m: None)
+    base = {"episodes": 16, "timeout_rate": 0.0, "ep_len": 100.0, "kl": 0.01}
+    for vs in (float("nan"), 0.2, float("nan"), float("nan")):   # baseline, a bad eval, 2 plain its
+        JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_init": vs, "vs_init_n": 32}}})
+    assert not t.stopped and t.vs_init_streak == {"chess": 1}
+    JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_init": 0.25, "vs_init_n": 32}}})
+    assert "score vs the --init network" in t.stopped["chess"]

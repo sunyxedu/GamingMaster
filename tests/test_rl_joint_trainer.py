@@ -764,3 +764,21 @@ def test_two_gloo_ranks_stay_identical(stage1, kind, placement):
     assert ck["world_size"] == WORLD
     assert sorted(os.listdir(stage1 / save / "snaps")) == [
         f"snapshot_{i:06d}.pt" for i in range(3)]
+
+
+def test_eval_vs_init_and_alarm_fields(stage1):
+    """--eval_every: the learner plays the frozen --init network (from iteration 1: at 0 it
+    has the same weights); vs_init / timeout_rate / shaping land in the record, nothing trips."""
+    from training import train_rl_joint
+
+    torch.manual_seed(0)
+    out = train_rl_joint.main(_args(stage1, "rl_eval", "--iterations", "2", "--eval_every", "1",
+                                    "--eval_episodes", "4"))
+    assert out["history"][0]["games"]["othello"]["vs_init_n"] == 0     # not at iteration 0
+    rec = out["history"][1]
+    for g in ("generals", "othello"):
+        row = rec["games"][g]
+        assert row["vs_init_n"] >= 4 and 0.0 <= row["vs_init"] <= 1.0, (g, row)
+        assert row["timeout_rate"] == 0.0 or g == "generals"
+        assert "alarm" not in row
+    assert "stopped" not in rec and out["trainer"].stopped == {}

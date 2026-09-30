@@ -134,6 +134,7 @@ from data_processing.games.dataset import (WholeRecordBatchSampler, collate_game
                                            training_sampler)
 from env.league import (
     League,
+    NetworkPolicy,
     PoolPolicy,
     SnapshotPool,
     StreamStepper,
@@ -329,9 +330,16 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="... or its KL to the IL policy above this multiple of its --kl_budget, for "
            "--alarm_patience iterations in a row, stops the game's RL (quota 0 for the rest "
            "of the run; logged, kept on resume)")
+    a("--alarm_vs_init", type=float, default=0.35,
+      help="... or (every --eval_every) its score against the frozen --init network below this")
     a("--alarm_patience", type=int, default=2)
     a("--alarm_min_episodes", type=int, default=8,
       help="iterations with fewer episodes of the game are not judged")
+    a("--eval_every", type=int, default=20,
+      help="every N iterations each 2+-seat RL game plays the frozen --init network (the "
+           "learner against it, seats drawn per episode; not trained on): vs_init in "
+           "metrics.jsonl, the referee self-play reward cannot fool (0 = off)")
+    a("--eval_episodes", type=int, default=32, help="episodes per game and evaluation (whole waves)")
     a("--entropy_lr", type=float, default=0.05)
     a("--entropy_mode", choices=("log", "linear"), default="log")
     a("--entropy_min", type=float, default=1e-5)
@@ -1525,7 +1533,7 @@ class ReplayStream:
 
 DIAG_KEYS = (
     "tokens_v", "tokens_p", "streams", "episodes", "ep_len_sum", "score_sum", "score_n",
-    "mirror", "timeouts", "ret_sum",
+    "mirror", "timeouts", "vs_init_sum", "vs_init_n", "ret_sum",
     "ent_sum", "ent_n", "kl_sum", "kl_n", "pol_n", "approx_kl_sum", "clip_frac_sum",
     "is_weight_sum", "is_trunc_sum", "vloss_sum", "vloss_n",
     "canary_oldmu_sum", "canary_ratio_sum", "canary_n",
@@ -1849,6 +1857,7 @@ class JointRLTrainer:
         #: consecutive iterations it has looked wrong, and the games stopped {game: why}
         self.alarm_base_len: Dict[str, float] = {}
         self.alarm_streak: Dict[str, int] = {}
+        self.vs_init_streak: Dict[str, int] = {}
         self.stopped: Dict[str, str] = {}
         #: per-game cost of the latest iteration that played it (rollout + learner
         #: seconds, rank-identical): the --rl_placement split assignment
@@ -1981,6 +1990,9 @@ class JointRLTrainer:
                     raise RuntimeError(f"{g}: a wave of {r.env.num_envs} envs produced no "
                                        f"learner tokens")
             stats[g] = total
+            if a.eval_every > 0 and it > 0 and it % a.eval_every == 0 and r.env.n_seats >= 2:
+                ev = self._eval_vs_init(g, r, it, gi)
+                diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n)
             diag.add(g, episodes=total.episodes, ep_len_sum=total.ep_len_sum,
                      score_sum=total.score_sum, score_n=total.score_n, mirror=total.mirror,
                      timeouts=total.timeouts,
@@ -2493,6 +2505,26 @@ class JointRLTrainer:
             self._log(rec)
         return rec
 
+    def _eval_vs_init(self, g: str, r: GameRL, it: int, gi: int) -> WaveStats:
+        """The learner against the frozen --init network on the game's env (no mirror
+        episodes, seats drawn per episode), whole waves until --eval_episodes; the
+        streams are dropped.  Self-play reward can rise from an exploit of the learner's
+        own play; a policy that got worse against where it started cannot hide it here."""
+        a = self.args
+        ref = NetworkPolicy(self.ref[g], act_steps=self.depth, device=self.device)
+        total, wave = WaveStats(), 0
+        while total.episodes < a.eval_episodes:
+            league = League(r.env, {"init": ref}, mirror_prob=0.0,
+                            seed=derive_seed(a.seed, self.rank, it, gi, 4, wave))
+            _, st = collect_wave(r.env, league, r.actor,
+                                 seed=derive_seed(a.seed, self.rank, it, gi, 5, wave),
+                                 max_steps=a.max_wave_steps, timeout_reward=r.timeout_reward,
+                                 timeout_draw=g in TIMEOUT_IS_DRAW)
+            for k in ("episodes", "score_sum", "score_n"):
+                setattr(total, k, getattr(total, k) + getattr(st, k))
+            wave += 1
+        return total
+
     def _alarms(self, rec: Dict[str, Any]) -> None:
         """Stop a game's RL when its record looks like reward hacking (alarm_reasons)
         --alarm_patience iterations in a row.  The record is all-reduced, so every
@@ -2508,9 +2540,17 @@ class JointRLTrainer:
             why = alarm_reasons(row, self.alarm_base_len.get(g), self.kl_budget[g],
                                 timeout=a.alarm_timeout, len_x=a.alarm_len_x, kl_x=a.alarm_kl_x)
             self.alarm_streak[g] = self.alarm_streak.get(g, 0) + 1 if why else 0
+            # the referee (every --eval_every): its own streak over evaluations
+            vi = row.get("vs_init", float("nan"))
+            if a.alarm_vs_init > 0 and math.isfinite(vi) \
+                    and row.get("vs_init_n", 0) >= a.alarm_min_episodes:
+                low = vi < a.alarm_vs_init
+                self.vs_init_streak[g] = self.vs_init_streak.get(g, 0) + 1 if low else 0
+                if low:
+                    why.append(f"score vs the --init network {vi:.3f} < {a.alarm_vs_init}")
             if why:
                 row["alarm"] = "; ".join(why)
-            if why and self.alarm_streak[g] >= a.alarm_patience:
+            if why and max(self.alarm_streak[g], self.vs_init_streak.get(g, 0)) >= a.alarm_patience:
                 self.stopped[g] = f"iteration {self.iteration}: " + "; ".join(why)
                 self.log(f"[alarm] {g}: RL stopped ({self.stopped[g]}) — its quota is 0 from "
                          f"now on; inspect its replays / fixed-opponent results before resuming "
@@ -2561,6 +2601,7 @@ class JointRLTrainer:
                     loss_share=ep["loss_share"].get(g, 0.0), episodes=d["episodes"],
                     ep_len=diag.mean(g, "ep_len_sum", "episodes"),
                     timeout_rate=diag.mean(g, "timeouts", "episodes"),
+                    vs_init=diag.mean(g, "vs_init_sum", "vs_init_n"), vs_init_n=d["vs_init_n"],
                     shaping=float(getattr(self.rl[g].env, "shaping", 0.0)),
                     score=diag.mean(g, "score_sum", "score_n"),
                     ret=diag.mean(g, "ret_sum", "tokens_v"),
@@ -2630,6 +2671,7 @@ class JointRLTrainer:
                 "learn_cost": dict(self.learn_cost),
                 "alarm_base_len": dict(self.alarm_base_len),
                 "alarm_streak": dict(self.alarm_streak), "stopped": dict(self.stopped),
+                "vs_init_streak": dict(self.vs_init_streak),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -2779,6 +2821,7 @@ class JointRLTrainer:
         self.learn_cost = dict(st.get("learn_cost", {}))
         self.alarm_base_len = dict(st.get("alarm_base_len", {}))
         self.alarm_streak = dict(st.get("alarm_streak", {}))
+        self.vs_init_streak = dict(st.get("vs_init_streak", {}))
         self.stopped = dict(st.get("stopped", {}))
         for g, why in self.stopped.items():
             self.log(f"[resume] {g}: RL stays stopped ({why})")
