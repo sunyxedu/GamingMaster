@@ -13,7 +13,11 @@ that is no legal action of ours raises (a rules / notation mismatch is a bug, ne
 silent substitute).
 
 Games: whatever gmrules game prints UCI-style moves and a FEN / SFEN start (``str(State)``):
-chess and chess_variants (Stockfish), xiangqi (Pikafish), shogi (YaneuraOu, ``usi``).
+chess and chess_variants (Stockfish), xiangqi (Pikafish), shogi (YaneuraOu, ``usi``); and go
+over GTP (KataGo: ``clear_board`` / ``boardsize`` / ``komi 7.5`` / chinese rules — area
+scoring, no suicide, like ours — then every ``play`` and ``genmove``; the strength is the
+command's, e.g. ``katago gtp -model M -config C -override-config maxVisits=64``; a
+``resign`` is played as a pass, since our rules have no resignation and the game is scored).
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ import numpy as np
 import torch
 
 #: protocol by game (the engine family that plays it)
-PROTOCOL = {"chess": "uci", "chess_variants": "uci", "xiangqi": "uci", "shogi": "usi"}
+PROTOCOL = {"chess": "uci", "chess_variants": "uci", "xiangqi": "uci", "shogi": "usi", "go": "gtp"}
 
 
 class EngineError(RuntimeError):
@@ -117,6 +121,64 @@ class UciEngine:
                 self.proc.kill()
 
 
+class GtpEngine:
+    """One GTP engine process (go); the game is rebuilt on every move."""
+
+    def __init__(self, command: str, board_size: int = 19, komi: float = 7.5, rules: str = "chinese",
+                 timeout: float = 300.0):
+        argv = [os.path.expanduser(a) for a in shlex.split(command)]
+        self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        self.timeout, self.size, self.komi, self.rules = float(timeout), board_size, komi, rules
+        self.name = self._cmd("name") + " " + self._cmd("version")
+
+    def _cmd(self, line: str) -> str:
+        if self.proc.poll() is not None:
+            raise EngineError(f"gtp engine exited ({self.proc.returncode})")
+        self.proc.stdin.write(line + "\n")
+        self.proc.stdin.flush()
+        timer = threading.Timer(self.timeout, self.proc.kill)
+        timer.start()
+        try:
+            resp: List[str] = []
+            for raw in self.proc.stdout:
+                raw = raw.rstrip("\n")
+                if not raw.strip():
+                    if resp:
+                        break
+                    continue
+                resp.append(raw)
+        finally:
+            timer.cancel()
+        if not resp or resp[0][:1] not in "=?":
+            raise EngineError(f"gtp {line!r}: no response ({resp[:2]})")
+        if resp[0].startswith("?"):
+            raise EngineError(f"gtp {line!r}: {' '.join(resp)}")
+        return " ".join([resp[0][1:].strip()] + resp[1:]).strip()
+
+    def best_move(self, start: str, moves: Sequence[str], go: str = "") -> str:
+        self._cmd(f"boardsize {self.size}")
+        self._cmd("clear_board")
+        self._cmd(f"komi {self.komi}")
+        try:
+            self._cmd(f"kata-set-rules {self.rules}")
+        except EngineError:
+            pass                        # not KataGo: the engine's own rules
+        colours = ("B", "W")
+        for i, m in enumerate(moves):
+            self._cmd(f"play {colours[i % 2]} {m}")
+        mv = self._cmd(f"genmove {colours[len(moves) % 2]}")
+        return "pass" if mv.lower() in ("pass", "resign") else mv.upper()
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            try:
+                self._cmd("quit")
+                self.proc.wait(timeout=5)
+            except Exception:           # noqa: BLE001
+                self.proc.kill()
+
+
 def start_string(game: str, config: str = "") -> str:
     """The FEN / SFEN of the game's initial position (``str(State)`` up to its first ' |')."""
     return str(gm.State(game, config)).split(" |")[0].strip()
@@ -169,7 +231,11 @@ class EnginePolicy:
             raise ValueError(f"no engine protocol for {game!r} (pass protocol=)")
         self.start = start_string(game, config)
         self.keys = tuple(env.action_keys)
-        self.engine = UciEngine(command, self.protocol, options)
+        if self.protocol == "gtp":
+            size = int(np.sqrt(len(gm.State(game, config).legal_actions(0)) - 1))
+            self.engine = GtpEngine(command, board_size=size)
+        else:
+            self.engine = UciEngine(command, self.protocol, options)
         self.name = self.engine.name
         self.moves = 0
 

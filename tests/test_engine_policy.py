@@ -13,10 +13,16 @@ from env.vec_game import make_vec_env
 
 ENGINES = {g: os.path.expanduser(f"~/gm-engines/bin/{e}")
            for g, e in (("chess", "stockfish"), ("xiangqi", "pikafish"), ("shogi", "yaneuraou"))}
+_KG_NET = os.path.expanduser("~/gm-engines/nets/katago/kata1-b18c384nbt-s9996604416-d4316597426.bin.gz")
+_KG_CFG = os.environ.get("GM_KATAGO_GTP_CFG", "/opt/homebrew/share/katago/configs/gtp_example.cfg")
+ENGINES["go"] = (f"{os.path.expanduser('~/gm-engines/bin/katago')} gtp -model {_KG_NET} -config {_KG_CFG} "
+                 f"-override-config maxVisits=4,logDir=,logAllGTPCommunication=false,numSearchThreads=1")
 
 
-def _have(path):
-    return os.path.exists(path) or shutil.which(path)
+def _have(cmd):
+    path = cmd.split()[0]
+    files = [w for w in cmd.split() if w.endswith((".gz", ".cfg"))]
+    return (os.path.exists(path) or shutil.which(path)) and all(os.path.exists(f) for f in files)
 
 
 @pytest.mark.parametrize("game", sorted(ENGINES))
