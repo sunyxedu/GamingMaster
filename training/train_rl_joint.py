@@ -309,6 +309,29 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="initial entropy coefficient (default 0.01)")
     a("--entropy_target", action="append", default=[], metavar="GAME=H",
       help="target policy entropy (nats); games without one keep a fixed coefficient")
+    a("--timeout_reward", action="append", default=[], metavar="GAME=R",
+      help="every seat's final reward when an episode hits the game's time limit (the env's "
+           "truncation; Tetris: its turn-limit draw).  Default -1 for "
+           + ", ".join(sorted(TIMEOUT_REWARD)) + ": running out the clock never beats "
+           "losing, so a losing side gains nothing by stalling ('none' = the env's own score)")
+    a("--shaping", action="append", default=[], metavar="GAME=S",
+      help="initial weight of an env's shaped reward (its `shaping` attribute; default "
+           + ", ".join(f"{g}={v}" for g, v in sorted(SHAPING.items())) + ")")
+    a("--shaping_anneal", action="append", default=[], metavar="GAME=ITERS",
+      help="iterations over which the shaping weight falls linearly to 0, so the game's "
+           "outcome is all that is left (default " + ", ".join(
+               f"{g}={v}" for g, v in sorted(SHAPING_ANNEAL.items())) + "; 0 = constant)")
+    a("--alarm_timeout", type=float, default=0.05,
+      help="reward-hacking alarm: a game's time-out rate above this ... (0 = off)")
+    a("--alarm_len_x", type=float, default=2.0,
+      help="... or its mean episode length above this multiple of its first iteration's ...")
+    a("--alarm_kl_x", type=float, default=3.0,
+      help="... or its KL to the IL policy above this multiple of its --kl_budget, for "
+           "--alarm_patience iterations in a row, stops the game's RL (quota 0 for the rest "
+           "of the run; logged, kept on resume)")
+    a("--alarm_patience", type=int, default=2)
+    a("--alarm_min_episodes", type=int, default=8,
+      help="iterations with fewer episodes of the game are not judged")
     a("--entropy_lr", type=float, default=0.05)
     a("--entropy_mode", choices=("log", "linear"), default="log")
     a("--entropy_min", type=float, default=1e-5)
@@ -1208,6 +1231,7 @@ class WaveStats:
     score_sum: float = 0.0
     score_n: int = 0
     mirror: int = 0
+    timeouts: int = 0
 
 
 def _assemble_streams(recs: List[Dict[str, Any]]) -> List[Stream]:
@@ -1237,8 +1261,68 @@ def _assemble_streams(recs: List[Dict[str, Any]]) -> List[Stream]:
                    **{k: fields_[k][i] for k in fields_}) for i in range(len(counts))]
 
 
+#: --timeout_reward defaults: the games whose time limit otherwise scores better than a loss
+#: (SC2 / Pokémon / HoK: 0 on truncation; Tetris: a draw at max_turns).  Generals scores its
+#: turn limit by material minus a penalty (env/generals_env.py), Clash Royale's overtime ends
+#: in the game's own tower-hp tiebreak, ARC's reward is the levels cleared.
+TIMEOUT_REWARD: Dict[str, float] = {"sc2": -1.0, "pokemon": -1.0, "hok": -1.0, "tetris": -1.0}
+#: --shaping / --shaping_anneal defaults.  HoK's SDK reward (gold, experience, hp, towers,
+#: kills, last hits) sums to ~22 per expert episode at weight 1 against the ±1 of the crystal:
+#: at 0.02 a typical episode's shaping (~0.45) stays below the outcome, then fades to 0.
+SHAPING: Dict[str, float] = {"hok": 0.02}
+SHAPING_ANNEAL: Dict[str, int] = {"hok": 300}
+
+
+def shaping_weight(s0: float, anneal: int, iteration: int) -> float:
+    """The shaping weight at ``iteration``: ``s0`` falling linearly to 0 over ``anneal``."""
+    if anneal <= 0:
+        return s0
+    return s0 * max(0.0, 1.0 - iteration / anneal)
+
+
+#: games whose time limit is a rules-level draw rather than an env truncation
+TIMEOUT_IS_DRAW = frozenset({"tetris"})
+
+
+def apply_timeout(rew: torch.Tensor, done: torch.Tensor, info: Mapping[str, Any],
+                  value: Optional[float], draw: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Rewards [E, S] with every seat of a timed-out episode set to ``value``, and the
+    timed-out rows [E] bool.  Timed out = done and truncated (or, ``draw``: a done
+    episode without a winner and all-zero rewards)."""
+    done = torch.as_tensor(done).bool().reshape(-1)
+    hit = torch.zeros_like(done)
+    if value is None:
+        return rew, hit
+    if "truncated" in info:
+        hit |= done & torch.as_tensor(info["truncated"]).bool().reshape(-1)
+    if draw:
+        no_winner = torch.as_tensor(info["winner"]).reshape(-1) < 0 if "winner" in info else True
+        hit |= done & no_winner & (rew.reshape(done.shape[0], -1) == 0).all(-1)
+    if bool(hit.any()):
+        rew = rew.clone()
+        rew[hit] = value
+    return rew, hit
+
+
+def alarm_reasons(row: Mapping[str, float], base_len: Optional[float], kl_budget: float, *,
+                  timeout: float, len_x: float, kl_x: float) -> List[str]:
+    """What looks like reward hacking in one iteration's record of a game (its row of
+    metrics.jsonl): time-outs, episodes growing long, the policy leaving the IL one."""
+    out = []
+    tr, ln, kl = row.get("timeout_rate", float("nan")), row.get("ep_len", float("nan")), \
+        row.get("kl", float("nan"))
+    if timeout > 0 and math.isfinite(tr) and tr > timeout:
+        out.append(f"time-out rate {tr:.3f} > {timeout}")
+    if len_x > 0 and base_len and math.isfinite(ln) and ln > len_x * base_len:
+        out.append(f"episode length {ln:.0f} > {len_x} x {base_len:.0f} (its first iteration)")
+    if kl_x > 0 and math.isfinite(kl) and kl > kl_x * kl_budget:
+        out.append(f"KL {kl:.4f} > {kl_x} x budget {kl_budget}")
+    return out
+
+
 def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: int,
-                 max_steps: int) -> Tuple[List[Stream], WaveStats]:
+                 max_steps: int, timeout_reward: Optional[float] = None,
+                 timeout_draw: bool = False) -> Tuple[List[Stream], WaveStats]:
     """Reset every env and play one lockstep wave to the end: the learner on
     its rows, the league's opponents on theirs.  Returns the learner's
     streams (episode rows it plays on) and episode statistics."""
@@ -1266,6 +1350,8 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
             acting = league.learner_acting(obs)[rows]
             pmask = league.learner_policy_mask(obs)[rows]
             nxt, rew, done, info = env.step(league.act(obs, la))
+            rew, timed_out = apply_timeout(rew, done, info, timeout_reward, timeout_draw)
+            st.timeouts += int(timed_out.sum())
             if rows.numel():
                 env_rows = obs.env_id[rows]
                 recs.append({
@@ -1439,7 +1525,7 @@ class ReplayStream:
 
 DIAG_KEYS = (
     "tokens_v", "tokens_p", "streams", "episodes", "ep_len_sum", "score_sum", "score_n",
-    "mirror", "ret_sum",
+    "mirror", "timeouts", "ret_sum",
     "ent_sum", "ent_n", "kl_sum", "kl_n", "pol_n", "approx_kl_sum", "clip_frac_sum",
     "is_weight_sum", "is_trunc_sum", "vloss_sum", "vloss_n",
     "canary_oldmu_sum", "canary_ratio_sum", "canary_n",
@@ -1554,6 +1640,8 @@ class GameRL:
     rows_per_forward: int
     hl_gauss: bool
     frames_per_forward: int = 0
+    timeout_reward: Optional[float] = None
+    shaping: Optional[Tuple[float, int]] = None      # (initial weight, anneal iterations)
     streams: List[Stream] = field(default_factory=list)
 
 
@@ -1618,10 +1706,17 @@ class JointRLTrainer:
         rpf = _pairs(a.rows_per_forward, int, "N")
         fpf = _pairs(a.frames_per_forward, int, "N")
         self.game_weight = _pairs(a.game_weight, float, "W")
+        shaping = {**SHAPING, **_pairs(a.shaping, float, "S")}
+        anneal = {**SHAPING_ANNEAL, **_pairs(a.shaping_anneal, int, "ITERS")}
+        timeout = {**TIMEOUT_REWARD, **_pairs(a.timeout_reward,
+                                             lambda v: None if v == "none" else float(v), "R")}
         for flag, vals in (("--envs", envs_n), ("--env_kw", env_kw), ("--mirror_prob", mirror),
                            ("--gamma", gamma), ("--lam", lam), ("--rows_per_forward", rpf),
                            ("--frames_per_forward", fpf),
                            ("--game_weight", self.game_weight),
+                           ("--timeout_reward", _pairs(a.timeout_reward, str, "R")),
+                           ("--shaping", _pairs(a.shaping, str, "S")),
+                           ("--shaping_anneal", _pairs(a.shaping_anneal, str, "ITERS")),
                            ("--share", _pairs(a.share, float, "W")),
                            ("--entropy_coef", _pairs(a.entropy_coef, float, "C")),
                            ("--entropy_target", _pairs(a.entropy_target, float, "H")),
@@ -1656,6 +1751,8 @@ class JointRLTrainer:
                                  f"this env's per-seat streams advance separately (seats act "
                                  f"on different turns); use --actor stream")
             spec.check_env(env, net)
+            if g in shaping and not hasattr(env, "shaping"):
+                raise SystemExit(f"--shaping {g}: its env has no shaped reward")
             actor = LearnerActor(net, spec, self.depth, device, bf16=a.bf16, mode=a.actor,
                                  cuda_graph=a.cuda_graph, record_routes=bool(a.routing_replay))
             p_mirror = mirror.get(g, 1.0)
@@ -1672,7 +1769,9 @@ class JointRLTrainer:
                 mirror_prob=p_mirror, gamma=gamma.get(g, 1.0), lam=lam.get(g, 0.95),
                 rows_per_forward=rpf.get(g, 8),
                 hl_gauss=isinstance(net.value_head, HLGaussValueHead),
-                frames_per_forward=fpf.get(g, a.frames_per_forward_default))
+                frames_per_forward=fpf.get(g, a.frames_per_forward_default),
+                timeout_reward=timeout.get(g),
+                shaping=(shaping[g], anneal.get(g, 0)) if g in shaping else None)
 
         # --- replay stream ------------------------------------------------
         rw = _pairs(a.replay_weight, float, "W")
@@ -1745,6 +1844,12 @@ class JointRLTrainer:
         self.ema = ModelEMA(model, mu=a.ema_rate) if a.ema_rate > 0 else None
         self.iteration = 0
         self.il_baseline: Dict[str, float] = {}
+        self.kl_budget = {g: budget.get(g, 0.03) for g in rl}
+        #: reward-hacking alarms: each game's first-iteration episode length, the
+        #: consecutive iterations it has looked wrong, and the games stopped {game: why}
+        self.alarm_base_len: Dict[str, float] = {}
+        self.alarm_streak: Dict[str, int] = {}
+        self.stopped: Dict[str, str] = {}
         #: per-game cost of the latest iteration that played it (rollout + learner
         #: seconds, rank-identical): the --rl_placement split assignment
         self.game_cost: Dict[str, float] = {}
@@ -1849,6 +1954,8 @@ class JointRLTrainer:
             q = quotas.get(g, 0)
             if q <= 0:
                 continue
+            if r.shaping is not None:
+                r.env.shaping = shaping_weight(*r.shaping, it)
             if r.pool_policy is not None:
                 self.pool.reseed(derive_seed(a.seed, self.rank, it, gi, 1))
                 r.pool_policy.refresh()
@@ -1862,10 +1969,12 @@ class JointRLTrainer:
                                 seed=derive_seed(a.seed, self.rank, it, gi, 2, wave))
                 streams, st = collect_wave(r.env, league, r.actor,
                                            seed=derive_seed(a.seed, self.rank, it, gi, 3, wave),
-                                           max_steps=a.max_wave_steps)
+                                           max_steps=a.max_wave_steps,
+                                           timeout_reward=r.timeout_reward,
+                                           timeout_draw=g in TIMEOUT_IS_DRAW)
                 r.streams.extend(streams)
                 for k in ("episodes", "steps", "tokens", "ep_len_sum", "score_sum", "score_n",
-                          "mirror"):
+                          "mirror", "timeouts"):
                     setattr(total, k, getattr(total, k) + getattr(st, k))
                 wave += 1
                 if st.tokens == 0:
@@ -1874,6 +1983,7 @@ class JointRLTrainer:
             stats[g] = total
             diag.add(g, episodes=total.episodes, ep_len_sum=total.ep_len_sum,
                      score_sum=total.score_sum, score_n=total.score_n, mirror=total.mirror,
+                     timeouts=total.timeouts,
                      streams=len(r.streams), rollout_s=time.time() - t_game,
                      rollout_steps=total.steps)
         return stats
@@ -2279,6 +2389,7 @@ class JointRLTrainer:
         if not self.rl_games:
             return {}, {}
         q = self.sched.quotas(self.args.tokens_per_iter)
+        q = {g: (0 if g in self.stopped else v) for g, v in q.items()}
         if self.args.rl_placement == "split" and self.world > 1:
             owner = self.placement(q)
             self._owner = owner
@@ -2371,6 +2482,7 @@ class JointRLTrainer:
                 and any(r.pool_policy is not None for r in self.rl.values())):
             self._add_snapshot(tag="iter")
         rec = self._record(diag, epoch_stats, q_glob, rel, time.time() - t0, t_roll)
+        self._alarms(rec)
         if getattr(self, "_owner", None):
             rec["placement"] = dict(self._owner)
         self.history.append(rec)
@@ -2380,6 +2492,31 @@ class JointRLTrainer:
         if self.iteration % a.log_every == 0:
             self._log(rec)
         return rec
+
+    def _alarms(self, rec: Dict[str, Any]) -> None:
+        """Stop a game's RL when its record looks like reward hacking (alarm_reasons)
+        --alarm_patience iterations in a row.  The record is all-reduced, so every
+        rank takes the same decision."""
+        a = self.args
+        for g in self.rl_games:
+            row = rec["games"].get(g, {})
+            if g in self.stopped or row.get("episodes", 0) < a.alarm_min_episodes:
+                continue
+            if g not in self.alarm_base_len and math.isfinite(row.get("ep_len", float("nan"))):
+                self.alarm_base_len[g] = float(row["ep_len"])
+                continue
+            why = alarm_reasons(row, self.alarm_base_len.get(g), self.kl_budget[g],
+                                timeout=a.alarm_timeout, len_x=a.alarm_len_x, kl_x=a.alarm_kl_x)
+            self.alarm_streak[g] = self.alarm_streak.get(g, 0) + 1 if why else 0
+            if why:
+                row["alarm"] = "; ".join(why)
+            if why and self.alarm_streak[g] >= a.alarm_patience:
+                self.stopped[g] = f"iteration {self.iteration}: " + "; ".join(why)
+                self.log(f"[alarm] {g}: RL stopped ({self.stopped[g]}) — its quota is 0 from "
+                         f"now on; inspect its replays / fixed-opponent results before resuming "
+                         f"it from a checkpoint before iteration {self.iteration}")
+        if self.stopped:
+            rec["stopped"] = dict(self.stopped)
 
     def _mark(self):
         """A per-game timing mark without a host sync: a recorded CUDA event (read
@@ -2423,6 +2560,8 @@ class JointRLTrainer:
                     quota=quotas.get(g, 0), tokens=d["tokens_v"],
                     loss_share=ep["loss_share"].get(g, 0.0), episodes=d["episodes"],
                     ep_len=diag.mean(g, "ep_len_sum", "episodes"),
+                    timeout_rate=diag.mean(g, "timeouts", "episodes"),
+                    shaping=float(getattr(self.rl[g].env, "shaping", 0.0)),
                     score=diag.mean(g, "score_sum", "score_n"),
                     ret=diag.mean(g, "ret_sum", "tokens_v"),
                     entropy=diag.mean(g, "ent_sum", "ent_n"),
@@ -2489,6 +2628,8 @@ class JointRLTrainer:
                 "pool": self.pool.state_dict(), "il_baseline": dict(self.il_baseline),
                 "game_cost": dict(self.game_cost), "replay_cost": dict(self.replay_cost),
                 "learn_cost": dict(self.learn_cost),
+                "alarm_base_len": dict(self.alarm_base_len),
+                "alarm_streak": dict(self.alarm_streak), "stopped": dict(self.stopped),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -2636,6 +2777,11 @@ class JointRLTrainer:
         self.game_cost = dict(st.get("game_cost", {}))
         self.replay_cost = dict(st.get("replay_cost", {}))
         self.learn_cost = dict(st.get("learn_cost", {}))
+        self.alarm_base_len = dict(st.get("alarm_base_len", {}))
+        self.alarm_streak = dict(st.get("alarm_streak", {}))
+        self.stopped = dict(st.get("stopped", {}))
+        for g, why in self.stopped.items():
+            self.log(f"[resume] {g}: RL stays stopped ({why})")
         self._load_env_states(st.get("envs"), int(ck.get("world_size", 1)))
         self.iteration = int(st["iteration"])
         self.log(f"[resume] {path}: iteration {self.iteration} (saved with world="
@@ -2679,6 +2825,9 @@ class JointRLTrainer:
         last_save = time.time()
         while self.iteration < a.iterations:
             self.run_iteration()
+            if self.rl_games and len(self.stopped) == len(self.rl_games):
+                self.log("[alarm] every RL game is stopped: ending the run")
+                break
             if self._want_checkpoint(last_save):
                 self.save(CKPT_LATEST)
                 last_save = time.time()
