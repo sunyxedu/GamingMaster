@@ -164,6 +164,36 @@ fn bit(data: &[u8], i: usize) -> u8 {
 
 /// A game image (1 bit or 1 byte per cell) sampled at the 64 × 64 cell centres; 1-bit images
 /// give 0 / 1.
+/// Whether the observed player sees any point within `r` world units of (x, y): the
+/// map_state visibility image (2 = visible; the top row first, one pixel per world unit
+/// up to the image's own size).
+fn visible_near(img: &proto::ImageData, w: usize, h: usize, x: f32, y: f32, r: f32) -> bool {
+    let (iw, ih) = img.size.as_ref().map(|s| (s.x.unwrap_or(w as i32).max(1) as usize, s.y.unwrap_or(h as i32).max(1) as usize))
+        .unwrap_or((w, h));
+    let data = img.data.as_deref().unwrap_or(&[]);
+    let bpp = img.bits_per_pixel.unwrap_or(8);
+    let (sx, sy) = (iw as f32 / w.max(1) as f32, ih as f32 / h.max(1) as f32);
+    let steps = r.ceil() as i32;
+    for dy in -steps..=steps {
+        for dx in -steps..=steps {
+            let (px, py) = (x + dx as f32, y + dy as f32);
+            if (dx * dx + dy * dy) as f32 > (r + 0.5) * (r + 0.5) || px < 0.0 || py < 0.0 {
+                continue;
+            }
+            let (c, row) = ((px * sx) as usize, (py * sy) as usize);
+            if c >= iw || row >= ih {
+                continue;
+            }
+            let i = (ih - 1 - row) * iw + c;
+            let v = if bpp == 1 { bit(data, i) } else { data.get(i).copied().unwrap_or(0) };
+            if v == 2 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn sample(img: Option<&proto::ImageData>, w: usize, h: usize) -> Vec<u8> {
     let mut out = vec![0u8; MAP * MAP];
     let Some(img) = img else { return out };
@@ -175,7 +205,9 @@ fn sample(img: Option<&proto::ImageData>, w: usize, h: usize) -> Vec<u8> {
         let y = (((r as f64 + 0.5) * ih as f64 / MAP as f64) as usize).min(ih - 1);
         for c in 0..MAP {
             let x = (((c as f64 + 0.5) * iw as f64 / MAP as f64) as usize).min(iw - 1);
-            let i = y * iw + x;
+            // the game's images store the TOP row (the largest world y) first; the planes'
+            // row r is world y band r (MapInfo::cell), as for the unit positions
+            let i = (ih - 1 - y) * iw + x;
             out[r * MAP + c] = if bpp == 1 { bit(data, i) } else { data.get(i).copied().unwrap_or(0) };
         }
     }
@@ -369,7 +401,22 @@ impl Encoder {
     pub fn encode(&mut self, obs: &proto::Observation, voc: &Vocab) -> Frame {
         let map = self.map.clone();
         let raw = obs.raw_data.as_ref();
-        let units: Vec<&proto::Unit> = raw.map(|r| r.units.iter().collect()).unwrap_or_default();
+        // fog of war: an enemy unit reported as visible must stand where the player sees.
+        // A live game reports only those; a replay's raw data (even with fog on) also lists
+        // enemy units the observed player never saw (workers in the enemy base ...) — the
+        // replay-built IL frames must be the live game's (the RL env's) frames
+        let vis = raw.and_then(|r| r.map_state.as_ref()).and_then(|ms| ms.visibility.as_ref());
+        let units: Vec<&proto::Unit> = raw.map(|r| r.units.iter().filter(|u| {
+            let enemy = alliance_idx(u.alliance.unwrap_or(0)) == 3;
+            let shown = u.display_type.unwrap_or(1) == 1;
+            match (enemy && shown, vis) {
+                (true, Some(img)) => {
+                    let (x, y) = pos(u);
+                    visible_near(img, map.w, map.h, x, y, u.radius.unwrap_or(0.5) + 1.0)
+                }
+                _ => true,
+            }
+        }).collect()).unwrap_or_default();
         self.allocate(&units);
         let mut f = Frame {
             units: vec![0; U * F],
@@ -640,6 +687,38 @@ mod tests {
         // the height levels: the right half is high ground
         let hb = |k: usize, c: usize| f1.map_bits[(plane::HEIGHT + k) * MAP * MAP + c];
         assert_eq!((hb(0, 10), hb(0, 40), hb(2, 40)), (0, 1, 1));
+    }
+
+    #[test]
+    fn map_images_top_row_first_and_fog_of_war() {
+        // a 128 x 96 map: the player sees world x 8..24, y 4..16; the game's image stores
+        // the TOP row (y = 95) first
+        let (w, h) = (128usize, 96usize);
+        let mut data = vec![0u8; w * h];
+        for y in 4..16 {
+            for x in 8..24 {
+                data[(h - 1 - y) * w + x] = 2;
+            }
+        }
+        let vis = proto::ImageData { bits_per_pixel: Some(8), size: Some(proto::Size2Di { x: Some(w as i32), y: Some(h as i32) }),
+                                     data: Some(data) };
+        let v = voc();
+        let mut e = Encoder::new(map(), 1);
+        use proto::Alliance::*;
+        let mut snap = unit(4, Enemy, 90.0, 60.0, 48);
+        snap.display_type = Some(2);
+        let units = vec![unit(1, Self_, 100.0, 80.0, 48), unit(2, Enemy, 15.0, 10.0, 48), unit(3, Enemy, 90.0, 60.0, 48), snap];
+        let mut o = obs(units);
+        o.raw_data.as_mut().unwrap().map_state = Some(proto::MapState { visibility: Some(vis), creep: None });
+        let f = e.encode(&o, &v);
+        // the plane's row is the world y band: the seen cell is where the units are
+        assert_eq!(f.map_bits[plane::VISIBLE * MAP * MAP + e.map.cell(15.0, 10.0)], 1);
+        assert_eq!(f.map_bits[plane::VISIBLE * MAP * MAP + e.map.cell(90.0, 60.0)], 0);
+        assert_eq!(f.map_bits[plane::VISIBLE * MAP * MAP + e.map.cell(15.0, 96.0 - 10.0)], 0, "not mirrored");
+        // an enemy shown outside the player's vision is not a unit the player sees (replays
+        // report them); own units, enemies in sight and enemy snapshots stay
+        assert!(e.slot(1).is_some() && e.slot(2).is_some() && e.slot(4).is_some());
+        assert!(e.slot(3).is_none(), "an enemy outside vision must not be encoded");
     }
 
     #[test]

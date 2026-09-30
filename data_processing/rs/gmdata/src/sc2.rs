@@ -113,6 +113,20 @@ pub enum Cmd {
         #[arg(long, default_value_t = 1)]
         parts: usize,
     },
+    /// Repair shards converted before the gmsc2 fog / orientation fix (no game needed): the
+    /// map planes read from the game's images (all but RESOURCE) are mirrored back to the
+    /// units' world-y rows, and an enemy unit shown as visible more than ~1.5 cells from any
+    /// cell the player sees (a replay's raw data lists them; a live game never does) is
+    /// dropped from `unit_mask` — unless the frame's command targets it.  Every other file
+    /// is hard-linked; a shard already repaired (refog.json) is refused.
+    Refog {
+        /// a shard directory, or a tree of them
+        #[arg(long)]
+        input: PathBuf,
+        /// the repaired copy (the same layout)
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Measure one replay through the game: observation cost, the actions it reports (kinds,
     /// loops, gaps), the frames and labels of gmsc2 — the numbers behind the frame design
     Probe {
@@ -758,6 +772,122 @@ pub fn convert(install: &Path, scan: &Path, vocab: &Path, out: &Path, min_mmr: i
               "seconds": t0.elapsed().as_secs_f64(), "build": inst.build}))
 }
 
+/// Bytes of one frame's map planes (bit-packed, MSB first) and the bytes of one plane row.
+const MAP_FRAME_BYTES: usize = gmsc2::MAP_BITS * gmsc2::MAP * gmsc2::MAP / 8;
+const ROW_BYTES: usize = gmsc2::MAP / 8;
+
+/// The map planes of one frame, mirrored in y (every plane read from a game image).
+fn flip_map_frame(frame: &mut [u8]) {
+    let plane_bytes = gmsc2::MAP * ROW_BYTES;
+    for p in 0..gmsc2::MAP_BITS {
+        if p == gmsc2::plane::RESOURCE {
+            continue; // drawn from the units' positions: already in world rows
+        }
+        let pl = &mut frame[p * plane_bytes..(p + 1) * plane_bytes];
+        for r in 0..gmsc2::MAP / 2 {
+            let (a, b) = (r * ROW_BYTES, (gmsc2::MAP - 1 - r) * ROW_BYTES);
+            for k in 0..ROW_BYTES {
+                pl.swap(a + k, b + k);
+            }
+        }
+    }
+}
+
+fn bit_at(bytes: &[u8], i: usize) -> bool {
+    bytes[i / 8] & (0x80 >> (i % 8)) != 0
+}
+
+/// One shard: (frames, enemy units shown as visible, dropped).
+fn refog_shard(src: &Path, dst: &Path) -> Result<(usize, usize, usize)> {
+    use gmshard::npy;
+    use gmsc2::{feature, MAP, U};
+    anyhow::ensure!(!src.join("refog.json").exists(), "{} is already repaired", src.display());
+    std::fs::create_dir_all(dst)?;
+    let mut mb = npy::read(&src.join("obs.map_bits.npy"))?;
+    let mut um = npy::read(&src.join("obs.unit_mask.npy"))?;
+    let units = npy::read(&src.join("obs.units.npy"))?;
+    let xy: Vec<u16> = npy::read(&src.join("obs.unit_xy.npy"))?.to_vec()?;
+    let tk: Vec<i64> = npy::read(&src.join("tgt.target_kind.npy"))?.to_vec()?;
+    let tu: Vec<i64> = npy::read(&src.join("tgt.target_unit.npy"))?.to_vec()?;
+    let frames = mb.shape[0];
+    let mask_bytes = U; // one byte (0 / 1) per unit slot
+    anyhow::ensure!(mb.data.len() == frames * MAP_FRAME_BYTES && um.data.len() == frames * mask_bytes
+                    && units.data.len() == frames * U * gmsc2::F && xy.len() == frames * U * 2 && tk.len() == frames,
+                    "{}: unexpected tensor sizes", src.display());
+    let (mut shown, mut dropped) = (0usize, 0usize);
+    for f in 0..frames {
+        let frame = &mut mb.data[f * MAP_FRAME_BYTES..(f + 1) * MAP_FRAME_BYTES];
+        flip_map_frame(frame);
+        let seen = |r: i64, c: i64| r >= 0 && c >= 0 && (r as usize) < MAP && (c as usize) < MAP
+            && bit_at(frame, gmsc2::plane::VISIBLE * MAP * MAP + r as usize * MAP + c as usize);
+        let mask = &mut um.data[f * mask_bytes..(f + 1) * mask_bytes];
+        for s in 0..U {
+            if mask[s] == 0 {
+                continue;
+            }
+            let row = &units.data[(f * U + s) * gmsc2::F..(f * U + s + 1) * gmsc2::F];
+            if row[feature::ALLIANCE] != 3 || row[feature::DISPLAY] != 0 {
+                continue;
+            }
+            shown += 1;
+            let c = xy[(f * U + s) * 2] as i64 * MAP as i64 / 65536;
+            let r = xy[(f * U + s) * 2 + 1] as i64 * MAP as i64 / 65536;
+            let near = (-1..=1).any(|dr| (-1..=1).any(|dc| seen(r + dr, c + dc)));
+            let targeted = tk[f] == 2 && tu[f] == s as i64;
+            if !near && !targeted {
+                mask[s] = 0;
+                dropped += 1;
+            }
+        }
+    }
+    npy::write::<u8>(&dst.join("obs.map_bits.npy"), &mb.shape, &mb.data)?;
+    npy::write::<u8>(&dst.join("obs.unit_mask.npy"), &um.shape, &um.data)?;
+    for entry in std::fs::read_dir(src)? {
+        let p = entry?.path();
+        let name = p.file_name().unwrap().to_owned();
+        if name == "obs.map_bits.npy" || name == "obs.unit_mask.npy" || !p.is_file() {
+            continue;
+        }
+        let target = dst.join(&name);
+        if target.exists() {
+            std::fs::remove_file(&target)?;
+        }
+        if std::fs::hard_link(&p, &target).is_err() {
+            std::fs::copy(&p, &target)?;
+        }
+    }
+    std::fs::write(dst.join("refog.json"), serde_json::to_vec(&json!({"frames": frames, "enemy_shown": shown, "dropped": dropped}))?)?;
+    Ok((frames, shown, dropped))
+}
+
+/// `sc2 refog` over a shard or a tree of shards (the same layout under `out`).
+pub fn refog(input: &Path, out: &Path) -> Result<Value> {
+    use rayon::prelude::*;
+    let mut shards = Vec::new();
+    let mut stack = vec![input.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        if d.join("index.json").is_file() {
+            shards.push(d);
+            continue;
+        }
+        for e in std::fs::read_dir(&d).with_context(|| format!("{}", d.display()))? {
+            let p = e?.path();
+            if p.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    shards.sort();
+    anyhow::ensure!(!shards.is_empty(), "no shard under {}", input.display());
+    let res: Vec<(usize, usize, usize)> = shards.par_iter().map(|d| {
+        let rel = d.strip_prefix(input).unwrap_or(Path::new(""));
+        refog_shard(d, &out.join(rel)).with_context(|| format!("{}", d.display()))
+    }).collect::<Result<_>>()?;
+    let (f, s, d) = res.iter().fold((0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+    Ok(json!({"shards": shards.len(), "frames": f, "enemy_shown": s, "dropped": d,
+              "dropped_frac": if s > 0 { d as f64 / s as f64 } else { 0.0 }}))
+}
+
 pub fn run(cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Scan { install, replays, out, workers, port, max_replays } => {
@@ -774,6 +904,10 @@ pub fn run(cmd: Cmd) -> Result<()> {
                                    skip_windows, workers, port, max_replays, val_every, shard_size, part, parts)?);
             Ok(())
         }
+        Cmd::Refog { input, out } => {
+            println!("{}", refog(&input, &out)?);
+            Ok(())
+        }
         Cmd::Probe { install, replay, vocab, player, fine_loops, step, max_loops, port } => {
             println!("{}", probe(&install, &replay, &vocab, player, fine_loops, step, max_loops, port)?);
             Ok(())
@@ -784,6 +918,54 @@ pub fn run(cmd: Cmd) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refog_mirrors_the_image_planes_and_drops_unseen_enemies() {
+        use gmsc2::{feature, plane, F, MAP, U};
+        let dir = std::env::temp_dir().join(format!("gm-refog-{}", std::process::id()));
+        let (src, dst) = (dir.join("in/s0"), dir.join("out"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&src).unwrap();
+        // one frame: the player sees map row 60 (as the unfixed converter stored it: the
+        // world row 3), an enemy at world row 3 (seen), one at world row 40 (not seen), one
+        // targeted at world row 40, an own unit at row 40; a resource bit at row 10
+        let mut bits = vec![0u8; MAP_FRAME_BYTES];
+        let set = |b: &mut Vec<u8>, i: usize| b[i / 8] |= 0x80 >> (i % 8);
+        for c in 0..MAP {
+            set(&mut bits, plane::VISIBLE * MAP * MAP + (MAP - 1 - 3) * MAP + c);
+        }
+        set(&mut bits, plane::RESOURCE * MAP * MAP + 10 * MAP + 5);
+        let mut units = vec![0u8; U * F];
+        let mut xy = vec![0u16; U * 2];
+        let mut mask = vec![0u8; U];
+        let mut put = |s: usize, alliance: u8, row: usize| {
+            units[s * F + feature::ALLIANCE] = alliance;
+            mask[s] = 1;
+            xy[s * 2] = (20 * 65536 / MAP) as u16;
+            xy[s * 2 + 1] = (row * 65536 / MAP + 100) as u16;
+        };
+        put(0, 0, 40);
+        put(200, 3, 3);
+        put(201, 3, 40);
+        put(202, 3, 40);
+        use gmshard::npy;
+        npy::write::<u8>(&src.join("obs.map_bits.npy"), &[1, MAP_FRAME_BYTES], &bits).unwrap();
+        npy::write::<u8>(&src.join("obs.unit_mask.npy"), &[1, U], &mask).unwrap();
+        npy::write::<u8>(&src.join("obs.units.npy"), &[1, U, F], &units).unwrap();
+        npy::write::<u16>(&src.join("obs.unit_xy.npy"), &[1, U, 2], &xy).unwrap();
+        npy::write::<i64>(&src.join("tgt.target_kind.npy"), &[1], &[2]).unwrap();
+        npy::write::<i64>(&src.join("tgt.target_unit.npy"), &[1], &[202]).unwrap();
+        std::fs::write(src.join("index.json"), "{}").unwrap();
+        let v = refog(&dir.join("in"), &dst).unwrap();
+        assert_eq!((v["enemy_shown"].as_u64(), v["dropped"].as_u64()), (Some(3), Some(1)));
+        let m = npy::read(&dst.join("s0/obs.unit_mask.npy")).unwrap().data;
+        assert_eq!((m[0], m[200], m[201], m[202]), (1, 1, 0, 1), "own kept, seen kept, unseen dropped, targeted kept");
+        let b = npy::read(&dst.join("s0/obs.map_bits.npy")).unwrap().data;
+        assert!(bit_at(&b, plane::VISIBLE * MAP * MAP + 3 * MAP + 7), "vision mirrored to world row 3");
+        assert!(bit_at(&b, plane::RESOURCE * MAP * MAP + 10 * MAP + 5), "resource plane untouched");
+        assert!(refog(&dst, &dir.join("again")).is_err(), "a repaired shard is refused");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn runs_cover_each_part_once_and_stay_put() {
