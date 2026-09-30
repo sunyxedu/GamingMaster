@@ -33,9 +33,10 @@
 #   HQ=1 (default)        ~420 M frames, ~0.7 TB    (train; val 0.5 % of it)
 #   HQ=0                  ~890 M frames, ~1.5 TB
 #   KEEP_PER_MILLE=100    a tenth of either: HQ=1 ~16 M hands, ~42 M frames, ~70 GB
-# For joint IL pretraining KEEP_PER_MILLE=100 is plenty and keeps GameShardDataset's
-# in-memory per-sample index (~120 B per sample and process: ~20 GB for the full
-# HQ corpus's ~160 M samples) small; the raw logs stay in RAW for a larger re-run.
+# GameShardDataset keeps 4 B per sample and process (measured 2026-09-30: 1.0 GB RSS for
+# 250 per mille, 1.5e8 frames / 5.7e7 samples; ~2.7 GB for the full HQ corpus), but opens
+# every shard's index at start-up: convert the full corpus with SHARD_SIZE=16384.  The raw
+# logs stay in RAW for a re-run.
 # About 45 000 hands / s per conversion pass on 12 cores (HQ adds a parsing pass), so
 # a few hours in all; the fetch is network-bound.
 set -euo pipefail
