@@ -59,3 +59,35 @@ def test_engine_beats_random_through_the_league(game):
     finally:
         league.release_all()
         pol.close()
+
+
+def test_egaroucid_beats_random_on_the_othello_env():
+    from training.arena_othello import default_engine
+    if not _have(default_engine()):
+        pytest.skip("no egaroucid")
+    from env.engine_policy import OthelloEnginePolicy
+    from env.league import scatter_rows
+
+    env = make_vec_env("othello", 4, seed=3)
+    pol = OthelloEnginePolicy(env, level=1)
+    rnd = RandomPolicy(env, seed=1)
+    league = League(env, {"engine": pol}, mirror_prob=0.0, seed=5)
+    try:
+        obs = env.reset(seed=11)
+        league.update(obs)
+        winner = torch.full((env.num_envs,), -1, dtype=torch.long)
+        ended = torch.zeros(env.num_envs, dtype=torch.bool)
+        for _ in range(300):
+            if not bool(obs.active.any()):
+                break
+            rows = league.learner_rows(obs).nonzero().squeeze(1)
+            la = scatter_rows(env.replay_actions(rnd(obs, rows)), rows, obs.n_rows) if rows.numel() else {}
+            obs, rew, done, info = env.step(league.act(obs, la))
+            winner = torch.where(done & ~ended, info["winner"].long(), winner)
+            ended |= done
+            league.update(obs)
+        assert bool(ended.all()) and pol.moves > 20
+        assert float(league.learner_score(winner).mean()) <= 0.25
+    finally:
+        league.release_all()
+        pol.close()

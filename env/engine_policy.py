@@ -264,3 +264,55 @@ class EnginePolicy:
 
     def close(self) -> None:
         self.engine.close()
+
+
+class OthelloEnginePolicy:
+    """Egaroucid at one ``level`` as a league opponent on env/vec_othello.py: the position
+    comes from the env's own bitboards (``black`` / ``white`` / ``mover``, seat 0 = black)
+    and goes to the arena's Egaroucid pool (training/arena_othello.py) as its ``setboard``
+    string; the reply square is ``place_idx`` (row * 8 + col).  A forced pass is answered
+    with ``passed``, as the env expects."""
+
+    def __init__(self, env, command: Optional[str] = None, *, level: int = 5):
+        from training import arena_othello as ao
+        from training.othello_probe import BLACK, WHITE
+
+        self.env, self.level, self._ao = env, int(level), ao
+        self._colour = (BLACK, WHITE)
+        argv, cwd = ao.egaroucid_command(os.path.expanduser(command or ao.default_engine()))
+        self.pool = ao.EgaroucidPool(argv, cwd, size=1)
+        self.name = f"egaroucid-L{self.level} {self.pool.version}"
+        self.go = f"level {self.level}"
+        self.moves = 0
+
+    def reset_streams(self, streams: Sequence[int]) -> None:
+        pass
+
+    def release_streams(self, streams: Sequence[int]) -> None:
+        pass
+
+    def __call__(self, obs, rows: torch.Tensor) -> Dict[str, torch.Tensor]:
+        ao, env = self._ao, self.env
+        rows = torch.as_tensor(rows, dtype=torch.long).reshape(-1)
+        out = {"place_idx": torch.zeros(len(rows), dtype=torch.long),
+               "passed": torch.zeros(len(rows), dtype=torch.bool)}
+        for i, r in enumerate(rows.tolist()):
+            if not bool(obs.active[r]):
+                continue
+            if bool(obs.forced[r]):
+                out["passed"][i] = True
+                continue
+            e = int(obs.env_id[r])
+            state = (int(env.black[e]), int(env.white[e]), self._colour[int(env.mover[e])])
+            legal = ao.OthelloRules().legal_moves(state)
+            mv = self.pool.best_move(ao.egaroucid_board(state), self.level,
+                                     [ao.square_name(m) for m in legal])
+            sq = ao.parse_square(mv)
+            if sq not in legal:
+                raise EngineError(f"egaroucid move {mv!r} is not legal here")
+            out["place_idx"][i] = sq
+            self.moves += 1
+        return out
+
+    def close(self) -> None:
+        self.pool.close()
