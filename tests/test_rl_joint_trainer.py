@@ -23,6 +23,7 @@ A tiny Stage-1 checkpoint is trained with the real train_multi_game (generals
   with the model on CUDA over gloo (the MIG-slice mode).
 """
 
+import json
 import math
 import os
 import socket
@@ -773,7 +774,7 @@ def test_eval_vs_init_and_alarm_fields(stage1):
 
     torch.manual_seed(0)
     out = train_rl_joint.main(_args(stage1, "rl_eval", "--iterations", "2", "--eval_every", "1",
-                                    "--eval_episodes", "4"))
+                                    "--eval_episodes", "4", "--trace_every", "1"))
     assert out["history"][0]["games"]["othello"]["vs_init_n"] == 0     # not at iteration 0
     rec = out["history"][1]
     for g in ("generals", "othello"):
@@ -782,3 +783,9 @@ def test_eval_vs_init_and_alarm_fields(stage1):
         assert row["timeout_rate"] == 0.0 or g == "generals"
         assert "alarm" not in row
     assert "stopped" not in rec and out["trainer"].stopped == {}
+    for g in ("generals", "othello"):         # --trace_every 1: one episode per game and iteration
+        tr = json.loads((stage1 / "rl_eval" / "traces" / f"{g}_it1.json").read_text())
+        assert tr["game"] == g and tr["steps"] and tr["steps"][-1]["done"]
+        assert all("applied" in st and "rewards" in st for st in tr["steps"])
+    gen = json.loads((stage1 / "rl_eval" / "traces" / "generals_it0.json").read_text())
+    assert "state" in gen["steps"][0]            # generals: the board after every step

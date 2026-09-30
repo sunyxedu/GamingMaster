@@ -339,6 +339,10 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="every N iterations each 2+-seat RL game plays the frozen --init network (the "
            "learner against it, seats drawn per episode; not trained on): vs_init in "
            "metrics.jsonl, the referee self-play reward cannot fool (0 = off)")
+    a("--trace_every", type=int, default=50,
+      help="every N iterations write one episode per RL game (env 0 of its first wave: per "
+           "step the seats to move, applied actions, rewards, done; generals also its board) to "
+           "SAVE_DIR/traces/GAME_itN.json for looking at what the policy actually does (0 = off)")
     a("--eval_episodes", type=int, default=32, help="episodes per game and evaluation (whole waves)")
     a("--entropy_lr", type=float, default=0.05)
     a("--entropy_mode", choices=("log", "linear"), default="log")
@@ -1328,9 +1332,43 @@ def alarm_reasons(row: Mapping[str, float], base_len: Optional[float], kl_budget
     return out
 
 
+def _plain(x: Any) -> Any:
+    """Tensors / arrays / nested dicts → JSON values."""
+    if torch.is_tensor(x):
+        return x.detach().cpu().tolist()
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    if isinstance(x, Mapping):
+        return {k: _plain(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_plain(v) for v in x]
+    return x
+
+
+def _trace_step(env: VecGameEnv, obs: VecObs, rew: torch.Tensor, done: torch.Tensor,
+                info: Mapping[str, Any]) -> Dict[str, Any]:
+    """Env 0's step for --trace_every: who moved, what was applied, the rewards."""
+    rows = (obs.env_id == 0).nonzero().squeeze(1)
+    act = rows[obs.active[rows].bool()]
+    step: Dict[str, Any] = {"to_play": _plain(obs.to_play[act]), "rewards": _plain(rew[0]),
+                            "done": bool(done[0])}
+    applied = info.get("applied")
+    if isinstance(applied, Mapping):
+        step["applied"] = {k: _plain(v[act]) for k, v in applied.items()
+                           if torch.is_tensor(v) and v.dim() >= 1 and v.shape[0] == obs.n_rows}
+    for k in ("winner", "truncated", "illegal"):
+        if k in info and torch.is_tensor(info[k]) and info[k].numel() == env.num_envs:
+            step[k] = _plain(info[k].reshape(-1)[0])
+    sub = getattr(env, "envs", None)
+    if sub and hasattr(sub[0], "get_state_snapshot"):
+        step["state"] = _plain(sub[0].get_state_snapshot())
+    return step
+
+
 def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: int,
                  max_steps: int, timeout_reward: Optional[float] = None,
-                 timeout_draw: bool = False) -> Tuple[List[Stream], WaveStats]:
+                 timeout_draw: bool = False,
+                 trace: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[Stream], WaveStats]:
     """Reset every env and play one lockstep wave to the end: the learner on
     its rows, the league's opponents on theirs.  Returns the learner's
     streams (episode rows it plays on) and episode statistics."""
@@ -1360,6 +1398,8 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
             nxt, rew, done, info = env.step(league.act(obs, la))
             rew, timed_out = apply_timeout(rew, done, info, timeout_reward, timeout_draw)
             st.timeouts += int(timed_out.sum())
+            if trace is not None and not (trace and trace[-1]["done"]):
+                trace.append(_trace_step(env, obs, rew, done, info))
             if rows.numel():
                 env_rows = obs.env_id[rows]
                 recs.append({
@@ -1971,6 +2011,7 @@ class JointRLTrainer:
             total = WaveStats()
             wave = 0
             t_game = time.time()
+            trace = [] if a.trace_every > 0 and it % a.trace_every == 0 else None
             while total.tokens < q:
                 opps = {"pool": r.pool_policy} if r.pool_policy is not None else {}
                 league = League(r.env, opps, mirror_prob=r.mirror_prob,
@@ -1980,7 +2021,10 @@ class JointRLTrainer:
                                            seed=derive_seed(a.seed, self.rank, it, gi, 3, wave),
                                            max_steps=a.max_wave_steps,
                                            timeout_reward=r.timeout_reward,
-                                           timeout_draw=g in TIMEOUT_IS_DRAW)
+                                           timeout_draw=g in TIMEOUT_IS_DRAW,
+                                           trace=trace if wave == 0 else None)
+                if wave == 0 and trace is not None:
+                    self._write_trace(g, it, league, trace)
                 r.streams.extend(streams)
                 for k in ("episodes", "steps", "tokens", "ep_len_sum", "score_sum", "score_n",
                           "mirror", "timeouts"):
@@ -2504,6 +2548,19 @@ class JointRLTrainer:
         if self.iteration % a.log_every == 0:
             self._log(rec)
         return rec
+
+    def _write_trace(self, g: str, it: int, league: League, trace: List[Dict[str, Any]]) -> None:
+        """--trace_every: env 0's episode of this wave (the rank that rolled the game)."""
+        d = os.path.join(self.args.save_dir, "traces")
+        os.makedirs(d, exist_ok=True)
+        rec = {"game": g, "iteration": it, "rank": self.rank,
+               "learner_seats": _plain(league.learner_seats[0]),
+               "opponent": league.opponent_of[0] if hasattr(league, "opponent_of") else None,
+               "steps": trace}
+        path = os.path.join(d, f"{g}_it{it}.json")
+        with open(f"{path}.tmp", "w") as f:
+            json.dump(rec, f, default=str)
+        os.replace(f"{path}.tmp", path)
 
     def _eval_vs_init(self, g: str, r: GameRL, it: int, gi: int) -> WaveStats:
         """The learner against the frozen --init network on the game's env (no mirror
