@@ -343,6 +343,15 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="every N iterations write one episode per RL game (env 0 of its first wave: per "
            "step the seats to move, applied actions, rewards, done; generals also its board) to "
            "SAVE_DIR/traces/GAME_itN.json for looking at what the policy actually does (0 = off)")
+    a("--eval_engine", action="append", default=[], metavar="GAME=CMD",
+      help="also play this UCI / USI engine at every --eval_every (env/engine_policy.py: "
+           "chess / chess_variants Stockfish, xiangqi Pikafish, shogi YaneuraOu): vs_engine, a "
+           "referee of fixed strength")
+    a("--eval_engine_go", action="append", default=[], metavar="GAME=LIMIT",
+      help="the engine's search limit per move (default 'go nodes 20000')")
+    a("--alarm_engine_drop", type=float, default=0.15,
+      help="... or (every --eval_every) its score against --eval_engine this far below its "
+           "first engine evaluation")
     a("--eval_episodes", type=int, default=32, help="episodes per game and evaluation (whole waves)")
     a("--entropy_lr", type=float, default=0.05)
     a("--entropy_mode", choices=("log", "linear"), default="log")
@@ -1573,7 +1582,7 @@ class ReplayStream:
 
 DIAG_KEYS = (
     "tokens_v", "tokens_p", "streams", "episodes", "ep_len_sum", "score_sum", "score_n",
-    "mirror", "timeouts", "vs_init_sum", "vs_init_n", "ret_sum",
+    "mirror", "timeouts", "vs_init_sum", "vs_init_n", "vs_engine_sum", "vs_engine_n", "ret_sum",
     "ent_sum", "ent_n", "kl_sum", "kl_n", "pol_n", "approx_kl_sum", "clip_frac_sum",
     "is_weight_sum", "is_trunc_sum", "vloss_sum", "vloss_n",
     "canary_oldmu_sum", "canary_ratio_sum", "canary_n",
@@ -1764,6 +1773,8 @@ class JointRLTrainer:
                            ("--game_weight", self.game_weight),
                            ("--timeout_reward", _pairs(a.timeout_reward, str, "R")),
                            ("--shaping", _pairs(a.shaping, str, "S")),
+                           ("--eval_engine", _pairs(a.eval_engine, str, "CMD")),
+                           ("--eval_engine_go", _pairs(a.eval_engine_go, str, "LIMIT")),
                            ("--shaping_anneal", _pairs(a.shaping_anneal, str, "ITERS")),
                            ("--share", _pairs(a.share, float, "W")),
                            ("--entropy_coef", _pairs(a.entropy_coef, float, "C")),
@@ -1898,6 +1909,11 @@ class JointRLTrainer:
         self.alarm_base_len: Dict[str, float] = {}
         self.alarm_streak: Dict[str, int] = {}
         self.vs_init_streak: Dict[str, int] = {}
+        self.eval_engine = _pairs(a.eval_engine, str, "CMD")
+        self.eval_engine_go = _pairs(a.eval_engine_go, str, "LIMIT")
+        self._engines: Dict[str, Any] = {}
+        self.engine_base: Dict[str, float] = {}
+        self.engine_streak: Dict[str, int] = {}
         self.stopped: Dict[str, str] = {}
         #: per-game cost of the latest iteration that played it (rollout + learner
         #: seconds, rank-identical): the --rl_placement split assignment
@@ -2037,6 +2053,9 @@ class JointRLTrainer:
             if a.eval_every > 0 and it > 0 and it % a.eval_every == 0 and r.env.n_seats >= 2:
                 ev = self._eval_vs_init(g, r, it, gi)
                 diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n)
+                if g in self.eval_engine:
+                    ev = self._eval_against(g, r, it, gi, "engine", self._engine(g))
+                    diag.add(g, vs_engine_sum=ev.score_sum, vs_engine_n=ev.score_n)
             diag.add(g, episodes=total.episodes, ep_len_sum=total.ep_len_sum,
                      score_sum=total.score_sum, score_n=total.score_n, mirror=total.mirror,
                      timeouts=total.timeouts,
@@ -2567,11 +2586,25 @@ class JointRLTrainer:
         episodes, seats drawn per episode), whole waves until --eval_episodes; the
         streams are dropped.  Self-play reward can rise from an exploit of the learner's
         own play; a policy that got worse against where it started cannot hide it here."""
-        a = self.args
         ref = NetworkPolicy(self.ref[g], act_steps=self.depth, device=self.device)
+        return self._eval_against(g, r, it, gi, "init", ref)
+
+    def _engine(self, g: str):
+        """The game's --eval_engine (one process per rank, kept for the run)."""
+        if g not in self._engines:
+            from env.engine_policy import EnginePolicy
+            self._engines[g] = EnginePolicy(self.rl[g].env, self.eval_engine[g],
+                                            go=self.eval_engine_go.get(g, "go nodes 20000"))
+            self.log(f"[eval] {g}: engine {self._engines[g].name} ({self._engines[g].go})")
+        return self._engines[g]
+
+    def _eval_against(self, g: str, r: GameRL, it: int, gi: int, name: str, opp) -> WaveStats:
+        """The learner against the fixed policy ``opp`` (no mirror episodes, seats drawn
+        per episode), whole waves until --eval_episodes; the streams are dropped."""
+        a = self.args
         total, wave = WaveStats(), 0
         while total.episodes < a.eval_episodes:
-            league = League(r.env, {"init": ref}, mirror_prob=0.0,
+            league = League(r.env, {name: opp}, mirror_prob=0.0,
                             seed=derive_seed(a.seed, self.rank, it, gi, 4, wave))
             _, st = collect_wave(r.env, league, r.actor,
                                  seed=derive_seed(a.seed, self.rank, it, gi, 5, wave),
@@ -2605,9 +2638,20 @@ class JointRLTrainer:
                 self.vs_init_streak[g] = self.vs_init_streak.get(g, 0) + 1 if low else 0
                 if low:
                     why.append(f"score vs the --init network {vi:.3f} < {a.alarm_vs_init}")
+            ve = row.get("vs_engine", float("nan"))
+            if math.isfinite(ve) and row.get("vs_engine_n", 0) >= a.alarm_min_episodes:
+                if g not in self.engine_base:
+                    self.engine_base[g] = ve
+                elif a.alarm_engine_drop > 0:
+                    low = ve < self.engine_base[g] - a.alarm_engine_drop
+                    self.engine_streak[g] = self.engine_streak.get(g, 0) + 1 if low else 0
+                    if low:
+                        why.append(f"score vs the engine {ve:.3f} < its first evaluation "
+                                   f"{self.engine_base[g]:.3f} - {a.alarm_engine_drop}")
             if why:
                 row["alarm"] = "; ".join(why)
-            if why and max(self.alarm_streak[g], self.vs_init_streak.get(g, 0)) >= a.alarm_patience:
+            if why and max(self.alarm_streak[g], self.vs_init_streak.get(g, 0),
+                           self.engine_streak.get(g, 0)) >= a.alarm_patience:
                 self.stopped[g] = f"iteration {self.iteration}: " + "; ".join(why)
                 self.log(f"[alarm] {g}: RL stopped ({self.stopped[g]}) — its quota is 0 from "
                          f"now on; inspect its replays / fixed-opponent results before resuming "
@@ -2659,6 +2703,8 @@ class JointRLTrainer:
                     ep_len=diag.mean(g, "ep_len_sum", "episodes"),
                     timeout_rate=diag.mean(g, "timeouts", "episodes"),
                     vs_init=diag.mean(g, "vs_init_sum", "vs_init_n"), vs_init_n=d["vs_init_n"],
+                    vs_engine=diag.mean(g, "vs_engine_sum", "vs_engine_n"),
+                    vs_engine_n=d["vs_engine_n"],
                     shaping=float(getattr(self.rl[g].env, "shaping", 0.0)),
                     score=diag.mean(g, "score_sum", "score_n"),
                     ret=diag.mean(g, "ret_sum", "tokens_v"),
@@ -2729,6 +2775,7 @@ class JointRLTrainer:
                 "alarm_base_len": dict(self.alarm_base_len),
                 "alarm_streak": dict(self.alarm_streak), "stopped": dict(self.stopped),
                 "vs_init_streak": dict(self.vs_init_streak),
+                "engine_base": dict(self.engine_base), "engine_streak": dict(self.engine_streak),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -2879,6 +2926,8 @@ class JointRLTrainer:
         self.alarm_base_len = dict(st.get("alarm_base_len", {}))
         self.alarm_streak = dict(st.get("alarm_streak", {}))
         self.vs_init_streak = dict(st.get("vs_init_streak", {}))
+        self.engine_base = dict(st.get("engine_base", {}))
+        self.engine_streak = dict(st.get("engine_streak", {}))
         self.stopped = dict(st.get("stopped", {}))
         for g, why in self.stopped.items():
             self.log(f"[resume] {g}: RL stays stopped ({why})")
