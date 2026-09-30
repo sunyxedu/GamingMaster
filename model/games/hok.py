@@ -82,6 +82,26 @@ ACTION_KEYS = ("button_idx",) + tuple(f"{h}_idx" for h in ARG_HEADS)
 _OWN_HERO, _ENEMY_HERO = 0, 1
 _ENEMY_SOLDIERS = (7, 8, 9, 10)
 _ENEMY_TOWERS = (13, 14)
+#: Fog of war.  The gamecore's per-player feature vector keeps enemy-hero columns live while
+#: the enemy is out of sight (docs problems log 119: counterfactual gamecore runs, a labelled
+#: self-play run and the Hokoff shards each showed a different set, 30+ columns in all).
+#: Column 251 is an exact visibility flag (1e-4 ⇔ hidden; 40 % of the Hokoff frames); while
+#: it says hidden, the whole enemy-hero slice but the flag is zeroed — in the encoder, so IL
+#: shards, replay and the RL environment are masked alike.
+HIDDEN_FLAG_DIM = 251
+HIDDEN_FLAG_VALUE = 1e-4
+ENEMY_HERO = slice(235, 470)
+
+
+def mask_hidden_enemy(x: torch.Tensor) -> torch.Tensor:
+    """``x`` [..., 705] with the enemy hero's columns (but the flag) zeroed where it is hidden."""
+    hidden = (x[..., HIDDEN_FLAG_DIM] - HIDDEN_FLAG_VALUE).abs() < 1e-6
+    if not bool(hidden.any()):
+        return x
+    keep = torch.ones(x.shape[-1], dtype=x.dtype, device=x.device)
+    keep[ENEMY_HERO] = 0
+    keep[HIDDEN_FLAG_DIM] = 1
+    return torch.where(hidden.unsqueeze(-1), x * keep, x)
 
 
 @dataclass
@@ -116,7 +136,7 @@ class HokEncoder(ObservationEncoder):
         B, T, F = x.shape
         if F != N_FEATURES:
             raise ValueError(f"hok features have {F} columns, expected {N_FEATURES}")
-        x = x.to(self.slot_embed.dtype)
+        x = mask_hidden_enemy(x.float()).to(self.slot_embed.dtype)
         tokens = []
         for kind, start, width, count in SEGMENTS:
             seg = x[..., start:start + width * count].reshape(B, T, count, width)

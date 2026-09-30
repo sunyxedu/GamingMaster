@@ -181,3 +181,18 @@ def test_train_multi_game_learns_hok_shards_in_chunks(tmp_path):
         "--max_len", "64", "--il_legal_mask", "--save_dir", str(tmp_path / "ck"),
         "--override", *[f"{k}={v}" for k, v in TINY.items()]])
     assert (tmp_path / "ck" / "multi_final.pt").is_file()
+
+
+def test_hidden_enemy_columns_are_masked():
+    from model.games.hok import ENEMY_HERO, HIDDEN_FLAG_DIM, N_FEATURES, mask_hidden_enemy
+    x = torch.rand(2, 3, N_FEATURES) + 0.5
+    x[0, 1, HIDDEN_FLAG_DIM] = 1e-4                       # enemy out of sight in one frame
+    y = mask_hidden_enemy(x)
+    enemy = [i for i in range(N_FEATURES)[ENEMY_HERO] if i != HIDDEN_FLAG_DIM]
+    assert (y[0, 1, enemy] == 0).all()
+    others = [i for i in range(N_FEATURES) if i not in enemy]
+    assert torch.equal(y[0, 1, others], x[0, 1, others])  # the flag and the other entities stay
+    visible = torch.ones(2, 3, dtype=torch.bool)
+    visible[0, 1] = False
+    assert torch.equal(y[visible], x[visible])
+    assert torch.equal(mask_hidden_enemy(x[1:]), x[1:])
