@@ -59,8 +59,11 @@ def test_format_check_reads_the_head(tmp_path):
     d = str(tmp_path / "a")
     _shard(d, [2])
     assert _is_gm_shard(d)
-    with open(os.path.join(d, "index.json"), "w") as fh:     # format not first: full parse
-        json.dump({"game": "toy", "format": "gm-shard.v1"}, fh)
+    with open(os.path.join(d, "index.json"), "w") as fh:     # after scalars: still the head
+        fh.write('{"converter_version":2,"format":"gm-shard.v1","game":"toy"}')
+    assert _is_gm_shard(d)
+    with open(os.path.join(d, "index.json"), "w") as fh:     # after a nested value: full parse
+        json.dump({"meta": {"format": "x"}, "format": "gm-shard.v1"}, fh)
     assert _is_gm_shard(d)
     with open(os.path.join(d, "index.json"), "w") as fh:
         fh.write('{"format": "other"}')

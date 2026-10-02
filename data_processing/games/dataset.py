@@ -240,16 +240,29 @@ def find_gm_shards(data_dir: str) -> List[str]:
                   if _is_gm_shard(os.path.dirname(p)))
 
 
+#: index.json's head up to its top-level "format": only plain scalar keys before it (the Rust
+#: writers put "format" first or after "converter_version")
+_FORMAT_HEAD = None
+
+
 def _is_gm_shard(path: str) -> bool:
     """Whether ``path/index.json`` is a gm-shard index: its "format" from the file's head
-    (the Rust writer puts it first; a full index can be megabytes), else the whole file."""
+    (a full index can be megabytes), else from a fresh head sidecar, else the whole file."""
     import json
     import re
+    global _FORMAT_HEAD
+    if _FORMAT_HEAD is None:
+        _FORMAT_HEAD = re.compile(r'\s*\{(?:\s*"\w+"\s*:\s*(?:-?\d+|"[^"\\]*")\s*,)*'
+                                  r'\s*"format"\s*:\s*"([^"\\]*)"')
     try:
         with open(os.path.join(path, "index.json")) as fh:
-            m = re.match(r'\s*\{\s*"format"\s*:\s*"([^"\\]*)"', fh.read(256))
+            m = _FORMAT_HEAD.match(fh.read(512))
             if m:
                 return m.group(1) == GM_SHARD_FORMAT
+            hp = os.path.join(path, HEAD_SIDECAR)
+            if os.path.exists(hp) and os.stat(hp).st_mtime >= os.fstat(fh.fileno()).st_mtime:
+                with open(hp) as h:
+                    return json.load(h).get("format") == GM_SHARD_FORMAT
             fh.seek(0)
             return json.load(fh).get("format") == GM_SHARD_FORMAT
     except (OSError, ValueError):
