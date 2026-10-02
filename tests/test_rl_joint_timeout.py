@@ -134,3 +134,23 @@ def test_engine_alarm_is_relative_to_the_first_engine_evaluation():
         JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": ve}}})
     assert "score vs the engine" in t.stopped["chess"]
 
+
+
+def test_engine_baseline_is_taken_on_the_first_iteration_too():
+    """--eval_at_start: iteration 0's engine score (the IL policy) is the baseline, although
+    that record only sets the episode-length baseline and is not judged otherwise."""
+    from types import SimpleNamespace
+
+    from training.train_rl_joint import JointRLTrainer
+    t = SimpleNamespace(
+        args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
+                             alarm_engine_drop=0.15, alarm_patience=2, alarm_min_episodes=8),
+        rl_games=["chess"], kl_budget={"chess": 0.03}, alarm_base_len={}, alarm_streak={},
+        vs_init_streak={}, engine_base={}, engine_streak={}, stopped={}, iteration=0,
+        log=lambda m: None)
+    base = {"episodes": 16, "timeout_rate": 0.0, "ep_len": 100.0, "kl": 0.01}
+    JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": 0.40, "vs_engine_n": 32}}})
+    assert t.engine_base == {"chess": 0.40} and t.alarm_base_len == {"chess": 100.0}
+    for ve in (0.20, 0.21):
+        JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": ve, "vs_engine_n": 32}}})
+    assert "score vs the engine" in t.stopped["chess"]

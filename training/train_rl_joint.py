@@ -355,6 +355,10 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="... or (every --eval_every) its score against --eval_engine this far below its "
            "first engine evaluation")
     a("--eval_episodes", type=int, default=32, help="episodes per game and evaluation (whole waves)")
+    a("--eval_at_start", action=argparse.BooleanOptionalAction, default=True,
+      help="also play the --eval_engine engines at iteration 0 (the IL policy itself, so the "
+           "engine alarm and run comparisons start from its score; vs_init is skipped there, "
+           "the learner being the --init network)")
     a("--entropy_lr", type=float, default=0.05)
     a("--entropy_mode", choices=("log", "linear"), default="log")
     a("--entropy_min", type=float, default=1e-5)
@@ -2053,9 +2057,11 @@ class JointRLTrainer:
                     raise RuntimeError(f"{g}: a wave of {r.env.num_envs} envs produced no "
                                        f"learner tokens")
             stats[g] = total
-            if a.eval_every > 0 and it > 0 and it % a.eval_every == 0 and r.env.n_seats >= 2:
+            evaluate = a.eval_every > 0 and it % a.eval_every == 0 and r.env.n_seats >= 2
+            if evaluate and it > 0:
                 ev = self._eval_vs_init(g, r, it, gi)
                 diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n)
+            if evaluate and (it > 0 or a.eval_at_start):
                 if g in self.eval_engine and g not in self._engine_failed:
                     try:
                         ev = self._eval_against(g, r, it, gi, "engine", self._engine(g))
@@ -2648,6 +2654,11 @@ class JointRLTrainer:
             row = rec["games"].get(g, {})
             if g in self.stopped or row.get("episodes", 0) < a.alarm_min_episodes:
                 continue
+            ve = row.get("vs_engine", float("nan"))
+            first_engine = (g not in self.engine_base and math.isfinite(ve)
+                            and row.get("vs_engine_n", 0) >= a.alarm_min_episodes)
+            if first_engine:            # the baseline, also on the first (unjudged) iteration
+                self.engine_base[g] = ve
             if g not in self.alarm_base_len and math.isfinite(row.get("ep_len", float("nan"))):
                 self.alarm_base_len[g] = float(row["ep_len"])
                 continue
@@ -2662,11 +2673,9 @@ class JointRLTrainer:
                 self.vs_init_streak[g] = self.vs_init_streak.get(g, 0) + 1 if low else 0
                 if low:
                     why.append(f"score vs the --init network {vi:.3f} < {a.alarm_vs_init}")
-            ve = row.get("vs_engine", float("nan"))
-            if math.isfinite(ve) and row.get("vs_engine_n", 0) >= a.alarm_min_episodes:
-                if g not in self.engine_base:
-                    self.engine_base[g] = ve
-                elif a.alarm_engine_drop > 0:
+            if math.isfinite(ve) and row.get("vs_engine_n", 0) >= a.alarm_min_episodes \
+                    and not first_engine:
+                if a.alarm_engine_drop > 0:
                     low = ve < self.engine_base[g] - a.alarm_engine_drop
                     self.engine_streak[g] = self.engine_streak.get(g, 0) + 1 if low else 0
                     if low:
