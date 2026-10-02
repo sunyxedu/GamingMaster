@@ -106,6 +106,51 @@ GM_SHARD_FORMAT = "gm-shard.v1"   # directories written by the Rust converters (
 VALUE_TARGET_BOUND = 1.0          # |tgt["value"]| ≤ this for every converter (see above)
 
 
+#: Per-shard sidecars next to ``index.json`` (scripts/build_shard_index.py): the index without
+#: its per-sample list and every sample's frame count.  A dataset's start-up only needs these —
+#: the full index (hundreds of bytes per sample: start, length, record meta) is parsed when a
+#: shard is first read.  Used only while at least as new as index.json.
+HEAD_SIDECAR = "index.head.json"
+LENGTHS_SIDECAR = "index.lengths.npy"
+
+
+def shard_header(path: str) -> Tuple[Dict, np.ndarray]:
+    """``(index without "samples" + "n_samples", lengths int32 [n])`` of a gm-shard
+    directory: from its sidecars when they are fresh, else from index.json."""
+    import json
+    idx = os.path.join(path, "index.json")
+    hp, lp = os.path.join(path, HEAD_SIDECAR), os.path.join(path, LENGTHS_SIDECAR)
+    try:
+        t = os.stat(idx).st_mtime
+        if os.stat(hp).st_mtime >= t and os.stat(lp).st_mtime >= t:
+            with open(hp) as fh:
+                head = json.load(fh)
+            lengths = np.load(lp)
+            if head.get("format") == GM_SHARD_FORMAT and len(lengths) == head.get("n_samples"):
+                return head, lengths
+    except (OSError, ValueError):
+        pass
+    with open(idx) as fh:
+        index = json.load(fh)
+    samples = index.pop("samples")
+    index["n_samples"] = len(samples)
+    return index, np.asarray([int(x["length"]) for x in samples], dtype=np.int32)
+
+
+def write_shard_sidecars(path: str) -> int:
+    """Write (atomically) the sidecars of one gm-shard directory; returns its sample count."""
+    import json
+    head, lengths = shard_header(path)
+    tmp = f".tmp-{os.getpid()}"
+    with open(os.path.join(path, HEAD_SIDECAR + tmp), "w") as fh:
+        json.dump(head, fh)
+    with open(os.path.join(path, LENGTHS_SIDECAR + tmp), "wb") as fh:
+        np.save(fh, lengths.astype(np.int32))
+    os.replace(os.path.join(path, LENGTHS_SIDECAR + tmp), os.path.join(path, LENGTHS_SIDECAR))
+    os.replace(os.path.join(path, HEAD_SIDECAR + tmp), os.path.join(path, HEAD_SIDECAR))
+    return int(head["n_samples"])
+
+
 class GmShard:
     """One ``gm-shard.v1`` directory (``index.json`` + ``obs.*.npy`` / ``tgt.*.npy``).
 
@@ -196,9 +241,16 @@ def find_gm_shards(data_dir: str) -> List[str]:
 
 
 def _is_gm_shard(path: str) -> bool:
+    """Whether ``path/index.json`` is a gm-shard index: its "format" from the file's head
+    (the Rust writer puts it first; a full index can be megabytes), else the whole file."""
     import json
+    import re
     try:
         with open(os.path.join(path, "index.json")) as fh:
+            m = re.match(r'\s*\{\s*"format"\s*:\s*"([^"\\]*)"', fh.read(256))
+            if m:
+                return m.group(1) == GM_SHARD_FORMAT
+            fh.seek(0)
             return json.load(fh).get("format") == GM_SHARD_FORMAT
     except (OSError, ValueError):
         return False
@@ -363,20 +415,25 @@ class GameShardDataset(Dataset):
         """Shard dict for a .pt file or a gm-shard directory. ``header_only``
         returns keys/meta/counts without materialising gm-shard samples."""
         if os.path.isdir(path):
-            sh = GmShard(path)
-            head = {"format_version": FORMAT_VERSION, "game": sh.game,
-                    "converter_version": sh.index.get("converter_version", 1),
-                    "meta": sh.index.get("meta") or {}, "n_samples": len(sh), "_gm": sh}
-            if header_only:
-                names = list(sh.index["tensors"])
+            if header_only:         # the sidecars when fresh: no per-sample index parsed
+                index, lengths = shard_header(path)
+                game = index["game"]
+                head = {"format_version": FORMAT_VERSION, "game": game,
+                        "converter_version": index.get("converter_version", 1),
+                        "meta": index.get("meta") or {}, "n_samples": int(index["n_samples"])}
+                names = list(index["tensors"])
                 obs_keys = frozenset(n.split(".", 1)[1] for n in names if n.startswith("obs."))
-                exp = _expander(sh.game)
+                exp = _expander(game)
                 if exp is not None:
                     raw_names = [n.split(".", 1)[1] for n in names if n.startswith("raw.")]
                     obs_keys = obs_keys | exp[1](raw_names)
                 head["_keys"] = (obs_keys, frozenset(n.split(".", 1)[1] for n in names if n.startswith("tgt.")))
-                head["_lengths"] = [int(x["length"]) for x in sh.index["samples"]]
-            return head
+                head["_lengths"] = lengths
+                return head
+            sh = GmShard(path)
+            return {"format_version": FORMAT_VERSION, "game": sh.game,
+                    "converter_version": sh.index.get("converter_version", 1),
+                    "meta": sh.index.get("meta") or {}, "n_samples": len(sh), "_gm": sh}
         shard = torch.load(path, map_location="cpu", weights_only=False)
         shard["n_samples"] = len(shard["samples"])
         return shard
