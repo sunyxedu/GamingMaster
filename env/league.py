@@ -655,8 +655,14 @@ class League:
 
     def __init__(self, env: VecGameEnv, opponents: Optional[Mapping[str, Policy]] = None, *,
                  opponent_weights: Optional[Mapping[str, float]] = None,
-                 mirror_prob: float = 1.0, learner_seat: Optional[int] = None, seed: int = 0):
+                 mirror_prob: float = 1.0, learner_seat: Optional[int] = None, seed: int = 0,
+                 balanced_seats: bool = False, seat_offset: int = 0):
         self.env = env
+        # balanced_seats: env i's k-th non-mirror episode puts the learner in seat (i + k) mod S
+        # instead of a random seat — an evaluation's seats split evenly (32 random draws put
+        # the learner on one side 19:13 easily, and the side decides a lot in go / othello)
+        self.balanced_seats = bool(balanced_seats)
+        self._seat_offset = int(seat_offset)       # e.g. the wave: odd env counts alternate
         self.opponents: Dict[str, Policy] = dict(opponents or {})
         names = list(self.opponents)
         w = dict(opponent_weights or {n: 1.0 for n in names})
@@ -673,6 +679,7 @@ class League:
         self._alloc(env.num_envs)
 
     def _alloc(self, n: int) -> None:
+        self._seat_turn = [getattr(self, "_seat_offset", 0)] * n
         self.learner_seats = torch.ones(n, self.env.n_seats, dtype=torch.bool)
         self.opponent_of: List[Optional[str]] = [None] * n
         self.opponent_snapshot: List[Optional[int]] = [None] * n
@@ -698,8 +705,13 @@ class League:
             self.learner_seats[i] = True
             self.opponent_of[i] = None
             return
-        seat = (self.learner_seat if self.learner_seat is not None
-                else int(torch.randint(S, (1,), generator=self._gen)))
+        if self.learner_seat is not None:
+            seat = self.learner_seat
+        elif self.balanced_seats:
+            seat = (i + self._seat_turn[i]) % S
+            self._seat_turn[i] += 1
+        else:
+            seat = int(torch.randint(S, (1,), generator=self._gen))
         name = self._names[int(torch.multinomial(self._weights, 1, generator=self._gen))]
         self.learner_seats[i] = False
         self.learner_seats[i, seat] = True

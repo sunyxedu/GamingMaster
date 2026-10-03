@@ -2778,8 +2778,9 @@ class JointRLTrainer:
         a = self.args
         total, wave = WaveStats(), 0
         while total.episodes < a.eval_episodes:
-            league = League(r.env, {name: opp}, mirror_prob=0.0,
-                            seed=derive_seed(a.seed, self.rank, it, gi, 4, wave))
+            # seats balanced within every wave (env i: the learner in seat (i + wave) mod S)
+            league = League(r.env, {name: opp}, mirror_prob=0.0, balanced_seats=True,
+                            seat_offset=wave, seed=derive_seed(a.seed, self.rank, it, gi, 4, wave))
             _, st = collect_wave(r.env, league, r.actor,
                                  seed=derive_seed(a.seed, self.rank, it, gi, 5, wave),
                                  max_steps=a.max_wave_steps, timeout_reward=r.timeout_reward,
