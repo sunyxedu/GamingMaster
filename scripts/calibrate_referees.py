@@ -20,12 +20,12 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def settings(E: str):
+def settings(E: str, nodes=(), workers: int = 1):
     """game -> [(label, factory(env) -> policy)], weakest first."""
     from env.engine_policy import BackgammonEnginePolicy, EnginePolicy, OthelloEnginePolicy
 
     def uci(cmd, go, **opt):
-        return lambda env: EnginePolicy(env, cmd, go=go, options=opt or None)
+        return lambda env: EnginePolicy(env, cmd, go=go, options=opt or None, workers=workers)
 
     kg = (f"{E}/bin/katago gtp -model {E}/nets/katago/kata1-b18c384nbt-s9996604416-d4316597426.bin.gz "
           f"-human-model {E}/nets/katago/b18c384nbt-humanv0.bin.gz "
@@ -33,21 +33,36 @@ def settings(E: str):
     kg_opt = "maxVisits=1,logDir=,delayMoveScale=0,delayMoveMax=0,allowResignation=false,numSearchThreads=1"
     sf, pk, yo = f"{E}/bin/stockfish", f"{E}/bin/pikafish", f"{E}/bin/yaneuraou"
     yo_opt = dict(Threads="1", USI_Hash="64")
+    def noisy(make, eps):
+        if eps <= 0:
+            return make
+        from env.engine_policy import NoisyReferee
+        return lambda env: NoisyReferee(make(env), env, eps, seed=7)
+
+    def sfe(e):
+        return uci(sf, "go nodes 20000", UCI_LimitStrength="true", UCI_Elo=str(e), Threads="1", Hash="16")
+
+    ot = lambda lv: (lambda env: OthelloEnginePolicy(env, f"{E}/bin/egaroucid", level=lv, workers=workers))
+    if nodes:       # --nodes N[@eps],...: a finer grid for the node-limited engines only
+        return {"xiangqi": [(f"pikafish nodes {n} eps {p}",
+                             noisy(uci(pk, f"go nodes {n}", Threads="1", Hash="16"), p)) for n, p in nodes],
+                "shogi": [(f"yaneuraou nodes {n} eps {p}", noisy(uci(yo, f"go nodes {n}", **yo_opt), p))
+                          for n, p in nodes]}
     return {
-        "chess": [(f"stockfish elo {e}", uci(sf, "go nodes 20000", UCI_LimitStrength="true",
-                                              UCI_Elo=str(e), Threads="1", Hash="16"))
-                  for e in (1320, 1600, 2000, 2400)],
-        "chess_variants": [(f"stockfish elo {e}", uci(sf, "go nodes 20000", UCI_LimitStrength="true",
-                                                       UCI_Elo=str(e), Threads="1", Hash="16"))
-                           for e in (1320, 1600, 2000)],
-        "xiangqi": [(f"pikafish nodes {n}", uci(pk, f"go nodes {n}", Threads="1", Hash="16"))
-                    for n in (1, 10, 100, 1000)],
-        "shogi": [(f"yaneuraou nodes {n}", uci(yo, f"go nodes {n}", **yo_opt))
-                  for n in (1, 10, 100, 1000)],
-        "othello": [(f"egaroucid level {lv}", lambda env, lv=lv: OthelloEnginePolicy(env, f"{E}/bin/egaroucid", level=lv))
-                    for lv in (0, 1, 2, 3)],
-        "go": [(f"katago human {p}", lambda env, p=p: EnginePolicy(env, kg + f"humanSLProfile={p}," + kg_opt))
-               for p in ("rank_10k", "rank_5k", "rank_1d", "rank_5d")],
+        "chess": [(f"stockfish elo 1320 eps {p}", noisy(sfe(1320), p)) for p in (0.5, 0.25)]
+                 + [(f"stockfish elo {e}", sfe(e)) for e in (1320, 1800)],
+        "xiangqi": [(f"pikafish nodes 1 eps {p}", noisy(uci(pk, "go nodes 1", Threads="1", Hash="16"), p))
+                    for p in (0.5, 0.25)]
+                   + [(f"pikafish nodes {n}", uci(pk, f"go nodes {n}", Threads="1", Hash="16"))
+                      for n in (1, 100)],
+        "shogi": [(f"yaneuraou nodes 1 eps {p}", noisy(uci(yo, "go nodes 1", **yo_opt), p))
+                  for p in (0.5, 0.25)]
+                 + [(f"yaneuraou nodes {n}", uci(yo, f"go nodes {n}", **yo_opt)) for n in (1, 100)],
+        "othello": [(f"egaroucid level 1 eps {p}", noisy(ot(1), p)) for p in (0.5, 0.25)]
+                   + [("egaroucid level 1", ot(1))],
+        "go": [(f"katago human {p}", lambda env, p=p: EnginePolicy(env, kg + f"humanSLProfile={p}," + kg_opt,
+                                                                    workers=workers))
+               for p in ("rank_15k", "rank_8k", "rank_3k", "rank_2d")],
         "backgammon": [(f"gnubg plies {p}", lambda env, p=p: BackgammonEnginePolicy(env, None, plies=p))
                        for p in (0,)],
     }
@@ -64,6 +79,8 @@ def main() -> None:
     ap.add_argument("--engines", default=os.path.expanduser("~/gm-engines"))
     ap.add_argument("--only", default="", help="substring filter on the setting labels")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--workers", type=int, default=4, help="engine processes per referee")
+    ap.add_argument("--nodes", default="", help="N[@eps],...: node limits (and noise) for xiangqi / shogi only")
     a = ap.parse_args()
     import torch
     if a.threads:
@@ -78,7 +95,9 @@ def main() -> None:
     t0 = time.time()
     tr = JointRLTrainer(parse_args(argv))
     print(f"trainer up in {time.time() - t0:.0f} s ({a.init})", flush=True)
-    table = settings(a.engines)
+    grid = [(int(x.split("@")[0]), float(x.split("@")[1]) if "@" in x else 0.0)
+            for x in a.nodes.split(",") if x]
+    table = settings(a.engines, grid, a.workers)
     for gi, g in enumerate(tr.rl_games):
         for label, make in table.get(g, []):
             if a.only and a.only not in label:

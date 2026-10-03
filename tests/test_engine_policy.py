@@ -160,3 +160,74 @@ def test_league_merges_opponent_actions_of_another_dtype():
         obs, _, _, _ = env.step(league.act(obs, la))
         league.update(obs)
     league.release_all()
+
+
+def test_noisy_referee_mixes_engine_and_random_moves():
+    """NoisyReferee: eps=1 never asks the engine; eps=0.5 plays whole games through the
+    League, the engine answering only its rows."""
+    from training.arena_othello import default_engine
+    if not _have(default_engine()):
+        pytest.skip("no egaroucid")
+    from env.engine_policy import NoisyReferee, OthelloEnginePolicy
+    from env.league import scatter_rows
+
+    for eps in (1.0, 0.5):
+        env = make_vec_env("othello", 4, seed=3)
+        base = OthelloEnginePolicy(env, level=1)
+        pol = NoisyReferee(base, env, eps, seed=2)
+        rnd = RandomPolicy(env, seed=1)
+        league = League(env, {"engine": pol}, mirror_prob=0.0, seed=5)
+        try:
+            obs = env.reset(seed=11)
+            league.update(obs)
+            ended = torch.zeros(env.num_envs, dtype=torch.bool)
+            for _ in range(300):
+                if not bool(obs.active.any()):
+                    break
+                rows = league.learner_rows(obs).nonzero().squeeze(1)
+                la = scatter_rows(env.replay_actions(rnd(obs, rows)), rows, obs.n_rows) \
+                    if rows.numel() else {}
+                obs, _, done, _ = env.step(league.act(obs, la))
+                ended |= done
+                league.update(obs)
+            assert bool(ended.all())
+            assert (pol.moves == 0) if eps == 1.0 else (pol.moves > 0)
+        finally:
+            league.release_all()
+            pol.close()
+
+
+def test_engine_pool_answers_each_row_with_its_own_position():
+    """workers=3: the rows of a call are split over three engine processes (threads); every
+    answer is a legal move of ITS row's position (rows are in different positions), so no
+    answer lands on another row.  (Moves can differ from one engine's: Stockfish keeps its
+    hash table between searches.)"""
+    if not _have(ENGINES["chess"]):
+        pytest.skip(f"no {ENGINES['chess']}")
+    from env.engine_policy import EnginePolicy, action_keys, replay_state
+    from env.league import scatter_rows
+
+    env = make_vec_env("chess", 6, seed=3)
+    obs = env.reset(seed=11)
+    rnd = RandomPolicy(env, seed=1)
+    for _ in range(5):                          # a few random plies: different positions
+        rows = obs.active.nonzero().squeeze(1)
+        obs, _, _, _ = env.step(scatter_rows(env.replay_actions(rnd(obs, rows)), rows, obs.n_rows))
+    rows = obs.active.nonzero().squeeze(1)
+    many = EnginePolicy(env, ENGINES["chess"], go="go nodes 200", options={"Threads": "1"}, workers=3)
+    try:
+        b = many(obs, rows)
+        assert len(many.engines) == 3 and many.moves == len(rows)
+        keys = tuple(env.action_keys)
+        seen = set()
+        for i, r in enumerate(rows.tolist()):
+            e, seat = int(obs.env_id[r]), int(obs.to_play[r])
+            state, _ = replay_state("chess", env.trajectory(e), "")
+            legal = {tuple(action_keys(state, seat, a, keys)[k] for k in keys)
+                     for a in state.legal_actions(seat)}
+            got = tuple(int(b[k][i]) for k in keys)
+            assert got in legal, (i, got)
+            seen.add(tuple(sorted(legal)))
+        assert len(seen) > 1                    # the rows really were in different positions
+    finally:
+        many.close()

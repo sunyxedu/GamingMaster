@@ -251,7 +251,7 @@ class EnginePolicy:
 
     def __init__(self, env, command: str, *, go: str = "go nodes 20000",
                  options: Optional[Mapping[str, str]] = None, protocol: Optional[str] = None,
-                 config: str = ""):
+                 config: str = "", workers: int = 1):
         game = env.game
         self.env, self.go, self.config = env, go, config
         self.protocol = protocol or PROTOCOL.get(game)
@@ -259,12 +259,23 @@ class EnginePolicy:
             raise ValueError(f"no engine protocol for {game!r} (pass protocol=)")
         self.start = start_string(game, config)
         self.keys = tuple(env.action_keys)
-        if self.protocol == "gtp":
-            size = int(np.sqrt(len(gm.State(game, config).legal_actions(0)) - 1))
-            self.engine = GtpEngine(command, board_size=size)
-        else:
-            self.engine = UciEngine(command, self.protocol, options)
-        self.name = self.engine.name
+        # ``workers`` engine processes, one thread each: the games of a wave are answered in
+        # parallel (one process answering them in turn made a 32-game KataGo evaluation take
+        # most of an hour)
+        self.engines: List = []
+        try:
+            for _ in range(max(1, int(workers))):
+                if self.protocol == "gtp":
+                    size = int(np.sqrt(len(gm.State(game, config).legal_actions(0)) - 1))
+                    self.engines.append(GtpEngine(command, board_size=size))
+                else:
+                    self.engines.append(UciEngine(command, self.protocol, options))
+        except BaseException:
+            self.close()
+            raise
+        self.engine = self.engines[0]
+        self.name = self.engine.name + (f" x{len(self.engines)}" if len(self.engines) > 1 else "")
+        self._pool = None
         self.moves = 0
 
     def reset_streams(self, streams: Sequence[int]) -> None:
@@ -273,25 +284,43 @@ class EnginePolicy:
     def release_streams(self, streams: Sequence[int]) -> None:
         pass
 
+    def _solve(self, engine, e: int, seat: int, traj) -> Dict[str, int]:
+        state, moves = replay_state(self.env.game, traj, self.config)
+        to, back = TO_ENGINE.get(self.env.game), FROM_ENGINE.get(self.env.game)
+        mv = engine.best_move(self.start, [to(m) for m in moves] if to else moves, self.go)
+        mv = back(mv) if back else mv
+        return action_keys(state, seat, action_of(state, seat, mv), self.keys)
+
     def __call__(self, obs, rows: torch.Tensor) -> Dict[str, torch.Tensor]:
         rows = torch.as_tensor(rows, dtype=torch.long).reshape(-1)
         out = {k: torch.zeros(len(rows), dtype=torch.long) for k in self.keys}
-        for i, r in enumerate(rows.tolist()):
-            if not bool(obs.active[r]):
-                continue
-            e, seat = int(obs.env_id[r]), int(obs.to_play[r])
-            state, moves = replay_state(self.env.game, self.env.trajectory(e), self.config)
-            to, back = TO_ENGINE.get(self.env.game), FROM_ENGINE.get(self.env.game)
-            mv = self.engine.best_move(self.start, [to(m) for m in moves] if to else moves, self.go)
-            mv = back(mv) if back else mv
-            a = action_of(state, seat, mv)
-            for k, v in action_keys(state, seat, a, self.keys).items():
+        tasks = [(i, int(obs.env_id[r]), int(obs.to_play[r]))
+                 for i, r in enumerate(rows.tolist()) if bool(obs.active[r])]
+        tasks = [(i, e, seat, self.env.trajectory(e)) for i, e, seat in tasks]
+        W = min(len(self.engines), len(tasks))
+        if W <= 1:
+            results = [(i, self._solve(self.engine, e, seat, tr)) for i, e, seat, tr in tasks]
+        else:
+            if self._pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+                self._pool = ThreadPoolExecutor(len(self.engines))
+
+            def run(j):     # engine j answers every W-th task, in order
+                return [(i, self._solve(self.engines[j], e, seat, tr))
+                        for i, e, seat, tr in tasks[j::W]]
+            results = [x for part in self._pool.map(run, range(W)) for x in part]
+        for i, keys in results:
+            for k, v in keys.items():
                 out[k][i] = v
-            self.moves += 1
+        self.moves += len(results)
         return out
 
     def close(self) -> None:
-        self.engine.close()
+        if getattr(self, "_pool", None) is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
+        for eng in getattr(self, "engines", []):
+            eng.close()
 
 
 class OthelloEnginePolicy:
@@ -304,14 +333,15 @@ class OthelloEnginePolicy:
     #: League asks only for this policy's own moves (it keeps no stream state)
     acts_only = True
 
-    def __init__(self, env, command: Optional[str] = None, *, level: int = 5):
+    def __init__(self, env, command: Optional[str] = None, *, level: int = 5, workers: int = 1):
         from training import arena_othello as ao
         from training.othello_probe import BLACK, WHITE
 
         self.env, self.level, self._ao = env, int(level), ao
         self._colour = (BLACK, WHITE)
         argv, cwd = ao.egaroucid_command(os.path.expanduser(command or ao.default_engine()))
-        self.pool = ao.EgaroucidPool(argv, cwd, size=1)
+        self.pool = ao.EgaroucidPool(argv, cwd, size=max(1, int(workers)))   # thread-safe
+        self._threads = None
         self.name = f"egaroucid-L{self.level} {self.pool.version}"
         self.go = f"level {self.level}"
         self.moves = 0
@@ -327,6 +357,7 @@ class OthelloEnginePolicy:
         rows = torch.as_tensor(rows, dtype=torch.long).reshape(-1)
         out = {"place_idx": torch.zeros(len(rows), dtype=torch.long),
                "passed": torch.zeros(len(rows), dtype=torch.bool)}
+        tasks = []
         for i, r in enumerate(rows.tolist()):
             if not bool(obs.active[r]):
                 continue
@@ -334,18 +365,35 @@ class OthelloEnginePolicy:
                 out["passed"][i] = True
                 continue
             e = int(obs.env_id[r])
-            state = (int(env.black[e]), int(env.white[e]), self._colour[int(env.mover[e])])
+            tasks.append((i, (int(env.black[e]), int(env.white[e]), self._colour[int(env.mover[e])])))
+
+        def solve(task):
+            i, state = task
             legal = ao.OthelloRules().legal_moves(state)
             mv = self.pool.best_move(ao.egaroucid_board(state), self.level,
                                      [ao.square_name(m) for m in legal])
             sq = ao.parse_square(mv)
             if sq not in legal:
                 raise EngineError(f"egaroucid move {mv!r} is not legal here")
+            return i, sq
+
+        n = len(self.pool.engines)
+        if n > 1 and len(tasks) > 1:        # the pool hands each request a free process
+            if self._threads is None:
+                from concurrent.futures import ThreadPoolExecutor
+                self._threads = ThreadPoolExecutor(n)
+            results = list(self._threads.map(solve, tasks))
+        else:
+            results = [solve(t) for t in tasks]
+        for i, sq in results:
             out["place_idx"][i] = sq
-            self.moves += 1
+        self.moves += len(results)
         return out
 
     def close(self) -> None:
+        if getattr(self, "_threads", None) is not None:
+            self._threads.shutdown(wait=True)
+            self._threads = None
         self.pool.close()
 
 
@@ -521,3 +569,55 @@ class BackgammonEnginePolicy:
     def close(self) -> None:
         if self.proc.poll() is None:
             self.proc.kill()
+
+
+class NoisyReferee:
+    """A referee made weaker by chance: each of its decisions is, with probability ``eps``,
+    a uniformly random legal action (the env's ``random_actions``) instead of the wrapped
+    policy's — a strength knob below an engine's weakest setting (the IL network scored 0.09
+    against Egaroucid's lowest level).  The rows are split first, so the engine is asked
+    only for the rows it plays.  Not for backgammon (gnubg plans a whole turn; a random
+    sub-move leaves the plan unreachable)."""
+
+    acts_only = True
+
+    def __init__(self, base, env, eps: float, seed: int = 0):
+        if not 0.0 <= eps <= 1.0:
+            raise ValueError(f"eps must be in [0, 1], got {eps}")
+        if env.game == "backgammon" and eps > 0:
+            raise ValueError("NoisyReferee: backgammon's engine plans whole turns")
+        self.base, self.env, self.eps = base, env, float(eps)
+        self.generator = torch.Generator().manual_seed(seed)
+        self.name = f"{getattr(base, 'name', type(base).__name__)} eps={eps:g}"
+        self.go = f"{getattr(base, 'go', '')} eps={eps:g}".strip()
+
+    @property
+    def moves(self) -> int:
+        return getattr(self.base, "moves", 0)
+
+    def reset_streams(self, streams: Sequence[int]) -> None:
+        self.base.reset_streams(streams)
+
+    def release_streams(self, streams: Sequence[int]) -> None:
+        self.base.release_streams(streams)
+
+    def __call__(self, obs, rows: torch.Tensor) -> Dict[str, torch.Tensor]:
+        rows = torch.as_tensor(rows, dtype=torch.long).reshape(-1)
+        rnd = torch.rand(len(rows), generator=self.generator) < self.eps
+        parts = []
+        if bool((~rnd).any()):
+            parts.append((~rnd, self.base(obs, rows[~rnd])))
+        if bool(rnd.any()):
+            parts.append((rnd, dict(self.env.random_actions(obs.select(rows[rnd]),
+                                                            generator=self.generator))))
+        out: Dict[str, torch.Tensor] = {}
+        for mask, acts in parts:
+            for k, v in acts.items():
+                v = torch.as_tensor(v)
+                if k not in out:
+                    out[k] = v.new_zeros((len(rows),) + tuple(v.shape[1:]))
+                out[k][mask.to(v.device)] = v.to(out[k].dtype)
+        return out
+
+    def close(self) -> None:
+        self.base.close()

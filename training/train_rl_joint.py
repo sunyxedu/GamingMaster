@@ -352,6 +352,13 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="a UCI / USI option of the game's --eval_engine, sent before its first game "
            "(repeatable), e.g. chess=UCI_LimitStrength=true chess=UCI_Elo=1800: the "
            "referee's strength, so the IL policy scores well inside (0, 1) against it")
+    a("--eval_engine_workers", type=int, default=4,
+      help="engine processes per referee (UCI / USI / GTP engines and Egaroucid), one thread "
+           "each: a wave's games are answered in parallel")
+    a("--eval_engine_eps", action="append", default=[], metavar="GAME=P",
+      help="the referee plays a uniformly random legal action with probability P per "
+           "decision (env/engine_policy.NoisyReferee): a strength below the engine's weakest "
+           "setting (not backgammon)")
     a("--eval_engine_go", action="append", default=[], metavar="GAME=LIMIT",
       help="the engine's search limit per move (default 'go nodes 20000'; othello: 'level N', "
            "default 5; backgammon: 'plies N', default 0)")
@@ -1966,6 +1973,10 @@ class JointRLTrainer:
         self.vs_init_streak: Dict[str, int] = {}
         self.eval_engine = _pairs(a.eval_engine, str, "CMD")
         self.eval_engine_go = _pairs(a.eval_engine_go, str, "LIMIT")
+        self.eval_engine_eps = _pairs(a.eval_engine_eps, float, "P")
+        for g in self.eval_engine_eps:
+            if g not in self.eval_engine:
+                raise SystemExit(f"--eval_engine_eps {g}: {g} has no --eval_engine")
         self.eval_engine_opt: Dict[str, Dict[str, str]] = {}
         for item in a.eval_engine_opt:
             g, sep, kv = item.partition("=")
@@ -1976,6 +1987,7 @@ class JointRLTrainer:
                 raise SystemExit(f"--eval_engine_opt {item!r}: {g} has no --eval_engine")
             self.eval_engine_opt.setdefault(g, {})[k] = v
         self._engines: Dict[str, Any] = {}
+        self._learn_mem: Dict[str, float] = {}     # per game: its learner pass's peak GPU GB
         self._engine_failed: Dict[str, str] = {}
         self.engine_base: Dict[str, float] = {}
         self.engine_streak: Dict[str, int] = {}
@@ -2543,6 +2555,8 @@ class JointRLTrainer:
                     for g in G:
                         idx = plan[m].get(g, [])
                         ss = self.rl[g].streams
+                        if self.device.type == "cuda":
+                            torch.cuda.reset_peak_memory_stats(self.device)
                         mg = self._mark()
                         chunks = self._forward_chunks(g, idx)
                         for chunk in chunks:
@@ -2560,6 +2574,9 @@ class JointRLTrainer:
                         if probe is not None:
                             diag.add(g, gn_rl=probe.delta_norm(), gn_rl_n=1)
                         marks.append(("learn_s", g, mg, self._mark()))
+                        if self.device.type == "cuda":     # the game's learner-pass peak
+                            peak = torch.cuda.max_memory_allocated(self.device) / 1e9
+                            self._learn_mem[g] = max(self._learn_mem.get(g, 0.0), peak)
                         diag.add(g, learn_fwd=len(chunks))
                     t1 = self._clock()
                     t["rl"] += t1 - t0
@@ -2732,12 +2749,19 @@ class JointRLTrainer:
                 from env.engine_policy import OthelloEnginePolicy
                 lim = self.eval_engine_go.get(g, "level 5").split()
                 self._engines[g] = OthelloEnginePolicy(self.rl[g].env, self.eval_engine[g] or None,
-                                                       level=int(lim[-1]))
+                                                       level=int(lim[-1]),
+                                                       workers=self.args.eval_engine_workers)
             else:
                 from env.engine_policy import EnginePolicy
                 self._engines[g] = EnginePolicy(self.rl[g].env, self.eval_engine[g],
                                                 go=self.eval_engine_go.get(g, "go nodes 20000"),
-                                                options=self.eval_engine_opt.get(g) or None)
+                                                options=self.eval_engine_opt.get(g) or None,
+                                                workers=self.args.eval_engine_workers)
+            eps = self.eval_engine_eps.get(g, 0.0)
+            if eps > 0:
+                from env.engine_policy import NoisyReferee
+                self._engines[g] = NoisyReferee(self._engines[g], self.rl[g].env, eps,
+                                                seed=derive_seed(self.args.seed, self.rank, 6))
             self.log(f"[eval] {g}: engine {self._engines[g].name} ({self._engines[g].go})")
         return self._engines[g]
 
@@ -2832,6 +2856,8 @@ class JointRLTrainer:
 
     def _record(self, diag: Diag, ep: Dict[str, Any], quotas: Dict[str, int],
                 rel: Optional[torch.Tensor], dt: float, t_roll: float) -> Dict[str, Any]:
+        mem = self._learn_mem
+        self._learn_mem = {}
         rec: Dict[str, Any] = {"iteration": self.iteration, "time": dt, "rollout_time": t_roll,
                                "phase_time": {k: round(v, 2) for k, v in
                                               getattr(self, "_phase_t", {}).items()},
@@ -2885,6 +2911,8 @@ class JointRLTrainer:
                     row["replay_kl"] = diag.mean(g, "rkl_sum", "rkl_n")
             if self.n_moe[0]:
                 row["load_entropy"] = diag.load_entropy(g)
+            if g in mem:
+                row["learn_mem_gb"] = round(mem[g], 2)
             if row:
                 rec["games"][g] = row
         return rec
@@ -2895,6 +2923,9 @@ class JointRLTrainer:
         self.log(f"[it {rec['iteration']}/{self.args.iterations}] gnorm={f(rec['gnorm'])} "
                  f"dropped={rec['dropped']} nonfinite={rec['nonfinite']} "
                  f"moe_load_cv={f(rec['moe_load_cv'])} "
+                 + (f"mem_peak={max(r.get('learn_mem_gb', 0) for r in rec['games'].values()):.1f}G "
+                    if any("learn_mem_gb" in r for r in rec["games"].values()) else "")
+                 +
                  f"({rec['time']:.1f}s, rollouts {rec['rollout_time']:.1f}s"
                  + "".join(f", {k} {v:.1f}s" for k, v in rec.get("phase_time", {}).items())
                  + ")")
