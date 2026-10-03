@@ -13,10 +13,15 @@ from env.vec_game import make_vec_env
 
 ENGINES = {g: os.path.expanduser(f"~/gm-engines/bin/{e}")
            for g, e in (("chess", "stockfish"), ("xiangqi", "pikafish"), ("shogi", "yaneuraou"))}
-_KG_NET = os.path.expanduser("~/gm-engines/nets/katago/kata1-b18c384nbt-s9996604416-d4316597426.bin.gz")
+# the small b10 net's raw policy when installed (~0.06 s a move on one CPU thread; the b18 net
+# at 4 visits took minutes per game on a CPU-only machine), else the b18 net
+_KG_SMALL = os.path.expanduser("~/gm-engines/nets/katago/kata1-b10c128-s1141046784-d204142634.txt.gz")
+_KG_NET = _KG_SMALL if os.path.exists(_KG_SMALL) else os.path.expanduser(
+    "~/gm-engines/nets/katago/kata1-b18c384nbt-s9996604416-d4316597426.bin.gz")
 _KG_CFG = os.environ.get("GM_KATAGO_GTP_CFG", "/opt/homebrew/share/katago/configs/gtp_example.cfg")
 ENGINES["go"] = (f"{os.path.expanduser('~/gm-engines/bin/katago')} gtp -model {_KG_NET} -config {_KG_CFG} "
-                 f"-override-config maxVisits=4,logDir=,logAllGTPCommunication=false,numSearchThreads=1")
+                 f"-override-config maxVisits={1 if _KG_NET == _KG_SMALL else 4},logDir=,"
+                 f"logAllGTPCommunication=false,numSearchThreads=1")
 
 
 def _have(cmd):

@@ -14,8 +14,9 @@ silent substitute).
 
 Games: whatever gmrules game prints UCI-style moves and a FEN / SFEN start (``str(State)``):
 chess and chess_variants (Stockfish), xiangqi (Pikafish), shogi (YaneuraOu, ``usi``); and go
-over GTP (KataGo: ``clear_board`` / ``boardsize`` / ``komi 7.5`` / chinese rules — area
-scoring, no suicide, like ours — then every ``play`` and ``genmove``; the strength is the
+over GTP (KataGo: ``clear_board`` / ``boardsize`` / ``komi 7.5`` / our rules, :data:`GTP_RULES`
+— area scoring, positional superko, no suicide, no friendly pass — then every ``play`` and
+``genmove``; the strength is the
 command's, e.g. ``katago gtp -model M -config C -override-config maxVisits=64``; a
 ``resign`` is played as a pass, since our rules have no resignation and the game is scored).
 """
@@ -54,6 +55,11 @@ def _xq_shift(move: str, d: int) -> str:
 #: our move string → the engine's, and back (xiangqi: gmrules ranks 1-10, the UCI
 #: engines' (Pikafish, Fairy-Stockfish) 0-9)
 TO_ENGINE = {"xiangqi": lambda m: _xq_shift(m, -1)}
+#: the GTP engine's rules, set to what the env scores: gmrules go is Tromp-Taylor area with
+#: positional superko and suicide illegal (KataGo's own "tromp-taylor" allows suicide, which
+#: our env rejects; "chinese" lets it pass with dead stones left on the board, which
+#: Tromp-Taylor counts as alive)
+GTP_RULES = {"go": "koPOSITIONALscoreAREAtaxNONEsui0"}
 FROM_ENGINE = {"xiangqi": lambda m: _xq_shift(m, +1)}
 
 
@@ -267,7 +273,8 @@ class EnginePolicy:
             for _ in range(max(1, int(workers))):
                 if self.protocol == "gtp":
                     size = int(np.sqrt(len(gm.State(game, config).legal_actions(0)) - 1))
-                    self.engines.append(GtpEngine(command, board_size=size))
+                    self.engines.append(GtpEngine(command, board_size=size,
+                                                  rules=GTP_RULES.get(game, "chinese")))
                 else:
                     self.engines.append(UciEngine(command, self.protocol, options))
         except BaseException:

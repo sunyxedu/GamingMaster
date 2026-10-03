@@ -31,6 +31,12 @@ def settings(E: str, nodes=(), workers: int = 1):
           f"-human-model {E}/nets/katago/b18c384nbt-humanv0.bin.gz "
           f"-config {E}/katago/v1.18.1-eigenavx2/gtp_human5k_example.cfg -override-config ")
     kg_opt = "maxVisits=1,logDir=,delayMoveScale=0,delayMoveMax=0,allowResignation=false,numSearchThreads=1"
+    small = {"b10": "kata1-b10c128-s1141046784-d204142634.txt.gz", "b6": "kata1-b6c96-s95425792-d14091095.txt.gz"}
+
+    def kgs(n):
+        return (f"{E}/bin/katago gtp -model {E}/nets/katago/{small[n]} "
+                f"-config {E}/katago/v1.18.1-eigenavx2/default_gtp.cfg -override-config "
+                "maxVisits=1,logDir=,numSearchThreads=1,allowResignation=false,ponderingEnabled=false")
     sf, pk, yo = f"{E}/bin/stockfish", f"{E}/bin/pikafish", f"{E}/bin/yaneuraou"
     yo_opt = dict(Threads="1", USI_Hash="64")
     def noisy(make, eps):
@@ -60,9 +66,11 @@ def settings(E: str, nodes=(), workers: int = 1):
                  + [(f"yaneuraou nodes {n}", uci(yo, f"go nodes {n}", **yo_opt)) for n in (1, 100)],
         "othello": [(f"egaroucid level 1 eps {p}", noisy(ot(1), p)) for p in (0.5, 0.25)]
                    + [("egaroucid level 1", ot(1))],
-        "go": [(f"katago human {p}", lambda env, p=p: EnginePolicy(env, kg + f"humanSLProfile={p}," + kg_opt,
-                                                                    workers=workers))
-               for p in ("rank_15k", "rank_8k", "rank_3k", "rank_2d")],
+        # KataGo's raw policy (1 visit) of a small network: ~0.06 s a move on one CPU thread
+        # (the b18 human net: ~1.7 s, a 32-game evaluation ~45 min)
+        "go": [(f"katago {n} v1 eps {p}", noisy(
+                    lambda env, n=n: EnginePolicy(env, kgs(n), workers=workers), p))
+               for n, p in (("b10", 0.0), ("b10", 0.25), ("b10", 0.5), ("b6", 0.0))],
         "backgammon": [(f"gnubg plies {p}", lambda env, p=p: BackgammonEnginePolicy(env, None, plies=p))
                        for p in (0,)],
     }
