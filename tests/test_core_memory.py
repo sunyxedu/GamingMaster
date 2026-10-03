@@ -81,7 +81,10 @@ def test_forward_equals_chained_steps_and_is_causal():
     obs2["board_seq"][:, 4:] = 1.0 - obs2["board_seq"][:, 4:]
     with torch.no_grad():
         full2 = net(obs2)
-    assert torch.equal(full2["value"][:, :4], full["value"][:, :4])
+    # equal up to float rounding: the MoE layers batch tokens per expert, so the later frames'
+    # routing changes the row counts (and so the kernels' summation order) of the earlier
+    # frames' expert matmuls — bitwise equality held on one CPU, not on another
+    torch.testing.assert_close(full2["value"][:, :4], full["value"][:, :4], rtol=1e-6, atol=1e-7)
     # the memory carries history: an earlier change moves a later output
     obs3 = {k: v.clone() for k, v in obs.items()}
     obs3["board_seq"][:, 0] = 1.0 - obs3["board_seq"][:, 0]

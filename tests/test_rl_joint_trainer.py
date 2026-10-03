@@ -881,3 +881,35 @@ def test_value_warmup_trains_no_policy(stage1):
 
     assert decoder_grad(0) > 0
     assert decoder_grad(5) == 0
+
+
+def test_value_core_grad_zero_trains_the_value_head_only():
+    """value_core_grad=0: a value loss reaches the value head and nothing upstream (the core,
+    the encoder); 1 (default) reaches both; 0.5 halves the core's gradient."""
+    from model.multi_game import build_multi_game
+
+    torch.manual_seed(0)
+    net = build_multi_game(["othello"], CORE)["othello"]
+    x = {"board_seq": torch.rand(2, 3, 3, 8, 8)}
+
+    net.eval()                              # a deterministic forward (no routing noise)
+
+    def grads(s):
+        net.zero_grad(set_to_none=True)
+        net.value_core_grad = s
+        torch.manual_seed(1)
+        out = net(x, act_steps=1)
+        v = out["value_logits"].float().square().mean() if "value_logits" in out else out["value"].square().mean()
+        v.backward()
+        head = sum(float(p.grad.abs().sum()) for p in net.value_head.parameters() if p.grad is not None)
+        core = [p.grad.clone() if p.grad is not None else torch.zeros_like(p)
+                for n, p in net.named_parameters() if not n.startswith("value_head")]
+        return head, core
+
+    h1, c1 = grads(1.0)
+    h0, c0 = grads(0.0)
+    hh, ch = grads(0.5)
+    assert h1 > 0 and h0 > 0 and abs(h0 - h1) < 1e-6 * max(1.0, h1)
+    assert sum(float(g.abs().sum()) for g in c1) > 0
+    assert sum(float(g.abs().sum()) for g in c0) == 0
+    assert all(torch.allclose(a * 0.5, b, atol=1e-7) for a, b in zip(c1, ch))

@@ -34,6 +34,28 @@ from model.config import ModelConfig
 from model.games.base import ActionDecoder, ObservationEncoder
 
 
+class _GradScale(torch.autograd.Function):
+    """Identity forward; the gradient scaled by ``s`` on the way back."""
+
+    @staticmethod
+    def forward(ctx, x, s: float):
+        ctx.s = s
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, g):
+        return g * ctx.s, None
+
+
+def grad_scale(x: torch.Tensor, s: float) -> torch.Tensor:
+    """``x`` whose gradient is scaled by ``s`` (1: unchanged, 0: detached)."""
+    if s == 1.0:
+        return x
+    if s == 0.0:
+        return x.detach()
+    return _GradScale.apply(x, s)
+
+
 class GameNetwork(nn.Module):
     """Generic two-stage network parameterised by a game adapter.
 
@@ -476,15 +498,20 @@ class GameNetwork(nn.Module):
             game_out, hl_out, ll_out, B=B, T=T, t0=t0, legal=legal, labels=labels,
             **self._decode_ctx(obs),
         )
+        # ``value_core_grad`` (a runtime attribute, train_rl_joint --value_core_grad): the
+        # value loss's gradient into the shared core and encoder, scaled (0: the value head
+        # alone learns, on the core's features) — fitting RL returns through the core moved
+        # the POLICY (KL 0.02-0.035 and rising entropy in five value-only iterations)
+        hl_v = grad_scale(hl_out, float(getattr(self, "value_core_grad", 1.0)))
         if isinstance(self.value_head, HLGaussValueHead):
             # One MLP pass: expose the logits for the HL-Gauss CE loss and
             # derive the scalar from them for every other consumer.
-            v_logits = self.value_head.logits(hl_out)
+            v_logits = self.value_head.logits(hl_v)
             out["value_logits"] = v_logits.reshape(B, T, -1)
             out["value"] = (self.value_head
                             .expectation_from_logits(v_logits).reshape(B, T))
         else:
-            out["value"] = self.value_head(hl_out).reshape(B, T)
+            out["value"] = self.value_head(hl_v).reshape(B, T)
         out["q_halt"] = q_halt.reshape(B, T)
         if return_carry:
             out["carry"] = new_carry

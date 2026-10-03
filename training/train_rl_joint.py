@@ -302,6 +302,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--is_clip", type=float, default=1.0, help="truncation of π_old/μ (0 = untruncated)")
     a("--dual_clip", type=float, default=None)
     a("--value_coef", type=float, default=0.5)
+    a("--value_core_grad", type=float, default=1.0,
+      help="scale of the value loss's gradient into the shared core and the encoders (the "
+           "value head itself always learns): 0 = the value head fits on the core's "
+           "features alone — in bench v2 five value-only iterations already moved the policy "
+           "(KL 0.02-0.035 to the IL reference, entropy rising)")
     a("--value_clip", type=float, default=None)
     a("--value_loss", choices=("mse", "huber"), default="mse")
     a("--game_weight", action="append", default=[], metavar="GAME=W",
@@ -1789,6 +1794,8 @@ class JointRLTrainer:
         model = load_multi(a.init, device)
         self.model: MultiGameNetwork = model
         self.games = model.games
+        for g in model.games:               # --value_core_grad (GameNetwork.forward)
+            model[g].value_core_grad = float(a.value_core_grad)
         self.ref = load_multi(a.init, device).requires_grad_(False).eval()
         self.init_hash = module_fingerprint(self.ref)
         if self.dist_env.enabled:
