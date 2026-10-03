@@ -124,3 +124,39 @@ def test_gnubg_beats_random_on_the_backgammon_env():
     finally:
         league.release_all()
         pol.close()
+
+
+def test_league_merges_opponent_actions_of_another_dtype():
+    """The network samples shogi's Bernoulli heads (dropped / promoted) as Bool, an engine
+    policy answers Long: League.act merges both (the 2026-10-03 bench disabled the shogi
+    referee on 'Index put requires the source and destination dtypes match')."""
+    from env.league import scatter_rows
+
+    env = make_vec_env("shogi", 2, seed=3)
+    rnd = RandomPolicy(env, seed=1)
+
+    class LongStub:
+        acts_only = True
+
+        def reset_streams(self, streams):
+            pass
+
+        def release_streams(self, streams):
+            pass
+
+        def __call__(self, obs, rows):
+            return {k: v.long() for k, v in rnd(obs, rows).items()}
+
+    league = League(env, {"stub": LongStub()}, mirror_prob=0.0, seed=5)
+    obs = env.reset(seed=11)
+    league.update(obs)
+    for _ in range(6):
+        rows = league.learner_rows(obs).nonzero().squeeze(1)
+        la = {}
+        if rows.numel():
+            la = {k: (v.bool() if k in ("dropped", "promoted") else v)
+                  for k, v in env.replay_actions(rnd(obs, rows)).items()}
+            la = scatter_rows(la, rows, obs.n_rows)
+        obs, _, _, _ = env.step(league.act(obs, la))
+        league.update(obs)
+    league.release_all()

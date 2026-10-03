@@ -57,6 +57,32 @@ TO_ENGINE = {"xiangqi": lambda m: _xq_shift(m, -1)}
 FROM_ENGINE = {"xiangqi": lambda m: _xq_shift(m, +1)}
 
 
+def _spawn(argv: Sequence[str], cwd: Optional[str] = None, text: bool = True):
+    """An engine process with its stderr in a temporary file (read by :func:`_err_tail`
+    for error messages: why an engine did not start is otherwise lost)."""
+    import tempfile
+    err = tempfile.TemporaryFile(mode="w+b")
+    proc = subprocess.Popen(list(argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=err, text=text, bufsize=1, cwd=cwd)
+    proc._gm_err = err
+    return proc
+
+
+def _err_tail(proc, n: int = 600) -> str:
+    """The last ``n`` characters of a :func:`_spawn` process's stderr ('' if none)."""
+    err = getattr(proc, "_gm_err", None)
+    if err is None:
+        return ""
+    try:
+        err.flush()
+        size = err.seek(0, 2)
+        err.seek(max(0, size - n))
+        tail = err.read().decode(errors="replace").strip()
+    except (OSError, ValueError):
+        return ""
+    return f"; stderr: {tail!r}" if tail else ""
+
+
 class UciEngine:
     """One engine process over UCI or USI (``protocol``); ``options`` go out as
     ``setoption name K value V`` before the first game."""
@@ -67,9 +93,7 @@ class UciEngine:
             raise ValueError(f"protocol must be uci / usi, got {protocol!r}")
         self.protocol, self.timeout = protocol, float(timeout)
         argv = [os.path.expanduser(a) for a in shlex.split(command)]
-        self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, text=True, bufsize=1,
-                                     cwd=os.path.dirname(argv[0]) or None)
+        self.proc = _spawn(argv, cwd=os.path.dirname(argv[0]) or None)
         self.name = argv[0]
         self._send(protocol)
         for line in self._until(f"{protocol}ok"):
@@ -82,7 +106,7 @@ class UciEngine:
 
     def _send(self, line: str) -> None:
         if self.proc.poll() is not None:
-            raise EngineError(f"{self.name} exited ({self.proc.returncode})")
+            raise EngineError(f"{self.name} exited ({self.proc.returncode}){_err_tail(self.proc)}")
         self.proc.stdin.write(line + "\n")
         self.proc.stdin.flush()
 
@@ -99,7 +123,8 @@ class UciEngine:
                     return out
         finally:
             timer.cancel()
-        raise EngineError(f"{self.name}: no {prefix!r} (exited {self.proc.poll()}); last {out[-3:]}")
+        raise EngineError(f"{self.name}: no {prefix!r} (exited {self.proc.poll()}); last {out[-3:]}"
+                          f"{_err_tail(self.proc)}")
 
     def ready(self) -> None:
         self._send("isready")
@@ -127,14 +152,13 @@ class GtpEngine:
     def __init__(self, command: str, board_size: int = 19, komi: float = 7.5, rules: str = "chinese",
                  timeout: float = 300.0):
         argv = [os.path.expanduser(a) for a in shlex.split(command)]
-        self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        self.proc = _spawn(argv)
         self.timeout, self.size, self.komi, self.rules = float(timeout), board_size, komi, rules
         self.name = self._cmd("name") + " " + self._cmd("version")
 
     def _cmd(self, line: str) -> str:
         if self.proc.poll() is not None:
-            raise EngineError(f"gtp engine exited ({self.proc.returncode})")
+            raise EngineError(f"gtp engine exited ({self.proc.returncode}){_err_tail(self.proc)}")
         self.proc.stdin.write(line + "\n")
         self.proc.stdin.flush()
         timer = threading.Timer(self.timeout, self.proc.kill)
@@ -151,7 +175,8 @@ class GtpEngine:
         finally:
             timer.cancel()
         if not resp or resp[0][:1] not in "=?":
-            raise EngineError(f"gtp {line!r}: no response ({resp[:2]})")
+            raise EngineError(f"gtp {line!r}: no response ({resp[:2]}; exited {self.proc.poll()})"
+                              f"{_err_tail(self.proc)}")
         if resp[0].startswith("?"):
             raise EngineError(f"gtp {line!r}: {' '.join(resp)}")
         return " ".join([resp[0][1:].strip()] + resp[1:]).strip()
@@ -387,9 +412,7 @@ class BackgammonEnginePolicy:
         cmd = command or (f"uv run --no-project --python 3.12 --with gnubg==1.1.0a16 python "
                           f"{os.path.join(self.ROOT, 'scripts', 'reference', 'gnubg_bridge.py')} "
                           f"--plies {self.plies}")
-        self.proc = subprocess.Popen(shlex.split(os.path.expanduser(cmd)), stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                                     bufsize=1)
+        self.proc = _spawn(shlex.split(os.path.expanduser(cmd)))
         hello = self._ask({"op": "hello"})
         self.name = f"{hello.get('engine', 'gnubg')} {self.plies}-ply"
         self.go = f"{self.plies}-ply"
@@ -398,7 +421,7 @@ class BackgammonEnginePolicy:
 
     def _ask(self, req: Dict) -> Dict:
         if self.proc.poll() is not None:
-            raise EngineError(f"gnubg bridge exited ({self.proc.returncode})")
+            raise EngineError(f"gnubg bridge exited ({self.proc.returncode}){_err_tail(self.proc)}")
         self.proc.stdin.write(self._json.dumps(req) + "\n")
         self.proc.stdin.flush()
         timer = threading.Timer(self.timeout, self.proc.kill)
@@ -408,7 +431,7 @@ class BackgammonEnginePolicy:
         finally:
             timer.cancel()
         if not line:
-            raise EngineError("gnubg bridge: no reply")
+            raise EngineError(f"gnubg bridge: no reply (exited {self.proc.poll()}){_err_tail(self.proc)}")
         rep = self._json.loads(line)
         if "error" in rep:
             raise EngineError(f"gnubg bridge: {rep['error']} (request {req})")

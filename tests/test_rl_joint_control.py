@@ -396,3 +396,19 @@ def test_expert_load_entropy():
     loads = torch.tensor([[5.0, 5.0, 5.0, 5.0], [8.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
     h = expert_load_entropy(loads)
     assert h[0] == pytest.approx(1.0) and h[1] == pytest.approx(0.0) and math.isnan(h[2])
+
+
+def test_kl_beta_rises_faster_than_it_falls_and_keeps_its_floor():
+    """err_clip_up: β may double per update while KL ≥ 3x budget, fall only 10%;
+    min_beta = the initial β (train_rl_joint --kl_floor_init): no loosening at the start."""
+    ctl = AdaptiveKLBeta(["a"], 0.03, init=0.05, rate=0.5, err_clip=0.2, err_clip_up=2.0,
+                         min_beta={"a": 0.05}, max_beta=10.0)
+    ctl.update({"a": 0.0})
+    assert ctl["a"] == pytest.approx(0.05)          # floored, not 0.045
+    ctl.update({"a": 0.3})                          # 10x budget: e clipped at 2 -> x2
+    assert ctl["a"] == pytest.approx(0.10)
+    ctl.update({"a": 0.0})                          # back under: at most -10%
+    assert ctl["a"] == pytest.approx(0.09)
+    sym = AdaptiveKLBeta(["a"], 0.03, init=0.05, rate=0.5, err_clip=0.2)
+    sym.update({"a": 0.3})
+    assert sym["a"] == pytest.approx(0.055)         # the old symmetric +10%

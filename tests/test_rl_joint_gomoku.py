@@ -144,7 +144,7 @@ def test_end_to_end_gomoku_and_othello_two_iterations(stage1):
             assert row["canary_log_old_mu"] < 1e-4             # actor ≈ learner
             assert row["kl"] >= 0.0 and row["core_gnorm_rl"] > 0
     assert hist[-1]["games"]["gomoku"]["ent_coef"] != 0.01
-    assert hist[-1]["games"]["gomoku"]["kl_beta"] != 0.05
+    assert hist[-1]["games"]["gomoku"]["kl_beta"] >= 0.05      # floored at its initial beta
     model = load_multi(str(stage1 / "rl_e2e" / "rl_final.pt"), torch.device("cpu"))
     assert model["gomoku"].core is model["othello"].core
     assert model["gomoku"].cfg.board_h == 20

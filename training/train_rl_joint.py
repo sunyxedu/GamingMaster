@@ -123,7 +123,7 @@ import os
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -348,6 +348,10 @@ def parse_args(argv=None) -> argparse.Namespace:
            "chess_variants Stockfish, xiangqi Pikafish, shogi YaneuraOu over UCI / USI, go "
            "KataGo over GTP, othello Egaroucid, backgammon gnubg (CMD '' = its bridge)): vs_engine, "
            "a referee of fixed strength")
+    a("--eval_engine_opt", action="append", default=[], metavar="GAME=NAME=VALUE",
+      help="a UCI / USI option of the game's --eval_engine, sent before its first game "
+           "(repeatable), e.g. chess=UCI_LimitStrength=true chess=UCI_Elo=1800: the "
+           "referee's strength, so the IL policy scores well inside (0, 1) against it")
     a("--eval_engine_go", action="append", default=[], metavar="GAME=LIMIT",
       help="the engine's search limit per move (default 'go nodes 20000'; othello: 'level N', "
            "default 5; backgammon: 'plies N', default 0)")
@@ -367,7 +371,19 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="initial KL beta (default 0.05; 0 = no KL anchor for the game)")
     a("--kl_budget", action="append", default=[], metavar="GAME=K",
       help="per-game KL budget the beta controller steers toward (default 0.03)")
+    a("--value_warmup", type=int, default=0, metavar="N",
+      help="the first N iterations train the value heads only (no policy-gradient or "
+           "entropy term; KL anchor and IL replay stay): the IL value heads start far from "
+           "the RL returns (2026-10-03 bench: value loss falling 25 -> 10 over 15 iterations, "
+           "explained variance 0.0-0.3), and policy steps on those advantages are noise")
     a("--kl_rate", type=float, default=0.5)
+    a("--kl_err_clip_up", type=float, default=2.0,
+      help="the beta controller's error clip upward (downward stays 0.2): with --kl_rate "
+           "0.5, beta at most doubles per iteration while KL >= 3x its budget, and falls "
+           "at most 10%%")
+    a("--kl_floor_init", type=int, default=1,
+      help="1 = a game's beta never falls below its initial --kl_beta (KL starts at 0, "
+           "under budget: a plain controller first loosens the anchor, when drift begins)")
     a("--kl_adapt", type=int, default=1, help="0 = fixed betas")
     a("--kl_min", type=float, default=1e-4)
     a("--kl_max", type=float, default=10.0)
@@ -1527,15 +1543,47 @@ def _length_chunks(idx: Sequence[int], lengths: Sequence[int], rows: int,
 
 
 def learner_forward(net, spec: RLGameSpec, b: Dict[str, Any], depth: int,
-                    device: torch.device, bf16: bool, replay_routes: bool = False
+                    device: torch.device, bf16: bool, replay_routes: bool = False,
+                    init_cache=None, t0: int = 0, return_cache: bool = False
                     ) -> Dict[str, torch.Tensor]:
     """``replay_routes``: take the batch's recorded actor routing (the
     learner network only — another network, e.g. the frozen reference,
-    routes on its own)."""
+    routes on its own).  ``init_cache`` / ``t0`` / ``return_cache``: a time window
+    of longer streams continuing from the previous window's memory state
+    (GameNetwork.forward; :func:`time_windows`)."""
     routes = b.get("routes") if replay_routes else None
+    kw = (dict(init_cache=init_cache, t0=t0, return_cache=True)
+          if init_cache is not None or return_cache else {})
     with _autocast(device, bf16):
         return net(b["obs"], legal=b["legal"], labels=spec.labels(b["actions"], net.cfg),
-                   act_steps=depth, frame_mask=b["frame_mask"], routes=routes)
+                   act_steps=depth, frame_mask=b["frame_mask"], routes=routes, **kw)
+
+
+def time_windows(net, T: int, frames: int) -> List[Tuple[int, int]]:
+    """The time windows a learner forward over ``T`` frames takes: one, or (a
+    recurrent-mixer non-TRM core, ``T`` > ``frames`` > 0) consecutive ``frames``-frame
+    windows chained through the memory state — truncated backpropagation through time,
+    so a stream longer than its game's --frames_per_forward budget (a generals game
+    grown to 1400 frames x ~600 tokens under RL) holds one window's activations, not
+    the whole stream's (one 2026-10-03 bench run's out-of-memory)."""
+    cfg = getattr(net, "cfg", None)
+    if (frames <= 0 or T <= frames or getattr(cfg, "temporal_mixer", None) != "recurrent"
+            or getattr(net, "core_type", None) == "trm"):
+        return [(0, T)]
+    return [(s, min(s + frames, T)) for s in range(0, T, frames)]
+
+
+def _tslice(x, s: int, e: int, B: int, T: int):
+    """Frames [s, e) of every [B, T, ...] tensor in a (nested) batch dict."""
+    if torch.is_tensor(x):
+        return x[:, s:e] if x.dim() >= 2 and x.shape[0] == B and x.shape[1] == T else x
+    if isinstance(x, dict):
+        return {k: _tslice(v, s, e, B, T) for k, v in x.items()}
+    return x
+
+
+def _detach_cache(cache):
+    return None if cache is None else [None if c is None else c.detach() for c in cache]
 
 
 # ======================================================================
@@ -1893,10 +1941,11 @@ class JointRLTrainer:
         kl_init = _pairs(a.kl_beta, float, "B")
         self.kl_off = {g: kl_init.get(g, 0.05) <= 0 for g in rl}
         budget = _pairs(a.kl_budget, float, "K")
+        beta0 = {g: max(kl_init.get(g, 0.05), a.kl_min) for g in rl}
         self.klb = AdaptiveKLBeta(
             rl, budget={g: budget.get(g, 0.03) for g in rl},
-            init={g: max(kl_init.get(g, 0.05), a.kl_min) for g in rl}, rate=a.kl_rate,
-            min_beta=a.kl_min, max_beta=a.kl_max)
+            init=beta0, rate=a.kl_rate, err_clip_up=a.kl_err_clip_up,
+            min_beta=dict(beta0) if a.kl_floor_init else a.kl_min, max_beta=a.kl_max)
         shares = _pairs(a.share, float, "W")
         self.bandit = LearningProgressBandit(rl) if a.bandit_mix > 0 else None
         self.sched = TokenQuotaScheduler(
@@ -1917,6 +1966,15 @@ class JointRLTrainer:
         self.vs_init_streak: Dict[str, int] = {}
         self.eval_engine = _pairs(a.eval_engine, str, "CMD")
         self.eval_engine_go = _pairs(a.eval_engine_go, str, "LIMIT")
+        self.eval_engine_opt: Dict[str, Dict[str, str]] = {}
+        for item in a.eval_engine_opt:
+            g, sep, kv = item.partition("=")
+            k, sep2, v = kv.partition("=")
+            if not (sep and sep2 and g and k):
+                raise SystemExit(f"--eval_engine_opt: expected GAME=NAME=VALUE, got {item!r}")
+            if g not in self.eval_engine:
+                raise SystemExit(f"--eval_engine_opt {item!r}: {g} has no --eval_engine")
+            self.eval_engine_opt.setdefault(g, {})[k] = v
         self._engines: Dict[str, Any] = {}
         self._engine_failed: Dict[str, str] = {}
         self.engine_base: Dict[str, float] = {}
@@ -2097,28 +2155,47 @@ class JointRLTrainer:
         with MoEFFN.inference_path("sparse"):
             for chunk in self._forward_chunks(g, range(len(r.streams))):
                 ss = [r.streams[i] for i in chunk]
-                b = build_batch(ss, self.device, ("forced",))
-                pred = learner_forward(net, r.spec, b, self.depth, self.device, self.args.bf16,
-                                       replay_routes=True)
-                lp, _ = r.spec.logp_entropy(net, pred, b["actions"], b["legal"])
-                v = pred["value"].float()
+                full = build_batch(ss, self.device, ("forced",))
+                B, T = full["frame_mask"].shape
+                wins = time_windows(net, T, r.frames_per_forward)
+                many = len(wins) > 1
+                lps, vs, refs = [], [], []
+                cache = ref_cache = None
+                for s0, e0 in wins:
+                    b = _tslice(full, s0, e0, B, T) if many else full
+                    pred = learner_forward(net, r.spec, b, self.depth, self.device,
+                                           self.args.bf16, replay_routes=True,
+                                           init_cache=cache, t0=s0, return_cache=many)
+                    cache = pred.get("st_cache")
+                    lp, _ = r.spec.logp_entropy(net, pred, b["actions"], b["legal"])
+                    lps.append(lp.detach())
+                    vs.append(pred["value"].float().detach())
+                    if ref is not None:
+                        # the reference routes on its own (no replay), as in _rl_chunk_losses
+                        ref_pred = learner_forward(ref, r.spec, b, self.depth, self.device,
+                                                   self.args.bf16, init_cache=ref_cache, t0=s0,
+                                                   return_cache=many)
+                        ref_cache = ref_pred.get("st_cache")
+                        if r.spec.full_kl:
+                            tgt = r.spec.kl_targets(b["actions"], b["forced"], net.cfg)
+                            ref_t = r.spec.kl_terms(ref, ref_pred, tgt, b["frame_mask"], b["legal"])
+                            refs.append({h: t["logits"].detach() for h, t in ref_t.items()})
+                        else:
+                            ref_lp, _ = r.spec.logp_entropy(ref, ref_pred, b["actions"], b["legal"])
+                            refs.append(ref_lp.detach())
+                lp, v = torch.cat(lps, 1), torch.cat(vs, 1)
                 for j, s in enumerate(ss):
-                    s.lp_old = lp[j, :s.length].detach().cpu()
-                    s.v_old = v[j, :s.length].detach().cpu()
+                    s.lp_old = lp[j, :s.length].cpu()
+                    s.v_old = v[j, :s.length].cpu()
                 if ref is not None:
-                    # the reference routes on its own (no replay), as in _rl_chunk_loss
-                    ref_pred = learner_forward(ref, r.spec, b, self.depth, self.device,
-                                               self.args.bf16)
                     if r.spec.full_kl:
-                        tgt = r.spec.kl_targets(b["actions"], b["forced"], net.cfg)
-                        ref_t = r.spec.kl_terms(ref, ref_pred, tgt, b["frame_mask"], b["legal"])
                         for j, s in enumerate(ss):
-                            s.ref_logits = {h: t["logits"][j, :s.length].detach()
-                                            for h, t in ref_t.items()}
+                            s.ref_logits = {h: torch.cat([w[h] for w in refs], 1)[j, :s.length]
+                                            for h in refs[0]}
                     else:
-                        ref_lp, _ = r.spec.logp_entropy(ref, ref_pred, b["actions"], b["legal"])
+                        ref_lp = torch.cat(refs, 1)
                         for j, s in enumerate(ss):
-                            s.ref_lp = ref_lp[j, :s.length].detach()
+                            s.ref_lp = ref_lp[j, :s.length]
 
     def _targets(self, diag: Diag) -> None:
         """GAE per game (reward units), PopArt + advantage statistics (one
@@ -2234,11 +2311,22 @@ class JointRLTrainer:
                        diag: Diag, canary: bool,
                        weights: Optional[Mapping[str, Mapping[str, float]]] = None
                        ) -> torch.Tensor:
+        """The RL loss of streams ``ss`` of game ``g`` (:meth:`_rl_chunk_losses` summed
+        over its time windows — one graph; the epochs back-propagate window by window)."""
+        return sum(self._rl_chunk_losses(g, ss, counts, diag, canary, weights))
+
+    def _rl_chunk_losses(self, g: str, ss: List[Stream], counts: Dict[str, Dict[str, float]],
+                         diag: Diag, canary: bool,
+                         weights: Optional[Mapping[str, Mapping[str, float]]] = None
+                         ) -> Iterator[torch.Tensor]:
         """The RL loss of streams ``ss`` of game ``g``, one term of the
         minibatch's combined loss: ``counts`` = the minibatch's global
         per-game token counts / world per kind, ``weights`` = per-kind
         per-token game weights (:meth:`_loss_weights`; default the plain
-        ``--game_weight`` token mean)."""
+        ``--game_weight`` token mean).  Yields one loss per time window
+        (:func:`time_windows`): every term is a token sum, so the windows add up to
+        the whole streams' loss; the caller back-propagates each before the next
+        window runs (its memory state continues detached)."""
         a = self.args
         if weights is None:
             unit = {x: self.game_weight.get(x, 1.0) for x in self.rl_games}
@@ -2246,9 +2334,26 @@ class JointRLTrainer:
         r = self.rl[g]
         net = self.model[g]
         extra = ("mu", "lp_old", "adv", "ret", "keep", "old_pred", "vmask", "pmask", "forced")
-        b = build_batch(ss, self.device, extra)
+        full = build_batch(ss, self.device, extra)
+        B, T_full = full["frame_mask"].shape
+        wins = time_windows(net, T_full, r.frames_per_forward)
+        many = len(wins) > 1
+        cache = ref_cache = None
+        for s0, e0 in wins:
+            b = _tslice(full, s0, e0, B, T_full) if many else full
+            loss, cache, ref_cache = self._rl_window_loss(
+                g, ss, b, counts, diag, canary and s0 == 0, weights, s0, e0, many,
+                cache, ref_cache)
+            yield loss
+
+    def _rl_window_loss(self, g, ss, b, counts, diag, canary, weights, s0, e0, many,
+                        cache, ref_cache):
+        a = self.args
+        r = self.rl[g]
+        net = self.model[g]
         pred = learner_forward(net, r.spec, b, self.depth, self.device, a.bf16,
-                               replay_routes=True)
+                               replay_routes=True, init_cache=cache, t0=s0, return_cache=many)
+        cache = _detach_cache(pred.pop("st_cache", None))
         lp, ent = r.spec.logp_entropy(net, pred, b["actions"], b["legal"])
         pm, vm = b["pmask"], b["vmask"]
         pol = decoupled_ppo_loss(lp, b["lp_old"], b["mu"], b["adv"], pm, policy_mask=b["keep"],
@@ -2265,23 +2370,27 @@ class JointRLTrainer:
                              clip=a.value_clip, kind=a.value_loss, reduction="sum")
         ent_t = entropy_loss(ent, pm, coef=self.entc[g], reduction="sum")
         wk, wp, wv = weights["kept"], weights["policy"], weights["value"]
-        loss = (combine_game_losses({g: pol}, wk, counts=counts["kept"])
+        pg = 0.0 if self.iteration < a.value_warmup else 1.0      # --value_warmup
+        loss = (pg * combine_game_losses({g: pol}, wk, counts=counts["kept"])
                 + a.value_coef * combine_game_losses({g: val}, wv, counts=counts["value"])
-                + combine_game_losses({g: ent_t}, wp, counts=counts["policy"]))
+                + pg * combine_game_losses({g: ent_t}, wp, counts=counts["policy"]))
         n_p, n_v = float(pm.sum()), float(vm.sum())
         if not self.kl_off[g]:
             ref = self.ref[g]
-            T = b["frame_mask"].shape[1]
+            T = max(st.length for st in ss)     # the streams' padded length, cut to the window
             cached = (all(s.ref_logits is not None for s in ss) if r.spec.full_kl
                       else all(s.ref_lp is not None for s in ss))
             if not cached:
                 with torch.no_grad():
-                    ref_pred = learner_forward(ref, r.spec, b, self.depth, self.device, a.bf16)
+                    ref_pred = learner_forward(ref, r.spec, b, self.depth, self.device, a.bf16,
+                                               init_cache=ref_cache, t0=s0, return_cache=many)
+                    ref_cache = _detach_cache(ref_pred.pop("st_cache", None))
             if r.spec.full_kl:
                 tgt = r.spec.kl_targets(b["actions"], b["forced"], net.cfg)
                 cur_t = r.spec.kl_terms(net, pred, tgt, vm, b["legal"])
                 if cached:          # the iteration's reference logits (_recompute)
-                    ref_t = {h: {**cur_t[h], "logits": _pad([s.ref_logits[h] for s in ss], T)}
+                    ref_t = {h: {**cur_t[h],
+                                 "logits": _pad([s.ref_logits[h] for s in ss], T)[:, s0:e0]}
                              for h in cur_t}
                 else:
                     with torch.no_grad():
@@ -2296,7 +2405,7 @@ class JointRLTrainer:
                 diag.add(g, kl_sum=float(kl["kl"]) * n_v, kl_n=n_v)
             else:
                 if cached:
-                    ref_lp = _pad([s.ref_lp for s in ss], T)
+                    ref_lp = _pad([s.ref_lp for s in ss], T)[:, s0:e0]
                 else:
                     with torch.no_grad():
                         ref_lp, _ = r.spec.logp_entropy(ref, ref_pred, b["actions"], b["legal"])
@@ -2313,7 +2422,7 @@ class JointRLTrainer:
         if canary:
             diag.add(g, canary_oldmu_sum=float(pol["abs_log_old_mu"]) * n_p,
                      canary_ratio_sum=float(pol["abs_log_ratio"]) * n_p, canary_n=n_p)
-        return loss
+        return loss, cache, ref_cache
 
     def _replay_loss(self, g: str, diag: Diag) -> torch.Tensor:
         a = self.args
@@ -2437,14 +2546,17 @@ class JointRLTrainer:
                         mg = self._mark()
                         chunks = self._forward_chunks(g, idx)
                         for chunk in chunks:
-                            loss = self._forward_tracked(
-                                g, diag, lambda chunk=chunk, g=g, canary=canary:
-                                self._rl_chunk_loss(g, [ss[i] for i in chunk], cnt, diag,
-                                                    canary, weights))
-                            if torch.isfinite(loss):
-                                loss.backward()
-                            else:
-                                skipped += 1
+                            windows = self._rl_chunk_losses(g, [ss[i] for i in chunk], cnt,
+                                                            diag, canary, weights)
+                            while True:
+                                loss = self._forward_tracked(
+                                    g, diag, lambda w=windows: next(w, None))
+                                if loss is None:
+                                    break
+                                if torch.isfinite(loss):
+                                    loss.backward()
+                                else:
+                                    skipped += 1
                         if probe is not None:
                             diag.add(g, gn_rl=probe.delta_norm(), gn_rl_n=1)
                         marks.append(("learn_s", g, mg, self._mark()))
@@ -2624,7 +2736,8 @@ class JointRLTrainer:
             else:
                 from env.engine_policy import EnginePolicy
                 self._engines[g] = EnginePolicy(self.rl[g].env, self.eval_engine[g],
-                                                go=self.eval_engine_go.get(g, "go nodes 20000"))
+                                                go=self.eval_engine_go.get(g, "go nodes 20000"),
+                                                options=self.eval_engine_opt.get(g) or None)
             self.log(f"[eval] {g}: engine {self._engines[g].name} ({self._engines[g].go})")
         return self._engines[g]
 

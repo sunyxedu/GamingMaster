@@ -46,7 +46,9 @@
 #              tag, Stockfish's Makefile: ARCH by CPU flags). Its NNUE network (pikafish.nnue,
 #              GPL-3.0) comes from the Networks repository's master-net release, which the
 #              build downloads; the install records the network's SHA-256 (the release
-#              asset is replaced as the network improves).
+#              asset is replaced as the network improves, and a newer net may not load into
+#              the pinned tag: the install then fails its 1-node search check —
+#              PIKAFISH_NET=<file> supplies a network that matches).
 #   KataGo     Engine: github.com/lightvector/KataGo (see its LICENSE: MIT-style, with
 #              separately licensed third-party parts). Networks from katagotraining.org
 #              under the "KataGo Neural Network License" (MIT-style,
@@ -586,6 +588,12 @@ install_pikafish() {
     id="$(printf 'uci\nisready\nquit\n' | "$BIN/pikafish" 2>/dev/null | awk '/^id name/{sub(/^id name /,""); print; exit}')"
     [ -n "$id" ] || die "$BIN/pikafish does not answer the UCI handshake"
     printf 'uci\nisready\nquit\n' | "$BIN/pikafish" 2>/dev/null | grep -q '^readyok' || die "$BIN/pikafish: isready failed"
+    # PIKAFISH_NET=<file>: a known-good network for this build (the master-net release moves on:
+    # on 2026-10-03 its new, zstd-packed net did not load into Pikafish-2026-09-06)
+    if [ -n "${PIKAFISH_NET:-}" ]; then cp "$PIKAFISH_NET" "$dir/pikafish.nnue"; fi
+    # the network is loaded at the first search, not at isready: search one node
+    printf 'uci\nisready\nposition startpos\ngo nodes 1\nquit\n' | "$BIN/pikafish" 2>/dev/null | grep -q '^bestmove' \
+        || die "$BIN/pikafish cannot search: its network $dir/pikafish.nnue does not load into $ref (the master-net release may have moved on; pass PIKAFISH_NET=<a network that matches>)"
     if have sha256sum; then sha="$(sha256sum "$dir/pikafish.nnue" | cut -c1-16)"; else sha="$(shasum -a 256 "$dir/pikafish.nnue" | cut -c1-16)"; fi
     echo "pikafish: $BIN/pikafish -> $dir/pikafish ($id, ARCH=$arch; network pikafish.nnue sha256 $sha...; GPL-3.0)"
 }

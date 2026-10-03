@@ -169,7 +169,7 @@ def test_end_to_end_two_iterations(e2e):
     # adaptive controllers moved: othello's entropy coefficient (target 2.0) and
     # generals' KL beta (budget 0.01)
     assert hist[-1]["games"]["othello"]["ent_coef"] != 0.01
-    assert hist[-1]["games"]["generals"]["kl_beta"] != 0.05
+    assert hist[-1]["games"]["generals"]["kl_beta"] >= 0.05    # floored at its initial beta
 
 
 def test_checkpoint_is_a_multi_game_checkpoint(e2e):
@@ -802,3 +802,82 @@ def test_a_failing_engine_referee_is_disabled_not_fatal(stage1):
     assert [r["iteration"] for r in out["history"]] == [1, 2]
     assert "othello" in tr._engine_failed and "othello" not in tr._engines
     assert out["history"][1]["games"]["othello"]["vs_engine_n"] == 0
+
+
+def test_time_windows_match_the_whole_stream(stage1):
+    """A stream longer than its game's --frames_per_forward runs in time windows chained
+    through the recurrent memory state (truncated BPTT): π_old / V / reference
+    log-probs of the recompute and the loss value equal the whole-stream forward; the
+    gradient differs only by the cut at window boundaries."""
+    from training.train_rl_joint import Diag, JointRLTrainer, parse_args, time_windows
+
+    def trainer(fpf):
+        argv = ["--init", str(stage1 / "ck_rec" / "multi_final.pt"), "--rl", "othello",
+                "--data", f"othello={stage1 / 'othello'}", "--replay_batch_size", "2",
+                "--tokens_per_iter", "60", "--envs", "othello=2", "--epochs", "1",
+                "--minibatches", "1", "--seed", "7", "--device", "cpu",
+                "--frames_per_forward", f"othello={fpf}",
+                "--save_dir", str(stage1 / f"tw{fpf}")]
+        torch.manual_seed(0)
+        return JointRLTrainer(parse_args(argv))
+
+    whole, win = trainer(0), trainer(7)
+    net = win.model["othello"]
+    assert net.cfg.temporal_mixer == "recurrent"
+    for tr in (whole, win):
+        tr._rollouts(0, {"othello": 60}, Diag(tr.games, tr.n_moe))
+    # the same rollouts in both: copy the first trainer's streams into the second
+    win.rl["othello"].streams = whole.rl["othello"].streams
+    T = max(s.length for s in whole.rl["othello"].streams)
+    assert len(time_windows(net, T, 7)) > 1
+    ref = {}
+    for tr in (whole, win):
+        tr._recompute("othello")
+        ref[tr is win] = [(s.lp_old.clone(), s.v_old.clone(),
+                           None if s.ref_lp is None else s.ref_lp.clone())
+                          for s in tr.rl["othello"].streams]
+    for (a1, v1, r1), (a2, v2, r2) in zip(ref[False], ref[True]):
+        assert torch.allclose(a1, a2, atol=1e-4) and torch.allclose(v1, v2, atol=1e-4)
+        if r1 is not None:
+            assert torch.allclose(r1, r2, atol=1e-4)
+    for tr in (whole, win):
+        tr._targets(Diag(tr.games, tr.n_moe))
+    plan, counts = whole._minibatch_plan(0, 0)
+    cnt = {name: {"othello": float(counts[0, 0, j])}
+           for j, name in enumerate(("kept", "policy", "value"))}
+    ss = whole.rl["othello"].streams
+    l_whole = float(whole._rl_chunk_loss("othello", ss, cnt, Diag(whole.games, whole.n_moe),
+                                         False).detach())
+    parts = [float(l.detach()) for l in win._rl_chunk_losses("othello", ss, cnt,
+                                                    Diag(win.games, win.n_moe), False)]
+    assert len(parts) > 1
+    assert abs(sum(parts) - l_whole) <= 1e-4 * max(1.0, abs(l_whole))
+
+
+def test_value_warmup_trains_no_policy(stage1):
+    """--value_warmup: the first iterations' RL loss has no policy-gradient / entropy term —
+    with the KL anchor off, the action decoder gets no gradient at all."""
+    from training.train_rl_joint import Diag, JointRLTrainer, parse_args
+
+    argv = ["--init", str(stage1 / "ck_rec" / "multi_final.pt"), "--rl", "othello",
+            "--tokens_per_iter", "60", "--envs", "othello=2", "--epochs", "1",
+            "--minibatches", "1", "--seed", "7", "--device", "cpu", "--kl_beta", "othello=0",
+            "--save_dir", str(stage1 / "vw")]
+
+    def decoder_grad(warm):
+        torch.manual_seed(0)
+        tr = JointRLTrainer(parse_args(argv + ["--value_warmup", str(warm)]))
+        tr._rollouts(0, {"othello": 60}, Diag(tr.games, tr.n_moe))
+        tr._recompute("othello")
+        tr._targets(Diag(tr.games, tr.n_moe))
+        plan, counts = tr._minibatch_plan(0, 0)
+        cnt = {name: {"othello": float(counts[0, 0, j])}
+               for j, name in enumerate(("kept", "policy", "value"))}
+        tr.optimizer.zero_grad(set_to_none=True)
+        tr._rl_chunk_loss("othello", tr.rl["othello"].streams, cnt,
+                          Diag(tr.games, tr.n_moe), False).backward()
+        dec = tr.model["othello"].action_decoder
+        return sum(float(p.grad.abs().sum()) for p in dec.parameters() if p.grad is not None)
+
+    assert decoder_grad(0) > 0
+    assert decoder_grad(5) == 0

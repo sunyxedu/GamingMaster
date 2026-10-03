@@ -18,7 +18,7 @@ NOT restored from a checkpoint, so a resumed run can retune them.
 from __future__ import annotations
 
 import math
-from typing import Dict, Mapping, Sequence
+from typing import Dict, Mapping, Optional, Sequence
 
 
 def _per_game(games: Sequence[str], value: object, name: str) -> Dict[str, float]:
@@ -121,18 +121,22 @@ class AdaptiveKLBeta(_PerGameCoef):
     """Per-game KL penalty coefficient β_g driven toward a KL budget.
 
       mode="proportional" (Ziegler et al. 2019, arXiv 1909.08593):
-            e = clip(KL / budget − 1, ±err_clip),   β ← β · (1 + rate · e)
+            e = clip(KL / budget − 1, −err_clip, err_clip_up),   β ← β · (1 + rate · e)
       mode="step" (Schulman et al. 2017, PPO adaptive-KL):
             KL > budget·tol → β ← β·factor;  KL < budget/tol → β ← β/factor
 
     A game whose measured KL to the frozen Stage-1 reference exceeds its
     budget gets anchored harder, one well inside its budget is let go.  The
     defaults move β by at most ±10% per update (one update per iteration;
-    Ziegler et al. update per minibatch with rate 0.1).
+    Ziegler et al. update per minibatch with rate 0.1); ``err_clip_up`` (default
+    ``err_clip``) lets β rise faster than it falls — with one update per iteration a
+    KL growing several-fold within a few iterations outruns a ±10% step (the
+    2026-10-03 RL bench: KL 3–8x its budget while β crept 0.05 → 0.07).
     """
 
     def __init__(self, games: Sequence[str], budget: object, *, init: object = 0.1,
-                 rate: float = 0.5, err_clip: float = 0.2, min_beta: object = 1e-4,
+                 rate: float = 0.5, err_clip: float = 0.2, err_clip_up: Optional[float] = None,
+                 min_beta: object = 1e-4,
                  max_beta: object = 10.0, mode: str = "proportional",
                  step_tol: float = 1.5, step_factor: float = 2.0):
         if mode not in ("proportional", "step"):
@@ -147,6 +151,7 @@ class AdaptiveKLBeta(_PerGameCoef):
             raise ValueError("step_tol and step_factor must exceed 1")
         self.rate = float(rate)
         self.err_clip = float(err_clip)
+        self.err_clip_up = float(err_clip if err_clip_up is None else err_clip_up)
         self.mode = mode
         self.step_tol = float(step_tol)
         self.step_factor = float(step_factor)
@@ -158,7 +163,7 @@ class AdaptiveKLBeta(_PerGameCoef):
         for g, k in kl.items():
             k, b, budget = float(k), self.values[g], self.budget[g]
             if self.mode == "proportional":
-                e = min(max(k / budget - 1.0, -self.err_clip), self.err_clip)
+                e = min(max(k / budget - 1.0, -self.err_clip), self.err_clip_up)
                 b = b * (1.0 + self.rate * e)
             elif k > budget * self.step_tol:
                 b = b * self.step_factor

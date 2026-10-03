@@ -617,7 +617,9 @@ def _merge_parts(parts, n: int) -> Dict[str, torch.Tensor]:
         for k, v in acts.items():
             if k not in out:
                 out[k] = v.new_zeros((n,) + tuple(v.shape[1:]))
-            out[k][torch.tensor(ks, dtype=torch.long, device=v.device)] = v
+            # policies may disagree on a key's dtype (an engine's Long 0/1 against the
+            # network's Bool flag, e.g. shogi's promotion): the first one's wins
+            out[k][torch.tensor(ks, dtype=torch.long, device=v.device)] = v.to(out[k].dtype)
     return out
 
 
@@ -820,7 +822,7 @@ class League:
                 v = v.to(dev)
                 if k not in out:
                     out[k] = v.new_zeros((R,) + tuple(v.shape[1:]))
-                out[k][rows[use]] = v[use]
+                out[k][rows[use]] = v[use].to(out[k].dtype)
         return out
 
     def learner_score(self, winner: torch.Tensor,
