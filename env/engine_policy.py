@@ -503,12 +503,19 @@ class BackgammonEnginePolicy:
 
     @staticmethod
     def _reaches(state, seat: int, want: Dict[int, List[int]], depth: int = 4) -> Optional[int]:
-        """A legal (sub-)move of ``seat`` from which ``want`` is reachable this turn."""
+        """A legal (sub-)move of ``seat`` from which ``want`` is reachable this turn.  A move
+        that bears off the mover's last checker ends the game: in a match the state then
+        shows the NEXT game's opening position, never ``want``'s empty board — such a move
+        is recognised by the match score changing (only the mover can end the game now)."""
+        score0 = bg_parse(str(state))["score"]
+        bears_all = not any(want.get(seat, [1]))
         for a in state.legal_actions(seat):
             nxt = state.clone()
             nxt.apply_action(seat, int(a))
-            b = bg_parse(str(nxt))["board"]
-            if all(b[k] == v for k, v in want.items()):
+            after = bg_parse(str(nxt))
+            if all(after["board"][k] == v for k, v in want.items()):
+                return int(a)
+            if bears_all and after["score"] != score0:
                 return int(a)
             t = nxt.turn()
             # the rest of the turn: more sub-moves, or (after the first die of a double) the

@@ -94,11 +94,15 @@ def test_egaroucid_beats_random_on_the_othello_env():
 
 
 @pytest.mark.skipif(not shutil.which("uv"), reason="needs uv (the gnubg wheel)")
-def test_gnubg_beats_random_on_the_backgammon_env():
+@pytest.mark.parametrize("match", [1, 3])
+def test_gnubg_beats_random_on_the_backgammon_env(match):
+    """match=3: a game inside a match ends with gnubg bearing off its last checker while the
+    state already shows the next game (the 2026-10-03 bench lost its backgammon referee to
+    'reachable by none of our legal moves' there)."""
     from env.engine_policy import BackgammonEnginePolicy
     from env.league import scatter_rows
 
-    env = make_vec_env("backgammon", 4, seed=3, match_length=1)
+    env = make_vec_env("backgammon", 4, seed=3, match_length=match)
     try:
         pol = BackgammonEnginePolicy(env, plies=0)
     except Exception as e:                      # noqa: BLE001 — no gnubg wheel offline
@@ -110,7 +114,7 @@ def test_gnubg_beats_random_on_the_backgammon_env():
         league.update(obs)
         winner = torch.full((env.num_envs,), -1, dtype=torch.long)
         ended = torch.zeros(env.num_envs, dtype=torch.bool)
-        for _ in range(2000):
+        for _ in range(2000 * match):
             if not bool(obs.active.any()):
                 break
             rows = league.learner_rows(obs).nonzero().squeeze(1)
@@ -231,3 +235,47 @@ def test_engine_pool_answers_each_row_with_its_own_position():
         assert len(seen) > 1                    # the rows really were in different positions
     finally:
         many.close()
+
+
+@pytest.mark.skipif(not shutil.which("uv"), reason="needs uv (the gnubg wheel)")
+def test_gnubg_ends_a_game_inside_a_match():
+    """gnubg plays both seats of 5-point matches (random players end games by dropping
+    doubles): wherever the player to move can bear off its last checker with a choice of
+    moves, gnubg's move is found — the state shows the NEXT game's opening position
+    afterwards, never gnubg's empty board (the 2026-10-03 bench lost its referee there)."""
+    import numpy as np
+
+    from env.engine_policy import BackgammonEnginePolicy, bg_parse, replay_state
+    from env.league import scatter_rows
+
+    env = make_vec_env("backgammon", 6, seed=5, match_length=5)
+    try:
+        pol = BackgammonEnginePolicy(env, plies=0)
+    except Exception as e:                      # noqa: BLE001 — no gnubg wheel offline
+        pytest.skip(f"gnubg bridge: {e}")
+    found = 0
+    try:
+        obs = env.reset(seed=7)
+        for _ in range(4000):
+            if found >= 2 or not bool(obs.active.any()):
+                break
+            rows = obs.active.nonzero().squeeze(1)
+            for r in rows.tolist():
+                e, seat = int(obs.env_id[r]), int(obs.to_play[r])
+                state, _ = replay_state("backgammon", np.asarray(env.trajectory(e)).reshape(-1, 2),
+                                        pol.cfg_json)
+                legal = state.legal_actions(seat)
+                p0 = bg_parse(str(state))
+                if len(legal) < 2 or max(p0["score"]) >= 4 or str(state).startswith(("phase=Cube", "phase=Take")):
+                    continue
+                for a in legal:
+                    nxt = state.clone()
+                    nxt.apply_action(seat, int(a))
+                    if bg_parse(str(nxt))["score"] != p0["score"]:
+                        found += 1                  # pol(...) below must answer this row
+                        break
+            # pol answers every row (both seats): an unreachable target raises here
+            obs, _, _, _ = env.step(scatter_rows(env.replay_actions(pol(obs, rows)), rows, obs.n_rows))
+        assert found >= 1, "no game-ending bear-off with a choice was reached"
+    finally:
+        pol.close()
