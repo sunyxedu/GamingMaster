@@ -371,6 +371,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--eval_engine_go", action="append", default=[], metavar="GAME=LIMIT",
       help="the engine's search limit per move (default 'go nodes 20000'; othello: 'level N', "
            "default 5; backgammon: 'plies N', default 0)")
+    a("--eval_start_episodes", type=int, default=128,
+      help="episodes of the iteration-0 engine evaluation (the IL policy: the baseline every "
+           "later evaluation and the engine alarm compare with — bench v2's configs all shared "
+           "one lucky 40-game backgammon baseline, 0.44, and every later evaluation 'dropped')")
+    a("--alarm_engine_z", type=float, default=2.5,
+      help="... and the drop below the baseline must also exceed this many standard errors of "
+           "the difference (binomial, both evaluations' episode counts)")
     a("--alarm_engine_drop", type=float, default=0.15,
       help="... or (every --eval_every) its score against --eval_engine this far below its "
            "first engine evaluation")
@@ -2006,6 +2013,7 @@ class JointRLTrainer:
         self._learn_mem: Dict[str, float] = {}     # per game: its learner pass's peak GPU GB
         self._engine_failed: Dict[str, str] = {}
         self.engine_base: Dict[str, float] = {}
+        self.engine_base_n: Dict[str, int] = {}
         self.engine_streak: Dict[str, int] = {}
         self.stopped: Dict[str, str] = {}
         #: per-game cost of the latest iteration that played it (rollout + learner
@@ -2150,7 +2158,9 @@ class JointRLTrainer:
             if evaluate and (it > 0 or a.eval_at_start):
                 if g in self.eval_engine and g not in self._engine_failed:
                     try:
-                        ev = self._eval_against(g, r, it, gi, "engine", self._engine(g))
+                        n0 = (max(self.eval_episodes.get(g, a.eval_episodes), a.eval_start_episodes)
+                              if g not in self.engine_base else None)    # the baseline: more games
+                        ev = self._eval_against(g, r, it, gi, "engine", self._engine(g), n0)
                         diag.add(g, vs_engine_sum=ev.score_sum, vs_engine_n=ev.score_n)
                     except Exception as e:      # noqa: BLE001 — a referee never stops the run
                         self._engine_failed[g] = f"{type(e).__name__}: {e}"
@@ -2781,12 +2791,13 @@ class JointRLTrainer:
             self.log(f"[eval] {g}: engine {self._engines[g].name} ({self._engines[g].go})")
         return self._engines[g]
 
-    def _eval_against(self, g: str, r: GameRL, it: int, gi: int, name: str, opp) -> WaveStats:
+    def _eval_against(self, g: str, r: GameRL, it: int, gi: int, name: str, opp,
+                      episodes: Optional[int] = None) -> WaveStats:
         """The learner against the fixed policy ``opp`` (no mirror episodes, seats drawn
         per episode), whole waves until --eval_episodes; the streams are dropped."""
         a = self.args
         total, wave = WaveStats(), 0
-        n_eval = self.eval_episodes.get(g, a.eval_episodes)
+        n_eval = episodes or self.eval_episodes.get(g, a.eval_episodes)
         while total.episodes < n_eval:
             # seats balanced within every wave (env i: the learner in seat (i + wave) mod S)
             league = League(r.env, {name: opp}, mirror_prob=0.0, balanced_seats=True,
@@ -2817,6 +2828,7 @@ class JointRLTrainer:
                             and row.get("vs_engine_n", 0) >= a.alarm_min_episodes)
             if first_engine:            # the baseline, also on the first (unjudged) iteration
                 self.engine_base[g] = ve
+                self.engine_base_n[g] = int(row.get("vs_engine_n", 0))
             if not few and g not in self.alarm_base_len and \
                     math.isfinite(row.get("ep_len", float("nan"))):
                 self.alarm_base_len[g] = float(row["ep_len"])
@@ -2838,11 +2850,15 @@ class JointRLTrainer:
             if math.isfinite(ve) and row.get("vs_engine_n", 0) >= a.alarm_min_episodes \
                     and not first_engine:
                 if a.alarm_engine_drop > 0:
-                    low = ve < self.engine_base[g] - a.alarm_engine_drop
+                    b, nb = self.engine_base[g], self.engine_base_n.get(g, row["vs_engine_n"])
+                    se2 = (max(b * (1 - b), 0.05) / max(nb, 1)
+                           + max(ve * (1 - ve), 0.05) / max(row["vs_engine_n"], 1))
+                    margin = max(a.alarm_engine_drop, a.alarm_engine_z * math.sqrt(se2))
+                    low = ve < b - margin
                     self.engine_streak[g] = self.engine_streak.get(g, 0) + 1 if low else 0
                     if low:
                         why.append(f"score vs the engine {ve:.3f} < its first evaluation "
-                                   f"{self.engine_base[g]:.3f} - {a.alarm_engine_drop}")
+                                   f"{self.engine_base[g]:.3f} - {margin:.3f}")
             if why:
                 row["alarm"] = "; ".join(why)
             if why and max(self.alarm_streak[g], self.vs_init_streak.get(g, 0),
@@ -2978,6 +2994,7 @@ class JointRLTrainer:
                 "alarm_streak": dict(self.alarm_streak), "stopped": dict(self.stopped),
                 "vs_init_streak": dict(self.vs_init_streak),
                 "engine_base": dict(self.engine_base), "engine_streak": dict(self.engine_streak),
+                "engine_base_n": dict(self.engine_base_n),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -3129,6 +3146,7 @@ class JointRLTrainer:
         self.alarm_streak = dict(st.get("alarm_streak", {}))
         self.vs_init_streak = dict(st.get("vs_init_streak", {}))
         self.engine_base = dict(st.get("engine_base", {}))
+        self.engine_base_n = dict(st.get("engine_base_n", {}))
         self.engine_streak = dict(st.get("engine_streak", {}))
         self.stopped = dict(st.get("stopped", {}))
         for g, why in self.stopped.items():
