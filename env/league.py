@@ -349,11 +349,17 @@ class NetworkPolicy:
 
     def __init__(self, net: nn.Module, *, act_steps: Optional[int] = None,
                  device: Optional[torch.device] = None, greedy: Optional[bool] = None,
-                 output_keys: Sequence[str] = ()):
+                 output_keys: Sequence[str] = (), bf16: bool = False):
         self.net = net
         self.stepper = StreamStepper(net, act_steps=act_steps, device=device)
         self.greedy = greedy
         self.output_keys = tuple(output_keys)
+        # bf16: act under bf16 autocast, as the learner's actor does (train_rl_joint
+        # --bf16) — a frozen copy of the learner acting in fp32 is a different player (MoE
+        # routing flips on bf16 rounding; recurrent state drifts over long games)
+        self.bf16 = bool(bf16)
+        self._dev_type = (torch.device(device).type if device is not None else
+                          next(net.parameters()).device.type)
 
     def reset_streams(self, streams: Sequence[int]) -> None:
         self.stepper.reset(streams)
@@ -367,7 +373,8 @@ class NetworkPolicy:
         restart = restart_streams(obs, rows)
         if restart:
             self.stepper.reset(restart)
-        with _eval_mode(self.net, self.greedy):
+        with _eval_mode(self.net, self.greedy), \
+                torch.autocast(self._dev_type, dtype=torch.bfloat16, enabled=self.bf16):
             out = self.stepper.step({k: v[rows] for k, v in obs.obs.items()},
                                     {k: v[rows] for k, v in obs.legal.items()},
                                     streams, obs.step_idx[rows].tolist())
@@ -529,12 +536,12 @@ class PoolPolicy:
 
     def __init__(self, pool: SnapshotPool, load_net: Callable[[Dict[str, torch.Tensor]], nn.Module],
                  *, act_steps: Optional[int] = None, device: Optional[torch.device] = None,
-                 greedy: Optional[bool] = None, max_nets: int = 4):
+                 greedy: Optional[bool] = None, max_nets: int = 4, bf16: bool = False):
         if max_nets < 1:
             raise ValueError("max_nets must be >= 1")
         self.pool = pool
         self.load_net = load_net
-        self.kw = dict(act_steps=act_steps, device=device, greedy=greedy)
+        self.kw = dict(act_steps=act_steps, device=device, greedy=greedy, bf16=bf16)
         self.max_nets = int(max_nets)
         self._active: List[int] = []
         self._sid: Dict[int, int] = {}                  # stream → snapshot id

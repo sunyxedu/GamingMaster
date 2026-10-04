@@ -1890,7 +1890,7 @@ class JointRLTrainer:
                 self.templates[g] = copy.deepcopy(net).cpu().requires_grad_(False).eval()
                 pool_policy = PoolPolicy(self.pool, self._snapshot_loader(g),
                                          act_steps=self.depth, device=device,
-                                         max_nets=a.pool_max_nets)
+                                         max_nets=a.pool_max_nets, bf16=a.bf16)
             self.rl[g] = GameRL(
                 game=g, spec=spec, env=env, actor=actor, pool_policy=pool_policy,
                 mirror_prob=p_mirror, gamma=gamma.get(g, 1.0), lam=lam.get(g, 0.95),
@@ -2741,7 +2741,7 @@ class JointRLTrainer:
         episodes, seats drawn per episode), whole waves until --eval_episodes; the
         streams are dropped.  Self-play reward can rise from an exploit of the learner's
         own play; a policy that got worse against where it started cannot hide it here."""
-        ref = NetworkPolicy(self.ref[g], act_steps=self.depth, device=self.device)
+        ref = NetworkPolicy(self.ref[g], act_steps=self.depth, device=self.device, bf16=self.args.bf16)
         return self._eval_against(g, r, it, gi, "init", ref)
 
     def _engine(self, g: str):
