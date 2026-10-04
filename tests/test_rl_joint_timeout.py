@@ -72,7 +72,7 @@ def test_alarm_stops_a_game_after_patience_iterations_and_zeroes_its_quota():
     t = SimpleNamespace(
         args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
                              alarm_engine_drop=0.15, alarm_patience=2,
-                             alarm_min_episodes=8, tokens_per_iter=100, rl_placement="all"),
+                             alarm_min_episodes=8, alarm_min_tokens=1000, tokens_per_iter=100, rl_placement="all"),
         rl_games=["sc2", "chess"], kl_budget={"sc2": 0.03, "chess": 0.03}, alarm_base_len={},
         alarm_streak={}, vs_init_streak={}, engine_base={}, engine_streak={}, stopped={}, iteration=0, log=logs.append, world=1,
         sched=SimpleNamespace(quotas=lambda n: {"sc2": 50, "chess": 50}))
@@ -103,7 +103,7 @@ def test_referee_alarm_counts_evaluations_not_iterations():
     from training.train_rl_joint import JointRLTrainer
     t = SimpleNamespace(
         args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
-                             alarm_engine_drop=0.15, alarm_patience=2, alarm_min_episodes=8),
+                             alarm_engine_drop=0.15, alarm_patience=2, alarm_min_episodes=8, alarm_min_tokens=1000),
         rl_games=["chess"], kl_budget={"chess": 0.03}, alarm_base_len={}, alarm_streak={},
         vs_init_streak={}, engine_base={}, engine_streak={}, stopped={}, iteration=0,
         log=lambda m: None)
@@ -121,7 +121,7 @@ def test_engine_alarm_is_relative_to_the_first_engine_evaluation():
     from training.train_rl_joint import JointRLTrainer
     t = SimpleNamespace(
         args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
-                             alarm_engine_drop=0.15, alarm_patience=2, alarm_min_episodes=8),
+                             alarm_engine_drop=0.15, alarm_patience=2, alarm_min_episodes=8, alarm_min_tokens=1000),
         rl_games=["chess"], kl_budget={"chess": 0.03}, alarm_base_len={"chess": 100.0},
         alarm_streak={}, vs_init_streak={}, engine_base={}, engine_streak={}, stopped={},
         iteration=0, log=lambda m: None)
@@ -144,7 +144,7 @@ def test_engine_baseline_is_taken_on_the_first_iteration_too():
     from training.train_rl_joint import JointRLTrainer
     t = SimpleNamespace(
         args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
-                             alarm_engine_drop=0.15, alarm_patience=2, alarm_min_episodes=8),
+                             alarm_engine_drop=0.15, alarm_patience=2, alarm_min_episodes=8, alarm_min_tokens=1000),
         rl_games=["chess"], kl_budget={"chess": 0.03}, alarm_base_len={}, alarm_streak={},
         vs_init_streak={}, engine_base={}, engine_streak={}, stopped={}, iteration=0,
         log=lambda m: None)
@@ -154,3 +154,28 @@ def test_engine_baseline_is_taken_on_the_first_iteration_too():
     for ve in (0.20, 0.21):
         JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": ve, "vs_engine_n": 32}}})
     assert "score vs the engine" in t.stopped["chess"]
+
+
+def test_few_episode_games_are_judged_on_kl():
+    """A game with 1-2 (long) episodes an iteration (hok, sc2) is judged on its KL — over its
+    thousands of tokens — but not on a time-out rate or length of one episode."""
+    from types import SimpleNamespace
+
+    from training.train_rl_joint import JointRLTrainer
+    t = SimpleNamespace(
+        args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
+                             alarm_engine_drop=0.15, alarm_patience=2, alarm_min_episodes=8,
+                             alarm_min_tokens=1000),
+        rl_games=["hok", "sc2"], kl_budget={"hok": 0.03, "sc2": 0.03}, alarm_base_len={},
+        alarm_streak={}, vs_init_streak={}, engine_base={}, engine_streak={}, stopped={},
+        iteration=0, log=lambda m: None)
+    hok = {"episodes": 1, "tokens": 4400, "timeout_rate": 0.0, "ep_len": 2233.0, "kl": 0.10}
+    sc2 = {"episodes": 1, "tokens": 8400, "timeout_rate": 1.0, "ep_len": 8441.0, "kl": 0.006}
+    for _ in range(2):
+        JointRLTrainer._alarms(t, {"games": {"hok": dict(hok), "sc2": dict(sc2)}})
+    assert "KL" in t.stopped["hok"] and "sc2" not in t.stopped     # one time-out: not judged
+    tiny = {"episodes": 1, "tokens": 200, "kl": 0.5}                    # too few tokens
+    t.stopped.clear(); t.alarm_streak.clear()
+    for _ in range(2):
+        JointRLTrainer._alarms(t, {"games": {"hok": dict(tiny)}})
+    assert not t.stopped

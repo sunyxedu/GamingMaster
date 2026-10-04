@@ -338,6 +338,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--alarm_vs_init", type=float, default=0.35,
       help="... or (every --eval_every) its score against the frozen --init network below this")
     a("--alarm_patience", type=int, default=2)
+    a("--alarm_min_tokens", type=int, default=1000,
+      help="a game with fewer than --alarm_min_episodes episodes in an iteration (hok, sc2, "
+           "arc3, generals, lux play 1-6) is still judged on its KL once it has this many "
+           "learner tokens (time-out rate and episode length need the episodes)")
     a("--alarm_min_episodes", type=int, default=8,
       help="iterations with fewer episodes of the game are not judged")
     a("--eval_every", type=int, default=20,
@@ -2797,17 +2801,24 @@ class JointRLTrainer:
         a = self.args
         for g in self.rl_games:
             row = rec["games"].get(g, {})
-            if g in self.stopped or row.get("episodes", 0) < a.alarm_min_episodes:
+            if g in self.stopped:
+                continue
+            few = row.get("episodes", 0) < a.alarm_min_episodes
+            if few and row.get("tokens", 0) < a.alarm_min_tokens:
                 continue
             ve = row.get("vs_engine", float("nan"))
             first_engine = (g not in self.engine_base and math.isfinite(ve)
                             and row.get("vs_engine_n", 0) >= a.alarm_min_episodes)
             if first_engine:            # the baseline, also on the first (unjudged) iteration
                 self.engine_base[g] = ve
-            if g not in self.alarm_base_len and math.isfinite(row.get("ep_len", float("nan"))):
+            if not few and g not in self.alarm_base_len and \
+                    math.isfinite(row.get("ep_len", float("nan"))):
                 self.alarm_base_len[g] = float(row["ep_len"])
                 continue
-            why = alarm_reasons(row, self.alarm_base_len.get(g), self.kl_budget[g],
+            # few episodes: the KL alone (over thousands of tokens) — a time-out rate or a
+            # mean length over 1-2 episodes says nothing
+            why = alarm_reasons({"kl": row.get("kl", float("nan"))} if few else row,
+                                None if few else self.alarm_base_len.get(g), self.kl_budget[g],
                                 timeout=a.alarm_timeout, len_x=a.alarm_len_x, kl_x=a.alarm_kl_x)
             self.alarm_streak[g] = self.alarm_streak.get(g, 0) + 1 if why else 0
             # the referee (every --eval_every): its own streak over evaluations
