@@ -375,6 +375,9 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="... or (every --eval_every) its score against --eval_engine this far below its "
            "first engine evaluation")
     a("--eval_episodes", type=int, default=32, help="episodes per game and evaluation (whole waves)")
+    a("--eval_episodes_game", action="append", default=[], metavar="GAME=N",
+      help="a game's own --eval_episodes: few for long-episode games with few envs (the 21-game "
+           "run's first evaluation took 2.9 h, hok alone ~1 h for 64 episodes on its one env)")
     a("--eval_at_start", action=argparse.BooleanOptionalAction, default=True,
       help="also play the --eval_engine engines at iteration 0 (the IL policy itself, so the "
            "engine alarm and run comparisons start from its score; vs_init is skipped there, "
@@ -1847,6 +1850,7 @@ class JointRLTrainer:
                            ("--shaping", _pairs(a.shaping, str, "S")),
                            ("--eval_engine", _pairs(a.eval_engine, str, "CMD")),
                            ("--eval_engine_go", _pairs(a.eval_engine_go, str, "LIMIT")),
+                           ("--eval_episodes_game", _pairs(a.eval_episodes_game, str, "N")),
                            ("--shaping_anneal", _pairs(a.shaping_anneal, str, "ITERS")),
                            ("--share", _pairs(a.share, float, "W")),
                            ("--entropy_coef", _pairs(a.entropy_coef, float, "C")),
@@ -1985,6 +1989,7 @@ class JointRLTrainer:
         self.eval_engine = _pairs(a.eval_engine, str, "CMD")
         self.eval_engine_go = _pairs(a.eval_engine_go, str, "LIMIT")
         self.eval_engine_eps = _pairs(a.eval_engine_eps, float, "P")
+        self.eval_episodes = _pairs(a.eval_episodes_game, int, "N")
         for g in self.eval_engine_eps:
             if g not in self.eval_engine:
                 raise SystemExit(f"--eval_engine_eps {g}: {g} has no --eval_engine")
@@ -2781,7 +2786,8 @@ class JointRLTrainer:
         per episode), whole waves until --eval_episodes; the streams are dropped."""
         a = self.args
         total, wave = WaveStats(), 0
-        while total.episodes < a.eval_episodes:
+        n_eval = self.eval_episodes.get(g, a.eval_episodes)
+        while total.episodes < n_eval:
             # seats balanced within every wave (env i: the learner in seat (i + wave) mod S)
             league = League(r.env, {name: opp}, mirror_prob=0.0, balanced_seats=True,
                             seat_offset=wave, seed=derive_seed(a.seed, self.rank, it, gi, 4, wave))

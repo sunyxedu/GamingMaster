@@ -774,14 +774,16 @@ def test_eval_vs_init_and_alarm_fields(stage1):
 
     torch.manual_seed(0)
     out = train_rl_joint.main(_args(stage1, "rl_eval", "--iterations", "2", "--eval_every", "1",
-                                    "--eval_episodes", "4", "--trace_every", "1"))
+                                    "--eval_episodes", "4", "--eval_episodes_game", "generals=2",
+                                    "--trace_every", "1"))
     assert out["history"][0]["games"]["othello"]["vs_init_n"] == 0     # not at iteration 0
     rec = out["history"][1]
     for g in ("generals", "othello"):
         row = rec["games"][g]
-        assert row["vs_init_n"] >= 4 and 0.0 <= row["vs_init"] <= 1.0, (g, row)
+        assert row["vs_init_n"] >= (2 if g == "generals" else 4) and 0.0 <= row["vs_init"] <= 1.0, (g, row)
         assert row["timeout_rate"] == 0.0 or g == "generals"
         assert "alarm" not in row
+    assert rec["games"]["generals"]["vs_init_n"] < rec["games"]["othello"]["vs_init_n"]   # its own
     assert "stopped" not in rec and out["trainer"].stopped == {}
     for g in ("generals", "othello"):         # --trace_every 1: one episode per game and iteration
         tr = json.loads((stage1 / "rl_eval" / "traces" / f"{g}_it1.json").read_text())
