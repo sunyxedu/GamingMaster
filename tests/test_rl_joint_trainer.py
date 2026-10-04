@@ -915,3 +915,22 @@ def test_value_core_grad_zero_trains_the_value_head_only():
     assert sum(float(g.abs().sum()) for g in c1) > 0
     assert sum(float(g.abs().sum()) for g in c0) == 0
     assert all(torch.allclose(a * 0.5, b, atol=1e-7) for a, b in zip(c1, ch))
+
+
+def test_clear_alarms_resumes_a_stopped_game(stage1):
+    """--clear_alarms GAME on --resume: a game the checkpoint has stopped trains again."""
+    from training import train_rl_joint
+    from training.train_rl_joint import JointRLTrainer, parse_args
+
+    torch.manual_seed(0)
+    train_rl_joint.main(_args(stage1, "rl_clear", "--iterations", "1"))
+    ck_path = stage1 / "rl_clear" / "rl_latest.pt"
+    ck = torch.load(ck_path, map_location="cpu", weights_only=False)
+    ck["rl_state"]["stopped"] = {"othello": "iteration 1: test"}
+    torch.save(ck, ck_path)
+    tr = JointRLTrainer(parse_args(_args(stage1, "rl_clear", "--iterations", "2",
+                                         "--resume", str(ck_path))))
+    assert tr.stopped == {"othello": "iteration 1: test"}
+    tr2 = JointRLTrainer(parse_args(_args(stage1, "rl_clear", "--iterations", "2",
+                                          "--resume", str(ck_path), "--clear_alarms", "othello")))
+    assert tr2.stopped == {}

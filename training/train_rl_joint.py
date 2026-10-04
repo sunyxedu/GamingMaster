@@ -378,6 +378,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--alarm_engine_z", type=float, default=2.5,
       help="... and the drop below the baseline must also exceed this many standard errors of "
            "the difference (binomial, both evaluations' episode counts)")
+    a("--clear_alarms", action="append", default=[], metavar="GAME[,GAME]",
+      help="on --resume: these games' RL resumes although the checkpoint has them stopped by an "
+           "alarm, their alarm streaks reset (a stop judged a false alarm after inspection)")
     a("--alarm_engine_drop", type=float, default=0.15,
       help="... or (every --eval_every) its score against --eval_engine this far below its "
            "first engine evaluation")
@@ -3149,6 +3152,13 @@ class JointRLTrainer:
         self.engine_base_n = dict(st.get("engine_base_n", {}))
         self.engine_streak = dict(st.get("engine_streak", {}))
         self.stopped = dict(st.get("stopped", {}))
+        for g in [x for item in self.args.clear_alarms for x in item.split(",") if x]:
+            # --clear_alarms: a stop judged wrong (e.g. an engine alarm on a lucky baseline)
+            why = self.stopped.pop(g, None)
+            for streak in (self.alarm_streak, self.vs_init_streak, self.engine_streak):
+                streak.pop(g, None)
+            if why:
+                self.log(f"[resume] {g}: RL resumes (--clear_alarms; it was stopped: {why})")
         for g, why in self.stopped.items():
             self.log(f"[resume] {g}: RL stays stopped ({why})")
         self._load_env_states(st.get("envs"), int(ck.get("world_size", 1)))
