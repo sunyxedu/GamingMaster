@@ -74,7 +74,7 @@ def test_alarm_stops_a_game_after_patience_iterations_and_zeroes_its_quota():
                              alarm_engine_drop=0.15, alarm_engine_z=2.5, alarm_patience=2,
                              alarm_min_episodes=8, alarm_min_tokens=1000, tokens_per_iter=100, rl_placement="all"),
         rl_games=["sc2", "chess"], kl_budget={"sc2": 0.03, "chess": 0.03}, alarm_base_len={},
-        alarm_streak={}, vs_init_streak={}, engine_base={}, engine_base_n={}, engine_streak={}, stopped={}, iteration=0, log=logs.append, world=1,
+        alarm_streak={}, vs_init_streak={}, engine_base={}, engine_base_n={}, init_base={}, init_base_n={}, engine_streak={}, stopped={}, iteration=0, log=logs.append, world=1,
         sched=SimpleNamespace(quotas=lambda n: {"sc2": 50, "chess": 50}))
     good = {"episodes": 16, "timeout_rate": 0.0, "ep_len": 100.0, "kl": 0.01}
     bad = {"episodes": 16, "timeout_rate": 0.5, "ep_len": 100.0, "kl": 0.01}
@@ -105,7 +105,7 @@ def test_referee_alarm_counts_evaluations_not_iterations():
         args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
                              alarm_engine_drop=0.15, alarm_engine_z=2.5, alarm_patience=2, alarm_min_episodes=8, alarm_min_tokens=1000),
         rl_games=["chess"], kl_budget={"chess": 0.03}, alarm_base_len={}, alarm_streak={},
-        vs_init_streak={}, engine_base={}, engine_base_n={}, engine_streak={}, stopped={}, iteration=0,
+        vs_init_streak={}, engine_base={}, engine_base_n={}, init_base={}, init_base_n={}, engine_streak={}, stopped={}, iteration=0,
         log=lambda m: None)
     base = {"episodes": 16, "timeout_rate": 0.0, "ep_len": 100.0, "kl": 0.01}
     for vs in (float("nan"), 0.2, float("nan"), float("nan")):   # baseline, a bad eval, 2 plain its
@@ -123,7 +123,7 @@ def test_engine_alarm_is_relative_to_the_first_engine_evaluation():
         args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
                              alarm_engine_drop=0.15, alarm_engine_z=2.5, alarm_patience=2, alarm_min_episodes=8, alarm_min_tokens=1000),
         rl_games=["chess"], kl_budget={"chess": 0.03}, alarm_base_len={"chess": 100.0},
-        alarm_streak={}, vs_init_streak={}, engine_base={}, engine_base_n={}, engine_streak={}, stopped={},
+        alarm_streak={}, vs_init_streak={}, engine_base={}, engine_base_n={}, init_base={}, init_base_n={}, engine_streak={}, stopped={},
         iteration=0, log=lambda m: None)
     base = {"episodes": 16, "timeout_rate": 0.0, "ep_len": 100.0, "kl": 0.01, "vs_engine_n": 128}
     for ve in (0.10, 0.05, 0.12):          # a strong engine: low scores are no alarm by themselves
@@ -146,7 +146,7 @@ def test_engine_baseline_is_taken_on_the_first_iteration_too():
         args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
                              alarm_engine_drop=0.15, alarm_engine_z=2.5, alarm_patience=2, alarm_min_episodes=8, alarm_min_tokens=1000),
         rl_games=["chess"], kl_budget={"chess": 0.03}, alarm_base_len={}, alarm_streak={},
-        vs_init_streak={}, engine_base={}, engine_base_n={}, engine_streak={}, stopped={}, iteration=0,
+        vs_init_streak={}, engine_base={}, engine_base_n={}, init_base={}, init_base_n={}, engine_streak={}, stopped={}, iteration=0,
         log=lambda m: None)
     base = {"episodes": 16, "timeout_rate": 0.0, "ep_len": 100.0, "kl": 0.01}
     JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": 0.40, "vs_engine_n": 128}}})
@@ -168,7 +168,7 @@ def test_few_episode_games_are_judged_on_kl():
                              alarm_engine_drop=0.15, alarm_engine_z=2.5, alarm_patience=2, alarm_min_episodes=8,
                              alarm_min_tokens=1000),
         rl_games=["hok", "sc2"], kl_budget={"hok": 0.03, "sc2": 0.03}, alarm_base_len={},
-        alarm_streak={}, vs_init_streak={}, engine_base={}, engine_base_n={}, engine_streak={}, stopped={},
+        alarm_streak={}, vs_init_streak={}, engine_base={}, engine_base_n={}, init_base={}, init_base_n={}, engine_streak={}, stopped={},
         iteration=0, log=lambda m: None)
     hok = {"episodes": 1, "tokens": 4400, "timeout_rate": 0.0, "ep_len": 2233.0, "kl": 0.10}
     sc2 = {"episodes": 1, "tokens": 8400, "timeout_rate": 1.0, "ep_len": 8441.0, "kl": 0.006}
@@ -197,7 +197,8 @@ def test_engine_alarm_needs_the_drop_beyond_the_noise():
                                  alarm_min_episodes=8, alarm_min_tokens=1000),
             rl_games=["backgammon"], kl_budget={"backgammon": 0.03},
             alarm_base_len={"backgammon": 300.0}, alarm_streak={}, vs_init_streak={},
-            engine_base={"backgammon": 0.47}, engine_base_n={"backgammon": n}, engine_streak={},
+            engine_base={"backgammon": 0.47}, engine_base_n={"backgammon": n}, init_base={},
+            init_base_n={}, engine_streak={},
             stopped={}, iteration=0, log=lambda m: None)
         row = {"episodes": 10, "timeout_rate": 0.0, "ep_len": 300.0, "kl": 0.002,
                "vs_engine": 0.30, "vs_engine_n": n}
@@ -207,3 +208,36 @@ def test_engine_alarm_needs_the_drop_beyond_the_noise():
 
     assert not run(40)
     assert "score vs the engine" in run(400)["backgammon"]
+
+
+
+def test_vs_init_alarm_of_multi_seat_games_uses_their_equal_strength_level():
+    """mahjong (4 seats): ~0.31 vs the --init network is par (a quarter of the wins + half
+    credit for drawn hands), no alarm against the fixed 0.35; its iteration-0 baseline
+    (learner = init) is the level a drop is judged from."""
+    from types import SimpleNamespace
+
+    from training.train_rl_joint import JointRLTrainer
+    t = SimpleNamespace(
+        args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
+                             alarm_vs_init_drop=0.15, alarm_engine_drop=0.15, alarm_engine_z=2.5,
+                             alarm_patience=2, alarm_min_episodes=8, alarm_min_tokens=1000),
+        rl={"mahjong": SimpleNamespace(env=SimpleNamespace(n_seats=4))},
+        rl_games=["mahjong"], kl_budget={"mahjong": 0.03}, alarm_base_len={}, alarm_streak={},
+        vs_init_streak={}, engine_base={}, engine_base_n={}, init_base={}, init_base_n={},
+        engine_streak={}, stopped={}, iteration=0, log=lambda m: None)
+    base = {"episodes": 12, "timeout_rate": 0.0, "ep_len": 550.0, "kl": 0.002, "vs_init_n": 128}
+    JointRLTrainer._alarms(t, {"games": {"mahjong": {**base, "vs_init": 0.31}}})   # iteration 0
+    assert t.init_base == {"mahjong": 0.31}
+    for vi in (0.30, 0.29):                      # par, not < 0.35's two-player meaning
+        JointRLTrainer._alarms(t, {"games": {"mahjong": {**base, "vs_init": vi}}})
+    assert not t.stopped
+    for vi in (0.10, 0.09):                      # far below its own level, twice
+        JointRLTrainer._alarms(t, {"games": {"mahjong": {**base, "vs_init": vi}}})
+    assert "score vs the --init network" in t.stopped["mahjong"]
+    # no baseline (a run resumed from before it existed): not judged on this score
+    t2 = SimpleNamespace(**{**vars(t), "init_base": {}, "init_base_n": {}, "stopped": {},
+                            "vs_init_streak": {}, "alarm_base_len": {"mahjong": 550.0}})
+    for it, vi in ((41, 0.05), (61, 0.05)):
+        JointRLTrainer._alarms(t2, {"iteration": it, "games": {"mahjong": {**base, "vs_init": vi}}})
+    assert not t2.stopped and t2.init_base == {}           # no baseline taken after iteration 0

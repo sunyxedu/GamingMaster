@@ -375,6 +375,12 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="episodes of the iteration-0 engine evaluation (the IL policy: the baseline every "
            "later evaluation and the engine alarm compare with — bench v2's configs all shared "
            "one lucky 40-game backgammon baseline, 0.44, and every later evaluation 'dropped')")
+    a("--alarm_vs_init_drop", type=float, default=0.15,
+      help="games of 3+ seats (mahjong, skat, doudizhu, bridge): the score vs the --init "
+           "network is judged against its own equal-strength level — measured at iteration 0, "
+           "where the learner IS the --init network (mahjong ~0.3, skat ~0.42; the fixed "
+           "--alarm_vs_init is for two-player games) — a drop of more than this and of "
+           "--alarm_engine_z standard errors stops it")
     a("--alarm_engine_z", type=float, default=2.5,
       help="... and the drop below the baseline must also exceed this many standard errors of "
            "the difference (binomial, both evaluations' episode counts)")
@@ -1392,6 +1398,12 @@ def alarm_reasons(row: Mapping[str, float], base_len: Optional[float], kl_budget
     return out
 
 
+def _n_seats(trainer: Any, g: str) -> int:
+    """A trainer's game ``g`` seat count (2 when unknown)."""
+    r = getattr(trainer, "rl", {}).get(g)
+    return int(getattr(getattr(r, "env", None), "n_seats", 2) or 2)
+
+
 def _plain(x: Any) -> Any:
     """Tensors / arrays / nested dicts → JSON values."""
     if torch.is_tensor(x):
@@ -2017,6 +2029,9 @@ class JointRLTrainer:
         self._engine_failed: Dict[str, str] = {}
         self.engine_base: Dict[str, float] = {}
         self.engine_base_n: Dict[str, int] = {}
+        #: games of 3+ seats: their score vs the --init network at iteration 0 (equal strength)
+        self.init_base: Dict[str, float] = {}
+        self.init_base_n: Dict[str, int] = {}
         self.engine_streak: Dict[str, int] = {}
         self.stopped: Dict[str, str] = {}
         #: per-game cost of the latest iteration that played it (rollout + learner
@@ -2155,8 +2170,13 @@ class JointRLTrainer:
                                        f"learner tokens")
             stats[g] = total
             evaluate = a.eval_every > 0 and it % a.eval_every == 0 and r.env.n_seats >= 2
-            if evaluate and it > 0:
-                ev = self._eval_vs_init(g, r, it, gi)
+            # 3+ seats: also at iteration 0, the learner = the --init network, so the score is
+            # the game's equal-strength level (the baseline of its vs_init alarm)
+            if evaluate and (it > 0 or (a.eval_at_start and r.env.n_seats > 2
+                                        and g not in self.init_base)):
+                n0 = (max(self.eval_episodes.get(g, a.eval_episodes), a.eval_start_episodes)
+                      if it == 0 else None)
+                ev = self._eval_vs_init(g, r, it, gi, n0)
                 diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n)
             if evaluate and (it > 0 or a.eval_at_start):
                 if g in self.eval_engine and g not in self._engine_failed:
@@ -2758,13 +2778,14 @@ class JointRLTrainer:
             json.dump(rec, f, default=str)
         os.replace(f"{path}.tmp", path)
 
-    def _eval_vs_init(self, g: str, r: GameRL, it: int, gi: int) -> WaveStats:
+    def _eval_vs_init(self, g: str, r: GameRL, it: int, gi: int,
+                      episodes: Optional[int] = None) -> WaveStats:
         """The learner against the frozen --init network on the game's env (no mirror
         episodes, seats drawn per episode), whole waves until --eval_episodes; the
         streams are dropped.  Self-play reward can rise from an exploit of the learner's
         own play; a policy that got worse against where it started cannot hide it here."""
         ref = NetworkPolicy(self.ref[g], act_steps=self.depth, device=self.device, bf16=self.args.bf16)
-        return self._eval_against(g, r, it, gi, "init", ref)
+        return self._eval_against(g, r, it, gi, "init", ref, episodes)
 
     def _engine(self, g: str):
         """The game's --eval_engine (one process per rank, kept for the run)."""
@@ -2832,6 +2853,13 @@ class JointRLTrainer:
             if first_engine:            # the baseline, also on the first (unjudged) iteration
                 self.engine_base[g] = ve
                 self.engine_base_n[g] = int(row.get("vs_engine_n", 0))
+            vi0 = row.get("vs_init", float("nan"))
+            first_init = (_n_seats(self, g) > 2 and g not in self.init_base and math.isfinite(vi0)
+                          and row.get("vs_init_n", 0) >= a.alarm_min_episodes
+                          and rec.get("iteration", 1) <= 1)    # only iteration 0: learner = init
+            if first_init:              # equal strength: the learner was the --init network
+                self.init_base[g] = vi0
+                self.init_base_n[g] = int(row.get("vs_init_n", 0))
             if not few and g not in self.alarm_base_len and \
                     math.isfinite(row.get("ep_len", float("nan"))):
                 self.alarm_base_len[g] = float(row["ep_len"])
@@ -2844,12 +2872,25 @@ class JointRLTrainer:
             self.alarm_streak[g] = self.alarm_streak.get(g, 0) + 1 if why else 0
             # the referee (every --eval_every): its own streak over evaluations
             vi = row.get("vs_init", float("nan"))
-            if a.alarm_vs_init > 0 and math.isfinite(vi) \
-                    and row.get("vs_init_n", 0) >= a.alarm_min_episodes:
-                low = vi < a.alarm_vs_init
+            n_vi = row.get("vs_init_n", 0)
+            judged = a.alarm_vs_init > 0 and math.isfinite(vi) and n_vi >= a.alarm_min_episodes \
+                and not first_init
+            if judged and _n_seats(self, g) > 2:
+                # 3+ seats: against the game's own equal-strength level (none measured, e.g. a
+                # run resumed from before this existed: not judged on this score)
+                if g in self.init_base:
+                    b, nb = self.init_base[g], self.init_base_n.get(g, n_vi)
+                    se2 = max(b * (1 - b), 0.05) / max(nb, 1) + max(vi * (1 - vi), 0.05) / max(n_vi, 1)
+                    limit = b - max(a.alarm_vs_init_drop, a.alarm_engine_z * math.sqrt(se2))
+                else:
+                    judged, limit = False, float("-inf")
+            else:
+                limit = a.alarm_vs_init
+            if judged:
+                low = vi < limit
                 self.vs_init_streak[g] = self.vs_init_streak.get(g, 0) + 1 if low else 0
                 if low:
-                    why.append(f"score vs the --init network {vi:.3f} < {a.alarm_vs_init}")
+                    why.append(f"score vs the --init network {vi:.3f} < {limit:.3f}")
             if math.isfinite(ve) and row.get("vs_engine_n", 0) >= a.alarm_min_episodes \
                     and not first_engine:
                 if a.alarm_engine_drop > 0:
@@ -2998,6 +3039,7 @@ class JointRLTrainer:
                 "vs_init_streak": dict(self.vs_init_streak),
                 "engine_base": dict(self.engine_base), "engine_streak": dict(self.engine_streak),
                 "engine_base_n": dict(self.engine_base_n),
+                "init_base": dict(self.init_base), "init_base_n": dict(self.init_base_n),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -3150,6 +3192,8 @@ class JointRLTrainer:
         self.vs_init_streak = dict(st.get("vs_init_streak", {}))
         self.engine_base = dict(st.get("engine_base", {}))
         self.engine_base_n = dict(st.get("engine_base_n", {}))
+        self.init_base = dict(st.get("init_base", {}))
+        self.init_base_n = dict(st.get("init_base_n", {}))
         self.engine_streak = dict(st.get("engine_streak", {}))
         self.stopped = dict(st.get("stopped", {}))
         for g in [x for item in self.args.clear_alarms for x in item.split(",") if x]:
