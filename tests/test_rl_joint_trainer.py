@@ -934,3 +934,19 @@ def test_clear_alarms_resumes_a_stopped_game(stage1):
     tr2 = JointRLTrainer(parse_args(_args(stage1, "rl_clear", "--iterations", "2",
                                           "--resume", str(ck_path), "--clear_alarms", "othello")))
     assert tr2.stopped == {}
+
+
+def test_stop_file_saves_and_exits_after_the_iteration(stage1):
+    """--stop_file: once the file exists the trainer writes rl_latest.pt after the iteration
+    and stops — no rl_final.pt (the job's wrapper continues with a handover)."""
+    from training import train_rl_joint
+
+    save = stage1 / "rl_stopfile"
+    save.mkdir(exist_ok=True)
+    stop = save / "STOP"
+    stop.write_text("now")
+    torch.manual_seed(0)
+    out = train_rl_joint.main(_args(stage1, "rl_stopfile", "--iterations", "3",
+                                    "--stop_file", str(stop), "--ckpt_minutes", "0"))
+    assert len(out["history"]) == 1
+    assert (save / "rl_latest.pt").exists() and not (save / "rl_final.pt").exists()

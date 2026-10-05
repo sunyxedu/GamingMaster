@@ -479,6 +479,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     # --- run ---
     a("--save_dir", default="checkpoints/rl_joint")
     a("--ckpt_minutes", type=float, default=30.0, help="write rl_latest.pt this often")
+    a("--stop_file", default=None,
+      help="checked after every iteration: once this file exists the trainer writes "
+           "rl_latest.pt and exits (no rl_final.pt) — the job's wrapper can then continue "
+           "with a handover (new code / arguments) in the same allocation, keeping its GPU")
     a("--ckpt_every", type=int, default=0, help="also every N iterations (0 = off)")
     a("--save_every", type=int, default=0, help="keep rl_iter<N>.pt every N iterations")
     a("--resume", default=None, help="rl_latest.pt to continue from (same arguments)")
@@ -3230,6 +3234,18 @@ class JointRLTrainer:
             f.writelines(keep)
         os.replace(f"{path}.tmp", path)
 
+    def _stop_requested(self) -> bool:
+        """--stop_file exists (rank 0 decides for everyone)."""
+        a = self.args
+        if not a.stop_file:
+            return False
+        want = os.path.exists(a.stop_file) if self.rank0 else False
+        if not self.dist_env.enabled:
+            return want
+        flag = torch.tensor([1.0 if want else 0.0], device=collective_device())
+        dist.broadcast(flag, src=0)
+        return bool(flag.item() > 0)
+
     def _want_checkpoint(self, last_save: float) -> bool:
         a = self.args
         due = (self.iteration >= a.iterations
@@ -3246,17 +3262,24 @@ class JointRLTrainer:
     def train(self) -> Dict[str, Any]:
         a = self.args
         last_save = time.time()
+        stop_requested = False
         while self.iteration < a.iterations:
             self.run_iteration()
             if self.rl_games and len(self.stopped) == len(self.rl_games):
                 self.log("[alarm] every RL game is stopped: ending the run")
+                break
+            if self._stop_requested():
+                self.save(CKPT_LATEST)
+                self.log(f"[stop] iteration {self.iteration}: {a.stop_file} — rl_latest.pt "
+                         f"written, exiting for the handover")
+                stop_requested = True
                 break
             if self._want_checkpoint(last_save):
                 self.save(CKPT_LATEST)
                 last_save = time.time()
             if a.save_every and self.iteration % a.save_every == 0:
                 self.save(f"rl_iter{self.iteration}.pt")
-        final = self.save(CKPT_FINAL)
+        final = None if stop_requested else self.save(CKPT_FINAL)
         if final:
             self.log(f"[done] saved {final}")
         return {"model": self.model, "ema": self.ema, "optimizer": self.optimizer,
