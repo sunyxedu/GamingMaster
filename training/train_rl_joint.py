@@ -1405,6 +1405,29 @@ def alarm_reasons(row: Mapping[str, float], base_len: Optional[float], kl_budget
     return out
 
 
+def two_phase_placement(rollout: Mapping[str, float], learn: Mapping[str, float],
+                        world: int) -> Dict[str, int]:
+    """game → rank minimising (about) max rollout seconds + max learner seconds over the
+    ranks: games by decreasing rollout + learner seconds (then name) to the rank where
+    that sum grows least; ties: the rank's own rollout + learner load, then its index."""
+    R = [0.0] * world
+    L = [0.0] * world
+    owner: Dict[str, int] = {}
+    for g in sorted(rollout, key=lambda x: (-(rollout[x] + learn.get(x, 0.0)), x)):
+        rg, lg = rollout[g], learn.get(g, 0.0)
+
+        def grown(i: int) -> Tuple[float, float, int]:
+            r_max = max(max(R), R[i] + rg)
+            l_max = max(max(L), L[i] + lg)
+            return (r_max + l_max, R[i] + L[i], i)
+
+        i = min(range(world), key=grown)
+        owner[g] = i
+        R[i] += rg
+        L[i] += lg
+    return owner
+
+
 def _n_seats(trainer: Any, g: str) -> int:
     """A trainer's game ``g`` seat count (2 when unknown)."""
     r = getattr(trainer, "rl", {}).get(g)
@@ -1691,7 +1714,7 @@ DIAG_KEYS = (
     "ev_n", "ev_g", "ev_g2", "ev_e", "ev_e2",
     "il_sum", "il_n", "rkl_sum", "rkl_n", "rvl_sum",
     "gn_rl", "gn_rl_n", "gn_replay", "gn_replay_n",
-    "learn_s", "learn_fwd", "replay_s", "rollout_s", "rollout_steps",
+    "learn_s", "learn_fwd", "replay_s", "rollout_s", "rollout_steps", "eval_s",
 )
 
 
@@ -2185,17 +2208,26 @@ class JointRLTrainer:
                     raise RuntimeError(f"{g}: a wave of {r.env.num_envs} envs produced no "
                                        f"learner tokens")
             stats[g] = total
+            t_roll = time.time() - t_game     # the rollouts alone: the placement's cost
             self._evaluate(g, r, it, gi, diag)
             diag.add(g, episodes=total.episodes, ep_len_sum=total.ep_len_sum,
                      score_sum=total.score_sum, score_n=total.score_n, mirror=total.mirror,
                      timeouts=total.timeouts,
-                     streams=len(r.streams), rollout_s=time.time() - t_game,
+                     streams=len(r.streams), rollout_s=t_roll,
                      rollout_steps=total.steps)
         return stats
 
     def _evaluate(self, g: str, r: GameRL, it: int, gi: int, diag: Diag) -> None:
         """Every --eval_every iterations: the learner against the frozen --init network
-        (vs_init) and against the game's --eval_engine referee (vs_engine)."""
+        (vs_init) and against the game's --eval_engine referee (vs_engine); its seconds
+        are the game's eval_s."""
+        t0 = time.time()
+        try:
+            self._evaluate_games(g, r, it, gi, diag)
+        finally:
+            diag.add(g, eval_s=time.time() - t0)
+
+    def _evaluate_games(self, g: str, r: GameRL, it: int, gi: int, diag: Diag) -> None:
         a = self.args
         evaluate = a.eval_every > 0 and it % a.eval_every == 0 and r.env.n_seats >= 2
         # 3+ seats: also at iteration 0, the learner = the --init network, so the score is
@@ -2693,17 +2725,23 @@ class JointRLTrainer:
         return q, per_rank
 
     def placement(self, quotas: Mapping[str, int]) -> Dict[str, int]:
-        """game → the rank that plays its whole quota (--rl_placement split):
-        longest-processing-time first over :attr:`game_cost` (rank-identical), the
-        quota for a game not measured yet; ties by name and rank (deterministic)."""
-        cost = {g: self.game_cost.get(g, float(quotas.get(g, 0))) for g in self.rl_games}
-        load = [0.0] * self.world
-        owner: Dict[str, int] = {}
-        for g in sorted(self.rl_games, key=lambda x: (-cost[x], x)):
-            r = min(range(self.world), key=lambda i: (load[i], i))
-            owner[g] = r
-            load[r] += cost[g]
-        return owner
+        """game → the rank that plays its whole quota (--rl_placement split), from the
+        rank-identical costs of the latest iteration that played each game: its rollout
+        seconds and its learner seconds (:attr:`game_cost` = their sum, :attr:`learn_cost`;
+        the quota as rollout cost for a game not measured yet, 0 for a game without quota).
+        The iteration waits for the slowest rank twice — after the rollouts, and at every
+        learner step — so it takes about max rollout + max learner load over the ranks:
+        the games go longest first to the rank where that sum grows least (balancing each
+        rank's total alone can put the longest rollouts and the heaviest learner load on
+        different ranks' critical paths); ties: the rank's own load, then the lowest rank
+        (deterministic, rank-identical)."""
+        total, learn = {}, {}
+        for g in self.rl_games:
+            q = float(quotas.get(g, 0))
+            total[g] = self.game_cost.get(g, q) if q > 0 else 0.0
+            learn[g] = min(self.learn_cost.get(g, 0.0), total[g])
+        return two_phase_placement({g: total[g] - learn[g] for g in self.rl_games}, learn,
+                                   self.world)
 
     def run_iteration(self) -> Dict[str, Any]:
         a = self.args
@@ -3005,6 +3043,7 @@ class JointRLTrainer:
                 # per-rank rollout / learner seconds, env steps and forwards (summed
                 # over ranks)
                 row.update(rollout_s=d["rollout_s"] / self.world,
+                           eval_s=d["eval_s"] / self.world,
                            rollout_steps=d["rollout_steps"] / self.world,
                            learn_s=d["learn_s"] / self.world,
                            learn_fwd=d["learn_fwd"] / self.world)

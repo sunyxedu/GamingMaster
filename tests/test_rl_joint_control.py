@@ -412,3 +412,40 @@ def test_kl_beta_rises_faster_than_it_falls_and_keeps_its_floor():
     sym = AdaptiveKLBeta(["a"], 0.03, init=0.05, rate=0.5, err_clip=0.2)
     sym.update({"a": 0.3})
     assert sym["a"] == pytest.approx(0.055)         # the old symmetric +10%
+
+
+def test_two_phase_placement_balances_both_waits():
+    """--rl_placement split: the iteration waits for the slowest rank after the rollouts and
+    at every learner step, so the placement minimises about max rollout + max learner load;
+    deterministic, every game placed, one rank takes everything."""
+    from training.train_rl_joint import two_phase_placement
+
+    # the 4-GPU smoke's measured seconds per game (rollout, learner)
+    cost = {"sc2": (208, 76), "clash_royale": (88, 68), "generals": (48, 56), "lux": (28, 64),
+            "go": (36, 36), "arc3": (32, 24), "mahjong": (24, 12), "gomoku": (16, 40),
+            "bridge": (16, 24), "tetris": (8, 20), "pokemon": (16, 8), "chess_variants": (12, 16),
+            "xiangqi": (8, 12), "shogi": (12, 16), "skat": (12, 12), "doudizhu": (8, 16),
+            "backgammon": (8, 12), "chess": (12, 12), "othello": (4, 12), "hunl": (4, 8),
+            "hok": (0, 0)}
+    roll = {g: float(v[0]) for g, v in cost.items()}
+    learn = {g: float(v[1]) for g, v in cost.items()}
+
+    def critical(owner, world):
+        R, L = [0.0] * world, [0.0] * world
+        for g, r in owner.items():
+            R[r] += roll[g]
+            L[r] += learn[g]
+        return max(R) + max(L)
+
+    owner = two_phase_placement(roll, learn, 4)
+    assert set(owner) == set(cost) and set(owner.values()) <= {0, 1, 2, 3}
+    assert owner == two_phase_placement(dict(reversed(list(roll.items()))), learn, 4)
+    load = [0.0] * 4                      # longest-processing-time over the sum (the old rule)
+    lpt = {}
+    for g in sorted(cost, key=lambda x: (-(roll[x] + learn[x]), x)):
+        r = min(range(4), key=lambda i: (load[i], i))
+        lpt[g] = r
+        load[r] += roll[g] + learn[g]
+    assert critical(owner, 4) < critical(lpt, 4)
+    assert critical(owner, 4) <= 208 + 76 + 0.25 * (sum(learn.values()) - 76) + 20
+    assert set(two_phase_placement(roll, learn, 1).values()) == {0}
