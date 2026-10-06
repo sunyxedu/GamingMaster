@@ -93,9 +93,9 @@ Design notes:
 from __future__ import annotations
 
 import bisect
-import glob
 import os
-from typing import Dict, Iterator, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple, TypeVar
 
 import numpy as np
 import torch
@@ -112,6 +112,67 @@ VALUE_TARGET_BOUND = 1.0          # |tgt["value"]| ≤ this for every converter 
 #: shard is first read.  Used only while at least as new as index.json.
 HEAD_SIDECAR = "index.head.json"
 LENGTHS_SIDECAR = "index.lengths.npy"
+
+#: Threads for opening a data root: the directory walk, each shard's format check and header
+#: sidecars are a few small file-system round trips per shard — latency-bound on a network file
+#: system (a GPU node of the cluster: ~24 ms per shard one after another, ~1.4 ms with 32
+#: threads; a 21-game RL start-up opened ~60k shards for ~25 min).  GM_SHARD_IO_THREADS=1 walks
+#: and reads one at a time.
+SHARD_IO_THREADS = max(1, int(os.environ.get("GM_SHARD_IO_THREADS", "16")))
+
+_T = TypeVar("_T")
+_R = TypeVar("_R")
+
+
+def _io_map(fn: Callable[[_T], _R], items: Sequence[_T]) -> List[_R]:
+    """``[fn(x) for x in items]`` on SHARD_IO_THREADS threads (results in order)."""
+    if SHARD_IO_THREADS <= 1 or len(items) <= 1:
+        return [fn(x) for x in items]
+    with ThreadPoolExecutor(min(SHARD_IO_THREADS, len(items))) as ex:
+        return list(ex.map(fn, items))
+
+
+def _scan_dir(top: str) -> Tuple[List[str], List[str], List[str]]:
+    """One directory: its ``*.pt`` files, its ``index.json`` and its subdirectories (symlinked
+    ones followed, hidden entries skipped — as ``glob``'s ``**``)."""
+    pts: List[str] = []
+    idx: List[str] = []
+    dirs: List[str] = []
+    try:
+        with os.scandir(top) as it:
+            for e in it:
+                if e.name.startswith("."):
+                    continue
+                try:
+                    is_dir = e.is_dir()
+                except OSError:
+                    is_dir = False
+                if is_dir:
+                    dirs.append(e.path)
+                elif e.name == "index.json":
+                    idx.append(e.path)
+                elif e.name.endswith(".pt"):
+                    pts.append(e.path)
+    except OSError:
+        pass
+    return pts, idx, dirs
+
+
+def walk_data_root(data_dir: str) -> Tuple[List[str], List[str]]:
+    """``(sorted *.pt files, sorted index.json files)`` under ``data_dir`` — what
+    ``glob(data_dir/**/*.pt)`` and ``glob(data_dir/**/index.json)`` (recursive) find, in one
+    walk whose directories are listed SHARD_IO_THREADS at a time, level by level."""
+    pts: List[str] = []
+    idx: List[str] = []
+    level = [data_dir]
+    while level:
+        nxt: List[str] = []
+        for p, i, d in _io_map(_scan_dir, level):
+            pts += p
+            idx += i
+            nxt += d
+        level = nxt
+    return sorted(pts), sorted(idx)
 
 
 def shard_header(path: str) -> Tuple[Dict, np.ndarray]:
@@ -235,9 +296,13 @@ def _expander(game: str):
 
 
 def find_gm_shards(data_dir: str) -> List[str]:
-    return sorted(os.path.dirname(p) for p in
-                  glob.glob(os.path.join(data_dir, "**", "index.json"), recursive=True)
-                  if _is_gm_shard(os.path.dirname(p)))
+    return _gm_shard_dirs(walk_data_root(data_dir)[1])
+
+
+def _gm_shard_dirs(index_files: Sequence[str]) -> List[str]:
+    """The gm-shard directories among ``index_files``' directories (format checks in parallel)."""
+    dirs = [os.path.dirname(p) for p in index_files]
+    return sorted(d for d, ok in zip(dirs, _io_map(_is_gm_shard, dirs)) if ok)
 
 
 #: index.json's head up to its top-level "format": only plain scalar keys before it (the Rust
@@ -379,8 +444,9 @@ class GameShardDataset(Dataset):
             raise ValueError(f"crop must be one of {self.CROPS}, got {crop!r}")
         self.crop = crop
         # .pt shards (torch.save) and/or gm-shard.v1 directories (Rust converters)
-        self.paths = sorted(glob.glob(os.path.join(data_dir, "**", "*.pt"),
-                                      recursive=True)) + find_gm_shards(data_dir)
+        pt_files, index_files = walk_data_root(data_dir)
+        gm_dirs = _gm_shard_dirs(index_files)
+        self.paths = pt_files + gm_dirs
         if not self.paths:
             raise FileNotFoundError(f"no .pt shards or gm-shard directories under {data_dir}")
         self.game = game
@@ -402,8 +468,10 @@ class GameShardDataset(Dataset):
         self._obs_keys: Optional[frozenset] = None
         self._tgt_keys: Optional[frozenset] = None
         self.seat_split = False
+        # gm-shard headers (sidecars) read in parallel; .pt shards (whole files) one at a time
+        heads = dict(zip(gm_dirs, _io_map(lambda d: self._open(d, header_only=True), gm_dirs)))
         for si, p in enumerate(self.paths):
-            shard = self._open(p, header_only=True)
+            shard = heads.pop(p) if p in heads else self._open(p, header_only=True)
             self._check(shard, p)
             if si == 0:        # one decision per dataset (_check: one meta, one game)
                 self.seat_split = (seat_split if seat_split is not None else
@@ -581,8 +649,8 @@ def schema_meta(meta: Dict) -> Dict:
 
 def has_shards(data_dir: str) -> bool:
     """Whether ``data_dir`` holds any .pt shard or gm-shard directory."""
-    return bool(glob.glob(os.path.join(data_dir, "**", "*.pt"), recursive=True)
-                or find_gm_shards(data_dir))
+    pt_files, index_files = walk_data_root(data_dir)
+    return bool(pt_files or _gm_shard_dirs(index_files))
 
 
 def open_game_dataset(data_dir: str, game: str, max_len: Optional[int] = None,

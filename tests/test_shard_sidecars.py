@@ -68,3 +68,41 @@ def test_format_check_reads_the_head(tmp_path):
     with open(os.path.join(d, "index.json"), "w") as fh:
         fh.write('{"format": "other"}')
     assert not _is_gm_shard(d)
+
+
+def test_parallel_walk_finds_what_glob_finds(tmp_path, monkeypatch):
+    """walk_data_root / find_gm_shards / GameShardDataset (directories listed and shard headers
+    read on SHARD_IO_THREADS threads): the same shards, in the same order, as the one-at-a-time
+    glob walk — symlinked shard directories followed (the frozen w* roots), hidden entries
+    skipped, a root that is itself a shard included."""
+    import glob
+
+    from data_processing.games import dataset as D
+
+    root = tmp_path / "root"
+    for i, lengths in enumerate(([3, 1], [2], [4, 4, 1], [5])):
+        _shard(str(tmp_path / "store" / f"s{i}"), lengths)
+    _shard(str(root / "a" / "x"), [2, 2])
+    _shard(str(root / "b"), [1])
+    _shard(str(root / ".hidden" / "h"), [7])                    # glob's ** skips hidden entries
+    (root / "frozen").mkdir()
+    for i in (2, 0, 3):                                         # symlinks, names out of order
+        os.symlink(tmp_path / "store" / f"s{i}", root / "frozen" / f"l{2 - i + 5}")
+    (root / "notes.txt").write_text("not a shard")
+    (root / "a" / "stray.json").write_text("{}")
+    write_shard_sidecars(str(root / "b"))
+    want_idx = sorted(glob.glob(os.path.join(str(root), "**", "index.json"), recursive=True))
+    want_pt = sorted(glob.glob(os.path.join(str(root), "**", "*.pt"), recursive=True))
+    for threads in (1, 16):
+        monkeypatch.setattr(D, "SHARD_IO_THREADS", threads)
+        pts, idx = D.walk_data_root(str(root))
+        assert (pts, idx) == (want_pt, want_idx) and len(idx) == 5
+        assert D.find_gm_shards(str(root)) == sorted(os.path.dirname(p) for p in want_idx)
+        ds = D.GameShardDataset(str(root), game="toy")
+        assert ds.sample_lengths().tolist() == [2, 2, 1, 5, 4, 4, 1, 3, 1]
+        assert [ds[i]["obs"]["x"].tolist() for i in (0, 3, 8)] == [
+            [[0.0], [1.0]], [[0.0], [1.0], [2.0], [3.0], [4.0]], [[3.0]]]
+    one = tmp_path / "one"
+    _shard(str(one), [2])                                        # the root itself is a shard
+    assert D.find_gm_shards(str(one)) == [str(one)]
+    assert D.walk_data_root(str(tmp_path / "missing")) == ([], [])
