@@ -793,6 +793,23 @@ def test_eval_vs_init_and_alarm_fields(stage1):
     assert "state" in gen["steps"][0]            # generals: the board after every step
 
 
+def test_a_game_that_trains_nowhere_is_still_evaluated(stage1):
+    """A zero --share (like a game stopped by an alarm) plays no RL episode, but every
+    --eval_every it still plays the frozen --init network: a game left out of RL stays visible
+    while the shared core moves under it."""
+    from training import train_rl_joint
+
+    torch.manual_seed(0)
+    out = train_rl_joint.main(_args(stage1, "rl_idle_eval", "--iterations", "2", "--eval_every", "1",
+                                    "--eval_episodes", "4", "--eval_episodes_game", "generals=2",
+                                    "--share", "othello=0"))
+    row = out["history"][1]["games"]["othello"]
+    assert row["episodes"] == 0 and row["tokens"] == 0, row
+    assert row["vs_init_n"] >= 4 and 0.0 <= row["vs_init"] <= 1.0, row
+    assert out["history"][1]["games"]["generals"]["episodes"] > 0
+    assert "alarm" not in row and out["trainer"].stopped == {}
+
+
 def test_a_failing_engine_referee_is_disabled_not_fatal(stage1):
     """--eval_engine with an engine that cannot start: the run goes on, the referee is off."""
     from training import train_rl_joint

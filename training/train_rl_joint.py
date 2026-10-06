@@ -2044,6 +2044,8 @@ class JointRLTrainer:
         #: per-game cost of the latest iteration that played it (rollout + learner
         #: seconds, rank-identical): the --rl_placement split assignment
         self.game_cost: Dict[str, float] = {}
+        #: game → the rank that plays it this iteration (--rl_placement split; empty otherwise)
+        self._owner: Dict[str, int] = {}
         #: per-game seconds of one replay batch (the latest measurement, rank-identical):
         #: the --replay_split assignment
         self.replay_cost: Dict[str, float] = {}
@@ -2135,7 +2137,8 @@ class JointRLTrainer:
     # rollouts
     # ------------------------------------------------------------------
 
-    def _rollouts(self, it: int, quotas: Dict[str, int], diag: Diag) -> Dict[str, WaveStats]:
+    def _rollouts(self, it: int, quotas: Dict[str, int], diag: Diag,
+                  global_quotas: Optional[Mapping[str, int]] = None) -> Dict[str, WaveStats]:
         a = self.args
         stats: Dict[str, WaveStats] = {}
         for r in self.rl.values():      # free the last iteration's buffers first
@@ -2144,6 +2147,12 @@ class JointRLTrainer:
             r = self.rl[g]
             q = quotas.get(g, 0)
             if q <= 0:
+                # a game that trains on no rank this iteration (stopped by an alarm, a zero
+                # --share) is still evaluated — on the rank that would play it — so it stays
+                # visible while the shared core keeps moving under it
+                if (global_quotas is not None and global_quotas.get(g, 0) <= 0
+                        and self._owner.get(g, self.rank) == self.rank):
+                    self._evaluate(g, r, it, gi, diag)
                 continue
             if r.shaping is not None:
                 r.env.shaping = shaping_weight(*r.shaping, it)
@@ -2176,37 +2185,43 @@ class JointRLTrainer:
                     raise RuntimeError(f"{g}: a wave of {r.env.num_envs} envs produced no "
                                        f"learner tokens")
             stats[g] = total
-            evaluate = a.eval_every > 0 and it % a.eval_every == 0 and r.env.n_seats >= 2
-            # 3+ seats: also at iteration 0, the learner = the --init network, so the score is
-            # the game's equal-strength level (the baseline of its vs_init alarm)
-            if evaluate and (it > 0 or (a.eval_at_start and r.env.n_seats > 2
-                                        and g not in self.init_base)):
-                n0 = (max(self.eval_episodes.get(g, a.eval_episodes), a.eval_start_episodes)
-                      if it == 0 else None)
-                ev = self._eval_vs_init(g, r, it, gi, n0)
-                diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n)
-            if evaluate and (it > 0 or a.eval_at_start):
-                if g in self.eval_engine and g not in self._engine_failed:
-                    try:
-                        n0 = (max(self.eval_episodes.get(g, a.eval_episodes), a.eval_start_episodes)
-                              if g not in self.engine_base else None)    # the baseline: more games
-                        ev = self._eval_against(g, r, it, gi, "engine", self._engine(g), n0)
-                        diag.add(g, vs_engine_sum=ev.score_sum, vs_engine_n=ev.score_n)
-                    except Exception as e:      # noqa: BLE001 — a referee never stops the run
-                        self._engine_failed[g] = f"{type(e).__name__}: {e}"
-                        self.log(f"[eval] {g}: engine referee disabled ({self._engine_failed[g]})")
-                        eng = self._engines.pop(g, None)
-                        if eng is not None:
-                            try:
-                                eng.close()
-                            except Exception:   # noqa: BLE001
-                                pass
+            self._evaluate(g, r, it, gi, diag)
             diag.add(g, episodes=total.episodes, ep_len_sum=total.ep_len_sum,
                      score_sum=total.score_sum, score_n=total.score_n, mirror=total.mirror,
                      timeouts=total.timeouts,
                      streams=len(r.streams), rollout_s=time.time() - t_game,
                      rollout_steps=total.steps)
         return stats
+
+    def _evaluate(self, g: str, r: GameRL, it: int, gi: int, diag: Diag) -> None:
+        """Every --eval_every iterations: the learner against the frozen --init network
+        (vs_init) and against the game's --eval_engine referee (vs_engine)."""
+        a = self.args
+        evaluate = a.eval_every > 0 and it % a.eval_every == 0 and r.env.n_seats >= 2
+        # 3+ seats: also at iteration 0, the learner = the --init network, so the score is
+        # the game's equal-strength level (the baseline of its vs_init alarm)
+        if evaluate and (it > 0 or (a.eval_at_start and r.env.n_seats > 2
+                                    and g not in self.init_base)):
+            n0 = (max(self.eval_episodes.get(g, a.eval_episodes), a.eval_start_episodes)
+                  if it == 0 else None)
+            ev = self._eval_vs_init(g, r, it, gi, n0)
+            diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n)
+        if evaluate and (it > 0 or a.eval_at_start):
+            if g in self.eval_engine and g not in self._engine_failed:
+                try:
+                    n0 = (max(self.eval_episodes.get(g, a.eval_episodes), a.eval_start_episodes)
+                          if g not in self.engine_base else None)    # the baseline: more games
+                    ev = self._eval_against(g, r, it, gi, "engine", self._engine(g), n0)
+                    diag.add(g, vs_engine_sum=ev.score_sum, vs_engine_n=ev.score_n)
+                except Exception as e:      # noqa: BLE001 — a referee never stops the run
+                    self._engine_failed[g] = f"{type(e).__name__}: {e}"
+                    self.log(f"[eval] {g}: engine referee disabled ({self._engine_failed[g]})")
+                    eng = self._engines.pop(g, None)
+                    if eng is not None:
+                        try:
+                            eng.close()
+                        except Exception:   # noqa: BLE001
+                            pass
 
     # ------------------------------------------------------------------
     # π_old, targets, statistics
@@ -2702,7 +2717,7 @@ class JointRLTrainer:
         self.model.eval()
         q_glob, q_rank = self._global_quotas()
         self._phase_t = collections.defaultdict(float)
-        self._rollouts(it, q_rank, diag)
+        self._rollouts(it, q_rank, diag, q_glob)
         t_roll = time.time() - t0
         t1 = self._clock()
         for g in self.rl_games:
