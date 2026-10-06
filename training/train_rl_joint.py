@@ -121,6 +121,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
@@ -384,9 +385,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--alarm_engine_z", type=float, default=2.5,
       help="... and the drop below the baseline must also exceed this many standard errors of "
            "the difference (binomial, both evaluations' episode counts)")
-    a("--clear_alarms", action="append", default=[], metavar="GAME[,GAME]",
+    a("--clear_alarms", action="append", default=[], metavar="GAME[@ITER][,...]",
       help="on --resume: these games' RL resumes although the checkpoint has them stopped by an "
-           "alarm, their alarm streaks reset (a stop judged a false alarm after inspection)")
+           "alarm, their alarm streaks reset (a stop judged a false alarm after inspection); "
+           "GAME@ITER clears only the stop made at iteration ITER — a flag that stays in a run's "
+           "settings (requeues, continuation jobs) then keeps a later stop of the game")
     a("--alarm_engine_drop", type=float, default=0.15,
       help="... or (every --eval_every) its score against --eval_engine this far below its "
            "first engine evaluation")
@@ -3200,13 +3203,24 @@ class JointRLTrainer:
         self.init_base_n = dict(st.get("init_base_n", {}))
         self.engine_streak = dict(st.get("engine_streak", {}))
         self.stopped = dict(st.get("stopped", {}))
-        for g in [x for item in self.args.clear_alarms for x in item.split(",") if x]:
+        for spec in [x for item in self.args.clear_alarms for x in item.split(",") if x]:
             # --clear_alarms: a stop judged wrong (e.g. an engine alarm on a lucky baseline)
-            why = self.stopped.pop(g, None)
+            g, _, at = spec.partition("@")
+            if g not in self.rl_games or (at and not at.isdigit()):
+                self.log(f"[resume] --clear_alarms {spec}: not GAME[@ITER] of an RL game — ignored")
+                continue
+            why = self.stopped.get(g)
+            if why is None:
+                continue
+            made = re.match(r"iteration (\d+):", why)
+            if at and (made is None or int(made.group(1)) != int(at)):
+                self.log(f"[resume] {g}: RL stays stopped ({why}; --clear_alarms {spec} is "
+                         f"for another stop)")
+                continue
+            del self.stopped[g]
             for streak in (self.alarm_streak, self.vs_init_streak, self.engine_streak):
                 streak.pop(g, None)
-            if why:
-                self.log(f"[resume] {g}: RL resumes (--clear_alarms; it was stopped: {why})")
+            self.log(f"[resume] {g}: RL resumes (--clear_alarms {spec}; it was stopped: {why})")
         for g, why in self.stopped.items():
             self.log(f"[resume] {g}: RL stays stopped ({why})")
         self._load_env_states(st.get("envs"), int(ck.get("world_size", 1)))

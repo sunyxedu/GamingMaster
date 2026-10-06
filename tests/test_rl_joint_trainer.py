@@ -934,6 +934,16 @@ def test_clear_alarms_resumes_a_stopped_game(stage1):
     tr2 = JointRLTrainer(parse_args(_args(stage1, "rl_clear", "--iterations", "2",
                                           "--resume", str(ck_path), "--clear_alarms", "othello")))
     assert tr2.stopped == {}
+    # GAME@ITER clears only the stop made at that iteration: a flag left in a run's settings
+    # keeps a later stop
+    ck["rl_state"]["stopped"] = {"othello": "iteration 7: score vs the --init network 0.2 < 0.35"}
+    torch.save(ck, ck_path)
+    kept = JointRLTrainer(parse_args(_args(stage1, "rl_clear", "--iterations", "2",
+                                           "--resume", str(ck_path), "--clear_alarms", "othello@1")))
+    assert set(kept.stopped) == {"othello"}
+    cleared = JointRLTrainer(parse_args(_args(stage1, "rl_clear", "--iterations", "2", "--resume",
+                                              str(ck_path), "--clear_alarms", "nogame,othello@7")))
+    assert cleared.stopped == {}
 
 
 def test_stop_file_saves_and_exits_after_the_iteration(stage1):
