@@ -793,6 +793,31 @@ def test_eval_vs_init_and_alarm_fields(stage1):
     assert "state" in gen["steps"][0]            # generals: the board after every step
 
 
+def test_deadline_stops_before_an_iteration_that_would_not_finish(stage1):
+    """--deadline: after one iteration the trainer knows how long one takes; an iteration
+    (plus its save) that would end after the deadline is not started — rl_latest.pt is
+    written, no rl_final.pt, and the estimates are kept for the next job's first iteration.
+    A far deadline changes nothing."""
+    import time as _time
+
+    from training import train_rl_joint
+
+    save = stage1 / "rl_deadline"
+    torch.manual_seed(0)
+    out = train_rl_joint.main(_args(stage1, "rl_deadline", "--iterations", "3", "--ckpt_minutes", "0",
+                                    "--deadline", str(_time.time() + 5)))
+    assert len(out["history"]) == 1
+    assert (save / "rl_latest.pt").exists() and not (save / "rl_final.pt").exists()
+    ck = torch.load(save / "rl_latest.pt", map_location="cpu", weights_only=False)
+    timing = ck["rl_state"]["timing"]
+    assert timing["iter_s"] > 0 and "eval_s" not in timing      # (a save's own time: the next one)
+    assert out["trainer"].timing["save_s"] >= 0
+    torch.manual_seed(0)
+    far = train_rl_joint.main(_args(stage1, "rl_deadline_far", "--iterations", "2",
+                                    "--deadline", str(_time.time() + 1e6)))
+    assert len(far["history"]) == 2 and (stage1 / "rl_deadline_far" / "rl_final.pt").exists()
+
+
 def test_a_game_that_trains_nowhere_is_still_evaluated(stage1):
     """A zero --share (like a game stopped by an alarm) plays no RL episode, but every
     --eval_every it still plays the frozen --init network: a game left out of RL stays visible

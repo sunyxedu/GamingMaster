@@ -486,6 +486,13 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="checked after every iteration: once this file exists the trainer writes "
            "rl_latest.pt and exits (no rl_final.pt) — the job's wrapper can then continue "
            "with a handover (new code / arguments) in the same allocation, keeping its GPU")
+    a("--deadline", type=float, default=0.0, metavar="UNIX_SECONDS",
+      help="the time by which the trainer must have written rl_latest.pt and exited (a job's "
+           "end): before each iteration it estimates the iteration (the running mean of recent "
+           "ones, plus the measured evaluation overhead when it evaluates) and the save, and "
+           "exits like --stop_file instead of starting one that would not finish (0 = off)")
+    a("--deadline_eval_s", type=float, default=3600.0,
+      help="--deadline: an evaluation iteration's extra seconds until one has been measured")
     a("--ckpt_every", type=int, default=0, help="also every N iterations (0 = off)")
     a("--save_every", type=int, default=0, help="keep rl_iter<N>.pt every N iterations")
     a("--resume", default=None, help="rl_latest.pt to continue from (same arguments)")
@@ -2076,6 +2083,9 @@ class JointRLTrainer:
         #: RL load a rank carries into every minibatch, which --replay_split tops up
         self.learn_cost: Dict[str, float] = {}
         self.history: List[Dict[str, Any]] = []
+        #: --deadline estimates (rank 0's clock; kept in the RL state): seconds of an iteration
+        #: without evaluation (running mean), an evaluation's extra seconds, a checkpoint save
+        self.timing: Dict[str, float] = {}
         if a.resume:
             self._load_resume(a.resume)
         if self.rank0:
@@ -3101,6 +3111,7 @@ class JointRLTrainer:
                 "engine_base": dict(self.engine_base), "engine_streak": dict(self.engine_streak),
                 "engine_base_n": dict(self.engine_base_n),
                 "init_base": dict(self.init_base), "init_base_n": dict(self.init_base_n),
+                "timing": dict(self.timing),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -3248,6 +3259,7 @@ class JointRLTrainer:
         self.game_cost = dict(st.get("game_cost", {}))
         self.replay_cost = dict(st.get("replay_cost", {}))
         self.learn_cost = dict(st.get("learn_cost", {}))
+        self.timing = dict(st.get("timing", {}))
         self.alarm_base_len = dict(st.get("alarm_base_len", {}))
         self.alarm_streak = dict(st.get("alarm_streak", {}))
         self.vs_init_streak = dict(st.get("vs_init_streak", {}))
@@ -3302,6 +3314,49 @@ class JointRLTrainer:
             f.writelines(keep)
         os.replace(f"{path}.tmp", path)
 
+    def _evaluates(self, it: int) -> bool:
+        """Whether iteration ``it`` (0-based) runs the --eval_every evaluation."""
+        a = self.args
+        return a.eval_every > 0 and it % a.eval_every == 0 and (it > 0 or a.eval_at_start)
+
+    def _time_iteration(self, seconds: float) -> None:
+        """--deadline bookkeeping (rank 0's clock): the running mean of iterations without
+        evaluation; an evaluation iteration's extra seconds over that mean (whether it
+        evaluated: its record — iteration 0 evaluates only games with an engine or 3+ seats)."""
+        rec = self.history[-1] if self.history else {}
+        evaluated = any((g.get("vs_init_n") or 0) > 0 or (g.get("vs_engine_n") or 0) > 0
+                        for g in rec.get("games", {}).values())
+        mean = self.timing.get("iter_s")
+        if evaluated:
+            if mean is not None:
+                self.timing["eval_s"] = max(0.0, seconds - mean)
+        else:
+            self.timing["iter_s"] = seconds if mean is None else 0.7 * mean + 0.3 * seconds
+
+    def _timed_save(self) -> None:
+        t0 = time.time()
+        self.save(CKPT_LATEST)
+        self.timing["save_s"] = time.time() - t0
+
+    def _past_deadline(self) -> str:
+        """Why the next iteration would not end before --deadline ('' = it would, or no
+        estimate yet); rank 0 decides for everyone."""
+        a = self.args
+        why = ""
+        if a.deadline > 0 and self.rank0 and self.timing.get("iter_s") is not None:
+            ev = self._evaluates(self.iteration)
+            need = (self.timing["iter_s"] + self.timing.get("save_s", 120.0)
+                    + (self.timing.get("eval_s", a.deadline_eval_s) if ev else 0.0))
+            left = a.deadline - time.time()
+            if need > left:
+                why = (f"the next iteration{' (an evaluation)' if ev else ''} needs ~{need:.0f} s "
+                       f"with its save, {left:.0f} s left")
+        if not self.dist_env.enabled:
+            return why
+        flag = torch.tensor([1.0 if why else 0.0], device=collective_device())
+        dist.broadcast(flag, src=0)
+        return (why or "the deadline (rank 0)") if flag.item() > 0 else ""
+
     def _stop_requested(self) -> bool:
         """--stop_file exists (rank 0 decides for everyone)."""
         a = self.args
@@ -3331,20 +3386,33 @@ class JointRLTrainer:
         a = self.args
         last_save = time.time()
         stop_requested = False
+        trained = False         # since the last rl_latest.pt (a resume starts from one)
         while self.iteration < a.iterations:
+            late = self._past_deadline()
+            if late:
+                if trained:
+                    self._timed_save()
+                self.log(f"[stop] iteration {self.iteration}: {late} — "
+                         f"{'rl_latest.pt written, ' if trained else ''}exiting before --deadline")
+                stop_requested = True
+                break
+            t0 = time.time()
             self.run_iteration()
+            self._time_iteration(time.time() - t0)
+            trained = True
             if self.rl_games and len(self.stopped) == len(self.rl_games):
                 self.log("[alarm] every RL game is stopped: ending the run")
                 break
             if self._stop_requested():
-                self.save(CKPT_LATEST)
+                self._timed_save()
                 self.log(f"[stop] iteration {self.iteration}: {a.stop_file} — rl_latest.pt "
                          f"written, exiting for the handover")
                 stop_requested = True
                 break
             if self._want_checkpoint(last_save):
-                self.save(CKPT_LATEST)
+                self._timed_save()
                 last_save = time.time()
+                trained = False
             if a.save_every and self.iteration % a.save_every == 0:
                 self.save(f"rl_iter{self.iteration}.pt")
         final = None if stop_requested else self.save(CKPT_FINAL)
