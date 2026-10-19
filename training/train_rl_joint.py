@@ -1483,6 +1483,27 @@ def _n_seats(trainer: Any, g: str) -> int:
     return int(getattr(getattr(r, "env", None), "n_seats", 2) or 2)
 
 
+def archive_eval_wave(path: str, env: Any, learner_seats: Any, meta: Optional[Mapping[str, Any]] = None) -> int:
+    """The finished episodes of an evaluation wave as gmrules trajectories — ``env.trajectory(e)``,
+    int64 [n, 2] (seat, action id), seat −1 = chance — with the learner's seats per episode, in
+    one .npz: scripts/analyze_strength.py replays them and has full-strength engines judge every
+    learner decision.  Returns the episodes written (0: the env keeps no trajectories)."""
+    if not callable(getattr(env, "trajectory", None)):
+        return 0
+    arrays: Dict[str, Any] = {}
+    n = int(getattr(env, "num_envs", 0))
+    for e in range(n):
+        arrays[f"traj{e}"] = np.asarray(env.trajectory(e), dtype=np.int64).reshape(-1, 2)
+    seats = np.asarray(_plain(learner_seats))
+    arrays["learner_seats"] = seats.reshape(n, -1) if seats.size else np.zeros((n, 0), dtype=bool)
+    arrays["meta"] = np.array(json.dumps(dict(meta or {})))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp.npz"
+    np.savez(tmp, **arrays)
+    os.replace(tmp, path)
+    return n
+
+
 def _plain(x: Any) -> Any:
     """Tensors / arrays / nested dicts → JSON values."""
     if torch.is_tensor(x):
@@ -3014,6 +3035,14 @@ class JointRLTrainer:
                                  timeout_draw=g in TIMEOUT_IS_DRAW)
             for k in ("episodes", "score_sum", "score_n"):
                 setattr(total, k, getattr(total, k) + getattr(st, k))
+            if a.trace_every > 0 and it % a.trace_every == 0:
+                # the wave's episodes for the offline strength analysis (full-strength engines)
+                archive_eval_wave(os.path.join(a.save_dir, "traces",
+                                               f"eval_{g}_{name}_it{it}_r{self.rank}_w{wave}.npz"),
+                                  r.env, league.learner_seats,
+                                  {"game": g, "opponent": name, "iteration": it, "rank": self.rank,
+                                   "wave": wave, "episodes": st.episodes, "score_sum": st.score_sum,
+                                   "score_n": st.score_n})
             wave += 1
         return total
 

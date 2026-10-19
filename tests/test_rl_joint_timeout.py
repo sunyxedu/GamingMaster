@@ -288,3 +288,27 @@ def test_referee_ladder_steps_up_after_two_high_scores_and_rebaselines():
     for ve in (0.95, 0.95, 0.95):                                                       # no rung left
         JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": ve}}})
     assert t.engine_rung == {"chess": 3} and not t.stopped
+
+
+def test_archive_eval_wave_keeps_gmrules_trajectories(tmp_path):
+    """archive_eval_wave: a gmsim env's finished episodes (seat, action id) and the learner's
+    seats land in one .npz that replay_state rebuilds; an env without trajectories writes none."""
+    import numpy as np
+
+    from env.engine_policy import replay_state
+    from env.vec_game import make_vec_env
+    from training.train_rl_joint import archive_eval_wave
+
+    env = make_vec_env("chess", 2, seed=3)
+    env.reset(seed=3)
+    path = str(tmp_path / "traces" / "eval_chess_init_it5_r0_w0.npz")
+    n = archive_eval_wave(path, env, [[True, False], [False, True]], {"game": "chess", "iteration": 5})
+    assert n == 2
+    z = np.load(path)
+    assert z["traj0"].shape[1] == 2 and z["traj0"].dtype == np.int64
+    assert z["learner_seats"].tolist() == [[True, False], [False, True]]
+    import json
+    assert json.loads(str(z["meta"]))["iteration"] == 5
+    st, moves = replay_state("chess", z["traj0"])
+    assert moves == [] and str(st).startswith("rnbqkbnr")
+    assert archive_eval_wave(str(tmp_path / "x.npz"), object(), []) == 0 and not (tmp_path / "x.npz").exists()
