@@ -362,6 +362,14 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="a UCI / USI option of the game's --eval_engine, sent before its first game "
            "(repeatable), e.g. chess=UCI_LimitStrength=true chess=UCI_Elo=1800: the "
            "referee's strength, so the IL policy scores well inside (0, 1) against it")
+    a("--eval_engine_ladder", action="append", default=[], metavar="GAME=RUNG[;RUNG...]",
+      help="the game's referee gets stronger as the learner beats it: once its score is at least "
+           "--eval_engine_step_up in two consecutive evaluations, the next rung's settings apply "
+           "(the referee is rebuilt, its alarm baseline measured again) — a rung is comma-"
+           "separated key=value settings: eps (--eval_engine_eps), go (--eval_engine_go, a + for "
+           "a space: go+nodes+10, level+3, plies+1, visits+16 for KataGo), opt.NAME "
+           "(--eval_engine_opt); e.g. chess=opt.UCI_Elo=1500;opt.UCI_Elo=1800;opt.UCI_LimitStrength=false")
+    a("--eval_engine_step_up", type=float, default=0.9)
     a("--eval_engine_workers", type=int, default=4,
       help="engine processes per referee (UCI / USI / GTP engines and Egaroucid), one thread "
            "each: a wave's games are answered in parallel")
@@ -531,6 +539,26 @@ def _pairs(items: Sequence[str], cast: Callable = str, what: str = "VALUE") -> D
         if not sep or not g:
             raise SystemExit(f"expected GAME={what}, got {it!r}")
         out[g] = cast(v)
+    return out
+
+
+def parse_ladder(items: Sequence[str]) -> Dict[str, List[Dict[str, str]]]:
+    """``--eval_engine_ladder GAME=RUNG;RUNG...`` → game → rungs, each ``{key: value}`` with the
+    keys eps / go / opt.NAME (comma-separated ``key=value`` settings within a rung; a ``+`` in a
+    value is a space, so a rung stays one shell word: ``go=go+nodes+200000``)."""
+    out: Dict[str, List[Dict[str, str]]] = {}
+    for g, spec in _pairs(items, str, "RUNGS").items():
+        rungs: List[Dict[str, str]] = []
+        for part in spec.split(";"):
+            rung: Dict[str, str] = {}
+            for kv in part.split(","):
+                k, sep, v = kv.strip().partition("=")
+                if not sep or not k or not (k in ("eps", "go") or k.startswith("opt.")):
+                    raise SystemExit(f"--eval_engine_ladder {g}: a rung is key=value settings "
+                                     f"(eps / go / opt.NAME), got {kv!r}")
+                rung[k] = v.strip().replace("+", " ")
+            rungs.append(rung)
+        out[g] = rungs
     return out
 
 
@@ -2075,6 +2103,13 @@ class JointRLTrainer:
             if g not in self.eval_engine:
                 raise SystemExit(f"--eval_engine_eps {g}: {g} has no --eval_engine")
         self.eval_engine_opt: Dict[str, Dict[str, str]] = {}
+        self.engine_ladder = parse_ladder(a.eval_engine_ladder)
+        for g in self.engine_ladder:
+            if g not in self.eval_engine:
+                raise SystemExit(f"--eval_engine_ladder {g}: {g} has no --eval_engine")
+        #: per game: rungs applied so far, and consecutive evaluations at/above the step-up score
+        self.engine_rung: Dict[str, int] = {}
+        self.engine_high: Dict[str, int] = {}
         for item in a.eval_engine_opt:
             g, sep, kv = item.partition("=")
             k, sep2, v = kv.partition("=")
@@ -2916,6 +2951,24 @@ class JointRLTrainer:
                             bf16=self.args.bf16)
         return self._eval_against(g, r, it, gi, "init", ref, episodes)
 
+    def _apply_rung(self, g: str, k: int) -> None:
+        """Rung ``k`` of ``g``'s --eval_engine_ladder: its settings into the referee's eps / go /
+        options; the current referee process (if any) is closed, the next evaluation builds
+        the stronger one."""
+        for key, value in self.engine_ladder[g][k].items():
+            if key == "eps":
+                self.eval_engine_eps[g] = float(value)
+            elif key == "go":
+                self.eval_engine_go[g] = value
+            elif key.startswith("opt."):
+                self.eval_engine_opt.setdefault(g, {})[key[4:]] = value
+        eng = self._engines.pop(g, None)
+        if eng is not None:
+            try:
+                eng.close()
+            except Exception:   # noqa: BLE001
+                pass
+
     def _engine(self, g: str):
         """The game's --eval_engine (one process per rank, kept for the run)."""
         if g not in self._engines:
@@ -3032,6 +3085,21 @@ class JointRLTrainer:
                     if low:
                         why.append(f"score vs the engine {ve:.3f} < its first evaluation "
                                    f"{self.engine_base[g]:.3f} - {margin:.3f}")
+            ladder = getattr(self, "engine_ladder", {}).get(g)
+            if ladder and math.isfinite(ve) and row.get("vs_engine_n", 0) >= a.alarm_min_episodes:
+                high = ve >= a.eval_engine_step_up
+                self.engine_high[g] = self.engine_high.get(g, 0) + 1 if high else 0
+                k = self.engine_rung.get(g, 0)
+                if self.engine_high[g] >= 2 and k < len(ladder):
+                    self._apply_rung(g, k)
+                    self.engine_rung[g] = k + 1
+                    self.engine_high[g] = 0
+                    for d in (self.engine_base, self.engine_base_n, self.engine_streak):
+                        d.pop(g, None)
+                    row["referee_rung"] = k + 1
+                    self.log(f"[eval] {g}: scored {ve:.3f} twice against its referee — stepped up "
+                             f"to rung {k + 1}/{len(ladder)} ({ladder[k]}); its baseline is "
+                             f"measured again at the next evaluation")
             if why:
                 row["alarm"] = "; ".join(why)
             if why and max(self.alarm_streak[g], self.vs_init_streak.get(g, 0),
@@ -3173,6 +3241,7 @@ class JointRLTrainer:
                 "ref_resets": self.ref_resets, "ev_ema": dict(self.ev_ema),
                 "init_base": dict(self.init_base), "init_base_n": dict(self.init_base_n),
                 "timing": dict(self.timing),
+                "engine_rung": dict(self.engine_rung), "engine_high": dict(self.engine_high),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -3325,6 +3394,14 @@ class JointRLTrainer:
         self.learn_cost = dict(st.get("learn_cost", {}))
         self.eval_cost = dict(st.get("eval_cost", {}))
         self.timing = dict(st.get("timing", {}))
+        self.engine_high = dict(st.get("engine_high", {}))
+        for g, k in st.get("engine_rung", {}).items():      # the referees as stepped up so far
+            rungs = self.engine_ladder.get(g, [])
+            for i in range(min(int(k), len(rungs))):
+                self._apply_rung(g, i)
+            self.engine_rung[g] = min(int(k), len(rungs))
+            if k:
+                self.log(f"[resume] {g}: referee at rung {self.engine_rung[g]}/{len(rungs)}")
         self.ev_ema = dict(st.get("ev_ema", {}))
         self.ref_resets = int(st.get("ref_resets", 0))
         if self.ref_resets > 0:

@@ -152,6 +152,13 @@ class UciEngine:
                 self.proc.kill()
 
 
+def gtp_visits(go: str) -> Optional[int]:
+    """The ``visits N`` of a GTP engine's go string (``--eval_engine_go go="visits 16"``), None
+    when it gives none."""
+    m = re.search(r"\bvisits\s+(\d+)", go or "")
+    return int(m.group(1)) if m else None
+
+
 class GtpEngine:
     """One GTP engine process (go); the game is rebuilt on every move."""
 
@@ -195,6 +202,12 @@ class GtpEngine:
             self._cmd(f"kata-set-rules {self.rules}")
         except EngineError:
             pass                        # not KataGo: the engine's own rules
+        visits = gtp_visits(go)
+        if visits is not None:          # KataGo: the search size at run time (a referee ladder)
+            try:
+                self._cmd(f"kata-set-param maxVisits {visits}")
+            except EngineError:
+                pass                    # not KataGo: the engine's own search
         colours = ("B", "W")
         for i, m in enumerate(moves):
             self._cmd(f"play {colours[i % 2]} {m}")

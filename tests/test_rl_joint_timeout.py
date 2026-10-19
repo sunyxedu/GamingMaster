@@ -241,3 +241,50 @@ def test_vs_init_alarm_of_multi_seat_games_uses_their_equal_strength_level():
     for it, vi in ((41, 0.05), (61, 0.05)):
         JointRLTrainer._alarms(t2, {"iteration": it, "games": {"mahjong": {**base, "vs_init": vi}}})
     assert not t2.stopped and t2.init_base == {}           # no baseline taken after iteration 0
+
+
+def test_referee_ladder_steps_up_after_two_high_scores_and_rebaselines():
+    """--eval_engine_ladder: a referee the learner beats (score >= --eval_engine_step_up twice in
+    a row) is replaced by the next rung — its settings applied, the engine process dropped, the
+    alarm baseline cleared so the next evaluation measures it again — rung by rung to the end."""
+    from types import SimpleNamespace
+
+    from training.train_rl_joint import JointRLTrainer, parse_ladder
+
+    ladder = parse_ladder(["chess=eps=0.25;eps=0,go=go+nodes+10;opt.UCI_Elo=1800"])
+    assert ladder == {"chess": [{"eps": "0.25"}, {"eps": "0", "go": "go nodes 10"}, {"opt.UCI_Elo": "1800"}]}
+    closed = []
+    t = SimpleNamespace(
+        args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
+                             alarm_engine_drop=0.15, alarm_engine_z=2.5, alarm_patience=2, alarm_min_episodes=8,
+                             alarm_min_tokens=1000, eval_engine_step_up=0.9),
+        rl_games=["chess"], kl_budget={"chess": 0.03}, alarm_base_len={"chess": 100.0},
+        alarm_streak={}, vs_init_streak={}, engine_base={}, engine_base_n={}, init_base={}, init_base_n={},
+        engine_streak={}, stopped={}, iteration=0, log=lambda m: None,
+        engine_ladder=ladder, engine_rung={}, engine_high={},
+        eval_engine_eps={"chess": 0.5}, eval_engine_go={"chess": "go nodes 5"}, eval_engine_opt={},
+        _engines={"chess": SimpleNamespace(close=lambda: closed.append(1))})
+    t._apply_rung = lambda g, k: JointRLTrainer._apply_rung(t, g, k)
+    base = {"episodes": 16, "timeout_rate": 0.0, "ep_len": 100.0, "kl": 0.01, "vs_engine_n": 64}
+    JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": 0.60}}})      # the baseline
+    assert t.engine_base == {"chess": 0.60} and t.engine_rung == {} and t.engine_high == {"chess": 0}
+    JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": 0.95}}})
+    assert t.engine_rung == {} and t.engine_high == {"chess": 1}                        # once is not enough
+    rec = {"games": {"chess": {**base, "vs_engine": 0.92}}}
+    JointRLTrainer._alarms(t, rec)
+    assert t.engine_rung == {"chess": 1} and t.engine_high == {"chess": 0} and closed == [1]
+    assert t.eval_engine_eps["chess"] == 0.25 and "chess" not in t.engine_base and "chess" not in t._engines
+    assert rec["games"]["chess"]["referee_rung"] == 1 and "alarm" not in rec["games"]["chess"]
+    JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": 0.55}}})      # the new baseline
+    assert t.engine_base == {"chess": 0.55}
+    for ve in (0.9, 0.9):
+        JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": ve}}})
+    assert t.engine_rung == {"chess": 2} and t.eval_engine_eps["chess"] == 0.0 and t.eval_engine_go["chess"] == "go nodes 10"
+    JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": 0.50}}})
+    for ve in (0.95, 0.95):
+        JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": ve}}})
+    assert t.engine_rung == {"chess": 3} and t.eval_engine_opt == {"chess": {"UCI_Elo": "1800"}}
+    JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": 0.50}}})
+    for ve in (0.95, 0.95, 0.95):                                                       # no rung left
+        JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": ve}}})
+    assert t.engine_rung == {"chess": 3} and not t.stopped
