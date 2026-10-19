@@ -535,3 +535,33 @@ def test_rank_seeds_of_a_seed_sweep_do_not_overlap():
     assert len(fresh) == 16 * 8
     resumed = {rank_seed(s, r, t) for s in range(16) for r in range(8) for t in (500, 1000)}
     assert len(resumed) == 16 * 8 * 2 and not resumed & fresh
+
+
+def test_rewarmup_ramps_a_continued_run(shards, tmp_path, capsys):
+    """A run whose WSD decay finished, continued with a larger --steps: without --rewarmup_steps
+    the rate jumps from the decayed floor to the constant rate at once; with it the rate ramps
+    there over the given steps (the new decay later as the schedule says)."""
+    import re
+
+    from training import train_multi_game as tmg
+
+    root = str(shards)
+    sched = ["--lr", "1e-3", "--lr_schedule", "wsd", "--lr_min_ratio", "0.1", "--log_every", "1"]
+    tmg.main([*_common_args(root, str(tmp_path / "a")), *sched, "--steps", "10", "--lr_decay_frac", "0.5",
+              "--ckpt_every", "10"])
+    capsys.readouterr()
+
+    def lrs(save):
+        out = capsys.readouterr().out
+        return {int(m.group(1)): float(m.group(2)) for m in re.finditer(r"\[step (\d+)/\d+\] lr=([0-9.e+-]+)", out)}
+
+    tmg.main([*_common_args(root, str(tmp_path / "jump")), *sched, "--steps", "20", "--lr_decay_frac", "0.2",
+              "--resume", str(tmp_path / "a" / "multi_latest.pt")])
+    jump = lrs("jump")
+    tmg.main([*_common_args(root, str(tmp_path / "ramp")), *sched, "--steps", "20", "--lr_decay_frac", "0.2",
+              "--rewarmup_steps", "4", "--resume", str(tmp_path / "a" / "multi_latest.pt")])
+    ramp = lrs("ramp")
+    assert set(jump) == set(ramp) and min(jump) == 11, (jump, ramp)
+    assert jump[11] == 1e-3 and jump[14] == 1e-3                     # at once
+    assert ramp[11] < 0.5e-3 and ramp[11] < ramp[12] < ramp[13] < ramp[14] == 1e-3   # the ramp
+    assert ramp[15] == jump[15] and ramp[20] == jump[20] < 1e-3    # the new decay as the schedule says

@@ -226,6 +226,7 @@ from model.optim import (
     AdamATan2,
     ModelEMA,
     trm_lr_lambda,
+    rewarm_lr_lambda,
     wsd_lr_lambda,
 )
 from model.rl_utils import qk_norm_param_ids, sync_gradients
@@ -381,6 +382,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--lr_decay_frac", type=float, default=0.1,
                    help="wsd: fraction of --steps the final decay spans")
     p.add_argument("--lr_decay_shape", choices=("cosine", "linear"), default="cosine")
+    p.add_argument("--rewarmup_steps", type=int, default=0,
+                   help="on a resume, ramp the rate linearly from the checkpoint's (e.g. the floor "
+                        "a finished wsd decay ended on) to the schedule's over this many steps — "
+                        "a run continued past its decay with a larger --steps (model.optim."
+                        "rewarm_lr_lambda); 0 = the schedule's rate at once")
     p.add_argument("--beta1", type=float, default=TRM_BETAS[0])
     p.add_argument("--beta2", type=float, default=TRM_BETAS[1])
     p.add_argument("--clip_grad", type=float, default=0.0)
@@ -1390,6 +1396,15 @@ def main(argv=None) -> Dict[str, object]:
         if ema is not None and ck_ema is not None:
             ema.load_state_dict(ck_ema)             # a partial EMA takes its own shadows
         start = resume["step"] + 1
+        if args.rewarmup_steps > 0:
+            # the checkpoint's rate (its optimizer state) relative to --lr: a finished wsd decay
+            # left --lr_min_ratio there; the ramp starts from it
+            r0 = optimizer.param_groups[0].get("lr", args.lr) / args.lr
+            r0 = min(max(r0, 0.0), 1.0) if math.isfinite(r0) else args.lr_min_ratio
+            lr_lambda = rewarm_lr_lambda(lr_lambda, resume["step"], r0, args.rewarmup_steps)
+            scheduler.lr_lambdas = [lr_lambda] * len(optimizer.param_groups)
+            log(f"[resume] --rewarmup_steps {args.rewarmup_steps}: the rate ramps from "
+                f"{r0 * args.lr:.2e} to the schedule's over steps {start}-{start + args.rewarmup_steps}")
         # fresh streams: the resumed run does not replay the first steps' draws
         random.seed(rank_seed(args.seed, rank, start))
         torch.manual_seed(rank_seed(args.seed, rank, start))

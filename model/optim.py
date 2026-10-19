@@ -121,6 +121,24 @@ def trm_lr_lambda(warmup_steps: int, total_steps: int, min_ratio: float):
     return fn
 
 
+def rewarm_lr_lambda(base, resume_step: int, resume_ratio: float, steps: int):
+    """``base`` (a schedule multiplier) with a linear ramp after a resume: from the
+    multiplier the checkpoint was trained at (``resume_ratio``, e.g. the floor a finished
+    WSD decay ended on) to ``base``'s own value over ``steps`` steps past ``resume_step``.
+    A run continued past a finished decay (resumed with a larger ``--steps``) then does not
+    jump from the decayed rate straight back to the constant rate.  ``steps <= 0``: ``base``."""
+    if steps <= 0:
+        return base
+    r0 = float(resume_ratio)
+
+    def fn(step: int) -> float:
+        if step <= resume_step:
+            return base(step)
+        t = min(1.0, (step - resume_step) / float(steps))
+        return r0 + (base(step) - r0) * t
+    return fn
+
+
 def wsd_lr_lambda(warmup_steps: int, total_steps: int, decay_frac: float,
                   min_ratio: float, shape: str = "cosine"):
     """Warmup-Stable-Decay multiplier (MiniCPM, arXiv 2404.06395; Hägele et
