@@ -877,6 +877,33 @@ def test_a_game_that_trains_nowhere_is_still_evaluated(stage1):
     assert "alarm" not in row and out["trainer"].stopped == {}
 
 
+def test_a_failing_vs_init_evaluation_is_skipped_not_fatal(stage1, monkeypatch):
+    """A simulator failure inside a game's vs_init evaluation (HoK's game server refusing a
+    reset killed final-main on 2026-10-19) skips that evaluation; a second failure disables
+    the game's evaluation for the run; training goes on either way."""
+    from training import train_rl_joint
+    from training.train_rl_joint import JointRLTrainer
+
+    calls = {"n": 0}
+    real = JointRLTrainer._eval_vs_init
+
+    def flaky(self, g, r, it, gi, episodes=None):
+        if g == "othello":
+            calls["n"] += 1
+            raise RuntimeError("hok worker 1: zmq_server.Reset failed: -7, retry 5/5")
+        return real(self, g, r, it, gi, episodes)
+
+    monkeypatch.setattr(JointRLTrainer, "_eval_vs_init", flaky)
+    torch.manual_seed(0)
+    out = train_rl_joint.main(_args(stage1, "rl_evalfail", "--iterations", "3", "--eval_every", "1",
+                                    "--eval_episodes", "2"))
+    tr = out["trainer"]
+    assert [r["iteration"] for r in out["history"]] == [1, 2, 3]
+    assert calls["n"] == 2 and tr._eval_failed.get("othello", "").startswith("RuntimeError")
+    assert all(r["games"]["othello"]["vs_init_n"] == 0 for r in out["history"])
+    assert out["history"][2]["games"]["generals"]["vs_init_n"] > 0      # the others still evaluate
+
+
 def test_a_failing_engine_referee_is_disabled_not_fatal(stage1):
     """--eval_engine with an engine that cannot start: the run goes on, the referee is off."""
     from training import train_rl_joint

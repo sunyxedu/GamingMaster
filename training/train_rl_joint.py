@@ -2086,6 +2086,9 @@ class JointRLTrainer:
         self._engines: Dict[str, Any] = {}
         self._learn_mem: Dict[str, float] = {}     # per game: its learner pass's peak GPU GB
         self._engine_failed: Dict[str, str] = {}
+        #: games whose vs_init evaluation raised (the simulator), and how often
+        self._eval_errors: Dict[str, int] = {}
+        self._eval_failed: Dict[str, str] = {}
         self.engine_base: Dict[str, float] = {}
         self.engine_base_n: Dict[str, int] = {}
         #: games of 3+ seats: their score vs the --init network at iteration 0 (equal strength)
@@ -2269,11 +2272,22 @@ class JointRLTrainer:
         # 3+ seats: also at iteration 0, the learner = the --init network, so the score is
         # the game's equal-strength level (the baseline of its vs_init alarm)
         if evaluate and (it > 0 or (a.eval_at_start and r.env.n_seats > 2
-                                    and g not in self.init_base)):
+                                    and g not in self.init_base)) and g not in self._eval_failed:
             n0 = (max(self.eval_episodes.get(g, a.eval_episodes), a.eval_start_episodes)
                   if it == 0 else None)
-            ev = self._eval_vs_init(g, r, it, gi, n0)
-            diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n)
+            try:
+                ev = self._eval_vs_init(g, r, it, gi, n0)
+                diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n)
+            except Exception as e:      # noqa: BLE001 — a simulator's failure (HoK's game
+                # server refusing a reset, 2026-10-19) must not end the 21-game run; the game
+                # is evaluated again next time, and not at all after a second failure
+                n = self._eval_errors.get(g, 0) + 1
+                self._eval_errors[g] = n
+                self.log(f"[eval] {g}: vs_init evaluation failed ({type(e).__name__}: "
+                         f"{str(e).splitlines()[-1][:160]}) — "
+                         f"{'disabled for the rest of the run' if n >= 2 else 'skipped this time'}")
+                if n >= 2:
+                    self._eval_failed[g] = f"{type(e).__name__} x{n}"
         if evaluate and (it > 0 or a.eval_at_start):
             if g in self.eval_engine and g not in self._engine_failed:
                 try:
