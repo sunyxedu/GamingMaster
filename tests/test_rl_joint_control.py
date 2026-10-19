@@ -449,3 +449,4 @@ def test_two_phase_placement_balances_both_waits():
     assert critical(owner, 4) < critical(lpt, 4)
     assert critical(owner, 4) <= 208 + 76 + 0.25 * (sum(learn.values()) - 76) + 20
     assert set(two_phase_placement(roll, learn, 1).values()) == {0}
+

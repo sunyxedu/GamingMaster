@@ -2104,6 +2104,10 @@ class JointRLTrainer:
         #: per-game learner seconds of an iteration (on its rank, rank-identical): the
         #: RL load a rank carries into every minibatch, which --replay_split tops up
         self.learn_cost: Dict[str, float] = {}
+        #: per-game seconds of its last evaluation (vs_init + engine; rank-identical): on an
+        #: evaluation iteration the split placement counts them with the game's rollouts —
+        #: the slowest rank's evaluation is what every other rank waits for
+        self.eval_cost: Dict[str, float] = {}
         self.history: List[Dict[str, Any]] = []
         #: --deadline estimates (rank 0's clock; kept in the RL state): seconds of an iteration
         #: without evaluation (running mean), an evaluation's extra seconds, a checkpoint save
@@ -2760,18 +2764,23 @@ class JointRLTrainer:
         """game → the rank that plays its whole quota (--rl_placement split), from the
         rank-identical costs of the latest iteration that played each game: its rollout
         seconds and its learner seconds (:attr:`game_cost` = their sum, :attr:`learn_cost`;
-        the quota as rollout cost for a game not measured yet, 0 for a game without quota).
+        the quota as rollout cost for a game not measured yet, 0 for a game without quota;
+        on an evaluation iteration also the game's last evaluation seconds, :attr:`eval_cost`
+        — an evaluated game without quota still costs its evaluation).
         The iteration waits for the slowest rank twice — after the rollouts, and at every
         learner step — so it takes about max rollout + max learner load over the ranks:
         the games go longest first to the rank where that sum grows least (balancing each
         rank's total alone can put the longest rollouts and the heaviest learner load on
         different ranks' critical paths); ties: the rank's own load, then the lowest rank
         (deterministic, rank-identical)."""
+        evaluating = self._evaluates(self.iteration)
         total, learn = {}, {}
         for g in self.rl_games:
             q = float(quotas.get(g, 0))
             total[g] = self.game_cost.get(g, q) if q > 0 else 0.0
             learn[g] = min(self.learn_cost.get(g, 0.0), total[g])
+            if evaluating:
+                total[g] += self.eval_cost.get(g, 0.0)
         return two_phase_placement({g: total[g] - learn[g] for g in self.rl_games}, learn,
                                    self.world)
 
@@ -2809,6 +2818,8 @@ class JointRLTrainer:
         for g in self.rl_games:
             if diag.v[g]["learn_s"] > 0:
                 self.learn_cost[g] = diag.v[g]["learn_s"]
+            if diag.v[g]["eval_s"] > 0:
+                self.eval_cost[g] = diag.v[g]["eval_s"]
         for g in self.replay:               # the next --replay_split assignment
             if diag.v[g]["il_n"] > 0 and diag.v[g]["replay_s"] > 0:
                 self.replay_cost[g] = diag.v[g]["replay_s"] / diag.v[g]["il_n"]
@@ -3139,7 +3150,7 @@ class JointRLTrainer:
                 "klb": self.klb.state_dict(), "sched": self.sched.state_dict(),
                 "pool": self.pool.state_dict(), "il_baseline": dict(self.il_baseline),
                 "game_cost": dict(self.game_cost), "replay_cost": dict(self.replay_cost),
-                "learn_cost": dict(self.learn_cost),
+                "learn_cost": dict(self.learn_cost), "eval_cost": dict(self.eval_cost),
                 "alarm_base_len": dict(self.alarm_base_len),
                 "alarm_streak": dict(self.alarm_streak), "stopped": dict(self.stopped),
                 "vs_init_streak": dict(self.vs_init_streak),
@@ -3298,6 +3309,7 @@ class JointRLTrainer:
         self.game_cost = dict(st.get("game_cost", {}))
         self.replay_cost = dict(st.get("replay_cost", {}))
         self.learn_cost = dict(st.get("learn_cost", {}))
+        self.eval_cost = dict(st.get("eval_cost", {}))
         self.timing = dict(st.get("timing", {}))
         self.ev_ema = dict(st.get("ev_ema", {}))
         self.ref_resets = int(st.get("ref_resets", 0))

@@ -1044,3 +1044,27 @@ def test_stop_file_saves_and_exits_after_the_iteration(stage1):
                                     "--stop_file", str(stop), "--ckpt_minutes", "0"))
     assert len(out["history"]) == 1
     assert (save / "rl_latest.pt").exists() and not (save / "rl_final.pt").exists()
+
+
+def test_placement_counts_evaluation_seconds_on_evaluation_iterations(stage1):
+    """--rl_placement split: on an iteration that evaluates, a game's last evaluation seconds
+    count with its rollouts (the ranks wait for the slowest rank's evaluation — final-main's
+    4-GPU job hit the NCCL timeout that way); on other iterations they do not."""
+    from training.train_rl_joint import JointRLTrainer, parse_args
+
+    tr = JointRLTrainer(parse_args(_args(stage1, "rl_place_eval", "--iterations", "1", "--eval_every", "10")))
+    tr.world = 2
+    games = tr.rl_games
+    assert len(games) >= 2
+    g0, g1 = games[0], games[1]
+    tr.game_cost = {g: 10.0 for g in games}
+    tr.learn_cost = {g: 2.0 for g in games}
+    tr.eval_cost = {g0: 100.0, g1: 100.0}
+    quotas = {g: 100 for g in games}
+    tr.iteration = 11                      # no evaluation: the two heavy games may share a rank
+    plain = tr.placement(quotas)
+    tr.iteration = 10                      # an evaluation iteration: 100 s each, apart
+    ev = tr.placement(quotas)
+    assert ev[g0] != ev[g1], ev
+    assert set(plain.values()) <= {0, 1} and set(ev.values()) <= {0, 1}
+
