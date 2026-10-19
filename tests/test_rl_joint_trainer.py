@@ -818,6 +818,48 @@ def test_deadline_stops_before_an_iteration_that_would_not_finish(stage1):
     assert len(far["history"]) == 2 and (stage1 / "rl_deadline_far" / "rl_final.pt").exists()
 
 
+def test_kl_budget_ev_scales_each_budget(stage1):
+    """--kl_budget_ev E: a game's budget in effect is its --kl_budget x clamp(ev / E, floor, 1)
+    from the EMA of its explained variance; the beta controller steers toward it, the record
+    carries it, the EMA survives in the RL state."""
+    from training import train_rl_joint
+
+    torch.manual_seed(0)
+    out = train_rl_joint.main(_args(stage1, "rl_klev", "--iterations", "3", "--kl_budget_ev", "0.3"))
+    tr = out["trainer"]
+    for g in tr.rl_games:
+        b = tr.kl_budget[g]
+        assert 0.1 * b - 1e-12 <= tr.kl_budget_eff[g] <= b + 1e-12, (g, tr.kl_budget_eff[g], b)
+        assert tr.klb.budget[g] == tr.kl_budget_eff[g]
+        assert out["history"][-1]["games"][g]["kl_budget"] == tr.kl_budget_eff[g]
+    assert any(0.0 <= v <= 1.0 for v in tr.ev_ema.values())
+    ck = torch.load(stage1 / "rl_klev" / "rl_final.pt", map_location="cpu", weights_only=False)
+    assert ck["rl_state"]["ev_ema"] == tr.ev_ema and ck["ref_state"] is None
+
+
+def test_ref_reset_moves_the_reference_not_the_init_opponent(stage1):
+    """--ref_reset_every N: at iteration N the KL reference takes the policy's (EMA) weights,
+    the --init network stays the vs_init opponent, the checkpoint carries the moved reference
+    and a resume restores it."""
+    from training import train_rl_joint
+    from training.train_rl_joint import JointRLTrainer, module_fingerprint, parse_args
+
+    torch.manual_seed(0)
+    out = train_rl_joint.main(_args(stage1, "rl_refreset", "--iterations", "2", "--ref_reset_every", "2",
+                                    "--ckpt_minutes", "0"))
+    tr = out["trainer"]
+    assert tr.ref_resets == 1
+    assert module_fingerprint(tr.ref) != tr.init_hash
+    assert module_fingerprint(tr.init_net) == tr.init_hash
+    final = stage1 / "rl_refreset" / "rl_final.pt"
+    ck = torch.load(final, map_location="cpu", weights_only=False)
+    assert ck["rl_state"]["ref_resets"] == 1 and ck["ref_state"]
+    tr2 = JointRLTrainer(parse_args(_args(stage1, "rl_refreset", "--iterations", "3", "--ref_reset_every", "2",
+                                          "--resume", str(final))))
+    assert tr2.ref_resets == 1 and module_fingerprint(tr2.ref) == module_fingerprint(tr.ref)
+    assert module_fingerprint(tr2.init_net) == tr2.init_hash
+
+
 def test_a_game_that_trains_nowhere_is_still_evaluated(stage1):
     """A zero --share (like a game stopped by an alarm) plays no RL episode, but every
     --eval_every it still plays the frozen --init network: a game left out of RL stays visible

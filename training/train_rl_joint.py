@@ -409,6 +409,20 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="initial KL beta (default 0.05; 0 = no KL anchor for the game)")
     a("--kl_budget", action="append", default=[], metavar="GAME=K",
       help="per-game KL budget the beta controller steers toward (default 0.03)")
+    a("--kl_budget_ev", type=float, default=0.0, metavar="E",
+      help="scale a game's KL budget by how much of its returns its critic explains: the "
+           "budget in effect is --kl_budget x clamp(ev / E, --kl_budget_ev_floor, 1), ev an "
+           "EMA (0.8) of the game's explained variance — a policy gradient the critic cannot "
+           "see past is mostly noise, and the 21-game run's games whose critic explained "
+           "nothing (clash royale 0.05, HUNL 0.08) drifted away from their IL start while "
+           "the others gained; 0 = off (the --alarm_kl_x alarm keeps the nominal budget)")
+    a("--kl_budget_ev_floor", type=float, default=0.1)
+    a("--ref_reset_every", type=int, default=0, metavar="N",
+      help="every N iterations the KL reference becomes the current policy (its EMA): the "
+           "policy may then move another budget's worth instead of staying within one KL "
+           "ball of the IL start (R-NaD's regularisation-policy reset); the --init network "
+           "stays the vs_init opponent and the engine / vs_init alarms the guard; the "
+           "reference's weights go into the checkpoint (0 = off)")
     a("--value_warmup", type=int, default=0, metavar="N",
       help="the first N iterations train the value heads only (no policy-gradient or "
            "entropy term; KL anchor and IL replay stay): the IL value heads start far from "
@@ -1864,6 +1878,11 @@ class JointRLTrainer:
             model[g].value_core_grad = float(a.value_core_grad)
         self.ref = load_multi(a.init, device).requires_grad_(False).eval()
         self.init_hash = module_fingerprint(self.ref)
+        # the vs_init opponent: the --init network itself — the KL reference moves under
+        # --ref_reset_every (without it the two are one network)
+        self.init_net = (load_multi(a.init, device).requires_grad_(False).eval()
+                         if a.ref_reset_every > 0 else self.ref)
+        self.ref_resets = 0
         if self.dist_env.enabled:
             broadcast_module_state(self.model, src=0)
         self.rl_games = list(dict.fromkeys(a.rl))
@@ -2040,6 +2059,9 @@ class JointRLTrainer:
         self.iteration = 0
         self.il_baseline: Dict[str, float] = {}
         self.kl_budget = {g: budget.get(g, 0.03) for g in rl}
+        #: --kl_budget_ev: each game's budget in effect, and the EMA of its explained variance
+        self.kl_budget_eff = dict(self.kl_budget)
+        self.ev_ema: Dict[str, float] = {}
         #: reward-hacking alarms: each game's first-iteration episode length, the
         #: consecutive iterations it has looked wrong, and the games stopped {game: why}
         self.alarm_base_len: Dict[str, float] = {}
@@ -2802,6 +2824,15 @@ class JointRLTrainer:
         if upd_e:
             self.entc.update(upd_e)
         upd_k = {g: v for g, v in kl.items() if not self.kl_off[g] and math.isfinite(v)}
+        if a.kl_budget_ev > 0:
+            for g in self.rl_games:
+                ev = diag.explained_variance(g)
+                if math.isfinite(ev):
+                    ev = min(max(ev, 0.0), 1.0)
+                    self.ev_ema[g] = ev if g not in self.ev_ema else 0.8 * self.ev_ema[g] + 0.2 * ev
+                scale = min(max(self.ev_ema.get(g, 0.0) / a.kl_budget_ev, a.kl_budget_ev_floor), 1.0)
+                self.kl_budget_eff[g] = self.kl_budget[g] * scale
+                self.klb.budget[g] = self.kl_budget_eff[g]
         if a.kl_adapt and upd_k:
             self.klb.update(upd_k)
         if self.rl_games:
@@ -2820,6 +2851,8 @@ class JointRLTrainer:
             if g not in self.il_baseline and math.isfinite(m_il):
                 self.il_baseline[g] = m_il
         self.iteration += 1
+        if a.ref_reset_every > 0 and self.iteration % a.ref_reset_every == 0:
+            self._reset_reference()
         if (a.snapshot_every > 0 and self.iteration % a.snapshot_every == 0
                 and any(r.pool_policy is not None for r in self.rl.values())):
             self._add_snapshot(tag="iter")
@@ -2854,7 +2887,8 @@ class JointRLTrainer:
         episodes, seats drawn per episode), whole waves until --eval_episodes; the
         streams are dropped.  Self-play reward can rise from an exploit of the learner's
         own play; a policy that got worse against where it started cannot hide it here."""
-        ref = NetworkPolicy(self.ref[g], act_steps=self.depth, device=self.device, bf16=self.args.bf16)
+        ref = NetworkPolicy(self.init_net[g], act_steps=self.depth, device=self.device,
+                            bf16=self.args.bf16)
         return self._eval_against(g, r, it, gi, "init", ref, episodes)
 
     def _engine(self, g: str):
@@ -3046,6 +3080,7 @@ class JointRLTrainer:
                     canary_log_old_mu=diag.mean(g, "canary_oldmu_sum", "canary_n"),
                     canary_log_ratio=diag.mean(g, "canary_ratio_sum", "canary_n"),
                     ent_coef=self.entc[g], kl_beta=self.klb[g],
+                    kl_budget=self.kl_budget_eff.get(g, self.kl_budget.get(g, float("nan"))),
                     popart_mu=self.popart.mean(g), popart_sigma=self.popart.std(g),
                     adv_std=self.advnorm.std(g))
             if g in self.rl:
@@ -3110,6 +3145,7 @@ class JointRLTrainer:
                 "vs_init_streak": dict(self.vs_init_streak),
                 "engine_base": dict(self.engine_base), "engine_streak": dict(self.engine_streak),
                 "engine_base_n": dict(self.engine_base_n),
+                "ref_resets": self.ref_resets, "ev_ema": dict(self.ev_ema),
                 "init_base": dict(self.init_base), "init_base_n": dict(self.init_base_n),
                 "timing": dict(self.timing),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
@@ -3202,6 +3238,9 @@ class JointRLTrainer:
                 "optimizer_state": self.optimizer.state_dict(),
                 "ema_state": shadow,
                 "rl_state": {**self._rl_state(), "raw_heads": raw_heads, "envs": envs},
+                # --ref_reset_every: the reference as moved (storages shared under the
+                # games' names are saved once); None while it is still the --init network
+                "ref_state": self.ref.state_dict() if self.ref_resets > 0 else None,
             }
             path = os.path.join(self.args.save_dir, name)
             torch.save(ck, f"{path}.tmp")
@@ -3260,6 +3299,13 @@ class JointRLTrainer:
         self.replay_cost = dict(st.get("replay_cost", {}))
         self.learn_cost = dict(st.get("learn_cost", {}))
         self.timing = dict(st.get("timing", {}))
+        self.ev_ema = dict(st.get("ev_ema", {}))
+        self.ref_resets = int(st.get("ref_resets", 0))
+        if self.ref_resets > 0:
+            if ck.get("ref_state") is None:
+                raise SystemExit(f"{path}: {self.ref_resets} reference reset(s) but no ref_state")
+            self.ref.load_state_dict(ck["ref_state"])
+            self.log(f"[resume] the KL reference as moved by {self.ref_resets} reset(s)")
         self.alarm_base_len = dict(st.get("alarm_base_len", {}))
         self.alarm_streak = dict(st.get("alarm_streak", {}))
         self.vs_init_streak = dict(st.get("vs_init_streak", {}))
@@ -3313,6 +3359,17 @@ class JointRLTrainer:
         with open(f"{path}.tmp", "w") as f:
             f.writelines(keep)
         os.replace(f"{path}.tmp", path)
+
+    def _reset_reference(self) -> None:
+        """--ref_reset_every: the KL reference becomes the current policy (its EMA when
+        there is one; rank-identical weights, so every rank's reference stays the same).
+        The betas then fall toward their floor as the measured KL restarts from ~0."""
+        state = (self.ema.ema_model_state(self.model) if self.ema is not None
+                 else self.model.state_dict())
+        self.ref.load_state_dict(state)
+        self.ref_resets += 1
+        self.log(f"[ref] iteration {self.iteration}: the KL reference is now the policy's "
+                 f"{'EMA' if self.ema is not None else 'live'} weights (reset {self.ref_resets})")
 
     def _evaluates(self, it: int) -> bool:
         """Whether iteration ``it`` (0-based) runs the --eval_every evaluation."""
