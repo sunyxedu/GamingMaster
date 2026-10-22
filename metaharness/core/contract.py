@@ -200,7 +200,7 @@ class VirtualClock:
     """
     mode = "virtual"
 
-    def __init__(self, idle_s: float = 1.0, handoff_s: float = 2.0) -> None:
+    def __init__(self, idle_s: float = 1.0, handoff_s: float = 1.0) -> None:
         self._t = 0.0
         self.on_advance: Optional[Callable[[float, float], None]] = None
         self.on_event: Optional[Callable[[str, dict[str, Any]], None]] = None
