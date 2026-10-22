@@ -31,6 +31,9 @@ Rows / streams / seats (see env/vec_game.py), from the game's FrameSpec layout:
     games' layout; ``lockstep = True``).
 
 ``forced`` = a single legal action (the env applies it whatever is sent).
+``privileged`` = {"oracle": [R, D]} for hidden-information games with a gmrules oracle
+(every seat's hidden cards seen from the row's seat — the RL trainer's privileged critic
+only; never part of ``obs``).
 Team games (``teams``: the team id of every seat, from the game's rules; e.g.
 bridge partnerships): teammates share one outcome and ``info["winner"]`` is
 the lowest seat of the winning team (−1: a tie); a per-seat row's
@@ -185,7 +188,15 @@ class GmSimVecEnv(VecEnvBase):
             active=torch.from_numpy(o["active"].copy()),
             forced=torch.from_numpy(o["forced"].copy()),
             stream_seats=stream_seats,
+            # critic-only: every seat's hidden cards from the row's seat (gmrules
+            # Game::encode_oracle) — the RL trainer's --privileged_critic; zeros on idle rows
+            privileged=({"oracle": torch.from_numpy(o["oracle"].copy())} if "oracle" in o else None),
         )
+
+    @property
+    def privileged_dim(self) -> int:
+        """Size of ``VecObs.privileged["oracle"]`` per row (0: the game has no oracle)."""
+        return int(getattr(self._sim, "oracle_dim", 0) or 0)
 
     def step(self, actions: Mapping[str, torch.Tensor]) -> StepResult:
         acts = self.replay_actions(actions)

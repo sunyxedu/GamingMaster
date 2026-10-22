@@ -61,6 +61,10 @@ pub struct RowBuffers {
     pub new_episode: Vec<u8>,
     /// Active with a single legal action (applied whatever is sent).
     pub forced: Vec<u8>,
+    /// `R × oracle_dim`: the acting rows' [`Game::encode_oracle`] (critic-only; zeros on
+    /// other rows; empty when the game has none).
+    pub oracle: Vec<f32>,
+    pub oracle_dim: usize,
 }
 
 /// Result of one [`VecSim::step`] (per env unless noted; `S` = seats, `K` = action keys).
@@ -109,6 +113,9 @@ struct Rows<'a> {
     active: &'a mut [u8],
     new_episode: &'a mut [u8],
     forced: &'a mut [u8],
+    /// `rpe × oracle_dim` (empty when the game has no oracle)
+    oracle: &'a mut [f32],
+    oracle_dim: usize,
 }
 
 impl Rows<'_> {
@@ -226,6 +233,7 @@ impl<G: Game> Ctx<'_, G> {
     /// Re-encode the env's rows from its state.
     fn refresh(&self, env: &Env<G>, rows: &mut Rows<'_>) -> Result<(), String> {
         rows.new_episode.fill(env.fresh as u8);
+        rows.oracle.fill(0.0);
         for k in 0..self.rpe {
             rows.frame(self.spec, k).clear();
             rows.active[k] = 0;
@@ -250,6 +258,10 @@ impl<G: Game> Ctx<'_, G> {
         for seat in seats.iter() {
             let k = self.row(seat);
             encode_frame(&env.state, seat, self.spec, &mut rows.frame(self.spec, k)).map_err(|e| e.0)?;
+            let d = rows.oracle_dim;
+            if d > 0 {
+                env.state.encode_oracle(seat, &mut rows.oracle[k * d..(k + 1) * d]);
+            }
             let n = rows.legal_ids[k].len();
             rows.active[k] = 1;
             rows.n_legal[k] = n as i64;
@@ -374,6 +386,9 @@ fn split_rows<'a>(buf: &'a mut RowBuffers, legal_ids: &'a mut [Vec<u32>], spec: 
     let mut active = buf.active.chunks_mut(rpe);
     let mut new_episode = buf.new_episode.chunks_mut(rpe);
     let mut forced = buf.forced.chunks_mut(rpe);
+    let d = buf.oracle_dim;
+    let mut oracle: Box<dyn Iterator<Item = &'a mut [f32]>> =
+        if d > 0 { Box::new(buf.oracle.chunks_mut(rpe * d)) } else { Box::new(std::iter::repeat_with(|| &mut [][..])) };
     (0..n)
         .map(|_| Rows {
             obs: obs.iter_mut().map(|it| it.next().unwrap()).collect(),
@@ -385,6 +400,8 @@ fn split_rows<'a>(buf: &'a mut RowBuffers, legal_ids: &'a mut [Vec<u32>], spec: 
             active: active.next().unwrap(),
             new_episode: new_episode.next().unwrap(),
             forced: forced.next().unwrap(),
+            oracle: oracle.next().unwrap(),
+            oracle_dim: d,
         })
         .collect()
 }
@@ -538,6 +555,8 @@ impl<G: Game> VecSim<G> {
             active: vec![0; r],
             new_episode: vec![0; r],
             forced: vec![0; r],
+            oracle: vec![0.0; r * G::oracle_dim(&self.cfg)],
+            oracle_dim: G::oracle_dim(&self.cfg),
         };
         self.legal = vec![Vec::new(); r];
     }
@@ -839,6 +858,85 @@ mod tests {
         let mut bad = ev[..=a].to_vec();
         bad[a] = Event::Act(31, 0);
         assert!(sim.reset_from(&[0], &[0], &[bad]).is_err());
+    }
+
+    /// The privileged critic's oracle: the batch buffer holds `encode_oracle(seat)` of the env's
+    /// state on acting rows and zeros elsewhere; every observer sees the same per-seat blocks
+    /// rotated (seat-relative), the shared tail block (kitty / skat) unrotated; seats' cards
+    /// never overlap; a game without an oracle has an empty buffer.
+    fn check_oracle<G: Game>(cfg: G::Config, seats: usize, block: usize, shared: usize, max_ones: usize, one_hot: bool) {
+        let d = G::oracle_dim(&cfg);
+        assert_eq!(d, seats * block + shared);
+        let n = 6;
+        let mut sim = VecSim::<G>::new(cfg.clone(), n, SimOptions::default()).unwrap();
+        sim.reset(&(0..n).collect::<Vec<_>>(), &(10..10 + n as u64).collect::<Vec<_>>()).unwrap();
+        let rpe = sim.rows_per_env();
+        for step in 0..200 {
+            let b = sim.buffers();
+            assert_eq!(b.oracle_dim, d);
+            for e in 0..n {
+                if sim.done(e) {
+                    continue;
+                }
+                let st = sim.state(e);
+                let views: Vec<Vec<f32>> = (0..seats).map(|o| {
+                    let mut v = vec![0.0; d];
+                    st.encode_oracle(o, &mut v);
+                    v
+                }).collect();
+                for row in e * rpe..(e + 1) * rpe {
+                    let got = &b.oracle[row * d..(row + 1) * d];
+                    if b.active[row] == 1 {
+                        assert_eq!(got, &views[b.to_play[row] as usize][..], "{} step {step} row {row}", G::NAME);
+                    } else {
+                        assert!(got.iter().all(|&x| x == 0.0), "{}: inactive row {row} has an oracle", G::NAME);
+                    }
+                }
+                for o in 0..seats {
+                    for k in 0..seats {
+                        let a = &views[o][k * block..(k + 1) * block];
+                        let z = &views[(o + k) % seats][..block];
+                        assert_eq!(a, z, "{}: observer {o} block {k}", G::NAME);
+                    }
+                    assert_eq!(&views[o][seats * block..], &views[0][seats * block..]);
+                }
+                let v = &views[0];
+                if one_hot {
+                    for c in 0..block {
+                        let holders = (0..seats).filter(|&k| v[k * block + c] > 0.0).count();
+                        assert!(holders <= 1, "{}: card {c} held by {holders} seats", G::NAME);
+                    }
+                } else {
+                    // rank counts / 4 (doudizhu): every rank's four cards (two jokers) at most once
+                    for r in 0..block {
+                        let total: f32 = (0..seats + usize::from(shared > 0)).map(|k| v[k * block + r] * 4.0).sum();
+                        assert!(total <= 4.0 + 1e-4 && (total - total.round()).abs() < 1e-4, "{}: rank {r} total {total}", G::NAME);
+                    }
+                }
+                let ones = v.iter().filter(|&&x| x > 0.0).count();
+                assert!(ones <= max_ones, "{}: {ones} entries > {max_ones}", G::NAME);
+            }
+            if (0..n).all(|e| sim.done(e)) {
+                break;
+            }
+            let acts = sim.random_actions(step as u64).unwrap();
+            sim.step(&acts).unwrap();
+        }
+    }
+
+    #[test]
+    fn oracle_of_the_hidden_information_games() {
+        use crate::games::bridge::{Bridge, BridgeConfig};
+        use crate::games::doudizhu::{DouDizhu, DouDizhuConfig};
+        use crate::games::hunl::{Hunl, HunlConfig};
+        use crate::games::skat::{Skat, SkatConfig};
+        check_oracle::<Hunl>(HunlConfig::default(), 2, 52, 0, 4, true);
+        check_oracle::<Bridge>(BridgeConfig::default(), 4, 52, 0, 52, true);
+        check_oracle::<Skat>(SkatConfig::default(), 3, 32, 32, 32, true);
+        check_oracle::<DouDizhu>(DouDizhuConfig::default(), 3, 15, 15, 4 * 15, false);
+        let sim = VecSim::<KuhnPoker>::new(KuhnConfig { players: 2 }, 3, SimOptions::default()).unwrap();
+        assert_eq!(sim.buffers().oracle_dim, 0);
+        assert!(sim.buffers().oracle.is_empty());
     }
 
     #[test]

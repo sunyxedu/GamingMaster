@@ -477,6 +477,17 @@ pub trait Game: Clone + Send + Sync + 'static {
     /// Full state, for debugging.
     fn state_string(&self) -> String;
 
+    /// Size of [`encode_oracle`](Game::encode_oracle)'s output (0: the game has none).
+    fn oracle_dim(_cfg: &Self::Config) -> usize {
+        0
+    }
+
+    /// Critic-only information for the RL trainer's privileged critic — NEVER part of a
+    /// frame (the policy must not see it): every seat's private cards from `observer`'s
+    /// point of view (its own first, then the following seats in turn order), so one value
+    /// function serves every seat.  `out` is `oracle_dim` long and arrives zeroed.
+    fn encode_oracle(&self, _observer: Seat, _out: &mut [f32]) {}
+
     /// Privacy-test support (mandatory when `spec().hidden_info`): a trajectory that
     /// differs from `events` ONLY in information `seat` never observes up to the end
     /// of `events` (typically: other seats' private chance outcomes re-dealt among

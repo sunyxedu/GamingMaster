@@ -44,7 +44,11 @@ def load_multi(path: str, device: torch.device, raw: bool = False) -> MultiGameN
         net, _ = build_net_tolerant(g, checkpoint_config_dict(ck, g))
         nets[g] = net
     model = MultiGameNetwork(nets)
-    model.load_state_dict(with_addon_defaults(model, ck["train_model_state" if raw else "model_state"]))
+    state = ck["train_model_state" if raw else "model_state"]
+    # an RL run's privileged critic (train_rl_joint --privileged_critic) is a training-only
+    # add-on of the value head: a plain network loads without it
+    state = {k: v for k, v in state.items() if ".priv_value." not in k}
+    model.load_state_dict(with_addon_defaults(model, state))
     return model.to(device).eval()
 
 

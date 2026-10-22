@@ -217,7 +217,14 @@ class Sim:
             out[k] = np.frombuffer(d[k], np.int64)
         for k in ("active", "new_episode", "forced"):
             out[k] = np.frombuffer(d[k], np.uint8).view(np.bool_)
+        if "oracle" in d:      # critic-only hidden information (gmrules Game::encode_oracle)
+            out["oracle"] = np.frombuffer(d["oracle"], np.float32).reshape(R, self._s.oracle_dim)
         return out
+
+    @property
+    def oracle_dim(self) -> int:
+        """Size of a row's privileged-critic oracle in ``observe()["oracle"]`` (0: none)."""
+        return int(self._s.oracle_dim)
 
     def _keys_array(self, actions) -> np.ndarray:
         R, K = self._s.n_rows, len(self.action_keys)

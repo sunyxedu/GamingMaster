@@ -20,6 +20,7 @@ boundary defined in ``model.games.base``:
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
@@ -54,6 +55,27 @@ def grad_scale(x: torch.Tensor, s: float) -> torch.Tensor:
     if s == 0.0:
         return x.detach()
     return _GradScale.apply(x, s)
+
+
+class PrivilegedValueInput(nn.Module):
+    """The privileged critic's extra input (RL training only): an MLP of the game's oracle —
+    every seat's hidden cards (gmrules ``Game::encode_oracle``) — added to the value head's
+    input.  The policy never sees it.  The last layer starts at zero, so attaching it leaves
+    the value function unchanged until the value loss trains it."""
+
+    def __init__(self, dim: int, d_model: int, hidden: int = 512,
+                 generator: Optional[torch.Generator] = None):
+        super().__init__()
+        self.net = nn.Sequential(nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, d_model))
+        with torch.no_grad():               # rank-identical with a seeded generator
+            bound = 1.0 / math.sqrt(dim)
+            self.net[0].weight.uniform_(-bound, bound, generator=generator)
+            self.net[0].bias.uniform_(-bound, bound, generator=generator)
+            self.net[2].weight.zero_()
+            self.net[2].bias.zero_()
+
+    def forward(self, oracle: torch.Tensor) -> torch.Tensor:
+        return self.net(oracle)
 
 
 class GameNetwork(nn.Module):
@@ -260,6 +282,15 @@ class GameNetwork(nn.Module):
             states.extend(mem.initial_states(batch, S))
         return states
 
+    def attach_privileged_critic(self, dim: int, generator: Optional[torch.Generator] = None,
+                                 hidden: int = 512) -> "PrivilegedValueInput":
+        """Give the value head the privileged input (:class:`PrivilegedValueInput`, ``dim``
+        oracle features) on this network's device; returns the module."""
+        ref = next(self.value_head.parameters())
+        self.priv_value = PrivilegedValueInput(dim, self.cfg.d_model, hidden, generator).to(
+            device=ref.device, dtype=ref.dtype)
+        return self.priv_value
+
     def _decode_ctx(self, obs: Dict[str, torch.Tensor],
                     step: bool = False) -> Dict[str, Dict[str, torch.Tensor]]:
         """``decode()`` kwargs carrying the encoder's decode context
@@ -391,8 +422,13 @@ class GameNetwork(nn.Module):
         init_cache: Optional[List[Optional[torch.Tensor]]] = None,
         t0: int = 0,
         return_cache: bool = False,
+        privileged: Optional[Dict[str, torch.Tensor]] = None,
     ) -> Dict[str, torch.Tensor]:
         """Full-sequence forward.
+
+        ``privileged`` {"oracle": [B, T, D]} — critic-only information (every seat's hidden
+        cards): with an attached privileged critic (:meth:`attach_privileged_critic`) it is
+        added to the value head's input; the policy outputs never depend on it.
 
         ``routes`` [B, T, C, S, k] replays a recorded MoE routing (what
         ``step(record_routes=True)`` returned for each frame, at the same
@@ -503,6 +539,10 @@ class GameNetwork(nn.Module):
         # alone learns, on the core's features) — fitting RL returns through the core moved
         # the POLICY (KL 0.02-0.035 and rising entropy in five value-only iterations)
         hl_v = grad_scale(hl_out, float(getattr(self, "value_core_grad", 1.0)))
+        priv = getattr(self, "priv_value", None)
+        if priv is not None and privileged is not None and "oracle" in privileged:
+            o = privileged["oracle"].float().reshape(B * T, -1)
+            hl_v = hl_v + priv(o).to(hl_v.dtype)
         if isinstance(self.value_head, HLGaussValueHead):
             # One MLP pass: expose the logits for the HL-Gauss CE loss and
             # derive the scalar from them for every other consumer.

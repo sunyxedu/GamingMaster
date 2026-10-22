@@ -451,6 +451,68 @@ def test_train_rl_joint_with_kuhn(stage1):
     assert (out / "rl" / "rl_final.pt").exists()
 
 
+def test_train_rl_joint_privileged_critic(stage1):
+    """--privileged_critic hunl: the value head also sees both seats' hole cards (the env's
+    oracle) — attached at zero (the first iteration's values equal a plain critic's), trained
+    by its own Adam, stored in the checkpoint, restored on a resume, dropped from pool
+    snapshots and by load_multi; the policy (actor and learner log-probs) never reads it."""
+    import copy
+
+    from training import train_rl_joint
+    from training.eval_multi_game import load_multi
+    from training.train_rl_joint import JointRLTrainer, build_batch, learner_forward, parse_args
+
+    out, root, _ = stage1
+    base = ["--init", str(out / "ck" / "multi_final.pt"), "--rl", "hunl", "--rl", "kuhn_poker",
+            "--data", f"hunl={root / 'train'}", "--replay_batch_size", "4",
+            "--tokens_per_iter", "120", "--envs", "hunl=6", "--envs", "kuhn_poker=4",
+            "--snapshot_every", "1", "--epochs", "1", "--minibatches", "2",
+            "--snapshot_dir", "memory", "--device", "cpu", "--seed", "3"]
+    with pytest.raises(SystemExit, match="no privileged oracle"):
+        JointRLTrainer(parse_args(base + ["--iterations", "1", "--save_dir", str(out / "rl_px"),
+                                          "--privileged_critic", "kuhn_poker"]))
+    torch.manual_seed(0)
+    res = train_rl_joint.main(base + ["--iterations", "2", "--save_dir", str(out / "rl_priv"),
+                                      "--privileged_critic", "hunl", "--privileged_lr", "1e-2"])
+    tr = res["trainer"]
+    net = tr.model["hunl"]
+    assert net.priv_value is not None and tr.priv_opt is not None
+    assert any(float(p.detach().abs().sum()) > 0 for p in net.priv_value.net[2].parameters())   # trained
+    rec = res["history"][-1]
+    assert rec["dropped"] == 0 and rec["nonfinite"] == 0 and np.isfinite(rec["games"]["hunl"]["value_loss"])
+    # the oracle reaches the learner: a batch of real streams carries it, and it moves the
+    # value but not the policy's log-probs
+    tr.run_iteration()
+    streams = tr.rl["hunl"].streams
+    assert streams and streams[0].privileged is not None and streams[0].privileged["oracle"].shape[-1] == 104
+    b = build_batch(streams[:4], torch.device("cpu"))
+    with torch.no_grad():
+        with_o = learner_forward(net, tr.rl["hunl"].spec, b, tr.depth, torch.device("cpu"), False)
+        b_no = {k: v for k, v in b.items() if k != "privileged"}
+        without = learner_forward(net, tr.rl["hunl"].spec, b_no, tr.depth, torch.device("cpu"), False)
+    lk = next(k for k in with_o if k.endswith("_logits") and with_o[k].dim() == 3)
+    assert torch.equal(with_o[lk], without[lk])
+    assert not torch.allclose(with_o["value"], without["value"])
+    assert not any(".priv_value." in k for k in tr._policy_state())
+    # checkpoint: the module and its Adam; a resume restores both, load_multi drops them
+    ck = torch.load(out / "rl_priv" / "rl_final.pt", map_location="cpu", weights_only=False)
+    assert any(".priv_value." in k for k in ck["train_model_state"])
+    assert ck["rl_state"]["priv_games"] == ["hunl"] and ck["rl_state"]["priv_opt"] is not None
+    tr2 = JointRLTrainer(parse_args(base + ["--iterations", "3", "--save_dir", str(out / "rl_priv"),
+                                            "--privileged_critic", "hunl",
+                                            "--resume", str(out / "rl_priv" / "rl_final.pt")]))
+    saved = {k.split(".priv_value.", 1)[1]: v for k, v in ck["train_model_state"].items()
+             if k.startswith("nets.hunl.priv_value.")}
+    got = tr2.model["hunl"].priv_value.state_dict()
+    assert saved.keys() == got.keys() and all(torch.equal(saved[k], got[k]) for k in saved)
+    plain = load_multi(str(out / "rl_priv" / "rl_final.pt"), torch.device("cpu"))
+    assert getattr(plain["hunl"], "priv_value", None) is None
+    # a run without the flag resumes the checkpoint (the module dropped)
+    tr3 = JointRLTrainer(parse_args(base + ["--iterations", "3", "--save_dir", str(out / "rl_priv"),
+                                            "--resume", str(out / "rl_priv" / "rl_final.pt")]))
+    assert getattr(tr3.model["hunl"], "priv_value", None) is None
+
+
 def test_slumbot_client_plays_the_trained_model(stage1):
     """scripts/slumbot_client.py's ModelPolicy (the checkpoint's hunl network on the
     hand's frames of its seat) against the local fake of the Slumbot API."""

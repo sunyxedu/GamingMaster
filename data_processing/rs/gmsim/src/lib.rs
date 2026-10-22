@@ -351,7 +351,17 @@ impl Sim {
         d.set_item("active", bytearray(py, &b.active))?;
         d.set_item("new_episode", bytearray(py, &b.new_episode))?;
         d.set_item("forced", bytearray(py, &b.forced))?;
+        if b.oracle_dim > 0 {
+            // critic-only (Game::encode_oracle), float32 [R * oracle_dim]
+            d.set_item("oracle", bytearray(py, &b.oracle))?;
+        }
         Ok(d)
+    }
+
+    /// Size of a row's privileged-critic oracle (0: the game has none).
+    #[getter]
+    fn oracle_dim(&self) -> usize {
+        self.inner.buffers().oracle_dim
     }
 
     /// Canonical legal action ids of a row's current frame.

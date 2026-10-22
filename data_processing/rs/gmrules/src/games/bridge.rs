@@ -1210,6 +1210,21 @@ impl Game for Bridge {
         }
     }
 
+    fn oracle_dim(_cfg: &BridgeConfig) -> usize {
+        4 * 52
+    }
+
+    /// Every seat's unplayed cards (one-hot over the 52 cards; observer first, then the
+    /// following seats clockwise).
+    fn encode_oracle(&self, observer: Seat, out: &mut [f32]) {
+        for (c, &h) in self.holder.iter().enumerate() {
+            if h != NONE {
+                let k = (h as usize + 4 - observer % 4) % 4;
+                out[k * 52 + c] = 1.0;
+            }
+        }
+    }
+
     fn state_string(&self) -> String {
         let hand = |p: u8| -> String {
             (0..4u8)

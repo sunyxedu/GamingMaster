@@ -349,6 +349,15 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="every N iterations each 2+-seat RL game plays the frozen --init network (the "
            "learner against it, seats drawn per episode; not trained on): vs_init in "
            "metrics.jsonl, the referee self-play reward cannot fool (0 = off)")
+    a("--privileged_critic", action="append", default=[], metavar="GAME[,GAME]",
+      help="these games' value function also sees every seat's hidden cards (the env's "
+           "privileged oracle, gmrules Game::encode_oracle: hunl, bridge, skat, doudizhu): a "
+           "critic that knows the deal leaves the advantage with the effect of the actions "
+           "instead of the card luck (the 21-game run's critics explained 8%% of HUNL's "
+           "returns); the policy never sees it.  The module starts at zero (the value function "
+           "unchanged) and trains with its own Adam (--privileged_lr), so a running run can "
+           "add it on a resume")
+    a("--privileged_lr", type=float, default=1e-4)
     a("--archive_eval", action=argparse.BooleanOptionalAction, default=True,
       help="every evaluation wave's episodes (vs_init and vs the engine referee) as gmrules "
            "trajectories, SAVE_DIR/traces/eval_GAME_OPPONENT_itN_rRANK_wWAVE.npz, for "
@@ -1342,6 +1351,8 @@ class Stream:
     rewards: torch.Tensor     # [T, S] reward of every seat after the frame
     done: torch.Tensor        # [T] episode ended after the frame
     routes: Optional[torch.Tensor] = None   # [T, C, S_tok, k] actor's MoE experts (replay)
+    #: critic-only information {key: [T, ...]} (the env's VecObs.privileged)
+    privileged: Optional[Dict[str, torch.Tensor]] = None
     # learner-side, filled before the epochs
     lp_old: Optional[torch.Tensor] = None
     v_old: Optional[torch.Tensor] = None
@@ -1395,7 +1406,9 @@ def _assemble_streams(recs: List[Dict[str, Any]]) -> List[Stream]:
     if "routes" in recs[0]:
         keys.append("routes")
     fields_ = {k: cat(lambda r, k=k: r[k]) for k in keys}
+    priv = cat_dict("privileged") if "privileged" in recs[0] else None
     return [Stream(obs=obs[i], legal=legal[i], actions=actions[i],
+                   privileged=priv[i] if priv is not None else None,
                    **{k: fields_[k][i] for k in fields_}) for i in range(len(counts))]
 
 
@@ -1590,6 +1603,8 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
                     "rewards": rew[env_rows].float(), "done": done[env_rows].bool()})
                 if "moe_routes" in out:
                     recs[-1]["routes"] = out["moe_routes"]
+                if obs.privileged is not None:
+                    recs[-1]["privileged"] = {k: v[rows] for k, v in obs.privileged.items()}
                 for pos, r in enumerate(rows.tolist()):
                     last[r] = (len(recs) - 1, pos)
             # per-seat streams of alternating games (env/vec_gmsim.py): a learner
@@ -1657,6 +1672,8 @@ def build_batch(streams: Sequence[Stream], device: torch.device,
     }
     if streams[0].routes is not None:
         b["routes"] = stack(lambda s: s.routes)
+    if streams[0].privileged is not None:
+        b["privileged"] = {k: stack(lambda s, k=k: s.privileged[k]) for k in streams[0].privileged}
     for k in extra:
         b[k] = stack(lambda s, k=k: getattr(s, k))
     return b
@@ -1699,6 +1716,8 @@ def learner_forward(net, spec: RLGameSpec, b: Dict[str, Any], depth: int,
     routes = b.get("routes") if replay_routes else None
     kw = (dict(init_cache=init_cache, t0=t0, return_cache=True)
           if init_cache is not None or return_cache else {})
+    if b.get("privileged") is not None and getattr(net, "priv_value", None) is not None:
+        kw["privileged"] = b["privileged"]
     with _autocast(device, bf16):
         return net(b["obs"], legal=b["legal"], labels=spec.labels(b["actions"], net.cfg),
                    act_steps=depth, frame_mask=b["frame_mask"], routes=routes, **kw)
@@ -2109,6 +2128,20 @@ class JointRLTrainer:
         self.optimizer = AdamATan2(multi_game_param_groups(model, a.weight_decay), lr=a.lr,
                                    betas=(a.beta1, a.beta2), weight_decay=a.weight_decay)
         self.ema = ModelEMA(model, mu=a.ema_rate) if a.ema_rate > 0 else None
+        self.priv_games = [g for item in a.privileged_critic for g in item.split(",") if g]
+        self.priv_params: List[torch.nn.Parameter] = []
+        for gi, g in enumerate(self.priv_games):
+            if g not in self.rl:
+                raise SystemExit(f"--privileged_critic {g}: not an RL game")
+            dim = int(getattr(self.rl[g].env, "privileged_dim", 0) or 0)
+            if dim <= 0:
+                raise SystemExit(f"--privileged_critic {g}: its env provides no privileged oracle")
+            gen = torch.Generator().manual_seed(derive_seed(a.seed, 0, 0, gi, 7))   # rank-identical
+            mod = model[g].attach_privileged_critic(dim, generator=gen)
+            self.priv_params += list(mod.parameters())
+            self.log(f"[rl] {g}: privileged critic ({dim} oracle features)")
+        self.priv_opt = (torch.optim.Adam(self.priv_params, lr=a.privileged_lr)
+                         if self.priv_params else None)
         self.iteration = 0
         self.il_baseline: Dict[str, float] = {}
         self.kl_budget = {g: budget.get(g, 0.03) for g in rl}
@@ -2226,6 +2259,8 @@ class JointRLTrainer:
         ema = self.ema if self.args.snapshot_weights == "ema" else None
         out: Dict[str, torch.Tensor] = {}
         for k, v in self.model.state_dict().items():
+            if ".priv_value." in k:         # the privileged critic: training-only, no opponent's
+                continue
             if ema is not None and k in ema.alias:
                 v = ema.shadow[ema.alias[k]]
             for g in self.rl_games:
@@ -2727,6 +2762,12 @@ class JointRLTrainer:
         if ok:
             self.optimizer.step()
         self.optimizer.zero_grad(set_to_none=True)
+        if self.priv_opt is not None:       # the privileged critic: its own clip and Adam
+            pn = (collective_clip_grad_norm_(self.priv_params, max_norm, self.device)
+                  if self.dist_env.enabled else torch.nn.utils.clip_grad_norm_(self.priv_params, max_norm))
+            if ok and bool(torch.isfinite(pn)):
+                self.priv_opt.step()
+            self.priv_opt.zero_grad(set_to_none=True)
         return ok, float(norm)
 
     def _forward_tracked(self, g: str, diag: Diag, fn: Callable[[], torch.Tensor]
@@ -3275,6 +3316,8 @@ class JointRLTrainer:
                 "ref_resets": self.ref_resets, "ev_ema": dict(self.ev_ema),
                 "init_base": dict(self.init_base), "init_base_n": dict(self.init_base_n),
                 "timing": dict(self.timing),
+                "priv_games": list(self.priv_games),
+                "priv_opt": self.priv_opt.state_dict() if self.priv_opt is not None else None,
                 "engine_rung": dict(self.engine_rung), "engine_high": dict(self.engine_high),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
@@ -3410,7 +3453,17 @@ class JointRLTrainer:
         # the train_multi_game fields are PopArt-folded; the normalised value
         # heads the RL state assumes are in rl_state["raw_heads"]
         raw = st.get("raw_heads") or {}
-        self.model.load_state_dict({**ck["train_model_state"], **raw.get("train", {})})
+        missing, unexpected = self.model.load_state_dict(
+            {**ck["train_model_state"], **raw.get("train", {})}, strict=False)
+        bad = [k for k in list(missing) + list(unexpected) if ".priv_value." not in k]
+        if bad:
+            raise SystemExit(f"{path}: model state mismatch {bad[:6]}")
+        saved_priv = list(st.get("priv_games", []))
+        if saved_priv == self.priv_games and st.get("priv_opt") is not None and self.priv_opt is not None:
+            self.priv_opt.load_state_dict(st["priv_opt"])
+        elif self.priv_games != saved_priv:
+            self.log(f"[resume] privileged critic: {saved_priv} -> {self.priv_games} "
+                     f"(new modules start at zero with a fresh Adam)")
         if self.ema is not None and ck.get("ema_state") is not None:
             self.ema.load_state_dict({**ck["ema_state"], **raw.get("ema", {})})
         self.optimizer.load_state_dict(ck["optimizer_state"])

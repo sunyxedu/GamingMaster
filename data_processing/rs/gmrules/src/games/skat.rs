@@ -1387,6 +1387,30 @@ impl Game for Skat {
         }
     }
 
+    fn oracle_dim(_cfg: &SkatConfig) -> usize {
+        4 * 32
+    }
+
+    /// Every seat's hand (one-hot over the 32 cards; observer first, then the following
+    /// seats) and the skat cards no hand holds (the dealt skat, or the declarer's discards;
+    /// while the declarer holds the picked-up skat, those cards are in its hand only).
+    fn encode_oracle(&self, observer: Seat, out: &mut [f32]) {
+        for k in 0..3 {
+            let hand = self.hands[(observer + k) % 3];
+            for c in 0..32 {
+                if hand >> c & 1 == 1 {
+                    out[k * 32 + c] = 1.0;
+                }
+            }
+        }
+        let skat = self.skat & !(self.hands[0] | self.hands[1] | self.hands[2]);
+        for c in 0..32 {
+            if skat >> c & 1 == 1 {
+                out[3 * 32 + c] = 1.0;
+            }
+        }
+    }
+
     fn state_string(&self) -> String {
         let h = |m: u32| cards_of(m).map(card_str).collect::<Vec<_>>().join(".");
         format!(

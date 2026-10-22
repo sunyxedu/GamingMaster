@@ -520,6 +520,26 @@ impl Game for DouDizhu {
         }
     }
 
+    fn oracle_dim(_cfg: &DouDizhuConfig) -> usize {
+        (N_SEATS + 1) * N_RANKS
+    }
+
+    /// Every seat's hand as rank counts / 4 (observer first, then the following seats),
+    /// then the kitty while it is still face down.
+    fn encode_oracle(&self, observer: Seat, out: &mut [f32]) {
+        for k in 0..N_SEATS {
+            let seat = (observer + k) % N_SEATS;
+            for r in 0..N_RANKS {
+                out[k * N_RANKS + r] = self.hands[seat][r] as f32 / 4.0;
+            }
+        }
+        if !self.kitty_shown {
+            for r in 0..N_RANKS {
+                out[N_SEATS * N_RANKS + r] = self.kitty[r] as f32 / 4.0;
+            }
+        }
+    }
+
     fn state_string(&self) -> String {
         let hands: Vec<String> = self.hands.iter().map(counts_str).collect();
         format!(

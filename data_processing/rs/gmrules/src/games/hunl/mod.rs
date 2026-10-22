@@ -477,6 +477,19 @@ impl Game for Hunl {
         eval::card_str(card as u8)
     }
 
+    fn oracle_dim(_cfg: &HunlConfig) -> usize {
+        2 * 52
+    }
+
+    /// Both seats' hole cards (one-hot over the 52 card ids each), the observer's first.
+    fn encode_oracle(&self, observer: Seat, out: &mut [f32]) {
+        for k in 0..2 {
+            for &c in self.hole((observer + k) % 2) {
+                out[k * 52 + c as usize] = 1.0;
+            }
+        }
+    }
+
     fn state_string(&self) -> String {
         let cards = |c: &[u8]| c.iter().map(|&x| eval::card_str(x)).collect::<String>();
         let hist: Vec<String> = self
