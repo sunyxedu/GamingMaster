@@ -36,7 +36,7 @@ def test_tier1_baseline_runs_on_any_turn_game(game, kw, tmp_path):
 
 @pytest.mark.parametrize("game,kw", [("snake", {"max_ticks": 20}), ("lanerunner", {"max_ticks": 20})])
 def test_tier2_baselines_run_on_any_realtime_game(game, kw, tmp_path):
-    for name in ("tier2_jev_only.py", "tier2_astra_only.py"):
+    for name in ("tier2_jev_only.py", "tier2_astra_only.py", "tier2_idle.py"):
         r = evaluate_harness(BASE / name, lambda **k: make_game(game, **k), [0],
                              system2=ScriptedSystem2(replies=["stay"], latency_s=0.3),
                              system1=HeuristicSystem1(latency_s=0.2), clock_mode="virtual", game_kwargs=kw)

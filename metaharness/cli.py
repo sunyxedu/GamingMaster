@@ -27,14 +27,19 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import signal
 import sys
+import threading
 import time
 from pathlib import Path
 
 from .config import DEFAULT_RUNS_DIR, load_dotenv
 from .core import Archive, LoopConfig, MetaHarnessLoop
+from .core.calibrate import calibrate
 from .core.contract import Budget
-from .core.runner import evaluate_harness
+from .core.loop import SeedRefused
+from .core.runner import DEFAULT_GRACE_S, evaluate_harness
+from .games import registry as _registry
 from .games.registry import GAMES, make_game, register_adaptor
 from .models import make_system1, make_system2  # noqa: F401
 
@@ -60,6 +65,33 @@ def _system1(name: str):
         from .baselines._scripted import heuristic_snake_policy
         return make_system1("heuristic", fn=heuristic_snake_policy)
     return make_system1(name)
+
+
+def _system1_for(name: str | None, tier_n: int):
+    """``auto``: Jev for tier 2, no System-1 for tier 1 (a tier-1 task never has one)."""
+    if not name or name == "auto":
+        name = "jev" if tier_n == 2 else "none"
+    if tier_n == 1 and name in ("jev", "heuristic"):
+        return None
+    return _system1(name)
+
+
+def _adaptor_spec(game: str):
+    lookup = getattr(_registry, "adaptor_spec", None)
+    return lookup(game) if lookup else None
+
+
+def _resolve_heldout_game(name: str) -> str | None:
+    """A registered game name or a generated adaptor directory; checked before the search starts."""
+    if not name:
+        return None
+    if Path(name).is_dir():
+        return register_adaptor(Path(name))
+    _registry._populate()
+    if name not in GAMES:
+        raise SystemExit(f"--heldout-game {name!r} is neither a registered game ({sorted(GAMES)}) "
+                         "nor an adaptor directory")
+    return name
 
 
 def _proposer(name: str, effort: str | None, tier_mod):
@@ -100,9 +132,9 @@ def _study_text(a: argparse.Namespace) -> str:
 
 
 def _episode_budget(a: argparse.Namespace) -> Budget:
-    """The per-episode wall budget can never be shorter than the harness timeout: the ARC run
-    lost an iteration to a harness that respected --harness-timeout 1800 while the manifest's
-    default 900 s wall budget cut every long episode (`run: done — best 0002`, 2026-09-21)."""
+    """One per-episode deadline: the larger of --wall-budget and --harness-timeout (the ARC run lost
+    an iteration to a harness that respected --harness-timeout 1800 while a 900 s wall budget cut
+    every long episode, 2026-09-21). The runner enforces exactly this and ctx.budget reports it."""
     wall = max(float(a.wall_budget), float(a.harness_timeout))
     return Budget(max_system2_calls=a.s2_budget, max_system1_calls=a.s1_budget, max_wall_s=wall)
 
@@ -110,30 +142,49 @@ def _episode_budget(a: argparse.Namespace) -> Budget:
 def _run_search(a: argparse.Namespace, game: str, tier_n: int, study: str, exp_dir: Path):
     tier = _tier(tier_n)
     budget = _episode_budget(a)
-    game_kwargs = json.loads(a.game_kwargs) if a.game_kwargs else {}
+    spec = _adaptor_spec(game)
+    declared = getattr(spec, "seeds", None) or {}       # an adaptor's own scenario split, if it declares one
+    game_kwargs = (json.loads(a.game_kwargs) if a.game_kwargs
+                   else dict(getattr(spec, "eval_kwargs", None) or {}))
+    seeds_train = _parse_seeds(a.seeds) if a.seeds is not None else list(declared.get("train") or [0, 1, 2])
+    seeds_heldout = (_parse_seeds(a.heldout) if a.heldout is not None
+                     else list(declared.get("heldout") or [100, 101, 102]))
+    heldout_game = _resolve_heldout_game(a.heldout_game)
     archive = Archive(exp_dir)
     for p in tier.baseline_paths():
         if not any(c.dir.name.endswith(p.stem) for c in archive.candidates()):
             archive.add_seed(p, label=p.stem, note=(p.read_text().split('"""')[1].strip() + "\n") if '"""' in p.read_text() else "")
-    system1 = _system1(a.system1) if tier_n == 2 else (None if a.system1 in ("none", "jev", "heuristic") else _system1(a.system1))
-    cfg = LoopConfig(n_iterations=a.iters, seeds_train=_parse_seeds(a.seeds), seeds_heldout=_parse_seeds(a.heldout),
+    system1 = _system1_for(a.system1, tier_n)
+    system2 = _system2(a.system2, a.effort)
+    factory = GAMES[game][1] if game in GAMES else (lambda **k: make_game(game, **k))
+    cfg = LoopConfig(n_iterations=a.iters, seeds_train=seeds_train, seeds_heldout=seeds_heldout,
                      clock_mode=a.clock, budget=budget, proposer_agentic=not a.proposer_text,
-                     proposer_timeout_s=a.proposer_timeout, harness_timeout_s=a.harness_timeout,
+                     proposer_timeout_s=a.proposer_timeout, harness_timeout_s=budget.max_wall_s,
                      latency_override=json.loads(a.latency_override) if a.latency_override else None,
-                     heldout_game=a.heldout_game or None, memory_mode=a.memory_mode,
+                     heldout_game=heldout_game, memory_mode=a.memory_mode,
                      heldout_game_kwargs=json.loads(a.heldout_game_kwargs) if a.heldout_game_kwargs else {},
-                     preflight=not a.no_preflight)
+                     preflight=not a.no_preflight, grace_s=a.grace, qualify_seeds=not a.no_seed_check,
+                     game_source=getattr(spec, "source_sha256", None))
+    calibration = None
+    if not a.no_calibrate:
+        calibration = calibrate(archive.root, system2=system2, system1=system1, game_factory=factory,
+                                game_kwargs=game_kwargs, seed=seeds_train[0])
+    task = tier.task_md(game, budget, a.clock, game_kwargs, study=study, generality=heldout_game is not None,
+                        deadline_s=budget.max_wall_s, memory_mode=a.memory_mode, calibration=calibration)
     loop = MetaHarnessLoop(
-        archive=archive, game_factory=GAMES[game][1] if game in GAMES else (lambda **k: make_game(game, **k)),
-        game_kwargs=game_kwargs, task_md=tier.task_md(game, budget, a.clock, game_kwargs, study=study),
+        archive=archive, game_factory=factory, game_kwargs=game_kwargs, task_md=task,
         contract_doc=tier.contract_doc(), proposer=_proposer(a.proposer, a.effort, tier),
-        system2=_system2(a.system2, a.effort), system1=system1, config=cfg,
+        system2=system2, system1=system1, config=cfg, game_name=game,
     )
     print(f"archive: {archive.root}")
-    best = loop.run()
+    try:
+        best = loop.run()
+    except SeedRefused as e:
+        raise SystemExit(f"seed check failed: {e}") from None
     print(archive.write_leaderboard())
     if best:
         print(f"best: {best.dir}")
+    a.interrupted = loop.interrupted
     return best
 
 
@@ -197,15 +248,16 @@ def cmd_eval(a: argparse.Namespace) -> int:
     budget = _episode_budget(a)
     game_kwargs = json.loads(a.game_kwargs) if a.game_kwargs else {}
     out = Path(a.out) if a.out else Path(a.runs_dir) / f"eval-{Path(a.harness).stem}-{time.strftime('%Y%m%d-%H%M%S')}"
-    res = evaluate_harness(a.harness, lambda **k: make_game(game, **k), _parse_seeds(a.seeds),
-                           system2=_system2(a.system2, a.effort), system1=_system1(a.system1), out_dir=out,
-                           clock_mode=a.clock, budget_per_episode=budget, harness_timeout_s=a.harness_timeout,
+    res = evaluate_harness(a.harness, lambda **k: make_game(game, **k), _parse_seeds(a.seeds or "0,1,2"),
+                           system2=_system2(a.system2, a.effort), system1=_system1_for(a.system1, a.tier),
+                           out_dir=out, clock_mode=a.clock, budget_per_episode=budget,
+                           harness_timeout_s=budget.max_wall_s,
                            latency_override=json.loads(a.latency_override) if a.latency_override else None,
-                           game_kwargs=game_kwargs, memory_mode=a.memory_mode)
+                           game_kwargs=game_kwargs, memory_mode=a.memory_mode, grace_s=a.grace, game_name=game)
     print(json.dumps({k: v for k, v in res.to_json().items() if k != "episodes"}, indent=2, default=str))
     for e in res.episodes:
         print(f"seed {e.seed}: score={e.score} steps={e.steps} stale={e.stale_ticks}/{e.stale_ticks + e.decided_ticks} "
-              f"s1={e.system1_calls} s2={e.system2_calls} err={'yes' if e.error else 'no'}")
+              f"s1={e.system1_calls} s2={e.system2_calls} ended_by={e.ended_by} err={'yes' if e.error else 'no'}")
     print(f"out: {out}")
     return 1 if res.fatal or any(e.error for e in res.episodes) else 0
 
@@ -228,18 +280,25 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--game-kwargs", default="", help="JSON kwargs for the game constructor")
         sp.add_argument("--system2", default="astra",
                         help="System-2 profile from metaharness/models.toml (astra, sol, claude, ...) | scripted | none")
-        sp.add_argument("--system1", default="jev",
-                        help="System-1 profile from metaharness/models.toml (jev) | heuristic | none")
+        sp.add_argument("--system1", default="auto",
+                        help="System-1 profile from metaharness/models.toml (jev) | heuristic | none | "
+                             "auto (jev for tier 2, none for tier 1)")
         sp.add_argument("--effort", default=None, help="override the profile's reasoning effort (low|medium|high|xhigh|max)")
         sp.add_argument("--clock", default="wall", choices=["wall", "virtual"])
         sp.add_argument("--memory-mode", default="episode", choices=["episode", "shared"],
                         help="episode: independent cold starts; shared: adaptation across ordered seeds")
         sp.add_argument("--latency-override", default="", help='JSON e.g. {"system2": 3.0, "system1": 0.3} (virtual clock)')
-        sp.add_argument("--seeds", default="0,1,2")
+        sp.add_argument("--seeds", default=None,
+                        help="training seeds (default: the adaptor's declared split, else 0,1,2)")
         sp.add_argument("--s2-budget", type=int, default=40)
         sp.add_argument("--s1-budget", type=int, default=4000)
-        sp.add_argument("--wall-budget", type=float, default=900.0)
-        sp.add_argument("--harness-timeout", type=float, default=600.0)
+        sp.add_argument("--wall-budget", type=float, default=900.0,
+                        help="per-episode wall-clock deadline in s (the larger of this and --harness-timeout)")
+        sp.add_argument("--harness-timeout", type=float, default=600.0,
+                        help="see --wall-budget: the episode deadline is the larger of the two")
+        sp.add_argument("--grace", type=float, default=DEFAULT_GRACE_S,
+                        help="seconds a harness has to return after the deadline (and spawned work after "
+                             "run_episode returns) before it counts as an error")
         sp.add_argument("--runs-dir", default=str(DEFAULT_RUNS_DIR))
 
     def loop_opts(sp):
@@ -247,10 +306,17 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--proposer-text", action="store_true", help="proposer answers in text (no tools)")
         sp.add_argument("--proposer-timeout", type=float, default=1800.0)
         sp.add_argument("--iters", type=int, default=3)
-        sp.add_argument("--heldout", default="100,101,102", help="held-out seeds (same game)")
-        sp.add_argument("--heldout-game", default="", help="held-out GAME for the generality test (registered name)")
+        sp.add_argument("--heldout", default=None,
+                        help="held-out seeds, same game (default: the adaptor's declared split, else 100,101,102)")
+        sp.add_argument("--heldout-game", default="",
+                        help="held-out GAME for the generality test (registered name or adaptor directory); "
+                             "setting it adds the generality requirement to the task")
         sp.add_argument("--heldout-game-kwargs", default="", help="JSON kwargs for the held-out game")
         sp.add_argument("--no-preflight", action="store_true", help="skip the stand-in dry run + repair round")
+        sp.add_argument("--no-calibrate", action="store_true",
+                        help="do not measure model latency for the task spec when a new archive starts")
+        sp.add_argument("--no-seed-check", action="store_true",
+                        help="do not reset every seed once before the search")
         sp.add_argument("--name", default="")
 
     rp = sub.add_parser("run", help="general pipeline: study -> adapt -> search from a game name")
@@ -286,7 +352,17 @@ def main(argv: list[str] | None = None) -> int:
     vp.set_defaults(fn=cmd_validate_adaptor)
 
     a = p.parse_args(argv)
-    return a.fn(a)
+    # SIGTERM (kill, cluster preemption) unwinds like Ctrl-C, so CLI agents are killed with us
+    previous = None
+    if threading.current_thread() is threading.main_thread():
+        def _terminate(signum, frame):
+            raise SystemExit(128 + signum)
+        previous = signal.signal(signal.SIGTERM, _terminate)
+    try:
+        return a.fn(a)
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
 
 
 if __name__ == "__main__":

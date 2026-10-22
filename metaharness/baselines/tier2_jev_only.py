@@ -5,6 +5,7 @@ Game-agnostic: the options are game.action_spec.names with their descriptions.
 """
 from __future__ import annotations
 
+from metaharness.core.contract import BudgetExceeded
 from metaharness.models.jev import Choice
 
 
@@ -14,12 +15,20 @@ class Harness:
 
     def run_episode(self, game):
         ctx = self.ctx
+        if ctx.system1 is None:              # evaluated without that model: nothing to do
+            return
         spec = game.action_spec
         q = {"act": Choice(
             instructions=f"{game.describe()} Which action is best right now?",
             criteria={n: spec.descriptions.get(n, n) for n in spec.names})}
         while not ctx.done:
-            ans = ctx.decide(game.observe(), q)
+            try:
+                ans = ctx.decide(game.observe(), q)
+            except BudgetExceeded:
+                raise                      # budget or episode over: a normal end
+            except (TimeoutError, RuntimeError):
+                ctx.wait_for_tick()        # a failed call: keep the current action
+                continue
             ctx.act(ans["act"].value)
 
 

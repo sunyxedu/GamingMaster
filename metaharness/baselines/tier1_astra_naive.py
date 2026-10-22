@@ -5,6 +5,7 @@ rendering of the observation are used."""
 from __future__ import annotations
 
 from metaharness.baselines._generic import obs_text, parse_action
+from metaharness.core.contract import BudgetExceeded
 
 
 class Harness:
@@ -13,6 +14,8 @@ class Harness:
 
     def run_episode(self, game):
         ctx = self.ctx
+        if ctx.system2 is None:              # evaluated without that model: nothing to do
+            return
         session = None
         obs = game.observe()
         names = list(game.action_spec.names)
@@ -22,8 +25,10 @@ class Harness:
                       "Reply with exactly one action (name, plus arguments if it needs them) and nothing else.")
             try:
                 res = ctx.think(prompt, session_id=session)
-            except RuntimeError:
-                break
+            except BudgetExceeded:
+                break                      # budget or episode over
+            except (TimeoutError, RuntimeError):
+                continue                   # a failed call: ask again
             session = res.session_id
             obs = ctx.act(parse_action(res.text, names, default=names[0]))
 

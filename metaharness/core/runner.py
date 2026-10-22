@@ -30,7 +30,7 @@ import time
 import traceback
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from ..games.base import close_game
 from ..models.base import ModelUnavailable, System1Model, System2Model, TraceSink
