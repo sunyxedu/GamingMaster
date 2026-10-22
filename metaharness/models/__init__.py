@@ -81,7 +81,9 @@ def make_system1(name: str, **overrides: Any) -> System1Model:
     backend = prof.pop("backend")
     prof.update({k: v for k, v in overrides.items() if v is not None})
     if backend == "typesafe":
-        return JevClient(model=prof.get("model", "jev-latest"))
+        if not prof.get("model"):
+            raise ValueError(f"system1 profile {name!r} (typesafe) needs a model id in {DEFAULT_PROFILES}")
+        return JevClient(model=prof["model"])
     if backend == "heuristic":
         return HeuristicSystem1(fn=prof.get("fn"), latency_s=prof.get("latency_s", 0.3))
     raise ValueError(f"unknown system1 backend {backend!r} in profile {name!r}")

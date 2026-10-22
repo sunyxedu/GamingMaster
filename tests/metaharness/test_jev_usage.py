@@ -1,6 +1,7 @@
 """Exercise the prompt's example through the real context and HTTP adapter."""
 import json
 import re
+import time
 
 from metaharness.core.contract import Budget, HarnessContext, VirtualClock
 from metaharness.models.base import TraceSink
@@ -28,19 +29,19 @@ def test_bundled_example_uses_local_answer_contract(monkeypatch):
                 "finished": {"type": "noul", "noul": 0.25},
             }}).encode()
 
-    def urlopen(request, timeout):
-        sent.append(json.loads(request.data))
-        assert 0 < timeout <= 5
-        return Response()
+    def post(client, data, deadline):
+        sent.append(json.loads(data))
+        assert 0 < deadline - time.monotonic() <= 5
+        return 200, {}, Response().read()
 
-    monkeypatch.setattr("metaharness.models.jev.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr(JevClient, "_post", post)
     namespace = {}
     example, = re.findall(r"```python\n(.*?)```", usage_guide(), flags=re.S)
     exec(compile(example, "jev_usage.md", "exec"), namespace)
     trace = TraceSink()
     budget = Budget(max_system1_calls=1)
     ctx = HarnessContext(
-        system2=None, system1=JevClient(api_key="test-only"), trace=trace,
+        system2=None, system1=JevClient(api_key="test-only", model="jev-latest"), trace=trace,
         clock=VirtualClock(), budget=budget, memory={}, game_kind="turn",
         act_fn=lambda action: None, observe_fn=lambda: {}, done_fn=lambda: False,
     )
