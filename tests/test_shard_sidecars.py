@@ -106,3 +106,69 @@ def test_parallel_walk_finds_what_glob_finds(tmp_path, monkeypatch):
     _shard(str(one), [2])                                        # the root itself is a shard
     assert D.find_gm_shards(str(one)) == [str(one)]
     assert D.walk_data_root(str(tmp_path / "missing")) == ([], [])
+
+
+def test_data_manifest_opens_the_same_dataset_and_goes_stale(tmp_path, monkeypatch):
+    """write_data_manifest / load_data_manifest: the dataset built from the manifest equals the
+    walked one (paths, lengths, frame stats, samples; mixed per-shard metas kept), without
+    reading any shard; adding or removing a shard makes it stale (the walk again, the new shard
+    included); GM_DATA_MANIFEST=0 ignores it; a root with .pt shards gets none."""
+    import json
+
+    from data_processing.games import dataset as D
+
+    root = tmp_path / "root"
+    _shard(str(root / "a" / "x"), [2, 3])
+    _shard(str(root / "a" / "y"), [1])
+    _shard(str(root / "b"), [4, 1, 1])
+    (root / "frozen").mkdir()
+    _shard(str(tmp_path / "store" / "s0"), [5])
+    os.symlink(tmp_path / "store" / "s0", root / "frozen" / "l0")
+    for d, eng in (("a/x", "x"), ("a/y", "x"), ("b", "y"), ("frozen/l0", "x")):   # provenance-only
+        idx = json.loads((root / d / "index.json").read_text())                    # meta differences
+        idx["meta"] = {"k": 1, "teacher": {"kind": "soft", "engine": eng}}
+        (root / d / "index.json").write_text(json.dumps(idx))
+    walked = GameShardDataset(str(root), game="toy")
+    assert not walked.from_manifest
+    out = D.write_data_manifest(str(root))
+    assert out == str(root / D.MANIFEST)
+    # from the manifest: no shard is opened
+    opened = []
+    real_open = D.GameShardDataset._open
+    monkeypatch.setattr(D.GameShardDataset, "_open", staticmethod(
+        lambda p, header_only=False: opened.append(p) or real_open(p, header_only)))
+    fast = GameShardDataset(str(root), game="toy")
+    assert fast.from_manifest and opened == []
+    assert fast.paths == walked.paths
+    assert fast.sample_lengths().tolist() == walked.sample_lengths().tolist() == [2, 3, 1, 4, 1, 1, 5]
+    assert fast.frame_stats() == walked.frame_stats()
+    assert fast.shard_meta == walked.shard_meta
+    import numpy as _np
+    z = _np.load(out)
+    assert len(z["headers"]) == 2                                     # both metas recorded
+    monkeypatch.setattr(D.GameShardDataset, "_open", staticmethod(real_open))
+    for i in range(7):
+        assert fast[i]["obs"]["x"].tolist() == walked[i]["obs"]["x"].tolist()
+    # disabled
+    monkeypatch.setenv("GM_DATA_MANIFEST", "0")
+    assert not GameShardDataset(str(root), game="toy").from_manifest
+    monkeypatch.delenv("GM_DATA_MANIFEST")
+    # a new shard (anywhere in the tree) makes it stale and is found by the walk
+    _shard(str(root / "a" / "z"), [7])
+    idx = json.loads((root / "a" / "z" / "index.json").read_text())
+    idx["meta"] = {"k": 1, "teacher": {"kind": "soft", "engine": "x"}}
+    (root / "a" / "z" / "index.json").write_text(json.dumps(idx))
+    again = GameShardDataset(str(root), game="toy")
+    assert not again.from_manifest and again.sample_lengths().tolist() == [2, 3, 1, 7, 4, 1, 1, 5]
+    D.write_data_manifest(str(root))
+    assert GameShardDataset(str(root), game="toy").from_manifest
+    import shutil
+    shutil.rmtree(root / "a" / "y")                                   # a removed shard: stale
+    assert D.load_data_manifest(str(root)) is None
+    # .pt shards: no manifest
+    pt_root = tmp_path / "pt"
+    pt_root.mkdir()
+    (pt_root / "s.pt").write_bytes(b"")
+    _shard(str(pt_root / "g"), [1])
+    assert D.write_data_manifest(str(pt_root)) is None
+

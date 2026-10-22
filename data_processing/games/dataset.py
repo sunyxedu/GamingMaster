@@ -162,17 +162,113 @@ def walk_data_root(data_dir: str) -> Tuple[List[str], List[str]]:
     """``(sorted *.pt files, sorted index.json files)`` under ``data_dir`` — what
     ``glob(data_dir/**/*.pt)`` and ``glob(data_dir/**/index.json)`` (recursive) find, in one
     walk whose directories are listed SHARD_IO_THREADS at a time, level by level."""
+    pts, idx, _ = _walk(data_dir)
+    return pts, idx
+
+
+def _walk(data_dir: str) -> Tuple[List[str], List[str], Dict[str, List[str]]]:
+    """:func:`walk_data_root` plus every walked directory's sorted non-hidden entry names."""
     pts: List[str] = []
     idx: List[str] = []
+    listing: Dict[str, List[str]] = {}
     level = [data_dir]
     while level:
         nxt: List[str] = []
-        for p, i, d in _io_map(_scan_dir, level):
+        for top, (p, i, d) in zip(level, _io_map(_scan_dir, level)):
             pts += p
             idx += i
             nxt += d
+            listing[top] = sorted(os.path.basename(x) for x in p + i + d)
         level = nxt
-    return sorted(pts), sorted(idx)
+    return sorted(pts), sorted(idx), listing
+
+
+#: The data-root manifest (scripts/build_data_manifest.py): every gm-shard's header and frame
+#: counts of a root in one file, so opening a dataset reads it and lists the root's
+#: non-shard directories — instead of a walk into, and two small reads from, every shard
+#: (60k shards for the RL replay: 45-50 min on a compute node whose NFS took 0.5-3 s per
+#: small file, 2026-10-22).  Trusted while every recorded non-shard directory still lists the
+#: same entries: adding or removing a shard (or a directory of shards) invalidates it; a shard
+#: REWRITTEN in place does not — rebuild the manifest after an in-place re-conversion.
+MANIFEST = ".gm_manifest.npz"
+MANIFEST_VERSION = 1
+
+
+def write_data_manifest(data_dir: str) -> Optional[str]:
+    """Write ``data_dir``'s manifest (atomically); None when the root holds .pt shards or is a
+    single shard (nothing to gain)."""
+    import json
+    pts, idx, listing = _walk(data_dir)
+    gm_dirs = _gm_shard_dirs(idx)
+    if pts or not gm_dirs or gm_dirs == [data_dir]:
+        return None
+    heads = _io_map(lambda d: GameShardDataset._open(d, header_only=True), gm_dirs)
+    shard_set = set(gm_dirs)
+    dirs = {os.path.relpath(d, data_dir): names for d, names in listing.items() if d not in shard_set}
+    headers: List[str] = []
+    header_idx = np.zeros(len(gm_dirs), dtype=np.int32)
+    for k, h in enumerate(heads):
+        obs_keys, tgt_keys = h["_keys"]
+        key = json.dumps({"format_version": h["format_version"], "game": h["game"],
+                          "converter_version": h["converter_version"], "meta": h["meta"],
+                          "obs_keys": sorted(obs_keys), "tgt_keys": sorted(tgt_keys)}, sort_keys=True)
+        if key not in headers:
+            headers.append(key)
+        header_idx[k] = headers.index(key)
+    lengths = [np.asarray(h["_lengths"], dtype=np.int32) for h in heads]
+    out = os.path.join(data_dir, MANIFEST)
+    tmp = out + f".tmp{os.getpid()}.npz"
+    np.savez(tmp, version=np.int64(MANIFEST_VERSION),
+             shards=np.array([os.path.relpath(d, data_dir) for d in gm_dirs]),
+             header_idx=header_idx, headers=np.array(headers),
+             n_samples=np.array([len(x) for x in lengths], dtype=np.int64),
+             lengths=np.concatenate(lengths) if lengths else np.zeros(0, np.int32),
+             dirs=np.array(json.dumps(dirs, sort_keys=True)))
+    os.replace(tmp, out)
+    return out
+
+
+def load_data_manifest(data_dir: str) -> Optional[Tuple[List[str], Dict[str, Dict]]]:
+    """``(gm-shard dirs, {dir: header_only shard dict})`` from ``data_dir``'s manifest — None
+    when there is none, it is of another version, or a recorded directory lists different
+    entries now (the dataset then walks the root).  ``GM_DATA_MANIFEST=0`` ignores manifests."""
+    import json
+    path = os.path.join(data_dir, MANIFEST)
+    if os.environ.get("GM_DATA_MANIFEST", "1") == "0" or not os.path.isfile(path):
+        return None
+    try:
+        z = np.load(path, allow_pickle=False)
+        if int(z["version"]) != MANIFEST_VERSION:
+            return None
+        dirs = json.loads(str(z["dirs"]))
+        names = list(dirs)
+
+        def same(rel: str) -> bool:
+            top = os.path.normpath(os.path.join(data_dir, rel))
+            try:
+                with os.scandir(top) as it:
+                    now = sorted(e.name for e in it if not e.name.startswith("."))
+            except OSError:
+                return False
+            return now == dirs[rel]
+        if not all(_io_map(same, names)):
+            return None
+        headers = [json.loads(str(h)) for h in z["headers"]]
+        shards = [os.path.normpath(os.path.join(data_dir, str(r))) for r in z["shards"]]
+        counts = z["n_samples"].astype(np.int64)
+        ends = np.cumsum(counts)
+        lengths = z["lengths"]
+        out: Dict[str, Dict] = {}
+        for k, (d, hi) in enumerate(zip(shards, z["header_idx"].tolist())):
+            h = headers[hi]
+            out[d] = {"format_version": h["format_version"], "game": h["game"],
+                      "converter_version": h["converter_version"], "meta": h["meta"],
+                      "n_samples": int(counts[k]),
+                      "_keys": (frozenset(h["obs_keys"]), frozenset(h["tgt_keys"])),
+                      "_lengths": lengths[ends[k] - counts[k]:ends[k]]}
+        return shards, out
+    except (OSError, ValueError, KeyError):
+        return None
 
 
 def shard_header(path: str) -> Tuple[Dict, np.ndarray]:
@@ -443,9 +539,17 @@ class GameShardDataset(Dataset):
         if crop not in self.CROPS:
             raise ValueError(f"crop must be one of {self.CROPS}, got {crop!r}")
         self.crop = crop
-        # .pt shards (torch.save) and/or gm-shard.v1 directories (Rust converters)
-        pt_files, index_files = walk_data_root(data_dir)
-        gm_dirs = _gm_shard_dirs(index_files)
+        # .pt shards (torch.save) and/or gm-shard.v1 directories (Rust converters); a fresh
+        # data-root manifest (scripts/build_data_manifest.py) gives the shards and their
+        # headers without touching them
+        man = load_data_manifest(data_dir)
+        if man is not None:
+            pt_files, (gm_dirs, heads) = [], man
+        else:
+            pt_files, index_files = walk_data_root(data_dir)
+            gm_dirs = _gm_shard_dirs(index_files)
+            heads = None
+        self.from_manifest = man is not None
         self.paths = pt_files + gm_dirs
         if not self.paths:
             raise FileNotFoundError(f"no .pt shards or gm-shard directories under {data_dir}")
@@ -468,8 +572,12 @@ class GameShardDataset(Dataset):
         self._obs_keys: Optional[frozenset] = None
         self._tgt_keys: Optional[frozenset] = None
         self.seat_split = False
-        # gm-shard headers (sidecars) read in parallel; .pt shards (whole files) one at a time
-        heads = dict(zip(gm_dirs, _io_map(lambda d: self._open(d, header_only=True), gm_dirs)))
+        # gm-shard headers (the manifest, or sidecars read in parallel); .pt shards (whole
+        # files) one at a time
+        if heads is None:
+            heads = dict(zip(gm_dirs, _io_map(lambda d: self._open(d, header_only=True), gm_dirs)))
+        else:
+            heads = dict(heads)
         for si, p in enumerate(self.paths):
             shard = heads.pop(p) if p in heads else self._open(p, header_only=True)
             self._check(shard, p)
