@@ -131,13 +131,17 @@ def test_adapt_phase_feeds_back_validation(tmp_path):
 
 
 def test_adapt_phase_stops_on_missing_env(tmp_path, monkeypatch):
+    # the adaptor cannot start without the declared variable: validation fails -> NEEDS.md, stop
     (tmp_path / "study").mkdir()
     for k, v in STUDY_FILES.items():
         (tmp_path / "study" / k).write_text(v)
     monkeypatch.delenv("COUNTGAME_TOKEN", raising=False)
-    agent = ScriptedSystem2(files=[{"game.py": GOOD_ADAPTOR, "ADAPTOR.md": "v", "env.example": "COUNTGAME_TOKEN=\n"}])
+    needs_token = GOOD_ADAPTOR.replace("def make_game(**kw):\n", "def make_game(**kw):\n    import os\n"
+                                       "    os.environ['COUNTGAME_TOKEN']\n")
+    agent = ScriptedSystem2(files=[{"game.py": needs_token, "ADAPTOR.md": "v", "env.example": "COUNTGAME_TOKEN=\n"}])
     rep = run_adapt(agent, tmp_path, "countgame", json.loads(STUDY_FILES["study.json"]), log=lambda *_: None)
     assert not rep.ok and "COUNTGAME_TOKEN" in (tmp_path / "adaptor" / "NEEDS.md").read_text()
+    assert len(agent.calls) == 1 and "user input required" in rep.error
 
 
 def test_full_run_pipeline_offline(tmp_path):

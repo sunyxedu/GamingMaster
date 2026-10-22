@@ -17,6 +17,7 @@ orchestrator only validates ``study.json`` and asks for repairs.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -113,18 +114,126 @@ def study_text(study_dir: Path, max_chars: int = 24000) -> str:
     return "\n\n".join(parts)
 
 
+PRIOR_FILES = ("strategies.md", "brief.md", "interfaces.md", "study.json", "ADAPTOR.md")
+PRIOR_WEIGHTS = {"strategies.md": 3, "brief.md": 2, "interfaces.md": 1}
+SUMMARY_FIELDS = (("strategy_summary",), ("scoring",), ("interface", "observation"), ("interface", "actions"))
+
+
+def _clip(text: str, limit: int, name: str) -> str:
+    """``text`` in about ``limit`` chars: its beginning and its end (where the conclusions and the
+    advice to the search usually are), the cut marked."""
+    if len(text) <= limit:
+        return text
+    mark = f"…(truncated; full text in prior/{name})"
+    keep = max(0, limit - len(mark) - 4)
+    n_head = keep * 2 // 3
+    head, tail = text[:n_head], text[len(text) - (keep - n_head):] if keep > n_head else ""
+    nl = head.rfind("\n")                          # whole lines where that costs little
+    if nl > n_head * 3 // 4:
+        head = head[:nl]
+    nl = tail.find("\n")
+    if 0 <= nl < len(tail) // 4:
+        tail = tail[nl + 1:]
+    return "\n\n".join(p for p in (head.rstrip(), mark, tail.strip()) if p)
+
+
+def _share(need: dict[str, int], weight: dict[str, int], budget: float) -> dict[str, int]:
+    """Weighted max-min split: a document needing less than its share keeps all of it and what it
+    leaves is divided among the others by weight."""
+    alloc = dict.fromkeys(need, 0)
+    pending = [f for f in need if need[f] > 0]
+    while pending:
+        total_w = sum(weight[f] for f in pending)
+        small = [f for f in pending if need[f] <= budget * weight[f] / total_w]
+        if not small:
+            alloc.update({f: int(budget * weight[f] / total_w) for f in pending})
+            break
+        for f in small:
+            alloc[f] = need[f]
+            budget -= need[f]
+            pending.remove(f)
+    return alloc
+
+
+def prior_documents(study_dir: Optional[Path], adaptor_dir: Optional[Path], archive_root: Path, *,
+                    study_budget: int = 24000, adaptor_budget: int = 12000) -> str:
+    """Prior knowledge for the search proposer: the inline digest for task.md, and the full texts.
+
+    Copies ``study/{brief,interfaces,strategies}.md``, ``study/study.json`` and ``adaptor/ADAPTOR.md``
+    (whichever exist) into ``<archive_root>/prior/`` — the proposer reads them there in full — and
+    returns the digest: the study.json summary fields (strategy_summary, scoring,
+    interface.observation, interface.actions) first, then strategies.md, brief.md, ADAPTOR.md,
+    interfaces.md. The study part gets ``study_budget`` characters, split 3:2:1 between strategies,
+    brief and interfaces; ADAPTOR.md gets up to ``adaptor_budget``. Whatever a shorter document leaves
+    goes to the others, across both parts. A document over its share keeps its beginning and its end,
+    and every cut is marked ``…(truncated; full text in prior/<file>)``. Deterministic for the same
+    files: the search manifest compares task.md when an archive is resumed."""
+    prior = Path(archive_root) / "prior"
+    texts: dict[str, str] = {}
+    for f in PRIOR_FILES:
+        base = adaptor_dir if f == "ADAPTOR.md" else study_dir
+        src = Path(base) / f if base else None
+        if src is not None and src.is_file():
+            prior.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, prior / f)
+            texts[f] = src.read_text(encoding="utf-8", errors="replace").strip()
+    if not texts:
+        return ""
+    summary = ""
+    try:
+        data = json.loads(texts.get("study.json", "{}"))
+    except ValueError:
+        data = {}
+    lines = []
+    for keys in SUMMARY_FIELDS:
+        v: Any = data
+        for k in keys:
+            v = v.get(k) if isinstance(v, dict) else None
+        if v not in (None, "", [], {}):
+            v = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+            lines.append(f"- {'.'.join(keys)}: {_clip(v, 2000, 'study.json')}")
+    if lines:
+        summary = "### study/study.json (summary)\n" + "\n".join(lines)
+    docs = [f for f in PRIOR_WEIGHTS if f in texts]
+    need = {f: len(texts[f]) for f in docs}
+    study_left = max(0, study_budget - len(summary))
+    a_need = len(texts.get("ADAPTOR.md", ""))
+    a_alloc = min(a_need, adaptor_budget + max(0, study_left - sum(need.values())))
+    alloc = _share(need, PRIOR_WEIGHTS, study_left + max(0, adaptor_budget - a_need))
+    alloc["ADAPTOR.md"] = a_alloc
+    listed = ", ".join(f"`prior/{f}`" for f in PRIOR_FILES if f in texts)
+    parts = [f"The full documents are readable in this archive under `prior/` ({listed}). Below: excerpts "
+             "within a size budget; every cut is marked `…(truncated; full text in prior/<file>)`."]
+    if summary:
+        parts.append(summary)
+    for f in ("strategies.md", "brief.md", "ADAPTOR.md", "interfaces.md"):
+        if f in texts:
+            parts.append(f"### {'adaptor' if f == 'ADAPTOR.md' else 'study'}/{f}\n" + _clip(texts[f], alloc[f], f))
+    return "\n\n".join(parts)
+
+
 def run_study(model: System2Model, run_dir: Path, game: str, *, notes: str = "",
               tier_hint: Optional[int] = None, timeout_s: float = 2400.0, max_repairs: int = 2,
               log=print) -> dict[str, Any]:
     out = run_dir / "study"
     out.mkdir(parents=True, exist_ok=True)
+    notes_md = out / "notes.md"                    # the notes this study was made with
     if (out / "study.json").exists():
         try:
             data = load_study(out)
-            log(f"study: reusing {out / 'study.json'} (tier {data['tier']})")
-            return data
         except Exception as e:  # noqa: BLE001
             log(f"study: existing study.json invalid ({e}); redoing")
+        else:
+            if notes_md.exists() and notes_md.read_text().strip() != notes.strip():
+                log("study: WARNING — --notes differ from the notes this study was made with (study/notes.md); "
+                    "reusing it anyway — delete study/study.json to redo the study with the new notes")
+            if tier_hint and int(data["tier"]) != int(tier_hint):   # the same override a fresh study gets
+                log(f"study: --tier {tier_hint} overrides the study's tier {data['tier']}")
+                data["tier"] = int(tier_hint)
+                (out / "study.json").write_text(json.dumps(data, indent=2))
+            log(f"study: reusing {out / 'study.json'} (tier {data['tier']})")
+            return data
+    notes_md.write_text(notes)
     trace = TraceSink(out / "study_trace.jsonl")
     prompt = study_prompt(game, notes, tier_hint, out)
     (out / "prompt.md").write_text(prompt)
