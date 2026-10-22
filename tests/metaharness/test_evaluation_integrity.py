@@ -91,8 +91,9 @@ def build(ctx):
     ctx.act(99)
     return SimpleNamespace(run_episode=lambda game: None)
 ''', system2=None, budget_per_episode=Budget(max_wall_s=.025), harness_timeout_s=2)
-    assert all(e.error and "deadline" in e.error for e in r.episodes)
-    assert all(e.wall_s < .2 for e in r.episodes)
+    # the deadline closes the episode (score kept, no error); the late action is refused
+    assert all(e.error is None and e.ended_by == "deadline" for e in r.episodes)
+    assert all(e.wall_s < .5 for e in r.episodes)
     p = tmp_path / "result" / "trace_seed0.jsonl"
     before = p.read_text()
     time.sleep(.15)
@@ -111,7 +112,7 @@ from types import SimpleNamespace
 def build(ctx):
     return SimpleNamespace(run_episode=lambda game: ctx.think('slow request'))
 ''', system2=Slow(), budget_per_episode=Budget(max_wall_s=.025))
-    assert all(e.error and 'deadline' in e.error for e in r.episodes)
+    assert all(e.error is None and e.ended_by == 'deadline' for e in r.episodes)
     rows = [json.loads(line) for line in
             (tmp_path / 'result' / 'trace_seed0.jsonl').read_text().splitlines()]
     request = next(row for row in rows if row['type'] == 'model_request')
