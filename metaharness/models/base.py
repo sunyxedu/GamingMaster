@@ -27,6 +27,10 @@ class ModelUnavailable(RuntimeError):
     """The backend cannot serve requests right now (quota, auth, network)."""
 
 
+class ModelCallCancelled(RuntimeError):
+    """The episode that made the call ended while it was in flight; the backend process was killed."""
+
+
 @dataclass
 class ModelCall:
     kind: str                 # "system1" | "system2"
