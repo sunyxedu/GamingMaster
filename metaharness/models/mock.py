@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Mapping, Optional
 
-from .base import ModelCall, System1Answer, System2Result, TraceSink
+from .base import ModelCall, ModelTimeout, System1Answer, System2Result, TraceSink
 
 
 class ScriptedSystem2:
@@ -28,6 +28,13 @@ class ScriptedSystem2:
             timeout_s: float = 600.0, trace: Optional[TraceSink] = None, images=None,
             full_access: bool = False, web_search: bool = False) -> System2Result:
         self.calls.append(prompt)
+        if self.latency_s > timeout_s:
+            # A real backend would time out here; pre-flight must exercise the harness's timeout path.
+            err = f"timeout: scripted latency {self.latency_s:g}s exceeds the call's {timeout_s:g}s"
+            if trace:
+                trace.log_call(ModelCall("system2", "scripted", time.time(), timeout_s, {"prompt": prompt}, None,
+                                         ok=False, error=err))
+            raise ModelTimeout(err, session_id=session_id or "scripted-session")
         if agentic and cwd is not None and self.files:
             from pathlib import Path
             batch = self.files[min(len(self.calls) - 1, len(self.files) - 1)]
@@ -60,6 +67,13 @@ class HeuristicSystem1:
 
     def decide(self, state: Any, questions: Mapping[str, Any], *, timeout_s: float = 5.0,
                trace: Optional[TraceSink] = None) -> dict[str, System1Answer]:
+        if self.latency_s > timeout_s:      # as a real backend would; exercises harness timeout paths
+            err = f"timeout: heuristic latency {self.latency_s:g}s exceeds the call's {timeout_s:g}s"
+            if trace:
+                trace.log_call(ModelCall("system1", "heuristic", time.time(), timeout_s, {"state": state, "questions": {
+                    k: (v.to_json() if hasattr(v, 'to_json') else v) for k, v in questions.items()}}, None,
+                    ok=False, error=err))
+            raise TimeoutError(err)
         picks = dict(self.fn(state, questions)) if self.fn else {}
         out: dict[str, System1Answer] = {}
         for qid, q in questions.items():
