@@ -112,7 +112,13 @@ def _tier(n: int):
 
 
 def _slug(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-") or "game"
+    """Run-directory name: the name's letters, digits and combining marks, lowercased, '-' between
+    them. Unicode-aware — '原神' and '王者荣耀' no longer share runs/game/ — and an ASCII name keeps the
+    slug it always had (anything but [a-z0-9], '_' included, separates)."""
+    import unicodedata
+    t = unicodedata.normalize("NFKC", s).lower()
+    t = "".join(c if c.isalnum() or unicodedata.category(c).startswith("M") else "-" for c in t)
+    return re.sub(r"-+", "-", t).strip("-") or "game"
 
 
 def _resolve_game(a: argparse.Namespace) -> str:
@@ -124,11 +130,18 @@ def _resolve_game(a: argparse.Namespace) -> str:
     return a.game
 
 
-def _study_text(a: argparse.Namespace) -> str:
-    if getattr(a, "study", ""):
+def _study_text(a: argparse.Namespace, archive_root: Path | None = None) -> str:
+    """Prior knowledge for the proposer from ``--study`` and/or ``--adaptor`` (ADAPTOR.md): the
+    digest of ``prior_documents``, which also copies the full documents into ``<archive_root>/prior/``."""
+    study = Path(a.study) if getattr(a, "study", "") else None
+    adaptor = Path(a.adaptor) if getattr(a, "adaptor", "") else None
+    if archive_root is None:                    # no archive to copy into: the study excerpt alone
         from .phases.study import study_text
-        return study_text(Path(a.study))
-    return ""
+        return study_text(study) if study else ""
+    if study is None and adaptor is None:
+        return ""
+    from .phases.study import prior_documents
+    return prior_documents(study, adaptor, archive_root)
 
 
 def _episode_budget(a: argparse.Namespace) -> Budget:
@@ -190,18 +203,58 @@ def _run_search(a: argparse.Namespace, game: str, tier_n: int, study: str, exp_d
 
 def cmd_loop(a: argparse.Namespace) -> int:
     load_dotenv()
+    from .games.registry import adaptor_spec
     game = _resolve_game(a)
-    exp = a.name or f"tier{a.tier}-{_slug(game)}-{time.strftime('%Y%m%d-%H%M%S')}"
-    _run_search(a, game, a.tier, _study_text(a), Path(a.runs_dir) / exp)
+    spec = adaptor_spec(game)
+    if spec is not None and spec.tier != f"tier{a.tier}":
+        print(f"warning: adaptor {game!r} is {spec.tier} ({'real-time' if spec.realtime else 'turn-based'}) "
+              f"but the search runs --tier {a.tier}", file=sys.stderr)
+    exp_dir = Path(a.runs_dir) / (a.name or f"tier{a.tier}-{_slug(game)}-{time.strftime('%Y%m%d-%H%M%S')}")
+    _run_search(a, game, a.tier, _study_text(a, exp_dir), exp_dir)
     return 0
 
 
 def cmd_run(a: argparse.Namespace) -> int:
     """The general pipeline: study -> adapt -> search, resumable, under runs/<slug>/."""
+    import ast
+    import unicodedata
     load_dotenv()
-    from .phases import run_adapt, run_study
+    from .games.registry import adaptor_spec
+    from .phases import prior_documents, run_adapt, run_study
+    try:
+        game_kwargs = json.loads(a.game_kwargs) if a.game_kwargs else None
+    except ValueError as e:
+        raise SystemExit(f"--game-kwargs is not valid JSON: {e}") from None
+    if game_kwargs is not None and not isinstance(game_kwargs, dict):
+        raise SystemExit("--game-kwargs must be a JSON object")
     run_dir = Path(a.runs_dir) / (a.name or _slug(a.game))
     run_dir.mkdir(parents=True, exist_ok=True)
+    # The directory belongs to the game it was created for: another name with the same slug (or the
+    # same --name) must not silently reuse that game's study and adaptor.
+    meta, made_for = run_dir / "run.json", None
+    if meta.exists():
+        try:
+            made_for = json.loads(meta.read_text(encoding="utf-8")).get("game")
+        except (ValueError, AttributeError):
+            raise SystemExit(f"{meta} is not a JSON object with the run's game; fix or delete it") from None
+    elif (run_dir / "pipeline.log").exists():   # created before run.json existed: the log names the game
+        m = re.search(r"\] run: game=('(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\")",
+                      (run_dir / "pipeline.log").read_text(encoding="utf-8", errors="replace"))
+        try:
+            made_for = ast.literal_eval(m.group(1)) if m else None
+        except (ValueError, SyntaxError):
+            made_for = None
+
+    def same_game(x: str) -> str:               # case / width / spacing never make another game
+        return " ".join(unicodedata.normalize("NFKC", x).casefold().split())
+
+    if made_for is not None and same_game(str(made_for)) != same_game(a.game):
+        raise SystemExit(f"{run_dir} was created for --game {made_for!r}, not {a.game!r}: its study and adaptor "
+                         f"belong to that game. Pass --name DIR for a separate run directory (or --game {made_for!r}).")
+    if not meta.exists():
+        meta.write_text(json.dumps({"game": a.game if made_for is None else made_for,
+                                    "created": time.strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
     log_path = run_dir / "pipeline.log"
 
     def log(msg: str) -> None:
@@ -215,10 +268,10 @@ def cmd_run(a: argparse.Namespace) -> int:
         raise SystemExit("--agent must be a System-2 profile (e.g. astra)")
     log(f"run: game={a.game!r} dir={run_dir} agent={agent.name}")
     study = run_study(agent, run_dir, a.game, notes=a.notes, tier_hint=a.tier, timeout_s=a.phase_timeout, log=log)
-    tier_n = int(study["tier"])
     if a.stop_after == "study":
         return 0
-    rep = run_adapt(agent, run_dir, a.game, study, timeout_s=a.phase_timeout, log=log)
+    rep = run_adapt(agent, run_dir, a.game, study, notes=a.notes, kwargs=game_kwargs, timeout_s=a.phase_timeout,
+                    log=log)
     if not rep.ok:
         log("run: adaptor not ready — " + (rep.error or "see adaptor/validation.md")[:500])
         needs = run_dir / "adaptor" / "NEEDS.md"
@@ -227,15 +280,16 @@ def cmd_run(a: argparse.Namespace) -> int:
         return 2
     if a.stop_after == "adapt":
         return 0
-    game = register_adaptor(run_dir / "adaptor")
-    from .phases.study import study_text
+    game = register_adaptor(run_dir / "adaptor", kwargs=game_kwargs)
+    spec = adaptor_spec(game)
+    tier_n = int(spec.tier.removeprefix("tier"))   # the adaptor's kind decides what the search can drive
+    if tier_n != int(study["tier"]):
+        log(f"search: the adaptor is tier {tier_n} ({'real-time' if spec.realtime else 'turn-based'}) but "
+            f"study.json says tier {study['tier']}; searching tier {tier_n}")
     log(f"search: tier {tier_n} on adaptor game {game!r}")
     if not a.system1 or a.system1 == "auto":
         a.system1 = "jev" if tier_n == 2 else "none"
-    prior = study_text(run_dir / "study")
-    adaptor_md = run_dir / "adaptor" / "ADAPTOR.md"
-    if adaptor_md.exists():                     # interface documentation, not hidden rules
-        prior += "\n\n### adaptor/ADAPTOR.md\n" + adaptor_md.read_text()[:8000]
+    prior = prior_documents(run_dir / "study", run_dir / "adaptor", run_dir / "search")
     best = _run_search(a, game, tier_n, prior, run_dir / "search")
     log("run: done" + (f" — best {best.dir.name}" if best else " — no eligible candidate"))
     return 0
@@ -265,7 +319,8 @@ def cmd_eval(a: argparse.Namespace) -> int:
 def cmd_validate_adaptor(a: argparse.Namespace) -> int:
     load_dotenv()
     from .games.adaptor import validate_adaptor
-    rep = validate_adaptor(Path(a.path), kwargs=json.loads(a.game_kwargs) if a.game_kwargs else None)
+    rep = validate_adaptor(Path(a.path), kwargs=json.loads(a.game_kwargs) if a.game_kwargs else None,
+                           expected_tier=getattr(a, "tier", None))   # if the subcommand defines --tier
     print(rep.to_markdown())
     return 0 if rep.ok else 1
 
