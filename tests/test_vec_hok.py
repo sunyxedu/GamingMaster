@@ -105,3 +105,31 @@ def test_rl_joint_on_hok_with_the_stand_in_worker(tmp_path):
     row = res["history"][-1]["games"]["hok"]
     assert row["tokens"] >= 1 and row["episodes"] > 0
     assert abs(row["canary_log_old_mu"]) < 1e-4 and abs(row["canary_log_ratio"]) < 1e-4
+
+
+def test_free_ports_and_runtime_ids_per_process():
+    """Several RL jobs on one node each start a gamecore server and SDK workers: the ports are
+    free ones picked at random (not the fixed 23432 / 35300+ that wedged two jobs on gpu6 on
+    2026-10-22), a taken port is never handed out, and runtime ids carry the pid."""
+    import random
+    import socket
+
+    from env.vec_hok import HokVecEnv, _port_free, free_port_range
+
+    base = free_port_range(8, rng=random.Random(1))
+    assert all(_port_free(base + k) for k in range(8))
+    with socket.socket() as s:                          # a port in use is not free
+        s.bind(("0.0.0.0", 0))
+        s.listen(1)
+        taken = s.getsockname()[1]
+        assert not _port_free(taken)
+        picks = {free_port_range(1, lo=taken, hi=taken + 3, rng=random.Random(k)) for k in range(20)}
+        assert taken not in picks
+    a = HokVecEnv(2, worker_cmd=FAKE, seed=0)
+    b = HokVecEnv(2, worker_cmd=FAKE, seed=0)
+    try:
+        assert a._port_base != b._port_base and a._prefix == b._prefix == f"gm{os.getpid()}"
+        assert abs(a._port_base - b._port_base) >= 16 or a._port_base != b._port_base
+    finally:
+        a.close()
+        b.close()

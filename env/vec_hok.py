@@ -30,6 +30,7 @@ import fcntl
 import glob
 import os
 import pickle
+import random
 import shutil
 import socket
 import struct
@@ -77,6 +78,32 @@ def gamecore_dir(root: str) -> str:
     return gc
 
 
+def _port_free(port: int) -> bool:
+    """Whether TCP ``port`` can be bound on every interface right now (as the SDK binds its
+    AI-server ports and the gamecore server its listen port)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+    return True
+
+
+def free_port_range(n: int, lo: int = 20000, hi: int = 60000, tries: int = 200,
+                    rng: Optional[random.Random] = None) -> int:
+    """The first port of ``n`` consecutive free TCP ports, at a random place in [lo, hi):
+    several RL jobs on one node each start a gamecore server and SDK workers — fixed ports
+    (23432 / 35300+) made the second job's server die on the taken port and both jobs'
+    workers wait forever on the first one's (two final-main / full1 jobs on gpu6,
+    2026-10-22)."""
+    rng = rng or random.Random(os.getpid() ^ time.time_ns())
+    for _ in range(tries):
+        base = rng.randrange(lo, hi - n)
+        if all(_port_free(base + k) for k in range(n)):
+            return base
+    raise RuntimeError(f"no {n} consecutive free ports in [{lo}, {hi}) after {tries} tries")
+
+
 def _wait_port(host: str, port: int, timeout: float) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -94,10 +121,11 @@ class GamecoreServer:
     The gamecore is copied once per node into ``local`` (fast local disk: a simulator
     reads its assets at every launch); concurrent copies are serialised by a lock."""
 
-    def __init__(self, root: Optional[str] = None, port: int = 23432,
+    def __init__(self, root: Optional[str] = None, port: Optional[int] = None,
                  local: Optional[str] = None, log: Optional[str] = None):
         self.root = resolve_root(root)
-        self.port = int(port)
+        # None: a free port (another job on this node may run its own server)
+        self.port = int(port) if port is not None else free_port_range(1)
         src = gamecore_dir(self.root)
         local = local or f"/tmp/{os.environ.get('USER', 'user')}-hok"
         os.makedirs(local, exist_ok=True)
@@ -126,6 +154,11 @@ class GamecoreServer:
              "--simulator-repeat-bin", os.path.join(bindir, "sgame_simulator_repeated_zmq")],
             cwd=self.gamecore, env=env, stdout=self._log, stderr=subprocess.STDOUT)
         _wait_port("127.0.0.1", self.port, 60.0)
+        time.sleep(0.5)
+        if self.proc.poll() is not None:
+            # it died (the port taken between the check and its bind): an open port then
+            # belongs to ANOTHER server — never talk to it
+            raise RuntimeError(f"gamecore server exited ({self.proc.returncode}) on port {self.port}")
 
     @property
     def address(self) -> str:
@@ -198,8 +231,8 @@ class HokVecEnv(VecEnvBase):
     def __init__(self, n_envs: int = 1, *, autoreset: bool = False, seed: Optional[int] = None,
                  gamecore: Optional[str] = None, hok_root: Optional[str] = None,
                  heroes: Optional[Sequence[str]] = None, max_steps: Optional[int] = None,
-                 shaping: float = 1.0, outcome: float = 1.0, port_base: int = 35300,
-                 gamecore_port: int = 23432, runtime_prefix: str = "gm",
+                 shaping: float = 1.0, outcome: float = 1.0, port_base: Optional[int] = None,
+                 gamecore_port: Optional[int] = None, runtime_prefix: Optional[str] = None,
                  worker_cmd: Optional[Sequence[str]] = None, eval_mode: bool = False,
                  reward_config: Optional[Mapping[str, Any]] = None, sdk_venv: Optional[str] = None,
                  log: Optional[str] = None):
@@ -210,7 +243,13 @@ class HokVecEnv(VecEnvBase):
         self.eval_mode = bool(eval_mode)
         self._server = None
         if gamecore is None and worker_cmd is None:
-            self._server = GamecoreServer(self.root, gamecore_port)
+            for attempt in range(3):            # a port race with another job: a new port
+                try:
+                    self._server = GamecoreServer(self.root, gamecore_port)
+                    break
+                except RuntimeError:
+                    if gamecore_port is not None or attempt == 2:
+                        raise
             gamecore = self._server.address
         sdk = sdk_venv or os.environ.get("HOK_SDK_VENV", "venv38")
         self._gamecore = gamecore or "127.0.0.1:0"
@@ -221,7 +260,11 @@ class HokVecEnv(VecEnvBase):
         self.heroes = pool
         self._cmd = list(worker_cmd) if worker_cmd else [
             os.path.join(sdk if os.path.isabs(sdk) else os.path.join(self.root, sdk), "bin", "python"), _WORKER]
-        self._port_base, self._prefix = int(port_base), runtime_prefix
+        # the SDK workers' AI-server ports (2 per env, up to a resize to 4x): free ones unless
+        # given; the runtime ids (and work dirs) carry this process's pid — several jobs on a
+        # node must not share either
+        self._port_base = int(port_base) if port_base is not None else free_port_range(8 * max(n_envs, 1))
+        self._prefix = runtime_prefix or f"gm{os.getpid()}"
         self._workroot = f"/tmp/{os.environ.get('USER', 'user')}-hok/work"
         #: the SDK's shaped-reward weights (hok1v1/config.json keys, e.g. reward_money)
         self._reward_config = dict(reward_config or {})
