@@ -157,8 +157,9 @@ def _run_search(a: argparse.Namespace, game: str, tier_n: int, study: str, exp_d
     budget = _episode_budget(a)
     spec = _adaptor_spec(game)
     declared = getattr(spec, "seeds", None) or {}       # an adaptor's own scenario split, if it declares one
-    game_kwargs = (json.loads(a.game_kwargs) if a.game_kwargs
-                   else dict(getattr(spec, "eval_kwargs", None) or {}))
+    # the adaptor's declared evaluation kwargs, overridden by the user's (as validate_adaptor merges them)
+    game_kwargs = {**(getattr(spec, "eval_kwargs", None) or {}),
+                   **(json.loads(a.game_kwargs) if a.game_kwargs else {})}
     seeds_train = _parse_seeds(a.seeds) if a.seeds is not None else list(declared.get("train") or [0, 1, 2])
     seeds_heldout = (_parse_seeds(a.heldout) if a.heldout is not None
                      else list(declared.get("heldout") or [100, 101, 102]))
@@ -211,7 +212,7 @@ def cmd_loop(a: argparse.Namespace) -> int:
               f"but the search runs --tier {a.tier}", file=sys.stderr)
     exp_dir = Path(a.runs_dir) / (a.name or f"tier{a.tier}-{_slug(game)}-{time.strftime('%Y%m%d-%H%M%S')}")
     _run_search(a, game, a.tier, _study_text(a, exp_dir), exp_dir)
-    return 0
+    return 3 if getattr(a, "interrupted", None) else 0
 
 
 def cmd_run(a: argparse.Namespace) -> int:
@@ -291,6 +292,9 @@ def cmd_run(a: argparse.Namespace) -> int:
         a.system1 = "jev" if tier_n == 2 else "none"
     prior = prior_documents(run_dir / "study", run_dir / "adaptor", run_dir / "search")
     best = _run_search(a, game, tier_n, prior, run_dir / "search")
+    if getattr(a, "interrupted", None):
+        log(f"run: search interrupted ({a.interrupted[:200]}); rerun the same command to resume")
+        return 3
     log("run: done" + (f" — best {best.dir.name}" if best else " — no eligible candidate"))
     return 0
 

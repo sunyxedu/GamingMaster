@@ -184,7 +184,7 @@ class MetaHarnessLoop:
         for attempt in (0, 1):
             rep = preflight_harness(cand.harness_path, self.game_factory, game_kwargs=self.game_kwargs,
                                     tier2=self.system1 is not None, timeout_s=self.cfg.preflight_timeout_s,
-                                    budget=self.cfg.budget)
+                                    budget=self.cfg.budget, seed=self.cfg.seeds_train[0])
             (cand.dir / f"preflight_{attempt}.json").write_text(json.dumps(rep, indent=2, default=str))
             if rep["ok"]:
                 note = ("; warnings: " + " | ".join(rep["warnings"])) if rep.get("warnings") else ""

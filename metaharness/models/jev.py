@@ -229,13 +229,16 @@ class JevClient:
         data = json.dumps(body).encode()
         t0, start = time.time(), time.monotonic()
         deadline = start + timeout_s
-        attempts, last_err, throttled_only = 0, None, True
+        attempts, last_err, throttled_only, saw_throttle = 0, None, True, False
         while time.monotonic() < deadline:
             attempts += 1
             try:
                 status, headers, raw = self._post(data, deadline)
             except (OSError, http.client.HTTPException) as e:    # refused, reset, TLS, out of time, ...
-                last_err, throttled_only = f"{type(e).__name__}: {e}", False
+                last_err = f"{type(e).__name__}: {e}"
+                # the call's own deadline cutting a retry short is not a different failure
+                if not (isinstance(e, TimeoutError) and time.monotonic() >= deadline - 0.01):
+                    throttled_only = False
                 self._pause(_backoff(attempts), deadline)
                 continue
             if 200 <= status < 300:
@@ -253,12 +256,13 @@ class JevClient:
                 self._log(trace, t0, body, None, last_err)
                 raise RuntimeError(f"Jev rejected the request: {last_err}")
             throttled_only = throttled_only and status in _THROTTLE_STATUS
+            saw_throttle = saw_throttle or status in _THROTTLE_STATUS
             wait = _retry_after(headers.get("retry-after"))
             self._pause(wait if wait is not None and wait < deadline - time.monotonic() else _backoff(attempts),
                         deadline)
         err = (f"Jev request deadline ({timeout_s:g}s) exceeded after {attempts} attempt(s); "
                f"last error: {last_err or 'none'}")
-        streak = self._outcome(attempts > 0 and throttled_only, start)
+        streak = self._outcome(saw_throttle and throttled_only, start)
         if streak:
             err = (f"Jev throttled (429/529) through {streak} consecutive calls over "
                    f"{THROTTLED_SPAN_UNAVAILABLE_S:g}s+; last error: {last_err}")

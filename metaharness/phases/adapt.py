@@ -20,7 +20,6 @@ from ..config import load_dotenv
 from ..games import adaptor as adaptor_mod
 from ..games import base as base_mod
 from ..models.base import System2Model, TraceSink
-from .study import study_text
 
 ADAPT_SYSTEM = """You are the Meta-Harness *adapt* agent: you write the code that connects a real game to a
 fixed Python interface so that model-driven harnesses can observe and act. You may install packages,
