@@ -66,6 +66,17 @@ def test_chess_loss_against_stockfish(tmp_path):
     assert rec["positions"] == 8 and rec["iteration"] == 3 and rec["engine"].startswith("Stockfish")
     assert 0.0 <= rec["mean_loss"] <= 1000.0 and 0.0 <= rec["agree"] <= 1.0
     assert rec["mean_loss"] > 0.0          # random moves lose centipawns
+    # against the --init network: the other seats are the init network, judged in the same games
+    assert rec["init_positions"] == 8 and rec["init_mean_loss"] > 0.0 and 0.0 <= rec["init_agree"] <= 1.0
+    path2 = str(tmp_path / "traces" / "eval_chess_engine_it3_r0_w0.npz")
+    archive_eval_wave(path2, _Env(trajs), [[True, False], [False, True]],
+                      {"game": "chess", "opponent": "engine", "iteration": 3})
+    eng = make_engine("chess", STOCKFISH, "go depth 6", 1)
+    try:
+        rec2 = judge_file(path2, eng, "chess", "go depth 6", 8)
+    finally:
+        eng.close()
+    assert rec2["positions"] == 8 and "init_positions" not in rec2     # the referee is not judged
 
 
 @pytest.mark.skipif(not (os.path.exists(KATAGO) and os.path.exists(B10)), reason="katago not installed")
@@ -83,3 +94,4 @@ def test_go_loss_against_katago(tmp_path):
     finally:
         eng.close()
     assert rec["positions"] == 3 and 0.0 <= rec["mean_loss"] <= 100.0 and rec["agree"] is None
+    assert rec["init_positions"] == 3 and 0.0 <= rec["init_mean_loss"] <= 100.0

@@ -349,6 +349,10 @@ def parse_args(argv=None) -> argparse.Namespace:
       help="every N iterations each 2+-seat RL game plays the frozen --init network (the "
            "learner against it, seats drawn per episode; not trained on): vs_init in "
            "metrics.jsonl, the referee self-play reward cannot fool (0 = off)")
+    a("--archive_eval", action=argparse.BooleanOptionalAction, default=True,
+      help="every evaluation wave's episodes (vs_init and vs the engine referee) as gmrules "
+           "trajectories, SAVE_DIR/traces/eval_GAME_OPPONENT_itN_rRANK_wWAVE.npz, for "
+           "scripts/analyze_strength.py (full-strength engines judge every decision)")
     a("--trace_every", type=int, default=50,
       help="every N iterations write one episode per RL game (env 0 of its first wave: per "
            "step the seats to move, applied actions, rewards, done; generals also its board) to "
@@ -3035,8 +3039,9 @@ class JointRLTrainer:
                                  timeout_draw=g in TIMEOUT_IS_DRAW)
             for k in ("episodes", "score_sum", "score_n"):
                 setattr(total, k, getattr(total, k) + getattr(st, k))
-            if a.trace_every > 0 and it % a.trace_every == 0:
-                # the wave's episodes for the offline strength analysis (full-strength engines)
+            if a.archive_eval:
+                # the wave's episodes for the offline strength analysis (full-strength engines;
+                # every evaluation: tied to --trace_every it came only every lcm(20, 25) = 100)
                 archive_eval_wave(os.path.join(a.save_dir, "traces",
                                                f"eval_{g}_{name}_it{it}_r{self.rank}_w{wave}.npz"),
                                   r.env, league.learner_seats,

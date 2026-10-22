@@ -19,7 +19,9 @@ win rates of the run do not (a referee is calibrated to the start and steps up o
 
 Appends one record per archive file to ``<run>/strength.jsonl`` (files already judged are
 skipped): game, opponent, iteration, positions judged, mean / median loss, the share of moves
-that were the engine's best, the engine and its limit.  ``--summary`` prints the per-game trend.
+that were the engine's best, the engine and its limit — and in games against the --init network
+the same for the init network's moves (``init_*``): the policy and its starting point judged by
+the same engine in the same games.  ``--summary`` prints the per-game trend.
 """
 from __future__ import annotations
 
@@ -178,16 +180,38 @@ def sample(items: List[Any], k: int, seed: int = 0) -> List[Any]:
 
 
 def judge_file(path: str, engine: Any, game: str, go: str, max_positions: int, verbose: bool = False) -> Dict[str, Any]:
+    """One archive: the learner's decisions judged; in a game against the --init network also
+    the init network's decisions of the same games (``init_*`` fields) — a paired comparison of
+    the policy with its starting point under the same engine, positions and opponents."""
     z = np.load(path)
     meta = json.loads(str(z["meta"])) if "meta" in z else {}
     seats = z["learner_seats"]
     n = seats.shape[0]
-    todo: List[Tuple[int, int, List[str], str]] = []
-    for e in range(n):
-        traj = z[f"traj{e}"]
-        for turn, before, played in decisions(game, traj, [bool(x) for x in seats[e]]):
-            todo.append((e, turn, before, played))
-    todo = sample(todo, max_positions, seed=int(meta.get("iteration", 0)))
+    rec = {"file": os.path.basename(path), "game": game, "opponent": meta.get("opponent"),
+           "iteration": meta.get("iteration"), "rank": meta.get("rank"), "wave": meta.get("wave"),
+           "episodes": n, "engine": getattr(engine, "name", "?"), "go": go}
+    sides = [("", lambda row: [bool(x) for x in row])]
+    if meta.get("opponent") == "init":
+        sides.append(("init_", lambda row: [not bool(x) for x in row]))
+    for prefix, pick in sides:
+        todo: List[Tuple[int, int, List[str], str]] = []
+        for e in range(n):
+            for turn, before, played in decisions(game, z[f"traj{e}"], pick(seats[e])):
+                todo.append((e, turn, before, played))
+        todo = sample(todo, max_positions, seed=int(meta.get("iteration", 0)) + len(prefix))
+        losses, agree = _judge(z, seats.shape[1], todo, engine, game, go)
+        rec.update({f"{prefix}positions": len(losses),
+                    f"{prefix}mean_loss": statistics.fmean(losses) if losses else None,
+                    f"{prefix}median_loss": statistics.median(losses) if losses else None,
+                    f"{prefix}agree": (agree / len(losses)) if losses and agree >= 0 else None})
+    if verbose:
+        print(json.dumps(rec), flush=True)
+    return rec
+
+
+def _judge(z: Any, n_seats: int, todo: List[Tuple[int, int, List[str], str]], engine: Any, game: str,
+           go: str) -> Tuple[List[float], int]:
+    """(losses, best-move count; -1 when not measured) of the decisions ``todo``."""
     losses: List[float] = []
     agree = 0
     if game in UCI_GAMES:
@@ -204,7 +228,7 @@ def judge_file(path: str, engine: Any, game: str, go: str, max_positions: int, v
             by_episode.setdefault(e, []).append((turn, before, played))
         for e, items in by_episode.items():
             full = z[f"traj{e}"]
-            all_moves = decisions(game, full, [True] * seats.shape[1])
+            all_moves = decisions(game, full, [True] * n_seats)
             moves = [m for _, _, m in all_moves]
             turns = sorted({t for t, _, _ in items} | {t + 1 for t, _, _ in items})
             wr = engine.winrates(moves, [t for t in turns if t <= len(moves)])
@@ -213,19 +237,10 @@ def judge_file(path: str, engine: Any, game: str, go: str, max_positions: int, v
                     losses.append(min(max(wr[turn] - (1.0 - wr[turn + 1]), 0.0), 1.0) * 100)
                 elif turn in wr:            # the game ended with this move: no loss measured
                     continue
-            agree = -1                      # not measured for go (no single best move queried)
+        agree = -1                          # not measured for go (no single best move queried)
     else:
         raise SystemExit(f"{game}: no engine protocol known")
-    rec = {"file": os.path.basename(path), "game": game, "opponent": meta.get("opponent"),
-           "iteration": meta.get("iteration"), "rank": meta.get("rank"), "wave": meta.get("wave"),
-           "episodes": n, "positions": len(losses),
-           "mean_loss": statistics.fmean(losses) if losses else None,
-           "median_loss": statistics.median(losses) if losses else None,
-           "agree": (agree / len(losses)) if losses and agree >= 0 else None,
-           "engine": getattr(engine, "name", "?"), "go": go}
-    if verbose:
-        print(json.dumps(rec), flush=True)
-    return rec
+    return losses, agree
 
 
 def make_engine(game: str, command: str, go: str, threads: int):
@@ -260,9 +275,14 @@ def summary(run: str) -> None:
                 continue
             n = sum(r["positions"] for r in rs)
             loss = sum(r["mean_loss"] * r["positions"] for r in rs) / n
-            ag = [r["agree"] for r in rs if r["agree"] is not None]
-            agree = (sum(a * r["positions"] for a, r in zip(ag, rs)) / n) if ag else None
-            parts.append(f"@{it}: loss {loss:.1f}" + (f" agree {agree:.2f}" if agree is not None else "") + f" (n={n})")
+            ag = [(r["agree"], r["positions"]) for r in rs if r["agree"] is not None]
+            agree = (sum(a * k for a, k in ag) / sum(k for _, k in ag)) if ag else None
+            ri = [r for r in rs if r.get("init_positions")]
+            ni = sum(r["init_positions"] for r in ri)
+            init = (f" | init {sum(r['init_mean_loss'] * r['init_positions'] for r in ri) / ni:.1f}"
+                    if ni else "")
+            parts.append(f"@{it}: loss {loss:.1f}" + (f" agree {agree:.2f}" if agree is not None else "")
+                         + init + f" (n={n})")
         unit = "winrate pts" if g == "go" else "cp"
         print(f"{g:14s} vs {opp:6s} [{unit}] " + "  ".join(parts))
 
@@ -273,7 +293,9 @@ def main() -> None:
     ap.add_argument("--engine", action="append", default=[], metavar="GAME=COMMAND")
     ap.add_argument("--go", action="append", default=[], metavar="GAME=LIMIT",
                     help="UCI/USI: the go command (e.g. 'go depth 16'); go: 'visits N'")
-    ap.add_argument("--max_positions", type=int, default=300, help="per archive file (sampled evenly)")
+    ap.add_argument("--max_positions", type=int, default=300, help="per archive file and side (sampled evenly)")
+    ap.add_argument("--max_positions_game", action="append", default=[], metavar="GAME=N",
+                    help="a game's own --max_positions (go's engine is the slow one)")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--only", default="", help="comma-separated games")
     ap.add_argument("--summary", action="store_true", help="print the trend and exit")
@@ -284,6 +306,7 @@ def main() -> None:
         return
     engines = dict(x.split("=", 1) for x in a.engine)
     limits = dict(x.split("=", 1) for x in a.go)
+    budget = {g: int(v) for g, v in (x.split("=", 1) for x in a.max_positions_game)}
     out_path = os.path.join(a.run, "strength.jsonl")
     done = set()
     if os.path.exists(out_path):
@@ -304,7 +327,8 @@ def main() -> None:
             if game not in live:
                 live[game] = make_engine(game, engines[game], limits.get(game, ""), a.threads)
             try:
-                rec = judge_file(path, live[game], game, limits.get(game, ""), a.max_positions, a.verbose)
+                rec = judge_file(path, live[game], game, limits.get(game, ""),
+                                 budget.get(game, a.max_positions), a.verbose)
             except EngineError as e:
                 print(f"{base}: {e}", file=sys.stderr, flush=True)
                 eng = live.pop(game, None)
