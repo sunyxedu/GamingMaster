@@ -111,14 +111,16 @@ def test_profiles_resolve_backend_and_model():
 
 def test_astra_argv_new_and_resume(tmp_path):
     a = CodexCLI(model="gpt-6-astra", reasoning_effort="high")
-    argv = a._argv("hi", cwd=tmp_path, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
+    argv = a._argv(cwd=tmp_path, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
     assert argv[:2] == ["codex", "exec"] and "-m" in argv and argv[argv.index("-m") + 1] == "gpt-6-astra"
-    assert "-s" in argv and "read-only" in argv and "--json" in argv and argv[-1] == "hi"
+    assert "-s" in argv and "read-only" in argv and "--json" in argv
+    assert argv[-1] == "-" and argv.count("-") == 1       # the prompt comes from stdin, never argv
     assert any(x == 'model_reasoning_effort="high"' for x in argv)
-    argv2 = a._argv("more", cwd=tmp_path, session_id="abc", agentic=True, last_msg_path=tmp_path / "l")
+    argv2 = a._argv(cwd=tmp_path, session_id="abc", agentic=True, last_msg_path=tmp_path / "l")
     assert argv2[:4] == ["codex", "exec", "resume", "abc"] and argv2[argv2.index("-m") + 1] == "gpt-6-astra"
+    assert argv2[-1] == "-"                               # `codex exec resume <id> -`: prompt from stdin
     assert "--color" not in argv2 and "-s" not in argv2 and "-C" not in argv2   # resume rejects these (live 0.154)
-    argv3 = a._argv("x", cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
+    argv3 = a._argv(cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
     assert "workspace-write" in argv3
     assert "--dangerously-bypass-approvals-and-sandbox" not in argv3
 
@@ -209,7 +211,7 @@ def test_astra_argv_never_inherits_fast_tier(tmp_path):
     from metaharness.models.codex_cli import CodexCLI
     a = CodexCLI(model="m")
     for agentic in (False, True):
-        argv = a._argv("hi", cwd=tmp_path, session_id=None, agentic=agentic, last_msg_path=tmp_path / "l")
+        argv = a._argv(cwd=tmp_path, session_id=None, agentic=agentic, last_msg_path=tmp_path / "l")
         assert 'service_tier="default"' in argv and "features.fast_mode=false" in argv
-    player = a._argv("hi", cwd=tmp_path, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
+    player = a._argv(cwd=tmp_path, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
     assert "project_doc_max_bytes=0" in player

@@ -9,8 +9,8 @@ login (``~/.codex/auth.json``) is used, ``OPENAI_API_KEY``/``OPENAI_BASE_URL``
 are dropped from the child env so the CLI never silently switches auth, and the
 reasoning effort is passed as ``model_reasoning_effort``.
 
-``codex exec --json`` prints JSONL events; the final agent message is also
-written with ``-o``. ``codex exec resume <thread-id> <prompt>`` continues a
+``codex exec --json -`` reads the prompt from stdin and prints JSONL events; the final
+agent message is also written with ``-o``. ``codex exec resume <thread-id> -`` continues a
 thread so Astra's conversation context persists across game turns. This does not establish
 persistence of inaccessible model-internal reasoning state.
 """
@@ -19,15 +19,34 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from ._cli import run_cli
-from .base import ModelCall, ModelUnavailable, System2Result, TraceSink
+from ._cli import CLITimeout, run_cli
+from .base import (
+    CLI_ENV_DROP,
+    PLAYER_PREAMBLE,
+    ModelCall,
+    ModelTimeout,
+    ModelUnavailable,
+    System2Result,
+    TraceSink,
+    image_trace,
+    read_images,
+)
 
-_USAGE_LIMIT_RE = re.compile(r"usage limit|insufficient_quota|purchase more credits", re.I)
-_AUTH_RE = re.compile(r"not logged in|login required|401|unauthorized", re.I)
+# Matched only against what codex reported as errors (error / turn.failed events, stderr of a failed
+# process), never the answer: a reply that mentions "usage limit" or a timestamp holding 401 is not one.
+_USAGE_LIMIT_RE = re.compile(r"usage limit|insufficient_quota|purchase more credits|exceeded your current quota|"
+                             r"quota exceeded\. check your plan|upgrade to (?:plus|pro)\b", re.I)
+_AUTH_RE = re.compile(r"\b401\b|unauthorized|refresh token|sign in again|log ?in required|not logged in|"
+                      r"not signed in|authentication required", re.I)
+# Tools an inference-only player must not have even if the user's config enables them: view_image
+# reads image files by path, plugins bring MCP servers / skills, hooks run per session (and may add
+# context), memories are external context. Attached screenshots (-i) are input, not view_image.
+_PLAYER_OFF_FEATURES = ("view_image", "image_generation", "plugins", "hooks", "memories")
 
 
 class CodexCLI:
@@ -46,11 +65,15 @@ class CodexCLI:
         self.ephemeral = ephemeral
         self.extra_config = dict(extra_config or {})
         self.n_calls = 0
-        self.total_usage: dict[str, int] = {}
+        self.total_usage: dict[str, int] = {}     # sum of per-call deltas
         self.player_tools = "disabled-and-audited"
+        # turn.completed reports the thread's running total; the last total seen per thread turns
+        # it into per-call deltas (a resumed thread would otherwise be charged for every earlier turn).
+        self._thread_usage: dict[str, dict[str, int]] = {}
+        self._lock = threading.Lock()
 
     # -- argv -----------------------------------------------------------
-    def _argv(self, prompt: str, *, cwd: Optional[Path], session_id: Optional[str],
+    def _argv(self, *, cwd: Optional[Path], session_id: Optional[str],
               agentic: bool, last_msg_path: Path, images: Optional[list[str]] = None,
               full_access: bool = False, web_search: bool = False) -> list[str]:
         argv = [self.codex_bin, "exec"]
@@ -89,6 +112,8 @@ class CodexCLI:
             cfg["features.browser_use"] = "false"
             cfg["features.computer_use"] = "false"
             cfg["features.multi_agent"] = "false"
+            for feature in _PLAYER_OFF_FEATURES:
+                cfg[f"features.{feature}"] = "false"
             cfg["web_search"] = '"disabled"'
         if self.reasoning_effort:
             cfg["model_reasoning_effort"] = f'"{self.reasoning_effort}"'
@@ -96,7 +121,10 @@ class CodexCLI:
         cfg.setdefault("notify", "[]")
         for k, v in cfg.items():
             argv += ["-c", f"{k}={v}"]
-        argv.append(prompt)
+        # The prompt goes through stdin: one argv element is capped at 128 KiB on Linux (E2BIG) and
+        # archived ARC prompts reached 310 KB. Never also a positional prompt: codex would then
+        # append stdin to it as a <stdin> block.
+        argv.append("-")
         return argv
 
     # -- run ------------------------------------------------------------
@@ -115,30 +143,43 @@ class CodexCLI:
         web_search: bool = False,
     ) -> System2Result:
         """``full_access`` (agentic only) lifts the workspace sandbox so the model can
-        install packages / start game servers; ``web_search`` enables live search."""
+        install packages / start game servers; ``web_search`` enables live search.
+        Running out of time raises ``ModelTimeout`` whose ``session_id`` is the thread the
+        call started or resumed, so a caller can resume it."""
         full_prompt = f"{system}\n\n{prompt}" if system and not session_id else prompt
         if not agentic:
-            full_prompt = ("Inference-only game player: use only the supplied observations and "
-                           "conversation. Do not use tools, read files, run commands, browse, or "
-                           "consult external memories. Return the requested answer directly.\n\n"
-                           + full_prompt)
+            full_prompt = PLAYER_PREAMBLE + "\n\n" + full_prompt
         cwd = Path(cwd).resolve() if cwd else None      # -C and subprocess cwd must both be absolute
         t0 = time.time()
+        request: dict[str, Any] = {"prompt": full_prompt}
+        try:
+            loaded = read_images(images)
+        except RuntimeError as e:
+            self._trace(trace, t0, {**request, "images": [str(i) for i in images or []]}, None, str(e))
+            raise
+        if loaded:
+            request["images"] = image_trace(loaded)
+        with self._lock:     # the running total this thread had reached; None = a thread this client never saw
+            known = self._thread_usage.get(session_id) if session_id else {}
+            baseline = None if known is None else dict(known)
         with tempfile.TemporaryDirectory() as td:
             last_msg = Path(td) / "last.txt"
-            argv = self._argv(full_prompt, cwd=cwd, session_id=session_id,
-                              agentic=agentic, last_msg_path=last_msg, images=images,
-                              full_access=full_access, web_search=web_search)
+            argv = self._argv(cwd=cwd, session_id=session_id, agentic=agentic, last_msg_path=last_msg,
+                              images=[str(p) for p, _ in loaded], full_access=full_access, web_search=web_search)
             try:
-                proc = run_cli(argv, cwd=cwd, stdin_text=None, timeout_s=timeout_s,
-                               env_drop=("OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY",
-                                         "TYPESAFE_API_KEY"))
-            except Exception as e:  # timeout etc.
-                self._trace(trace, t0, full_prompt, None, str(e))
+                proc = run_cli(argv, cwd=cwd, stdin_text=full_prompt, timeout_s=timeout_s, env_drop=CLI_ENV_DROP)
+            except CLITimeout as e:
+                # The partial JSONL still names the thread, so the caller can resume it (repair round).
+                thread_id = _digest_events(_parse_jsonl(e.stdout))[0] or session_id
+                err = f"timeout: codex exec exceeded {timeout_s:g}s (session {thread_id})"
+                self._trace(trace, t0, request, None, err)
+                raise ModelTimeout(err, session_id=thread_id) from e
+            except Exception as e:  # binary missing, cancelled with its episode, ...
+                self._trace(trace, t0, request, None, f"{type(e).__name__}: {e}")
                 raise
             text = last_msg.read_text() if last_msg.exists() else ""
         events = _parse_jsonl(proc.stdout)
-        thread_id, usage, errors = _digest_events(events)
+        thread_id, cumulative, errors = _digest_events(events)
         if not agentic:
             external = [ev.get("item", {}).get("type") for ev in events
                         if ev.get("type") in ("item.started", "item.completed")
@@ -147,38 +188,68 @@ class CodexCLI:
                          "collab_tool_call"}]
             if external:
                 error = "inference-only player used external tools: " + ", ".join(sorted(set(external)))
-                self._trace(trace, t0, full_prompt, None, error)
+                self._trace(trace, t0, request, None, error)
                 raise ModelUnavailable(error)
-        stderr_tail = (proc.stderr or "")[-2000:]
-        combined_err = "\n".join(errors + ([stderr_tail] if proc.returncode != 0 else []))
-        if _USAGE_LIMIT_RE.search(combined_err) or _USAGE_LIMIT_RE.search(proc.stdout[-4000:]):
-            self._trace(trace, t0, full_prompt, None, combined_err)
-            raise ModelUnavailable(f"codex usage limit: {combined_err.strip()[:300]}")
-        if proc.returncode != 0 or errors:
-            self._trace(trace, t0, full_prompt, None, combined_err)
-            if _AUTH_RE.search(combined_err):
-                raise ModelUnavailable(f"codex auth problem: {combined_err[:300]}")
-            raise RuntimeError(f"codex exec failed (rc={proc.returncode}): {combined_err[:800]}")
+        turn_failed = any(ev.get("type") == "turn.failed" for ev in events)
         if not text:  # fall back to the last agent_message event
             text = _last_agent_message(events)
-        if not text.strip():
-            self._trace(trace, t0, full_prompt, None, "empty completed response")
-            raise RuntimeError("codex returned no final response")
+        if proc.returncode != 0 or turn_failed or not text.strip():
+            # Success is structural (rc 0, no turn.failed, a final message); a failure is classified
+            # only from codex's own error reports (+ stderr of a failed process).
+            reported = errors + ([(proc.stderr or "")[-2000:]] if proc.returncode != 0 else [])
+            detail = "\n".join(m.strip() for m in reported if m.strip()) or (
+                "no error output" if proc.returncode != 0 or turn_failed else "empty completed response")
+            self._trace(trace, t0, request, None, detail)
+            for regex, what in ((_USAGE_LIMIT_RE, "usage limit"), (_AUTH_RE, "auth problem")):
+                for msg in reported:
+                    hit = regex.search(msg)
+                    if hit:
+                        raise ModelUnavailable(f"codex {what} (matched {hit.group(0)!r}): {msg.strip()[:300]}")
+            if proc.returncode == 0 and not turn_failed:
+                raise RuntimeError(f"codex returned no final response: {detail[:800]}")
+            raise RuntimeError(f"codex exec failed (rc={proc.returncode}): {detail[:800]}")
+        sid = thread_id or session_id
+        usage = self._account(sid, session_id, baseline, cumulative)
         latency = time.time() - t0
-        self.n_calls += 1
-        for k, v in usage.items():
-            if isinstance(v, int):
-                self.total_usage[k] = self.total_usage.get(k, 0) + v
-        res = System2Result(text=text, session_id=thread_id or session_id, latency_s=latency, usage=usage, raw=events)
-        self._trace(trace, t0, full_prompt, res, None)
+        res = System2Result(text=text, session_id=sid, latency_s=latency, usage=usage, raw=events)
+        # error events inside a turn that still completed (e.g. a retried stream) are warnings
+        self._trace(trace, t0, request, res, None, warnings=errors)
         return res
 
-    def _trace(self, trace: Optional[TraceSink], t0: float, prompt: str, res: Optional[System2Result], err: Optional[str]) -> None:
+    def _account(self, thread_id: Optional[str], session_id: Optional[str],
+                 baseline: Optional[dict[str, int]], cumulative: dict[str, Any]) -> dict[str, Any]:
+        """Per-call usage from the thread's running total; the raw total stays under ``thread_cumulative``."""
+        totals = {k: v for k, v in cumulative.items() if isinstance(v, int) and not isinstance(v, bool)}
+        base = baseline or {}
+        reset = any(v < base.get(k, 0) for k, v in totals.items())   # a total never shrinks: count from zero
+        delta = {k: v if reset else v - base.get(k, 0) for k, v in totals.items()}
+        with self._lock:
+            self.n_calls += 1
+            if totals:        # a call that reported nothing keeps the last known total
+                for key in {thread_id, session_id} - {None}:
+                    self._thread_usage[key] = totals
+            for k, v in delta.items():
+                self.total_usage[k] = self.total_usage.get(k, 0) + v
+        if not cumulative:
+            return {}
+        usage: dict[str, Any] = {**delta, "thread_cumulative": dict(cumulative)}
+        if baseline is None:
+            usage["thread_baseline"] = "unknown"   # resumed a thread this client never saw: an upper bound
+        elif reset:
+            usage["thread_baseline"] = "reset"
+        return usage
+
+    def _trace(self, trace: Optional[TraceSink], t0: float, request: dict[str, Any], res: Optional[System2Result],
+               err: Optional[str], warnings: Optional[list[str]] = None) -> None:
         if not trace:
             return
+        response: Optional[dict[str, Any]] = None
+        if res:
+            response = {"text": res.text, "session_id": res.session_id}
+            if warnings:
+                response["warnings"] = list(warnings)
         trace.log_call(ModelCall(
-            "system2", self.name, t0, time.time() - t0,
-            {"prompt": prompt}, {"text": res.text, "session_id": res.session_id} if res else None,
+            "system2", self.name, t0, time.time() - t0, request, response,
             ok=err is None, error=err, usage=res.usage if res else {},
         ))
 

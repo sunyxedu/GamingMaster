@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from .base import (
     ModelCall,
+    ModelTimeout,
     ModelUnavailable,
     System1Answer,
     System1Model,
@@ -23,7 +24,7 @@ from .jev import Choice, JevClient, Noul, Score
 from .mock import HeuristicSystem1, ScriptedSystem2
 
 __all__ = [
-    "ModelCall", "ModelUnavailable", "System1Answer", "System1Model", "System2Model",
+    "ModelCall", "ModelTimeout", "ModelUnavailable", "System1Answer", "System1Model", "System2Model",
     "System2Result", "TraceSink", "Choice", "JevClient", "Noul", "Score",
     "HeuristicSystem1", "ScriptedSystem2", "make_system1", "make_system2",
     "load_profiles", "profile_names",
@@ -64,6 +65,8 @@ def make_system2(name: str, **overrides: Any) -> System2Model:
     prof.update({k: v for k, v in overrides.items() if v is not None})
     if backend == "codex":
         from .codex_cli import CodexCLI
+        if not prof.get("model"):
+            raise ValueError(f"system2 profile {name!r} (codex) needs a model id in {DEFAULT_PROFILES}")
         return CodexCLI(model=prof["model"], reasoning_effort=prof.get("reasoning_effort"))
     if backend == "claude":
         from .claude_cli import ClaudeCLI
