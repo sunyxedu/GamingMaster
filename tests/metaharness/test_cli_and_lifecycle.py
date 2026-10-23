@@ -116,3 +116,37 @@ def test_close_game_optional_and_bounded():
 def test_action_spec_describes_sticky_mailbox():
     text = ActionSpec(names=["a", "b"], noop="b").describe()
     assert "repeats the last posted action" in text
+
+
+def test_run_cli_delivers_large_stdin_inside_a_cancel_scope():
+    # the child starts slowly (like a CLI loading its runtime) and only then reads stdin: a polled
+    # communicate() used to drop everything beyond the pipe buffer and time out
+    payload = "y" * 300_000
+    code = "import sys, time; time.sleep(0.5); print(len(sys.stdin.read()))"
+    with cancel_scope(lambda: None):
+        proc = run_cli([PY, "-c", code], cwd=None, stdin_text=payload, timeout_s=20)
+    assert proc.returncode == 0 and proc.stdout.strip() == "300000"
+
+
+def test_kill_all_kills_live_cli_children(tmp_path):
+    import threading
+    from metaharness.models import _cli
+    pid_file = tmp_path / "pid"
+    code = f"import os, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); time.sleep(30)"
+    errors = []
+
+    def call():
+        try:
+            run_cli([PY, "-c", code], cwd=None, stdin_text=None, timeout_s=30)
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    th = threading.Thread(target=call, daemon=True)
+    th.start()
+    deadline = time.monotonic() + 5
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    _cli.kill_all()
+    th.join(5)
+    pid = int(pid_file.read_text())
+    assert not th.is_alive() and not _alive(pid)

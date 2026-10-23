@@ -41,7 +41,7 @@ from .core.loop import SeedRefused
 from .core.runner import DEFAULT_GRACE_S, evaluate_harness
 from .games import registry as _registry
 from .games.registry import GAMES, make_game, register_adaptor
-from .models import make_system1, make_system2  # noqa: F401
+from .models import ModelUnavailable, make_system1, make_system2  # noqa: F401
 
 
 def _parse_seeds(s: str) -> list[int]:
@@ -81,17 +81,42 @@ def _adaptor_spec(game: str):
     return lookup(game) if lookup else None
 
 
-def _resolve_heldout_game(name: str) -> str | None:
-    """A registered game name or a generated adaptor directory; checked before the search starts."""
+def _kwargs(text: str, flag: str) -> dict:
+    try:
+        value = json.loads(text) if text else {}
+    except ValueError as e:
+        raise SystemExit(f"{flag} is not valid JSON: {e}") from None
+    if not isinstance(value, dict):
+        raise SystemExit(f"{flag} must be a JSON object")
+    return value
+
+
+def _game_setup(a: argparse.Namespace, game: str) -> tuple[dict, dict]:
+    """(kwargs, declared seeds) for a game: an adaptor's EVAL_KWARGS overridden by --game-kwargs
+    (as validate_adaptor merges them) and its SEEDS split, if it declares one."""
+    spec = _adaptor_spec(game)
+    kwargs = {**(getattr(spec, "eval_kwargs", None) or {}), **_kwargs(a.game_kwargs, "--game-kwargs")}
+    return kwargs, dict(getattr(spec, "seeds", None) or {})
+
+
+def _resolve_heldout_game(a: argparse.Namespace) -> tuple[str | None, dict, list[int] | None]:
+    """``--heldout-game``: a registered game name or a generated adaptor directory, checked before
+    the search starts -> (key, kwargs, declared held-out seeds). An adaptor's EVAL_KWARGS and SEEDS
+    apply to it as they do to the training game; --heldout-game-kwargs override the kwargs."""
+    name = a.heldout_game
+    user = _kwargs(a.heldout_game_kwargs, "--heldout-game-kwargs")
     if not name:
-        return None
+        return None, user, None
     if Path(name).is_dir():
-        return register_adaptor(Path(name))
+        key = register_adaptor(Path(name), kwargs=user or None)
+        spec = _adaptor_spec(key)
+        seeds = (getattr(spec, "seeds", None) or {}).get("heldout")
+        return key, {**(getattr(spec, "eval_kwargs", None) or {}), **user}, (list(seeds) if seeds else None)
     _registry._populate()
     if name not in GAMES:
         raise SystemExit(f"--heldout-game {name!r} is neither a registered game ({sorted(GAMES)}) "
                          "nor an adaptor directory")
-    return name
+    return name, user, None
 
 
 def _proposer(name: str, effort: str | None, tier_mod):
@@ -124,7 +149,7 @@ def _slug(s: str) -> str:
 def _resolve_game(a: argparse.Namespace) -> str:
     """``--adaptor DIR`` registers a generated adaptor and returns its game name; else ``--game``."""
     if getattr(a, "adaptor", ""):
-        return register_adaptor(Path(a.adaptor))
+        return register_adaptor(Path(a.adaptor), kwargs=_kwargs(a.game_kwargs, "--game-kwargs") or None)
     if not a.game:
         raise SystemExit("--game or --adaptor is required")
     return a.game
@@ -156,14 +181,11 @@ def _run_search(a: argparse.Namespace, game: str, tier_n: int, study: str, exp_d
     tier = _tier(tier_n)
     budget = _episode_budget(a)
     spec = _adaptor_spec(game)
-    declared = getattr(spec, "seeds", None) or {}       # an adaptor's own scenario split, if it declares one
-    # the adaptor's declared evaluation kwargs, overridden by the user's (as validate_adaptor merges them)
-    game_kwargs = {**(getattr(spec, "eval_kwargs", None) or {}),
-                   **(json.loads(a.game_kwargs) if a.game_kwargs else {})}
+    game_kwargs, declared = _game_setup(a, game)
     seeds_train = _parse_seeds(a.seeds) if a.seeds is not None else list(declared.get("train") or [0, 1, 2])
     seeds_heldout = (_parse_seeds(a.heldout) if a.heldout is not None
                      else list(declared.get("heldout") or [100, 101, 102]))
-    heldout_game = _resolve_heldout_game(a.heldout_game)
+    heldout_game, heldout_kwargs, heldout_seeds = _resolve_heldout_game(a)
     archive = Archive(exp_dir)
     for p in tier.baseline_paths():
         if not any(c.dir.name.endswith(p.stem) for c in archive.candidates()):
@@ -175,14 +197,21 @@ def _run_search(a: argparse.Namespace, game: str, tier_n: int, study: str, exp_d
                      clock_mode=a.clock, budget=budget, proposer_agentic=not a.proposer_text,
                      proposer_timeout_s=a.proposer_timeout, harness_timeout_s=budget.max_wall_s,
                      latency_override=json.loads(a.latency_override) if a.latency_override else None,
-                     heldout_game=heldout_game, memory_mode=a.memory_mode,
-                     heldout_game_kwargs=json.loads(a.heldout_game_kwargs) if a.heldout_game_kwargs else {},
+                     heldout_game=heldout_game, memory_mode=a.memory_mode, heldout_game_kwargs=heldout_kwargs,
                      preflight=not a.no_preflight, grace_s=a.grace, qualify_seeds=not a.no_seed_check,
-                     game_source=getattr(spec, "source_sha256", None))
-    calibration = None
-    if not a.no_calibrate:
-        calibration = calibrate(archive.root, system2=system2, system1=system1, game_factory=factory,
-                                game_kwargs=game_kwargs, seed=seeds_train[0])
+                     game_source=getattr(spec, "source_sha256", None), heldout_game_seeds=heldout_seeds)
+    # A calibration already measured for this archive is part of its task text: always reuse it (also
+    # with --no-calibrate), measure only for a new archive.
+    cal_path = archive.root / "calibration.json"
+    calibration = json.loads(cal_path.read_text()) if cal_path.exists() else None
+    if calibration is None and not a.no_calibrate and not (archive.root / "manifest.json").exists():
+        try:
+            calibration = calibrate(archive.root, system2=system2, system1=system1, game_factory=factory,
+                                    game_kwargs=game_kwargs, seed=seeds_train[0])
+        except ModelUnavailable as e:
+            print(f"calibration: model unavailable ({e}); rerun the same command once it is back", file=sys.stderr)
+            a.interrupted = f"model unavailable: {e}"
+            return None
     task = tier.task_md(game, budget, a.clock, game_kwargs, study=study, generality=heldout_game is not None,
                         deadline_s=budget.max_wall_s, memory_mode=a.memory_mode, calibration=calibration)
     loop = MetaHarnessLoop(
@@ -199,6 +228,9 @@ def _run_search(a: argparse.Namespace, game: str, tier_n: int, study: str, exp_d
     if best:
         print(f"best: {best.dir}")
     a.interrupted = loop.interrupted
+    if loop.interrupted:
+        print(f"interrupted: rerun with --name {archive.root.name} --runs-dir {archive.root.parent} "
+              "(and the same settings) to resume", file=sys.stderr)
     return best
 
 
@@ -304,9 +336,10 @@ def cmd_eval(a: argparse.Namespace) -> int:
     _tier(a.tier)
     game = _resolve_game(a)
     budget = _episode_budget(a)
-    game_kwargs = json.loads(a.game_kwargs) if a.game_kwargs else {}
+    game_kwargs, declared = _game_setup(a, game)
+    seeds = _parse_seeds(a.seeds) if a.seeds is not None else list(declared.get("train") or [0, 1, 2])
     out = Path(a.out) if a.out else Path(a.runs_dir) / f"eval-{Path(a.harness).stem}-{time.strftime('%Y%m%d-%H%M%S')}"
-    res = evaluate_harness(a.harness, lambda **k: make_game(game, **k), _parse_seeds(a.seeds or "0,1,2"),
+    res = evaluate_harness(a.harness, lambda **k: make_game(game, **k), seeds,
                            system2=_system2(a.system2, a.effort), system1=_system1_for(a.system1, a.tier),
                            out_dir=out, clock_mode=a.clock, budget_per_episode=budget,
                            harness_timeout_s=budget.max_wall_s,

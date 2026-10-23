@@ -5,7 +5,7 @@ Game-agnostic: the options are game.action_spec.names with their descriptions.
 """
 from __future__ import annotations
 
-from metaharness.core.contract import BudgetExceeded
+from metaharness.core.contract import BudgetExceeded, ModelUnavailable
 from metaharness.models.jev import Choice
 
 
@@ -24,8 +24,8 @@ class Harness:
         while not ctx.done:
             try:
                 ans = ctx.decide(game.observe(), q)
-            except BudgetExceeded:
-                raise                      # budget or episode over: a normal end
+            except (BudgetExceeded, ModelUnavailable):
+                raise                      # budget or episode over (a normal end) / backend gone
             except (TimeoutError, RuntimeError):
                 ctx.wait_for_tick()        # a failed call: keep the current action
                 continue

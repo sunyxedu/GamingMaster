@@ -317,10 +317,15 @@ def test_virtual_background_calls_are_not_starved_and_deterministic(tmp_path):
 
 
 def test_preflight_of_the_reference_harness_is_deterministic(tmp_path):
-    verdicts = [preflight_harness(BASELINES / "tier2_reference.py", lambda **k: SnakeGame(**k), seed=s)
-                for s in range(6)]
-    assert all(v["ok"] for v in verdicts), [v["error"] for v in verdicts if not v["ok"]]
-    assert all(v["coverage"]["system1_answers"] > 0 for v in verdicts)
+    # the reference harness keeps a background Astra replan in flight: verdicts used to flip
+    for seed in range(4):
+        runs = [preflight_harness(BASELINES / "tier2_reference.py", lambda **k: SnakeGame(**k), seed=seed)
+                for _ in range(3)]
+        assert all(v["ok"] for v in runs), [v["error"] for v in runs if not v["ok"]]
+        keys = {(v["score"], v["steps"], v["system1_calls"], v["system2_calls"], v["coverage"]["acts"])
+                for v in runs}
+        assert len(keys) == 1, (seed, keys)
+        assert runs[0]["coverage"]["system1_answers"] > 0
 
 
 class EndlessGame:
@@ -362,3 +367,179 @@ def test_live_action_spec_is_visible_to_the_harness(tmp_path):
     view = _GameView(g, threading.Event())
     g.action_spec = ActionSpec(names=["1", "2"])
     assert list(view.action_spec.names) == ["1", "2"]
+
+
+class HangingStep(CounterGame):
+    def step(self, action):
+        if self.score >= 2:
+            time.sleep(3600)               # a stalled server: the call never returns
+        return super().step(action)
+
+
+class HangingTick(EndlessGame):
+    tick_s = 0.05
+
+    def tick(self, action):
+        if self.ticks >= 5:
+            time.sleep(3600)
+        super().tick(action)
+
+
+LOOP_ACT = '''
+def build(ctx):
+    class H:
+        def run_episode(self, game):
+            while not ctx.done:
+                ctx.act(1 if game.action_spec.names[0] == "1" else "a")
+                ctx.wait_for_tick()
+    return H()
+'''
+
+
+def test_a_hung_game_call_ends_the_episode_instead_of_hanging_the_evaluator(tmp_path):
+    p = _write(tmp_path, "h.py", LOOP_ACT)
+    for game in (HangingStep, HangingTick):
+        t0 = time.monotonic()
+        r = evaluate_harness(p, game, [0], system2=None, system1=None, clock_mode="wall",
+                             budget_per_episode=Budget(max_wall_s=1.0), harness_timeout_s=1.0, grace_s=0.5)
+        ep = r.episodes[0]
+        assert ep.ended_by == "game_error" and "game hung" in ep.error, (game.__name__, ep.error)
+        assert time.monotonic() - t0 < 6, game.__name__
+    t0 = time.monotonic()
+    rep = preflight_harness(p, HangingTick, timeout_s=1.0)
+    assert not rep["ok"] and "game hung" in rep["error"] and time.monotonic() - t0 < 10
+
+
+def test_a_timeout_clamped_to_the_deadline_is_a_deadline_end(tmp_path):
+    from metaharness.models.base import ModelTimeout
+
+    class SlowCLI(ScriptedSystem2):
+        def run(self, prompt, *, timeout_s=600.0, **kw):
+            time.sleep(timeout_s)
+            raise ModelTimeout(f"exceeded {timeout_s}s")
+
+    p = _write(tmp_path, "h.py", ACT_THEN_THINK)
+    for _ in range(3):
+        r = evaluate_harness(p, CounterGame, [0], system2=SlowCLI(), system1=None, clock_mode="wall",
+                             budget_per_episode=Budget(max_wall_s=0.5), harness_timeout_s=0.5, grace_s=2)
+        ep = r.episodes[0]
+        assert ep.error is None and ep.ended_by == "deadline" and ep.score == 1, ep.error
+
+
+NESTED = '''
+def build(ctx):
+    class H:
+        def run_episode(self, game):
+            def inner():
+                return ctx.think("inner").text
+            def outer():
+                return ctx.spawn(inner).result()       # a worker waiting on another worker
+            out = ctx.spawn(outer)
+            out.result()
+            ctx.act("keep")
+    return H()
+'''
+
+
+def test_virtual_clock_handles_nested_spawned_futures(tmp_path):
+    p = _write(tmp_path, "h.py", NESTED)
+    t0 = time.monotonic()
+    r = evaluate_harness(p, lambda **k: SnakeGame(width=40, max_ticks=100, **k), [0],
+                         system2=ScriptedSystem2(latency_s=2.0), system1=None, clock_mode="virtual",
+                         harness_timeout_s=20)
+    ep = r.episodes[0]
+    assert ep.error is None and ep.system2_calls == 1 and time.monotonic() - t0 < 3
+    assert ep.steps >= 8                    # the 2 s call let the game tick 8 times
+
+
+def test_unavailable_backend_ends_the_episode_at_once(tmp_path):
+    from metaharness.models.base import ModelUnavailable
+
+    class Dead(ScriptedSystem2):
+        def run(self, *a, **k):
+            raise ModelUnavailable("usage limit")
+
+    p = _write(tmp_path, "h.py", '''
+def build(ctx):
+    class H:
+        def run_episode(self, game):
+            while not ctx.done:
+                try:
+                    ctx.think("plan")
+                except Exception:
+                    pass                      # a careless harness swallows everything
+    return H()
+''')
+    t0 = time.monotonic()
+    r = evaluate_harness(p, CounterGame, [0, 1], system2=Dead(), system1=None, clock_mode="wall",
+                         harness_timeout_s=30)
+    assert r.fatal == "model unavailable: usage limit" and time.monotonic() - t0 < 3
+
+
+def test_decide_rejects_non_json_state_like_the_live_api(tmp_path):
+    p = _write(tmp_path, "h.py", '''
+def build(ctx):
+    class H:
+        def run_episode(self, game):
+            ctx.decide({"obs": object()}, {"m": {"type": "choice", "instructions": "q", "criteria": {"a": ""}}})
+    return H()
+''')
+    rep = preflight_harness(p, lambda **k: SnakeGame(**k), tier2=True)
+    assert not rep["ok"] and "strict-JSON" in rep["error"] and rep["system1_calls"] == 0
+
+
+def test_spawned_system1_call_longer_than_grace_is_not_an_error(tmp_path):
+    from metaharness.models.mock import HeuristicSystem1
+
+    class SlowJev(HeuristicSystem1):
+        def decide(self, state, questions, *, timeout_s=5.0, trace=None):
+            time.sleep(1.5)                  # an HTTP call: not cancellable, ends within its timeout
+            return super().decide(state, questions, timeout_s=timeout_s, trace=trace)
+
+    p = _write(tmp_path, "h.py", '''
+def build(ctx):
+    class H:
+        def run_episode(self, game):
+            ctx.spawn(lambda: ctx.decide({"x": 1}, {"m": {"type": "noul", "instructions": "q"}}, timeout_s=3))
+            ctx.act(1)
+    return H()
+''')
+    r = evaluate_harness(p, CounterGame, [0], system2=None, system1=SlowJev(), clock_mode="wall", grace_s=0.3)
+    assert r.episodes[0].error is None, r.episodes[0].error
+
+
+def test_invalid_trial_that_also_raised_is_replayed(tmp_path):
+    made = []
+
+    class Breaks(CounterGame):
+        def __init__(self):
+            made.append(1)
+            self.bad = len(made) == 1
+
+        def step(self, action):
+            if self.bad:
+                raise ConnectionError("bridge dropped")
+            return super().step(action)
+
+        def info(self):
+            return {"valid_trial": not self.bad, "invalid_reason": "bridge dropped"}
+
+    p = _write(tmp_path, "h.py", "def build(ctx):\n    class H:\n        def run_episode(self, game):\n"
+                                 "            ctx.act(1)\n    return H()\n")
+    r = evaluate_harness(p, Breaks, [0], system2=None, system1=None, clock_mode="virtual")
+    assert r.episodes[0].error is None and len(r.metadata["invalid_trials"]) == 1
+
+
+def test_shared_memory_with_a_non_copyable_value_does_not_crash(tmp_path):
+    p = _write(tmp_path, "h.py", '''
+import threading
+def build(ctx):
+    class H:
+        def run_episode(self, game):
+            ctx.memory["lock"] = threading.Lock()
+            ctx.act(1)
+    return H()
+''')
+    r = evaluate_harness(p, CounterGame, [0, 1], system2=None, system1=None, clock_mode="virtual",
+                         memory_mode="shared")
+    assert r.fatal is None and len(r.episodes) == 2 and r.metadata["memory_resets"]

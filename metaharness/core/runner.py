@@ -97,6 +97,11 @@ def _tb(e: BaseException, limit: int) -> str:
     return "".join(traceback.format_exception(type(e), e, e.__traceback__))[-limit:]
 
 
+def _last_line(text: str, limit: int = 200) -> str:
+    lines = [ln.strip() for ln in str(text).splitlines() if ln.strip()]
+    return (lines[-1] if lines else "")[:limit]
+
+
 def _obs_text(obs: Any, cap: int) -> str:
     try:
         s = json.dumps(obs, default=str, separators=(",", ":"))
@@ -171,11 +176,13 @@ class _GameView:
 
     @property
     def action_spec(self) -> Any:      # live: an adaptor may change its legal actions during play
-        return self._g.action_spec
+        with self._lock:
+            return self._g.action_spec
 
     @property
     def tick_s(self) -> Optional[float]:
-        return getattr(self._g, "tick_s", None)
+        with self._lock:
+            return getattr(self._g, "tick_s", None)
 
     def observe(self) -> Any:
         with self._lock:
@@ -275,6 +282,9 @@ def run_episode(
     capped = threading.Event()
     holder: dict[str, HarnessContext] = {}
     cancelled_calls = [0]
+    # tick count / end flag published by the ticker under tick_cv, so waiters never need the game
+    # lock while holding tick_cv (a hung tick() must not deadlock the evaluator)
+    published = {"ticks": 0, "over": False, "score": 0.0}
 
     # tracing hooks for latency (trace records carry latency_s)
     class _Tee(TraceSink):
@@ -359,11 +369,13 @@ def run_episode(
                 decided += 1
             else:
                 stale += 1
+            with tick_cv:
+                published.update(ticks=n, over=over, score=score)
+                tick_cv.notify_all()
             tee.write({"type": "tick", "tick": n, "action": a, "fresh": fresh, "score": score})
             if score != last_score[0] or over:
                 last_score[0] = score
                 _trace_observation(tick=n)
-            _wake_waiters()
             if over:
                 _game_over()
             return not over
@@ -421,6 +433,7 @@ def run_episode(
             except Exception as e:  # noqa: BLE001 — the game, not the harness, is broken
                 _game_failed("state read after a step", e)
                 return obs
+            published.update(ticks=steps, over=over, score=score)
             tee.write({"type": "step", "step": steps, "action": action, "score": score,
                        "obs": _obs_field(obs, STEP_OBS_CAP)})
             if over:
@@ -432,8 +445,9 @@ def run_episode(
                          act_fn=act_fn, observe_fn=view.observe, done_fn=lambda: view.done,
                          latency_override=latency_override,
                          tick_s=tick_s if realtime else None,
-                         ticks_fn=(lambda: view.ticks) if realtime else None,
-                         tick_cv=tick_cv if realtime else None)
+                         ticks_fn=(lambda: published["ticks"]) if realtime else None,
+                         tick_cv=tick_cv if realtime else None,
+                         tick_over_fn=lambda: published["over"] or stop.is_set())
     holder["ctx"] = ctx
     if isinstance(clock, VirtualClock):
         clock.on_event = lambda event, data: tee.write({"type": event, **data})
@@ -469,10 +483,10 @@ def run_episode(
         finished = done_flag.wait(max(0.0, deadline_s - budget.elapsed()))
         if not finished:
             ended_by = "deadline"
-            tee.write({"type": "deadline", "deadline_s": deadline_s, "grace_s": grace_s})
             stop.set()
-            ctx.begin_close("episode deadline")
+            ctx.begin_close("episode deadline")         # first: a call ending now must see the close
             _wake_waiters()
+            tee.write({"type": "deadline", "deadline_s": deadline_s, "grace_s": grace_s})
             finished = done_flag.wait(grace_s)
             if not finished:
                 err = (f"harness did not return within {grace_s:.1f}s after the episode deadline "
@@ -498,40 +512,52 @@ def run_episode(
         raise ctx.unavailable
     if pending and err is None:
         err = (f"{pending} ctx.spawn task(s) still running {grace_s:.0f}s after run_episode returned "
-               "(in-flight model calls are cancelled for you; other background work must stop when ctx.done)")
+               "(model calls are cancelled or end with their own timeout; other background work must "
+               "stop when ctx.done)")
     if game_errors:
         err = err or game_errors[0]
         ended_by = "game_error"
     game_done = False
-    try:
-        with lock:
-            score = float(game.score)
-            game_done = bool(game.done)
-            res.steps = int(getattr(game, "ticks", 0)) if realtime else steps
-        if not math.isfinite(score):
-            raise ValueError(f"the game reports a non-finite score {score!r}")
-        res.score = score
-    except Exception as e:  # noqa: BLE001
-        err = err or "game failed after the episode: " + _tb(e, 2000)
-        res.steps = res.steps or steps
+    # The game lock is free unless a call into the game never returned (a hung server): never wait
+    # for it unboundedly — record the hang and use what the ticker / steps published.
+    hung = not lock.acquire(timeout=2.0)          # a game call returns in well under that
+    if hung:
+        err = ("game hung: a call into the game (tick/step/observe) did not return, so neither the "
+               "harness nor the evaluator could use it" + (f" — also: {_last_line(err)}" if err else ""))
+        ended_by = "game_error"
+        res.score = float(published["score"]) if math.isfinite(float(published["score"])) else 0.0
+        res.steps = int(published["ticks"])
+        final_obs, game_done = "<game hung>", bool(published["over"])
+    else:
+        try:
+            try:
+                score = float(game.score)
+                game_done = bool(game.done)
+                res.steps = int(getattr(game, "ticks", 0)) if realtime else steps
+                if not math.isfinite(score):
+                    raise ValueError(f"the game reports a non-finite score {score!r}")
+                res.score = score
+            except Exception as e:  # noqa: BLE001
+                err = err or "game failed after the episode: " + _tb(e, 2000)
+                res.steps = res.steps or steps
+            try:
+                final_obs = game.observe()
+            except Exception as e:  # noqa: BLE001
+                final_obs = f"<observe() failed: {type(e).__name__}: {e}>"[:300]
+            try:
+                info = game.info()
+                # evaluator-only infrastructure signal; no other info() key is read (they can hold hidden rules)
+                if isinstance(info, dict) and info.get("valid_trial") is False:
+                    res.invalid = str(info.get("invalid_reason") or "the game reported an invalid trial")[:300]
+            except Exception:  # noqa: BLE001 — diagnostics are optional
+                pass
+        finally:
+            lock.release()
     if not ended_by:
         ended_by = ("game_done" if game_done else "virtual_cap" if capped.is_set() else
                     "harness_return" if done_flag.is_set() else "deadline")
     elif game_done and ended_by not in ("game_error", "harness_error"):
         ended_by = "game_done"
-    final_obs: Any = None
-    try:
-        final_obs = view.observe()
-    except Exception as e:  # noqa: BLE001
-        final_obs = f"<observe() failed: {type(e).__name__}: {e}>"[:300]
-    try:
-        with lock:
-            info = game.info()
-        # evaluator-only infrastructure signal; no other info() key is read (they can hold hidden rules)
-        if isinstance(info, dict) and info.get("valid_trial") is False:
-            res.invalid = str(info.get("invalid_reason") or "the game reported an invalid trial")[:300]
-    except Exception:  # noqa: BLE001 — diagnostics are optional
-        pass
     res.system1_calls = budget.system1_calls
     res.system2_calls = budget.system2_calls
     res.stale_ticks, res.decided_ticks = stale, decided
@@ -541,15 +567,12 @@ def run_episode(
     res.ended_by = ended_by
     res.final_observation = _obs_text(final_obs, EVAL_OBS_CAP)
     res.backends = {k: sorted(v) for k, v in backends.items() if v}
-    try:
-        res.info = view.info()
-    except Exception:  # noqa: BLE001
-        res.info = {}
+    res.info = {"score": res.score, "ticks": res.steps, "game_done": game_done}
     res.info.update({"pending_tasks": pending, "deadline_s": deadline_s, "harness_alive": th.is_alive(),
                      "cancelled_calls": cancelled_calls[0]})
     # Optional adaptor hook: a numeric breakdown of the score (e.g. progress vs survival) so
     # the proposer can see *where* points came from instead of one scalar. Public, not hidden state.
-    if hasattr(game, "score_breakdown"):
+    if hasattr(game, "score_breakdown") and not hung:
         try:
             with lock:
                 bd = game.score_breakdown()
@@ -563,13 +586,16 @@ def run_episode(
     return res
 
 
-def _copy_memory(memory: dict[str, Any]) -> dict[str, Any]:
-    """Deep copy of shared memory; a harness thread that outlived its deadline may still mutate it."""
+def _copy_memory(memory: dict[str, Any]) -> tuple[dict[str, Any], Optional[str]]:
+    """Deep copy of shared memory (a harness thread that outlived its deadline may still mutate it);
+    a value that cannot be deep-copied (a lock, a generator) falls back to a shallow copy."""
     for _ in range(3):
         try:
-            return copy.deepcopy(memory)
+            return copy.deepcopy(memory), None
         except RuntimeError:          # changed size during iteration
             time.sleep(0.01)
+        except Exception as e:  # noqa: BLE001
+            return dict(memory), f"shallow copy: a value cannot be deep-copied ({type(e).__name__}: {e})"[:300]
     raise RuntimeError("shared memory is still being modified by a previous episode's harness thread")
 
 
@@ -638,11 +664,13 @@ def evaluate_harness(
                     result.fatal = "load error: " + _tb(e, 3000)
                     break
             first = False
+            note = None
             try:
-                memory = _copy_memory(carried) if memory_mode == "shared" else {}
+                memory, note = _copy_memory(carried) if memory_mode == "shared" else ({}, None)
             except RuntimeError as e:   # the previous episode's harness never returned (already an error)
-                memory = {}
-                result.metadata.setdefault("memory_resets", []).append({"seed": seed, "reason": str(e)})
+                memory, note = {}, str(e)
+            if note:
+                result.metadata.setdefault("memory_resets", []).append({"seed": seed, "reason": note})
             trace_path = out_dir / f"trace_seed{seed}.jsonl" if out_dir else None
             trace = TraceSink(trace_path, append=False)
             budget = Budget(max_system2_calls=b.max_system2_calls, max_system1_calls=b.max_system1_calls,
@@ -680,7 +708,7 @@ def evaluate_harness(
                     unload_harness_module(module)
             if result.fatal or ep is None:
                 break
-            if ep.invalid and not ep.error and attempt < invalid_retries:
+            if ep.invalid and attempt < invalid_retries:     # the failure may have raised as well
                 # infrastructure failure the adaptor detected: replay the seed once on a fresh game
                 if trace_path and trace_path.exists():
                     trace_path.rename(trace_path.with_name(f"trace_seed{seed}.invalid{attempt}.jsonl"))

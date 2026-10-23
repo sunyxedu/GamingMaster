@@ -7,6 +7,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
 from ..games.base import close_game
@@ -41,18 +42,35 @@ class LoopConfig:
     grace_s: float = DEFAULT_GRACE_S
     qualify_seeds: bool = True                               # reset every seed once before evaluating
     game_source: Optional[str] = None                        # adaptor source hash, pinned by the manifest
+    heldout_game_seeds: Optional[list[int]] = None           # a held-out adaptor's own declared seeds
 
 
 def _unavailable(e: Optional[dict[str, Any]]) -> bool:
     return bool(e) and str(e.get("fatal") or "").startswith("model unavailable")
 
 
-def _counts_as_heldout(e: dict[str, Any]) -> bool:
-    """A held-out record exposed test information unless a model outage stopped it before any episode."""
-    return not (_unavailable(e) and not e.get("n_episodes"))
+_ENV_ERRORS = ("game reset failed", "game construction failed", "game hung", "invalid trial")
 
 
-_ENV_ERRORS = ("game reset failed", "game construction failed")
+def _env_failed(errors: list[str], n: int) -> bool:
+    """Every episode failed because of the game or its infrastructure, not the harness."""
+    return n > 0 and len(errors) == n and all(str(e).startswith(_ENV_ERRORS) for e in errors)
+
+
+def _interrupted(e: Optional[dict[str, Any]]) -> bool:
+    """An evaluation the search stopped on (model outage, game down): redone on resume."""
+    return _unavailable(e) or (bool(e) and _env_failed(e.get("errors") or [], e.get("n_episodes", 0)))
+
+
+def _heldout_exposed(d: Path) -> bool:
+    """A held-out stage counts as run (test information is in the archive) once any of its
+    episodes started — an eval.json with episodes, or any trace written — whatever stopped it."""
+    ej = d / "eval.json"
+    if ej.exists():
+        e = json.loads(ej.read_text() or "{}")
+        if e.get("n_episodes") or not _unavailable(e):
+            return True
+    return any(p.stat().st_size > 0 for p in d.glob("trace_seed*.jsonl"))
 
 
 @contextlib.contextmanager
@@ -63,11 +81,15 @@ def _archive_lock(root) -> Iterator[None]:
     except ImportError:            # not POSIX: no lock
         yield
         return
+    import errno
     fh = open(root / ".lock", "a+")
     try:
         try:
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        except OSError as e:
+            if e.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                raise RuntimeError(f"cannot lock the archive {root} ({e}); is it on a filesystem "
+                                   "without flock support?") from None
             raise RuntimeError(f"another Meta-Harness process is using the archive {root}") from None
         fh.seek(0)
         fh.truncate()
@@ -112,9 +134,12 @@ class MetaHarnessLoop:
         overlap = set(config.seeds_train) & set(config.seeds_heldout)
         if overlap:
             raise ValueError(f"train and held-out seeds overlap: {sorted(overlap)}")
-        if config.n_iterations and any(_counts_as_heldout(json.loads(p.read_text() or "{}"))
-                                       for p in archive.cand_dir.glob("*/heldout*/eval.json")):
+        if config.n_iterations and any(_heldout_exposed(d) for d in archive.cand_dir.glob("*/heldout*")
+                                       if d.is_dir()):
             raise ValueError("This archive contains held-out results; start a new search archive.")
+        # JSON-normalised (a tuple in an adaptor's EVAL_KWARGS would never equal its stored list)
+        game_kwargs = json.loads(json.dumps(game_kwargs, default=str))
+        self.game_kwargs = game_kwargs
         manifest = {
             "protocol_version": PROTOCOL_VERSION, "task": task_md, "seeds_train": config.seeds_train,
             "clock_mode": config.clock_mode, "latency_override": config.latency_override,
@@ -131,16 +156,17 @@ class MetaHarnessLoop:
         if config.game_source:
             manifest["game_source"] = config.game_source
         manifest_path = archive.root / "manifest.json"
+        scored = any(c.eval() is not None for c in archive.candidates())
         if manifest_path.exists():
             old = json.loads(manifest_path.read_text())
-            if old != manifest:
+            if old != manifest and scored:
                 changed = sorted(k for k in set(old) | set(manifest) if old.get(k) != manifest.get(k))
-                raise ValueError("Search configuration changed (" + ", ".join(changed)
-                                 + "); start a new archive (--name) to avoid mixing scores.")
-        elif any(c.eval() is not None for c in archive.candidates()):
+                raise ValueError(f"Search configuration changed ({', '.join(changed)}) for the archive "
+                                 f"{archive.root}: its scores were measured differently. Search in a new "
+                                 "archive (loop: another --name; run: move that search/ directory away).")
+        elif scored:
             raise ValueError("Legacy archive has no protocol manifest; start a new search archive.")
-        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-        self.archive.write_task(task_md)
+        self._manifest = manifest           # written by run() once the seeds are known to work
         self.log_path = archive.root / "loop.log"
 
     def _log(self, msg: str) -> None:
@@ -174,7 +200,7 @@ class MetaHarnessLoop:
         """Stop the search (resumable) on a model outage or when the game itself is down."""
         if res.fatal and res.fatal.startswith("model unavailable") and self.cfg.stop_on_model_unavailable:
             self.interrupted = res.fatal
-        elif res.episodes and all((e.error or "").startswith(_ENV_ERRORS) for e in res.episodes):
+        elif _env_failed([e.error or "" for e in res.episodes], len(res.episodes)):
             self.interrupted = "the game failed in every episode: " + (res.episodes[0].error or "")[:300]
         return self.interrupted is not None
 
@@ -212,7 +238,7 @@ class MetaHarnessLoop:
         if self.cfg.heldout_game:
             name = self.cfg.heldout_game
             groups.append(("heldout-game", lambda **k: make_game(name, **k), self.cfg.heldout_game_kwargs,
-                           self.cfg.seeds_heldout or self.cfg.seeds_train))
+                           self.cfg.heldout_game_seeds or self.cfg.seeds_heldout or self.cfg.seeds_train))
         key = {"groups": [[g[0], g[3]] for g in groups], "game_kwargs": self.game_kwargs,
                "heldout_game": self.cfg.heldout_game, "heldout_game_kwargs": self.cfg.heldout_game_kwargs,
                "game_source": self.cfg.game_source}
@@ -270,11 +296,15 @@ class MetaHarnessLoop:
     def _run(self) -> Optional[Candidate]:
         if self.cfg.qualify_seeds:
             self.qualify_seeds()
+        # Pinned only now: a refused seed (or an adaptor fix after it) must not lock the archive
+        # into a configuration that never produced a score.
+        (self.archive.root / "manifest.json").write_text(json.dumps(self._manifest, indent=2) + "\n")
+        self.archive.write_task(self.task_md)
         # evaluate unevaluated candidates first: seed baselines, a candidate whose evaluation was
         # interrupted by a model outage, or one written by a proposer that was stopped
         for c in self.archive.candidates():
             e = c.eval()
-            if not c.harness_path.exists() or (e is not None and not _unavailable(e)):
+            if not c.harness_path.exists() or (e is not None and not _interrupted(e)):
                 continue
             if e is not None:
                 c.eval_path.rename(c.dir / f"eval.interrupted-{int(time.time())}.json")
@@ -286,8 +316,14 @@ class MetaHarnessLoop:
                     break
             if self._stop_for(self.evaluate(c, self.cfg.seeds_train)):
                 break
+        # --iters is the number of proposals this archive should have: a resumed search runs the rest
         n = self.cfg.n_iterations
-        for it in range(n):
+        done = sum(1 for c in self.archive.candidates() if "-" not in c.dir.name
+                   and not str((c.eval() or {}).get("fatal") or "").startswith("proposer unavailable"))
+        if done and n:
+            self._log(f"the archive already holds {done} proposal(s); running {max(0, n - done)} more "
+                      f"to reach {n} (raise --iters for more)")
+        for it in range(done, n):
             if self.interrupted:
                 break
             self._log(f"iteration {it + 1}/{n}: proposing with {self.proposer.name}")
@@ -328,31 +364,44 @@ class MetaHarnessLoop:
         if self.interrupted:
             # no held-out evaluation: it would lock the archive against resuming the search
             self._log(f"search interrupted ({self.interrupted[:200]}); held-out evaluation skipped — "
-                      "rerun the same command to resume")
+                      f"rerun the same search on {self.archive.root} to resume")
             self.archive.write_leaderboard()
             return self.archive.best()
-        best = self.archive.best()
+        best = self.heldout_best()
         if best and self.cfg.seeds_heldout and self._heldout_needed(best, "heldout"):
             self._log(f"held-out seeds evaluation of {best.dir.name}")
-            self.evaluate(best, self.cfg.seeds_heldout, tag="heldout")
-        if best and self.cfg.heldout_game:
+            self._stop_for(self.evaluate(best, self.cfg.seeds_heldout, tag="heldout"))
+        if best and self.cfg.heldout_game and not self.interrupted:
             from ..games.registry import make_game
             tag = f"heldout-{self.cfg.heldout_game.replace('/', '_').replace(':', '_')}"
             if self._heldout_needed(best, tag):
                 self._log(f"held-out GAME evaluation of {best.dir.name} on {self.cfg.heldout_game}")
                 name = self.cfg.heldout_game
-                self.evaluate(best, self.cfg.seeds_heldout or self.cfg.seeds_train, tag=tag,
-                              game_factory=lambda **k: make_game(name, **k),
-                              game_kwargs=self.cfg.heldout_game_kwargs)
+                self._stop_for(self.evaluate(best, self.cfg.heldout_game_seeds or self.cfg.seeds_heldout
+                                             or self.cfg.seeds_train, tag=tag,
+                                             game_factory=lambda **k: make_game(name, **k),
+                                             game_kwargs=self.cfg.heldout_game_kwargs))
+        if self.interrupted:
+            self._log(f"held-out evaluation interrupted ({self.interrupted[:200]}); rerun the same search on "
+                      f"{self.archive.root} to complete it (the search itself stays closed)")
         self.archive.write_leaderboard()
         return best
 
+    def heldout_best(self) -> Optional[Candidate]:
+        """The candidate the held-out stage tests: once a held-out stage has started, always that one
+        (a later best — e.g. after an interrupted held-out run — must not re-roll the test)."""
+        for c in self.archive.candidates():
+            if any(_heldout_exposed(d) for d in c.dir.glob("heldout*") if d.is_dir()):
+                return c
+        return self.archive.best()
+
     def _heldout_needed(self, cand: Candidate, tag: str) -> bool:
-        """Held-out results are written once: re-running would let a test be re-rolled."""
+        """Held-out results are written once: re-running would let a test be re-rolled. A stage cut
+        short (model outage, killed process) is completed, never replaced by another candidate's."""
         p = cand.dir / tag / "eval.json"
         if not p.exists():
             return True
-        if _counts_as_heldout(json.loads(p.read_text() or "{}")):
-            self._log(f"{cand.dir.name}/{tag}: held-out result already recorded; not re-evaluated")
-            return False
-        return True
+        if _interrupted(json.loads(p.read_text() or "{}")):
+            return True
+        self._log(f"{cand.dir.name}/{tag}: held-out result already recorded; not re-evaluated")
+        return False

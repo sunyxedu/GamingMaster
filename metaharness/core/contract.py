@@ -50,11 +50,14 @@ What ctx calls raise (``from metaharness.core.contract import BudgetExceeded, Ep
     TimeoutError      the model call exceeded its timeout_s — a slow answer is a normal event
     RuntimeError      any other failed model call (bad response, transient backend error)
     BudgetExceeded    (a RuntimeError) a call budget is used up or the episode's wall-clock deadline
-                      has passed; .kind is "system2" | "system1" | "wall"
-    EpisodeOver       (a BudgetExceeded) the episode is over — the game ended, the deadline passed or
-                      the evaluator closed it — before or while the call ran
-    ModelUnavailable  the backend is out of quota or logged out; the run stops. The context records
-                      it even if the harness catches it, so ``except Exception`` around a call is safe.
+                      has passed (also when it passes during the call); .kind is "system2" |
+                      "system1" | "wall"
+    EpisodeOver       (a BudgetExceeded) the episode was closed (deadline, evaluator) before or while
+                      the call ran, or the game ended while a System-2 call was in flight
+    ModelUnavailable  the backend is out of quota or logged out; the run stops. The context records it
+                      even if the harness catches it (``ctx.done`` turns True and every later ctx call
+                      re-raises it), so ``except Exception`` around a call is safe.
+    TypeError         ctx.decide with a state or questions that are not strict JSON (objects, NaN)
     ctx.act on a turn game raises whatever the game raises for an illegal action (catch it to recover);
     in a real-time game an action that makes ``game.tick`` raise ends the episode as a game error.
 
@@ -65,8 +68,10 @@ How an episode ends — the score reached is always kept:
   passes: from then on ``ctx.done`` is True for the deadline and ctx calls raise ``BudgetExceeded``
   or ``EpisodeOver``. Letting that exception propagate out of ``run_episode`` is a normal end.
   After the deadline the harness has a short grace period to return.
-* Model calls still in flight when the game ends or the episode closes are cancelled (they raise
-  ``EpisodeOver``); a harness may return without joining its ``ctx.spawn`` futures.
+* System-2 (CLI) calls still in flight when the game ends or the episode closes are cancelled (they
+  raise ``EpisodeOver``); a System-1 call is short and ends within its own timeout. Calls made after
+  the game ended are still admitted (e.g. to record lessons in shared memory). A harness may return
+  without joining its ``ctx.spawn`` futures.
 
 A candidate is eligible for selection only if none of its training episodes ends with an *error*:
 any other exception escaping ``run_episode`` (e.g. a TimeoutError the harness did not catch), a
@@ -80,6 +85,7 @@ import concurrent.futures as cf
 import contextlib
 import importlib.util
 import itertools
+import json
 import sys
 import threading
 import time
@@ -217,6 +223,7 @@ class VirtualClock:
         self._advancing = False
         self._closed = False
         self._last_driver = time.monotonic()
+        self._last_change = time.monotonic()      # any task / waiter state change (progress)
         self.idle_s = idle_s
         self.handoff_s = handoff_s
 
@@ -234,6 +241,9 @@ class VirtualClock:
 
     def _running(self) -> int:
         return sum(t.state == "busy" for t in self._tasks)
+
+    def _touch(self) -> None:
+        self._last_change = time.monotonic()
 
     def _report(self, event: str, **data: Any) -> None:
         if self.on_event is not None:
@@ -262,6 +272,7 @@ class VirtualClock:
                     self._cv.acquire()
         finally:
             self._advancing = False
+            self._touch()
             self._cv.notify_all()
 
     def _release_due(self) -> None:
@@ -271,6 +282,7 @@ class VirtualClock:
                 self._released.add(wid)
                 if task is not None:
                     task.state = "busy"
+        self._touch()
         self._cv.notify_all()
 
     def _settle(self) -> None:
@@ -322,6 +334,7 @@ class VirtualClock:
         self._parked[wid] = (wake, task)
         if task is not None:
             task.state = "parked"
+        self._touch()
         self._cv.notify_all()                      # a settling driver may be waiting for us
         try:
             while wid not in self._released:
@@ -336,13 +349,21 @@ class VirtualClock:
 
     def _advance_for_waiting_driver(self) -> None:
         # called by a parked worker with the condition held
-        # queued tasks are ignored here: with every pool thread parked they could never start
-        if self._advancing or self._driver_charging or self._running() or not self._parked:
+        if self._advancing or self._driver_charging or not self._parked:
             return
         blocked = self._driver_blocked > 0
         idle = (not self._driver_in_call and time.monotonic() - self._last_driver >= self.idle_s)
         if not (blocked or idle):
             return
+        if self._running():
+            # A running worker may itself wait for a parked one (an Event, a lock held across a
+            # call, a nested future): once nothing has moved for handoff_s, stop waiting for it.
+            if time.monotonic() - self._last_change < self.handoff_s:
+                return
+            stuck = [t for t in self._tasks if t.state == "busy"]
+            for t in stuck:
+                t.state = "detached"
+            self._report("virtual_handoff_timeout", workers=len(stuck), handoff_s=self.handoff_s)
         wake = min(w for w, _ in self._parked.values())
         t0 = self._t
         self._advance_to(wake)
@@ -366,6 +387,7 @@ class VirtualClock:
         with self._cv:
             if task.state == "queued":
                 task.state = "busy"
+            self._touch()
             self._cv.notify_all()
 
     def task_finished(self, task: _Task) -> None:
@@ -373,7 +395,33 @@ class VirtualClock:
         with self._cv:
             task.state = "done"
             self._tasks.discard(task)
+            self._touch()
             self._cv.notify_all()
+
+    @contextlib.contextmanager
+    def waiting(self) -> Iterator[None]:
+        """The calling thread waits on a spawned future: the driver is blocked, a worker is not
+        running — either way parked workers may move time (nested spawns need no timeout)."""
+        if self._driver is not None and threading.get_ident() == self._driver:
+            with self.driver_blocked():
+                yield
+            return
+        task: Optional[_Task] = getattr(self._tls, "task", None)
+        if task is None:
+            yield
+            return
+        with self._cv:
+            if task.state == "busy":
+                task.state = "blocked"
+                self._touch()
+                self._cv.notify_all()
+        try:
+            yield
+        finally:
+            with self._cv:
+                if task.state == "blocked":
+                    task.state = "busy"
+                self._touch()
 
     @contextlib.contextmanager
     def driver_blocked(self) -> Iterator[None]:
@@ -421,8 +469,10 @@ class _SpawnFuture(cf.Future):
         super().__init__()
         self._clock = clock
 
+    thread: Optional[int] = None         # the worker thread, once it runs
+
     def _blocked(self):
-        return self._clock.driver_blocked() if isinstance(self._clock, VirtualClock) else contextlib.nullcontext()
+        return self._clock.waiting() if isinstance(self._clock, VirtualClock) else contextlib.nullcontext()
 
     def result(self, timeout: Optional[float] = None) -> Any:
         with self._blocked():
@@ -435,10 +485,12 @@ class _SpawnFuture(cf.Future):
 
 class _Call:
     """An in-flight model call; ``reason`` is set when the evaluator cancels it."""
-    __slots__ = ("reason",)
+    __slots__ = ("reason", "thread", "deadline")
 
-    def __init__(self) -> None:
+    def __init__(self, timeout_s: float) -> None:
         self.reason: Optional[str] = None
+        self.thread = threading.get_ident()
+        self.deadline = time.monotonic() + max(0.0, timeout_s)
 
 
 class HarnessContext:
@@ -460,10 +512,12 @@ class HarnessContext:
         act_overhead_s: float = 0.001,
         ticks_fn: Optional[Callable[[], int]] = None,
         tick_cv: Optional[threading.Condition] = None,
+        tick_over_fn: Optional[Callable[[], bool]] = None,
     ) -> None:
         self.tick_s = tick_s
-        self._ticks = ticks_fn
+        self._ticks = ticks_fn           # lock-free (published by the ticker): read while holding tick_cv
         self._tick_cv = tick_cv
+        self._tick_over = tick_over_fn
         self.act_overhead_s = act_overhead_s
         self.system2 = system2
         self.system1 = system1
@@ -476,14 +530,13 @@ class HarnessContext:
         self._observe = observe_fn
         self._done = done_fn
         self._latency_override = dict(latency_override or {})
-        self._pool = cf.ThreadPoolExecutor(max_workers=16, thread_name_prefix="harness")
         self._lock = threading.Lock()
         self._inflight: set[_Call] = set()
         self.last_system2: Optional[System2Result] = None
         self.errors: list[str] = []
         self.unavailable: Optional[ModelUnavailable] = None
         self._closed = threading.Event()
-        self._futures: list[tuple[_SpawnFuture, cf.Future]] = []
+        self._futures: list[_SpawnFuture] = []
         # Decision provenance (reported, never used for selection): how many posted
         # actions were preceded by a fresh System-1 / System-2 answer since the last act.
         self.acts = 0
@@ -519,8 +572,9 @@ class HarnessContext:
             # Wait on the tick counter, not the clock: right after a boundary whose tick is still
             # pending, sleeping to the next boundary would skip a whole decision window.
             target = self._ticks() + 1
-            with self._tick_cv:
-                self._tick_cv.wait_for(lambda: self._ticks() >= target or self.done,
+            over = self._tick_over or (lambda: False)
+            with self._tick_cv:       # never touch the game (its lock) while holding tick_cv
+                self._tick_cv.wait_for(lambda: self._ticks() >= target or self._closed.is_set() or over(),
                                        timeout=2 * self.tick_s + 0.05)
             return
         now = self.clock.now()
@@ -532,14 +586,16 @@ class HarnessContext:
 
     @property
     def done(self) -> bool:
-        return self._closed.is_set() or self._done()
+        return self._closed.is_set() or self.unavailable is not None or self._done()
 
     # -- models ---------------------------------------------------------
     @contextlib.contextmanager
-    def _call(self) -> Iterator[_Call]:
-        call = _Call()
+    def _call(self, timeout_s: float) -> Iterator[_Call]:
+        call = _Call(timeout_s)
         with self._lock:
             self._inflight.add(call)
+            if self._closed.is_set():          # registered just after begin_close cancelled the rest
+                call.reason = "episode closed"
         driver_call = self.clock.driver_call() if isinstance(self.clock, VirtualClock) else contextlib.nullcontext()
         try:
             with cancel_scope(lambda: call.reason), driver_call:
@@ -560,9 +616,10 @@ class HarnessContext:
         if self.clock.mode == "virtual":
             self.clock.charge(max(0.0, started + seconds - self.clock.now()))
 
-    def _model_call(self, kind: str, started: float, timeout_s: float, fn: Callable[[], Any]) -> Any:
+    def _model_call(self, kind: str, started: float, timeout_s: float, clamped: bool,
+                    fn: Callable[[], Any]) -> Any:
         t0 = time.monotonic()
-        with self._call() as call:
+        with self._call(timeout_s) as call:
             try:
                 out = fn()
             except ModelUnavailable as exc:
@@ -575,6 +632,9 @@ class HarnessContext:
                     raise EpisodeOver(f"{kind} call ended with the episode: {call.reason or exc}") from None
                 # a failed call takes time too (a timeout costs its timeout) — never free in virtual mode
                 self._charge_since(started, timeout_s if isinstance(exc, TimeoutError) else time.monotonic() - t0)
+                if isinstance(exc, TimeoutError) and (clamped or self.budget.remaining()["wall_s"] <= 0.05):
+                    # it ran into the episode deadline, not into its own timeout: a deadline end
+                    raise BudgetExceeded(f"the episode deadline passed during the {kind} call", kind="wall") from None
                 raise
         if self._closed.is_set():
             raise EpisodeOver(f"{kind} answer arrived after the episode closed")
@@ -586,13 +646,14 @@ class HarnessContext:
             raise RuntimeError("no System-2 model in this task")
         self._check_open()
         self.budget.reserve("system2")
-        timeout_s = min(timeout_s, self.budget.remaining()["wall_s"])
+        left = self.budget.remaining()["wall_s"]
+        clamped, timeout_s = timeout_s > left, min(timeout_s, left)
         started = self.clock.now()
         self.trace.write({"type": "model_request", "kind": "system2", "clock": started, "prompt": prompt,
                           "session_id": session_id, "timeout_s": timeout_s,
                           **({"images": [str(i) for i in images]} if images else {})})
         kw = {"images": images} if images else {}
-        res = self._model_call("system2", started, timeout_s, lambda: self.system2.run(
+        res = self._model_call("system2", started, timeout_s, clamped, lambda: self.system2.run(
             prompt, session_id=session_id, system=system, agentic=False, timeout_s=timeout_s,
             trace=self.trace, **kw))
         self._charge_since(started, self._latency_override.get("system2", res.latency_s))
@@ -604,15 +665,20 @@ class HarnessContext:
         if self.system1 is None:
             raise RuntimeError("no System-1 model in this task")
         self._check_open()
+        qjson = {key: value.to_json() if hasattr(value, "to_json") else value for key, value in questions.items()}
+        try:     # the API takes strict JSON; fail the same way with the stand-in (pre-flight) as live
+            json.dumps({"state": state, "questions": qjson}, allow_nan=False)
+        except (TypeError, ValueError) as e:
+            raise TypeError(f"ctx.decide needs strict-JSON state and questions (no objects, NaN or "
+                            f"Infinity): {e}") from None
         self.budget.reserve("system1")
-        timeout_s = min(timeout_s, self.budget.remaining()["wall_s"])
+        left = self.budget.remaining()["wall_s"]
+        clamped, timeout_s = timeout_s > left, min(timeout_s, left)
         started = self.clock.now()
         self.trace.write({"type": "model_request", "kind": "system1", "clock": started, "timeout_s": timeout_s,
-                          "state": state, "questions": {
-                              key: value.to_json() if hasattr(value, "to_json") else value
-                              for key, value in questions.items()}})
+                          "state": state, "questions": qjson})
         t0 = time.monotonic()
-        ans = self._model_call("system1", started, timeout_s, lambda: self.system1.decide(
+        ans = self._model_call("system1", started, timeout_s, clamped, lambda: self.system1.decide(
             state, questions, timeout_s=timeout_s, trace=self.trace))
         lat = time.monotonic() - t0
         self._charge_since(started, self._latency_override.get("system1", getattr(self.system1, "latency_s", lat)))
@@ -620,6 +686,8 @@ class HarnessContext:
         return ans
 
     def _check_open(self) -> None:
+        if self.unavailable is not None:
+            raise self.unavailable
         if self._closed.is_set():
             raise EpisodeOver("episode is closed")
 
@@ -632,6 +700,7 @@ class HarnessContext:
         def run() -> None:
             if task is not None:
                 vclock.task_started(task)
+            fut.thread = threading.get_ident()
             try:
                 if not fut.set_running_or_notify_cancel():
                     return
@@ -645,13 +714,16 @@ class HarnessContext:
                 if task is not None:
                     vclock.task_finished(task)
 
-        try:
-            inner = self._pool.submit(run)
-        except RuntimeError:             # pool already shut down: the episode is over
-            if task is not None:
-                vclock.task_finished(task)
-            raise EpisodeOver("episode is closed") from None
-        self._futures.append((fut, inner))
+        # one daemon thread per task: no queue (a queued task could wait forever behind parked ones)
+        # and a task that never ends cannot keep the evaluator process from exiting
+        th = threading.Thread(target=run, name=f"harness-spawn-{len(self._futures) + 1}", daemon=True)
+        with self._lock:
+            if self._closed.is_set():
+                if task is not None:
+                    vclock.task_finished(task)
+                raise EpisodeOver("episode is closed")
+            self._futures.append(fut)
+        th.start()
         return fut
 
     def log(self, *args: Any, **event: Any) -> None:
@@ -679,14 +751,20 @@ class HarnessContext:
         """End the episode and wait up to ``grace_s`` for spawned work; returns how many tasks
         are still running (an episode error)."""
         self.begin_close()
-        futs = [f for f, _ in self._futures]
+        with self._lock:
+            futs = list(self._futures)
         if grace_s > 0 and futs:
             cf.wait(futs, timeout=grace_s)
-        self._pool.shutdown(wait=False, cancel_futures=True)
-        for fut, inner in self._futures:
-            if inner.cancelled() and not fut.done():
-                fut.cancel()
-        return sum(not f.done() for f, _ in self._futures)
+            pending = [f for f in futs if not f.done()]
+            if pending:
+                # a task inside a model call that cannot be cancelled (an HTTP System-1 request)
+                # ends with that call's own timeout: wait for it instead of calling it unfinished
+                with self._lock:
+                    calls = {c.thread: c.deadline for c in self._inflight}
+                if all(f.thread in calls for f in pending):
+                    end = max(calls[f.thread] for f in pending)
+                    cf.wait(pending, timeout=min(60.0, max(0.0, end - time.monotonic())) + 0.5)
+        return sum(not f.done() for f in futs)
 
 
 class HarnessProgram(Protocol):

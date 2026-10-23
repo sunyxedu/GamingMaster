@@ -4,7 +4,7 @@ Game-agnostic (JSON observation, action names from the spec)."""
 from __future__ import annotations
 
 from metaharness.baselines._generic import obs_text, parse_action
-from metaharness.core.contract import BudgetExceeded
+from metaharness.core.contract import BudgetExceeded, ModelUnavailable
 
 
 class Harness:
@@ -23,8 +23,8 @@ class Harness:
                       "Reply with exactly one action name and nothing else.")
             try:
                 res = ctx.think(prompt, session_id=session)
-            except BudgetExceeded:
-                break                      # budget or episode over
+            except (BudgetExceeded, ModelUnavailable):
+                break                      # budget or episode over / backend gone: the run stops
             except (TimeoutError, RuntimeError):
                 continue                   # a failed call: ask again
             session = res.session_id

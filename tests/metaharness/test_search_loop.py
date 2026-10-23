@@ -160,3 +160,113 @@ def test_leaderboard_has_no_pseudo_games_and_explains_ineligibility(tmp_path):
     text = a.write_leaderboard()
     assert a.games() == ["snake"] and "selection (mean / worst" not in text
     assert "✗ fatal: load error: SyntaxError: bad" in text and "seed 0: 2.00 game_done 3s" in text
+
+
+def test_an_evaluation_cut_by_a_dead_game_is_redone_on_resume(tmp_path):
+    down = {"on": True}
+
+    class Flaky(SnakeGame):
+        def reset(self, seed):
+            if down["on"]:
+                raise ConnectionError("game server is down")
+            return super().reset(seed)
+
+    factory = lambda **k: Flaky(max_ticks=30, **k)          # noqa: E731
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(), factory=factory,
+                 qualify_seeds=False)
+    loop.run()
+    assert loop.interrupted and "game failed in every episode" in loop.interrupted
+    down["on"] = False
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(), factory=factory,
+                 qualify_seeds=False)
+    loop.run()
+    e = loop.archive.candidates()[0].eval()
+    assert loop.interrupted is None and e["errors"] == [] and e["n_episodes"] == 2
+
+
+def test_heldout_outage_is_completed_on_the_same_candidate(tmp_path):
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, system2=Quota(), heldout=(100, 101))
+    loop.archive.add_seed(BASE / "tier2_jev_only.py", label="tier2_jev_only_b")
+    best = loop.run()
+    assert loop.interrupted is None and best is not None
+    # the held-out stage of the selected candidate ran with a working player; now break it mid-way
+    held = best.dir / "heldout" / "eval.json"
+    e = json.loads(held.read_text())
+    e["fatal"], e["n_episodes"], e["episodes"] = "model unavailable: usage limit", 1, e["episodes"][:1]
+    held.write_text(json.dumps(e))
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(100, 101))
+    with pytest.raises(ValueError, match="held-out results"):           # exposed: no more search
+        _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=(100, 101))
+    assert loop.heldout_best().dir == best.dir
+    loop.run()
+    assert json.loads(held.read_text())["n_episodes"] == 2                # completed, same candidate
+
+
+def test_iters_counts_the_archive_proposals(tmp_path):
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=())
+    loop.run()
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=())
+    loop.run()
+    assert sum("-" not in c.dir.name for c in loop.archive.candidates()) == 1      # resumed: nothing left
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=2, heldout=())
+    loop.run()
+    assert sum("-" not in c.dir.name for c in loop.archive.candidates()) == 2
+
+
+def test_refused_seed_does_not_pin_the_archive(tmp_path):
+    class Picky(SnakeGame):
+        def reset(self, seed):
+            if seed == 1:
+                raise RuntimeError("seed 1 is not admissible")
+            return super().reset(seed)
+
+    def make(seeds):
+        archive = Archive(tmp_path / "a")
+        if not archive.candidates():
+            archive.add_seed(BASE / "tier2_jev_only.py", label="tier2_jev_only")
+        cfg = LoopConfig(n_iterations=0, seeds_train=seeds, seeds_heldout=[], clock_mode="virtual",
+                         budget=Budget(max_system2_calls=2, max_system1_calls=50, max_wall_s=30), harness_timeout_s=30)
+        return MetaHarnessLoop(archive=archive, game_factory=lambda **k: Picky(max_ticks=20, **k), game_kwargs={},
+                               task_md="task", contract_doc="c", proposer=scripted_proposer(tier2),
+                               system2=ScriptedSystem2(latency_s=0.5), system1=HeuristicSystem1(), config=cfg)
+
+    with pytest.raises(SeedRefused):
+        make([0, 1]).run()
+    make([0, 2]).run()                       # other seeds: accepted, the first manifest never pinned
+    assert json.loads((tmp_path / "a" / "manifest.json").read_text())["seeds_train"] == [0, 2]
+
+
+def test_tuple_game_kwargs_do_not_break_resume(tmp_path):
+    def make():
+        archive = Archive(tmp_path / "a")
+        if not archive.candidates():
+            archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+        cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[], clock_mode="virtual",
+                         budget=Budget(max_wall_s=30), harness_timeout_s=30)
+        return MetaHarnessLoop(archive=archive, game_factory=lambda **k: SnakeGame(max_ticks=10),
+                               game_kwargs={"size": (12, 12)}, task_md="task", contract_doc="c",
+                               proposer=scripted_proposer(tier2), system2=None, system1=HeuristicSystem1(),
+                               config=cfg)
+
+    make().run()
+    make().run()                              # the stored manifest has a list: still equal
+
+
+def test_heldout_adaptor_directory_brings_its_kwargs_and_seeds(tmp_path):
+    import argparse
+    from metaharness import cli
+    d = tmp_path / "held"
+    d.mkdir()
+    (d / "ADAPTOR.md").write_text("held-out adaptor")
+    (d / "game.py").write_text('''
+from metaharness.testbeds.lanerunner import LaneRunnerGame
+SEEDS = {"train": [1, 2], "heldout": [7, 8]}
+EVAL_KWARGS = {"max_ticks": 33}
+class Held(LaneRunnerGame):
+    name = "held"
+def make_game(**kw):
+    return Held(**kw)
+''')
+    a = argparse.Namespace(heldout_game=str(d), heldout_game_kwargs='{"density": 0.2}')
+    key, kwargs, seeds = cli._resolve_heldout_game(a)
+    assert kwargs == {"max_ticks": 33, "density": 0.2} and seeds == [7, 8]
