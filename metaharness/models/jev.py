@@ -17,6 +17,7 @@ working on this integration use the ``typesafe-ai`` skill / live docs.
 from __future__ import annotations
 
 import base64
+import contextlib
 import email.utils
 import http.client
 import json
@@ -24,6 +25,7 @@ import math
 import os
 import random
 import re
+import socket
 import ssl
 import threading
 import time
@@ -171,7 +173,8 @@ class JevClient:
     * One kept-alive connection per thread (one TCP + TLS handshake, not one per call). A kept-alive
       connection the server closed while idle fails on reuse and is replaced at once, without backoff.
     * ``timeout_s`` bounds the whole call — connect, send, every read and all backoff; running out
-      raises ``TimeoutError`` naming the last error. (DNS lookups cannot be bounded in the stdlib.)
+      raises ``TimeoutError`` naming the last error. The socket is shut down at the deadline, so a
+      response trickling in cannot outlast it. (DNS lookups cannot be bounded in the stdlib.)
     * 408 / 429 / 5xx (529 included) and transport errors are retried with exponential backoff +
       jitter inside that deadline; ``Retry-After`` (seconds or HTTP date) is honoured when it fits.
     * 401 / 402 / 403, and a 4xx (429 included, 422 not) whose body names billing / quota ->
@@ -184,8 +187,9 @@ class JevClient:
     * A body that is not JSON, or lacks a well-formed answer of the asked type for every question,
       is a traced ``RuntimeError`` — never a success with partial answers.
 
-    HTTPS proxies from the environment / system settings are used through a CONNECT tunnel, as
-    urllib did. ``model`` is required: model ids live in ``models.toml``.
+    The HTTPS proxy from the environment / system settings is used through a plaintext CONNECT
+    tunnel, as urllib did (http:// or https:// proxy URL; another scheme is a ``ValueError`` here).
+    ``model`` is required: model ids live in ``models.toml``.
     """
     name = "jev"
 
@@ -311,7 +315,8 @@ class JevClient:
             raise TimeoutError("deadline reached before connecting")
         conn = self._new_connection(remaining)
         try:
-            conn.connect()          # TCP (+ proxy CONNECT) + TLS handshake, bounded by the time left
+            with _CutOff(conn, deadline):     # TCP (+ proxy CONNECT) + TLS handshake, bounded by the time left
+                conn.connect()
         except BaseException:
             conn.close()
             raise
@@ -323,7 +328,8 @@ class JevClient:
     def _exchange(self, conn: http.client.HTTPConnection, data: bytes,
                   deadline: float) -> tuple[int, dict[str, str], bytes]:
         """Send and read the whole response (a kept-alive connection must be drained), every
-        socket operation limited to the time left of the call."""
+        socket operation limited to the time left of the call and the whole exchange cut off at
+        the deadline."""
         sock = conn.sock
 
         def left() -> float:
@@ -332,20 +338,21 @@ class JevClient:
                 raise TimeoutError("deadline reached")
             return remaining
 
-        sock.settimeout(left())
-        conn.request("POST", self._path, body=data, headers=self._headers)
-        sock.settimeout(left())
-        resp = conn.getresponse()
-        chunks: list[bytes] = []
-        while True:
+        with _CutOff(conn, deadline):
             sock.settimeout(left())
-            chunk = resp.read(65536)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        if resp.will_close:          # the server ends the connection after this response
-            self._drop(conn)
-        return resp.status, {k.lower(): v for k, v in resp.getheaders()}, b"".join(chunks)
+            conn.request("POST", self._path, body=data, headers=self._headers)
+            sock.settimeout(left())
+            resp = conn.getresponse()
+            chunks: list[bytes] = []
+            while True:
+                sock.settimeout(left())
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            if resp.will_close:          # the server ends the connection after this response
+                self._drop(conn)
+            return resp.status, {k.lower(): v for k, v in resp.getheaders()}, b"".join(chunks)
 
     def _drop(self, conn: http.client.HTTPConnection) -> None:
         conn.close()
@@ -411,6 +418,41 @@ class JevClient:
             trace.log_call(ModelCall("system1", "jev", t0, time.time() - t0, body, payload, ok=err is None, error=err))
 
 
+class _CutOff:
+    """Shuts a connection's socket down at the call's deadline. A socket timeout bounds each recv, not
+    the exchange: a response trickling in byte by byte kept a 1 s call alive for as long as it lasted.
+    Whatever the cut socket then raises, or the short read it causes, becomes a TimeoutError; the
+    caller drops the connection, never reused once cut."""
+
+    def __init__(self, conn: http.client.HTTPConnection, deadline: float) -> None:
+        self._conn = conn
+        self._lock = threading.Lock()
+        self._done = self.fired = False
+        self._timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._fire)
+        self._timer.daemon = True
+
+    def _fire(self) -> None:
+        with self._lock:          # never after __exit__: a returned connection stays usable
+            if self._done:
+                return
+            self.fired = True
+            sock = self._conn.sock          # None while the TCP connect runs (bounded by its own timeout)
+            if sock is not None:
+                with contextlib.suppress(OSError):
+                    sock.shutdown(socket.SHUT_RDWR)
+
+    def __enter__(self) -> "_CutOff":
+        self._timer.start()
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Optional[BaseException], tb: Any) -> None:
+        self._timer.cancel()
+        with self._lock:
+            self._done = True
+        if self.fired and (exc is None or isinstance(exc, Exception)):
+            raise TimeoutError("deadline reached: connection cut off") from exc
+
+
 def _backoff(attempt: int) -> float:
     """Exponential backoff with jitter: half of each step fixed, half random."""
     step = min(_BACKOFF_CAP_S, _BACKOFF_S * 2 ** (attempt - 1))
@@ -435,15 +477,21 @@ def _retry_after(value: Optional[str]) -> Optional[float]:
 
 
 def _https_proxy(host: str) -> Optional[tuple[str, int, dict[str, str]]]:
-    """The HTTP proxy urllib would tunnel ``host`` through (environment / system settings), if any."""
+    """The proxy urllib would tunnel ``host`` through (environment / system settings), if any.
+
+    As urllib: a plaintext CONNECT whether the proxy URL says http:// or https://, and port 443 when
+    it names none (urllib reached it with an HTTPSConnection). Any other scheme (socks5://, ...) is a
+    ValueError: urllib could not use it either, and connecting directly would bypass the proxy."""
     proxy = urllib.request.getproxies().get("https")
     if not proxy or urllib.request.proxy_bypass(host):
         return None
     parts = urllib.parse.urlsplit(proxy if "://" in proxy else f"http://{proxy}")
-    if parts.scheme != "http" or not parts.hostname:
-        return None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        # never the whole URL: it may carry credentials
+        raise ValueError(f"unsupported https proxy {parts.scheme}://{parts.hostname or ''}: Jev tunnels through "
+                         f"http:// or https:// proxies only; unset it or add {host} to no_proxy")
     headers: dict[str, str] = {}
     if parts.username:
         cred = f"{urllib.parse.unquote(parts.username)}:{urllib.parse.unquote(parts.password or '')}"
         headers["Proxy-Authorization"] = "Basic " + base64.b64encode(cred.encode()).decode("ascii")
-    return parts.hostname, parts.port or 8080, headers
+    return parts.hostname, 443 if parts.port is None else parts.port, headers

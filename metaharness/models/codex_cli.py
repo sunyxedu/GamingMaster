@@ -39,8 +39,11 @@ from .base import (
 
 # Matched only against what codex reported as errors (error / turn.failed events, stderr of a failed
 # process), never the answer: a reply that mentions "usage limit" or a timestamp holding 401 is not one.
+# Workspace credits and spend caps are usage limits too (0.160: "Your workspace is out of credits. Add
+# credits to continue.", "You hit your spend cap set in your workspace. ...").
 _USAGE_LIMIT_RE = re.compile(r"usage limit|insufficient_quota|purchase more credits|exceeded your current quota|"
-                             r"quota exceeded\. check your plan|upgrade to (?:plus|pro)\b", re.I)
+                             r"quota exceeded\. check your plan|upgrade to (?:plus|pro)\b|out of credits|spend cap",
+                             re.I)
 _AUTH_RE = re.compile(r"\b401\b|unauthorized|refresh token|sign in again|log ?in required|not logged in|"
                       r"not signed in|authentication required", re.I)
 # Tools an inference-only player must not have even if the user's config enables them: view_image
@@ -174,7 +177,11 @@ class CodexCLI:
                 err = f"timeout: codex exec exceeded {timeout_s:g}s (session {thread_id})"
                 self._trace(trace, t0, request, None, err)
                 raise ModelTimeout(err, session_id=thread_id) from e
-            except Exception as e:  # binary missing, cancelled with its episode, ...
+            except OSError as e:    # binary missing, E2BIG, ...: a failed call like any other, not a bare OSError
+                err = f"codex exec could not run: {type(e).__name__}: {e}"
+                self._trace(trace, t0, request, None, err)
+                raise RuntimeError(err) from e
+            except Exception as e:  # cancelled with its episode, ...
                 self._trace(trace, t0, request, None, f"{type(e).__name__}: {e}")
                 raise
             text = last_msg.read_text() if last_msg.exists() else ""

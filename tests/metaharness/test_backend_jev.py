@@ -3,9 +3,12 @@ Retry-After, throttling persistence and strict response checks (no network beyon
 from __future__ import annotations
 
 import email.utils
+import http.client
 import json
+import socket
 import threading
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,6 +32,7 @@ class Reply:
     body: Any = field(default_factory=lambda: OK)
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0.0
+    trickle: float = 0.0        # seconds between body bytes (0: the body in one write)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -56,7 +60,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        if not reply.trickle:
+            self.wfile.write(data)
+            return
+        for i in range(len(data)):      # until done, or the client hangs up
+            self.wfile.write(data[i:i + 1])
+            time.sleep(reply.trickle)
 
     def log_message(self, *args: Any) -> None:
         pass
@@ -201,6 +210,49 @@ def test_jev_whole_call_obeys_one_deadline(jev_server, make_client):
     assert time.monotonic() - t0 < 1.5
 
 
+def test_jev_deadline_holds_against_a_trickling_response(jev_server, make_client):
+    """A socket timeout bounds each recv: a body arriving a byte every 50 ms (~10 s in all) kept a 1 s
+    call alive until its end. The connection cut at the deadline is dropped; the next call reconnects."""
+    jev_server.default = Reply(trickle=0.05)
+    c = make_client()
+    t0 = time.monotonic()
+    with pytest.raises(TimeoutError, match=r"deadline \(1s\) exceeded.*cut off"):
+        c.decide({}, Q, timeout_s=1)
+    assert time.monotonic() - t0 < 1.5
+    assert getattr(c._local, "conn", None) is None
+    jev_server.default = Reply()
+    assert c.decide({}, Q)["move"].value == "up" and jev_server.connections == 2
+
+
+def test_jev_deadline_holds_against_a_trickling_proxy(monkeypatch):
+    """Connecting is cut off too: here a proxy answers CONNECT a byte every 50 ms (~2 s in all)."""
+    listener = socket.create_server(("127.0.0.1", 0))
+
+    def proxy() -> None:
+        conn, _ = listener.accept()
+        with conn:
+            conn.recv(65536)
+            for byte in b"HTTP/1.1 200 Connection established\r\n\r\n":
+                try:
+                    conn.sendall(bytes([byte]))
+                except OSError:
+                    return
+                time.sleep(0.05)
+    threading.Thread(target=proxy, daemon=True).start()
+    monkeypatch.setattr(jev_mod.urllib.request, "getproxies",
+                        lambda: {"https": f"http://127.0.0.1:{listener.getsockname()[1]}"})
+    monkeypatch.setattr(jev_mod.urllib.request, "proxy_bypass", lambda host: False)
+    c = JevClient(api_key="k", model="m", url="https://jev.invalid/v1/systemone")    # never resolved here
+    t0 = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError, match=r"deadline \(1s\) exceeded.*cut off"):
+            c.decide({}, Q, timeout_s=1)
+        assert time.monotonic() - t0 < 1.5 and getattr(c._local, "conn", None) is None
+    finally:
+        c.close()
+        listener.close()
+
+
 def test_jev_deadline_names_the_last_error(jev_server, make_client):
     jev_server.default = Reply(503, {"detail": "maintenance"})
     tr = TraceSink()
@@ -330,3 +382,46 @@ def test_jev_uses_the_https_proxy_urllib_would(monkeypatch):
     monkeypatch.setattr(jev_mod.urllib.request, "proxy_bypass", lambda host: True)
     direct = JevClient(api_key="k", model="m")._new_connection(1.0)
     assert direct.host == "api.typesafe.ai" and direct._tunnel_host is None
+
+
+def _urllib_route(monkeypatch, proxy: str) -> tuple[str, int, str, int]:
+    """Where urllib itself sends an HTTPS request through ``proxy`` (its connect stubbed: no network)."""
+    seen: list[tuple[str, int, str, int]] = []
+
+    def connect(conn: http.client.HTTPSConnection) -> None:
+        seen.append((conn.host, conn.port, conn._tunnel_host, conn._tunnel_port))
+        raise OSError("not connecting")
+    with monkeypatch.context() as m:
+        m.setattr(http.client.HTTPSConnection, "connect", connect)
+        with pytest.raises(OSError):
+            urllib.request.build_opener(urllib.request.ProxyHandler({"https": proxy})).open(jev_mod.JEV_URL, timeout=1)
+    return seen[-1]
+
+
+@pytest.mark.parametrize("proxy,host,port", [
+    ("http://proxy.local:3128", "proxy.local", 3128),
+    ("https://proxy.local:3129", "proxy.local", 3129),     # urllib sent a plaintext CONNECT to it all the same
+    ("http://proxy.local", "proxy.local", 443),            # no port: 443, urllib's HTTPSConnection default
+    ("https://proxy.local", "proxy.local", 443),
+    ("proxy.local:3130", "proxy.local", 3130),
+    ("http://[::1]:3131", "::1", 3131),
+])
+def test_jev_tunnels_where_urllib_did(monkeypatch, proxy, host, port):
+    monkeypatch.setattr(jev_mod.urllib.request, "proxy_bypass", lambda host: False)
+    monkeypatch.setattr(jev_mod.urllib.request, "getproxies", lambda: {"https": proxy})
+    conn = JevClient(api_key="k", model="m")._new_connection(1.0)      # not connected
+    route = (conn.host, conn.port, conn._tunnel_host, conn._tunnel_port)
+    assert isinstance(conn, http.client.HTTPSConnection)
+    assert route == (host, port, "api.typesafe.ai", 443) == _urllib_route(monkeypatch, proxy)
+
+
+@pytest.mark.parametrize("proxy", ["socks5://proxy.local:1080", "socks5h://user:s3cret@proxy.local",
+                                   "ftp://proxy.local"])
+def test_jev_refuses_a_proxy_it_cannot_tunnel_through(monkeypatch, proxy):
+    monkeypatch.setattr(jev_mod.urllib.request, "getproxies", lambda: {"https": proxy})
+    monkeypatch.setattr(jev_mod.urllib.request, "proxy_bypass", lambda host: False)
+    with pytest.raises(ValueError, match="unsupported https proxy .*proxy.local") as ei:
+        JevClient(api_key="k", model="m")              # never a silent direct connection
+    assert "s3cret" not in str(ei.value)
+    monkeypatch.setattr(jev_mod.urllib.request, "proxy_bypass", lambda host: True)
+    assert JevClient(api_key="k", model="m")._proxy is None     # bypassed for this host: not used, no error
