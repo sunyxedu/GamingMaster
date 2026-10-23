@@ -44,7 +44,10 @@ def register_adaptor(path: Path | str, name: str | None = None, *, kwargs: dict[
     The test beds are registered first (registering them later used to replace an adaptor named
     ``snake`` on the first ``make_game``). A name held by a different game — a test bed or another
     adaptor directory — gives ``adaptor:<name>`` (then ``adaptor:<name>:2``, ...); registering the
-    same directory again reuses its key. ``kwargs`` go to the probe instance (see ``load_adaptor``)."""
+    same directory again reuses its key. ``kwargs`` go to the probe instance (see ``load_adaptor``).
+    The registered factory is the spec's ``make_game``: it re-activates the adaptor before every
+    construction (its directory first on sys.path, other directories' same-named modules out of the
+    way), so two adaptors with a same-named helper module each import their own."""
     from .adaptor import load_adaptor
     _populate()
     spec = load_adaptor(path, kwargs=kwargs)

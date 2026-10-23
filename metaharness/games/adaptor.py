@@ -60,6 +60,7 @@ changed no code file. Warnings (``[!]``) do not fail it.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib
 import importlib.util
@@ -136,20 +137,32 @@ def _module_paths(mod: Any) -> list[str]:
     return paths
 
 
-def _forget_modules(path: Path) -> None:
+_PARKED: dict[str, dict[str, Any]] = {}       # loaded adaptor root -> its modules another adaptor evicted
+
+
+def _forget_modules(path: Path, *, own: bool = True) -> None:
     """Drop cached imports that would shadow this adaptor directory's modules on (re)load.
 
     A long-lived process validates after every adapt attempt: r7's game.py imports scoring.py,
     and the agent's fix to scoring.py stayed invisible because ``scoring`` was still cached; a
     same-named module of another adaptor directory would shadow it the same way. Evicts modules
     loaded from this directory and modules named after its ``*.py`` files / packages that come
-    from elsewhere. Built-in, standard-library, installed and metaharness modules are never touched."""
+    from elsewhere. Built-in, standard-library, installed and metaharness modules are never touched.
+    ``own=False`` (``_activate``, before every construction) keeps this directory's modules. Evicted
+    modules of another loaded adaptor are parked and put back by its next activation: its lazy
+    imports then get the modules its game.py imported, not a re-executed second copy."""
     root = str(path) + os.sep
-    local = {p.stem for p in path.glob("*.py")} | {p.name for p in path.iterdir() if (p / "__init__.py").is_file()}
+    try:
+        local = {p.stem for p in path.glob("*.py")}
+        local |= {p.name for p in path.iterdir() if (p / "__init__.py").is_file()}
+    except OSError:                                    # the directory is gone: nothing of it to shadow
+        local = set()
     protected = set(sys.builtin_module_names) | set(getattr(sys, "stdlib_module_names", ()))
     libs = _lib_roots()
     for name, mod in list(sys.modules.items()):
         top = name.partition(".")[0]
+        if not (own or top in local):
+            continue
         paths = _module_paths(mod)
         if not paths or top in protected or top == "metaharness" or name == "__main__":
             continue
@@ -158,8 +171,43 @@ def _forget_modules(path: Path) -> None:
             where += [os.path.realpath(p) for p in paths]
         if any(p.startswith(libs) for p in where):
             continue
-        if top in local or any(p.startswith(root) for p in where):
+        mine = any(p.startswith(root) for p in where)
+        if mine and own:
             del sys.modules[name]
+        elif top in local and not mine:
+            del sys.modules[name]
+            owner = max((r for r in _PARKED if any(p.startswith(r) for p in where)), key=len, default="")
+            if owner:
+                _PARKED[owner][name] = mod
+    parked = _PARKED.pop(root, {})
+    _PARKED[root] = {}                                 # a loaded adaptor: its evicted modules get parked
+    if not own:                                        # (a reload drops them instead: stale)
+        for name, mod in parked.items():
+            sys.modules.setdefault(name, mod)
+
+
+def _activate(path: Path, *, fresh: bool = False) -> None:
+    """Point sibling imports at this adaptor directory: evict what would shadow its modules
+    (``_forget_modules``; ``fresh``: its own cached ones too), put it first on sys.path and drop
+    the finders' directory caches (helper files added since the last import)."""
+    _forget_modules(path, own=fresh)
+    if str(path) in sys.path:                          # sibling helper modules, also imported lazily:
+        sys.path.remove(str(path))                     # this directory ahead of other adaptors'
+    sys.path.insert(0, str(path))
+    importlib.invalidate_caches()
+
+
+def _activating(path: Path, make_game: Callable[..., Any]) -> Callable[..., Any]:
+    """``make_game`` that activates its adaptor before every construction. Loading a second adaptor
+    (``loop --adaptor A --heldout-game B``, both with a bridge.py) evicts A's same-named helpers
+    and puts B first on sys.path; without this, A's lazy imports — in make_game or while playing —
+    ran B's helper. The evaluator constructs one game at a time, so imports while playing resolve
+    to the adaptor of the game being played."""
+    @functools.wraps(make_game)
+    def activated(**kwargs: Any) -> Any:
+        _activate(path)
+        return make_game(**kwargs)
+    return activated
 
 
 def _seed_list(value: Any, key: str) -> list[int]:
@@ -267,21 +315,18 @@ def source_sha256(path: Path | str) -> str:
 
 def load_adaptor(path: Path | str, *, kwargs: dict[str, Any] | None = None) -> AdaptorSpec:
     """Import ``<path>/game.py`` afresh and read its declarations; one probe instance (EVAL_KWARGS
-    updated by ``kwargs``) tells the kind and name and is closed again. Raises on any failure
+    updated by ``kwargs``) tells the kind and name and is closed again. The spec's ``make_game``
+    activates the adaptor before every construction (``_activating``). Raises on any failure
     (``DeclarationError`` for malformed SEEDS / EVAL_KWARGS)."""
     path = Path(path).resolve()
     missing = [f for f in REQUIRED_FILES if not (path / f).exists()]
     if missing:
         raise FileNotFoundError(f"adaptor at {path} is missing {missing}")
-    _forget_modules(path)
-    importlib.invalidate_caches()                      # helper files the agent added since the last load
+    _activate(path, fresh=True)
     mod_name = f"_adaptor_{abs(hash(str(path)))}_{int(time.time() * 1000)}"
     spec = importlib.util.spec_from_file_location(mod_name, path / "game.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    if str(path) in sys.path:                          # sibling helper modules, also imported lazily:
-        sys.path.remove(str(path))                     # this directory ahead of other adaptors'
-    sys.path.insert(0, str(path))
     sys.modules[mod_name] = module
     try:
         spec.loader.exec_module(module)
@@ -292,14 +337,15 @@ def load_adaptor(path: Path | str, *, kwargs: dict[str, Any] | None = None) -> A
         raise ImportError("game.py must define make_game(**kwargs)")
     seeds = _declared_seeds(module)
     eval_kwargs = _declared_eval_kwargs(module)
-    probe = module.make_game(**{**eval_kwargs, **(kwargs or {})})
+    make = _activating(path, module.make_game)
+    probe = make(**{**eval_kwargs, **(kwargs or {})})
     try:
         realtime = hasattr(probe, "tick")
         name = str(getattr(probe, "name", path.name))
     finally:
         close_game(probe)                              # it may own a server / emulator / connection
     tier = getattr(module, "TIER", 2 if realtime else 1)
-    return AdaptorSpec(path=path, name=name, tier=f"tier{int(tier)}", make_game=module.make_game,
+    return AdaptorSpec(path=path, name=name, tier=f"tier{int(tier)}", make_game=make,
                        realtime=realtime, deterministic=bool(getattr(module, "DETERMINISTIC", False)),
                        module=module, seeds=seeds, eval_kwargs=eval_kwargs, source_sha256=source_sha256(path))
 

@@ -1,7 +1,7 @@
 """Generated-adaptor plumbing: fresh loading (sibling helpers, declarations, probe close, source
 hash of the code only), the stricter validator (tier, post-action types, tick pace, malformed actions,
 fresh-instance determinism, SEEDS, close, code changed by running) and a registry that never lets a
-test bed replace an adaptor."""
+test bed replace an adaptor and keeps each adaptor on its own helper modules."""
 from __future__ import annotations
 
 import json
@@ -496,3 +496,58 @@ def test_register_adaptor_keeps_its_own_name(tmp_path, clean_registry):
     assert reg.GAMES[key][1] is reg.adaptor_spec(key).make_game and reg.game_tier(key) == "tier1"
     assert os.path.isdir(reg.adaptor_spec(key).path)
 
+
+# game.py of its own: the helper module is imported lazily, in make_game and while playing
+LAZY_GAME = textwrap.dedent('''
+    from countbase import TurnCount
+
+    TIER = 1
+
+
+    class Game(TurnCount):
+        def __init__(self, helper, **kw):
+            super().__init__(**kw)
+            self.made_with, self.played_with = helper, None
+            self.name = f"lazy-{helper.WHO}"
+
+        def step(self, action):
+            import mh_tst_lazy
+            self.played_with = mh_tst_lazy
+            return super().step(action)
+
+
+    def make_game(**kw):
+        import mh_tst_lazy
+        return Game(mh_tst_lazy, **kw)
+''')
+
+
+def test_adaptors_keep_their_own_helpers(tmp_path, clean_registry):
+    # loop --adaptor A --heldout-game B, both with a helper of the same name: registering B evicted
+    # A's helper and put B first on sys.path, so every later construction / lazy import of A ran B's
+    dirs = {who: write_adaptor(tmp_path / who, "", **{"game.py": LAZY_GAME, "mh_tst_lazy.py": f"WHO = {who!r}\n"})
+            for who in ("a", "b")}
+    keys = {who: clean_registry.register_adaptor(d) for who, d in dirs.items()}
+    assert keys == {"a": "lazy-a", "b": "lazy-b"}
+    first: dict[str, object] = {}
+
+    def play(who: str) -> str:
+        g = clean_registry.make_game(keys[who])
+        try:
+            g.reset(0)
+            g.step("inc")
+        finally:
+            g.close()
+        helper = first.setdefault(who, g.made_with)
+        assert g.made_with is g.played_with is helper, who          # the module it loaded, not a re-import
+        assert helper.__file__ == str(dirs[who].resolve() / "mh_tst_lazy.py")
+        return helper.WHO
+
+    try:
+        assert [play(w) for w in "abab"] == list("abab")
+        (dirs["a"] / "mh_tst_lazy.py").write_text("WHO = 'a2'  # the agent's fix\n")
+        keys["a"] = clean_registry.register_adaptor(dirs["a"])      # reloaded while b's helper is active
+        del first["a"]
+        assert [play(w) for w in "ba"] == ["b", "a2"]                # b's own module back; a's fresh one
+    finally:
+        sys.modules.pop("mh_tst_lazy", None)
