@@ -1057,3 +1057,24 @@ def test_train_il_game_fresh_on_converter_v1_shards(v3_shards, tmp_path, monkeyp
                      weights_only=False)["config"]
     assert (cfg["pokemon_move_head"], cfg["pokemon_field_features"],
             cfg["pokemon_move_vocab"]) == ("slot", 20, 0)
+
+
+def test_mon_oracle_reads_the_switch_request_data():
+    """env.vec_pokemon.mon_oracle / team_oracle: a Pokémon of a side's request as the privileged
+    critic's features (HP fraction, fainted, active, level, max HP, stats, status, tera); the
+    row's own side first, a side not known yet zeros."""
+    from env.vec_pokemon import MON_ORACLE, ORACLE_DIM, mon_oracle, team_oracle
+
+    p = {"ident": "p1: Pikachu", "details": "Pikachu, L88, M", "condition": "120/240 par", "active": True,
+         "stats": {"atk": 200, "def": 150, "spa": 250, "spd": 175, "spe": 300}, "terastallized": ""}
+    f = mon_oracle(p)
+    assert len(f) == MON_ORACLE
+    assert f[:10] == pytest.approx([0.5, 0.0, 1.0, 0.88, 0.48, 0.4, 0.3, 0.5, 0.35, 0.6])
+    assert f[10:] == [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]          # par, not terastallized
+    dead = mon_oracle({"details": "Mew", "condition": "0 fnt", "stats": {}, "terastallized": "Psychic"})
+    assert dead[:4] == [0.0, 1.0, 0.0, 1.0] and dead[16] == 1.0 and not any(dead[10:16])
+    o = team_oracle([p], None)
+    assert o.shape == (ORACLE_DIM,)
+    o = o.reshape(2, 6, MON_ORACLE)
+    assert o[0, 0].tolist() == pytest.approx(f) and not o[0, 1:].any() and not o[1].any()
+    assert team_oracle(None, [p]).reshape(2, 6, -1)[1, 0].tolist() == pytest.approx(f)

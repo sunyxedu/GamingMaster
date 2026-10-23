@@ -117,8 +117,42 @@ def test_il_then_rl_on_the_simulator(tmp_path, gmdata):  # noqa: F811
         "--envs", "pokemon=2", "--env_kw", "pokemon:format='gen9randombattle'",
         "--env_kw", f"pokemon:showdown_dir='{SHOWDOWN}'", "--epochs", "1", "--minibatches", "2",
         "--snapshot_dir", "memory", "--device", "cpu", "--seed", "1", "--iterations", "1",
-        "--save_dir", str(tmp_path / "rl")])
+        "--privileged_critic", "pokemon", "--save_dir", str(tmp_path / "rl")])
+    tr = res["trainer"]
+    assert tr.model["pokemon"].priv_value is not None
+    streams = tr.rl["pokemon"].streams
+    assert streams and streams[0].privileged["oracle"].shape[-1] == tr.rl["pokemon"].env.privileged_dim
     row = res["history"][-1]["games"]["pokemon"]
     assert row["tokens"] >= 1
     assert abs(row["canary_log_old_mu"]) < 1e-4 and abs(row["canary_log_ratio"]) < 1e-4
     assert np.isfinite(row["entropy"]) and np.isfinite(row["value_loss"])
+
+
+def test_privileged_oracle_is_both_real_teams():
+    """observe().privileged["oracle"]: on every active row the row's own team, then the foe's,
+    as the sides' requests have them (env.teams); zeros on the other rows; HP moves as the
+    battles go on."""
+    from env.vec_pokemon import ORACLE_DIM, PokemonVecEnv, team_oracle
+
+    env = PokemonVecEnv(4, format="gen9randombattle", seed=3, workers=1, showdown_dir=SHOWDOWN)
+    assert env.privileged_dim == ORACLE_DIM
+    gen = torch.Generator().manual_seed(0)
+    obs = env.observe()
+    damaged = checked = 0
+    for _ in range(40):
+        o = obs.privileged["oracle"]
+        assert o.shape == (env.num_rows, ORACLE_DIM)
+        for row in torch.nonzero(obs.active).flatten().tolist():
+            e, s = divmod(row, 2)
+            want = team_oracle(env.teams[e][s], env.teams[e][1 - s])
+            assert np.allclose(o[row].numpy(), want)
+            assert not np.allclose(want[:ORACLE_DIM // 2], want[ORACLE_DIM // 2:])   # two teams
+            hp = o[row].reshape(2, 6, -1)[:, :, 0]
+            damaged += int(((hp > 0) & (hp < 1)).any())
+            checked += 1
+        assert not o[~obs.active].any()
+        if bool(env.finished.all()):
+            break
+        obs, *_ = env.step(env.random_actions(obs, gen))
+    assert checked > 20 and damaged > 0
+    env.close()

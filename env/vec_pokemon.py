@@ -19,6 +19,9 @@ usable moves, trapping, tera, the switchable slots).
     legal   action_type [2] bool, move_id [V] bool, switch [6] bool, tera [] bool,
             active_idx [] long (state), move_ids [4] long (state)
     action  action_type [R] (0 move / 1 switch), move_id [R], switch_idx [R], tera [R]
+    privileged  oracle [R, 204] f32: both teams as they really are — every Pokémon of the
+            row's own side, then of the foe's, from the sides' requests (:func:`team_oracle`);
+            critic-only (train_rl_joint --privileged_critic pokemon), never the policy's input
 
 Formats: ``gen9randombattle`` (Showdown's generator deals the teams; no team preview: an own
 Pokémon enters the frame's slots when it first appears, so switching to an unrevealed one
@@ -76,6 +79,45 @@ def _phase(req: Mapping[str, Any]) -> str:
 
 def _nick(ident: str) -> str:
     return ident.split(": ", 1)[1] if ": " in ident else ident
+
+
+STATUSES = ("brn", "par", "slp", "frz", "psn", "tox")
+MON_ORACLE = 17
+ORACLE_DIM = SIDES * TEAM * MON_ORACLE
+
+
+def mon_oracle(p: Mapping[str, Any]) -> List[float]:
+    """One Pokémon of a side's request (``side.pokemon[k]``, Showdown's switch request data)
+    as the critic's features: HP fraction, fainted, active, level / 100, max HP / 500, the
+    five stats / 500, the status (one-hot), terastallized."""
+    cond = str(p.get("condition") or "0 fnt").split()
+    fainted = "fnt" in cond[1:] or cond[0] == "0"
+    cur, _, mx = cond[0].partition("/")
+    try:
+        hp, max_hp = float(cur), float(mx or 0.0)
+    except ValueError:
+        hp, max_hp = 0.0, 0.0
+    level = 100
+    for part in str(p.get("details") or "").split(", ")[1:]:
+        if part[:1] == "L" and part[1:].isdigit():
+            level = int(part[1:])
+    stats = p.get("stats") or {}
+    status = cond[1] if len(cond) > 1 and cond[1] != "fnt" else ""
+    return ([0.0 if fainted or max_hp <= 0 else hp / max_hp, float(fainted), float(bool(p.get("active"))),
+             level / 100.0, max_hp / 500.0]
+            + [float(stats.get(k, 0) or 0) / 500.0 for k in ("atk", "def", "spa", "spd", "spe")]
+            + [float(status == x) for x in STATUSES] + [float(bool(p.get("terastallized")))])
+
+
+def team_oracle(own: Optional[Sequence[Mapping[str, Any]]],
+                foe: Optional[Sequence[Mapping[str, Any]]]) -> np.ndarray:
+    """[ORACLE_DIM]: the row's own side's Pokémon (request order), then the foe's, each side
+    padded to six; a side not known yet is zeros."""
+    out = np.zeros((SIDES, TEAM, MON_ORACLE), dtype=np.float32)
+    for k, team in enumerate((own, foe)):
+        for j, p in enumerate(list(team or [])[:TEAM]):
+            out[k, j] = mon_oracle(p)
+    return out.reshape(-1)
 
 
 def _base_species(details: str) -> str:
@@ -204,6 +246,8 @@ class PokemonVecEnv(VecEnvBase):
         self._n = n
         self.logs: List[List[str]] = [[] for _ in range(n)]
         self.reqs: List[List[Optional[dict]]] = [[None, None] for _ in range(n)]
+        #: each side's latest team (its request's ``side.pokemon``; the privileged oracle)
+        self.teams: List[List[Optional[list]]] = [[None, None] for _ in range(n)]
         self.done = np.ones(n, dtype=bool)
         self.frames = np.zeros((n, SIDES), dtype=np.int64)
         self.fresh = np.zeros(n, dtype=bool)
@@ -229,6 +273,7 @@ class PokemonVecEnv(VecEnvBase):
                    "seed": [s & 0xFFFF, (s >> 16) & 0xFFFF, (s * 7 + 3) & 0xFFFF, (s * 13 + 5) & 0xFFFF], "teams": teams}
             by_worker.setdefault(i % len(self._workers), []).append((i, cmd))
             self.logs[i] = []
+            self.teams[i] = [None, None]
             self.done[i] = False
             self.frames[i] = 0
             self.fresh[i] = True
@@ -268,6 +313,10 @@ class PokemonVecEnv(VecEnvBase):
         self.last_error = r.get("error")
         self.logs[i].extend(r.get("log", []))
         self.reqs[i] = list(r.get("requests") or [None, None])
+        for side, req in enumerate(self.reqs[i]):
+            team = ((req or {}).get("side") or {}).get("pokemon")
+            if team:
+                self.teams[i][side] = team
         self.turns[i] = int(r.get("turn") or 0)
         self._ended = getattr(self, "_ended", {})
         self._ended[i] = (bool(r.get("ended")), r.get("winner"))
@@ -332,6 +381,7 @@ class PokemonVecEnv(VecEnvBase):
                  "active_idx": torch.zeros(R, dtype=torch.long), "move_ids": torch.zeros(R, MOVES, dtype=torch.long)}
         active = torch.zeros(R, dtype=torch.bool)
         forced = torch.zeros(R, dtype=torch.bool)
+        oracle = np.zeros((R, ORACLE_DIM), dtype=np.float32)
         for i in range(n):
             if self.done[i]:
                 continue
@@ -340,6 +390,7 @@ class PokemonVecEnv(VecEnvBase):
                 if not _decides(req):
                     continue
                 row = i * SIDES + side
+                oracle[row] = team_oracle(self.teams[i][side], self.teams[i][1 - side])
                 d, slots = self._row_frame(i, side)
                 for k, (shape, dt, npdt) in OBS_SPEC.items():
                     if npdt is None:
@@ -359,7 +410,13 @@ class PokemonVecEnv(VecEnvBase):
             new_episode=torch.from_numpy(np.repeat(self.fresh, SIDES)),
             active=active, forced=forced,
             stream_seats=torch.nn.functional.one_hot(rows % SIDES, SIDES).bool(),
+            privileged={"oracle": torch.from_numpy(oracle)},
         )
+
+    @property
+    def privileged_dim(self) -> int:
+        """The width of ``VecObs.privileged["oracle"]`` (train_rl_joint --privileged_critic)."""
+        return ORACLE_DIM
 
     # ------------------------------------------------------------------
 
