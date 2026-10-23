@@ -413,12 +413,16 @@ class MetaHarnessLoop:
         return best
 
     def heldout_best(self) -> Optional[Candidate]:
-        """The candidate the held-out stage tests: once a held-out stage has started, always that one
-        (a later best — e.g. after an interrupted held-out run — must not re-roll the test)."""
-        for c in self.archive.candidates():
-            if any(_heldout_exposed(d) for d in c.dir.glob("heldout*") if d.is_dir()):
-                return c
-        return self.archive.best()
+        """The candidate the held-out stage tests. Once the loop's held-out stage has started on a
+        candidate it stays that one (a later best — e.g. an evaluation redone on resume — must not
+        re-roll the test). Held-out results on several candidates (evaluated outside the loop, as
+        the audit's test phase does) leave the training selection in charge."""
+        best = self.archive.best()
+        exposed = [c for c in self.archive.candidates()
+                   if any(_heldout_exposed(d) for d in c.dir.glob("heldout*") if d.is_dir())]
+        if len(exposed) == 1 and (best is None or best.dir != exposed[0].dir):
+            return exposed[0]
+        return best
 
     def _heldout_needed(self, cand: Candidate, tag: str) -> bool:
         """Held-out results are written once: re-running would let a test be re-rolled. A stage cut

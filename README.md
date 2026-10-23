@@ -240,7 +240,9 @@ which makes tests and cheap experiments reproducible.
 
 These are the first end-to-end runs from a game name, with Astra at high reasoning effort
 and the real Jev. The archives in [`metaharness/artifacts/`](metaharness/artifacts/README.md)
-hold every proposal, harness, score and generated adaptor.
+hold every proposal, harness, score and generated adaptor. They were measured under
+evaluation protocol 2; the current evaluator (protocol 3) no longer counts a used-up call
+budget or the deadline as an episode error, so new runs are not directly comparable.
 
 | Input | Layer | Baselines (train seeds) | Best found harness | Held-out |
 |---|---|---|---|---|

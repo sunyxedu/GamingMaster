@@ -65,7 +65,8 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
   what and stop (the orchestrator removes it once the adaptor validates).
 * Write `ADAPTOR.md`, `requirements.txt` (if any), `env.example`. The evaluator's interpreter is
   `{sys.executable}` (Python {sys.version.split()[0]}; `metaharness` is importable there). Install
-  requirements into *that* environment: `{sys.executable} -m pip install ...`.
+  requirements into *that* environment: `uv pip install --python {sys.executable} ...` (a uv-made
+  environment has no pip), or `{sys.executable} -m pip install ...` where it has one.
 * Test it yourself: `{sys.executable} -c "from metaharness.games.adaptor import validate_adaptor; print({check}.to_markdown())"`
   must print PASS (read its [!] warnings too). Then play a few random actions and check the observation and
   score make sense.

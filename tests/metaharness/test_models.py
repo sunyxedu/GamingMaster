@@ -62,7 +62,10 @@ def test_jev_request_body_and_retry():
 @pytest.mark.skipif(not os.environ.get("TYPESAFE_API_KEY") and not (Path(__file__).resolve().parents[2] / ".env").exists(),
                     reason="no Jev key")
 def test_jev_live_snake_decision():
-    c = make_system1("jev")         # the model id comes from models.toml
+    try:
+        c = make_system1("jev")     # the model id comes from models.toml
+    except ModelUnavailable as e:   # a .env made for other settings (ARC) has no key
+        pytest.skip(f"no Jev key: {e}")
     ans = c.decide(
         {"head": [5, 5], "food_delta": [0, -3], "danger": {"up": False, "down": False, "left": True, "right": False}},
         {"move": Choice("Which safe heading moves toward the food?", {"up": "toward food, safe", "down": "away, safe",

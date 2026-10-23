@@ -314,3 +314,15 @@ def make_game(**kw):
     a = argparse.Namespace(heldout_game=str(d), heldout_game_kwargs='{"density": 0.2}')
     key, kwargs, seeds = cli._resolve_heldout_game(a)
     assert kwargs == {"max_ticks": 33, "density": 0.2} and seeds == [7, 8]
+
+
+def test_heldout_results_on_several_candidates_leave_the_training_selection(tmp_path):
+    # the audit's test phase evaluates the incumbent, a challenger and a baseline on held-out seeds
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=())
+    loop.run()
+    best = loop.archive.best()
+    for c in loop.archive.candidates()[:1] + [best]:
+        d = c.dir / "heldout-cold"
+        d.mkdir(exist_ok=True)
+        (d / "eval.json").write_text(json.dumps({"n_episodes": 3, "mean_score": 0.0}))
+    assert loop.heldout_best().dir == best.dir
