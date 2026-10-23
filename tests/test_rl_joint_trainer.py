@@ -1095,3 +1095,43 @@ def test_placement_counts_evaluation_seconds_on_evaluation_iterations(stage1):
     assert ev[g0] != ev[g1], ev
     assert set(plain.values()) <= {0, 1} and set(ev.values()) <= {0, 1}
 
+
+
+def test_value_lr_mult_scales_only_the_value_heads_step(stage1):
+    """--value_lr_mult M: after the optimizer's step the RL games' value heads have moved M
+    times as far (the same optimizer otherwise: its groups and state as without the flag);
+    every other parameter takes the same step."""
+    from training.train_rl_joint import JointRLTrainer, parse_args
+
+    def one_step(mult: str):
+        torch.manual_seed(0)
+        tr = JointRLTrainer(parse_args(_args(stage1, f"rl_vlr{mult}", "--iterations", "1",
+                                             "--epochs", "1", "--minibatches", "1",
+                                             "--value_lr_mult", mult)))
+        steps = []
+        orig = tr._step
+
+        # the parameters around the optimizer step (PopArt rescales the heads before it)
+        def step():
+            before = {k: v.detach().clone() for k, v in tr.model.named_parameters()}
+            out = orig()
+            steps.append({k: v.detach() - before[k] for k, v in tr.model.named_parameters()})
+            return out
+
+        tr._step = step
+        tr.run_iteration()
+        assert len(steps) == 1
+        return tr, steps[0]
+
+    tr1, d1 = one_step("1")
+    tr10, d10 = one_step("10")
+    vh = {k for k in d1 if ".value_head." in k and any(f"nets.{g}." in k for g in tr1.rl_games)}
+    assert vh and len(tr10.value_params) == len(vh)
+    moved = [k for k in vh if float(d1[k].abs().max()) > 0]
+    assert moved
+    for k in moved:
+        assert torch.allclose(d10[k], 10 * d1[k], rtol=1e-3, atol=1e-8), k
+    for k in d1:
+        if k not in vh:
+            assert torch.equal(d1[k], d10[k]), k
+    assert len(tr10.optimizer.param_groups) == len(tr1.optimizer.param_groups)

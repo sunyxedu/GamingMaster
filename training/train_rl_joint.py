@@ -303,6 +303,12 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--is_clip", type=float, default=1.0, help="truncation of π_old/μ (0 = untruncated)")
     a("--dual_clip", type=float, default=None)
     a("--value_coef", type=float, default=0.5)
+    a("--value_lr_mult", type=float, default=1.0,
+      help="the RL games' value heads take this many times the optimizer's step: a critic "
+           "learning rate of --lr x M without a second optimizer (its param groups, state and "
+           "checkpoint stay as they are).  With --value_core_grad 0 only the value loss trains "
+           "the heads; at --lr 1e-5 the 21-game run's heads were still recalibrating after 235 "
+           "iterations (HL-Gauss cross-entropy 1.5-5x a uniform guess in eight games)")
     a("--value_core_grad", type=float, default=1.0,
       help="scale of the value loss's gradient into the shared core and the encoders (the "
            "value head itself always learns): 0 = the value head fits on the core's "
@@ -2143,6 +2149,14 @@ class JointRLTrainer:
         self.optimizer = AdamATan2(multi_game_param_groups(model, a.weight_decay), lr=a.lr,
                                    betas=(a.beta1, a.beta2), weight_decay=a.weight_decay)
         self.ema = ModelEMA(model, mu=a.ema_rate) if a.ema_rate > 0 else None
+        #: --value_lr_mult: the RL games' value heads (their step scaled after the optimizer's)
+        seen: set = set()
+        self.value_params: List[torch.nn.Parameter] = []
+        for g in self.rl_games:
+            for p in model[g].value_head.parameters():
+                if p.requires_grad and id(p) not in seen:
+                    seen.add(id(p))
+                    self.value_params.append(p)
         self.priv_games = [g for item in a.privileged_critic for g in item.split(",") if g]
         self.priv_params: List[torch.nn.Parameter] = []
         for gi, g in enumerate(self.priv_games):
@@ -2777,7 +2791,15 @@ class JointRLTrainer:
             norm = torch.nn.utils.clip_grad_norm_(self.params, max_norm)
         ok = bool(torch.isfinite(norm))
         if ok:
+            m = float(a.value_lr_mult)
+            v0 = [p.detach().clone() for p in self.value_params] if m != 1.0 else None
             self.optimizer.step()
+            if v0 is not None:
+                # --value_lr_mult: the value heads' step x m — a per-parameter learning rate
+                # that leaves the optimizer's groups (and its checkpointed state) as they are
+                with torch.no_grad():
+                    for p, p0 in zip(self.value_params, v0):
+                        p.copy_(p0.add_(p - p0, alpha=m))
         self.optimizer.zero_grad(set_to_none=True)
         if self.priv_opt is not None:       # the privileged critic: its own clip and Adam
             pn = (collective_clip_grad_norm_(self.priv_params, max_norm, self.device)
@@ -3452,6 +3474,21 @@ class JointRLTrainer:
         self.dist_env.barrier()
         return path
 
+    def _keep_hparams(self, opt: torch.optim.Optimizer,
+                      hp: Sequence[Tuple[float, Optional[float]]], what: str) -> None:
+        """After ``opt.load_state_dict`` on a resume: the run's own learning rate (and weight
+        decay) per param group, not the checkpoint's — load_state_dict restores the saved
+        groups' hyper-parameters, so an --lr / --privileged_lr change on a resume (LR= in a
+        handover) had silently kept the old rate."""
+        old = [(pg["lr"], pg.get("weight_decay")) for pg in opt.param_groups]
+        for pg, (lr, wd) in zip(opt.param_groups, hp):
+            pg["lr"] = lr
+            if wd is not None:
+                pg["weight_decay"] = wd
+        new = [(pg["lr"], pg.get("weight_decay")) for pg in opt.param_groups]
+        if new != old:
+            self.log(f"[resume] {what}: {old} (checkpoint) -> {new}")
+
     def _load_resume(self, path: str) -> None:
         ck = torch.load(path, map_location="cpu", weights_only=False)
         if ck.get("stage") != "rl_joint" or "rl_state" not in ck:
@@ -3492,12 +3529,15 @@ class JointRLTrainer:
         saved_priv = list(st.get("priv_games", []))
         if saved_priv == self.priv_games and st.get("priv_opt") is not None and self.priv_opt is not None:
             self.priv_opt.load_state_dict(st["priv_opt"])
+            self._keep_hparams(self.priv_opt, [(self.args.privileged_lr, None)], "privileged critic lr")
         elif self.priv_games != saved_priv:
             self.log(f"[resume] privileged critic: {saved_priv} -> {self.priv_games} "
                      f"(new modules start at zero with a fresh Adam)")
         if self.ema is not None and ck.get("ema_state") is not None:
             self.ema.load_state_dict({**ck["ema_state"], **raw.get("ema", {})})
+        hp = [(pg["lr"], pg.get("weight_decay")) for pg in self.optimizer.param_groups]
         self.optimizer.load_state_dict(ck["optimizer_state"])
+        self._keep_hparams(self.optimizer, hp, "lr / weight decay")
         mirrors = [self.popart.mirror_tensors(self.model, self.ema.shadow)] \
             if self.ema is not None else []
         self.popart.load_state_dict(st["popart"], mirrors=mirrors)

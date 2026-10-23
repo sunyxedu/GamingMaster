@@ -499,13 +499,20 @@ def test_train_rl_joint_privileged_critic(stage1):
     ck = torch.load(out / "rl_priv" / "rl_final.pt", map_location="cpu", weights_only=False)
     assert any(".priv_value." in k for k in ck["train_model_state"])
     assert ck["rl_state"]["priv_games"] == ["hunl"] and ck["rl_state"]["priv_opt"] is not None
+    # (a resume runs with its own --lr / --privileged_lr: the checkpoint's optimizer states,
+    # not their saved rates)
+    assert ck["rl_state"]["priv_opt"]["param_groups"][0]["lr"] == 1e-2
     tr2 = JointRLTrainer(parse_args(base + ["--iterations", "3", "--save_dir", str(out / "rl_priv"),
-                                            "--privileged_critic", "hunl",
+                                            "--privileged_critic", "hunl", "--privileged_lr", "3e-3",
+                                            "--lr", "2e-5",
                                             "--resume", str(out / "rl_priv" / "rl_final.pt")]))
     saved = {k.split(".priv_value.", 1)[1]: v for k, v in ck["train_model_state"].items()
              if k.startswith("nets.hunl.priv_value.")}
     got = tr2.model["hunl"].priv_value.state_dict()
     assert saved.keys() == got.keys() and all(torch.equal(saved[k], got[k]) for k in saved)
+    assert [pg["lr"] for pg in tr2.priv_opt.param_groups] == [3e-3]
+    assert all(pg["lr"] == 2e-5 for pg in tr2.optimizer.param_groups)
+    assert tr2.priv_opt.state_dict()["state"] and tr2.optimizer.state_dict()["state"]   # moments kept
     plain = load_multi(str(out / "rl_priv" / "rl_final.pt"), torch.device("cpu"))
     assert getattr(plain["hunl"], "priv_value", None) is None
     # a run without the flag resumes the checkpoint (the module dropped)
