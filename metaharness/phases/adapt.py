@@ -58,7 +58,7 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
   observation fields. `action_spec` lists every legal action name with a one-line meaning and a `noop`.
   Actions with parameters use a compact string grammar documented in `describe()` (e.g. `"move 3 4"`).
 * Observations are strict JSON (no NaN / inf, sets or objects) and compact (< 200 kB): structured state
-  where the interface gives it; otherwise text; screenshots as file paths under this directory.
+  where the interface gives it; otherwise text; screenshots as file paths under `runtime/` in this directory.
 * If the game needs a running client/server/account, script the setup (`setup.sh` or Python) and run it.
   Every process, server or connection an instance starts is released by its `close()`.
   If something needs the user (account login, purchase, a GUI step), write `NEEDS.md` listing exactly
