@@ -131,13 +131,17 @@ def test_adapt_phase_feeds_back_validation(tmp_path):
 
 
 def test_adapt_phase_stops_on_missing_env(tmp_path, monkeypatch):
+    # the adaptor cannot start without the declared variable: validation fails -> NEEDS.md, stop
     (tmp_path / "study").mkdir()
     for k, v in STUDY_FILES.items():
         (tmp_path / "study" / k).write_text(v)
     monkeypatch.delenv("COUNTGAME_TOKEN", raising=False)
-    agent = ScriptedSystem2(files=[{"game.py": GOOD_ADAPTOR, "ADAPTOR.md": "v", "env.example": "COUNTGAME_TOKEN=\n"}])
+    needs_token = GOOD_ADAPTOR.replace("def make_game(**kw):\n", "def make_game(**kw):\n    import os\n"
+                                       "    os.environ['COUNTGAME_TOKEN']\n")
+    agent = ScriptedSystem2(files=[{"game.py": needs_token, "ADAPTOR.md": "v", "env.example": "COUNTGAME_TOKEN=\n"}])
     rep = run_adapt(agent, tmp_path, "countgame", json.loads(STUDY_FILES["study.json"]), log=lambda *_: None)
     assert not rep.ok and "COUNTGAME_TOKEN" in (tmp_path / "adaptor" / "NEEDS.md").read_text()
+    assert len(agent.calls) == 1 and "user input required" in rep.error
 
 
 def test_full_run_pipeline_offline(tmp_path):
@@ -160,11 +164,11 @@ def test_full_run_pipeline_offline(tmp_path):
     assert (run_dir / "study" / "study.json").exists() and (run_dir / "adaptor" / "validation.json").exists()
     a = Archive(run_dir / "search")
     names = [c.dir.name for c in a.candidates()]
-    assert names[:2] == ["0000-tier2_jev_only", "0001-tier2_astra_only"] and len(names) == 3
+    assert names[:3] == ["0000-tier2_jev_only", "0001-tier2_astra_only", "0002-tier2_idle"] and len(names) == 4
     assert "study/strategies.md" in (a.root / "task.md").read_text()
     for c in a.candidates():
         assert (c.eval() or {}).get("game") == "countgame"
-    assert (a.candidates()[2].dir / "preflight_0.json").exists()
+    assert (a.candidates()[3].dir / "preflight_0.json").exists()
 
 
 def test_preflight_catches_contract_misuse(tmp_path):

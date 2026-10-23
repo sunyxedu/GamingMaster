@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from .base import (
     ModelCall,
+    ModelTimeout,
     ModelUnavailable,
     System1Answer,
     System1Model,
@@ -23,7 +24,7 @@ from .jev import Choice, JevClient, Noul, Score
 from .mock import HeuristicSystem1, ScriptedSystem2
 
 __all__ = [
-    "ModelCall", "ModelUnavailable", "System1Answer", "System1Model", "System2Model",
+    "ModelCall", "ModelTimeout", "ModelUnavailable", "System1Answer", "System1Model", "System2Model",
     "System2Result", "TraceSink", "Choice", "JevClient", "Noul", "Score",
     "HeuristicSystem1", "ScriptedSystem2", "make_system1", "make_system2",
     "load_profiles", "profile_names",
@@ -64,6 +65,8 @@ def make_system2(name: str, **overrides: Any) -> System2Model:
     prof.update({k: v for k, v in overrides.items() if v is not None})
     if backend == "codex":
         from .codex_cli import CodexCLI
+        if not prof.get("model"):
+            raise ValueError(f"system2 profile {name!r} (codex) needs a model id in {DEFAULT_PROFILES}")
         return CodexCLI(model=prof["model"], reasoning_effort=prof.get("reasoning_effort"))
     if backend == "claude":
         from .claude_cli import ClaudeCLI
@@ -78,7 +81,9 @@ def make_system1(name: str, **overrides: Any) -> System1Model:
     backend = prof.pop("backend")
     prof.update({k: v for k, v in overrides.items() if v is not None})
     if backend == "typesafe":
-        return JevClient(model=prof.get("model", "jev-latest"))
+        if not prof.get("model"):
+            raise ValueError(f"system1 profile {name!r} (typesafe) needs a model id in {DEFAULT_PROFILES}")
+        return JevClient(model=prof["model"])
     if backend == "heuristic":
         return HeuristicSystem1(fn=prof.get("fn"), latency_s=prof.get("latency_s", 0.3))
     raise ValueError(f"unknown system1 backend {backend!r} in profile {name!r}")

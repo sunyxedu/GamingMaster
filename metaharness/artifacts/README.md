@@ -5,7 +5,7 @@ These are immutable research records, distinct from editable source in
 ignored `runs/` directory until their results are checked and deliberately
 published. Keep failed candidates and timeout records alongside successes.
 
-## Current audited evidence
+## Audited evidence (evaluation protocol 2, 2026-09-19)
 
 | Archive | What it contains |
 |---|---|
@@ -36,5 +36,9 @@ need not exist when reading a published archive.
 
 Historical runs used different protocols, including cross-seed memory sharing.
 Their leaderboards are preserved as measured and should not be combined into
-one ranking with the independent-episode audit. See the
+one ranking with the independent-episode audit. Every archive here, the audit
+included, predates evaluation protocol 3 (`protocol_version` in the manifests):
+before it, a used-up call budget or the episode deadline made an episode an error
+and its candidate ineligible; protocol 3 ends such an episode with the score
+reached. Do not rank new runs together with these archives. See the
 [historical experiment notes](../../docs/meta-harness.md#historical-experiments-2026-09-19-shared-memory-protocol).

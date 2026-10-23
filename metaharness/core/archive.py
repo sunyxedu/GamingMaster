@@ -85,14 +85,19 @@ def combine_evals(per_game: dict[str, dict[str, Any]], seeds: list[int]) -> dict
         "system2_calls": sum(g.get("system2_calls", 0) for g in per_game.values()),
         "failed_s1": sum(g.get("failed_s1", 0) for g in per_game.values()),
         "failed_s2": sum(g.get("failed_s2", 0) for g in per_game.values()),
-        "mean_steps": None,
+        "mean_steps": (sum(g["mean_steps"] for g in per_game.values()) / len(per_game)
+                       if per_game and all(g.get("mean_steps") is not None for g in per_game.values()) else None),
+        "timeouts_s1": sum(g.get("timeouts_s1", 0) for g in per_game.values()),
+        "timeouts_s2": sum(g.get("timeouts_s2", 0) for g in per_game.values()),
         "s1_informed_fraction": (acts_s1 / acts) if acts else None,
         "s2_informed_fraction": (acts_s2 / acts) if acts else None,
         "errors": [f"{name}: {err}" for name, g in per_game.items() for err in g.get("errors", [])],
         "per_game": {name: {k: v for k, v in g.items() if k != "episodes"} | {
             "episodes": [{k: ep.get(k) for k in ("seed", "score", "steps", "stale_ticks", "decided_ticks",
                                                   "system1_calls", "system2_calls", "acts", "acts_after_s1",
-                                                  "acts_after_s2", "error")} for ep in g.get("episodes", [])]}
+                                                  "acts_after_s2", "error", "ended_by", "wall_s", "latency_s1",
+                                                  "latency_s2", "calls_s2", "info") if k in ep}
+                         for ep in g.get("episodes", [])]}
             for name, g in per_game.items()},
         "metadata": {"seeds": seeds, "games": games, "expected_episodes": len(seeds) * len(games),
                      "game_kind": next((g.get("metadata", {}).get("game_kind") for g in per_game.values()), None)},
@@ -117,15 +122,59 @@ def latency_summary(e: dict[str, Any]) -> dict[str, Optional[float]]:
     return out
 
 
-def _eligible(e: dict[str, Any]) -> bool:
+def _last_line(text: str, limit: int = 160) -> str:
+    lines = [ln.strip() for ln in str(text).splitlines() if ln.strip()]
+    line = lines[-1] if lines else str(text).strip()
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def ineligibility(e: Optional[dict[str, Any]]) -> Optional[str]:
+    """Why an evaluation cannot be selected, or None. Fatal, partial and erroneous evaluations
+    cannot win; a budget or deadline end is not an error (protocol 3)."""
+    if not e:
+        return "not evaluated"
+    if e.get("fatal"):
+        return "fatal: " + _last_line(e["fatal"])
     score = e.get("mean_score")
+    if score is None or not math.isfinite(score):
+        return "no finite mean score"
+    if e.get("errors"):
+        return f"{len(e['errors'])} episode error(s), first: " + _last_line(e["errors"][0])
     meta = e.get("metadata", {})
     expected = meta.get("expected_episodes")
     if expected is None and meta.get("seeds") is not None:
         expected = len(meta["seeds"])
-    return (score is not None and math.isfinite(score) and not e.get("fatal")
-            and not e.get("errors") and e.get("n_episodes", 0) > 0
-            and (expected is None or expected == e.get("n_episodes")))
+    n = e.get("n_episodes", 0)
+    if n <= 0:
+        return "no episodes"
+    if expected is not None and expected != n:
+        return f"partial: {n} of {expected} episodes"
+    return None
+
+
+def _eligible(e: dict[str, Any]) -> bool:
+    return ineligibility(e) is None
+
+
+def _episodes(e: dict[str, Any]) -> list[dict[str, Any]]:
+    games = e["per_game"].values() if isinstance(e.get("per_game"), dict) else [e]
+    return [ep for g in games for ep in g.get("episodes", [])]
+
+
+def latency_fit(calls: list[tuple[float, int]]) -> Optional[tuple[float, float, float, int]]:
+    """Least-squares System-2 latency ~ a + b * output_tokens: (a, b, r, n), or None."""
+    n = len(calls)
+    if n < 5:
+        return None
+    xs = [float(t) for _, t in calls]
+    ys = [float(lat) for lat, _ in calls]
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx <= 0 or syy <= 0:
+        return None
+    b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    return my - b * mx, b, b * math.sqrt(sxx / syy), n
 
 
 class Archive:
@@ -163,6 +212,9 @@ class Archive:
     def games(self) -> list[str]:
         seen: list[str] = []
         for c in self.candidates():
+            e = c.eval() or {}
+            if not e.get("n_episodes") and not isinstance(e.get("per_game"), dict):
+                continue           # a load error / empty proposal names no real game
             for g in c.game_evals():
                 if g not in seen:
                     seen.append(g)
@@ -243,8 +295,8 @@ class Archive:
             if e is None:
                 rows.append("| " + " | ".join([f"{c.idx:04d}", c.dir.name] + ["–"] * (len(head) - 3) + ["not evaluated"]) + " |")
                 continue
-            status = "fatal: " + e["fatal"][:60].replace("\n", " ") if e.get("fatal") else (
-                f"{len(e.get('errors', []))} episode errors" if e.get("errors") else "ok")
+            why = ineligibility(e)
+            status = "ok" if why is None else "✗ " + why[:120].replace("|", "/")
             ge = c.game_evals()
             cells = [f"{c.idx:04d}", c.dir.name]
             if multi:
@@ -257,9 +309,11 @@ class Archive:
 
             def lat_cell(kind):
                 return "–" if lat[f"{kind}_p50"] is None else f"{lat[f'{kind}_p50']:.1f} / {lat[f'{kind}_max']:.0f}"
+            timeouts = (f" ({e.get('timeouts_s1', 0)} / {e.get('timeouts_s2', 0)} timed out)"
+                        if e.get("timeouts_s1") or e.get("timeouts_s2") else "")
             cells += [str(e.get("n_episodes", 0)), fmt(e.get("stale_fraction"), pct=True),
                       str(e.get("system1_calls", 0)), str(e.get("system2_calls", 0)),
-                      f"{e.get('failed_s1', 0)} / {e.get('failed_s2', 0)}",
+                      f"{e.get('failed_s1', 0)} / {e.get('failed_s2', 0)}{timeouts}",
                       fmt(e.get("s1_informed_fraction"), pct=True), fmt(e.get("s2_informed_fraction"), pct=True),
                       lat_cell("s1"), lat_cell("s2"), status]
             rows.append("| " + " | ".join(cells) + " |")
@@ -274,13 +328,52 @@ class Archive:
                  "median per-episode p50 and the worst observed call: design timeouts and pipelining from these "
                  "measurements, not from assumptions.\n\n")
         text += (f"Best so far: `{best.dir.name}` (mean score {best.score:.3f})\n" if best else "No scored candidate yet.\n")
+        text += ("Only candidates whose status is `ok` can be selected: a fatal, partial or erroneous evaluation "
+                 "cannot win, whatever its score. A used-up call budget or the deadline is not an error.\n")
+        # per-seed outcome: which seeds failed, how each episode ended and how much of the deadline it used
+        ep_rows = []
+        for c in self.candidates():
+            e = c.eval() or {}
+            parts = []
+            for ep in _episodes(e):
+                seed = ep.get("seed")
+                score = ep.get("score")
+                part = f"seed {seed}: {'–' if score is None else f'{score:.2f}'}"
+                if ep.get("ended_by"):
+                    part += f" {ep['ended_by']}"
+                if ep.get("wall_s") is not None:
+                    part += f" {ep['wall_s']:.0f}s"
+                if ep.get("error"):
+                    part += f" ✗ {_last_line(ep['error'], 100)}"
+                parts.append(part)
+            if parts:
+                ep_rows.append(f"- `{c.dir.name}`: " + " · ".join(parts))
+        if ep_rows:
+            text += "\nEpisodes (score, how it ended, wall time; ✗ = error):\n" + "\n".join(ep_rows) + "\n"
+        calls = [(float(lat), int(tok)) for c in self.candidates() for ep in _episodes(c.eval() or {})
+                 for lat, tok in (ep.get("calls_s2") or []) if tok]
+        fit = latency_fit(calls)
+        if fit:
+            a, b, r, n = fit
+            text += (f"\nSystem-2 latency ≈ {a:.1f} s + {1000 * b:.1f} ms × output tokens (fit over {n} archived calls, "
+                     f"r = {r:.2f}; slowest {max(lat for lat, _ in calls):.0f} s): long answers are slow — size "
+                     "timeouts from this, not from short baseline answers.\n")
+        versions: dict[str, set[str]] = {}
+        for c in self.candidates():
+            for kind, names in ((c.eval() or {}).get("metadata", {}).get("resolved_models") or {}).items():
+                versions.setdefault(kind, set()).update(names)
+        drift = {k: sorted(v) for k, v in versions.items() if len(v) > 1}
+        if drift:
+            text += ("\nWarning: different model versions answered in this archive "
+                     + "; ".join(f"{k}: {', '.join(v)}" for k, v in drift.items())
+                     + " — scores across them are not strictly comparable.\n")
         # score composition, when the adaptor exposes it (mean over episodes)
         comp_rows = []
         for c in self.candidates():
             e = c.eval() or {}
             eps = [ep for g in (e["per_game"].values() if isinstance(e.get("per_game"), dict) else [e])
                    for ep in g.get("episodes", [])]
-            bds = [ep.get("info", {}).get("score_breakdown") for ep in eps]
+            bds = [(ep.get("info") or {}).get("score_breakdown") for ep in eps]
             bds = [b for b in bds if isinstance(b, dict)]
             if bds:
                 keys = sorted({k for b in bds for k in b})

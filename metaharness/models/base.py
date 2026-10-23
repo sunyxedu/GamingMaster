@@ -15,6 +15,7 @@ Every call is recorded as a ``ModelCall`` and pushed to an optional
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -25,6 +26,20 @@ from typing import Any, Mapping, Optional, Protocol
 
 class ModelUnavailable(RuntimeError):
     """The backend cannot serve requests right now (quota, auth, network)."""
+
+
+class ModelCallCancelled(RuntimeError):
+    """The episode that made the call ended while it was in flight; the backend process was killed."""
+
+
+class ModelTimeout(TimeoutError):
+    """A model call ran out of time. ``session_id`` is the conversation the call had started or
+    resumed (None if unknown), so a caller can resume it — e.g. a repair round for a coding agent
+    that timed out during its final checks."""
+
+    def __init__(self, message: str, session_id: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.session_id = session_id
 
 
 @dataclass
@@ -107,6 +122,35 @@ class System2Model(Protocol):
         a plain answer (still through the same CLI so the model is the same).
         """
         ...
+
+
+# Sent with every agentic=False call by the CLI backends (codex: prepended to the prompt; claude:
+# its system prompt). A player is inference-only: files, search or memories could expose
+# simulator state or answers outside its observation.
+PLAYER_PREAMBLE = ("Inference-only game player: use only the supplied observations and "
+                   "conversation. Do not use tools, read files, run commands, browse, or "
+                   "consult external memories. Return the requested answer directly.")
+
+# Never inherited by a CLI child: each CLI uses its own login (OPENAI_* would silently switch codex
+# to API-key auth), and an agent's shell has no business with another backend's credentials.
+CLI_ENV_DROP = ("TYPESAFE_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY")
+
+
+def read_images(images: Optional[list[str]]) -> list[tuple[Path, bytes]]:
+    """Absolute path + bytes of each image a System-2 call attaches, read up front so the trace
+    names exactly what the model saw. An unreadable image is an error, never a silent drop."""
+    out: list[tuple[Path, bytes]] = []
+    for img in images or []:
+        path = Path(img).resolve()
+        try:
+            out.append((path, path.read_bytes()))
+        except OSError as e:
+            raise RuntimeError(f"cannot read image {img}: {e}") from e
+    return out
+
+
+def image_trace(images: list[tuple[Path, bytes]]) -> list[dict[str, str]]:
+    return [{"path": str(p), "sha256": hashlib.sha256(data).hexdigest()} for p, data in images]
 
 
 # ----------------------------------------------------------------- System 1

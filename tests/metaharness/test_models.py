@@ -2,17 +2,18 @@
 failure classification). Live Jev test runs only when TYPESAFE_API_KEY is set."""
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
 import pytest
 
 from metaharness.models import codex_cli as codex_mod
-from metaharness.models import make_system2
+from metaharness.models import make_system1, make_system2
 from metaharness.models.codex_cli import CodexCLI, _digest_events, _last_agent_message, _parse_jsonl
 from metaharness.models.base import ModelUnavailable, TraceSink
 from metaharness.models.jev import Choice, JevClient, Noul, Score, parse_answer
+
+from .test_backend_jev import JevServer, Reply
 
 
 # ---------------------------------------------------------------- Jev
@@ -36,44 +37,24 @@ def test_jev_requires_key(monkeypatch, tmp_path):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     monkeypatch.setattr("metaharness.models.jev.load_dotenv", lambda *a, **k: {})
     with pytest.raises(ModelUnavailable):
-        JevClient()
+        JevClient(model="jev-test")
 
 
-def test_jev_request_body_and_retry(monkeypatch):
-    """Fake urlopen: first call 429, second returns a well-formed answer."""
-    calls = []
-
-    class _Resp:
-        def __init__(self, payload):
-            self._p = json.dumps(payload).encode()
-
-        def read(self):
-            return self._p
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    import urllib.error
-
-    def fake_urlopen(req, timeout):
-        calls.append(json.loads(req.data.decode()))
-        assert req.get_header("Authorization") == "Bearer k"
-        if len(calls) == 1:
-            raise urllib.error.HTTPError(req.full_url, 429, "slow down", {}, None)
-        return _Resp({"model": "jev-1.13.0", "answers": {"move": {"type": "choice", "choice": "up",
-                      "probabilities": {"up": 0.7, "down": 0.3}, "confidence": 0.5}},
-                      "usage": {"input_tokens": 10, "output_tokens": 1}})
-
-    monkeypatch.setattr("metaharness.models.jev.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("metaharness.models.jev.time.sleep", lambda s: None)
-    c = JevClient(api_key="k")
-    tr = TraceSink()
-    ans = c.decide({"x": 1}, {"move": Choice("q", {"up": "u", "down": "d"})}, trace=tr)
+def test_jev_request_body_and_retry():
+    """Local HTTP/1.1 server: the first call gets a 429, the retry a well-formed answer."""
+    srv = JevServer()
+    srv.script = [Reply(429, {"detail": "slow down"}, {"Retry-After": "0"})]
+    c = JevClient(api_key="k", model="jev-latest", url=srv.url)
+    try:
+        tr = TraceSink()
+        ans = c.decide({"x": 1}, {"move": Choice("q", {"up": "u", "down": "d"})}, trace=tr)
+    finally:
+        c.close()
+        srv.stop()
     assert ans["move"].value == "up"
+    calls = [r["body"] for r in srv.requests]
     assert len(calls) == 2 and calls[0]["model"] == "jev-latest" and calls[0]["questions"]["move"]["type"] == "choice"
+    assert all(r["auth"] == "Bearer k" for r in srv.requests) and srv.connections == 1
     assert c.total_input_tokens == 10
     assert tr.records[-1]["kind"] == "system1" and tr.records[-1]["backend"] == "jev:jev-1.13.0"
 
@@ -81,7 +62,10 @@ def test_jev_request_body_and_retry(monkeypatch):
 @pytest.mark.skipif(not os.environ.get("TYPESAFE_API_KEY") and not (Path(__file__).resolve().parents[2] / ".env").exists(),
                     reason="no Jev key")
 def test_jev_live_snake_decision():
-    c = JevClient()
+    try:
+        c = make_system1("jev")     # the model id comes from models.toml
+    except ModelUnavailable as e:   # a .env made for other settings (ARC) has no key
+        pytest.skip(f"no Jev key: {e}")
     ans = c.decide(
         {"head": [5, 5], "food_delta": [0, -3], "danger": {"up": False, "down": False, "left": True, "right": False}},
         {"move": Choice("Which safe heading moves toward the food?", {"up": "toward food, safe", "down": "away, safe",
@@ -111,14 +95,16 @@ def test_profiles_resolve_backend_and_model():
 
 def test_astra_argv_new_and_resume(tmp_path):
     a = CodexCLI(model="gpt-6-astra", reasoning_effort="high")
-    argv = a._argv("hi", cwd=tmp_path, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
+    argv = a._argv(cwd=tmp_path, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
     assert argv[:2] == ["codex", "exec"] and "-m" in argv and argv[argv.index("-m") + 1] == "gpt-6-astra"
-    assert "-s" in argv and "read-only" in argv and "--json" in argv and argv[-1] == "hi"
+    assert "-s" in argv and "read-only" in argv and "--json" in argv
+    assert argv[-1] == "-" and argv.count("-") == 1       # the prompt comes from stdin, never argv
     assert any(x == 'model_reasoning_effort="high"' for x in argv)
-    argv2 = a._argv("more", cwd=tmp_path, session_id="abc", agentic=True, last_msg_path=tmp_path / "l")
+    argv2 = a._argv(cwd=tmp_path, session_id="abc", agentic=True, last_msg_path=tmp_path / "l")
     assert argv2[:4] == ["codex", "exec", "resume", "abc"] and argv2[argv2.index("-m") + 1] == "gpt-6-astra"
+    assert argv2[-1] == "-"                               # `codex exec resume <id> -`: prompt from stdin
     assert "--color" not in argv2 and "-s" not in argv2 and "-C" not in argv2   # resume rejects these (live 0.154)
-    argv3 = a._argv("x", cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
+    argv3 = a._argv(cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
     assert "workspace-write" in argv3
     assert "--dangerously-bypass-approvals-and-sandbox" not in argv3
 
@@ -209,7 +195,7 @@ def test_astra_argv_never_inherits_fast_tier(tmp_path):
     from metaharness.models.codex_cli import CodexCLI
     a = CodexCLI(model="m")
     for agentic in (False, True):
-        argv = a._argv("hi", cwd=tmp_path, session_id=None, agentic=agentic, last_msg_path=tmp_path / "l")
+        argv = a._argv(cwd=tmp_path, session_id=None, agentic=agentic, last_msg_path=tmp_path / "l")
         assert 'service_tier="default"' in argv and "features.fast_mode=false" in argv
-    player = a._argv("hi", cwd=tmp_path, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
+    player = a._argv(cwd=tmp_path, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
     assert "project_doc_max_bytes=0" in player

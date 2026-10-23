@@ -93,13 +93,19 @@ def main():
             config=LoopConfig(n_iterations=a.iterations, seeds_train=[0, 1, 2] if a.tier == 2 else [0, 1],
                               seeds_heldout=[], budget=budget, clock_mode="wall",
                               harness_timeout_s=budget.max_wall_s, proposer_timeout_s=600,
-                              memory_mode="episode"), proposer_extra=extra)
+                              # validate re-evaluates frozen programs as discovered: no dry run
+                              # whose failure would hand them to the proposer for repair
+                              memory_mode="episode", preflight=a.phase == "search"),
+            proposer_extra=extra)
         provenance = {"git_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip(),
             "command": a.phase, "tier": a.tier}
         with (archive.root / "provenance.jsonl").open("a") as fh:
             fh.write(json.dumps(provenance) + "\n")
-        best = loop.run()
+        loop.run()
+        if loop.interrupted:      # model outage / game down: resumable, so 'test' must not run yet
+            raise SystemExit(f"search interrupted ({loop.interrupted[:300]}); rerun the same command to resume")
+        best = archive.best()     # the training selection (held-out results never change it)
         if best is None:
             raise SystemExit("No eligible candidate")
         print("SELECTED", best.dir.name, flush=True)

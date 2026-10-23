@@ -102,7 +102,7 @@ def test_stale_tick_accounting_with_slow_system1(tmp_path):
     assert r.stale_fraction is not None and r.stale_fraction > 0.5
 
 
-def test_budget_exceeded_is_reported_not_fatal(tmp_path):
+def test_call_budget_end_keeps_score_and_is_not_an_error(tmp_path):
     code = '''
 class H:
     def __init__(self, ctx): self.ctx = ctx
@@ -116,7 +116,8 @@ def build(ctx): return H(ctx)
     r = evaluate_harness(p, lambda **k: SnakeGame(max_ticks=1000, **k), [0], system2=ScriptedSystem2(latency_s=0.1),
                          system1=None, clock_mode="virtual", budget_per_episode=Budget(max_system2_calls=3))
     ep = r.episodes[0]
-    assert ep.error and "budget" in ep.error and ep.system2_calls == 3
+    # the contract: a used-up call budget ends the episode with its score (eligible), it is no error
+    assert ep.error is None and ep.ended_by == "call_budget" and ep.system2_calls == 3
 
 
 def test_load_error_is_fatal(tmp_path):
