@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import re
@@ -511,6 +512,52 @@ def test_train_rl_joint_privileged_critic(stage1):
     tr3 = JointRLTrainer(parse_args(base + ["--iterations", "3", "--save_dir", str(out / "rl_priv"),
                                             "--resume", str(out / "rl_priv" / "rl_final.pt")]))
     assert getattr(tr3.model["hunl"], "priv_value", None) is None
+
+
+def test_duplicate_evaluation_deals_and_payoff(stage1):
+    """--eval_duplicate (the default): every vs_init wave deals each pair of envs one hand with
+    the learner in both seats — the archived episodes of a pair share their chance events
+    (hole cards first) and have complementary learner seats; the record carries the learner's
+    mean payoff (chips) beside its score; the env's deal group is restored for the rollouts.
+    --no-eval_duplicate deals every env its own cards."""
+    from training import train_rl_joint
+
+    out, root, _ = stage1
+    save = out / "rl_dup"
+    torch.manual_seed(0)
+    res = train_rl_joint.main([
+        "--init", str(out / "ck" / "multi_final.pt"), "--rl", "hunl", "--rl", "kuhn_poker",
+        "--data", f"hunl={root / 'train'}", "--replay_batch_size", "4",
+        "--tokens_per_iter", "120", "--envs", "hunl=6", "--envs", "kuhn_poker=4",
+        "--snapshot_every", "1", "--epochs", "1", "--minibatches", "2",
+        "--snapshot_dir", "memory", "--device", "cpu", "--seed", "3", "--iterations", "2",
+        "--eval_every", "1", "--eval_episodes", "12", "--save_dir", str(save)])
+    rows = [h["games"]["hunl"] for h in res["history"]]
+    assert rows[0]["vs_init_n"] == 0 and math.isnan(rows[0]["vs_init_payoff"])
+    assert rows[1]["vs_init_n"] == 12 and math.isfinite(rows[1]["vs_init_payoff"])
+
+    def pairs(path):
+        z = np.load(path)
+        assert json.loads(str(z["meta"]))["deal_group"] in (1, 2)
+        seats = z["learner_seats"].tolist()
+        out = []
+        for e in range(0, len(seats), 2):
+            a, b = (np.asarray(z[f"traj{k}"]) for k in (e, e + 1))
+            ca, cb = a[a[:, 0] < 0, 1].tolist(), b[b[:, 0] < 0, 1].tolist()
+            out.append((ca, cb, seats[e], seats[e + 1]))
+        return out
+
+    for w in (0, 1):
+        for ca, cb, sa, sb in pairs(save / "traces" / f"eval_hunl_init_it1_r0_w{w}.npz"):
+            n = min(len(ca), len(cb))
+            assert n >= 4 and ca[:n] == cb[:n]                   # one deal (a fold ends one early)
+            assert sa == [not x for x in sb]                     # the learner in both seats
+    tr = res["trainer"]
+    assert tr.rl["hunl"].env.deal_group == 1
+    tr.args.eval_duplicate = False
+    st = tr._eval_vs_init("hunl", tr.rl["hunl"], 7, 0, 6)
+    assert st.score_n == 6 and st.payoff_n == 6
+    assert any(ca[:4] != cb[:4] for ca, cb, _, _ in pairs(save / "traces" / "eval_hunl_init_it7_r0_w0.npz"))
 
 
 def test_slumbot_client_plays_the_trained_model(stage1):

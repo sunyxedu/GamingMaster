@@ -217,6 +217,9 @@ class VecEnvBase:
         self.autoreset = bool(autoreset)
         self._seed_rngs(seed)
         self._n = int(n_envs)
+        #: duplicate deals (train_rl_joint --eval_duplicate): with a seeded reset, groups of
+        #: this many consecutive envs share their episode seed (see _episode_seeds)
+        self.deal_group = 1
 
     def _seed_rngs(self, seed: Optional[int]) -> None:
         self._rng = np.random.default_rng(seed)
@@ -249,9 +252,12 @@ class VecEnvBase:
         return ids
 
     def _episode_seeds(self, count: int, seed: Optional[int]) -> list:
-        """Per-episode seeds: ``seed + k`` when given, else from the env RNG."""
+        """Per-episode seeds: ``seed + k`` when given, else from the env RNG.  With
+        ``deal_group`` G > 1 a given seed makes them ``seed + k // G``: G consecutive envs
+        play the same deal (cards, dice, wall, map — everything the episode seed draws)."""
         if seed is not None:
-            return [int(seed) + k for k in range(count)]
+            g = max(1, int(getattr(self, "deal_group", 1)))
+            return [int(seed) + k // g for k in range(count)]
         return [int(s) for s in self._rng.integers(0, 2**31 - 1, size=count)]
 
     # -- actions -------------------------------------------------------------

@@ -418,6 +418,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--eval_episodes_game", action="append", default=[], metavar="GAME=N",
       help="a game's own --eval_episodes: few for long-episode games with few envs (the 21-game "
            "run's first evaluation took 2.9 h, hok alone ~1 h for 64 episodes on its one env)")
+    a("--eval_duplicate", action=argparse.BooleanOptionalAction, default=True,
+      help="evaluation deals in duplicate: the n_seats envs of a group play the same episode "
+           "seed (cards, dice, wall, map) with the learner in every seat once, so the luck of "
+           "the deal cancels in the group (duplicate bridge / poker); with independent deals "
+           "the card games' 64-120-game scores had a standard error of 0.05-0.1")
     a("--eval_at_start", action=argparse.BooleanOptionalAction, default=True,
       help="also play the --eval_engine engines at iteration 0 (the IL policy itself, so the "
            "engine alarm and run comparisons start from its score; vs_init is skipped there, "
@@ -1379,6 +1384,10 @@ class WaveStats:
     ep_len_sum: float = 0.0
     score_sum: float = 0.0
     score_n: int = 0
+    #: the learner's mean final payoff (its seats' ``info["returns"]``, gmsim envs; mirror
+    #: episodes excluded) — chips for HUNL, where the share of hands won says little
+    payoff_sum: float = 0.0
+    payoff_n: int = 0
     mirror: int = 0
     timeouts: int = 0
 
@@ -1639,6 +1648,11 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
     score = league.learner_score(winner, returns=final_ret)
     ok = ~torch.isnan(score)
     st.score_sum, st.score_n = float(score[ok].sum()), int(ok.sum())
+    if final_ret is not None:
+        seats = league.learner_seats.cpu().bool()
+        own = seats.any(-1) & ~seats.all(-1)
+        pay = (final_ret.double().cpu() * seats).sum(-1) / seats.sum(-1).clamp(min=1)
+        st.payoff_sum, st.payoff_n = float(pay[own].sum()), int(own.sum())
     st.tokens = int(sum(int(s.vmask.sum()) for s in streams))
     return streams, st
 
@@ -1800,7 +1814,8 @@ class ReplayStream:
 
 DIAG_KEYS = (
     "tokens_v", "tokens_p", "streams", "episodes", "ep_len_sum", "score_sum", "score_n",
-    "mirror", "timeouts", "vs_init_sum", "vs_init_n", "vs_engine_sum", "vs_engine_n", "ret_sum",
+    "mirror", "timeouts", "vs_init_sum", "vs_init_n", "vs_engine_sum", "vs_engine_n",
+    "vs_init_pay_sum", "vs_init_pay_n", "vs_engine_pay_sum", "vs_engine_pay_n", "ret_sum",
     "ent_sum", "ent_n", "kl_sum", "kl_n", "pol_n", "approx_kl_sum", "clip_frac_sum",
     "is_weight_sum", "is_trunc_sum", "vloss_sum", "vloss_n",
     "canary_oldmu_sum", "canary_ratio_sum", "canary_n",
@@ -2372,7 +2387,8 @@ class JointRLTrainer:
                   if it == 0 else None)
             try:
                 ev = self._eval_vs_init(g, r, it, gi, n0)
-                diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n)
+                diag.add(g, vs_init_sum=ev.score_sum, vs_init_n=ev.score_n,
+                         vs_init_pay_sum=ev.payoff_sum, vs_init_pay_n=ev.payoff_n)
             except Exception as e:      # noqa: BLE001 — a simulator's failure (HoK's game
                 # server refusing a reset, 2026-10-19) must not end the 21-game run; the game
                 # is evaluated again next time, and not at all after a second failure
@@ -2389,7 +2405,8 @@ class JointRLTrainer:
                     n0 = (max(self.eval_episodes.get(g, a.eval_episodes), a.eval_start_episodes)
                           if g not in self.engine_base else None)    # the baseline: more games
                     ev = self._eval_against(g, r, it, gi, "engine", self._engine(g), n0)
-                    diag.add(g, vs_engine_sum=ev.score_sum, vs_engine_n=ev.score_n)
+                    diag.add(g, vs_engine_sum=ev.score_sum, vs_engine_n=ev.score_n,
+                             vs_engine_pay_sum=ev.payoff_sum, vs_engine_pay_n=ev.payoff_n)
                 except Exception as e:      # noqa: BLE001 — a referee never stops the run
                     self._engine_failed[g] = f"{type(e).__name__}: {e}"
                     self.log(f"[eval] {g}: engine referee disabled ({self._engine_failed[g]})")
@@ -3066,30 +3083,42 @@ class JointRLTrainer:
     def _eval_against(self, g: str, r: GameRL, it: int, gi: int, name: str, opp,
                       episodes: Optional[int] = None) -> WaveStats:
         """The learner against the fixed policy ``opp`` (no mirror episodes, seats drawn
-        per episode), whole waves until --eval_episodes; the streams are dropped."""
+        per episode), whole waves until --eval_episodes; the streams are dropped.  With
+        --eval_duplicate the n_seats envs of a group share the deal and the learner sits in
+        each of their seats once."""
         a = self.args
         total, wave = WaveStats(), 0
         n_eval = episodes or self.eval_episodes.get(g, a.eval_episodes)
-        while total.episodes < n_eval:
-            # seats balanced within every wave (env i: the learner in seat (i + wave) mod S)
-            league = League(r.env, {name: opp}, mirror_prob=0.0, balanced_seats=True,
-                            seat_offset=wave, seed=derive_seed(a.seed, self.rank, it, gi, 4, wave))
-            _, st = collect_wave(r.env, league, r.actor,
-                                 seed=derive_seed(a.seed, self.rank, it, gi, 5, wave),
-                                 max_steps=a.max_wave_steps, timeout_reward=r.timeout_reward,
-                                 timeout_draw=g in TIMEOUT_IS_DRAW)
-            for k in ("episodes", "score_sum", "score_n"):
-                setattr(total, k, getattr(total, k) + getattr(st, k))
-            if a.archive_eval:
-                # the wave's episodes for the offline strength analysis (full-strength engines;
-                # every evaluation: tied to --trace_every it came only every lcm(20, 25) = 100)
-                archive_eval_wave(os.path.join(a.save_dir, "traces",
-                                               f"eval_{g}_{name}_it{it}_r{self.rank}_w{wave}.npz"),
-                                  r.env, league.learner_seats,
-                                  {"game": g, "opponent": name, "iteration": it, "rank": self.rank,
-                                   "wave": wave, "episodes": st.episodes, "score_sum": st.score_sum,
-                                   "score_n": st.score_n})
-            wave += 1
+        group = getattr(r.env, "deal_group", 1)
+        if a.eval_duplicate and r.env.n_seats > 1:
+            r.env.deal_group = r.env.n_seats
+        try:
+            while total.episodes < n_eval:
+                # seats balanced within every wave (env i: the learner in seat (i + wave) mod S),
+                # so the S envs of a duplicate group put it in every seat
+                league = League(r.env, {name: opp}, mirror_prob=0.0, balanced_seats=True,
+                                seat_offset=wave,
+                                seed=derive_seed(a.seed, self.rank, it, gi, 4, wave))
+                _, st = collect_wave(r.env, league, r.actor,
+                                     seed=derive_seed(a.seed, self.rank, it, gi, 5, wave),
+                                     max_steps=a.max_wave_steps, timeout_reward=r.timeout_reward,
+                                     timeout_draw=g in TIMEOUT_IS_DRAW)
+                for k in ("episodes", "score_sum", "score_n", "payoff_sum", "payoff_n"):
+                    setattr(total, k, getattr(total, k) + getattr(st, k))
+                if a.archive_eval:
+                    # the wave's episodes for the offline strength analysis (full-strength
+                    # engines; every evaluation: tied to --trace_every it came only every
+                    # lcm(20, 25) = 100)
+                    archive_eval_wave(
+                        os.path.join(a.save_dir, "traces",
+                                     f"eval_{g}_{name}_it{it}_r{self.rank}_w{wave}.npz"),
+                        r.env, league.learner_seats,
+                        {"game": g, "opponent": name, "iteration": it, "rank": self.rank,
+                         "wave": wave, "episodes": st.episodes, "score_sum": st.score_sum,
+                         "score_n": st.score_n, "deal_group": getattr(r.env, "deal_group", 1)})
+                wave += 1
+        finally:
+            r.env.deal_group = group
         return total
 
     def _alarms(self, rec: Dict[str, Any]) -> None:
@@ -3234,6 +3263,8 @@ class JointRLTrainer:
                     vs_init=diag.mean(g, "vs_init_sum", "vs_init_n"), vs_init_n=d["vs_init_n"],
                     vs_engine=diag.mean(g, "vs_engine_sum", "vs_engine_n"),
                     vs_engine_n=d["vs_engine_n"],
+                    vs_init_payoff=diag.mean(g, "vs_init_pay_sum", "vs_init_pay_n"),
+                    vs_engine_payoff=diag.mean(g, "vs_engine_pay_sum", "vs_engine_pay_n"),
                     shaping=float(getattr(self.rl[g].env, "shaping", 0.0)),
                     score=diag.mean(g, "score_sum", "score_n"),
                     ret=diag.mean(g, "ret_sum", "tokens_v"),

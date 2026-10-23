@@ -312,3 +312,29 @@ def test_archive_eval_wave_keeps_gmrules_trajectories(tmp_path):
     st, moves = replay_state("chess", z["traj0"])
     assert moves == [] and str(st).startswith("rnbqkbnr")
     assert archive_eval_wave(str(tmp_path / "x.npz"), object(), []) == 0 and not (tmp_path / "x.npz").exists()
+
+
+def test_deal_group_gives_consecutive_envs_the_same_deal():
+    """VecEnvBase.deal_group G: a seeded reset gives envs k*G .. k*G+G-1 the episode seed
+    seed + k — the same deal (here HUNL's hole and board cards, every chance event) — and
+    the next group another one; G = 1 keeps seed + k per env.  Unseeded resets ignore it."""
+    import numpy as np
+
+    from env.vec_game import make_vec_env
+
+    def chance(env, e):
+        t = np.asarray(env.trajectory(e)).reshape(-1, 2)
+        return t[t[:, 0] < 0, 1].tolist()
+
+    env = make_vec_env("hunl", 4, seed=1)
+    assert env.deal_group == 1
+    assert env._episode_seeds(4, 7) == [7, 8, 9, 10]
+    env.deal_group = 2
+    assert env._episode_seeds(5, 7) == [7, 7, 8, 8, 9]
+    assert len(set(env._episode_seeds(4, None))) > 1
+    env.reset(seed=7)
+    deals = [chance(env, e) for e in range(4)]
+    assert deals[0] and deals[0] == deals[1] and deals[2] == deals[3] and deals[0] != deals[2]
+    env.deal_group = 1
+    env.reset(seed=7)
+    assert chance(env, 0) == deals[0] and chance(env, 1) != deals[0]
