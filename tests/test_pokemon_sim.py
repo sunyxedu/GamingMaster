@@ -120,6 +120,10 @@ def test_il_then_rl_on_the_simulator(tmp_path, gmdata):  # noqa: F811
         "--privileged_critic", "pokemon", "--save_dir", str(tmp_path / "rl")])
     tr = res["trainer"]
     assert tr.model["pokemon"].priv_value is not None
+    # an evaluation against the --init network (duplicate teams, the learner in both seats):
+    # Pokémon is no team game for the league (env.teams unset)
+    st = tr._eval_vs_init("pokemon", tr.rl["pokemon"], 20, 0, 4)
+    assert st.episodes >= 4 and st.score_n >= 1
     streams = tr.rl["pokemon"].streams
     assert streams and streams[0].privileged["oracle"].shape[-1] == tr.rl["pokemon"].env.privileged_dim
     row = res["history"][-1]["games"]["pokemon"]
@@ -130,12 +134,13 @@ def test_il_then_rl_on_the_simulator(tmp_path, gmdata):  # noqa: F811
 
 def test_privileged_oracle_is_both_real_teams():
     """observe().privileged["oracle"]: on every active row the row's own team, then the foe's,
-    as the sides' requests have them (env.teams); zeros on the other rows; HP moves as the
+    as the sides' requests have them (env.side_teams); zeros on the other rows; HP moves as the
     battles go on."""
     from env.vec_pokemon import ORACLE_DIM, PokemonVecEnv, team_oracle
 
     env = PokemonVecEnv(4, format="gen9randombattle", seed=3, workers=1, showdown_dir=SHOWDOWN)
     assert env.privileged_dim == ORACLE_DIM
+    assert getattr(env, "teams", None) is None      # not a team game (env/league.py's protocol)
     gen = torch.Generator().manual_seed(0)
     obs = env.observe()
     damaged = checked = 0
@@ -144,7 +149,7 @@ def test_privileged_oracle_is_both_real_teams():
         assert o.shape == (env.num_rows, ORACLE_DIM)
         for row in torch.nonzero(obs.active).flatten().tolist():
             e, s = divmod(row, 2)
-            want = team_oracle(env.teams[e][s], env.teams[e][1 - s])
+            want = team_oracle(env.side_teams[e][s], env.side_teams[e][1 - s])
             assert np.allclose(o[row].numpy(), want)
             assert not np.allclose(want[:ORACLE_DIM // 2], want[ORACLE_DIM // 2:])   # two teams
             hp = o[row].reshape(2, 6, -1)[:, :, 0]

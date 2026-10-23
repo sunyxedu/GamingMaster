@@ -2020,6 +2020,12 @@ class JointRLTrainer:
         if self.rank0:
             print(*a, **kw, flush=True)
 
+    def log_any(self, msg: str) -> None:
+        """A message from whichever rank it concerns (an evaluation or engine failure on the
+        rank that plays the game: --rl_placement split puts most games on other ranks than
+        0, and their failures were silent), prefixed with the rank under data parallelism."""
+        print(f"[rank {self.rank}] {msg}" if self.world > 1 else msg, flush=True)
+
     # ------------------------------------------------------------------
     # setup
     # ------------------------------------------------------------------
@@ -2504,7 +2510,7 @@ class JointRLTrainer:
                 # is evaluated again next time, and not at all after a second failure
                 n = self._eval_errors.get(g, 0) + 1
                 self._eval_errors[g] = n
-                self.log(f"[eval] {g}: vs_init evaluation failed ({type(e).__name__}: "
+                self.log_any(f"[eval] {g}: vs_init evaluation failed ({type(e).__name__}: "
                          f"{str(e).splitlines()[-1][:160]}) — "
                          f"{'disabled for the rest of the run' if n >= 2 else 'skipped this time'}")
                 if n >= 2:
@@ -2519,7 +2525,7 @@ class JointRLTrainer:
                              vs_engine_pay_sum=ev.payoff_sum, vs_engine_pay_n=ev.payoff_n)
                 except Exception as e:      # noqa: BLE001 — a referee never stops the run
                     self._engine_failed[g] = f"{type(e).__name__}: {e}"
-                    self.log(f"[eval] {g}: engine referee disabled ({self._engine_failed[g]})")
+                    self.log_any(f"[eval] {g}: engine referee disabled ({self._engine_failed[g]})")
                     eng = self._engines.pop(g, None)
                     if eng is not None:
                         try:
@@ -3211,7 +3217,7 @@ class JointRLTrainer:
                                                  go=self.teacher_go.get(g, "go nodes 50000"),
                                                  options=self.teacher_opt.get(g) or None,
                                                  workers=self.args.teacher_workers)
-            self.log(f"[teacher] {g}: {self._teachers[g].name} "
+            self.log_any(f"[teacher] {g}: {self._teachers[g].name} "
                      f"({getattr(self._teachers[g], 'go', '')}) labels {self.teacher_frac[g]:.0%} "
                      f"of the learner's decisions, weight {self.teacher_w[g]:g}")
         return self._teachers[g]
@@ -3241,7 +3247,7 @@ class JointRLTrainer:
                 from env.engine_policy import NoisyReferee
                 self._engines[g] = NoisyReferee(self._engines[g], self.rl[g].env, eps,
                                                 seed=derive_seed(self.args.seed, self.rank, 6))
-            self.log(f"[eval] {g}: engine {self._engines[g].name} ({self._engines[g].go})")
+            self.log_any(f"[eval] {g}: engine {self._engines[g].name} ({self._engines[g].go})")
         return self._engines[g]
 
     def _eval_against(self, g: str, r: GameRL, it: int, gi: int, name: str, opp,

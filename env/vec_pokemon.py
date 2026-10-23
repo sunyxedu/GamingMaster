@@ -20,7 +20,7 @@ usable moves, trapping, tera, the switchable slots).
             active_idx [] long (state), move_ids [4] long (state)
     action  action_type [R] (0 move / 1 switch), move_id [R], switch_idx [R], tera [R]
     privileged  oracle [R, 204] f32: both teams as they really are — every Pokémon of the
-            row's own side, then of the foe's, from the sides' requests (:func:`team_oracle`);
+            row's own side, then of the foe's, from the sides' requests (:func:`team_oracle`, ``env.side_teams``);
             critic-only (train_rl_joint --privileged_critic pokemon), never the policy's input
 
 Formats: ``gen9randombattle`` (Showdown's generator deals the teams; no team preview: an own
@@ -246,8 +246,9 @@ class PokemonVecEnv(VecEnvBase):
         self._n = n
         self.logs: List[List[str]] = [[] for _ in range(n)]
         self.reqs: List[List[Optional[dict]]] = [[None, None] for _ in range(n)]
-        #: each side's latest team (its request's ``side.pokemon``; the privileged oracle)
-        self.teams: List[List[Optional[list]]] = [[None, None] for _ in range(n)]
+        #: each side's latest team (its request's ``side.pokemon``; the privileged oracle) —
+        #: not ``teams``: that name is the team-game protocol (env/league.py: seat → team id)
+        self.side_teams: List[List[Optional[list]]] = [[None, None] for _ in range(n)]
         self.done = np.ones(n, dtype=bool)
         self.frames = np.zeros((n, SIDES), dtype=np.int64)
         self.fresh = np.zeros(n, dtype=bool)
@@ -273,7 +274,7 @@ class PokemonVecEnv(VecEnvBase):
                    "seed": [s & 0xFFFF, (s >> 16) & 0xFFFF, (s * 7 + 3) & 0xFFFF, (s * 13 + 5) & 0xFFFF], "teams": teams}
             by_worker.setdefault(i % len(self._workers), []).append((i, cmd))
             self.logs[i] = []
-            self.teams[i] = [None, None]
+            self.side_teams[i] = [None, None]
             self.done[i] = False
             self.frames[i] = 0
             self.fresh[i] = True
@@ -316,7 +317,7 @@ class PokemonVecEnv(VecEnvBase):
         for side, req in enumerate(self.reqs[i]):
             team = ((req or {}).get("side") or {}).get("pokemon")
             if team:
-                self.teams[i][side] = team
+                self.side_teams[i][side] = team
         self.turns[i] = int(r.get("turn") or 0)
         self._ended = getattr(self, "_ended", {})
         self._ended[i] = (bool(r.get("ended")), r.get("winner"))
@@ -390,7 +391,7 @@ class PokemonVecEnv(VecEnvBase):
                 if not _decides(req):
                     continue
                 row = i * SIDES + side
-                oracle[row] = team_oracle(self.teams[i][side], self.teams[i][1 - side])
+                oracle[row] = team_oracle(self.side_teams[i][side], self.side_teams[i][1 - side])
                 d, slots = self._row_frame(i, side)
                 for k, (shape, dt, npdt) in OBS_SPEC.items():
                     if npdt is None:
