@@ -399,6 +399,26 @@ def parse_args(argv=None) -> argparse.Namespace:
     a("--eval_engine_go", action="append", default=[], metavar="GAME=LIMIT",
       help="the engine's search limit per move (default 'go nodes 20000'; othello: 'level N', "
            "default 5; backgammon: 'plies N', default 0)")
+    a("--teacher", action="append", default=[], metavar="GAME=FRAC",
+      help="engine teacher (on-policy distillation, DAgger): this share of the learner's own "
+           "policy decisions in GAME's rollouts is labeled by a full-strength engine — the "
+           "game's --teacher_engine (default its --eval_engine binary) with --teacher_go / "
+           "--teacher_opt, in its own processes — and the policy takes a cross-entropy term "
+           "toward the engine's move there (--teacher_weight).  RL did not change the board "
+           "games' move quality as the same engines judge it (decision 169), IL on engine data "
+           "did; the teacher labels the positions the learner itself reaches")
+    a("--teacher_engine", action="append", default=[], metavar="GAME=CMD",
+      help="the teacher's engine command (default the game's --eval_engine; a + is a space)")
+    a("--teacher_go", action="append", default=[], metavar="GAME=LIMIT",
+      help="the teacher's search limit per move (default 'go nodes 50000'; go 'visits N'; othello "
+           "'level N', default 15; a + is a space: chess=go+nodes+100000)")
+    a("--teacher_opt", action="append", default=[], metavar="GAME=NAME=VALUE",
+      help="a UCI / USI option of the game's teacher (repeatable; none of the referee's "
+           "--eval_engine_opt strength limits apply)")
+    a("--teacher_weight", action="append", default=[], metavar="GAME=W",
+      help="the teacher term's weight (default 1): W x the labeled frames' cross-entropy, summed "
+           "and divided like the policy terms by the game's policy tokens")
+    a("--teacher_workers", type=int, default=4, help="engine processes per teacher")
     a("--eval_start_episodes", type=int, default=128,
       help="episodes of the iteration-0 engine evaluation (the IL policy: the baseline every "
            "later evaluation and the engine alarm compare with — bench v2's configs all shared "
@@ -1364,6 +1384,11 @@ class Stream:
     routes: Optional[torch.Tensor] = None   # [T, C, S_tok, k] actor's MoE experts (replay)
     #: critic-only information {key: [T, ...]} (the env's VecObs.privileged)
     privileged: Optional[Dict[str, torch.Tensor]] = None
+    #: --teacher: the engine's action {key: [T]} (replay format) on the frames of ``tmask``,
+    #: and the env's unconditioned legality of every frame (the teacher forward's masks)
+    teacher: Optional[Dict[str, torch.Tensor]] = None
+    tmask: Optional[torch.Tensor] = None
+    teacher_legal: Optional[Dict[str, torch.Tensor]] = None
     # learner-side, filled before the epochs
     lp_old: Optional[torch.Tensor] = None
     v_old: Optional[torch.Tensor] = None
@@ -1422,8 +1447,14 @@ def _assemble_streams(recs: List[Dict[str, Any]]) -> List[Stream]:
         keys.append("routes")
     fields_ = {k: cat(lambda r, k=k: r[k]) for k in keys}
     priv = cat_dict("privileged") if "privileged" in recs[0] else None
+    teach = cat_dict("teacher") if "teacher" in recs[0] else None
+    tmask = cat(lambda r: r["tmask"]) if "teacher" in recs[0] else None
+    tlegal = cat_dict("teacher_legal") if "teacher" in recs[0] else None
     return [Stream(obs=obs[i], legal=legal[i], actions=actions[i],
                    privileged=priv[i] if priv is not None else None,
+                   teacher=teach[i] if teach is not None else None,
+                   tmask=tmask[i] if tmask is not None else None,
+                   teacher_legal=tlegal[i] if tlegal is not None else None,
                    **{k: fields_[k][i] for k in fields_}) for i in range(len(counts))]
 
 
@@ -1572,10 +1603,18 @@ def _trace_step(env: VecGameEnv, obs: VecObs, rew: torch.Tensor, done: torch.Ten
 def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: int,
                  max_steps: int, timeout_reward: Optional[float] = None,
                  timeout_draw: bool = False,
-                 trace: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[Stream], WaveStats]:
+                 trace: Optional[List[Dict[str, Any]]] = None,
+                 teacher=None, teacher_frac: float = 0.0,
+                 teacher_seed: int = 0) -> Tuple[List[Stream], WaveStats]:
     """Reset every env and play one lockstep wave to the end: the learner on
     its rows, the league's opponents on theirs.  Returns the learner's
-    streams (episode rows it plays on) and episode statistics."""
+    streams (episode rows it plays on) and episode statistics.
+
+    ``teacher`` (an engine policy, ``__call__(obs, rows)`` → replay-format action keys):
+    each of the learner's policy decisions (not forced) is labeled with the teacher's
+    action with probability ``teacher_frac`` — asked before the learner's move is applied,
+    in the position the learner faces — into the streams' ``teacher`` / ``tmask``."""
+    tgen = torch.Generator().manual_seed(int(teacher_seed)) if teacher is not None else None
     obs = env.reset(seed=seed)
     league.update(obs)
     actor.begin_wave()
@@ -1599,6 +1638,17 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
                 acts, la = {}, {}
             acting = league.learner_acting(obs)[rows]
             pmask = league.learner_policy_mask(obs)[rows]
+            if teacher is not None and rows.numel():
+                # the engine's move in the position the learner faces (before env.step)
+                tmask = (acting.bool() & pmask.bool() & ~obs.forced[rows].bool()
+                         & (torch.rand(len(rows), generator=tgen) < teacher_frac))
+                # unlabeled frames carry the learner's own action: a finite log-prob everywhere
+                tkeys = {k: (acts[k].detach().cpu().reshape(-1).clone() if k in acts
+                             else torch.zeros(len(rows), dtype=torch.long)) for k in teacher.keys}
+                if bool(tmask.any()):
+                    lab = teacher(obs, rows[tmask])
+                    for k in tkeys:
+                        tkeys[k][tmask] = lab[k].to(tkeys[k].dtype)
             nxt, rew, done, info = env.step(league.act(obs, la))
             rew, timed_out = apply_timeout(rew, done, info, timeout_reward, timeout_draw)
             st.timeouts += int(timed_out.sum())
@@ -1620,6 +1670,12 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
                     recs[-1]["routes"] = out["moe_routes"]
                 if obs.privileged is not None:
                     recs[-1]["privileged"] = {k: v[rows] for k, v in obs.privileged.items()}
+                if teacher is not None:
+                    # the env's own legality too: the stored one is conditioned on the
+                    # learner's sampled from-square (from-to decoders), the teacher's move
+                    # needs the tables of its own
+                    recs[-1]["teacher"], recs[-1]["tmask"] = tkeys, tmask
+                    recs[-1]["teacher_legal"] = {k: v[rows] for k, v in obs.legal.items()}
                 for pos, r in enumerate(rows.tolist()):
                     last[r] = (len(recs) - 1, pos)
             # per-seat streams of alternating games (env/vec_gmsim.py): a learner
@@ -1694,6 +1750,11 @@ def build_batch(streams: Sequence[Stream], device: torch.device,
         b["routes"] = stack(lambda s: s.routes)
     if streams[0].privileged is not None:
         b["privileged"] = {k: stack(lambda s, k=k: s.privileged[k]) for k in streams[0].privileged}
+    if streams[0].teacher is not None:
+        b["teacher"] = {k: stack(lambda s, k=k: s.teacher[k]) for k in streams[0].teacher}
+        b["tmask"] = stack(lambda s: s.tmask)
+        b["teacher_legal"] = {k: stack(lambda s, k=k: s.teacher_legal[k])
+                              for k in streams[0].teacher_legal}
     for k in extra:
         b[k] = stack(lambda s, k=k: getattr(s, k))
     return b
@@ -1829,6 +1890,7 @@ DIAG_KEYS = (
     "il_sum", "il_n", "rkl_sum", "rkl_n", "rvl_sum",
     "gn_rl", "gn_rl_n", "gn_replay", "gn_replay_n",
     "learn_s", "learn_fwd", "replay_s", "rollout_s", "rollout_steps", "eval_s",
+    "teacher_sum", "teacher_n", "teacher_hit",
 )
 
 
@@ -2206,6 +2268,35 @@ class JointRLTrainer:
                 raise SystemExit(f"--eval_engine_opt {item!r}: {g} has no --eval_engine")
             self.eval_engine_opt.setdefault(g, {})[k] = v
         self._engines: Dict[str, Any] = {}
+        #: --teacher: per game the labeled share of the learner's decisions, the engine and its
+        #: settings, the term's weight; the engine policies (lazily, on the rank playing it)
+        self.teacher_frac = _pairs(a.teacher, float, "FRAC")
+        # (a + in --teacher_engine / --teacher_go values is a space: one shell word in a run's
+        # EXTRA settings, as in --eval_engine_ladder)
+        self.teacher_cmd = {**self.eval_engine, **{g: v.replace("+", " ") for g, v in
+                                                   _pairs(a.teacher_engine, str, "CMD").items()}}
+        self.teacher_go = {g: v.replace("+", " ") for g, v in _pairs(a.teacher_go, str, "LIMIT").items()}
+        self.teacher_w = {g: 1.0 for g in self.teacher_frac}
+        self.teacher_w.update(_pairs(a.teacher_weight, float, "W"))
+        self.teacher_opt: Dict[str, Dict[str, str]] = {}
+        for item in a.teacher_opt:
+            g, sep, kv = item.partition("=")
+            k, sep2, v = kv.partition("=")
+            if not (sep and sep2 and g and k):
+                raise SystemExit(f"--teacher_opt: expected GAME=NAME=VALUE, got {item!r}")
+            self.teacher_opt.setdefault(g, {})[k] = v
+        for g, f in self.teacher_frac.items():
+            if g not in self.rl:
+                raise SystemExit(f"--teacher {g}: not an RL game")
+            if not 0.0 < f <= 1.0:
+                raise SystemExit(f"--teacher {g}={f}: the labeled share must be in (0, 1]")
+            if g == "backgammon":
+                raise SystemExit("--teacher backgammon: gnubg plans whole turns (not a teacher yet)")
+            if g not in self.teacher_cmd and g != "othello":
+                raise SystemExit(f"--teacher {g}: no engine (--teacher_engine or --eval_engine)")
+            if g != "othello" and not callable(getattr(self.rl[g].env, "trajectory", None)):
+                raise SystemExit(f"--teacher {g}: its env keeps no trajectories for an engine")
+        self._teachers: Dict[str, Any] = {}
         self._learn_mem: Dict[str, float] = {}     # per game: its learner pass's peak GPU GB
         self._engine_failed: Dict[str, str] = {}
         #: games whose vs_init evaluation raised (the simulator), and how often
@@ -2354,12 +2445,17 @@ class JointRLTrainer:
                 league = League(r.env, opps, mirror_prob=r.mirror_prob,
                                 learner_seat=a.learner_seat,
                                 seed=derive_seed(a.seed, self.rank, it, gi, 2, wave))
+                teacher = self._teacher(g) if g in self.teacher_frac else None
                 streams, st = collect_wave(r.env, league, r.actor,
                                            seed=derive_seed(a.seed, self.rank, it, gi, 3, wave),
                                            max_steps=a.max_wave_steps,
                                            timeout_reward=r.timeout_reward,
                                            timeout_draw=g in TIMEOUT_IS_DRAW,
-                                           trace=trace if wave == 0 else None)
+                                           trace=trace if wave == 0 else None,
+                                           teacher=teacher,
+                                           teacher_frac=self.teacher_frac.get(g, 0.0),
+                                           teacher_seed=derive_seed(a.seed, self.rank, it, gi, 8,
+                                                                    wave))
                 if wave == 0 and trace is not None:
                     self._write_trace(g, it, league, trace)
                 r.streams.extend(streams)
@@ -2642,6 +2738,7 @@ class JointRLTrainer:
         a = self.args
         r = self.rl[g]
         net = self.model[g]
+        cache_in = cache
         pred = learner_forward(net, r.spec, b, self.depth, self.device, a.bf16,
                                replay_routes=True, init_cache=cache, t0=s0, return_cache=many)
         cache = _detach_cache(pred.pop("st_cache", None))
@@ -2665,6 +2762,30 @@ class JointRLTrainer:
         loss = (pg * combine_game_losses({g: pol}, wk, counts=counts["kept"])
                 + a.value_coef * combine_game_losses({g: val}, wv, counts=counts["value"])
                 + pg * combine_game_losses({g: ent_t}, wp, counts=counts["policy"]))
+        tm = (b["tmask"].bool() & b["frame_mask"].bool()) if b.get("teacher") is not None else None
+        if tm is not None and self.teacher_w.get(g, 0.0) > 0 and bool(tm.any()):
+            # --teacher: cross-entropy toward the engine's move on the labeled frames, summed
+            # and divided by the game's policy tokens like the policy terms.  Its own forward:
+            # the heads teacher-forced with the engine's move (a from-to decoder's to-head
+            # conditions on it) under the env's own legality; the trunk takes the same input,
+            # recorded routing and memory state as the learner forward
+            bt = {**b, "actions": b["teacher"], "legal": b["teacher_legal"]}
+            pred_t = learner_forward(net, r.spec, bt, self.depth, self.device, a.bf16,
+                                     replay_routes=True, init_cache=cache_in, t0=s0,
+                                     return_cache=many)
+            pred_t.pop("st_cache", None)
+            lp_t, _ = r.spec.logp_entropy(net, pred_t, b["teacher"], b["teacher_legal"])
+            n_t = float(tm.sum())
+            if n_t > 0:
+                ce = -torch.where(tm, lp_t.float(), torch.zeros((), device=lp_t.device)).sum()
+                loss = loss + pg * self.teacher_w[g] * combine_game_losses(
+                    {g: {"loss": ce, "count": tm.sum()}}, wp, counts=counts["policy"])
+                hit = tm.clone()
+                for k, v in b["teacher"].items():
+                    if k in b["actions"]:
+                        hit &= b["actions"][k] == v
+                diag.add(g, teacher_sum=float(ce.detach()), teacher_n=n_t,
+                         teacher_hit=float(hit.sum()))
         n_p, n_v = float(pm.sum()), float(vm.sum())
         if not self.kl_off[g]:
             ref = self.ref[g]
@@ -3074,6 +3195,27 @@ class JointRLTrainer:
             except Exception:   # noqa: BLE001
                 pass
 
+    def _teacher(self, g: str):
+        """The game's --teacher engine policy (full strength, its own processes; one set per
+        rank that plays the game, kept for the run)."""
+        if g not in self._teachers:
+            if g == "othello":          # Egaroucid; --teacher_go othello="level N"
+                from env.engine_policy import OthelloEnginePolicy
+                lim = self.teacher_go.get(g, "level 15").split()
+                self._teachers[g] = OthelloEnginePolicy(self.rl[g].env, self.teacher_cmd.get(g) or None,
+                                                        level=int(lim[-1]),
+                                                        workers=self.args.teacher_workers)
+            else:
+                from env.engine_policy import EnginePolicy
+                self._teachers[g] = EnginePolicy(self.rl[g].env, self.teacher_cmd[g],
+                                                 go=self.teacher_go.get(g, "go nodes 50000"),
+                                                 options=self.teacher_opt.get(g) or None,
+                                                 workers=self.args.teacher_workers)
+            self.log(f"[teacher] {g}: {self._teachers[g].name} "
+                     f"({getattr(self._teachers[g], 'go', '')}) labels {self.teacher_frac[g]:.0%} "
+                     f"of the learner's decisions, weight {self.teacher_w[g]:g}")
+        return self._teachers[g]
+
     def _engine(self, g: str):
         """The game's --eval_engine (one process per rank, kept for the run)."""
         if g not in self._engines:
@@ -3287,6 +3429,9 @@ class JointRLTrainer:
                     vs_engine_n=d["vs_engine_n"],
                     vs_init_payoff=diag.mean(g, "vs_init_pay_sum", "vs_init_pay_n"),
                     vs_engine_payoff=diag.mean(g, "vs_engine_pay_sum", "vs_engine_pay_n"),
+                    teacher_ce=diag.mean(g, "teacher_sum", "teacher_n"),
+                    teacher_agree=diag.mean(g, "teacher_hit", "teacher_n"),
+                    teacher_n=d["teacher_n"],
                     shaping=float(getattr(self.rl[g].env, "shaping", 0.0)),
                     score=diag.mean(g, "score_sum", "score_n"),
                     ret=diag.mean(g, "ret_sum", "tokens_v"),

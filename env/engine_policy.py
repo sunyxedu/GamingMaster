@@ -352,6 +352,8 @@ class OthelloEnginePolicy:
 
     #: League asks only for this policy's own moves (it keeps no stream state)
     acts_only = True
+    #: the replay-format keys of its answers
+    keys = ("place_idx", "passed")
 
     def __init__(self, env, command: Optional[str] = None, *, level: int = 5, workers: int = 1):
         from training import arena_othello as ao

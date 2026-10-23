@@ -269,3 +269,33 @@ def test_train_multi_game_then_rl_joint(shards, tmp_path):
     tr._recompute("shogi")
     for s in tr.rl["shogi"].streams:
         assert torch.allclose(s.lp_old, s.mu, atol=1e-4)
+
+
+def test_engine_teacher_shogi(shards, tmp_path):
+    """--teacher shogi=0.5: yaneuraou labels half of the learner's shogi decisions; the teacher
+    term (its own teacher-forced forward under the env's tables) is finite."""
+    import os
+
+    from training import train_multi_game, train_rl_joint
+
+    engine = os.path.expanduser("~/gm-engines/bin/yaneuraou")
+    if not os.path.exists(engine):
+        pytest.skip("yaneuraou not installed")
+    root, _ = shards
+    torch.manual_seed(0)
+    train_multi_game.main([
+        "--data", f"shogi={root}", "--steps", "2", "--batch_size", "4", "--max_len", "48",
+        "--warmup_steps", "1", "--eval_every", "0", "--device", "cpu", "--il_legal_mask",
+        "--save_dir", str(tmp_path / "ck"), "--override", *CORE])
+    res = train_rl_joint.main([
+        "--init", str(tmp_path / "ck" / "multi_final.pt"), "--rl", "shogi", "--tokens_per_iter", "120",
+        "--envs", "shogi=3", "--env_kw", "shogi:max_turns=40", "--mirror_prob", "shogi=0.5",
+        "--snapshot_every", "1", "--epochs", "1", "--minibatches", "1", "--snapshot_dir", "memory",
+        "--device", "cpu", "--seed", "1", "--iterations", "1", "--eval_every", "0",
+        "--eval_engine", f"shogi={engine}", "--teacher", "shogi=0.5",
+        "--teacher_go", "shogi=go depth 2", "--teacher_opt", "shogi=Threads=1",
+        "--teacher_opt", "shogi=USI_Hash=64", "--save_dir", str(tmp_path / "rl")])
+    rec = res["history"][-1]
+    row = rec["games"]["shogi"]
+    assert rec["nonfinite"] == 0 and row["teacher_n"] > 0
+    assert np.isfinite(row["teacher_ce"]) and 0.0 <= row["teacher_agree"] <= 1.0

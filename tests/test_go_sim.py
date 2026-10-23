@@ -257,3 +257,35 @@ def test_train_multi_game_then_rl_joint(shards, tmp_path):
     tr._recompute("go")
     for s in tr.rl["go"].streams:
         assert torch.allclose(s.lp_old, s.mu, atol=1e-4)
+
+
+def test_engine_teacher_go(shards, tmp_path):
+    """--teacher go=0.5 with KataGo over GTP (--teacher_engine, a small network, 'visits 8'):
+    the labels and the teacher term (the placement head under the env's legality) are finite."""
+    import os
+
+    from training import train_multi_game, train_rl_joint
+
+    kg = os.path.expanduser("~/gm-engines/katago/v1.18.1-eigenavx2")
+    net = os.path.expanduser("~/gm-engines/nets/katago/kata1-b6c96-s95425792-d14091095.txt.gz")
+    if not (os.path.exists(os.path.join(kg, "katago")) and os.path.exists(net)):
+        pytest.skip("katago not installed")
+    root, _ = shards
+    torch.manual_seed(0)
+    train_multi_game.main([
+        "--data", f"go={root}", "--steps", "2", "--batch_size", "2", "--max_len", "32",
+        "--warmup_steps", "1", "--eval_every", "0", "--device", "cpu",
+        "--save_dir", str(tmp_path / "ck"), "--override", *CORE])
+    cmd = (f"{kg}/katago gtp -model {net} -config {kg}/default_gtp.cfg -override-config "
+           "logDir=,numSearchThreads=1,ponderingEnabled=false,allowResignation=false")
+    res = train_rl_joint.main([
+        "--init", str(tmp_path / "ck" / "multi_final.pt"), "--rl", "go", "--tokens_per_iter", "120",
+        "--envs", "go=3", "--env_kw", "go:max_turns=40", "--mirror_prob", "go=0.5",
+        "--snapshot_every", "1", "--epochs", "1", "--minibatches", "1", "--snapshot_dir", "memory",
+        "--device", "cpu", "--seed", "1", "--iterations", "1", "--eval_every", "0",
+        "--teacher_engine", f"go={cmd}", "--teacher", "go=0.5", "--teacher_go", "go=visits 8",
+        "--teacher_workers", "1", "--save_dir", str(tmp_path / "rl")])
+    rec = res["history"][-1]
+    row = rec["games"]["go"]
+    assert rec["nonfinite"] == 0 and row["teacher_n"] > 0
+    assert np.isfinite(row["teacher_ce"]) and 0.0 <= row["teacher_agree"] <= 1.0

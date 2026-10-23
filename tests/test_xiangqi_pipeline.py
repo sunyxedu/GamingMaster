@@ -606,3 +606,33 @@ def test_fetch_script_resolves_paths_from_the_callers_directory(gmdata, tmp_path
     forced = run(FORCE="1")
     assert forced.returncode == 0, forced.stderr[-2000:]
     assert shard_dirs() == ["xiangqi_00000"]
+
+
+def test_engine_teacher_xiangqi(shards, tmp_path):
+    """--teacher xiangqi=0.5: pikafish labels half of the learner's xiangqi decisions; the teacher
+    term (its own teacher-forced forward under the env's tables) is finite."""
+    import os
+
+    from training import train_multi_game, train_rl_joint
+
+    engine = os.path.expanduser("~/gm-engines/bin/pikafish")
+    if not os.path.exists(engine):
+        pytest.skip("pikafish not installed")
+    root, _, _ = shards
+    torch.manual_seed(0)
+    train_multi_game.main([
+        "--data", f"xiangqi={root / 'all'}", "--steps", "2", "--batch_size", "4", "--max_len", "48",
+        "--warmup_steps", "1", "--eval_every", "0", "--device", "cpu", "--il_legal_mask",
+        "--save_dir", str(tmp_path / "ck"), "--override", *CORE])
+    res = train_rl_joint.main([
+        "--init", str(tmp_path / "ck" / "multi_final.pt"), "--rl", "xiangqi", "--tokens_per_iter", "120",
+        "--envs", "xiangqi=3", "--env_kw", "xiangqi:max_turns=40", "--mirror_prob", "xiangqi=0.5",
+        "--snapshot_every", "1", "--epochs", "1", "--minibatches", "1", "--snapshot_dir", "memory",
+        "--device", "cpu", "--seed", "1", "--iterations", "1", "--eval_every", "0",
+        "--eval_engine", f"xiangqi={engine}", "--teacher", "xiangqi=0.5",
+        "--teacher_go", "xiangqi=go depth 2", "--teacher_opt", "xiangqi=Threads=1",
+        "--save_dir", str(tmp_path / "rl")])
+    rec = res["history"][-1]
+    row = rec["games"]["xiangqi"]
+    assert rec["nonfinite"] == 0 and row["teacher_n"] > 0
+    assert np.isfinite(row["teacher_ce"]) and 0.0 <= row["teacher_agree"] <= 1.0

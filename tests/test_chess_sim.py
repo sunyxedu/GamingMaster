@@ -25,6 +25,7 @@ frames = the pre-refactor v3 reference frames, simulator steps = converter frame
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -306,3 +307,112 @@ def test_train_multi_game_then_rl_joint(shards, tmp_path):
     tr._recompute("chess")
     for s in tr.rl["chess"].streams:
         assert torch.allclose(s.lp_old, s.mu, atol=1e-4)
+
+
+STOCKFISH = os.path.expanduser("~/gm-engines/bin/stockfish")
+
+
+@pytest.mark.skipif(not os.path.exists(STOCKFISH), reason="stockfish not installed")
+def test_engine_teacher_labels_the_learners_decisions(shards, tmp_path):
+    """--teacher chess=F: about F of the learner's chess policy decisions (none of the forced
+    ones) carry Stockfish's move in the position the learner faced — legal there — and the
+    policy takes a cross-entropy term toward it: the record's teacher_n / teacher_ce /
+    teacher_agree, and a different policy update than without the teacher."""
+    from env.engine_policy import FROM_ENGINE, TO_ENGINE, UciEngine, replay_state, start_string
+    from training import train_multi_game
+    from training.train_rl_joint import JointRLTrainer, parse_args
+
+    root, _ = shards
+    torch.manual_seed(0)
+    train_multi_game.main([
+        "--data", f"chess={root}", "--steps", "2", "--batch_size", "4", "--max_len", "48",
+        "--warmup_steps", "1", "--eval_every", "0", "--device", "cpu", "--il_legal_mask",
+        "--save_dir", str(tmp_path / "ck"), "--override", *CORE])
+    base = ["--init", str(tmp_path / "ck" / "multi_final.pt"), "--rl", "chess",
+            "--tokens_per_iter", "120", "--envs", "chess=3", "--env_kw", "chess:max_turns=40",
+            "--mirror_prob", "chess=0.5", "--snapshot_every", "1", "--epochs", "1",
+            "--minibatches", "1", "--snapshot_dir", "memory", "--device", "cpu", "--seed", "1",
+            "--iterations", "1", "--eval_engine", f"chess={STOCKFISH}",
+            "--eval_every", "0"]     # (an evaluation would replay the env: its trajectories)
+
+    def args(name, *extra):
+        return parse_args(base + ["--save_dir", str(tmp_path / name), *extra])
+
+    with pytest.raises(SystemExit, match="the labeled share"):
+        JointRLTrainer(args("rl_teach_bad", "--teacher", "chess=0"))
+    with pytest.raises(SystemExit, match="not an RL game"):
+        JointRLTrainer(args("rl_teach_bad", "--teacher", "gomoku=0.5"))
+
+    torch.manual_seed(0)
+    tr = JointRLTrainer(args("rl_teach", "--teacher", "chess=0.5", "--teacher_go", "chess=go+depth+3",
+                             "--teacher_opt", "chess=Threads=1"))
+    assert tr.teacher_go == {"chess": "go depth 3"}     # (a + is a space)
+    p0 = {k: v.detach().clone() for k, v in tr.model.named_parameters() if ".chess." in k}
+    rec = tr.run_iteration()
+    row = rec["games"]["chess"]
+    streams = tr.rl["chess"].streams
+    assert streams and all(s.teacher is not None and s.tmask is not None for s in streams)
+    n_pol = sum(int((s.pmask & ~s.forced).sum()) for s in streams)
+    n_lab = sum(int(s.tmask.sum()) for s in streams)
+    assert 0.25 * n_pol <= n_lab <= 0.75 * n_pol
+    assert not any(bool((s.tmask & (s.forced | ~s.pmask)).any()) for s in streams)
+    assert row["teacher_n"] == n_lab and math.isfinite(row["teacher_ce"]) and row["teacher_ce"] > 0
+    assert 0.0 <= row["teacher_agree"] <= 1.0
+    # every label is a legal move of the side to move in the position of its frame — the
+    # episode's trajectory up to the frame's decision: an interleaved stream holds a frame of
+    # every decision (the opponent's too, not acting: the env applied the opponent's move
+    # there); the stream's env is the one whose trajectory holds the stream's own acting
+    # moves — and mostly a depth-3 Stockfish move there (a fresh engine's search can differ:
+    # the teacher's hash holds earlier searches)
+    env = tr.rl["chess"].env
+
+    def keys_of(st, seat, a, names):
+        tgt = st.target(seat, a)
+        return {k: (int(np.frombuffer(bytes(tgt[k]), dtype=np.int64)[0])
+                    if len(bytes(tgt[k])) == 8 else int(bytes(tgt[k])[0])) for k in names}
+
+    def positions(e, s0):
+        traj = np.asarray(env.trajectory(e)).reshape(-1, 2)
+        if len(traj) < s0.length:
+            return None
+        out = []
+        for k in range(s0.length):
+            st, moves = replay_state("chess", traj[:k])
+            seat = int(s0.seat[k])
+            if int(traj[k, 0]) != seat:
+                return None
+            if bool(s0.vmask[k]) and keys_of(st, seat, int(traj[k, 1]), s0.actions) != \
+                    {key: int(v[k]) for key, v in s0.actions.items()}:
+                return None
+            out.append((st, moves, seat))
+        return out
+
+    eng = UciEngine(STOCKFISH, "uci", {"Threads": "1"})
+    start, to, back = start_string("chess"), TO_ENGINE.get("chess"), FROM_ENGINE.get("chess")
+    checked = same = 0
+    last = streams[-env.num_envs:]          # the env's trajectories are its last wave's
+    try:
+        for s0 in last:
+            pos = next((p for p in (positions(e, s0) for e in range(env.num_envs)) if p), None)
+            assert pos is not None, "no env's trajectory holds the stream's actions"
+            for k in torch.nonzero(s0.tmask).flatten().tolist():
+                st, moves, seat = pos[k]
+                want = {key: int(v[k]) for key, v in s0.teacher.items()}
+                got = [a for a in st.legal_actions(seat) if keys_of(st, seat, a, want) == want]
+                assert len(got) == 1, (k, want)                 # a legal move there
+                if checked < 4:
+                    mv = eng.best_move(start, [to(m) for m in moves] if to else moves, "go depth 3")
+                    same += int(st.action_string(seat, got[0]) == (back(mv) if back else mv))
+                checked += 1
+        assert checked == sum(int(s.tmask.sum()) for s in last) and checked and same >= 2
+    finally:
+        eng.close()
+    moved = {k: v.detach() - p0[k] for k, v in tr.model.named_parameters() if ".chess." in k}
+
+    torch.manual_seed(0)
+    tr0 = JointRLTrainer(args("rl_teach0"))
+    p00 = {k: v.detach().clone() for k, v in tr0.model.named_parameters() if ".chess." in k}
+    rec0 = tr0.run_iteration()
+    assert rec0["games"]["chess"]["teacher_n"] == 0 and tr0.rl["chess"].streams[0].teacher is None
+    moved0 = {k: v.detach() - p00[k] for k, v in tr0.model.named_parameters() if ".chess." in k}
+    assert any(not torch.allclose(moved[k], moved0[k]) for k in moved)
