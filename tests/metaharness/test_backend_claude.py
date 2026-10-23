@@ -2,9 +2,11 @@
 quota/auth classification, traced failures, resumable timeouts, images via stream-json."""
 from __future__ import annotations
 
+import errno
 import gc
 import hashlib
 import json
+import os
 import sys
 import time
 import uuid
@@ -13,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from metaharness.models import claude_cli as claude_mod
 from metaharness.models import make_system2
 from metaharness.models._cli import cancel_scope
 from metaharness.models.base import (
@@ -27,13 +30,15 @@ from metaharness.models.claude_cli import EFFORT_LEVELS, ClaudeCLI
 WATCHED_ENV = ("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "TYPESAFE_API_KEY",
                "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")
 
-# Logs argv / cwd / stdin / env, then answers per FAKE_CLAUDE_MODE.
+# Logs argv / cwd / stdin / env (and the --system-prompt-file it was given), then answers per FAKE_CLAUDE_MODE.
 FAKE_CLAUDE = """
 import json, os, sys, time
 argv = sys.argv[1:]
 stdin = sys.stdin.read()
+system_file = argv[argv.index("--system-prompt-file") + 1] if "--system-prompt-file" in argv else None
 with open(os.environ["FAKE_CLAUDE_LOG"], "a") as fh:
     fh.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "stdin": stdin,
+                         "system_file": open(system_file, encoding="utf-8").read() if system_file else None,
                          "env": {k: os.environ.get(k) for k in %(watched)r}}) + "\\n")
 mode, text = os.environ.get("FAKE_CLAUDE_MODE", "ok"), os.environ.get("FAKE_CLAUDE_TEXT", "up")
 rc = int(os.environ.get("FAKE_CLAUDE_RC", "1"))
@@ -162,11 +167,42 @@ UNAVAILABLE = [
     "Invalid auth token · Fix external auth token",
     "OAuth token has expired. Please obtain a new token or refresh your existing token.",
     "Authentication required · Sign in again to continue",
+    # exhausted credits, disabled usage and auth, as the 2.1.309 binary words them
+    "You're out of usage credits. Switch to another model to continue.",
+    "You're out of usage credits · resets 5pm (Europe/Berlin)",
+    "Your org is out of usage · add funds to continue",
+    "Your org is out of usage · contact your admin",
+    "Your organization is out of usage credits. Contact your admin to add more.",
+    "Your seat type doesn't include usage credits",
+    "Your seat type doesn't include usage",
+    "Your usage allocation has been disabled by your admin · ask your admin for a higher limit",
+    "This service is disabled for your org",
+    "Your group's usage limit is set to $0 · ask your admin for a higher limit",
+    "You've hit your team's shared budget. Switch to another model to continue.",
+    "You've hit your monthly spend limit. Switch to another model to continue.",
+    "Your ANTHROPIC_API_KEY belongs to a disabled organization · Update or unset the environment variable",
+    "Your organization has disabled API key authentication · Unset ANTHROPIC_API_KEY to use your claude.ai "
+    "account instead",
+    "Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, "
+    "or ask your admin to enable access",
+    "Anthropic profile login expired · Re-authenticate your Anthropic profile",
 ]
 TRANSIENT = [
     'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
     "API Error: 500 Internal server error",
     "API Error: Request timed out.",
+    "Repeated 529 Overloaded errors",
+    "Opus is experiencing high load, please use /model to switch to Sonnet",
+    "API Error: Request rejected (429) · this may be a temporary capacity issue.",
+    "Usage credits are required for long context requests.",      # a shorter request still gets through
+    # name a limit or a login, but the CLI itself calls them temporary
+    "API Error: Server is temporarily limiting requests (not your usage limit) · this may be a temporary "
+    "capacity issue.",
+    "Another Claude Code process is refreshing the OAuth token. Retry in a moment.",
+    "Could not refresh your login because another Claude Code process is refreshing it (or exited mid-refresh) · "
+    "Try again in a minute; if it keeps happening, close other Claude Code windows or sign in again with /login",
+    "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is "
+    "usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again",
 ]
 
 
@@ -181,12 +217,20 @@ def test_quota_and_auth_failures_are_unavailable(fake, mode, message):
     assert message[:20] in tr.records[-1]["error"]
 
 
+@pytest.mark.parametrize("mode", ["error", "errors", "stderr"])
 @pytest.mark.parametrize("message", TRANSIENT)
-def test_overload_and_server_errors_stay_runtime_errors(fake, message):
-    fake.mode("error", message)
+def test_overload_and_server_errors_stay_runtime_errors(fake, mode, message):
+    fake.mode(mode, message)
     with pytest.raises(RuntimeError) as ei:
         ClaudeCLI(claude_bin=fake.bin).run("hi")
     assert not isinstance(ei.value, ModelUnavailable)
+
+
+def test_a_temporary_line_does_not_hide_an_exhausted_account(fake):
+    fake.mode("error", "Another Claude Code process is refreshing the OAuth token. Retry in a moment.\n"
+                       "You're out of usage credits. Switch to another model to continue.")
+    with pytest.raises(ModelUnavailable, match="matched 'out of usage'"):
+        ClaudeCLI(claude_bin=fake.bin).run("hi")
 
 
 def test_is_error_with_exit_code_zero_is_a_failure(fake):
@@ -235,14 +279,54 @@ def test_timeout_names_the_session_to_resume(fake):
 
 def test_missing_binary_and_cancellation_are_traced(fake, tmp_path):
     tr = TraceSink()
-    with pytest.raises(OSError):
+    with pytest.raises(RuntimeError, match="could not run: FileNotFoundError") as ei:
         ClaudeCLI(claude_bin=str(tmp_path / "no-such-claude")).run("hi", trace=tr)
-    assert tr.records[-1]["ok"] is False
+    assert not isinstance(ei.value, OSError)                 # harnesses catch RuntimeError, not OSError
+    assert tr.records[-1]["ok"] is False and "FileNotFoundError" in tr.records[-1]["error"]
     fake.mode("sleep")
     with cancel_scope(lambda: "episode over"):
         with pytest.raises(ModelCallCancelled):
             ClaudeCLI(claude_bin=fake.bin).run("hi", trace=tr)
     assert tr.records[-1]["ok"] is False and "cancelled" in tr.records[-1]["error"]
+
+
+def test_an_argv_the_os_refuses_is_a_traced_runtime_error(monkeypatch):
+    def run_cli(argv, **kw):
+        raise OSError(errno.E2BIG, os.strerror(errno.E2BIG), argv[0])
+    monkeypatch.setattr(claude_mod, "run_cli", run_cli)
+    tr = TraceSink()
+    with pytest.raises(RuntimeError, match=f"could not run: OSError: .*{os.strerror(errno.E2BIG)}") as ei:
+        ClaudeCLI().run("hi", trace=tr)
+    assert not isinstance(ei.value, OSError) and isinstance(ei.value.__cause__, OSError)
+    assert tr.records[-1]["ok"] is False and os.strerror(errno.E2BIG) in tr.records[-1]["error"]
+
+
+def test_long_system_prompts_go_through_a_file(fake, tmp_path):
+    """One argv element over 128 KiB fails with E2BIG on Linux: a long system prompt reaches the CLI as
+    --system-prompt-file (the player's in its private directory, an agent's never in its workspace),
+    removed after the call, timed out or not; a short one stays on argv."""
+    rules = "règle · " * 40_000                   # 400 KB of UTF-8
+    player_text = f"{PLAYER_PREAMBLE}\n\n{rules}"
+    model, tr = ClaudeCLI(claude_bin=fake.bin), TraceSink()
+    first = model.run("state", system=rules, trace=tr)
+    model.run("next", session_id=first.session_id, system=rules)
+    model.run("design", cwd=tmp_path, agentic=True, system=rules)
+    model.run("short", system="rules")
+    fake.mode("sleep")
+    with pytest.raises(ModelTimeout):
+        model.run("slow", system=rules, timeout_s=1.0)
+    c1, c2, c3, c4, c5 = fake.calls()
+    for call, text in ((c1, player_text), (c2, player_text), (c3, rules), (c5, player_text)):
+        argv = call["argv"]
+        assert "--system-prompt" not in argv and call["system_file"] == text
+        assert max(len(a.encode()) for a in argv) < 4096
+        path = Path(_flag(argv, "--system-prompt-file"))
+        assert path.is_absolute() and not path.exists()
+    assert Path(_flag(c1["argv"], "--system-prompt-file")).parent == Path(c1["cwd"])
+    assert tmp_path.resolve() not in Path(_flag(c3["argv"], "--system-prompt-file")).parents
+    assert _flag(c4["argv"], "--system-prompt") == f"{PLAYER_PREAMBLE}\n\nrules" and c4["system_file"] is None
+    assert "--system-prompt-file" not in c4["argv"] and not any(Path(c1["cwd"]).iterdir())
+    assert tr.records[0]["request"]["system"] == player_text and tr.records[0]["ok"] is True
 
 
 def test_images_go_through_stream_json(fake, tmp_path):

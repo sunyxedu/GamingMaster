@@ -19,6 +19,7 @@ are stored per directory. Not ``--bare``: it also drops settings-file auth
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import re
 import shutil
@@ -45,12 +46,22 @@ from .base import (
 
 # `claude --help` (2.1.308); the CLI only warns on an unknown --effort and runs at its default.
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
-# Quota / auth messages of the CLI and the API. Checked only on a failed call (rc != 0 or is_error);
-# "overloaded", API 5xx and timeouts are transient (RuntimeError / TimeoutError).
+# Quota / auth messages of the CLI (its usage-limit and auth texts, checked in the 2.1.309 binary) and
+# the API. Checked only on a failed call (rc != 0 or is_error); "overloaded", API 5xx and timeouts are
+# transient (RuntimeError / TimeoutError). "Usage credits are required for long context" is not here:
+# a shorter request still gets through.
 _UNAVAILABLE_RE = re.compile(
-    r"hit your|reached your|usage limit|session limit|weekly limit|out of extra usage|"
-    r"doesn.t include extra usage|requires usage credits|credit balance|run /login|sign in again|"
-    r"invalid api key|invalid auth token|oauth token|authentication required|not logged in", re.I)
+    r"hit your|reached your|usage limit|session limit|weekly limit|out of (?:extra )?usage|"
+    r"doesn.t include (?:extra )?usage|requires usage credits|usage allocation has been disabled|"
+    r"disabled for your org|disabled organization|organization has disabled|credit balance|run /login|"
+    r"sign in again|login expired|invalid api key|invalid auth token|oauth token|authentication required|"
+    r"not logged in", re.I)
+# Lines the CLI itself calls temporary though they name a limit or a login: a 429 that is "not your
+# usage limit", an OAuth refresh another claude process holds ("retry in a minute"). Not classified.
+_TRANSIENT_LINE_RE = re.compile(r"^.*(?:not your usage limit|another Claude Code process is refreshing).*$",
+                                re.I | re.M)
+# One argv element is capped at 128 KiB on Linux (E2BIG): a longer system prompt goes through a file.
+_SYSTEM_ARGV_MAX = 32 * 1024
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                 ".webp": "image/webp"}
 _ENV_DROP = CLI_ENV_DROP + ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")   # a nested session refuses to start
@@ -85,7 +96,7 @@ class ClaudeCLI:
             return self._player_dir
 
     def _argv(self, *, session_id: Optional[str], new_session_id: Optional[str], system: Optional[str],
-              agentic: bool, web_search: bool, stream: bool) -> list[str]:
+              agentic: bool, web_search: bool, stream: bool, system_file: Optional[Path] = None) -> list[str]:
         argv = [self.claude_bin, "-p"]
         if stream:      # stream-json input requires stream-json output, which requires --verbose
             argv += ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
@@ -101,15 +112,15 @@ class ClaudeCLI:
             argv += ["--session-id", new_session_id]
         if agentic:
             if system and not session_id:
-                argv += ["--system-prompt", system]
+                argv += _system_flag(system, system_file)
             argv += ["--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
             if not web_search:  # study / adapt research the game on the web; the proposer must not
                 argv += ["--disallowedTools", "WebSearch", "WebFetch"]
         else:
             # Replaces the coding-agent system prompt. Sent on --resume too: the CLI keeps reusing
             # the prompt it recorded first, and renders this one again after a compaction.
-            argv += ["--system-prompt", PLAYER_PREAMBLE + (f"\n\n{system}" if system else ""),
-                     "--tools", "", "--strict-mcp-config", "--settings", _PLAYER_SETTINGS,
+            argv += _system_flag(PLAYER_PREAMBLE + (f"\n\n{system}" if system else ""), system_file)
+            argv += ["--tools", "", "--strict-mcp-config", "--settings", _PLAYER_SETTINGS,
                      "--disable-slash-commands"]
         return argv
 
@@ -146,27 +157,39 @@ class ClaudeCLI:
         stream = bool(blocks)
         new_session_id = None if session_id else str(uuid.uuid4())
         sid = session_id or new_session_id
-        argv = self._argv(session_id=session_id, new_session_id=new_session_id, system=system,
-                          agentic=agentic, web_search=web_search, stream=stream)
         stdin = prompt if not stream else json.dumps(
             {"type": "user", "message": {"role": "user", "content": blocks + [{"type": "text", "text": prompt}]}}) + "\n"
-        run_dir = (Path(cwd).resolve() if cwd else None) if agentic else self._player_cwd()
+        system_file: Optional[Path] = None
         try:
+            run_dir = (Path(cwd).resolve() if cwd else None) if agentic else self._player_cwd()
+            if len(request.get("system", "").encode("utf-8")) > _SYSTEM_ARGV_MAX:
+                # a player's in its private directory; an agent's in the temp dir, never its workspace
+                system_file = _system_file(request["system"], None if agentic else run_dir)
+            argv = self._argv(session_id=session_id, new_session_id=new_session_id, system=system,
+                              agentic=agentic, web_search=web_search, stream=stream, system_file=system_file)
             proc = run_cli(argv, cwd=run_dir, stdin_text=stdin, timeout_s=timeout_s,
                            env_overrides=None if agentic else _PLAYER_ENV, env_drop=_ENV_DROP)
         except CLITimeout as e:
             err = f"timeout: claude -p exceeded {timeout_s:g}s (session {sid})"
             self._trace(trace, t0, request, None, err)
             raise ModelTimeout(err, session_id=sid) from e
-        except Exception as e:  # binary missing, cancelled with its episode, ...
+        except OSError as e:    # binary missing, E2BIG, ...: a failed call like any other, not a bare OSError
+            err = f"claude -p could not run: {type(e).__name__}: {e}"
+            self._trace(trace, t0, request, None, err)
+            raise RuntimeError(err) from e
+        except Exception as e:  # cancelled with its episode, ...
             self._trace(trace, t0, request, None, f"{type(e).__name__}: {e}")
             raise
+        finally:
+            if system_file is not None:
+                with contextlib.suppress(OSError):
+                    system_file.unlink()
         latency = time.time() - t0
         payload = _result_payload(proc.stdout or "", stream)
         if proc.returncode != 0 or (payload is not None and payload.get("is_error")):
             err = _error_text(payload, proc)
             self._trace(trace, t0, request, None, err)
-            hit = _UNAVAILABLE_RE.search(err)
+            hit = _UNAVAILABLE_RE.search(_TRANSIENT_LINE_RE.sub("", err))
             if hit:
                 raise ModelUnavailable(f"claude unavailable (matched {hit.group(0)!r}): {err[-800:]}")
             raise RuntimeError(f"claude -p failed (rc={proc.returncode}): {err}")
@@ -193,6 +216,18 @@ class ClaudeCLI:
                 "system2", self.name, t0, time.time() - t0, request,
                 {"text": res.text, "session_id": res.session_id} if res else None,
                 ok=err is None, error=err, usage=res.usage if res else {}))
+
+
+def _system_file(text: str, directory: Optional[Path]) -> Path:
+    """A private file holding a system prompt too long for argv; the CLI reads it at start-up."""
+    fd, path = tempfile.mkstemp(prefix="metaharness-claude-system-", suffix=".txt", dir=directory)
+    with open(fd, "wb") as fh:
+        fh.write(text.encode("utf-8"))
+    return Path(path)
+
+
+def _system_flag(text: str, path: Optional[Path]) -> list[str]:
+    return ["--system-prompt-file", str(path)] if path is not None else ["--system-prompt", text]
 
 
 def _image_block(path: Path, data: bytes) -> dict[str, Any]:

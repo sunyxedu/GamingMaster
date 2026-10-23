@@ -106,6 +106,12 @@ def test_timestamp_containing_401_is_not_an_auth_failure(monkeypatch):
     ("Your access token could not be refreshed. Please log out and sign in again.", "auth problem"),
     ("You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro)", "usage limit"),
     ("Quota exceeded. Check your plan and billing details.", "usage limit"),
+    # UsageLimitReachedError of codex 0.160 for workspace credits and spend caps
+    ("Your workspace is out of credits. Add credits to continue.", "usage limit"),
+    ("Your workspace is out of credits. Ask your workspace owner to refill in order to continue.", "usage limit"),
+    ("You hit your spend cap set in your workspace. Increase your spend cap to continue.", "usage limit"),
+    ("You hit your spend cap set by the owner of your workspace. Ask an owner to increase your spend cap to "
+     "continue.", "usage limit"),
 ])
 def test_reported_failures_are_classified_with_the_matched_text(monkeypatch, message, what):
     stdout = _events({"type": "thread.started", "thread_id": "t"}, {"type": "error", "message": message},
@@ -115,6 +121,29 @@ def test_reported_failures_are_classified_with_the_matched_text(monkeypatch, mes
     with pytest.raises(ModelUnavailable, match=f"codex {what} \\(matched ") as ei:
         CodexCLI(model="m").run("hi", trace=tr)
     assert message[:30] in str(ei.value) and tr.records[-1]["ok"] is False
+
+
+@pytest.mark.parametrize("message", [
+    "Selected model is at capacity. Please try a different model.",
+    "We’re currently experiencing high demand, which may cause temporary errors.",
+    "Codex is currently experiencing high load.",
+    "unexpected status 503 Service Unavailable: upstream connect error",
+])
+def test_overload_stays_a_runtime_error(monkeypatch, message):
+    stdout = _events({"type": "thread.started", "thread_id": "t"}, {"type": "error", "message": message},
+                     {"type": "turn.failed", "error": {"message": message}})
+    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(stdout, rc=1))
+    with pytest.raises(RuntimeError, match="codex exec failed") as ei:
+        CodexCLI(model="m").run("hi")
+    assert not isinstance(ei.value, ModelUnavailable)
+
+
+def test_a_codex_that_cannot_start_is_a_traced_runtime_error(tmp_path):
+    tr = TraceSink()
+    with pytest.raises(RuntimeError, match="could not run: FileNotFoundError") as ei:
+        CodexCLI(model="m", codex_bin=str(tmp_path / "no-such-codex")).run("hi", trace=tr)
+    assert not isinstance(ei.value, OSError)                 # harnesses catch RuntimeError, not OSError
+    assert tr.records[-1]["ok"] is False and "FileNotFoundError" in tr.records[-1]["error"]
 
 
 def test_stderr_is_classified_only_when_codex_failed(monkeypatch):
