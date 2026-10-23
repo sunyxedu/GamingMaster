@@ -181,6 +181,25 @@ def archive_game(base: str) -> Optional[str]:
     return m.group("game") if m else None
 
 
+WINRATE_GAMES = ("go",)
+
+
+def lopsided(path: str, limit: float) -> Optional[str]:
+    """Why the archive's wave is not worth judging on winrate (its learner score >= ``limit``
+    or <= 1 - ``limit``), else None."""
+    if not (0.5 < limit < 1.0):
+        return None
+    z = np.load(path)
+    meta = json.loads(str(z["meta"])) if "meta" in z else {}
+    n = meta.get("score_n") or 0
+    if not n:
+        return None
+    score = float(meta.get("score_sum", 0.0)) / n
+    if score >= limit or score <= 1.0 - limit:
+        return f"lopsided wave: learner score {score:.2f} over {n} games"
+    return None
+
+
 def sample(items: List[Any], k: int, seed: int = 0) -> List[Any]:
     if k <= 0 or len(items) <= k:
         return items
@@ -276,6 +295,8 @@ def summary(run: str) -> None:
     rows = [json.loads(l) for l in open(path)]
     by: Dict[Tuple[str, str], Dict[int, List[Dict[str, Any]]]] = {}
     for r in rows:
+        if r.get("skipped"):
+            continue
         by.setdefault((r["game"], r.get("opponent") or "?"), {}).setdefault(int(r["iteration"]), []).append(r)
     for (g, opp), its in sorted(by.items()):
         parts = []
@@ -307,6 +328,9 @@ def main() -> None:
     ap.add_argument("--max_positions_game", action="append", default=[], metavar="GAME=N",
                     help="a game's own --max_positions (go's engine is the slow one)")
     ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--skip_lopsided", type=float, default=0.9,
+                    help="winrate-judged games (go): skip waves the learner scored >= this (or "
+                         "<= 1 - this) in — decided positions, every move keeps the winrate")
     ap.add_argument("--only", default="", help="comma-separated games")
     ap.add_argument("--summary", action="store_true", help="print the trend and exit")
     ap.add_argument("--verbose", action="store_true")
@@ -334,6 +358,15 @@ def main() -> None:
                 continue
             game = archive_game(base)
             if game not in engines or game in dead or (only and game not in only):
+                continue
+            lop = lopsided(path, a.skip_lopsided) if game in WINRATE_GAMES else None
+            if lop is not None:
+                # winrate points: in a wave the learner won (or lost) nearly every game of, the
+                # positions are decided and every move keeps the winrate — nothing to measure
+                # (go against its weakest referees: 1.00).  Recorded, so it is not queued again
+                rec = {"file": base, "game": game, "positions": 0, "skipped": lop}
+                with open(out_path, "a") as f:
+                    f.write(json.dumps(rec) + "\n")
                 continue
             if game not in live:
                 try:

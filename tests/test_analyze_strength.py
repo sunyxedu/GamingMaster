@@ -147,3 +147,31 @@ def test_archive_names_keep_multi_word_games():
     assert archive_game("eval_chess_variants_init_it40_r0_w0.npz") == "chess_variants"
     assert archive_game("eval_clash_royale_engine_it7_r1_w12.npz") == "clash_royale"
     assert archive_game("hunl_it25.json") is None
+
+
+def test_lopsided_go_waves_are_recorded_not_judged(tmp_path):
+    """--skip_lopsided: a go wave the learner won every game of is written to strength.jsonl as
+    skipped (so the sentinel does not queue it again) without starting the engine; --summary
+    ignores the row."""
+    from scripts import analyze_strength
+
+    run = tmp_path / "run"
+    path = run / "traces" / "eval_go_engine_it5_r0_w0.npz"
+    archive_eval_wave(str(path), _Env(_random_games("go", 1, 4)), [[True, False]],
+                      {"game": "go", "opponent": "engine", "iteration": 5, "score_sum": 6.0, "score_n": 6})
+    assert analyze_strength.lopsided(str(path), 0.9).startswith("lopsided wave: learner score 1.00")
+    assert analyze_strength.lopsided(str(path), 1.0) is None
+
+    def no_engine(*a, **k):
+        raise AssertionError("the engine must not start for a lopsided wave")
+
+    orig = analyze_strength.make_engine
+    analyze_strength.make_engine = no_engine
+    try:
+        analyze_strength.sys.argv = ["analyze_strength.py", "--run", str(run), "--engine", "go=x"]
+        analyze_strength.main()
+    finally:
+        analyze_strength.make_engine = orig
+    rows = [json.loads(l) for l in open(run / "strength.jsonl")]
+    assert len(rows) == 1 and rows[0]["skipped"] and rows[0]["file"] == path.name
+    analyze_strength.summary(str(run))
