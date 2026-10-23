@@ -95,3 +95,44 @@ def test_go_loss_against_katago(tmp_path):
         eng.close()
     assert rec["positions"] == 3 and 0.0 <= rec["mean_loss"] <= 100.0 and rec["agree"] is None
     assert rec["init_positions"] == 3 and 0.0 <= rec["init_mean_loss"] <= 100.0
+
+
+def test_an_engine_that_does_not_start_skips_its_game(tmp_path, capsys):
+    """main(): a game whose engine does not start (an AVX2 build on an SSE2-only node exits at
+    once) is skipped with a message — its files stay unjudged for the next run — and the other
+    games are still judged."""
+    from scripts import analyze_strength
+
+    run = tmp_path / "run"
+    for game, plies in (("chess", 6), ("xiangqi", 6)):
+        archive_eval_wave(str(run / "traces" / f"eval_{game}_init_it3_r0_w0.npz"),
+                          _Env(_random_games(game, 1, plies)), [[True, False]],
+                          {"game": game, "opponent": "init", "iteration": 3, "rank": 0, "wave": 0})
+    calls = []
+
+    class FakeEngine:
+        name = "fake"
+
+        def judge(self, start, moves, played, go):
+            calls.append(played)
+            return 10.0, 0.0, False
+
+        def close(self):
+            pass
+
+    def fake_make(game, command, go, threads):
+        if game == "xiangqi":
+            raise analyze_strength.EngineError("pikafish: no 'uciok' (exited -4)")
+        return FakeEngine()
+
+    orig = analyze_strength.make_engine
+    analyze_strength.make_engine = fake_make
+    try:
+        analyze_strength.sys.argv = ["analyze_strength.py", "--run", str(run), "--engine", "chess=x",
+                                     "--engine", "xiangqi=y", "--go", "chess=go depth 1"]
+        analyze_strength.main()
+    finally:
+        analyze_strength.make_engine = orig
+    rows = [json.loads(l) for l in open(run / "strength.jsonl")]
+    assert [r["game"] for r in rows] == ["chess"] and calls
+    assert "xiangqi: the engine does not start" in capsys.readouterr().err

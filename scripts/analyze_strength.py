@@ -315,17 +315,24 @@ def main() -> None:
                    key=lambda p: (int(re.search(r"_it(\d+)_", p).group(1)), p))
     only = set(a.only.split(",")) if a.only else None
     live: Dict[str, Any] = {}
-    n_new = 0
+    dead: Dict[str, str] = {}       # games whose engine does not start (e.g. an AVX2 build on an
+    n_new = 0                       # SSE2-only node): skipped, their files stay unjudged
     try:
         for path in files:
             base = os.path.basename(path)
             if base in done:
                 continue
             game = base[len("eval_"):].split("_")[0]
-            if game not in engines or (only and game not in only):
+            if game not in engines or game in dead or (only and game not in only):
                 continue
             if game not in live:
-                live[game] = make_engine(game, engines[game], limits.get(game, ""), a.threads)
+                try:
+                    live[game] = make_engine(game, engines[game], limits.get(game, ""), a.threads)
+                except (EngineError, OSError) as e:
+                    dead[game] = f"{type(e).__name__}: {e}"
+                    print(f"{game}: the engine does not start ({dead[game][:300]}) — skipped",
+                          file=sys.stderr, flush=True)
+                    continue
             try:
                 rec = judge_file(path, live[game], game, limits.get(game, ""),
                                  budget.get(game, a.max_positions), a.verbose)
