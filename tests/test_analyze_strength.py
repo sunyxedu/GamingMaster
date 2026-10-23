@@ -136,3 +136,14 @@ def test_an_engine_that_does_not_start_skips_its_game(tmp_path, capsys):
     rows = [json.loads(l) for l in open(run / "strength.jsonl")]
     assert [r["game"] for r in rows] == ["chess"] and calls
     assert "xiangqi: the engine does not start" in capsys.readouterr().err
+
+
+def test_archive_names_keep_multi_word_games():
+    """archive_game: chess_variants' archives are chess_variants, not chess (the chess engine
+    must not judge them)."""
+    from scripts.analyze_strength import archive_game
+
+    assert archive_game("eval_chess_init_it40_r0_w2.npz") == "chess"
+    assert archive_game("eval_chess_variants_init_it40_r0_w0.npz") == "chess_variants"
+    assert archive_game("eval_clash_royale_engine_it7_r1_w12.npz") == "clash_royale"
+    assert archive_game("hunl_it25.json") is None

@@ -171,6 +171,16 @@ def decisions(game: str, traj: np.ndarray, learner_seats: Sequence[bool]) -> Lis
     return out
 
 
+ARCHIVE = re.compile(r"^eval_(?P<game>.+)_(?P<opponent>[^_]+)_it(?P<iteration>\d+)_r\d+_w\d+\.npz$")
+
+
+def archive_game(base: str) -> Optional[str]:
+    """The game of an archive file name (``eval_<game>_<opponent>_it<N>_r<rank>_w<wave>.npz``;
+    game names hold underscores: ``eval_chess_variants_init_it40_r0_w0.npz`` is chess_variants)."""
+    m = ARCHIVE.match(base)
+    return m.group("game") if m else None
+
+
 def sample(items: List[Any], k: int, seed: int = 0) -> List[Any]:
     if k <= 0 or len(items) <= k:
         return items
@@ -322,7 +332,7 @@ def main() -> None:
             base = os.path.basename(path)
             if base in done:
                 continue
-            game = base[len("eval_"):].split("_")[0]
+            game = archive_game(base)
             if game not in engines or game in dead or (only and game not in only):
                 continue
             if game not in live:
