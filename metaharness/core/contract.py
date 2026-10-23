@@ -182,10 +182,11 @@ class WallClock:
 
 class _Task:
     """One ``ctx.spawn`` task as the virtual clock sees it."""
-    __slots__ = ("state",)
+    __slots__ = ("state", "awaiting")
 
     def __init__(self) -> None:
-        self.state = "queued"      # queued | busy | parked | detached | done
+        self.state = "queued"      # queued | busy | parked | blocked | detached | done
+        self.awaiting: Any = None  # the future a blocked task waits on
 
 
 class VirtualClock:
@@ -219,6 +220,7 @@ class VirtualClock:
         self._tls = threading.local()
         self._driver_charging = False
         self._driver_blocked = 0
+        self._driver_awaiting: Any = None
         self._driver_in_call = 0
         self._advancing = False
         self._closed = False
@@ -236,11 +238,16 @@ class VirtualClock:
     def _is_driver(self) -> bool:
         return self._driver is None or threading.get_ident() == self._driver
 
+    @staticmethod
+    def _live(t: "_Task") -> bool:
+        # a task blocked on a future that is already done is about to run: count it as running
+        return t.state == "busy" or (t.state == "blocked" and t.awaiting is not None and t.awaiting.done())
+
     def _busy(self) -> int:
-        return sum(t.state in ("queued", "busy") for t in self._tasks)
+        return sum(t.state == "queued" or self._live(t) for t in self._tasks)
 
     def _running(self) -> int:
-        return sum(t.state == "busy" for t in self._tasks)
+        return sum(self._live(t) for t in self._tasks)
 
     def _touch(self) -> None:
         self._last_change = time.monotonic()
@@ -291,7 +298,7 @@ class VirtualClock:
         while self._busy() and not self._closed:
             left = deadline - time.monotonic()
             if left <= 0:
-                stuck = [t for t in self._tasks if t.state in ("queued", "busy")]
+                stuck = [t for t in self._tasks if t.state == "queued" or self._live(t)]
                 for t in stuck:
                     t.state = "detached"
                 self._report("virtual_handoff_timeout", workers=len(stuck), handoff_s=self.handoff_s)
@@ -352,6 +359,8 @@ class VirtualClock:
         if self._advancing or self._driver_charging or not self._parked:
             return
         blocked = self._driver_blocked > 0
+        if blocked and self._driver_awaiting is not None and self._driver_awaiting.done():
+            return                 # the driver's future is done: it moves time itself, from that instant
         idle = (not self._driver_in_call and time.monotonic() - self._last_driver >= self.idle_s)
         if not (blocked or idle):
             return
@@ -360,7 +369,7 @@ class VirtualClock:
             # call, a nested future): once nothing has moved for handoff_s, stop waiting for it.
             if time.monotonic() - self._last_change < self.handoff_s:
                 return
-            stuck = [t for t in self._tasks if t.state == "busy"]
+            stuck = [t for t in self._tasks if self._live(t)]
             for t in stuck:
                 t.state = "detached"
             self._report("virtual_handoff_timeout", workers=len(stuck), handoff_s=self.handoff_s)
@@ -399,11 +408,12 @@ class VirtualClock:
             self._cv.notify_all()
 
     @contextlib.contextmanager
-    def waiting(self) -> Iterator[None]:
-        """The calling thread waits on a spawned future: the driver is blocked, a worker is not
-        running — either way parked workers may move time (nested spawns need no timeout)."""
+    def waiting(self, fut: Any = None) -> Iterator[None]:
+        """The calling thread waits on spawned future ``fut``: the driver is blocked, a worker is not
+        running — either way parked workers may move time (nested spawns need no timeout). Once
+        ``fut`` is done the waiter counts as running again, so time waits for it to resume."""
         if self._driver is not None and threading.get_ident() == self._driver:
-            with self.driver_blocked():
+            with self.driver_blocked(fut):
                 yield
             return
         task: Optional[_Task] = getattr(self._tls, "task", None)
@@ -412,7 +422,7 @@ class VirtualClock:
             return
         with self._cv:
             if task.state == "busy":
-                task.state = "blocked"
+                task.state, task.awaiting = "blocked", fut
                 self._touch()
                 self._cv.notify_all()
         try:
@@ -421,22 +431,25 @@ class VirtualClock:
             with self._cv:
                 if task.state == "blocked":
                     task.state = "busy"
+                task.awaiting = None
                 self._touch()
 
     @contextlib.contextmanager
-    def driver_blocked(self) -> Iterator[None]:
+    def driver_blocked(self, fut: Any = None) -> Iterator[None]:
         """The driver waits on a spawned future: parked workers may move time."""
         if self._driver is None or threading.get_ident() != self._driver:
             yield
             return
         with self._cv:
             self._driver_blocked += 1
+            self._driver_awaiting = fut
             self._cv.notify_all()
         try:
             yield
         finally:
             with self._cv:
                 self._driver_blocked -= 1
+                self._driver_awaiting = None
                 self._last_driver = time.monotonic()
 
     @contextlib.contextmanager
@@ -472,7 +485,7 @@ class _SpawnFuture(cf.Future):
     thread: Optional[int] = None         # the worker thread, once it runs
 
     def _blocked(self):
-        return self._clock.waiting() if isinstance(self._clock, VirtualClock) else contextlib.nullcontext()
+        return self._clock.waiting(self) if isinstance(self._clock, VirtualClock) else contextlib.nullcontext()
 
     def result(self, timeout: Optional[float] = None) -> Any:
         with self._blocked():
@@ -513,7 +526,9 @@ class HarnessContext:
         ticks_fn: Optional[Callable[[], int]] = None,
         tick_cv: Optional[threading.Condition] = None,
         tick_over_fn: Optional[Callable[[], bool]] = None,
+        on_unavailable: Optional[Callable[[], None]] = None,
     ) -> None:
+        self._on_unavailable = on_unavailable
         self.tick_s = tick_s
         self._ticks = ticks_fn           # lock-free (published by the ticker): read while holding tick_cv
         self._tick_cv = tick_cv
@@ -624,6 +639,8 @@ class HarnessContext:
                 out = fn()
             except ModelUnavailable as exc:
                 self.unavailable = exc
+                if self._on_unavailable is not None:
+                    self._on_unavailable()         # the run stops: end this episode now
                 raise
             except ModelCallCancelled as exc:
                 raise EpisodeOver(f"{kind} call cancelled: {call.reason or exc}") from None
@@ -686,8 +703,8 @@ class HarnessContext:
         return ans
 
     def _check_open(self) -> None:
-        if self.unavailable is not None:
-            raise self.unavailable
+        if self.unavailable is not None:   # a fresh exception each time: re-raising one instance grows its traceback
+            raise ModelUnavailable(str(self.unavailable)) from None
         if self._closed.is_set():
             raise EpisodeOver("episode is closed")
 
@@ -761,9 +778,9 @@ class HarnessContext:
                 # ends with that call's own timeout: wait for it instead of calling it unfinished
                 with self._lock:
                     calls = {c.thread: c.deadline for c in self._inflight}
-                if all(f.thread in calls for f in pending):
-                    end = max(calls[f.thread] for f in pending)
-                    cf.wait(pending, timeout=min(60.0, max(0.0, end - time.monotonic())) + 0.5)
+                inflight = [calls[f.thread] for f in pending if f.thread in calls]
+                if inflight:          # also covers a task waiting on a nested future that is in a call
+                    cf.wait(pending, timeout=min(60.0, max(0.0, max(inflight) - time.monotonic())) + 0.5)
         return sum(not f.done() for f in futs)
 
 

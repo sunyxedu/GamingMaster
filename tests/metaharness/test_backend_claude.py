@@ -279,9 +279,10 @@ def test_timeout_names_the_session_to_resume(fake):
 
 def test_missing_binary_and_cancellation_are_traced(fake, tmp_path):
     tr = TraceSink()
-    with pytest.raises(RuntimeError, match="could not run: FileNotFoundError") as ei:
+    with pytest.raises(ModelUnavailable, match="could not run: FileNotFoundError") as ei:
         ClaudeCLI(claude_bin=str(tmp_path / "no-such-claude")).run("hi", trace=tr)
-    assert not isinstance(ei.value, OSError)                 # harnesses catch RuntimeError, not OSError
+    # a CLI that cannot start makes every call fail: the run stops instead of burning its iterations
+    assert not isinstance(ei.value, OSError)
     assert tr.records[-1]["ok"] is False and "FileNotFoundError" in tr.records[-1]["error"]
     fake.mode("sleep")
     with cancel_scope(lambda: "episode over"):

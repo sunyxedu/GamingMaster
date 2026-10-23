@@ -447,7 +447,8 @@ def run_episode(
                          tick_s=tick_s if realtime else None,
                          ticks_fn=(lambda: published["ticks"]) if realtime else None,
                          tick_cv=tick_cv if realtime else None,
-                         tick_over_fn=lambda: published["over"] or stop.is_set())
+                         tick_over_fn=lambda: published["over"] or stop.is_set(),
+                         on_unavailable=lambda: (stop.set(), _wake_waiters()))
     holder["ctx"] = ctx
     if isinstance(clock, VirtualClock):
         clock.on_event = lambda event, data: tee.write({"type": event, **data})
@@ -520,6 +521,8 @@ def run_episode(
     game_done = False
     # The game lock is free unless a call into the game never returned (a hung server): never wait
     # for it unboundedly — record the hang and use what the ticker / steps published.
+    breakdown: Optional[dict[str, float]] = None
+    breakdown_error: Optional[str] = None
     hung = not lock.acquire(timeout=2.0)          # a game call returns in well under that
     if hung:
         err = ("game hung: a call into the game (tick/step/observe) did not return, so neither the "
@@ -551,6 +554,15 @@ def run_episode(
                     res.invalid = str(info.get("invalid_reason") or "the game reported an invalid trial")[:300]
             except Exception:  # noqa: BLE001 — diagnostics are optional
                 pass
+            # Optional adaptor hook: a numeric breakdown of the score (e.g. progress vs survival) so the
+            # proposer can see *where* points came from instead of one scalar. Public, not hidden state.
+            if hasattr(game, "score_breakdown"):
+                try:
+                    bd = game.score_breakdown()
+                    if isinstance(bd, dict):
+                        breakdown = {str(k): float(v) for k, v in bd.items() if isinstance(v, (int, float))}
+                except Exception as e:  # noqa: BLE001
+                    breakdown_error = str(e)[:200]
         finally:
             lock.release()
     if not ended_by:
@@ -570,17 +582,10 @@ def run_episode(
     res.info = {"score": res.score, "ticks": res.steps, "game_done": game_done}
     res.info.update({"pending_tasks": pending, "deadline_s": deadline_s, "harness_alive": th.is_alive(),
                      "cancelled_calls": cancelled_calls[0]})
-    # Optional adaptor hook: a numeric breakdown of the score (e.g. progress vs survival) so
-    # the proposer can see *where* points came from instead of one scalar. Public, not hidden state.
-    if hasattr(game, "score_breakdown") and not hung:
-        try:
-            with lock:
-                bd = game.score_breakdown()
-            if isinstance(bd, dict):
-                res.info["score_breakdown"] = {str(k): float(v) for k, v in bd.items()
-                                               if isinstance(v, (int, float))}
-        except Exception as e:  # noqa: BLE001
-            res.info["score_breakdown_error"] = str(e)[:200]
+    if breakdown is not None:
+        res.info["score_breakdown"] = breakdown
+    if breakdown_error is not None:
+        res.info["score_breakdown_error"] = breakdown_error
     res.acts, res.acts_after_s1, res.acts_after_s2 = ctx.acts, ctx.acts_after_s1, ctx.acts_after_s2
     trace.write({"type": "episode_end", **res.summary(), "final_obs": _obs_field(final_obs, FINAL_OBS_CAP)})
     return res
@@ -714,8 +719,9 @@ def evaluate_harness(
                     trace_path.rename(trace_path.with_name(f"trace_seed{seed}.invalid{attempt}.jsonl"))
                 result.metadata.setdefault("invalid_trials", []).append({"seed": seed, "reason": ep.invalid})
                 continue
-            if ep.invalid and not ep.error:
-                ep.error = f"invalid trial (reported by the game): {ep.invalid}"
+            if ep.invalid:      # also when the failure raised: it is the infrastructure's, not the harness's
+                ep.error = (f"invalid trial (reported by the game): {ep.invalid}"
+                            + (f" — also: {_last_line(ep.error)}" if ep.error else ""))
             for kind, names in ep.backends.items():
                 resolved.setdefault(kind, set()).update(names)
             carried = memory

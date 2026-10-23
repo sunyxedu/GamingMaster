@@ -551,3 +551,30 @@ def test_adaptors_keep_their_own_helpers(tmp_path, clean_registry):
         assert [play(w) for w in "ba"] == ["b", "a2"]                # b's own module back; a's fresh one
     finally:
         sys.modules.pop("mh_tst_lazy", None)
+
+
+NS_GAME = LAZY_GAME.replace("import mh_tst_lazy\n", "import mh_tst_ns.helper as mh_tst_lazy\n")
+
+
+def test_adaptors_keep_their_own_namespace_package_helpers(tmp_path, clean_registry):
+    # helper directories without __init__.py (namespace packages) are shadowed the same way
+    dirs = {who: write_adaptor(tmp_path / who, "", **{"game.py": NS_GAME,
+                                                      "mh_tst_ns/helper.py": f"WHO = {who!r}\n"})
+            for who in ("a", "b")}
+    keys = {who: clean_registry.register_adaptor(d) for who, d in dirs.items()}
+
+    def play(who: str) -> str:
+        g = clean_registry.make_game(keys[who])
+        try:
+            g.reset(0)
+            g.step("inc")
+        finally:
+            g.close()
+        assert g.made_with.WHO == g.played_with.WHO, who
+        return g.played_with.WHO
+
+    try:
+        assert [play(w) for w in "abab"] == list("abab")
+    finally:
+        for name in [n for n in sys.modules if n == "mh_tst_ns" or n.startswith("mh_tst_ns.")]:
+            sys.modules.pop(name, None)

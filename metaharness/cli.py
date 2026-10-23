@@ -228,9 +228,6 @@ def _run_search(a: argparse.Namespace, game: str, tier_n: int, study: str, exp_d
     if best:
         print(f"best: {best.dir}")
     a.interrupted = loop.interrupted
-    if loop.interrupted:
-        print(f"interrupted: rerun with --name {archive.root.name} --runs-dir {archive.root.parent} "
-              "(and the same settings) to resume", file=sys.stderr)
     return best
 
 
@@ -244,7 +241,11 @@ def cmd_loop(a: argparse.Namespace) -> int:
               f"but the search runs --tier {a.tier}", file=sys.stderr)
     exp_dir = Path(a.runs_dir) / (a.name or f"tier{a.tier}-{_slug(game)}-{time.strftime('%Y%m%d-%H%M%S')}")
     _run_search(a, game, a.tier, _study_text(a, exp_dir), exp_dir)
-    return 3 if getattr(a, "interrupted", None) else 0
+    if getattr(a, "interrupted", None):
+        print(f"interrupted: rerun with --name {exp_dir.name} --runs-dir {exp_dir.parent} (and the same "
+              "settings) to resume", file=sys.stderr)
+        return 3
+    return 0
 
 
 def cmd_run(a: argparse.Namespace) -> int:

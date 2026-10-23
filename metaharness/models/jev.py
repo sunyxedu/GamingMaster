@@ -426,6 +426,9 @@ class _CutOff:
 
     def __init__(self, conn: http.client.HTTPConnection, deadline: float) -> None:
         self._conn = conn
+        # a Connection: close / HTTP/1.0 response detaches conn.sock while its body is read: keep
+        # the socket that exists now (None in _connect) and fall back to conn.sock
+        self._sock = conn.sock
         self._lock = threading.Lock()
         self._done = self.fired = False
         self._timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._fire)
@@ -436,7 +439,7 @@ class _CutOff:
             if self._done:
                 return
             self.fired = True
-            sock = self._conn.sock          # None while the TCP connect runs (bounded by its own timeout)
+            sock = self._sock or self._conn.sock   # None while the TCP connect runs (bounded by its own timeout)
             if sock is not None:
                 with contextlib.suppress(OSError):
                     sock.shutdown(socket.SHUT_RDWR)

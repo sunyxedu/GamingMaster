@@ -150,3 +150,11 @@ def test_kill_all_kills_live_cli_children(tmp_path):
     th.join(5)
     pid = int(pid_file.read_text())
     assert not th.is_alive() and not _alive(pid)
+
+
+def test_a_call_cancelled_at_its_own_deadline_is_cancelled_not_timed_out():
+    # the episode closes a moment before the CLI's (clamped) timeout: the cancel must win
+    t0 = time.monotonic()
+    with cancel_scope(lambda: "episode deadline" if time.monotonic() - t0 > 0.95 else None):
+        with pytest.raises(ModelCallCancelled):
+            run_cli([PY, "-c", "import time; time.sleep(30)"], cwd=None, stdin_text="x" * 10, timeout_s=1.0)

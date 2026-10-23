@@ -155,6 +155,9 @@ def _forget_modules(path: Path, *, own: bool = True) -> None:
     try:
         local = {p.stem for p in path.glob("*.py")}
         local |= {p.name for p in path.iterdir() if (p / "__init__.py").is_file()}
+        # helper directories without __init__.py are namespace packages: same shadowing problem
+        local |= {p.name for p in path.iterdir() if p.is_dir() and p.name.isidentifier()
+                  and p.name not in SKIP_DIRS and any(p.glob("*.py"))}
     except OSError:                                    # the directory is gone: nothing of it to shadow
         local = set()
     protected = set(sys.builtin_module_names) | set(getattr(sys, "stdlib_module_names", ()))
@@ -171,13 +174,15 @@ def _forget_modules(path: Path, *, own: bool = True) -> None:
             where += [os.path.realpath(p) for p in paths]
         if any(p.startswith(libs) for p in where):
             continue
-        mine = any(p.startswith(root) for p in where)
+        # a namespace package's __path__ spans every directory on sys.path: never anyone's own
+        ns = getattr(mod, "__file__", None) is None and hasattr(mod, "__path__")
+        mine = not ns and any(p.startswith(root) for p in where)
         if mine and own:
             del sys.modules[name]
         elif top in local and not mine:
             del sys.modules[name]
             owner = max((r for r in _PARKED if any(p.startswith(r) for p in where)), key=len, default="")
-            if owner:
+            if owner and not ns:
                 _PARKED[owner][name] = mod
     parked = _PARKED.pop(root, {})
     _PARKED[root] = {}                                 # a loaded adaptor: its evicted modules get parked

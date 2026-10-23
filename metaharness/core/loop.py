@@ -62,6 +62,10 @@ def _interrupted(e: Optional[dict[str, Any]]) -> bool:
     return _unavailable(e) or (bool(e) and _env_failed(e.get("errors") or [], e.get("n_episodes", 0)))
 
 
+def _jsonish(value: Any) -> Any:
+    return json.loads(json.dumps(value, default=str))
+
+
 def _heldout_exposed(d: Path) -> bool:
     """A held-out stage counts as run (test information is in the archive) once any of its
     episodes started — an eval.json with episodes, or any trace written — whatever stopped it."""
@@ -134,16 +138,15 @@ class MetaHarnessLoop:
         overlap = set(config.seeds_train) & set(config.seeds_heldout)
         if overlap:
             raise ValueError(f"train and held-out seeds overlap: {sorted(overlap)}")
-        if config.n_iterations and any(_heldout_exposed(d) for d in archive.cand_dir.glob("*/heldout*")
-                                       if d.is_dir()):
+        if config.n_iterations > self.proposals_done() and any(
+                _heldout_exposed(d) for d in archive.cand_dir.glob("*/heldout*") if d.is_dir()):
             raise ValueError("This archive contains held-out results; start a new search archive.")
-        # JSON-normalised (a tuple in an adaptor's EVAL_KWARGS would never equal its stored list)
-        game_kwargs = json.loads(json.dumps(game_kwargs, default=str))
-        self.game_kwargs = game_kwargs
         manifest = {
             "protocol_version": PROTOCOL_VERSION, "task": task_md, "seeds_train": config.seeds_train,
             "clock_mode": config.clock_mode, "latency_override": config.latency_override,
-            "game_kwargs": game_kwargs, "memory_mode": config.memory_mode,
+            # compared JSON-normalised (a tuple in EVAL_KWARGS is a list once stored); games are
+            # still built from the caller's kwargs
+            "game_kwargs": _jsonish(game_kwargs), "memory_mode": config.memory_mode,
             "budget": {k: getattr(config.budget, k) for k in
                        ("max_system1_calls", "max_system2_calls", "max_wall_s")},
             "harness_timeout_s": config.harness_timeout_s, "grace_s": config.grace_s,
@@ -196,13 +199,29 @@ class MetaHarnessLoop:
                   f"ended: {ended or '–'}")
         return res
 
-    def _stop_for(self, res: EvalResult) -> bool:
-        """Stop the search (resumable) on a model outage or when the game itself is down."""
+    def _stop_for(self, res: EvalResult, *, env_retry: bool = False) -> bool:
+        """Stop the search (resumable) on a model outage or when the game itself is down. A candidate
+        whose evaluation already failed that way once is not a reason to stop again: a hang or an
+        invalid trial its own play provokes would otherwise block every resume."""
         if res.fatal and res.fatal.startswith("model unavailable") and self.cfg.stop_on_model_unavailable:
             self.interrupted = res.fatal
-        elif _env_failed([e.error or "" for e in res.episodes], len(res.episodes)):
+        elif not env_retry and _env_failed([e.error or "" for e in res.episodes], len(res.episodes)):
             self.interrupted = "the game failed in every episode: " + (res.episodes[0].error or "")[:300]
         return self.interrupted is not None
+
+    def proposals_done(self) -> int:
+        """Proposals the archive holds (a proposer outage or an empty directory left by a killed
+        proposer does not count): --iters is their target number."""
+        n = 0
+        for c in self.archive.candidates():
+            if "-" in c.dir.name:                                   # a labelled seed baseline
+                continue
+            e = c.eval()
+            if e is not None and str(e.get("fatal") or "").startswith("proposer unavailable"):
+                continue
+            if c.harness_path.exists() or e is not None:
+                n += 1
+        return n
 
     def preflight_and_repair(self, cand: Candidate) -> bool:
         """Dry-run the candidate with stand-in models; on failure ask the proposer to repair once.
@@ -239,9 +258,9 @@ class MetaHarnessLoop:
             name = self.cfg.heldout_game
             groups.append(("heldout-game", lambda **k: make_game(name, **k), self.cfg.heldout_game_kwargs,
                            self.cfg.heldout_game_seeds or self.cfg.seeds_heldout or self.cfg.seeds_train))
-        key = {"groups": [[g[0], g[3]] for g in groups], "game_kwargs": self.game_kwargs,
-               "heldout_game": self.cfg.heldout_game, "heldout_game_kwargs": self.cfg.heldout_game_kwargs,
-               "game_source": self.cfg.game_source}
+        key = _jsonish({"groups": [[g[0], g[3]] for g in groups], "game_kwargs": self.game_kwargs,
+                        "heldout_game": self.cfg.heldout_game, "heldout_game_kwargs": self.cfg.heldout_game_kwargs,
+                        "game_source": self.cfg.game_source})
         path = self.archive.root / "seeds.json"
         if path.exists():
             cached = json.loads(path.read_text())
@@ -306,6 +325,12 @@ class MetaHarnessLoop:
             e = c.eval()
             if not c.harness_path.exists() or (e is not None and not _interrupted(e)):
                 continue
+            # an evaluation the game itself spoiled is redone once; failing that way again is the candidate's
+            env_retry = e is not None and not _unavailable(e) and any(
+                _interrupted(json.loads(p.read_text() or "{}")) and not _unavailable(json.loads(p.read_text() or "{}"))
+                for p in c.dir.glob("eval.interrupted-*.json"))
+            if env_retry:
+                continue
             if e is not None:
                 c.eval_path.rename(c.dir / f"eval.interrupted-{int(time.time())}.json")
             if self.cfg.preflight and "-" not in c.dir.name:       # proposed, not a labelled seed baseline
@@ -314,12 +339,12 @@ class MetaHarnessLoop:
                 except ModelUnavailable as exc:
                     self.interrupted = f"model unavailable: {exc}"
                     break
-            if self._stop_for(self.evaluate(c, self.cfg.seeds_train)):
+            retried = bool(list(c.dir.glob("eval.interrupted-*.json"))) and e is not None and not _unavailable(e)
+            if self._stop_for(self.evaluate(c, self.cfg.seeds_train), env_retry=retried):
                 break
         # --iters is the number of proposals this archive should have: a resumed search runs the rest
         n = self.cfg.n_iterations
-        done = sum(1 for c in self.archive.candidates() if "-" not in c.dir.name
-                   and not str((c.eval() or {}).get("fatal") or "").startswith("proposer unavailable"))
+        done = self.proposals_done()
         if done and n:
             self._log(f"the archive already holds {done} proposal(s); running {max(0, n - done)} more "
                       f"to reach {n} (raise --iters for more)")

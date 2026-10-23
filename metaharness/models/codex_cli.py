@@ -180,6 +180,8 @@ class CodexCLI:
             except OSError as e:    # binary missing, E2BIG, ...: a failed call like any other, not a bare OSError
                 err = f"codex exec could not run: {type(e).__name__}: {e}"
                 self._trace(trace, t0, request, None, err)
+                if _cannot_start(e, self.codex_bin):     # not on PATH / not executable: no call can ever work
+                    raise ModelUnavailable(err) from e
                 raise RuntimeError(err) from e
             except Exception as e:  # cancelled with its episode, ...
                 self._trace(trace, t0, request, None, f"{type(e).__name__}: {e}")
@@ -298,3 +300,11 @@ def _last_agent_message(events: list[dict]) -> str:
             if item.get("type") == "agent_message":
                 text = item.get("text", "") or text
     return text
+
+
+def _cannot_start(e: OSError, binary: str) -> bool:
+    """The CLI executable itself could not be started (Popen sets filename to it; a missing cwd or
+    E2BIG are different failures)."""
+    import errno
+    return (isinstance(e, (FileNotFoundError, PermissionError)) or e.errno == errno.ENOEXEC) and \
+        str(e.filename or "") in (binary, str(binary))

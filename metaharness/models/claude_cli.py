@@ -176,6 +176,8 @@ class ClaudeCLI:
         except OSError as e:    # binary missing, E2BIG, ...: a failed call like any other, not a bare OSError
             err = f"claude -p could not run: {type(e).__name__}: {e}"
             self._trace(trace, t0, request, None, err)
+            if _cannot_start(e, self.claude_bin):     # not on PATH / not executable: no call can ever work
+                raise ModelUnavailable(err) from e
             raise RuntimeError(err) from e
         except Exception as e:  # cancelled with its episode, ...
             self._trace(trace, t0, request, None, f"{type(e).__name__}: {e}")
@@ -286,3 +288,11 @@ def _error_text(payload: Optional[dict[str, Any]], proc: Any) -> str:
     if not parts and payload is None and (proc.stdout or "").strip():
         parts.append(proc.stdout.strip()[-1500:])
     return "\n".join(parts)[-1500:] or f"exit status {proc.returncode}, no error output"
+
+
+def _cannot_start(e: OSError, binary: str) -> bool:
+    """The CLI executable itself could not be started (Popen sets filename to it; a missing cwd or
+    E2BIG are different failures)."""
+    import errno
+    return (isinstance(e, (FileNotFoundError, PermissionError)) or e.errno == errno.ENOEXEC) and \
+        str(e.filename or "") in (binary, str(binary))

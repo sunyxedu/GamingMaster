@@ -425,3 +425,12 @@ def test_jev_refuses_a_proxy_it_cannot_tunnel_through(monkeypatch, proxy):
     assert "s3cret" not in str(ei.value)
     monkeypatch.setattr(jev_mod.urllib.request, "proxy_bypass", lambda host: True)
     assert JevClient(api_key="k", model="m")._proxy is None     # bypassed for this host: not used, no error
+
+
+def test_jev_deadline_holds_against_a_trickling_close_delimited_response(jev_server, make_client):
+    # Connection: close hands the socket to the response: conn.sock is None while the body is read
+    jev_server.default = Reply(trickle=0.05, headers={"Connection": "close"})
+    t0 = time.monotonic()
+    with pytest.raises(TimeoutError):
+        make_client().decide({}, Q, timeout_s=1)
+    assert time.monotonic() - t0 < 1.5

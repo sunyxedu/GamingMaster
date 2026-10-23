@@ -144,16 +144,16 @@ def _communicate_polled(proc: subprocess.Popen, stdin_text: Optional[str], timeo
         th.join(max(0.0, min(POLL_S, deadline - time.monotonic())))
         if not th.is_alive():
             break
+        reason = check()       # first: a call cancelled at the episode deadline is not a timeout
+        if reason:
+            _signal_kill(proc)
+            th.join(10)
+            raise ModelCallCancelled(f"model call cancelled: {reason}")
         if time.monotonic() >= deadline:
             _signal_kill(proc)
             th.join(10)
             out, err = box.get("out") or ("", "")
             raise CLITimeout(f"CLI invocation exceeded {timeout_s:.3f}s", out or "", err or "")
-        reason = check()
-        if reason:
-            _signal_kill(proc)
-            th.join(10)
-            raise ModelCallCancelled(f"model call cancelled: {reason}")
     if "exc" in box:
         raise box["exc"]  # type: ignore[misc]
     out, err = box["out"]  # type: ignore[misc]

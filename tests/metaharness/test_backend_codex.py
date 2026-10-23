@@ -247,3 +247,9 @@ def test_player_prompt_and_env(monkeypatch):
     CodexCLI(model="m").run("state", system="rules")
     assert seen[0]["stdin"] == f"{PLAYER_PREAMBLE}\n\nrules\n\nstate"
     assert {"TYPESAFE_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY"} <= set(seen[0]["env_drop"])
+
+
+def test_codex_binary_that_cannot_start_is_unavailable(tmp_path):
+    from metaharness.models.base import ModelUnavailable
+    with pytest.raises(ModelUnavailable, match="could not run"):
+        CodexCLI(model="m", codex_bin=str(tmp_path / "no-such-codex")).run("hi")

@@ -194,12 +194,53 @@ def test_heldout_outage_is_completed_on_the_same_candidate(tmp_path):
     e = json.loads(held.read_text())
     e["fatal"], e["n_episodes"], e["episodes"] = "model unavailable: usage limit", 1, e["episodes"][:1]
     held.write_text(json.dumps(e))
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(100, 101))
-    with pytest.raises(ValueError, match="held-out results"):           # exposed: no more search
+    with pytest.raises(ValueError, match="held-out results"):           # exposed: no new proposals
         _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=(100, 101))
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(100, 101))
     assert loop.heldout_best().dir == best.dir
     loop.run()
     assert json.loads(held.read_text())["n_episodes"] == 2                # completed, same candidate
+
+
+def test_interrupted_heldout_resumes_with_the_same_iters(tmp_path):
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=(100, 101))
+    best = loop.run()
+    held = best.dir / "heldout" / "eval.json"
+    e = json.loads(held.read_text())
+    e["fatal"], e["n_episodes"], e["episodes"] = "model unavailable: usage limit", 1, e["episodes"][:1]
+    held.write_text(json.dumps(e))
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=(100, 101))   # same command
+    loop.run()
+    assert json.loads(held.read_text())["n_episodes"] == 2
+    assert loop.proposals_done() == 1
+
+
+def test_an_empty_proposal_directory_does_not_count(tmp_path):
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=())
+    loop.archive.new_candidate()            # a proposer killed before writing anything
+    assert loop.proposals_done() == 0
+
+
+def test_a_candidate_that_breaks_the_game_is_retried_once_then_kept(tmp_path):
+    class Fragile(SnakeGame):
+        def reset(self, seed):
+            if seed in (0, 1) and Fragile.broken:
+                raise ConnectionError("server crashed")
+            return super().reset(seed)
+    Fragile.broken = True
+    factory = lambda **k: Fragile(max_ticks=30, **k)          # noqa: E731
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(), factory=factory,
+                 qualify_seeds=False)
+    loop.run()
+    assert loop.interrupted                                   # first time: the game looks down
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(), factory=factory,
+                 qualify_seeds=False)
+    loop.run()
+    assert loop.interrupted is None                           # redone once, failed the same way: kept
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(), factory=factory,
+                 qualify_seeds=False)
+    loop.run()
+    assert loop.interrupted is None and len(list(loop.archive.candidates()[0].dir.glob("eval.interrupted-*"))) == 1
 
 
 def test_iters_counts_the_archive_proposals(tmp_path):
@@ -243,7 +284,10 @@ def test_tuple_game_kwargs_do_not_break_resume(tmp_path):
             archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
         cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[], clock_mode="virtual",
                          budget=Budget(max_wall_s=30), harness_timeout_s=30)
-        return MetaHarnessLoop(archive=archive, game_factory=lambda **k: SnakeGame(max_ticks=10),
+        def factory(**k):
+            assert k == {"size": (12, 12)}       # the caller's kwargs, not their JSON round trip
+            return SnakeGame(max_ticks=10)
+        return MetaHarnessLoop(archive=archive, game_factory=factory,
                                game_kwargs={"size": (12, 12)}, task_md="task", contract_doc="c",
                                proposer=scripted_proposer(tier2), system2=None, system1=HeuristicSystem1(),
                                config=cfg)

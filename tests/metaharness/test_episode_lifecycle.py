@@ -543,3 +543,97 @@ def build(ctx):
     r = evaluate_harness(p, CounterGame, [0, 1], system2=None, system1=None, clock_mode="virtual",
                          memory_mode="shared")
     assert r.fatal is None and len(r.episodes) == 2 and r.metadata["memory_resets"]
+
+
+TIMED_NESTED = '''
+def build(ctx):
+    class H:
+        def run_episode(self, game):
+            def inner():
+                ctx.think("inner")
+                return ctx.clock.now()
+            def outer():
+                t_inner = ctx.spawn(inner).result()
+                return t_inner, ctx.clock.now()        # resumes at the virtual instant inner finished
+            out = ctx.spawn(outer)
+            while not out.done():
+                ctx.act("keep")
+                ctx.wait_for_tick()
+            t_inner, t_outer = out.result()
+            ctx.log(event="times", inner=t_inner, outer=t_outer)
+    return H()
+'''
+
+
+def test_nested_future_resumes_at_the_virtual_instant_it_completed(tmp_path):
+    import json
+    p = _write(tmp_path, "h.py", TIMED_NESTED)
+    seen = set()
+    for i in range(5):
+        out = tmp_path / f"o{i}"
+        r = evaluate_harness(p, lambda **k: SnakeGame(width=200, max_ticks=40, **k), [0],
+                             system2=ScriptedSystem2(latency_s=2.0), system1=None, clock_mode="virtual",
+                             harness_timeout_s=20, out_dir=out)
+        assert r.episodes[0].error is None
+        rec = next(json.loads(l) for l in (out / "trace_seed0.jsonl").read_text().splitlines()
+                   if '"times"' in l)
+        seen.add((rec["inner"], rec["outer"]))
+    assert seen == {(2.0, 2.0)}, seen
+
+
+def test_unavailable_backend_ends_a_loop_that_ignores_ctx_done(tmp_path):
+    from metaharness.models.base import ModelUnavailable
+
+    class Dead(ScriptedSystem2):
+        def run(self, *a, **k):
+            raise ModelUnavailable("usage limit")
+
+    p = _write(tmp_path, "h.py", '''
+def build(ctx):
+    class H:
+        def run_episode(self, game):
+            while not game.done:                 # never looks at ctx.done
+                try:
+                    ctx.think("plan")
+                except Exception:
+                    pass
+    return H()
+''')
+    t0 = time.monotonic()
+    r = evaluate_harness(p, CounterGame, [0], system2=Dead(), system1=None, clock_mode="wall", harness_timeout_s=30)
+    assert r.fatal and time.monotonic() - t0 < 3
+
+
+def test_nested_task_in_a_slow_system1_call_is_not_an_error(tmp_path):
+    from metaharness.models.mock import HeuristicSystem1
+
+    class SlowJev(HeuristicSystem1):
+        def decide(self, state, questions, *, timeout_s=5.0, trace=None):
+            time.sleep(1.5)
+            return super().decide(state, questions, timeout_s=timeout_s, trace=trace)
+
+    p = _write(tmp_path, "h.py", '''
+def build(ctx):
+    class H:
+        def run_episode(self, game):
+            inner = lambda: ctx.decide({"x": 1}, {"m": {"type": "noul", "instructions": "q"}}, timeout_s=3)
+            ctx.spawn(lambda: ctx.spawn(inner).result())
+            ctx.act(1)
+    return H()
+''')
+    r = evaluate_harness(p, CounterGame, [0], system2=None, system1=SlowJev(), clock_mode="wall", grace_s=0.3)
+    assert r.episodes[0].error is None, r.episodes[0].error
+
+
+def test_invalid_trial_that_raised_every_time_is_an_environment_error(tmp_path):
+    class Broken(CounterGame):
+        def step(self, action):
+            raise ConnectionError("bridge dropped")
+
+        def info(self):
+            return {"valid_trial": False, "invalid_reason": "bridge dropped"}
+
+    p = _write(tmp_path, "h.py", "def build(ctx):\n    class H:\n        def run_episode(self, game):\n"
+                                 "            ctx.act(1)\n    return H()\n")
+    r = evaluate_harness(p, Broken, [0], system2=None, system1=None, clock_mode="virtual")
+    assert r.episodes[0].error.startswith("invalid trial") and "ConnectionError" in r.episodes[0].error
