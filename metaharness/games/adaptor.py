@@ -12,6 +12,8 @@ An adaptor is a directory (written by Astra, never by hand in this repo):
                          An uncommented ``NAME=`` line is a variable the user MUST
                          set (the orchestrator stops and asks for it); keep optional
                          ones commented (``# NAME=default``).
+      runtime/           (optional) everything the adaptor writes while it runs: screenshots,
+                         caches, logs, server / world directories, generated configs
 
 ``game.py`` may import anything installed, ``metaharness.games.base`` and sibling modules of
 the adaptor directory. The object returned by ``make_game`` must implement ``TurnGame``
@@ -42,12 +44,19 @@ records an error. Observations must be strict JSON (dicts/lists/str/finite numbe
 < 200 kB); binary perception (screenshots) is exposed as file paths so a harness can hand them
 to ``ctx.think(images=[...])``.
 
+Runtime outputs (screenshots, caches, logs, recordings, server / world directories, anything
+generated while playing) belong under ``runtime/`` or another directory the source hash skips
+(node_modules, .cache, logs, recordings, worlds). The code files elsewhere in the directory
+(``*.py *.pyi *.js *.mjs *.cjs *.ts *.sh *.bash``, requirements.txt, package.json) are pinned by
+the search manifest (``source_sha256``): one written or changed while the adaptor runs makes a
+resumed search refuse to continue.
+
 ``validate_adaptor`` is the generic smoke test the orchestrator runs (and shows the model when it
 fails): load, construct, the tier the study chose, reset two seeds (the first train and held-out
 seed when SEEDS is declared), observe, describe, action spec, apply the noop and every action
 once, done/score/observation types after them, tick() time against tick_s, one malformed action,
-determinism of reset(seed) on a fresh instance (``DETERMINISTIC``), and close(). Warnings
-(``[!]``) do not fail it.
+determinism of reset(seed) on a fresh instance (``DETERMINISTIC``), close(), and that running
+changed no code file. Warnings (``[!]``) do not fail it.
 """
 from __future__ import annotations
 
@@ -74,11 +83,13 @@ REQUIRED_FILES = ("game.py", "ADAPTOR.md")
 MALFORMED_ACTION = "__not_an_action__"
 MAX_OBS_CHARS = 200_000
 
-# source_sha256 scope (see its docstring)
-SOURCE_SUFFIXES = frozenset({".py", ".js", ".mjs", ".ts", ".json", ".sh", ".toml", ".txt", ".cfg", ".yaml", ".yml"})
+# source_sha256 scope (see its docstring): code only — data files are what adaptors write while they play
+# (r6's observations/<sha>.json frames, state.json, eula.txt, package-lock.json), and pinning them refused resumes
+SOURCE_SUFFIXES = frozenset({".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".sh", ".bash"})
+SOURCE_NAMES = frozenset({"requirements.txt", "package.json"})
 SKIP_DIRS = frozenset({"node_modules", "runtime", "__pycache__", ".cache", "logs", "recordings", "worlds", ".venv"})
-ORCHESTRATOR_FILES = re.compile(r"(validation\..+|prompt_\d+\.md|agent_output_\d+\.md|adapt_trace\.jsonl|NEEDS\.md"
-                                r"|run\.json)\Z")
+ORCHESTRATOR_FILES = re.compile(r"(validation\.(md|json)|prompt_\d+\.md|agent_output_\d+\.md|adapt_trace\.jsonl"
+                                r"|NEEDS\.md|run\.json)\Z")
 MAX_SUBDIR_BYTES = 20 * 2**20
 MAX_SUBDIR_FILES = 5000
 MAX_HASHED_BYTES = 2 * 2**20
@@ -187,8 +198,9 @@ def _declared_eval_kwargs(module: Any) -> dict[str, Any]:
 
 
 def _source_files(d: Path, rel: str, top: bool, out: list[tuple[str, str, int]]) -> tuple[int, int] | None:
-    """Collect (relative path, path, size) of the source files under ``d`` into ``out``; returns the
-    subtree's (bytes, files), or None for a subdirectory too heavy to be source (nothing collected)."""
+    """Collect (relative path, path, size) of the code files under ``d`` into ``out``; returns the
+    subtree's code (bytes, files), or None for a subdirectory too heavy to be source (nothing
+    collected). Only code counts: runtime outputs piling up beside it never drop it from the hash."""
     found: list[tuple[str, str, int]] = []
     size = count = 0
     try:
@@ -205,11 +217,11 @@ def _source_files(d: Path, rel: str, top: bool, out: list[tuple[str, str, int]])
                 sub = _source_files(Path(e.path), f"{rel}{e.name}/", False, found)
                 if sub:
                     size, count = size + sub[0], count + sub[1]
-            elif e.is_file():
+            elif (os.path.splitext(e.name)[1] in SOURCE_SUFFIXES or e.name in SOURCE_NAMES) and e.is_file() \
+                    and not (top and ORCHESTRATOR_FILES.match(e.name)):
                 n = e.stat().st_size
                 size, count = size + n, count + 1
-                if Path(e.name).suffix in SOURCE_SUFFIXES and not (top and ORCHESTRATOR_FILES.match(e.name)):
-                    found.append((rel + e.name, e.path, n))
+                found.append((rel + e.name, e.path, n))
         except OSError:
             continue
         if not top and (size > MAX_SUBDIR_BYTES or count > MAX_SUBDIR_FILES):
@@ -218,28 +230,39 @@ def _source_files(d: Path, rel: str, top: bool, out: list[tuple[str, str, int]])
     return size, count
 
 
-def source_sha256(path: Path | str) -> str:
-    """sha256 of an adaptor's source, so an archive can tell which adaptor version produced its scores.
-
-    Covered: files with a source suffix (``SOURCE_SUFFIXES``: .py .js .mjs .ts .json .sh .toml .txt
-    .cfg .yaml .yml) at the top level and in subdirectories (e.g. ``bridge/*.js``), in sorted path
-    order, each as its relative path, size and first ``MAX_HASHED_BYTES`` bytes. Not covered:
-    documentation (``*.md``), hidden files and directories, symlinks, runtime / dependency
-    directories (``SKIP_DIRS``: node_modules, runtime, __pycache__, .cache, logs, recordings, worlds,
-    .venv), any subdirectory over 20 MB or 5000 files, and what the orchestrator writes into the
-    directory (validation.*, prompt_N.md, agent_output_N.md, adapt_trace.jsonl, NEEDS.md, run.json)."""
+def _source_digests(path: Path | str) -> tuple[str, dict[str, str]]:
+    """(``source_sha256``, {relative path: sha256 of that file's part of it}): the parts name what changed."""
     files: list[tuple[str, str, int]] = []
     _source_files(Path(path), "", True, files)
     h = hashlib.sha256()
+    parts: dict[str, str] = {}
     for rel, p, size in sorted(files):
         try:
             with open(p, "rb") as fh:
                 data = fh.read(MAX_HASHED_BYTES)
         except OSError:
             data = b"<unreadable>"
-        h.update(f"{rel}\0{size}\0{len(data)}\0".encode())
-        h.update(data)
-    return h.hexdigest()
+        part = f"{rel}\0{size}\0{len(data)}\0".encode("utf-8", "surrogateescape") + data   # undecodable names too
+        h.update(part)
+        parts[rel] = hashlib.sha256(part).hexdigest()
+    return h.hexdigest(), parts
+
+
+def source_sha256(path: Path | str) -> str:
+    """sha256 of an adaptor's code, so an archive can tell which adaptor version produced its scores
+    (the search manifest pins it as ``game_source``; a resumed search with another hash is refused).
+
+    Covered: code files — ``SOURCE_SUFFIXES`` (.py .pyi .js .mjs .cjs .ts .sh .bash) and
+    ``SOURCE_NAMES`` (requirements.txt, package.json) — at the top level and in subdirectories (e.g.
+    ``bridge/*.js``), in sorted path order, each as its relative path, size and first
+    ``MAX_HASHED_BYTES`` bytes. Not covered: every other file (.json .txt .yaml .toml .md, images...:
+    adaptors write such files while they play — observation frames, state.json, eula.txt,
+    package-lock.json — and that must not change the hash), hidden files and directories, symlinks,
+    runtime / dependency directories (``SKIP_DIRS``: node_modules, runtime, __pycache__, .cache, logs,
+    recordings, worlds, .venv), any subdirectory with over 20 MB or 5000 files of code, and what the
+    orchestrator writes into the directory (validation.md / .json, prompt_N.md, agent_output_N.md,
+    adapt_trace.jsonl, NEEDS.md, run.json)."""
+    return _source_digests(path)[0]
 
 
 def load_adaptor(path: Path | str, *, kwargs: dict[str, Any] | None = None) -> AdaptorSpec:
@@ -337,7 +360,26 @@ def validate_adaptor(path: Path | str, *, kwargs: dict[str, Any] | None = None,
                      time_budget_s: float = 120.0, expected_tier: int | None = None) -> ValidationReport:
     """The generic smoke test (module docstring). ``kwargs`` update the adaptor's EVAL_KWARGS for
     every instance; ``seeds`` default to the first train and held-out seed of SEEDS, else (0, 1);
-    ``expected_tier`` is the tier the study chose. Every instance it creates is closed."""
+    ``expected_tier`` is the tier the study chose. Every instance it creates is closed. The code
+    files are hashed before and after: one the run wrote or changed is a warning, since the search
+    manifest pins them (``source_sha256``) and code written while playing would break a resume."""
+    path = Path(path).resolve()                        # an adaptor that chdirs: still this directory
+    before = _source_digests(path)[1]
+    rep = _smoke_test(path, kwargs=kwargs, seeds=seeds, max_actions=max_actions, time_budget_s=time_budget_s,
+                      expected_tier=expected_tier)
+    after = _source_digests(path)[1]
+    changed = [f"{rel} ({'added' if rel not in before else 'removed' if rel not in after else 'modified'})"
+               for rel in sorted(before.keys() | after.keys()) if before.get(rel) != after.get(rel)]
+    if changed:
+        rep.warn(f"running the adaptor changed code files: {', '.join(changed[:10])}"
+                 + (f" and {len(changed) - 10} more" if len(changed) > 10 else "")
+                 + " — the search manifest pins the code files (source_sha256), so a resumed search would "
+                   "refuse to continue; write what the adaptor generates while it runs under runtime/")
+    return rep
+
+
+def _smoke_test(path: Path, *, kwargs: dict[str, Any] | None, seeds: tuple[int, ...] | None, max_actions: int,
+                time_budget_s: float, expected_tier: int | None) -> ValidationReport:
     rep = ValidationReport(ok=True)
     t0 = time.time()
     try:

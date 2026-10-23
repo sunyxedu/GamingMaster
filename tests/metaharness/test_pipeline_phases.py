@@ -142,7 +142,7 @@ def test_adapt_prompt_carries_notes_contract_and_kwargs(tmp_path):
     prompt = agent.calls[0]
     assert "use the EU server" in prompt and "expected_tier=2, kwargs={'level': 2}" in prompt
     for term in ("close()", "SEEDS", "EVAL_KWARGS", "valid_trial", "invalid_reason", "never overlap",
-                 "game error", "MUST", "env.example"):
+                 "game error", "MUST", "env.example", "runtime/", "pinned by"):
         assert term in prompt, term
     saved = json.loads((tmp_path / "adaptor" / "validation.json").read_text())
     assert saved["ok"] and "warnings" in saved

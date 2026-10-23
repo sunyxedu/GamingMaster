@@ -1,6 +1,7 @@
 """Generated-adaptor plumbing: fresh loading (sibling helpers, declarations, probe close, source
-hash), the stricter validator (tier, post-action types, tick pace, malformed actions, fresh-instance
-determinism, SEEDS, close) and a registry that never lets a test bed replace an adaptor."""
+hash of the code only), the stricter validator (tier, post-action types, tick pace, malformed actions,
+fresh-instance determinism, SEEDS, close, code changed by running) and a registry that never lets a
+test bed replace an adaptor."""
 from __future__ import annotations
 
 import json
@@ -13,7 +14,8 @@ from pathlib import Path
 import pytest
 
 from metaharness.games import registry as reg
-from metaharness.games.adaptor import DeclarationError, load_adaptor, source_sha256, validate_adaptor
+from metaharness.games.adaptor import (MAX_SUBDIR_FILES, DeclarationError, load_adaptor, source_sha256,
+                                       validate_adaptor)
 from metaharness.testbeds.snake import SnakeGame
 
 # Written next to every fake adaptor's game.py: game.py imports it as a sibling module, the way
@@ -192,9 +194,9 @@ def test_malformed_declarations(tmp_path, decl, msg):
 
 def test_source_sha256_scope(tmp_path):
     a = write_adaptor(tmp_path / "a", TICK_GAME, **{
-        "bridge/bridge.js": "console.log(1)\n", "bridge/node_modules/dep/index.js": "x\n",
+        "bridge/bridge.js": "console.log(1)\n", "bridge/package.json": "{}", "bridge/node_modules/dep/index.js": "x\n",
         "runtime/state.json": "{}", "logs/run.txt": "x", "validation.json": "{}", "run.json": "{}",
-        "prompt_0.md": "p", "NEEDS.md": "n", "notes.md": "doc", "seeds.json": "[1]"})
+        "prompt_0.md": "p", "NEEDS.md": "n", "notes.md": "doc", "seeds.json": "[1]", "requirements.txt": "numpy\n"})
     h0 = source_sha256(a)
     assert h0 == source_sha256(a) and h0 == load_adaptor(a).source_sha256
 
@@ -211,21 +213,85 @@ def test_source_sha256_scope(tmp_path):
         assert source_sha256(a) == h0
         return h != h0
 
-    for rel in ("game.py", "countbase.py", "bridge/bridge.js", "seeds.json", "bridge/new.mjs", "setup.sh"):
-        assert changed(rel), rel                                   # source: part of the hash
+    for rel in ("game.py", "countbase.py", "bridge/bridge.js", "bridge/new.mjs", "bridge/new.cjs", "bridge/new.ts",
+                "setup.sh", "run.bash", "stubs.pyi", "requirements.txt", "bridge/package.json", "validation.py"):
+        assert changed(rel), rel                                   # code: part of the hash
     for rel in ("ADAPTOR.md", "NEEDS.md", "validation.json", "validation.md", "run.json", "prompt_0.md",
                 "agent_output_0.md", "adapt_trace.jsonl", "runtime/state.json", "logs/run.txt",
                 "bridge/node_modules/dep/index.js", "__pycache__/game.cpython-312.pyc", ".env", "worlds/w/level.json",
-                "recordings/r.json", ".cache/x.json", "server.jar"):
-        assert not changed(rel), rel                               # docs, runtime, orchestrator files
-    big = a / "assets"
-    big.mkdir()
-    (big / "map.json").write_text("{}")
-    with open(big / "blob.bin", "wb") as fh:                       # sparse: > 20 MB without the disk
+                "recordings/r.json", ".cache/x.json", "server.jar",
+                # what adaptors write while they play, next to game.py or in a new data directory
+                "seeds.json", "state.json", "verification.json", "eula.txt", "server.port", "config.yaml",
+                "settings.toml", "setup.cfg", "bridge/package-lock.json", "bridge/bot.log",
+                "observations/3f2a9c.json", "data/frames/0001.json", "data/notes.txt"):
+        assert not changed(rel), rel                               # docs, data, runtime, orchestrator files
+    vendor = a / "vendor"                                          # e.g. a downloaded game's scripts
+    vendor.mkdir()
+    (vendor / "lib.py").write_text("x = 1\n")
+    with open(vendor / "bundle.js", "wb") as fh:                   # sparse: > 20 MB of code without the disk
         fh.truncate(21 * 2**20)
     assert source_sha256(a) == h0                                  # a heavy directory is not source
-    (big / "blob.bin").unlink()
-    assert source_sha256(a) != h0                                  # small again: assets/map.json counts
+    (vendor / "bundle.js").unlink()
+    h1 = source_sha256(a)
+    assert h1 != h0                                                # small again: vendor/lib.py counts
+    with open(a / "bridge" / "world.bin", "wb") as fh:             # only code counts toward that limit:
+        fh.truncate(21 * 2**20)                                    # data piling up beside bridge.js...
+    for i in range(MAX_SUBDIR_FILES + 1):
+        (a / "bridge" / f"frame{i}.json").touch()
+    assert source_sha256(a) == h1                                  # ... never drops it from the hash
+
+
+def test_runtime_outputs_keep_the_source_hash(tmp_path):
+    # r6's ARC adaptor wrote observations/<sha>.json frames while it played: with .json in the hash
+    # a resumed search was refused ("Search configuration changed (game_source)")
+    body = """
+        import hashlib
+        import json
+        from pathlib import Path
+
+        TIER = 2
+        HERE = Path(__file__).resolve().parent
+
+        class Game(TickCount):
+            def reset(self, seed):
+                obs = super().reset(seed)
+                frame = json.dumps({"seed": seed, "obs": obs}).encode()
+                (HERE / "observations").mkdir(exist_ok=True)
+                (HERE / "observations" / f"{hashlib.sha256(frame).hexdigest()}.json").write_bytes(frame)
+                (HERE / "state.json").write_text(json.dumps({"seed": seed}))
+                (HERE / "eula.txt").write_text("eula=true\\n")
+                return obs
+    """
+    a = write_adaptor(tmp_path / "a", body)
+    h0 = source_sha256(a)
+    rep = validate_adaptor(a)
+    assert rep.ok and not rep.warnings, rep.to_markdown()
+    assert len(list((a / "observations").glob("*.json"))) >= 2 and (a / "state.json").exists()
+    assert source_sha256(a) == h0 == load_adaptor(a).source_sha256
+
+
+def test_validator_warns_when_running_changes_code(tmp_path):
+    body = """
+        from pathlib import Path
+
+        TIER = 2
+        HERE = Path(__file__).resolve().parent
+
+        class Game(TickCount):
+            def reset(self, seed):
+                (HERE / "bot.js").write_text(f"start({seed})\\n")             # a script rewritten per episode
+                (HERE / f"plan_{seed}.py").write_text(f"SEED = {seed}\\n")    # generated code
+                (HERE / "runtime").mkdir(exist_ok=True)
+                (HERE / "runtime" / "plan.py").write_text(f"SEED = {seed}\\n")    # fine: under runtime/
+                return super().reset(seed)
+    """
+    a = write_adaptor(tmp_path / "a", body, **{"bot.js": "start(null)\n"})
+    rep = validate_adaptor(a)
+    assert rep.ok, rep.to_markdown()                               # a warning, not a failure
+    md = rep.to_markdown()
+    assert "- [!] running the adaptor changed code files: bot.js (modified), plan_0.py (added), plan_1.py " \
+           "(added) — the search manifest pins the code files" in md, md
+    assert "runtime/plan.py" not in md and "under runtime/" in md
 
 
 # ----------------------------------------------------------------------------- validation
@@ -429,3 +495,4 @@ def test_register_adaptor_keeps_its_own_name(tmp_path, clean_registry):
     reg.register(name, "tier2")(SnakeGame)                           # nor a late test-bed registration
     assert reg.GAMES[key][1] is reg.adaptor_spec(key).make_game and reg.game_tier(key) == "tier1"
     assert os.path.isdir(reg.adaptor_spec(key).path)
+
