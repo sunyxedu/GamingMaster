@@ -12,7 +12,7 @@
 
 [providers.router]
 name = "appintheloop router"
-base_url = "http://127.0.0.1:8787/v1"
+base_url = "http://127.0.0.1:8799/v1"   # queueing proxy (~/mh-proxy) in front of the router at 8787
 env_key = "MH_ROUTER_API_KEY"       # the key itself lives in .env, never here
 wire_api = "responses"
 codex_home = "~/.cache/metaharness/codex-home"
