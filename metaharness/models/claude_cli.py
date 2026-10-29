@@ -81,7 +81,16 @@ _RATE_LIMIT_RE = re.compile(r"\b429\b|rate.?limit|too many requests", re.I)
 _RATE_LIMIT_WAITS = (15.0, 30.0, 60.0, 120.0, 240.0)
 _sleep = time.sleep          # module level, so tests can skip the waits
 _ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
-_ISOLATION_SETTINGS = json.dumps({"disableAllHooks": True})
+
+
+def _isolation_settings() -> str:
+    """``--settings`` for every call: no hooks; and, with METAHARNESS_CLAUDE_BASE_URL set, the API base URL
+    (a local queueing proxy in front of a shared router) — the flag outranks the user's settings env."""
+    settings: dict[str, Any] = {"disableAllHooks": True}
+    base = os.environ.get("METAHARNESS_CLAUDE_BASE_URL")
+    if base:
+        settings["env"] = {"ANTHROPIC_BASE_URL": base}
+    return json.dumps(settings)
 
 
 @contextlib.contextmanager
@@ -162,14 +171,14 @@ class ClaudeCLI:
             if system and not session_id:
                 argv += _system_flag(system, system_file)
             argv += ["--permission-mode", "bypassPermissions", "--dangerously-skip-permissions",
-                     "--settings", _ISOLATION_SETTINGS]
+                     "--settings", _isolation_settings()]
             if not web_search:  # study / adapt research the game on the web; the proposer must not
                 argv += ["--disallowedTools", "WebSearch", "WebFetch"]
         else:
             # Replaces the coding-agent system prompt. Sent on --resume too: the CLI keeps reusing
             # the prompt it recorded first, and renders this one again after a compaction.
             argv += _system_flag(PLAYER_PREAMBLE + (f"\n\n{system}" if system else ""), system_file)
-            argv += ["--tools", "", "--strict-mcp-config", "--settings", _ISOLATION_SETTINGS,
+            argv += ["--tools", "", "--strict-mcp-config", "--settings", _isolation_settings(),
                      "--disable-slash-commands"]
         return argv
 
