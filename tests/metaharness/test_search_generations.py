@@ -1,0 +1,177 @@
+"""Generations: directives with parent sampling, duplicate rejection, parallel child-process
+evaluation, the validation pick, multi-game training and the reflection record."""
+from __future__ import annotations
+
+import json
+import random
+from pathlib import Path
+
+import pytest
+
+from metaharness.cli import main
+from metaharness.core import generation
+from metaharness.core.archive import Archive
+from metaharness.core.contract import Budget
+from metaharness.core.loop import GameSpec, LoopConfig, MetaHarnessLoop
+from metaharness.models.mock import HeuristicSystem1, ScriptedSystem2
+from metaharness.testbeds.lanerunner import LaneRunnerGame
+from metaharness.testbeds.snake import SnakeGame
+from metaharness.tiers import tier2
+
+BASE = Path(__file__).resolve().parents[2] / "metaharness" / "baselines"
+REF = (BASE / "tier2_reference.py").read_text()
+IDLE = (BASE / "tier2_idle.py").read_text()
+
+
+def _eval(score, errors=(), n=2, game="snake"):
+    return {"game": game, "mean_score": score, "n_episodes": n, "errors": list(errors),
+            "metadata": {"seeds": list(range(n))},
+            "episodes": [{"seed": i, "score": score, "ended_by": "game_done"} for i in range(n)]}
+
+
+def _archive(tmp_path, scores):
+    a = Archive(tmp_path / "a")
+    for i, (score, errors) in enumerate(scores):
+        c = a.new_candidate()
+        c.harness_path.write_text(IDLE + f"\n# v{i}\n")
+        c.eval_path.write_text(json.dumps(_eval(score, errors)))
+    return a
+
+
+def test_directives_cover_the_modes_and_sample_parents(tmp_path):
+    a = _archive(tmp_path, [(1.0, ()), (5.0, ()), (3.0, ()), (9.0, ["seed 1: harness_error"])])
+    plan = generation.plan(a, 4, generation=0, rng=random.Random(1))
+    modes = [d["mode"] for d in plan]
+    assert modes[:3] == ["refine", "rewrite", "crossover"] and modes[3] == "repair"   # 0003 scores best but erred
+    assert plan[0]["parents"] == [1] and plan[0]["parent_dirs"] == ["0001"]            # refine the best
+    assert plan[2]["parents"][0] == 1 and plan[2]["parents"][1] != 1                   # crossover: best + another
+    assert plan[3]["parents"] == [3]
+    assert all(d["generation"] == 0 for d in plan)
+    # one repair slot per errored candidate: once a repair child exists, sampling is among the eligible ones
+    child = a.new_candidate()
+    (child.dir / "directive.json").write_text(json.dumps({"mode": "repair", "parents": [3], "parent_dirs": ["0003"]}))
+    assert generation.plan(a, 1, 0)[0]["mode"] == "refine"
+    # weights: the best and unexplored candidates are drawn most; nobody has probability zero
+    draws = [generation.plan(a, 1, g, rng=random.Random(g))[0]["parents"][0] for g in range(1, 200, 4)]
+    assert set(draws) <= {0, 1, 2} and draws.count(1) > draws.count(0)
+    # an archive without eligible candidates: free exploration
+    assert generation.plan(Archive(tmp_path / "empty"), 2, 0) == [
+        {"mode": "explore", "parents": [], "parent_dirs": [], "generation": 0}] * 2
+    assert "Mode: refine" in generation.describe(plan[0]) and "candidates/0001/" in generation.describe(plan[0])
+
+
+def test_children_lower_a_parents_weight(tmp_path):
+    a = _archive(tmp_path, [(5.0, ()), (5.0, ())])
+    for _ in range(6):                                     # six children of 0000, none of 0001
+        c = a.new_candidate()
+        (c.dir / "directive.json").write_text(json.dumps({"mode": "refine", "parents": [0], "parent_dirs": ["0000"]}))
+    assert generation.children_counts(a) == {0: 6}
+    draws = [generation.plan(a, 1, g, rng=random.Random(g))[0]["parents"][0] for g in range(1, 400, 4)]
+    assert draws.count(1) > 3 * draws.count(0)
+
+
+def test_near_duplicates_are_detected_but_edits_are_not(tmp_path):
+    a = _archive(tmp_path, [(1.0, ())])
+    same = a.new_candidate()
+    same.harness_path.write_text(IDLE + "\n# a comment changes nothing\n")
+    other, sim = generation.duplicate_of(a, same)
+    assert other.idx == 0 and sim == 1.0
+    changed = a.new_candidate()
+    changed.harness_path.write_text(IDLE.replace("while not self.ctx.done:", "for _ in range(3):\n            if self.ctx.done: break"))
+    assert generation.duplicate_of(a, changed) is None
+    assert generation.similarity(IDLE, REF) < 0.5
+
+
+def test_parallel_generations_validate_and_pick_a_champion(tmp_runs):
+    # two proposals per generation with a scripted proposer: the second is a duplicate of the first and is not
+    # evaluated; evaluations run in child processes; the finalists are re-evaluated on the validation seeds
+    rc = main(["loop", "--tier", "2", "--game", "snake", "--system1", "heuristic", "--system2", "scripted",
+               "--proposer", "scripted", "--clock", "virtual", "--iters", "1", "--proposals", "2", "--parallel", "3",
+               "--seeds", "0,1", "--val-seeds", "7", "--heldout", "100", "--finalists", "2",
+               "--name", "gen", "--runs-dir", str(tmp_runs)])
+    assert rc == 0
+    a = Archive(tmp_runs / "gen")
+    names = [c.dir.name for c in a.candidates()]
+    assert names == ["0000-tier2_jev_only", "0001-tier2_astra_only", "0002-tier2_idle", "0003", "0004"]
+    c3, c4 = a.candidates()[3], a.candidates()[4]
+    assert c3.directive()["mode"] == "refine" and c3.directive()["parents"] == [c3.parent()]
+    assert c3.eval()["n_episodes"] == 2 and (c3.dir / "evalworker.json").exists()    # a child process evaluated it
+    assert c4.eval()["fatal"].startswith("duplicate of candidates/0003")
+    assert "Sibling proposers are writing candidates/0004/" in (c3.dir / "prompt.md").read_text()
+    champion = json.loads((a.root / "champion.json").read_text())
+    assert champion["seeds_val"] == {"snake": [7]} and len(champion["finalists"]) == 2
+    assert c3.validation()["n_episodes"] == 1 and all(r["status"] == "ok" for r in champion["finalists"])
+    expected = max(champion["finalists"], key=lambda r: (round(r["combined"], 9), -r["rank"]))["candidate"]
+    assert champion["candidate"] == expected                                          # training + validation together
+    winner = next(c for c in a.candidates() if c.dir.name == expected)
+    assert (winner.dir / "heldout" / "eval.json").exists()                            # only the champion
+    assert not any((c.dir / "heldout").exists() for c in a.candidates() if c.dir != winner.dir)
+    lb = (a.root / "leaderboard.md").read_text()
+    assert "Validation seeds" in lb and f"Final pick: `{expected}`" in lb and "(refine of 0000-tier2_jev_only)" in lb
+    assert (a.root / "lessons.md").exists() and "## Generation 1" in (a.root / "lessons.md").read_text()
+    assert json.loads((a.root / "manifest.json").read_text())["run"]["system1"] == "heuristic"
+    # the archive is closed: validation / held-out results exist, so no further proposals
+    with pytest.raises(ValueError, match="held-out results"):
+        main(["loop", "--tier", "2", "--game", "snake", "--system1", "heuristic", "--system2", "scripted",
+              "--proposer", "scripted", "--clock", "virtual", "--iters", "2", "--proposals", "2", "--parallel", "3",
+              "--seeds", "0,1", "--val-seeds", "7", "--heldout", "100", "--finalists", "2",
+              "--name", "gen", "--runs-dir", str(tmp_runs)])
+
+
+def test_multi_game_training_combines_per_game_scores(tmp_runs):
+    rc = main(["loop", "--tier", "2", "--game", "snake,lanerunner", "--system1", "heuristic", "--system2", "scripted",
+               "--proposer", "scripted", "--clock", "virtual", "--iters", "1", "--parallel", "2", "--seeds", "0",
+               "--heldout", "", "--name", "mg", "--runs-dir", str(tmp_runs)])
+    assert rc == 0
+    a = Archive(tmp_runs / "mg")
+    assert a.games() == ["snake", "lanerunner"]
+    best = a.best()
+    e = best.eval()
+    assert set(e["per_game"]) == {"snake", "lanerunner"} and e["n_episodes"] == 2
+    assert (best.dir / "game-snake" / "eval.json").exists() and (best.dir / "game-lanerunner" / "trace_seed0.jsonl").exists()
+    task = (a.root / "task.md").read_text()
+    assert "### Training game `snake`" in task and "### Training game `lanerunner`" in task
+    assert "Several training games" in task and "Generality requirement" in task
+    assert "selection (mean / worst norm.)" in (a.root / "leaderboard.md").read_text()
+
+
+def test_task_text_for_several_games_lists_each_tick():
+    text = tier2.task_md(["snake", "lanerunner"], Budget(), "wall", [{}, {}])
+    assert "Tick: every 0.25s." in text and "Tick: every 0.5s." in text and "at its own pace" in text
+    single = tier2.task_md("snake", Budget(), "wall", {})
+    assert "ticks every 0.25s" in single and "Training game" not in single
+
+
+def test_reflection_text_is_kept_when_the_model_has_no_tools(tmp_path):
+    archive = Archive(tmp_path / "a")
+    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    notes = ScriptedSystem2(replies=["- idle scored 0 on both seeds (game_done at tick 30): nothing acts\n"], latency_s=0.1)
+    cfg = LoopConfig(n_iterations=0, seeds_train=[0, 1], seeds_heldout=[], clock_mode="virtual",
+                     budget=Budget(max_wall_s=30), harness_timeout_s=30)
+    loop = MetaHarnessLoop(archive=archive, game_factory=lambda **k: SnakeGame(max_ticks=30, **k), game_kwargs={},
+                           task_md="task", contract_doc="c", proposer=notes, system2=None,
+                           system1=HeuristicSystem1(), config=cfg, game_name="snake")
+    loop.run()
+    loop.reflect(3, archive.candidates())
+    text = (archive.root / "lessons.md").read_text()
+    assert text.startswith("## Generation 3") and "idle scored 0" in text
+    assert (archive.root / "reflections" / "gen_003_prompt.md").exists()
+    assert "candidates/0000-tier2_idle — seed" in (archive.root / "reflections" / "gen_003_prompt.md").read_text()
+
+
+def test_in_process_multi_game_loop_with_game_specs(tmp_path):
+    archive = Archive(tmp_path / "a")
+    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    extra = GameSpec("lanerunner", lambda **k: LaneRunnerGame(max_ticks=20, **k), {}, seeds_train=[3])
+    cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[9], clock_mode="virtual",
+                     budget=Budget(max_wall_s=30), harness_timeout_s=30, more_games=[extra])
+    loop = MetaHarnessLoop(archive=archive, game_factory=lambda **k: SnakeGame(max_ticks=20, **k), game_kwargs={},
+                           task_md="task", contract_doc="c", proposer=ScriptedSystem2(), system2=None,
+                           system1=HeuristicSystem1(), config=cfg, game_name="snake")
+    best = loop.run()
+    e = best.eval()
+    assert e["per_game"]["lanerunner"]["episodes"][0]["seed"] == 3 and e["per_game"]["snake"]["episodes"][0]["seed"] == 0
+    held = json.loads((best.dir / "heldout" / "eval.json").read_text())
+    assert held["per_game"]["snake"]["episodes"][0]["seed"] == 9 and held["per_game"]["lanerunner"]["episodes"][0]["seed"] == 9
+    seeds = json.loads((archive.root / "seeds.json").read_text())["results"]
+    assert "lanerunner:train:3" in seeds and "train:0" in seeds and "heldout:9" in seeds

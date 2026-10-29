@@ -16,6 +16,8 @@ from typing import Optional
 
 from ..models.base import ModelUnavailable, System2Model, TraceSink
 from .archive import Archive, Candidate
+from .generation import describe as describe_directive
+from .generation import read_lessons
 
 PROPOSER_SYSTEM = """You are the Meta-Harness proposer. You improve the *harness* — the code that connects
 foundation models to a game — not the models. Work like a researcher: read the archive, form a
@@ -30,22 +32,32 @@ def _fenced_python(text: str) -> Optional[str]:
 
 
 def build_prompt(archive: Archive, candidate: Candidate, contract_doc: str, task_md: str, extra: str = "",
-                 iteration: Optional[tuple[int, int]] = None, timeout_s: Optional[float] = None) -> str:
+                 iteration: Optional[tuple[int, int]] = None, timeout_s: Optional[float] = None,
+                 directive: Optional[dict] = None, siblings: tuple[str, ...] = ()) -> str:
     lb = archive.write_leaderboard()
+    skip = set(siblings) | {candidate.dir.name}
     prior = "\n".join(f"- candidates/{c.dir.name}/ (harness.py, proposal.md, eval.json, trace_seed*.jsonl)"
-                      for c in archive.candidates() if c.idx != candidate.idx)
+                      for c in archive.candidates() if c.dir.name not in skip)
     if (archive.root / "prior").is_dir():
         prior += "\n- prior/ (the full study documents and the adaptor's interface documentation)"
+    lessons = read_lessons(archive.root)
+    if lessons:
+        prior += "\n- lessons.md (the evaluator's record per generation: what each candidate tried, what happened, why)"
     when = ""
     if iteration:
         i, n = iteration
-        when = (f"\nThis is iteration {i} of {n}"
+        when = (f"\nThis is generation {i} of {n}"
                 + (" — the last one: prefer a careful, testable improvement over a risky rewrite" if i == n else "")
                 + ".")
     if timeout_s:
         when += (f" You have {timeout_s / 60:.0f} minutes. Write `harness.py` and `proposal.md` first, then refine: "
                  "a harness written before the deadline is still evaluated, an unwritten one is lost.")
-    return f"""# Meta-Harness iteration -> candidate `{candidate.dir.name}`{when}
+    if siblings:
+        when += (f"\nSibling proposers are writing {', '.join(f'candidates/{s}/' for s in siblings)} right now: those "
+                 "directories are unfinished and unevaluated — ignore them and never write into them.")
+    directive_md = f"\n## Your directive\n{describe_directive(directive)}\n" if directive else ""
+    lessons_md = f"\n## Lessons so far (lessons.md)\n{lessons}\n" if lessons else ""
+    return f"""# Meta-Harness generation -> candidate `{candidate.dir.name}`{when}
 
 Working directory: `{archive.root}` (you have full read/write access here).
 
@@ -56,25 +68,24 @@ Working directory: `{archive.root}` (you have full read/write access here).
 ```
 {contract_doc}
 ```
-{extra}
-
+{extra}{directive_md}
 ## Archive
 {lb}
 Prior candidates (read their code, proposals, eval.json and the JSONL traces — traces contain every
 model call with request/response/latency, every game tick/step, observations at the start and end of each
 episode, on every turn-game step and whenever a real-time score changes, and how each episode ended):
 {prior or '- (none yet)'}
-
+{lessons_md}
 ## What to do
-1. Read the best candidate(s) and the traces of their worst episodes. Diagnose the failure mode
-   concretely (quote evidence from traces).
+1. Read your parent candidate(s), the best candidate and the traces of their worst episodes. Diagnose the
+   failure mode concretely (quote evidence from traces). Check lessons.md so you do not repeat a refuted
+   hypothesis.
 2. Write `candidates/{candidate.dir.name}/harness.py` — a complete module with `build(ctx)`.
    It must import only the standard library and `metaharness.*`.
-3. Write `candidates/{candidate.dir.name}/proposal.md`: hypothesis, what changed vs. the parent
-   candidate, what evidence would confirm/refute it.
-4. Append 3-6 bullet lessons to `notes.md` at the archive root (a running lab notebook: what
-   generalised, what was a dead end, which contract details bit you). Read it first.
-5. If you cannot use tools, reply with the full harness in ONE ```python fenced block and the
+3. Write `candidates/{candidate.dir.name}/proposal.md`: parent(s), hypothesis, what changed, the lesson or
+   evidence it acts on, what evidence would confirm/refute it, and (tier 2) the System-1 state schema,
+   questions, thresholds and fallback policy.
+4. If you cannot use tools, reply with the full harness in ONE ```python fenced block and the
    proposal text after it.
 Before the real evaluation the candidate is *pre-flighted*: one short episode with stand-in models
 that return arbitrary text / first options on a virtual clock. Any exception there (a contract
@@ -103,9 +114,14 @@ def propose(
     timeout_s: float = 1800.0,
     candidate: Optional[Candidate] = None,
     iteration: Optional[tuple[int, int]] = None,
+    directive: Optional[dict] = None,
+    siblings: tuple[str, ...] = (),
 ) -> Candidate:
     cand = candidate or archive.new_candidate()
-    prompt = build_prompt(archive, cand, contract_doc, task_md, extra, iteration=iteration, timeout_s=timeout_s)
+    if directive:
+        (cand.dir / "directive.json").write_text(json.dumps(directive, indent=2) + "\n")
+    prompt = build_prompt(archive, cand, contract_doc, task_md, extra, iteration=iteration, timeout_s=timeout_s,
+                          directive=directive, siblings=siblings)
     (cand.dir / "prompt.md").write_text(prompt)
     try:
         res = model.run(prompt, cwd=archive.root, system=PROPOSER_SYSTEM, agentic=agentic,

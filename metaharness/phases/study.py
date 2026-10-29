@@ -124,7 +124,7 @@ def _clip(text: str, limit: int, name: str) -> str:
     advice to the search usually are), the cut marked."""
     if len(text) <= limit:
         return text
-    mark = f"…(truncated; full text in prior/{name})"
+    mark = f"…(truncated; full text in {name if '/' in name else 'prior/' + name})"
     keep = max(0, limit - len(mark) - 4)
     n_head = keep * 2 // 3
     head, tail = text[:n_head], text[len(text) - (keep - n_head):] if keep > n_head else ""
@@ -156,7 +156,7 @@ def _share(need: dict[str, int], weight: dict[str, int], budget: float) -> dict[
 
 
 def prior_documents(study_dir: Optional[Path], adaptor_dir: Optional[Path], archive_root: Path, *,
-                    study_budget: int = 24000, adaptor_budget: int = 12000) -> str:
+                    study_budget: int = 24000, adaptor_budget: int = 12000, label: str = "") -> str:
     """Prior knowledge for the search proposer: the inline digest for task.md, and the full texts.
 
     Copies ``study/{brief,interfaces,strategies}.md``, ``study/study.json`` and ``adaptor/ADAPTOR.md``
@@ -167,8 +167,10 @@ def prior_documents(study_dir: Optional[Path], adaptor_dir: Optional[Path], arch
     brief and interfaces; ADAPTOR.md gets up to ``adaptor_budget``. Whatever a shorter document leaves
     goes to the others, across both parts. A document over its share keeps its beginning and its end,
     and every cut is marked ``…(truncated; full text in prior/<file>)``. Deterministic for the same
-    files: the search manifest compares task.md when an archive is resumed."""
-    prior = Path(archive_root) / "prior"
+    files: the search manifest compares task.md when an archive is resumed. ``label`` (a game name)
+    puts the documents under ``prior/<label>/`` when a search trains on several games."""
+    prior = Path(archive_root) / "prior" / label if label else Path(archive_root) / "prior"
+    where = f"prior/{label}" if label else "prior"
     texts: dict[str, str] = {}
     for f in PRIOR_FILES:
         base = adaptor_dir if f == "ADAPTOR.md" else study_dir
@@ -191,7 +193,7 @@ def prior_documents(study_dir: Optional[Path], adaptor_dir: Optional[Path], arch
             v = v.get(k) if isinstance(v, dict) else None
         if v not in (None, "", [], {}):
             v = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-            lines.append(f"- {'.'.join(keys)}: {_clip(v, 2000, 'study.json')}")
+            lines.append(f"- {'.'.join(keys)}: {_clip(v, 2000, where + '/study.json')}")
     if lines:
         summary = "### study/study.json (summary)\n" + "\n".join(lines)
     docs = [f for f in PRIOR_WEIGHTS if f in texts]
@@ -201,14 +203,15 @@ def prior_documents(study_dir: Optional[Path], adaptor_dir: Optional[Path], arch
     a_alloc = min(a_need, adaptor_budget + max(0, study_left - sum(need.values())))
     alloc = _share(need, PRIOR_WEIGHTS, study_left + max(0, adaptor_budget - a_need))
     alloc["ADAPTOR.md"] = a_alloc
-    listed = ", ".join(f"`prior/{f}`" for f in PRIOR_FILES if f in texts)
-    parts = [f"The full documents are readable in this archive under `prior/` ({listed}). Below: excerpts "
-             "within a size budget; every cut is marked `…(truncated; full text in prior/<file>)`."]
+    listed = ", ".join(f"`{where}/{f}`" for f in PRIOR_FILES if f in texts)
+    parts = [f"The full documents are readable in this archive under `{where}/` ({listed}). Below: excerpts "
+             f"within a size budget; every cut is marked `…(truncated; full text in {where}/<file>)`."]
     if summary:
         parts.append(summary)
     for f in ("strategies.md", "brief.md", "ADAPTOR.md", "interfaces.md"):
         if f in texts:
-            parts.append(f"### {'adaptor' if f == 'ADAPTOR.md' else 'study'}/{f}\n" + _clip(texts[f], alloc[f], f))
+            parts.append(f"### {'adaptor' if f == 'ADAPTOR.md' else 'study'}/{f}\n"
+                         + _clip(texts[f], alloc[f], f"{where}/{f}"))
     return "\n\n".join(parts)
 
 

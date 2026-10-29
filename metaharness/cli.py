@@ -34,10 +34,10 @@ import time
 from pathlib import Path
 
 from .config import DEFAULT_RUNS_DIR, load_dotenv
-from .core import Archive, LoopConfig, MetaHarnessLoop
+from .core import Archive, GameSpec, LoopConfig, MetaHarnessLoop
 from .core.calibrate import calibrate
 from .core.contract import Budget
-from .core.loop import SeedRefused
+from .core.loop import SeedRefused, _slug as _game_slug
 from .core.runner import DEFAULT_GRACE_S, evaluate_harness
 from .games import registry as _registry
 from .games.registry import GAMES, make_game, register_adaptor
@@ -119,6 +119,22 @@ def _resolve_heldout_game(a: argparse.Namespace) -> tuple[str | None, dict, list
     return name, user, None
 
 
+def _resolve_games(a: argparse.Namespace) -> list[tuple[str, str | None]]:
+    """The training games: ``--adaptor DIR`` (repeatable) and ``--game NAME[,NAME...]`` ->
+    [(registry key, adaptor directory or None), ...] in that order."""
+    out: list[tuple[str, str | None]] = []
+    dirs = getattr(a, "adaptor", None) or []
+    for d in ([dirs] if isinstance(dirs, str) else dirs):
+        if d:
+            key = register_adaptor(Path(d), kwargs=_kwargs(a.game_kwargs, "--game-kwargs") or None)
+            out.append((key, str(Path(d).resolve())))
+    for name in [n.strip() for n in (getattr(a, "game", "") or "").split(",") if n.strip()]:
+        out.append((name, None))
+    if not out:
+        raise SystemExit("--game or --adaptor is required")
+    return out
+
+
 def _proposer(name: str, effort: str | None, tier_mod):
     if name == "scripted":
         from .baselines._scripted import scripted_proposer
@@ -147,26 +163,29 @@ def _slug(s: str) -> str:
 
 
 def _resolve_game(a: argparse.Namespace) -> str:
-    """``--adaptor DIR`` registers a generated adaptor and returns its game name; else ``--game``."""
-    if getattr(a, "adaptor", ""):
-        return register_adaptor(Path(a.adaptor), kwargs=_kwargs(a.game_kwargs, "--game-kwargs") or None)
-    if not a.game:
-        raise SystemExit("--game or --adaptor is required")
-    return a.game
+    """The first training game (``eval`` plays one game)."""
+    return _resolve_games(a)[0][0]
 
 
-def _study_text(a: argparse.Namespace, archive_root: Path | None = None) -> str:
-    """Prior knowledge for the proposer from ``--study`` and/or ``--adaptor`` (ADAPTOR.md): the
-    digest of ``prior_documents``, which also copies the full documents into ``<archive_root>/prior/``."""
+def _study_text(a: argparse.Namespace, archive_root: Path | None, games: list[tuple[str, str | None]]) -> str:
+    """Prior knowledge for the proposer from ``--study`` and/or the adaptors (ADAPTOR.md): the digest
+    of ``prior_documents``, which also copies the full documents into ``<archive_root>/prior/``
+    (``prior/<game>/`` each when several games have documents)."""
+    from .phases.study import prior_documents, study_text
     study = Path(a.study) if getattr(a, "study", "") else None
-    adaptor = Path(a.adaptor) if getattr(a, "adaptor", "") else None
+    adaptors = [(key, Path(d)) for key, d in games if d]
     if archive_root is None:                    # no archive to copy into: the study excerpt alone
-        from .phases.study import study_text
         return study_text(study) if study else ""
-    if study is None and adaptor is None:
-        return ""
-    from .phases.study import prior_documents
-    return prior_documents(study, adaptor, archive_root)
+    if len(adaptors) <= 1:
+        if study is None and not adaptors:
+            return ""
+        return prior_documents(study, adaptors[0][1] if adaptors else None, archive_root)
+    parts = []
+    for key, d in adaptors:                      # a run directory keeps the study next to its adaptor
+        sdir = d.parent / "study" if (d.parent / "study").is_dir() else None
+        parts.append(f"## Prior documents for `{key}`\n"
+                     + prior_documents(sdir, d, archive_root, label=_game_slug(key)))
+    return "\n\n".join(parts)
 
 
 def _episode_budget(a: argparse.Namespace) -> Budget:
@@ -177,47 +196,73 @@ def _episode_budget(a: argparse.Namespace) -> Budget:
     return Budget(max_system2_calls=a.s2_budget, max_system1_calls=a.s1_budget, max_wall_s=wall)
 
 
-def _run_search(a: argparse.Namespace, game: str, tier_n: int, study: str, exp_dir: Path):
+def _game_specs(a: argparse.Namespace, games: list[tuple[str, str | None]]) -> list[GameSpec]:
+    """A GameSpec per training game: its kwargs (EVAL_KWARGS + --game-kwargs) and its seed blocks:
+    --seeds / --val-seeds / --heldout, else the adaptor's declared split (with a validation block
+    carved from the end of a declared training list of 4+ seeds), else 0,1,2 / none / 100,101,102."""
+    specs = []
+    for key, adaptor_dir in games:
+        kwargs, declared = _game_setup(a, key)
+        train = _parse_seeds(a.seeds) if a.seeds is not None else list(declared.get("train") or [0, 1, 2])
+        held = _parse_seeds(a.heldout) if a.heldout is not None else list(declared.get("heldout") or [100, 101, 102])
+        val = _parse_seeds(a.val_seeds) if getattr(a, "val_seeds", "") else []
+        if not val and a.seeds is None and declared.get("train") and len(train) >= 4:
+            n_val = max(1, len(train) // 4)
+            val, train = train[-n_val:], train[:-n_val]
+        factory = GAMES[key][1] if key in GAMES else (lambda k=key, **kw: make_game(k, **kw))
+        specs.append(GameSpec(key, factory, kwargs, train, val, held, adaptor_dir))
+    return specs
+
+
+def _run_search(a: argparse.Namespace, games: list[tuple[str, str | None]], tier_n: int, study: str, exp_dir: Path):
     tier = _tier(tier_n)
     budget = _episode_budget(a)
-    spec = _adaptor_spec(game)
-    game_kwargs, declared = _game_setup(a, game)
-    seeds_train = _parse_seeds(a.seeds) if a.seeds is not None else list(declared.get("train") or [0, 1, 2])
-    seeds_heldout = (_parse_seeds(a.heldout) if a.heldout is not None
-                     else list(declared.get("heldout") or [100, 101, 102]))
+    specs = _game_specs(a, games)
+    first = specs[0]
     heldout_game, heldout_kwargs, heldout_seeds = _resolve_heldout_game(a)
+    heldout_adaptor = str(Path(a.heldout_game).resolve()) if a.heldout_game and Path(a.heldout_game).is_dir() else None
     archive = Archive(exp_dir)
     for p in tier.baseline_paths():
         if not any(c.dir.name.endswith(p.stem) for c in archive.candidates()):
             archive.add_seed(p, label=p.stem, note=(p.read_text().split('"""')[1].strip() + "\n") if '"""' in p.read_text() else "")
     system1 = _system1_for(a.system1, tier_n)
     system2 = _system2(a.system2, a.effort)
-    factory = GAMES[game][1] if game in GAMES else (lambda **k: make_game(game, **k))
-    cfg = LoopConfig(n_iterations=a.iters, seeds_train=seeds_train, seeds_heldout=seeds_heldout,
+    sources = [s for s in (getattr(_adaptor_spec(g.name), "source_sha256", None) for g in specs) if s]
+    cfg = LoopConfig(n_iterations=a.iters, seeds_train=first.seeds_train, seeds_heldout=first.seeds_heldout,
+                     seeds_val=first.seeds_val or [],
                      clock_mode=a.clock, budget=budget, proposer_agentic=not a.proposer_text,
                      proposer_timeout_s=a.proposer_timeout, harness_timeout_s=budget.max_wall_s,
                      latency_override=json.loads(a.latency_override) if a.latency_override else None,
                      heldout_game=heldout_game, memory_mode=a.memory_mode, heldout_game_kwargs=heldout_kwargs,
                      preflight=not a.no_preflight, grace_s=a.grace, qualify_seeds=not a.no_seed_check,
-                     game_source=getattr(spec, "source_sha256", None), heldout_game_seeds=heldout_seeds)
+                     game_source=";".join(sources) or None, heldout_game_seeds=heldout_seeds,
+                     heldout_game_adaptor=heldout_adaptor,
+                     proposals_per_iteration=getattr(a, "proposals", 1), parallel=a.parallel,
+                     finalists=getattr(a, "finalists", 3), reflect=not getattr(a, "no_reflect", False),
+                     more_games=specs[1:],
+                     eval_spec={"system1": a.system1, "system2": a.system2, "effort": a.effort, "tier": tier_n,
+                                "proposer": a.proposer, "proposer_effort": getattr(a, "proposer_effort", None)})
     # A calibration already measured for this archive is part of its task text: always reuse it (also
     # with --no-calibrate), measure only for a new archive.
     cal_path = archive.root / "calibration.json"
     calibration = json.loads(cal_path.read_text()) if cal_path.exists() else None
     if calibration is None and not a.no_calibrate and not (archive.root / "manifest.json").exists():
         try:
-            calibration = calibrate(archive.root, system2=system2, system1=system1, game_factory=factory,
-                                    game_kwargs=game_kwargs, seed=seeds_train[0])
+            calibration = calibrate(archive.root, system2=system2, system1=system1, game_factory=first.factory,
+                                    game_kwargs=first.kwargs, seed=first.seeds_train[0])
         except ModelUnavailable as e:
             print(f"calibration: model unavailable ({e}); rerun the same command once it is back", file=sys.stderr)
             a.interrupted = f"model unavailable: {e}"
             return None
-    task = tier.task_md(game, budget, a.clock, game_kwargs, study=study, generality=heldout_game is not None,
+    names = [g.name for g in specs]
+    kws = [g.kwargs for g in specs]
+    task = tier.task_md(names if len(names) > 1 else names[0], budget, a.clock, kws if len(kws) > 1 else kws[0],
+                        study=study, generality=heldout_game is not None or len(names) > 1,
                         deadline_s=budget.max_wall_s, memory_mode=a.memory_mode, calibration=calibration)
     loop = MetaHarnessLoop(
-        archive=archive, game_factory=factory, game_kwargs=game_kwargs, task_md=task,
-        contract_doc=tier.contract_doc(), proposer=_proposer(a.proposer, a.effort, tier),
-        system2=system2, system1=system1, config=cfg, game_name=game,
+        archive=archive, game_factory=first.factory, game_kwargs=first.kwargs, task_md=task,
+        contract_doc=tier.contract_doc(), proposer=_proposer(a.proposer, getattr(a, "proposer_effort", None) or a.effort, tier),
+        system2=system2, system1=system1, config=cfg, game_name=first.name, game_adaptor=first.adaptor_dir,
     )
     print(f"archive: {archive.root}")
     try:
@@ -234,13 +279,15 @@ def _run_search(a: argparse.Namespace, game: str, tier_n: int, study: str, exp_d
 def cmd_loop(a: argparse.Namespace) -> int:
     load_dotenv()
     from .games.registry import adaptor_spec
-    game = _resolve_game(a)
-    spec = adaptor_spec(game)
-    if spec is not None and spec.tier != f"tier{a.tier}":
-        print(f"warning: adaptor {game!r} is {spec.tier} ({'real-time' if spec.realtime else 'turn-based'}) "
-              f"but the search runs --tier {a.tier}", file=sys.stderr)
-    exp_dir = Path(a.runs_dir) / (a.name or f"tier{a.tier}-{_slug(game)}-{time.strftime('%Y%m%d-%H%M%S')}")
-    _run_search(a, game, a.tier, _study_text(a, exp_dir), exp_dir)
+    games = _resolve_games(a)
+    for game, _ in games:
+        spec = adaptor_spec(game)
+        if spec is not None and spec.tier != f"tier{a.tier}":
+            print(f"warning: adaptor {game!r} is {spec.tier} ({'real-time' if spec.realtime else 'turn-based'}) "
+                  f"but the search runs --tier {a.tier}", file=sys.stderr)
+    label = "+".join(_slug(g) for g, _ in games)
+    exp_dir = Path(a.runs_dir) / (a.name or f"tier{a.tier}-{label}-{time.strftime('%Y%m%d-%H%M%S')}")
+    _run_search(a, games, a.tier, _study_text(a, exp_dir, games), exp_dir)
     if getattr(a, "interrupted", None):
         print(f"interrupted: rerun with --name {exp_dir.name} --runs-dir {exp_dir.parent} (and the same "
               "settings) to resume", file=sys.stderr)
@@ -324,7 +371,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     if not a.system1 or a.system1 == "auto":
         a.system1 = "jev" if tier_n == 2 else "none"
     prior = prior_documents(run_dir / "study", run_dir / "adaptor", run_dir / "search")
-    best = _run_search(a, game, tier_n, prior, run_dir / "search")
+    best = _run_search(a, [(game, str((run_dir / "adaptor").resolve()))], tier_n, prior, run_dir / "search")
     if getattr(a, "interrupted", None):
         log(f"run: search interrupted ({a.interrupted[:200]}); rerun the same command to resume")
         return 3
@@ -392,13 +439,23 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--grace", type=float, default=DEFAULT_GRACE_S,
                         help="seconds a harness has to return after the deadline (and spawned work after "
                              "run_episode returns) before it counts as an error")
+        sp.add_argument("--parallel", type=int, default=1,
+                        help="concurrent evaluations (one child process per candidate and game) and proposers")
         sp.add_argument("--runs-dir", default=str(DEFAULT_RUNS_DIR))
 
     def loop_opts(sp):
         sp.add_argument("--proposer", default="astra", help="System-2 profile for the proposer | scripted")
+        sp.add_argument("--proposer-effort", default=None, help="reasoning effort of the proposer (default: --effort)")
         sp.add_argument("--proposer-text", action="store_true", help="proposer answers in text (no tools)")
         sp.add_argument("--proposer-timeout", type=float, default=1800.0)
-        sp.add_argument("--iters", type=int, default=3)
+        sp.add_argument("--iters", type=int, default=3, help="generations of proposals this archive should have")
+        sp.add_argument("--proposals", type=int, default=1,
+                        help="candidates proposed per generation (each with its own parent / mode directive)")
+        sp.add_argument("--val-seeds", default="",
+                        help="validation seeds: the top --finalists training candidates are re-evaluated on them "
+                             "and the final pick ranks training + validation together")
+        sp.add_argument("--finalists", type=int, default=3)
+        sp.add_argument("--no-reflect", action="store_true", help="no lessons.md reflection after each generation")
         sp.add_argument("--heldout", default=None,
                         help="held-out seeds, same game (default: the adaptor's declared split, else 100,101,102)")
         sp.add_argument("--heldout-game", default="",
@@ -423,9 +480,11 @@ def main(argv: list[str] | None = None) -> int:
     loop_opts(rp)
     rp.set_defaults(fn=cmd_run, system1="auto")
 
-    lp = sub.add_parser("loop", help="run the harness search on a registered game or adaptor")
-    lp.add_argument("--game", default="", help="registered game name (test beds: snake, lanerunner, rulepuzzle, arc3)")
-    lp.add_argument("--adaptor", default="", help="generated adaptor directory (runs/<game>/adaptor)")
+    lp = sub.add_parser("loop", help="run the harness search on registered games and/or adaptors")
+    lp.add_argument("--game", default="", help="registered game name(s), comma-separated for several training "
+                                               "games (test beds: snake, lanerunner, rulepuzzle, arc3)")
+    lp.add_argument("--adaptor", action="append", default=[],
+                    help="generated adaptor directory (runs/<game>/adaptor); repeat for several training games")
     lp.add_argument("--study", default="", help="study directory whose documents become prior knowledge")
     search_opts(lp, tier_required=True)
     loop_opts(lp)
@@ -433,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ep = sub.add_parser("eval", help="evaluate one harness file")
     ep.add_argument("--game", default="")
-    ep.add_argument("--adaptor", default="")
+    ep.add_argument("--adaptor", action="append", default=[])
     search_opts(ep, tier_required=True)
     ep.add_argument("--harness", required=True)
     ep.add_argument("--out", default="")

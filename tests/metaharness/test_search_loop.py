@@ -147,7 +147,7 @@ def test_proposer_timeout_keeps_a_harness_without_proposal(tmp_path):
     assert c.harness_path.exists() and "timed out" in (c.dir / "proposal.md").read_text()
     assert json.loads((c.dir / "session.json").read_text())["session_id"] == "thread-1"
     prompt = (c.dir / "prompt.md").read_text()
-    assert "iteration 2 of 3" in prompt and "10 minutes" in prompt
+    assert "generation 2 of 3" in prompt and "10 minutes" in prompt
 
 
 def test_leaderboard_has_no_pseudo_games_and_explains_ineligibility(tmp_path):

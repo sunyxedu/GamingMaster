@@ -279,7 +279,9 @@ def test_run_searches_the_adaptor_tier_and_passes_notes_and_kwargs(tmp_path, fak
         write_adaptor(run_dir / "adaptor", TICK_GAME)
         return ValidationReport(ok=True)
 
-    def fake_search(a, game, tier_n, prior, exp_dir):
+    def fake_search(a, games, tier_n, prior, exp_dir):
+        (game, adaptor_dir), = games
+        assert adaptor_dir == str((exp_dir.parent / "adaptor").resolve())
         calls["search"] = (game, tier_n, prior, exp_dir)
 
     monkeypatch.setattr(phases, "run_adapt", fake_adapt)

@@ -1,7 +1,7 @@
 """Text shared by the tier task specifications (what the proposer is told about the evaluation)."""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 GENERALITY = """
 
@@ -17,6 +17,38 @@ SCOPE = """
 unseen seeds of the same game; there is no held-out game. Rules, strategies and search that the game
 description or the study establish may be implemented as code once they are verified against
 observations — but nothing specific to the training seeds."""
+
+
+MULTI_GAME = """
+**Several training games.** Selection normalises each game's mean score across candidates and ranks
+candidates by the mean normalised score, then by their worst game: a harness must work on every game.
+Learn each game's rules and observation fields from `game.describe()` and its observations at run
+time; share the machinery, not the game knowledge."""
+
+
+def games_text(games: Sequence[str], kwargs: Sequence[dict]) -> tuple[str, list[Optional[float]]]:
+    """One block per training game (description, action spec); returns the text and each game's tick_s."""
+    from ..games.base import close_game
+    from ..games.registry import make_game
+    parts, ticks = [], []
+    for name, kw in zip(games, kwargs):
+        g = make_game(name, **kw)
+        try:
+            tick = getattr(g, "tick_s", None)
+            head = f"Game: `{name}`" if len(games) == 1 else f"### Training game `{name}`"
+            parts.append(f"{head} — {g.describe()}\n\nActions:\n{g.action_spec.describe()}"
+                         + (f"\nTick: every {tick}s." if tick and len(games) > 1 else ""))
+            ticks.append(tick)
+        finally:
+            close_game(g)
+    return "\n\n".join(parts), ticks
+
+
+def as_lists(game_name: Any, game_kwargs: Any) -> tuple[list[str], list[dict]]:
+    names = [game_name] if isinstance(game_name, str) else list(game_name)
+    kws = [dict(game_kwargs or {})] * len(names) if isinstance(game_kwargs, dict) or game_kwargs is None \
+        else [dict(k or {}) for k in game_kwargs]
+    return names, kws
 
 
 def memory_text(memory_mode: str) -> str:
