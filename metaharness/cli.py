@@ -199,7 +199,7 @@ def _episode_budget(a: argparse.Namespace) -> Budget:
 def _game_specs(a: argparse.Namespace, games: list[tuple[str, str | None]]) -> list[GameSpec]:
     """A GameSpec per training game: its kwargs (EVAL_KWARGS + --game-kwargs) and its seed blocks:
     --seeds / --val-seeds / --heldout, else the adaptor's declared split (with a validation block
-    carved from the end of a declared training list of 4+ seeds), else 0,1,2 / none / 100,101,102."""
+    carved from the end of a declared training list of 4+ seeds), else 0,1,2 / 3,4 / 100,101,102."""
     specs = []
     for key, adaptor_dir in games:
         kwargs, declared = _game_setup(a, key)
@@ -209,6 +209,8 @@ def _game_specs(a: argparse.Namespace, games: list[tuple[str, str | None]]) -> l
         if not val and a.seeds is None and declared.get("train") and len(train) >= 4:
             n_val = max(1, len(train) // 4)
             val, train = train[-n_val:], train[:-n_val]
+        elif not val and a.seeds is None and not declared.get("train"):
+            val = [3, 4]                                   # nothing declared, nothing asked: a default block
         factory = GAMES[key][1] if key in GAMES else (lambda k=key, **kw: make_game(k, **kw))
         specs.append(GameSpec(key, factory, kwargs, train, val, held, adaptor_dir))
     return specs

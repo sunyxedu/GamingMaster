@@ -135,6 +135,24 @@ def test_multi_game_training_combines_per_game_scores(tmp_runs):
     assert "selection (mean / worst norm.)" in (a.root / "leaderboard.md").read_text()
 
 
+def test_default_seed_blocks_carve_validation_from_declared_train_seeds(tmp_path):
+    import argparse
+    from metaharness import cli
+    d = tmp_path / "ad"
+    d.mkdir()
+    (d / "ADAPTOR.md").write_text("x")
+    (d / "game.py").write_text('from metaharness.testbeds.snake import SnakeGame\nSEEDS = {"train": [10, 11, 12, 13, 14, 15, 16, 17], "heldout": [90, 91]}\ndef make_game(**kw):\n    return SnakeGame(**kw)\n')
+    a = argparse.Namespace(game_kwargs="", seeds=None, heldout=None, val_seeds="")
+    declared, = cli._game_specs(a, [(cli.register_adaptor(d), str(d))])
+    assert declared.seeds_train == [10, 11, 12, 13, 14, 15] and declared.seeds_val == [16, 17]
+    assert declared.seeds_heldout == [90, 91] and declared.adaptor_dir == str(d)
+    plain, = cli._game_specs(a, [("snake", None)])
+    assert (plain.seeds_train, plain.seeds_val, plain.seeds_heldout) == ([0, 1, 2], [3, 4], [100, 101, 102])
+    explicit, = cli._game_specs(argparse.Namespace(game_kwargs="", seeds="5,6", heldout="", val_seeds=""),
+                                [("snake", None)])
+    assert (explicit.seeds_train, explicit.seeds_val, explicit.seeds_heldout) == ([5, 6], [], [])
+
+
 def test_task_text_for_several_games_lists_each_tick():
     text = tier2.task_md(["snake", "lanerunner"], Budget(), "wall", [{}, {}])
     assert "Tick: every 0.25s." in text and "Tick: every 0.5s." in text and "at its own pace" in text
