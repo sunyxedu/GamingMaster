@@ -74,6 +74,13 @@ elif mode == "empty":
     print(json.dumps({**result, "result": ""}))
 elif mode == "sleep":
     time.sleep(30)
+elif mode == "rate_limit_once":
+    marker = os.environ["FAKE_CLAUDE_LOG"] + ".429"
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        print(json.dumps({**result, "is_error": True, "result": "API Error: 429 user rate limit exceeded (rpm)"}))
+        sys.exit(1)
+    print(json.dumps(result))
 """ % {"watched": WATCHED_ENV}
 
 
@@ -84,6 +91,8 @@ def fake(tmp_path, monkeypatch):
     script.chmod(0o755)
     log = tmp_path / "claude-calls.jsonl"
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
+    monkeypatch.setattr(claude_mod, "_sleep", lambda s: None)          # 429 retries wait for nothing here
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
 
     def mode(name: str, text: str | None = None, rc: int = 1) -> None:
         monkeypatch.setenv("FAKE_CLAUDE_MODE", name)
@@ -226,6 +235,27 @@ def test_overload_and_server_errors_stay_runtime_errors(fake, mode, message):
     fake.mode(mode, message)
     with pytest.raises(RuntimeError) as ei:
         ClaudeCLI(claude_bin=fake.bin).run("hi")
+    assert not isinstance(ei.value, ModelUnavailable)
+
+
+def test_rate_limits_are_retried_and_agents_resume_their_session(fake, tmp_path):
+    fake.mode("rate_limit_once")
+    model, tr = ClaudeCLI(claude_bin=fake.bin), TraceSink()
+    assert model.run("hi", trace=tr).text == "up"                        # a player repeats the request
+    c1, c2 = fake.calls()
+    assert _flag(c1["argv"], "--session-id") != _flag(c2["argv"], "--session-id") and c2["stdin"] == "hi"
+    assert "rate limited (retry 1" in tr.records[0]["error"] and tr.records[1]["ok"]
+    (tmp_path / "claude-calls.jsonl.429").unlink()
+    store = tmp_path / "claude-config" / "projects" / "some-dir"
+    store.mkdir(parents=True)
+    (store / "abc.jsonl").write_text("{}")                                # the CLI stored the agent's session
+    assert model.run("design", cwd=tmp_path, agentic=True, session_id="abc").text == "up"
+    c3, c4 = fake.calls()[2:]
+    assert _flag(c3["argv"], "--resume") == "abc" and _flag(c4["argv"], "--resume") == "abc"
+    assert c4["stdin"].startswith("The previous turn was interrupted by an API rate limit")
+    fake.mode("error", "API Error: 429 user rate limit exceeded (rpm)")
+    with pytest.raises(RuntimeError, match="rate limited after 5 retries") as ei:   # never unavailable
+        model.run("hi")
     assert not isinstance(ei.value, ModelUnavailable)
 
 

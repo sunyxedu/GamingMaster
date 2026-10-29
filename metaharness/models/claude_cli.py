@@ -24,6 +24,8 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
+import os
+import random
 import re
 import shutil
 import tempfile
@@ -32,7 +34,7 @@ import time
 import uuid
 import weakref
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from ._cli import CLITimeout, run_cli
 from .base import (
@@ -68,8 +70,51 @@ _SYSTEM_ARGV_MAX = 32 * 1024
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                 ".webp": "image/webp"}
 _ENV_DROP = CLI_ENV_DROP + ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")   # a nested session refuses to start
+# A requests-per-minute cap at the API (a shared router enforces one per user) is hit by every process on
+# the machine together. Two defences: a cross-process cap on concurrent invocations — agents and players
+# have separate pools (METAHARNESS_CLAUDE_AGENT_SLOTS / METAHARNESS_CLAUDE_PLAYER_SLOTS; 0 = no cap) —
+# and, when the CLI still gives up with 429 after its own retries, our retry with backoff that resumes
+# the same session so an agent's work is not lost. 429 is transient, never ModelUnavailable.
+_SLOT_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "metaharness" / "claude-slots"
+_SLOT_DEFAULTS = {"agent": 4, "player": 8}
+_RATE_LIMIT_RE = re.compile(r"\b429\b|rate.?limit|too many requests", re.I)
+_RATE_LIMIT_WAITS = (15.0, 30.0, 60.0, 120.0, 240.0)
+_sleep = time.sleep          # module level, so tests can skip the waits
 _ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
 _ISOLATION_SETTINGS = json.dumps({"disableAllHooks": True})
+
+
+@contextlib.contextmanager
+def _slot(pool: str) -> Iterator[None]:
+    """Hold one of the pool's slots (lock files shared by every process of this user) for the call."""
+    n = int(os.environ.get(f"METAHARNESS_CLAUDE_{pool.upper()}_SLOTS", _SLOT_DEFAULTS[pool]) or 0)
+    try:
+        import fcntl
+    except ImportError:          # not POSIX: no cross-process cap
+        n = 0
+    if n <= 0:
+        yield
+        return
+    _SLOT_DIR.mkdir(parents=True, exist_ok=True)
+    handles = [open(_SLOT_DIR / f"{pool}{i}.lock", "a") for i in range(n)]
+    held = None
+    try:
+        while held is None:
+            for fh in handles:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held = fh
+                    break
+                except OSError:
+                    continue
+            if held is None:
+                time.sleep(0.1 + random.random() * 0.2)
+        yield
+    finally:
+        if held is not None:
+            fcntl.flock(held, fcntl.LOCK_UN)
+        for fh in handles:
+            fh.close()
 
 
 class ClaudeCLI:
@@ -164,15 +209,36 @@ class ClaudeCLI:
         stdin = prompt if not stream else json.dumps(
             {"type": "user", "message": {"role": "user", "content": blocks + [{"type": "text", "text": prompt}]}}) + "\n"
         system_file: Optional[Path] = None
+        deadline = time.monotonic() + timeout_s
+        attempt = 0
         try:
             run_dir = (Path(cwd).resolve() if cwd else None) if agentic else self._player_cwd()
             if len(request.get("system", "").encode("utf-8")) > _SYSTEM_ARGV_MAX:
                 # a player's in its private directory; an agent's in the temp dir, never its workspace
                 system_file = _system_file(request["system"], None if agentic else run_dir)
-            argv = self._argv(session_id=session_id, new_session_id=new_session_id, system=system,
-                              agentic=agentic, web_search=web_search, stream=stream, system_file=system_file)
-            proc = run_cli(argv, cwd=run_dir, stdin_text=stdin, timeout_s=timeout_s,
-                           env_overrides=_ISOLATION_ENV, env_drop=_ENV_DROP)
+            while True:
+                argv = self._argv(session_id=session_id, new_session_id=new_session_id, system=system,
+                                  agentic=agentic, web_search=web_search, stream=stream, system_file=system_file)
+                with _slot("agent" if agentic else "player"):
+                    proc = run_cli(argv, cwd=run_dir, stdin_text=stdin, timeout_s=max(1.0, deadline - time.monotonic()),
+                                   env_overrides=_ISOLATION_ENV, env_drop=_ENV_DROP)
+                payload = _result_payload(proc.stdout or "", stream)
+                failed = proc.returncode != 0 or (payload is not None and payload.get("is_error"))
+                err = _error_text(payload, proc) if failed else ""
+                if not (failed and _RATE_LIMIT_RE.search(err)) or attempt >= len(_RATE_LIMIT_WAITS):
+                    break
+                wait = _RATE_LIMIT_WAITS[attempt] * (0.75 + random.random() * 0.5)
+                if time.monotonic() + wait >= deadline:
+                    break
+                attempt += 1
+                self._trace(trace, t0, request, None, f"rate limited (retry {attempt} in {wait:.0f}s): {err[-300:]}")
+                _sleep(wait)
+                # an agent resumes its session (its work so far is kept); a player repeats the request
+                if agentic and _session_exists(run_dir, sid):
+                    session_id, new_session_id = sid, None
+                    stdin = "The previous turn was interrupted by an API rate limit. Continue where you left off."
+                elif not session_id:
+                    new_session_id = sid = str(uuid.uuid4())
         except CLITimeout as e:
             err = f"timeout: claude -p exceeded {timeout_s:g}s (session {sid})"
             self._trace(trace, t0, request, None, err)
@@ -191,10 +257,10 @@ class ClaudeCLI:
                 with contextlib.suppress(OSError):
                     system_file.unlink()
         latency = time.time() - t0
-        payload = _result_payload(proc.stdout or "", stream)
-        if proc.returncode != 0 or (payload is not None and payload.get("is_error")):
-            err = _error_text(payload, proc)
+        if failed:
             self._trace(trace, t0, request, None, err)
+            if _RATE_LIMIT_RE.search(err):
+                raise RuntimeError(f"claude -p rate limited after {attempt} retries: {err[-500:]}")
             hit = _UNAVAILABLE_RE.search(_TRANSIENT_LINE_RE.sub("", err))
             if hit:
                 raise ModelUnavailable(f"claude unavailable (matched {hit.group(0)!r}): {err[-800:]}")
@@ -222,6 +288,14 @@ class ClaudeCLI:
                 "system2", self.name, t0, time.time() - t0, request,
                 {"text": res.text, "session_id": res.session_id} if res else None,
                 ok=err is None, error=err, usage=res.usage if res else {}))
+
+
+def _session_exists(run_dir: Optional[Path], sid: Optional[str]) -> bool:
+    """Whether the CLI stored a conversation ``sid`` for ``run_dir`` (sessions live per project directory)."""
+    if not sid or run_dir is None:
+        return False
+    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    return any(p.name == f"{sid}.jsonl" for d in projects.glob("*") if d.is_dir() for p in d.glob(f"{sid}.jsonl"))
 
 
 def _system_file(text: str, directory: Optional[Path]) -> Path:
