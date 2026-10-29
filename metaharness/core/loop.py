@@ -1,10 +1,13 @@
 """The outer loop: propose -> evaluate -> archive -> repeat; then hold-out."""
 from __future__ import annotations
 
+import concurrent.futures as cf
 import contextlib
 import hashlib
 import json
 import os
+import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,7 +17,7 @@ from ..games.base import close_game
 from ..models.base import ModelUnavailable, System1Model, System2Model, TraceSink
 from .archive import Archive, Candidate
 from .contract import Budget
-from .proposer import propose, repair
+from .proposer import propose, repair, tools_text
 from .runner import DEFAULT_GRACE_S, PROTOCOL_VERSION, EvalResult, evaluate_harness, preflight_harness
 
 
@@ -43,6 +46,14 @@ class LoopConfig:
     qualify_seeds: bool = True                               # reset every seed once before evaluating
     game_source: Optional[str] = None                        # adaptor source hash, pinned by the manifest
     heldout_game_seeds: Optional[list[int]] = None           # a held-out adaptor's own declared seeds
+    proposals_per_iter: int = 1                              # proposers working in parallel per iteration
+    parallel_seeds: int = 1                                  # seeds of one evaluation played at once
+    seeds_dev: list[int] = field(default_factory=list)       # the proposer's own dev evaluations
+    proposer_dev_evals: int = 0                              # ... how many per candidate (0: no dev tool)
+    proposer_tools: bool = True                              # pre-flight (and dev-eval) commands in the prompt
+    validate_top: int = 0                                    # re-evaluate the top-k on seeds_val before held-out
+    seeds_val: list[int] = field(default_factory=list)
+    run_info: dict[str, Any] = field(default_factory=dict)   # game / profiles for the proposer's tools (manifest)
 
 
 def _unavailable(e: Optional[dict[str, Any]]) -> bool:
@@ -135,10 +146,18 @@ class MetaHarnessLoop:
         self.proposer_extra = proposer_extra
         self.game_name = game_name
         self.interrupted: Optional[str] = None
-        overlap = set(config.seeds_train) & set(config.seeds_heldout)
-        if overlap:
-            raise ValueError(f"train and held-out seeds overlap: {sorted(overlap)}")
-        if config.n_iterations > self.proposals_done() and any(
+        groups = {"train": config.seeds_train, "held-out": config.seeds_heldout, "dev": config.seeds_dev,
+                  "validation": config.seeds_val}
+        names = list(groups)
+        for i, a in enumerate(names):
+            for b in names[i + 1:]:
+                overlap = set(groups[a]) & set(groups[b])
+                if overlap:
+                    raise ValueError(f"{a} and {b} seeds overlap: {sorted(overlap)}")
+        if config.validate_top and not config.seeds_val:
+            raise ValueError("--validate-top needs validation seeds (--val-seeds)")
+        self._log_lock = threading.Lock()
+        if config.n_iterations > self.iterations_done() and any(
                 _heldout_exposed(d) for d in archive.cand_dir.glob("*/heldout*") if d.is_dir()):
             raise ValueError("This archive contains held-out results; start a new search archive.")
         manifest = {
@@ -150,6 +169,8 @@ class MetaHarnessLoop:
             "budget": {k: getattr(config.budget, k) for k in
                        ("max_system1_calls", "max_system2_calls", "max_wall_s")},
             "harness_timeout_s": config.harness_timeout_s, "grace_s": config.grace_s,
+            "seeds_val": config.seeds_val, "seeds_dev": config.seeds_dev,
+            "run": _jsonish(config.run_info),
             "models": {k: None if m is None else {
                 "name": m.name, "model": getattr(m, "model", None),
                 "player_tools": getattr(m, "player_tools", None),
@@ -174,9 +195,16 @@ class MetaHarnessLoop:
 
     def _log(self, msg: str) -> None:
         line = f"[{time.strftime('%H:%M:%S')}] {msg}"
-        print(line, flush=True)
-        with open(self.log_path, "a") as fh:
-            fh.write(line + "\n")
+        with self._log_lock:
+            print(line, flush=True)
+            with open(self.log_path, "a") as fh:
+                fh.write(line + "\n")
+
+    def _tools(self) -> str:
+        if not self.cfg.proposer_tools or not self.cfg.proposer_agentic:
+            return ""
+        from ..config import REPO_ROOT
+        return tools_text(sys.executable, str(REPO_ROOT), self.cfg.seeds_dev, self.cfg.proposer_dev_evals)
 
     def evaluate(self, cand: Candidate, seeds: list[int], tag: str = "",
                  game_factory: Optional[Callable[..., Any]] = None,
@@ -189,7 +217,7 @@ class MetaHarnessLoop:
             harness_timeout_s=self.cfg.harness_timeout_s,
             game_kwargs=self.game_kwargs if game_kwargs is None else game_kwargs,
             memory_mode=self.cfg.memory_mode, grace_s=self.cfg.grace_s,
-            game_name=game_name or (None if tag else self.game_name),
+            game_name=game_name or (None if tag else self.game_name), parallel=self.cfg.parallel_seeds,
         )
         self.archive.write_leaderboard()
         ended = ", ".join(f"{k} {v}" for k, v in res.to_json()["ended_by"].items())
@@ -209,9 +237,14 @@ class MetaHarnessLoop:
             self.interrupted = "the game failed in every episode: " + (res.episodes[0].error or "")[:300]
         return self.interrupted is not None
 
+    def iterations_done(self) -> int:
+        """Iterations the archive holds: proposals / proposals per iteration, rounded up."""
+        k = max(1, self.cfg.proposals_per_iter)
+        return -(-self.proposals_done() // k)
+
     def proposals_done(self) -> int:
         """Proposals the archive holds (a proposer outage or an empty directory left by a killed
-        proposer does not count): --iters is their target number."""
+        proposer does not count): --iters × proposals per iteration is their target number."""
         n = 0
         for c in self.archive.candidates():
             if "-" in c.dir.name:                                   # a labelled seed baseline
@@ -238,13 +271,51 @@ class MetaHarnessLoop:
             self._log(f"preflight {cand.dir.name}: FAILED — {rep['error'][:200].replace(chr(10), ' ')}")
             if attempt == 1 or not rep.get("repairable", True):
                 return False
-            ptrace = TraceSink(self.archive.root / "proposer_trace.jsonl")
+            ptrace = TraceSink(cand.dir / "proposer_trace.jsonl")
             try:
                 repair(self.proposer, cand, rep["error"], agentic=self.cfg.proposer_agentic, trace=ptrace,
-                       timeout_s=min(900.0, self.cfg.proposer_timeout_s))
+                       timeout_s=min(900.0, self.cfg.proposer_timeout_s), full_access=bool(self._tools()))
             finally:
                 ptrace.close()
         return False
+
+    def propose_one(self, cand: Candidate, iteration: tuple[int, int], slot: tuple[int, int]) -> bool:
+        """Propose into ``cand``, pre-flight and evaluate it. False when the search must stop."""
+        self._log(f"iteration {iteration[0]}/{iteration[1]} slot {slot[0] + 1}/{slot[1]}: proposing {cand.dir.name} "
+                  f"with {self.proposer.name}")
+        ptrace = TraceSink(cand.dir / "proposer_trace.jsonl")
+        try:
+            propose(self.proposer, self.archive, contract_doc=self.contract_doc, task_md=self.task_md,
+                    extra=self.proposer_extra + self._tools(), agentic=self.cfg.proposer_agentic, trace=ptrace,
+                    timeout_s=self.cfg.proposer_timeout_s, candidate=cand, iteration=iteration, slot=slot,
+                    full_access=bool(self._tools()))
+        except ModelUnavailable as e:
+            self._log(f"proposer unavailable: {e}")
+            if not cand.harness_path.exists():
+                self._new_candidate_eval(cand, f"proposer unavailable: {str(e)[:300]}")
+            if self.cfg.stop_on_model_unavailable:
+                self.interrupted = f"model unavailable: {e}"
+                return False
+            return True
+        except Exception as e:  # noqa: BLE001 — a failed proposal is data, not a crash
+            self._log(f"proposer failed: {type(e).__name__}: {str(e)[:300]}")
+            if not cand.harness_path.exists():
+                self._new_candidate_eval(cand, f"proposer failed: {type(e).__name__}: {str(e)[:300]}")
+                return True
+        finally:
+            ptrace.close()
+        if not cand.harness_path.exists():
+            self._new_candidate_eval(cand, "proposer produced no harness.py")
+            self._log(f"{cand.dir.name}: proposer produced no harness")
+            return True
+        if self.cfg.preflight:
+            try:
+                self.preflight_and_repair(cand)
+            except ModelUnavailable as e:
+                self._log(f"repair: proposer unavailable: {e}")
+                self.interrupted = f"model unavailable: {e}"
+                return False
+        return not self._stop_for(self.evaluate(cand, self.cfg.seeds_train))
 
     def qualify_seeds(self) -> None:
         """Reset every configured seed once before anything is evaluated. A training seed the game
@@ -342,50 +413,25 @@ class MetaHarnessLoop:
             retried = bool(list(c.dir.glob("eval.interrupted-*.json"))) and e is not None and not _unavailable(e)
             if self._stop_for(self.evaluate(c, self.cfg.seeds_train), env_retry=retried):
                 break
-        # --iters is the number of proposals this archive should have: a resumed search runs the rest
-        n = self.cfg.n_iterations
-        done = self.proposals_done()
+        # --iters is the number of iterations this archive should have (each with proposals_per_iter
+        # proposals written in parallel): a resumed search runs the rest
+        n, k = self.cfg.n_iterations, max(1, self.cfg.proposals_per_iter)
+        done = self.iterations_done()
         if done and n:
-            self._log(f"the archive already holds {done} proposal(s); running {max(0, n - done)} more "
-                      f"to reach {n} (raise --iters for more)")
+            self._log(f"the archive already holds {self.proposals_done()} proposal(s) = {done} iteration(s); running "
+                      f"{max(0, n - done)} more to reach {n} (raise --iters for more)")
         for it in range(done, n):
             if self.interrupted:
                 break
-            self._log(f"iteration {it + 1}/{n}: proposing with {self.proposer.name}")
-            cand = self.archive.new_candidate()
-            ptrace = TraceSink(self.archive.root / "proposer_trace.jsonl")
-            try:
-                propose(self.proposer, self.archive, contract_doc=self.contract_doc, task_md=self.task_md,
-                        extra=self.proposer_extra, agentic=self.cfg.proposer_agentic, trace=ptrace,
-                        timeout_s=self.cfg.proposer_timeout_s, candidate=cand, iteration=(it + 1, n))
-            except ModelUnavailable as e:
-                self._log(f"proposer unavailable: {e}")
-                if not cand.harness_path.exists():
-                    self._new_candidate_eval(cand, f"proposer unavailable: {str(e)[:300]}")
-                if self.cfg.stop_on_model_unavailable:
-                    self.interrupted = f"model unavailable: {e}"
-                    break
+            cands = [self.archive.new_candidate() for _ in range(k)]
+            if k == 1:
+                self.propose_one(cands[0], (it + 1, n), (0, 1))
                 continue
-            except Exception as e:  # noqa: BLE001 — a failed proposal is data, not a crash
-                self._log(f"proposer failed: {type(e).__name__}: {str(e)[:300]}")
-                if not cand.harness_path.exists():
-                    self._new_candidate_eval(cand, f"proposer failed: {type(e).__name__}: {str(e)[:300]}")
-                    continue
-            finally:
-                ptrace.close()
-            if not cand.harness_path.exists():
-                self._new_candidate_eval(cand, "proposer produced no harness.py")
-                self._log(f"{cand.dir.name}: proposer produced no harness")
-                continue
-            if self.cfg.preflight:
-                try:
-                    self.preflight_and_repair(cand)
-                except ModelUnavailable as e:
-                    self._log(f"repair: proposer unavailable: {e}")
-                    self.interrupted = f"model unavailable: {e}"
-                    break
-            if self._stop_for(self.evaluate(cand, self.cfg.seeds_train)):
-                break
+            with cf.ThreadPoolExecutor(max_workers=k, thread_name_prefix="propose") as pool:
+                for f in [pool.submit(self.propose_one, c, (it + 1, n), (i, k)) for i, c in enumerate(cands)]:
+                    f.result()
+        if not self.interrupted and self.cfg.validate_top and self.cfg.seeds_val:
+            self.validate_top()
         if self.interrupted:
             # no held-out evaluation: it would lock the archive against resuming the search
             self._log(f"search interrupted ({self.interrupted[:200]}); held-out evaluation skipped — "
@@ -411,6 +457,22 @@ class MetaHarnessLoop:
                       f"{self.archive.root} to complete it (the search itself stays closed)")
         self.archive.write_leaderboard()
         return best
+
+    def validate_top(self) -> None:
+        """Re-evaluate the top-k training candidates on the validation seeds (in parallel); the final
+        selection is then the best train+validation mean among them (``Archive.best``). A candidate
+        validated before (a resumed search) is not re-rolled."""
+        top = self.archive.ranked()[: self.cfg.validate_top]
+        todo = [c for c in top if c.validation() is None or _interrupted(c.validation())]
+        if not todo:
+            return
+        self._log(f"validation of the top {len(top)} on seeds {self.cfg.seeds_val}: " + ", ".join(c.dir.name for c in todo))
+        with cf.ThreadPoolExecutor(max_workers=len(todo), thread_name_prefix="validate") as pool:
+            for f in [pool.submit(self.evaluate, c, self.cfg.seeds_val, "validation") for c in todo]:
+                self._stop_for(f.result())
+        best = self.archive.best()
+        if best:
+            self._log(f"selected after validation: {best.dir.name}")
 
     def heldout_best(self) -> Optional[Candidate]:
         """The candidate the held-out stage tests. Once the loop's held-out stage has started on a

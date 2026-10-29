@@ -21,10 +21,14 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+
+_PARENT_RE = re.compile(r"^\s*parent\s*:\s*`?(\d{4})", re.I | re.M)
 
 
 @dataclass
@@ -58,6 +62,19 @@ class Candidate:
     def score(self) -> Optional[float]:
         e = self.eval()
         return None if not e else e.get("mean_score")
+
+    def parent(self) -> Optional[str]:
+        """The candidate this one was derived from: a ``parent: NNNN`` line in proposal.md."""
+        p = self.dir / "proposal.md"
+        if not p.exists():
+            return None
+        m = _PARENT_RE.search(p.read_text(errors="replace")[:4000])
+        return m.group(1) if m else None
+
+    def validation(self) -> Optional[dict[str, Any]]:
+        """The top-k re-evaluation on the validation seeds, if this candidate had one."""
+        p = self.dir / "validation" / "eval.json"
+        return json.loads(p.read_text()) if p.exists() else None
 
 
 def combine_evals(per_game: dict[str, dict[str, Any]], seeds: list[int]) -> dict[str, Any]:
@@ -182,6 +199,7 @@ class Archive:
         self.root = Path(root)
         self.cand_dir = self.root / "candidates"
         self.cand_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()        # parallel proposals / evaluations share the archive
 
     # -- candidates -----------------------------------------------------
     def candidates(self) -> list[Candidate]:
@@ -196,11 +214,12 @@ class Archive:
         return (cs[-1].idx + 1) if cs else 0
 
     def new_candidate(self, label: str = "") -> Candidate:
-        idx = self.next_index()
-        name = f"{idx:04d}" + (f"-{label}" if label else "")
-        d = self.cand_dir / name
-        d.mkdir(parents=True, exist_ok=False)
-        return Candidate(idx, d)
+        with self._lock:
+            idx = self.next_index()
+            name = f"{idx:04d}" + (f"-{label}" if label else "")
+            d = self.cand_dir / name
+            d.mkdir(parents=True, exist_ok=False)
+            return Candidate(idx, d)
 
     def add_seed(self, harness_file: Path, label: str = "baseline", note: str = "") -> Candidate:
         c = self.new_candidate(label)
@@ -252,10 +271,9 @@ class Archive:
             return (float("-inf"), float("-inf"))
         return (sum(n.values()) / len(n), min(n.values()))
 
-    def best(self) -> Optional[Candidate]:
+    def ranked(self) -> list[Candidate]:
+        """Eligible candidates, best first, by the training evaluation."""
         scored = [c for c in self.candidates() if _eligible(c.eval() or {})]
-        if not scored:
-            return None
         table = self._norm_table()
 
         def key(c: Candidate):
@@ -269,17 +287,43 @@ class Archive:
             return (round(mean_n, 9), round(worst_n, 9), e.get("mean_score", 0.0),
                     -(e.get("stale_fraction") or 0.0), -e.get("system2_calls", 0),
                     steps if realtime else -steps)
-        return max(scored, key=key)
+        return sorted(scored, key=key, reverse=True)
+
+    @staticmethod
+    def combined_score(c: Candidate) -> Optional[float]:
+        """Mean episode score over the training and validation evaluations together (one eligible
+        validation evaluation is required): what the top-k re-evaluation selects on."""
+        v = c.validation()
+        if not v or not _eligible(v):
+            return None
+        scores = [ep.get("score") for ep in _episodes(c.eval() or {}) + _episodes(v)]
+        scores = [float(x) for x in scores if isinstance(x, (int, float))]
+        return (sum(scores) / len(scores)) if scores else None
+
+    def best(self) -> Optional[Candidate]:
+        """The training leader; once candidates were re-evaluated on validation seeds, the best
+        combined train+validation mean among them (the training leader's score is a max over noisy
+        evaluations — the re-evaluation corrects the winner's curse)."""
+        ranked = self.ranked()
+        validated = [(self.combined_score(c), c) for c in ranked]
+        validated = [(s, c) for s, c in validated if s is not None]
+        if validated:
+            return max(validated, key=lambda sc: (round(sc[0], 9), -sc[1].idx))[1]
+        return ranked[0] if ranked else None
 
     # -- docs -----------------------------------------------------------
     def write_task(self, text: str) -> None:
         (self.root / "task.md").write_text(text)
 
     def write_leaderboard(self) -> str:
+        with self._lock:
+            return self._write_leaderboard()
+
+    def _write_leaderboard(self) -> str:
         games = self.games()
         multi = len(games) > 1
         table = self._norm_table()
-        head = ["#", "candidate"] + ([f"{g}" for g in games] if multi else ["mean score"]) + \
+        head = ["#", "candidate", "parent"] + ([f"{g}" for g in games] if multi else ["mean score"]) + \
                (["selection (mean / worst norm.)"] if multi else []) + \
                ["episodes", "stale ticks", "S1 calls", "S2 calls", "failed S1/S2", "Jev→act", "Astra→act",
                 "Jev p50/max s", "Astra p50/max s", "status"]
@@ -292,13 +336,15 @@ class Archive:
 
         for c in self.candidates():
             e = c.eval()
+            parent = c.parent() or "–"
             if e is None:
-                rows.append("| " + " | ".join([f"{c.idx:04d}", c.dir.name] + ["–"] * (len(head) - 3) + ["not evaluated"]) + " |")
+                rows.append("| " + " | ".join([f"{c.idx:04d}", c.dir.name, parent] + ["–"] * (len(head) - 4)
+                                              + ["not evaluated"]) + " |")
                 continue
             why = ineligibility(e)
             status = "ok" if why is None else "✗ " + why[:120].replace("|", "/")
             ge = c.game_evals()
-            cells = [f"{c.idx:04d}", c.dir.name]
+            cells = [f"{c.idx:04d}", c.dir.name, parent]
             if multi:
                 cells += [fmt(ge[g].get("mean_score")) if g in ge else "–" for g in games]
                 mean_n, worst_n = self.selection_score(c, table)
@@ -329,7 +375,20 @@ class Archive:
                  "measurements, not from assumptions.\n\n")
         text += (f"Best so far: `{best.dir.name}` (mean score {best.score:.3f})\n" if best else "No scored candidate yet.\n")
         text += ("Only candidates whose status is `ok` can be selected: a fatal, partial or erroneous evaluation "
-                 "cannot win, whatever its score. A used-up call budget or the deadline is not an error.\n")
+                 "cannot win, whatever its score. A used-up call budget or the deadline is not an error. "
+                 "`parent` is the candidate a proposal says it was derived from (`parent: NNNN` in proposal.md).\n")
+        val_rows = []
+        for c in self.candidates():
+            v = c.validation()
+            if v:
+                ms, why = v.get("mean_score"), ineligibility(v)
+                comb = self.combined_score(c)
+                val_rows.append(f"- `{c.dir.name}`: validation {'–' if ms is None else f'{ms:.3f}'} over "
+                                f"{v.get('n_episodes', 0)} episodes" + (f"; train+validation {comb:.3f}" if comb is not None else "")
+                                + (f"; ✗ {why[:100]}" if why else ""))
+        if val_rows:
+            text += ("\nValidation (top candidates re-evaluated on unseen seeds; the final selection is the best "
+                     "train+validation mean among them):\n" + "\n".join(val_rows) + "\n")
         # per-seed outcome: which seeds failed, how each episode ended and how much of the deadline it used
         ep_rows = []
         for c in self.candidates():
