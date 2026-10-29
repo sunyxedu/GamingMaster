@@ -13,8 +13,11 @@ A player (``agentic=False``) is isolated from the user's Claude Code setup: no t
 servers, hooks, skills / slash commands, CLAUDE.md or auto-memory, the inference-only
 instruction as its system prompt (instead of the coding-agent prompt with env and git status),
 and a private empty working directory, created once per instance and reused because sessions
-are stored per directory. Not ``--bare``: it also drops settings-file auth
-(ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL in settings env), which some installs rely on.
+are stored per directory. Agents (study / adapt / proposer) keep their tools but run with the
+same CLAUDE.md, auto-memory and hook isolation: their run directory is their whole world, and
+nothing may carry state between iterations outside the archive. Not ``--bare``: it also drops
+settings-file auth (ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL in settings env), which some
+installs rely on.
 """
 from __future__ import annotations
 
@@ -65,8 +68,8 @@ _SYSTEM_ARGV_MAX = 32 * 1024
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                 ".webp": "image/webp"}
 _ENV_DROP = CLI_ENV_DROP + ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")   # a nested session refuses to start
-_PLAYER_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
-_PLAYER_SETTINGS = json.dumps({"disableAllHooks": True})
+_ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
+_ISOLATION_SETTINGS = json.dumps({"disableAllHooks": True})
 
 
 class ClaudeCLI:
@@ -113,14 +116,15 @@ class ClaudeCLI:
         if agentic:
             if system and not session_id:
                 argv += _system_flag(system, system_file)
-            argv += ["--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
+            argv += ["--permission-mode", "bypassPermissions", "--dangerously-skip-permissions",
+                     "--settings", _ISOLATION_SETTINGS]
             if not web_search:  # study / adapt research the game on the web; the proposer must not
                 argv += ["--disallowedTools", "WebSearch", "WebFetch"]
         else:
             # Replaces the coding-agent system prompt. Sent on --resume too: the CLI keeps reusing
             # the prompt it recorded first, and renders this one again after a compaction.
             argv += _system_flag(PLAYER_PREAMBLE + (f"\n\n{system}" if system else ""), system_file)
-            argv += ["--tools", "", "--strict-mcp-config", "--settings", _PLAYER_SETTINGS,
+            argv += ["--tools", "", "--strict-mcp-config", "--settings", _ISOLATION_SETTINGS,
                      "--disable-slash-commands"]
         return argv
 
@@ -168,7 +172,7 @@ class ClaudeCLI:
             argv = self._argv(session_id=session_id, new_session_id=new_session_id, system=system,
                               agentic=agentic, web_search=web_search, stream=stream, system_file=system_file)
             proc = run_cli(argv, cwd=run_dir, stdin_text=stdin, timeout_s=timeout_s,
-                           env_overrides=None if agentic else _PLAYER_ENV, env_drop=_ENV_DROP)
+                           env_overrides=_ISOLATION_ENV, env_drop=_ENV_DROP)
         except CLITimeout as e:
             err = f"timeout: claude -p exceeded {timeout_s:g}s (session {sid})"
             self._trace(trace, t0, request, None, err)

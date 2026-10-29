@@ -137,7 +137,10 @@ def test_agentic_calls_keep_tools_but_not_web_unless_asked(fake, tmp_path):
     assert c1["argv"][c1["argv"].index("--disallowedTools") + 1:][:2] == ["WebSearch", "WebFetch"]
     assert "--disallowedTools" not in c2["argv"]
     assert _flag(c1["argv"], "--system-prompt") == "SYS" and "--system-prompt" not in c3["argv"]
-    assert c1["cwd"] == str(tmp_path.resolve()) and c1["env"]["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] is None
+    assert c1["cwd"] == str(tmp_path.resolve())
+    # agents keep their tools, but neither CLAUDE.md, auto-memory nor hooks may leak into the run directory
+    assert c1["env"]["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1" and c1["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+    assert json.loads(_flag(c1["argv"], "--settings")) == {"disableAllHooks": True}
     assert all(_flag(c["argv"], "--effort") == "xhigh" for c in (c1, c2, c3))
     assert _flag(c3["argv"], "--resume") == "abc"
 
