@@ -4,16 +4,35 @@
 #           "scripted" / "heuristic" (offline stand-ins for tests).
 # Select with --system2 <profile> / --proposer <profile> / --system1 <profile>.
 # Override the file with METAHARNESS_MODELS=/path/to/models.toml.
+#
+# A codex profile may name a provider: an OpenAI-compatible endpoint (Responses API) reached with an
+# API key from the environment variable it names, instead of the codex CLI's ChatGPT login. The
+# "router" below is the local model router Claude Code on this machine uses (its settings.json env:
+# ANTHROPIC_BASE_URL = http://127.0.0.1:8787, the same token); codex runs with its own CODEX_HOME.
+
+[providers.router]
+name = "appintheloop router"
+base_url = "http://127.0.0.1:8787/v1"
+env_key = "MH_ROUTER_API_KEY"       # the key itself lives in .env, never here
+wire_api = "responses"
+codex_home = "~/.cache/metaharness/codex-home"
 
 [system2.astra]
+backend = "codex"
+model = "gpt-6-astra"
+reasoning_effort = "high"
+provider = "router"
+
+[system2.astra-login]                # the codex CLI's own ChatGPT login (needs `codex login`)
 backend = "codex"
 model = "gpt-6-astra"
 reasoning_effort = "high"
 
 [system2.sol]
 backend = "codex"
-model = "gpt-5.6-sol"
+model = "gpt-6.1-sol"
 reasoning_effort = "high"
+provider = "router"
 
 [system2.claude]
 backend = "claude"

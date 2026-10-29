@@ -58,7 +58,8 @@ def _answer(text: str, thread: str = "t-1", usage: dict | None = None) -> str:
 def _fake_run_cli(stdout: str, rc: int = 0, stderr: str = "", seen: list | None = None):
     def run_cli(argv, *, cwd, stdin_text, timeout_s, env_overrides=None, env_drop=()):
         if seen is not None:
-            seen.append({"argv": list(argv), "stdin": stdin_text, "env_drop": tuple(env_drop)})
+            seen.append({"argv": list(argv), "stdin": stdin_text, "env_drop": tuple(env_drop),
+                         "env_overrides": env_overrides})
         return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr=stderr)
     return run_cli
 
@@ -253,3 +254,64 @@ def test_codex_binary_that_cannot_start_is_unavailable(tmp_path):
     from metaharness.models.base import ModelUnavailable
     with pytest.raises(ModelUnavailable, match="could not run"):
         CodexCLI(model="m", codex_bin=str(tmp_path / "no-such-codex")).run("hi")
+
+
+# ---------------------------------------------------------------- providers (OpenAI-compatible endpoint)
+
+ROUTER = {"id": "router", "name": "r", "base_url": "http://127.0.0.1:8787/v1", "env_key": "MH_ROUTER_API_KEY",
+          "wire_api": "responses"}
+
+
+def test_provider_profile_runs_with_overrides_and_its_own_codex_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_ROUTER_API_KEY", "secret")
+    seen: list = []
+    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(_answer("up"), seen=seen))
+    home = tmp_path / "codex-home"
+    model = CodexCLI(model="gpt-6-astra", provider={**ROUTER, "codex_home": str(home)})
+    assert model.name == "codex:gpt-6-astra@router"
+    assert model.run("state").text == "up"
+    argv = seen[0]["argv"]
+    cfg = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in argv if "=" in a}
+    assert cfg["model_provider"] == '"router"'
+    assert cfg["model_providers.router.base_url"] == '"http://127.0.0.1:8787/v1"'
+    assert cfg["model_providers.router.env_key"] == '"MH_ROUTER_API_KEY"'
+    assert cfg["model_providers.router.wire_api"] == '"responses"'
+    assert "shell_environment_policy.exclude" not in cfg          # a player has no shell
+    assert seen[0]["env_overrides"] == {"CODEX_HOME": str(home)}
+    toml = (home / "config.toml").read_text()                     # reproducible by hand: CODEX_HOME=<dir> codex
+    assert 'model_provider = "router"' in toml and "[model_providers.router]" in toml and "secret" not in toml
+    assert "MH_ROUTER_API_KEY" not in seen[0]["env_drop"]         # codex itself must see the key
+
+
+def test_provider_key_is_hidden_from_the_agent_shell(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_ROUTER_API_KEY", "secret")
+    model = CodexCLI(model="m", provider={**ROUTER, "codex_home": str(tmp_path)})
+    agent = model._argv(cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
+    assert 'shell_environment_policy.exclude=["MH_ROUTER_API_KEY"]' in agent
+    resumed = model._argv(cwd=tmp_path, session_id="t", agentic=True, last_msg_path=tmp_path / "l")
+    assert 'model_provider="router"' in resumed                   # resume gets the provider too
+
+
+def test_provider_without_its_key_is_refused_at_construction(monkeypatch):
+    monkeypatch.delenv("MH_ROUTER_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="MH_ROUTER_API_KEY.*not set"):
+        CodexCLI(model="m", provider=ROUTER)
+    with pytest.raises(ValueError, match="base_url"):
+        CodexCLI(model="m", provider={"id": "x"})
+    with pytest.raises(ValueError, match="provider id"):
+        CodexCLI(model="m", provider={"id": "bad id", "base_url": "http://x"})
+
+
+def test_profile_naming_an_unknown_provider_is_an_error(tmp_path, monkeypatch):
+    from metaharness.models import make_system2
+    cfg = tmp_path / "models.toml"
+    cfg.write_text('[system2.x]\nbackend = "codex"\nmodel = "m"\nprovider = "nowhere"\n')
+    monkeypatch.setenv("METAHARNESS_MODELS", str(cfg))
+    with pytest.raises(ValueError, match="provider 'nowhere'"):
+        make_system2("x")
+
+
+def test_toml_values():
+    from metaharness.models.codex_cli import _toml
+    assert _toml("a") == '"a"' and _toml(True) == "true" and _toml(3) == "3"
+    assert _toml(["k"]) == '["k"]' and _toml({"a": 1}) == "{a = 1}"
