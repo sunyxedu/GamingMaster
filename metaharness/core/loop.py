@@ -15,7 +15,7 @@ from typing import Any, Callable, Iterator, Optional
 
 from ..games.base import close_game
 from ..models.base import ModelUnavailable, System1Model, System2Model, TraceSink
-from .archive import Archive, Candidate
+from .archive import Archive, Candidate, atomic_write
 from .contract import Budget
 from .proposer import propose, repair, tools_text
 from .runner import DEFAULT_GRACE_S, PROTOCOL_VERSION, EvalResult, evaluate_harness, preflight_harness
@@ -375,8 +375,8 @@ class MetaHarnessLoop:
         self._log(f"seed check: {len(results)} seed(s) reset ok")
 
     def _new_candidate_eval(self, cand: Candidate, fatal: str) -> None:
-        (cand.dir / "eval.json").write_text(json.dumps({"fatal": fatal, "mean_score": None, "n_episodes": 0,
-                                                        "game": self.game_name}))
+        atomic_write(cand.dir / "eval.json", json.dumps({"fatal": fatal, "mean_score": None, "n_episodes": 0,
+                                                         "game": self.game_name}))
 
     def run(self) -> Optional[Candidate]:
         self.interrupted = None

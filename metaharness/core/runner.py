@@ -34,6 +34,7 @@ from typing import Any, Optional
 
 from ..games.base import close_game
 from ..models.base import ModelUnavailable, System1Model, System2Model, TraceSink
+from .archive import atomic_write
 from .contract import (Budget, BudgetExceeded, HarnessContext, VirtualClock, WallClock, load_harness_module,
                        unload_harness_module)
 
@@ -765,11 +766,11 @@ def evaluate_harness(
 
 def _dump(result: EvalResult, out_dir: Optional[Path]) -> None:
     if out_dir:
-        (out_dir / "eval.json").write_text(json.dumps(result.to_json(), indent=2, default=str))
+        atomic_write(out_dir / "eval.json", json.dumps(result.to_json(), indent=2, default=str))
         try:
-            (out_dir / "digest.md").write_text(digest(result, out_dir))
+            atomic_write(out_dir / "digest.md", digest(result, out_dir))
         except Exception as e:  # noqa: BLE001 — a reading aid, never a failed evaluation
-            (out_dir / "digest.md").write_text(f"(digest failed: {type(e).__name__}: {e})\n")
+            atomic_write(out_dir / "digest.md", f"(digest failed: {type(e).__name__}: {e})\n")
 
 
 def digest(result: EvalResult, out_dir: Path, max_rows: int = 400) -> str:

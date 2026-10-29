@@ -31,6 +31,14 @@ from typing import Any, Optional
 _PARENT_RE = re.compile(r"^\s*parent\s*:\s*`?(\d{4})", re.I | re.M)
 
 
+def atomic_write(path: Path, text: str) -> None:
+    """Write ``text`` so a concurrent reader (a parallel proposer reading eval.json or the leaderboard)
+    sees the old file or the new one, never a partial one."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
 @dataclass
 class Candidate:
     idx: int
@@ -453,5 +461,5 @@ class Archive:
                                 + (f", {len(e['errors'])} episode errors" if e.get("errors") else ""))
         if held:
             text += "\nHeld-out evaluations (not used for selection):\n" + "\n".join(held) + "\n"
-        (self.root / "leaderboard.md").write_text(text)
+        atomic_write(self.root / "leaderboard.md", text)
         return text
