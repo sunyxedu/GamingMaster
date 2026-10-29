@@ -315,3 +315,61 @@ def test_toml_values():
     from metaharness.models.codex_cli import _toml
     assert _toml("a") == '"a"' and _toml(True) == "true" and _toml(3) == "3"
     assert _toml(["k"]) == '["k"]' and _toml({"a": 1}) == "{a = 1}"
+
+
+def test_rate_limited_call_is_retried_and_resumes_its_thread(monkeypatch):
+    """codex gives up on 429 after its own retries; the backend waits and resumes the thread."""
+    limited = _events({"type": "thread.started", "thread_id": "t-rl"},
+                      {"type": "error", "message": "exceeded retry limit, last status: 429 Too Many Requests"},
+                      {"type": "turn.failed", "error": {"message": "exceeded retry limit, last status: 429 Too Many Requests"}})
+    outcomes = iter([(limited, 1), (limited, 1), (_answer("done", "t-rl"), 0)])
+    seen: list = []
+
+    def run_cli(argv, *, cwd, stdin_text, timeout_s, env_overrides=None, env_drop=()):
+        seen.append({"argv": list(argv), "stdin": stdin_text})
+        stdout, rc = next(outcomes)
+        return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr="")
+    monkeypatch.setattr(codex_mod, "run_cli", run_cli)
+    naps: list = []
+    monkeypatch.setattr(codex_mod.time, "sleep", naps.append)
+    tr = TraceSink()
+    res = CodexCLI(model="m").run("build it", agentic=True, trace=tr)
+    assert res.text == "done" and len(seen) == 3 and len(naps) == 2 and naps[1] > naps[0] / 4
+    assert seen[1]["argv"][:3] == ["codex", "exec", "resume"] and seen[1]["argv"][3] == "t-rl"
+    assert "rate-limited" in seen[1]["stdin"] and seen[0]["stdin"] == "build it"
+    assert [r["type"] for r in tr.records].count("rate_limited") == 2 and tr.records[-1]["ok"] is True
+    # a player call is simply sent again (same prompt, no thread continuation text)
+    outcomes = iter([(limited, 1), (_answer("up"), 0)])
+    seen.clear()
+    assert CodexCLI(model="m").run("state").text == "up" and seen[1]["stdin"] == seen[0]["stdin"]
+
+
+def test_rate_limit_retries_give_up_after_the_wait_budget(monkeypatch):
+    limited = _events({"type": "turn.failed", "error": {"message": "429 Too Many Requests"}})
+    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(limited, rc=1))
+    monkeypatch.setattr(codex_mod.time, "sleep", lambda s: None)
+    model = CodexCLI(model="m")
+    model.rate_limit_wait_s = 12.0            # 5 s + 10 s backoff: one retry fits, the second does not
+    with pytest.raises(RuntimeError, match="429") as ei:
+        model.run("hi")
+    assert not isinstance(ei.value, ModelUnavailable) and type(ei.value) is RuntimeError
+
+
+def test_concurrency_slots_are_shared_through_lock_files(tmp_path):
+    from metaharness.models.codex_cli import concurrency_slot
+    active, peak, lock = [0], [0], threading.Lock()
+
+    def worker():
+        with concurrency_slot(tmp_path / "slots", 2, poll_s=0.01):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            time.sleep(0.05)
+            with lock:
+                active[0] -= 1
+    ts = [threading.Thread(target=worker) for _ in range(6)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert peak[0] == 2 and sorted(p.name for p in (tmp_path / "slots").iterdir()) == ["0.lock", "1.lock"]

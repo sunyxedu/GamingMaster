@@ -23,20 +23,23 @@ key (``shell_environment_policy.exclude``).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import random
 import re
 import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
-from ._cli import CLITimeout, run_cli
+from ._cli import _CANCEL, CLITimeout, run_cli
 from .base import (
     CLI_ENV_DROP,
     PLAYER_PREAMBLE,
     ModelCall,
+    ModelCallCancelled,
     ModelTimeout,
     ModelUnavailable,
     System2Result,
@@ -61,6 +64,49 @@ _PLAYER_OFF_FEATURES = ("view_image", "image_generation", "plugins", "hooks", "m
 
 
 DEFAULT_CODEX_HOME = "~/.cache/metaharness/codex-home"
+# A shared endpoint's per-user request rate: codex gives up after its own retries ("exceeded retry
+# limit, last status: 429 Too Many Requests"); the call is then retried here, with backoff, resuming
+# the thread it had started.
+_RATE_LIMIT_RE = re.compile(r"\b429\b|rate.?limit|too many requests", re.I)
+RATE_LIMIT_WAIT_S = 1800.0        # how long one call may wait for the rate limit in total
+_RETRIES_DEFAULT = {"request_max_retries": 8, "stream_max_retries": 8}
+
+
+class _CodexFailed(RuntimeError):
+    """codex exec failed; ``thread_id`` is the thread it had started, if it got that far."""
+
+    def __init__(self, message: str, thread_id: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.thread_id = thread_id
+
+
+@contextlib.contextmanager
+def concurrency_slot(directory: Path, n: int, poll_s: float = 0.5) -> Iterator[int]:
+    """One of ``n`` slots shared by every process using ``directory`` (lock files): a cap on the
+    codex processes talking to one endpoint at a time. Waiting honours the episode's cancel scope."""
+    import fcntl
+    directory.mkdir(parents=True, exist_ok=True)
+    handles = [open(directory / f"{i}.lock", "a") for i in range(n)]
+    try:
+        while True:
+            for i, fh in enumerate(handles):
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    continue
+                try:
+                    yield i
+                finally:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+                return
+            check = _CANCEL.get()
+            reason = check() if check else None
+            if reason:
+                raise ModelCallCancelled(f"model call cancelled while waiting for a slot: {reason}")
+            time.sleep(poll_s)
+    finally:
+        for fh in handles:
+            fh.close()
 _PROVIDER_KEYS = ("name", "base_url", "env_key", "wire_api", "query_params", "http_headers",
                   "env_http_headers", "request_max_retries", "stream_max_retries", "stream_idle_timeout_ms",
                   "requires_openai_auth")
@@ -100,6 +146,8 @@ class CodexCLI:
         self.extra_config = dict(extra_config or {})
         self.provider = dict(provider) if provider else None
         self.codex_home: Optional[Path] = None
+        self.max_concurrent = 0
+        self.rate_limit_wait_s = RATE_LIMIT_WAIT_S
         if self.provider:
             pid = str(self.provider.get("id") or "router")
             if not re.fullmatch(r"[A-Za-z0-9_-]+", pid):
@@ -113,6 +161,10 @@ class CodexCLI:
                                  f"(put it in .env, see .env.example)")
             self.codex_home = Path(os.path.expanduser(str(self.provider.get("codex_home") or DEFAULT_CODEX_HOME)))
             self.name = f"codex:{model}@{pid}"
+            for k, v in _RETRIES_DEFAULT.items():
+                self.provider.setdefault(k, v)
+            self.max_concurrent = int(self.provider.get("max_concurrent") or 0)
+            self.rate_limit_wait_s = float(self.provider.get("rate_limit_wait_s") or RATE_LIMIT_WAIT_S)
         self.n_calls = 0
         self.total_usage: dict[str, int] = {}     # sum of per-call deltas
         self.player_tools = "disabled-and-audited"
@@ -203,7 +255,49 @@ class CodexCLI:
         """``full_access`` (agentic only) lifts the workspace sandbox so the model can
         install packages / start game servers; ``web_search`` enables live search.
         Running out of time raises ``ModelTimeout`` whose ``session_id`` is the thread the
-        call started or resumed, so a caller can resume it."""
+        call started or resumed, so a caller can resume it.
+
+        A call the endpoint rate-limits is retried with backoff (up to ``rate_limit_wait_s`` in
+        total): an agentic turn resumes its thread with a continuation prompt, a player call is
+        sent again. ``max_concurrent`` codex processes per provider run at a time (all processes)."""
+        kw = dict(cwd=cwd, system=system, agentic=agentic, timeout_s=timeout_s, trace=trace, images=images,
+                  full_access=full_access, web_search=web_search)
+        deadline = time.monotonic() + self.rate_limit_wait_s
+        delay, sid, text = 5.0, session_id, prompt
+        while True:
+            slot = (concurrency_slot(self.codex_home / "slots", self.max_concurrent)
+                    if self.provider and self.max_concurrent and self.codex_home else contextlib.nullcontext())
+            try:
+                with slot:
+                    return self._run_once(text, session_id=sid, **kw)
+            except _CodexFailed as e:
+                if not _RATE_LIMIT_RE.search(str(e)) or time.monotonic() + delay > deadline:
+                    raise RuntimeError(str(e)) from None
+                wait = delay * (0.5 + random.random())
+                if trace:
+                    trace.write({"type": "rate_limited", "backend": self.name, "wait_s": round(wait, 1),
+                                 "thread_id": e.thread_id, "error": str(e)[:300]})
+                time.sleep(wait)
+                delay = min(delay * 2, 120.0)
+                if agentic and (e.thread_id or sid):
+                    sid = e.thread_id or sid
+                    text = ("The previous request was rate-limited by the API and that turn was aborted. "
+                            "Continue the task from where you left off.")
+
+    def _run_once(
+        self,
+        prompt: str,
+        *,
+        cwd: Optional[Path] = None,
+        session_id: Optional[str] = None,
+        system: Optional[str] = None,
+        agentic: bool = False,
+        timeout_s: float = 600.0,
+        trace: Optional[TraceSink] = None,
+        images: Optional[list[str]] = None,
+        full_access: bool = False,
+        web_search: bool = False,
+    ) -> System2Result:
         full_prompt = f"{system}\n\n{prompt}" if system and not session_id else prompt
         if not agentic:
             full_prompt = PLAYER_PREAMBLE + "\n\n" + full_prompt
@@ -271,8 +365,8 @@ class CodexCLI:
                     if hit:
                         raise ModelUnavailable(f"codex {what} (matched {hit.group(0)!r}): {msg.strip()[:300]}")
             if proc.returncode == 0 and not turn_failed:
-                raise RuntimeError(f"codex returned no final response: {detail[:800]}")
-            raise RuntimeError(f"codex exec failed (rc={proc.returncode}): {detail[:800]}")
+                raise _CodexFailed(f"codex returned no final response: {detail[:800]}", thread_id)
+            raise _CodexFailed(f"codex exec failed (rc={proc.returncode}): {detail[:800]}", thread_id)
         sid = thread_id or session_id
         usage = self._account(sid, session_id, baseline, cumulative)
         latency = time.time() - t0

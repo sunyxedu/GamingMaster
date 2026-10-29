@@ -16,6 +16,8 @@ base_url = "http://127.0.0.1:8787/v1"
 env_key = "MH_ROUTER_API_KEY"       # the key itself lives in .env, never here
 wire_api = "responses"
 codex_home = "~/.cache/metaharness/codex-home"
+max_concurrent = 8                  # codex processes on this endpoint at a time, across all our processes
+                                    # (the router caps requests per minute per user; 429s are retried)
 
 [system2.astra]
 backend = "codex"
