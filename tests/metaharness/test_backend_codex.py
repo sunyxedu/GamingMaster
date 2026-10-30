@@ -239,7 +239,11 @@ def test_player_turns_off_file_and_hook_features(tmp_path):
     player = a._argv(cwd=None, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
     agent = a._argv(cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
     for feature in ("view_image", "image_generation", "plugins", "hooks", "memories"):
-        assert f"features.{feature}=false" in player and f"features.{feature}=false" not in agent
+        assert f"features.{feature}=false" in player
+    for feature in ("view_image", "image_generation"):
+        assert f"features.{feature}=false" not in agent                 # an agent may look at screenshots
+    for feature in ("multi_agent", "plugins", "hooks", "memories"):
+        assert f"features.{feature}=false" in agent                     # but is one agent, without plugins
 
 
 def test_player_prompt_and_env(monkeypatch):

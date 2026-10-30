@@ -61,6 +61,9 @@ _AUTH_RE = re.compile(r"\b401\b|unauthorized|refresh token|sign in again|log ?in
 # reads image files by path, plugins bring MCP servers / skills, hooks run per session (and may add
 # context), memories are external context. Attached screenshots (-i) are input, not view_image.
 _PLAYER_OFF_FEATURES = ("view_image", "image_generation", "plugins", "hooks", "memories")
+# An agent (proposer, study, adapt) is one agent: no sub-agents (they multiply requests on a
+# rate-limited endpoint and work outside the archive), and no plugins / hooks / memories either.
+_AGENT_OFF_FEATURES = ("multi_agent", "plugins", "hooks", "memories")
 
 
 DEFAULT_CODEX_HOME = "~/.cache/metaharness/codex-home"
@@ -208,6 +211,8 @@ class CodexCLI:
         if agentic:
             # Study / adapt phases research the game on the web; the proposer must not.
             cfg["web_search"] = '"live"' if web_search else '"disabled"'
+            for feature in _AGENT_OFF_FEATURES:
+                cfg[f"features.{feature}"] = "false"
         # Never inherit the user's interactive speed tier: experiments run on the
         # standard tier so latency numbers are comparable and credits are not 2x.
         cfg.setdefault("service_tier", '"default"')
