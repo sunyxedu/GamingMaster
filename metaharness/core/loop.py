@@ -221,6 +221,10 @@ class MetaHarnessLoop:
         scored = any(c.eval() is not None for c in archive.candidates())
         if manifest_path.exists():
             old = json.loads(manifest_path.read_text())
+            old.pop("seeds_val", None)                 # pinned by earlier versions; not part of the protocol
+            for g in old.get("games") or []:
+                for k in ("seeds_val", "seeds_heldout"):
+                    g.pop(k, None)
             if old != manifest and scored:
                 changed = sorted(k for k in set(old) | set(manifest) if old.get(k) != manifest.get(k))
                 raise ValueError(f"Search configuration changed ({', '.join(changed)}) for the archive "

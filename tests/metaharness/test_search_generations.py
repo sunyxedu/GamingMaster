@@ -252,3 +252,20 @@ def test_a_missing_reflection_is_caught_up_and_a_timed_out_one_finishes(tmp_path
     assert notes.calls[1][1] == "r-1" and "Your time is up" in notes.calls[1][0]
     loop.run()                                                                # already there: no second reflection
     assert (archive.root / "lessons.md").read_text() == text
+
+
+def test_an_archive_that_pinned_validation_seeds_still_resumes(tmp_path):
+    archive = Archive(tmp_path / "a")
+    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+
+    def make(val):
+        cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[], seeds_val=val, clock_mode="virtual",
+                         budget=Budget(max_wall_s=30), harness_timeout_s=30)
+        return MetaHarnessLoop(archive=archive, game_factory=lambda **k: SnakeGame(max_ticks=10, **k), game_kwargs={},
+                               task_md="task", contract_doc="c", proposer=ScriptedSystem2(), system2=None,
+                               system1=HeuristicSystem1(), config=cfg, game_name="snake")
+    make([]).run()
+    m = json.loads((archive.root / "manifest.json").read_text())
+    m["seeds_val"] = [5]                                    # what an earlier version wrote
+    (archive.root / "manifest.json").write_text(json.dumps(m))
+    make([7, 8])                                            # other validation seeds: still the same protocol
