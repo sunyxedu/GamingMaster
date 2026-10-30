@@ -365,6 +365,10 @@ class MetaHarnessLoop:
         train = {v.get("obs_sha256") for k, v in results.items() if k.startswith("train:") and v.get("ok")}
         same = [k for k, v in results.items() if k.startswith("heldout:") and v.get("obs_sha256") in train]
         warnings = ([f"held-out seeds start exactly like a training seed: {', '.join(same)}"] if same else [])
+        n_train = sum(1 for k, v in results.items() if k.startswith("train:") and v.get("ok"))
+        if n_train > 1 and len(train) == 1:
+            warnings.append("every training seed starts from the same observation: the seeds may not vary the "
+                            "scenario, so a harness can memorise one episode and the held-out seeds test nothing")
         path.write_text(json.dumps({"key": key, "results": results, "refused": refused, "warnings": warnings},
                                    indent=2) + "\n")
         for w in warnings:

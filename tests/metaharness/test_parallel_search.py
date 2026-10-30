@@ -180,3 +180,15 @@ def test_preflight_and_dev_eval_commands_read_the_archive_manifest(tmp_runs, cap
     # the proposer was told about the tools (the archive has dev seeds)
     prompt = (root / "candidates" / "0001" / "prompt.md").read_text()
     assert "metaharness preflight" in prompt and "dev-eval" in prompt
+
+
+def test_seed_check_warns_when_training_seeds_do_not_vary(tmp_path):
+    class Same(RulePuzzleGame):
+        def reset(self, seed):
+            return super().reset(0)                      # every seed replays the same episode
+    loop = _loop(tmp_path / "same", proposer=scripted_proposer(tier1), iters=0)
+    loop.game_factory = lambda **k: Same(**k)
+    loop.qualify_seeds()
+    seeds = json.loads((tmp_path / "same" / "seeds.json").read_text())
+    assert any("same observation" in w for w in seeds["warnings"])
+    assert any("held-out seeds start exactly like" in w for w in seeds["warnings"])
