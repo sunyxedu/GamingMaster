@@ -544,8 +544,15 @@ class MetaHarnessLoop:
             self.interrupted = f"model unavailable: {e}"
             self._log(f"reflection: proposer unavailable: {e}")
             return
-        except Exception as e:  # noqa: BLE001 — a missing reflection costs nothing but context
-            self._log(f"reflection failed: {type(e).__name__}: {str(e)[:200]}")
+        except Exception as e:  # noqa: BLE001 — the section may be written anyway; else a numeric summary
+            section = re.search(rf"^## Generation {gen}\b", lessons.read_text() if lessons.exists() else "", flags=re.M)
+            if section is None and not STOPPING.is_set():
+                with open(lessons, "a") as fh:
+                    fh.write(f"\n## Generation {gen} (automatic summary: the reflection did not finish)\n"
+                             + "\n".join(generation.digest(c, limit=400) for c in cands) + "\n\n")
+            self._log(f"reflection after generation {gen} " + ("recorded in lessons.md before the call ended"
+                      if section else "did not finish; an automatic summary was recorded")
+                      + f" ({type(e).__name__}: {str(e)[:120]})")
             return
         finally:
             trace.close()

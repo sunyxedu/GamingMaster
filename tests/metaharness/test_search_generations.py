@@ -297,3 +297,21 @@ def test_patience_stops_a_search_whose_best_is_stale(tmp_path):
     assert not loop._plateaued(3) and loop._plateaued(4)
     cfg.patience = 0
     assert not loop._plateaued(7)
+
+
+def test_a_reflection_that_writes_nothing_leaves_a_numeric_summary(tmp_path):
+    class Silent(ScriptedSystem2):
+        def run(self, prompt, **kw):
+            raise RuntimeError("upstream error")
+
+    archive = Archive(tmp_path / "a")
+    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[], clock_mode="virtual",
+                     budget=Budget(max_wall_s=30), harness_timeout_s=30)
+    loop = MetaHarnessLoop(archive=archive, game_factory=lambda **k: SnakeGame(max_ticks=10, **k), game_kwargs={},
+                           task_md="t", contract_doc="c", proposer=Silent(), system2=None,
+                           system1=HeuristicSystem1(), config=cfg, game_name="snake")
+    loop.run()
+    loop.reflect(2, archive.candidates())
+    text = (archive.root / "lessons.md").read_text()
+    assert "## Generation 2 (automatic summary" in text and "candidates/0000-tier2_idle" in text and "mean score" in text
