@@ -59,6 +59,9 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
   Actions with parameters use a compact string grammar documented in `describe()` (e.g. `"move 3 4"`).
 * Observations are strict JSON (no NaN / inf, sets or objects) and compact (< 200 kB): structured state
   where the interface gives it; otherwise text; screenshots as file paths under `runtime/` in this directory.
+* Everything the adaptor needs lives in this directory (downloads, builds, caches under `runtime/`), never
+  in /tmp or elsewhere: the evaluator loads only this directory. Prefer the interface the study chose and
+  its maintained packages over building your own bridge to the game.
 * If the game needs a running client/server/account, script the setup (`setup.sh` or Python) and run it.
   Every process, server or connection an instance starts is released by its `close()`.
   If something needs the user (account login, purchase, a GUI step), write `NEEDS.md` listing exactly
@@ -157,13 +160,18 @@ def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, An
         log("adapt: the existing adaptor fails validation; repairing")
     trace = TraceSink(out / "adapt_trace.jsonl")
     session = None
+    timed_out = False
     rep = adaptor_mod.ValidationReport(ok=False, error="not run")
     try:
         for attempt in range(max_attempts):
             prompt = adapt_prompt(game, study, study_dir, out, feedback, notes=notes, kwargs=kwargs, timeout_s=timeout_s)
             (out / f"prompt_{attempt}.md").write_text(prompt)
+            urgent = ("Your time ran out and there is no working adaptor yet. Write the simplest adaptor that "
+                      "validates now, inside this directory, from what you have learned; improve fidelity only "
+                      "after it validates.\n\n") if timed_out and not (out / "game.py").exists() else ""
+            timed_out = False
             try:
-                res = model.run(prompt if session is None else f"{feedback}\n\nFix the adaptor in `{out}` accordingly.",
+                res = model.run(prompt if session is None else f"{urgent}{feedback}\n\nFix the adaptor in `{out}` accordingly.",
                                 cwd=out, system=ADAPT_SYSTEM if session is None else None, agentic=True,
                                 timeout_s=timeout_s, trace=trace, session_id=session, web_search=True, full_access=True)
                 session = res.session_id
@@ -171,7 +179,7 @@ def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, An
             except ModelTimeout as e:       # what it wrote is validated; the next round resumes the session
                 if not e.session_id:
                     raise
-                session = e.session_id
+                session, timed_out = e.session_id, True
                 (out / f"agent_output_{attempt}.md").write_text(f"(timed out after {timeout_s:.0f}s)\n")
                 log(f"adapt: the agent ran out of time (attempt {attempt + 1}/{max_attempts}); validating what it wrote")
             rep = validate()
