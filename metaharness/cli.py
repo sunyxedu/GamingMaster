@@ -507,14 +507,25 @@ def main(argv: list[str] | None = None) -> int:
     vp.set_defaults(fn=cmd_validate_adaptor)
 
     a = p.parse_args(argv)
-    # SIGTERM (kill, cluster preemption) unwinds like Ctrl-C, so CLI agents are killed with us
+    # SIGTERM (kill, cluster preemption) unwinds like Ctrl-C. The children go first: worker threads wait
+    # on CLI agents and evaluation processes, and the main thread's pool would otherwise wait for them.
     previous = None
     if threading.current_thread() is threading.main_thread():
         def _terminate(signum, frame):
+            from .core.evalworker import kill_children
+            from .models._cli import kill_all
+            kill_all()
+            kill_children()
             raise SystemExit(128 + signum)
         previous = signal.signal(signal.SIGTERM, _terminate)
     try:
         return a.fn(a)
+    except KeyboardInterrupt:
+        from .core.evalworker import kill_children
+        from .models._cli import kill_all
+        kill_all()
+        kill_children()
+        raise
     finally:
         if previous is not None:
             signal.signal(signal.SIGTERM, previous)
