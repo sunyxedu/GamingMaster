@@ -517,18 +517,13 @@ def main(argv: list[str] | None = None) -> int:
             kill_all()
             kill_children()
             raise SystemExit(128 + signum)
-        previous = signal.signal(signal.SIGTERM, _terminate)
+        previous = (signal.signal(signal.SIGTERM, _terminate), signal.signal(signal.SIGINT, _terminate))
     try:
         return a.fn(a)
-    except KeyboardInterrupt:
-        from .core.evalworker import kill_children
-        from .models._cli import kill_all
-        kill_all()
-        kill_children()
-        raise
     finally:
         if previous is not None:
-            signal.signal(signal.SIGTERM, previous)
+            signal.signal(signal.SIGTERM, previous[0])
+            signal.signal(signal.SIGINT, previous[1])
 
 
 if __name__ == "__main__":

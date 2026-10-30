@@ -13,3 +13,12 @@ def _no_shared_claude_slots(monkeypatch):
     monkeypatch.setenv("METAHARNESS_CLAUDE_AGENT_SLOTS", "0")
     monkeypatch.setenv("METAHARNESS_CLAUDE_PLAYER_SLOTS", "0")
     monkeypatch.delenv("METAHARNESS_CLAUDE_BASE_URL", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _not_stopping():
+    """kill_all() marks the process as stopping; one test calling it must not stop the next ones."""
+    from metaharness.models._cli import STOPPING
+    STOPPING.clear()
+    yield
+    STOPPING.clear()

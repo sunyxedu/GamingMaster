@@ -158,6 +158,8 @@ def _kill(proc: subprocess.Popen) -> None:
 
 def kill_children() -> None:
     """Kill every evaluation child still running (interpreter exit, Ctrl-C)."""
+    from ..models._cli import STOPPING
+    STOPPING.set()
     with _LOCK:
         procs = list(_CHILDREN)
     for proc in procs:
@@ -195,6 +197,9 @@ def _run_child(job: EvalJob) -> dict[str, Any]:
             return json.loads(job.eval_path.read_text())
         except ValueError as e:
             return _fatal(job, f"evaluator wrote an unreadable eval.json ({e})")
+    from ..models._cli import STOPPING
+    if STOPPING.is_set():                      # we killed it: nothing to record, a resume redoes it
+        raise RuntimeError("evaluation stopped with the search")
     tail = log_path.read_text(errors="replace")[-2000:] if log_path.exists() else ""
     return _fatal(job, f"evaluator exited with status {proc.returncode} without a result\n{tail}")
 

@@ -170,6 +170,9 @@ def propose(
 def _finish(model: System2Model, archive: Archive, cand: Candidate, session: str, why: str, *, agentic: bool,
             trace: Optional[TraceSink], timeout_s: float) -> None:
     """Ask a proposer that produced no harness to write it now, from what it worked out (same session)."""
+    from ..models._cli import STOPPING
+    if STOPPING.is_set():
+        return
     prompt = (f"{why} From what you have already worked out, write `candidates/{cand.dir.name}/harness.py` (a "
               f"complete module with build(ctx)) and `candidates/{cand.dir.name}/proposal.md` now, then stop.")
     try:

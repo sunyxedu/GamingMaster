@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
 from ..games.base import close_game
+from ..models._cli import STOPPING
 from ..models.base import ModelUnavailable, System1Model, System2Model, TraceSink
 from . import evalworker, generation
 from .archive import Archive, Candidate, combine_evals, ineligibility, write_atomic
@@ -380,6 +381,8 @@ class MetaHarnessLoop:
         """Dry-run the candidate with stand-in models; on failure ask the proposer to repair once.
         A ModelUnavailable from the repair propagates (the search stops)."""
         for attempt in (0, 1):
+            if STOPPING.is_set():
+                return False
             rep = preflight_harness(cand.harness_path, self.game_factory, game_kwargs=self.game_kwargs,
                                     tier2=self.system1 is not None, timeout_s=self.cfg.preflight_timeout_s,
                                     budget=self.cfg.budget, seed=self._seeds("train")[_slug(self.games[0].name)][0])
@@ -436,12 +439,16 @@ class MetaHarnessLoop:
                 self._new_candidate_eval(cand, f"proposer unavailable: {str(e)[:300]}")
             return f"model unavailable: {e}"
         except Exception as e:  # noqa: BLE001 — a failed proposal is data, not a crash
+            if STOPPING.is_set():               # killed by our own stop: a resume proposes it again
+                return "stopped"
             self._log(f"{cand.dir.name}: proposer failed: {type(e).__name__}: {str(e)[:300]}")
             if not cand.harness_path.exists():
                 self._new_candidate_eval(cand, f"proposer failed: {type(e).__name__}: {str(e)[:300]}")
             return None
         finally:
             ptrace.close()
+        if STOPPING.is_set():
+            return "stopped"
         if not cand.harness_path.exists():
             self._new_candidate_eval(cand, "proposer produced no harness.py")
             self._log(f"{cand.dir.name}: proposer produced no harness")
@@ -465,7 +472,7 @@ class MetaHarnessLoop:
     def reflect(self, gen: int, cands: list[Candidate]) -> None:
         """Record what the generation tried and what happened (``lessons.md``), with the proposer model."""
         cands = [c for c in cands if c.eval() is not None]
-        if not cands:
+        if not cands or STOPPING.is_set():
             return
         prompt = generation.reflection_prompt(self.archive, gen, cands)
         rdir = self.archive.root / "reflections"
@@ -603,6 +610,9 @@ class MetaHarnessLoop:
         with _pool(min(k, max(1, self.cfg.parallel) if self.cfg.parallel > 1 else k)) as ex:
             problems = list(ex.map(lambda cd: self._propose_one(
                 cd[0], cd[1], tuple(x for x in names if x != cd[0].dir.name), (gen + 1, n)), zip(cands, directives)))
+        if STOPPING.is_set():
+            self.interrupted = "stopped"
+            return
         for problem in problems:
             if problem and self.cfg.stop_on_model_unavailable:
                 self.interrupted = problem
