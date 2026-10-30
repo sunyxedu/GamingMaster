@@ -166,6 +166,9 @@ traces of its worst and best episodes: trace_seed*.jsonl), then append ONE secti
   evidence that explains the outcome;
 - then at most 5 bullets of general lessons for the next proposers: mechanisms confirmed, hypotheses refuted,
   what remains untested, which contract or plumbing details cost episodes. Numbers, not adjectives.
+- end with one bullet on where the remaining headroom is: compare the best candidate's score components (the
+  leaderboard's score composition, if the game reports one) and how its episodes end with what the game
+  description says is achievable, and name the component or failure that is furthest from it.
 
 Do not edit candidates, the leaderboard or task.md; do not propose code. Keep the section under 60 lines.
 If you cannot use tools, answer with the section text only.
