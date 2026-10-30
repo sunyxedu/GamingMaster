@@ -634,3 +634,13 @@ def test_seeds_that_replay_the_same_episode_fail_validation(tmp_path):
     assert not rep.ok and not check["ok"] and "replay the training seeds" in check["detail"]
     seeded = validate_adaptor(tmp_path / "a", kwargs={"seeded": True})
     assert seeded.ok and next(c for c in seeded.checks if "different episodes" in c["check"])["ok"]
+
+
+def test_a_seed_label_in_the_observation_does_not_hide_identical_episodes(tmp_path):
+    from metaharness.games.adaptor import validate_adaptor
+    labelled = SAME_EPISODE_GAME.replace(
+        'return {"x": self.x}', 'return {"x": self.x, "seed": self.seed, "rng_seeds": [self.seed]}')
+    write_adaptor(tmp_path / "a", labelled)
+    rep = validate_adaptor(tmp_path / "a")
+    check = next(c for c in rep.checks if "different episodes" in c["check"])
+    assert not rep.ok and not check["ok"]

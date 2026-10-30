@@ -112,10 +112,7 @@ def _episode_signature(game: Any, seed: int) -> Optional[str]:
     script did not finish within SIGNATURE_TIME_S, or the episode ended before SIGNATURE_STEPS (a
     scripted player that dies early cannot see the seeds diverge later: two seeds sharing a first
     obstacle would look identical)."""
-    def state(obs: Any) -> str:
-        if isinstance(obs, dict):
-            obs = {k: v for k, v in obs.items() if "seed" not in str(k).lower()}
-        return json.dumps(obs, sort_keys=True, default=str)
+    from ..games.adaptor import episode_state as state
     try:
         names = list(game.action_spec.names)
         step = game.tick if hasattr(game, "tick") else game.step

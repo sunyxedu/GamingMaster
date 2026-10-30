@@ -408,13 +408,21 @@ def _seeds_text(seeds: list[int]) -> str:
     return ", ".join(map(str, seeds[:5])) + (", …" if len(seeds) > 5 else "")
 
 
+def episode_state(obs: Any) -> str:
+    """An observation as episode state: top-level fields named after the seed label the episode, they are
+    not its state (two seeds that differ only there play the same game)."""
+    if isinstance(obs, dict):
+        obs = {k: v for k, v in obs.items() if "seed" not in str(k).lower()}
+    return json.dumps(obs, sort_keys=True, default=str)
+
+
 def _trajectory(new_game: Callable[[], Any], release: Callable[..., None], seed: int, actions: list[str]
                 ) -> tuple[str, int]:
-    """(hash of the observations, actions applied) of a fixed action script from reset(seed) on a fresh instance."""
+    """(hash of the episode states, actions applied) of a fixed action script from reset(seed) on a fresh instance."""
     g = new_game()
     try:
         g.reset(seed)
-        h = hashlib.sha256(json.dumps(g.observe(), sort_keys=True, default=str).encode())
+        h = hashlib.sha256(episode_state(g.observe()).encode())
         step = g.tick if hasattr(g, "tick") else g.step
         n = 0
         for i in range(VARIETY_ACTIONS):
@@ -422,7 +430,7 @@ def _trajectory(new_game: Callable[[], Any], release: Callable[..., None], seed:
                 break
             step(actions[(i // 3) % len(actions)])
             n += 1
-            h.update(json.dumps(g.observe(), sort_keys=True, default=str).encode())
+            h.update(episode_state(g.observe()).encode())
         return h.hexdigest(), n
     finally:
         release(g, check=False)
@@ -531,7 +539,7 @@ def _smoke_test(path: Path, *, kwargs: dict[str, Any] | None, seeds: tuple[int, 
             obs = g.observe()
             ok, detail = _json_ok(obs)
             rep.add(f"seed {seed}: observe() JSON-serialisable", ok, detail)
-            first_obs[seed] = json.dumps(obs, sort_keys=True, default=str)
+            first_obs[seed] = episode_state(obs)
             rep.add(f"seed {seed}: done is bool and score is a number after reset", *_state_ok(g))
             names = list(g.action_spec.names)
             actions = ([g.action_spec.noop] if g.action_spec.noop else []) + names
@@ -593,7 +601,7 @@ def _smoke_test(path: Path, *, kwargs: dict[str, Any] | None, seeds: tuple[int, 
             s0 = next(iter(first_obs))
             g2 = new_game()
             g2.reset(s0)
-            same = json.dumps(g2.observe(), sort_keys=True, default=str) == first_obs[s0]
+            same = episode_state(g2.observe()) == first_obs[s0]
             rep.add("DETERMINISTIC: reset(seed) on a fresh instance reproduces the first observation", same,
                     "" if same else f"seed {s0}: a fresh make_game() + reset({s0}) observed something else")
             release(g2, check=False)
