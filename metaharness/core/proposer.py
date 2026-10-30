@@ -81,7 +81,8 @@ episode, on every turn-game step and whenever a real-time score changes, and how
    failure mode concretely (quote evidence from traces). Check lessons.md so you do not repeat a refuted
    hypothesis.
 2. Write `candidates/{candidate.dir.name}/harness.py` — a complete module with `build(ctx)`.
-   It must import only the standard library and `metaharness.*`.
+   It must import only the standard library and `metaharness.*`. A harness whose code repeats an existing
+   candidate's (comments aside) is not evaluated.
 3. Write `candidates/{candidate.dir.name}/proposal.md`: parent(s), hypothesis, what changed, the lesson or
    evidence it acts on, what evidence would confirm/refute it, and (tier 2) the System-1 state schema,
    questions, thresholds and fallback policy.
@@ -174,7 +175,8 @@ def _finish(model: System2Model, archive: Archive, cand: Candidate, session: str
     if STOPPING.is_set():
         return
     prompt = (f"{why} From what you have already worked out, write `candidates/{cand.dir.name}/harness.py` (a "
-              f"complete module with build(ctx)) and `candidates/{cand.dir.name}/proposal.md` now, then stop.")
+              f"complete module with build(ctx)) and `candidates/{cand.dir.name}/proposal.md` now, then stop. A copy "
+              "of an existing candidate is not evaluated: write your own change, even a partial one.")
     try:
         res = model.run(prompt, cwd=archive.root, session_id=session, agentic=agentic, timeout_s=timeout_s,
                         trace=trace)
