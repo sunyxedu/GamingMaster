@@ -374,3 +374,28 @@ def test_a_proposer_that_ends_without_a_harness_is_asked_once_more(tmp_path):
                                      System2Result(text="plans", session_id="s-4"))[1]
     c2 = propose(once, Archive(tmp_path / "archive2"), contract_doc="c", task_md="t", timeout_s=600)
     assert not c2.harness_path.exists() and len(once.calls) == 3
+
+
+def test_seeds_that_alias_another_stage_are_refused(tmp_path):
+    class Modulo(SnakeGame):
+        """Scenario = seed % 4 (deterministic), with the seed itself in the observation, as a real adaptor did."""
+        def reset(self, seed):
+            self.label = seed
+            return super().reset(seed % 4)
+
+        def observe(self):
+            return {**super().observe(), "seed": self.label}
+
+    def make(val, heldout):
+        archive = Archive(tmp_path / f"a{val}{heldout}")
+        archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+        cfg = LoopConfig(n_iterations=0, seeds_train=[0, 1], seeds_val=val, seeds_heldout=heldout, clock_mode="virtual",
+                         budget=Budget(max_wall_s=30), harness_timeout_s=30)
+        return MetaHarnessLoop(archive=archive, game_factory=lambda **k: Modulo(max_ticks=40, **k), game_kwargs={},
+                               task_md="t", contract_doc="c", proposer=ScriptedSystem2(), system2=None,
+                               system1=HeuristicSystem1(), config=cfg, game_name="snake")
+    with pytest.raises(SeedRefused, match="train:0, val:4|val:4, train:0"):
+        make([4], [2]).run()                         # validation seed 4 replays training seed 0
+    with pytest.raises(SeedRefused, match="same episode"):
+        make([2], [6]).run()                         # held-out 6 replays validation 2
+    make([2], [3]).run()                             # distinct scenarios: accepted

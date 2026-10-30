@@ -97,6 +97,31 @@ def _interrupted(e: Optional[dict[str, Any]]) -> bool:
     return _unavailable(e) or (bool(e) and _env_failed(e.get("errors") or [], e.get("n_episodes", 0)))
 
 
+SIGNATURE_STEPS = 24
+
+
+def _episode_signature(game: Any, seed: int) -> Optional[str]:
+    """Hash of the observations under a fixed action script from reset(seed) (fields named like a seed
+    dropped: they label the episode, they are not its state); None if the game cannot play it."""
+    def state(obs: Any) -> str:
+        if isinstance(obs, dict):
+            obs = {k: v for k, v in obs.items() if "seed" not in str(k).lower()}
+        return json.dumps(obs, sort_keys=True, default=str)
+    try:
+        names = list(game.action_spec.names)
+        step = game.tick if hasattr(game, "tick") else game.step
+        h = hashlib.sha256(state(game.observe()).encode())
+        for i in range(SIGNATURE_STEPS):
+            if game.done:
+                break
+            step(names[(i // 3) % len(names)])
+            h.update(state(game.observe()).encode())
+        game.reset(seed)                     # leave it as the seed check found it
+        return h.hexdigest()[:16]
+    except Exception:  # noqa: BLE001 — a signature is a check, never a reason to refuse
+        return None
+
+
 def _jsonish(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str))
 
@@ -553,7 +578,8 @@ class MetaHarnessLoop:
                     try:
                         game.reset(seed)
                         obs = json.dumps(game.observe(), sort_keys=True, default=str)
-                        results[f"{label}:{seed}"] = {"ok": True, "obs_sha256": hashlib.sha256(obs.encode()).hexdigest()[:16]}
+                        results[f"{label}:{seed}"] = {"ok": True, "obs_sha256": hashlib.sha256(obs.encode()).hexdigest()[:16],
+                                                      "episode_sha256": _episode_signature(game, seed)}
                     except ModelUnavailable:
                         raise
                     except Exception as e:  # noqa: BLE001
@@ -566,11 +592,20 @@ class MetaHarnessLoop:
             finally:
                 if game is not None:
                     close_game(game)
-        train = {v.get("obs_sha256") for k, v in results.items() if k.endswith("train:" + k.rsplit(":", 1)[-1])
-                 and k.split(":")[-2] == "train" and v.get("ok")}
-        same = [k for k, v in results.items() if k.split(":")[-2] in ("heldout", "val") and v.get("obs_sha256") in train]
-        warnings = ([f"held-out / validation seeds start like a training seed ({', '.join(same)}); fine when the "
-                     "seed changes the episode later, which adaptor validation checks"] if same else [])
+        # Seeds that replay another seed's episode (a scenario chosen by seed % n, an RNG the seed does not
+        # reach): a validation or held-out seed must not repeat a training one, nor validation a held-out one.
+        by_sig: dict[str, list[str]] = {}
+        for k, v in results.items():
+            if v.get("episode_sha256"):
+                by_sig.setdefault(v["episode_sha256"], []).append(k)
+        warnings = []
+        for keys in by_sig.values():
+            stages = {k.split(":")[-2] for k in keys}
+            if len(keys) > 1 and len(stages) > 1:
+                refused.append(f"seeds {', '.join(keys)} play the same episode under the same actions (a validation "
+                               "or held-out seed repeating another stage's)")
+            elif len(keys) > 1:
+                warnings.append(f"seeds {', '.join(keys)} play the same episode under the same actions")
         path.write_text(json.dumps({"key": key, "results": results, "refused": refused, "warnings": warnings},
                                    indent=2) + "\n")
         for w in warnings:
