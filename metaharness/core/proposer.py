@@ -17,7 +17,7 @@ from typing import Optional
 from ..models.base import ModelUnavailable, System2Model, TraceSink
 from .archive import Archive, Candidate
 from .generation import describe as describe_directive
-from .generation import read_lessons
+from .generation import duplicate_of, read_lessons
 
 PROPOSER_SYSTEM = """You are the Meta-Harness proposer. You improve the *harness* — the code that connects
 foundation models to a game — not the models. Work like a researcher: read the archive, form a
@@ -138,8 +138,12 @@ def propose(
         }, indent=2) + "\n")
         if session:
             (cand.dir / "session.json").write_text(json.dumps({"session_id": session}))
-        if session and not cand.harness_path.exists():
-            _finish(model, archive, cand, session, "Your time is up.", agentic=agentic, trace=trace,
+        copy = duplicate_of(archive, cand) if cand.harness_path.exists() else None
+        if session and (not cand.harness_path.exists() or copy):
+            # a proposer typically starts from a copy of its parent: out of time before editing, the copy is all
+            why = "Your time is up." + (f" Your harness.py is still an unmodified copy of candidates/{copy[0].dir.name}/."
+                                        if copy else "")
+            _finish(model, archive, cand, session, why, agentic=agentic, trace=trace,
                     timeout_s=min(900.0, timeout_s / 2))
         if cand.harness_path.exists():
             if not (cand.dir / "proposal.md").exists():
@@ -153,6 +157,11 @@ def propose(
         # an agent can end its turn after planning without writing the file: once more, same session
         _finish(model, archive, cand, res.session_id, "You ended without writing the harness.", agentic=agentic,
                 trace=trace, timeout_s=min(900.0, timeout_s / 2))
+    elif res.session_id and cand.harness_path.exists():
+        copy = duplicate_of(archive, cand)
+        if copy:
+            _finish(model, archive, cand, res.session_id, f"Your harness.py is an unmodified copy of "
+                    f"candidates/{copy[0].dir.name}/.", agentic=agentic, trace=trace, timeout_s=min(900.0, timeout_s / 2))
     if isinstance(res.raw, list):
         (cand.dir / "proposer_events.jsonl").write_text(
             "".join(json.dumps(event, default=str) + "\n" for event in res.raw))

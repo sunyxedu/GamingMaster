@@ -399,3 +399,28 @@ def test_seeds_that_alias_another_stage_are_refused(tmp_path):
     with pytest.raises(SeedRefused, match="same episode"):
         make([2], [6]).run()                         # held-out 6 replays validation 2
     make([2], [3]).run()                             # distinct scenarios: accepted
+
+
+def test_a_proposer_left_with_a_copy_of_its_parent_is_asked_to_apply_its_change(tmp_path):
+    from metaharness.core.proposer import propose
+    from metaharness.models.base import ModelTimeout
+
+    a = Archive(tmp_path / "archive")
+    parent = a.new_candidate()
+    parent.harness_path.write_text("def build(ctx):\n    return None\n")
+
+    class Copier(ScriptedSystem2):
+        def run(self, prompt, *, cwd, session_id=None, **kwargs):
+            self.calls.append((prompt, session_id))
+            d = sorted((cwd / "candidates").iterdir())[-1]
+            if len(self.calls) == 1:
+                (d / "harness.py").write_text(parent.harness_path.read_text())       # cp parent, then time out
+                raise ModelTimeout("deadline", session_id="t-1")
+            (d / "harness.py").write_text("def build(ctx):\n    return 1\n")
+            return System2Result(text="changed", session_id=session_id)
+
+    model = Copier()
+    c = propose(model, a, contract_doc="c", task_md="t", timeout_s=600)
+    assert len(model.calls) == 2 and model.calls[1][1] == "t-1"
+    assert "unmodified copy of candidates/0000/" in model.calls[1][0]
+    assert "return 1" in c.harness_path.read_text()
