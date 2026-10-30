@@ -481,9 +481,20 @@ class MetaHarnessLoop:
         lessons = self.archive.root / "lessons.md"
         before = lessons.read_text() if lessons.exists() else ""
         trace = TraceSink(rdir / f"gen_{gen:03d}_trace.jsonl")
+        timeout = min(1800.0, self.cfg.proposer_timeout_s)
         try:
-            res = self.proposer.run(prompt, cwd=self.archive.root, agentic=self.cfg.proposer_agentic,
-                                    timeout_s=min(900.0, self.cfg.proposer_timeout_s), trace=trace)
+            try:
+                res = self.proposer.run(prompt, cwd=self.archive.root, agentic=self.cfg.proposer_agentic,
+                                        timeout_s=timeout, trace=trace)
+            except TimeoutError as e:       # out of time while reading traces: write what it found
+                session = getattr(e, "session_id", None)
+                if not session or STOPPING.is_set():
+                    raise
+                res = self.proposer.run(f"Your time is up. Finish the `## Generation {gen}` section of lessons.md "
+                                        "now from what you have found (a bullet per candidate of this generation, "
+                                        "then the general lessons), then stop.", cwd=self.archive.root,
+                                        session_id=session, agentic=self.cfg.proposer_agentic,
+                                        timeout_s=timeout / 3, trace=trace)
         except ModelUnavailable as e:
             self.interrupted = f"model unavailable: {e}"
             self._log(f"reflection: proposer unavailable: {e}")
@@ -599,6 +610,23 @@ class MetaHarnessLoop:
             if self._stop_for(e, env_retry=retried):
                 break
 
+    def _catch_up_reflections(self, done: int) -> None:
+        """A generation that has no section in lessons.md (its reflection failed, or the process stopped
+        before it) is reflected on now, before the next proposers read the notes."""
+        if not self.cfg.reflect:
+            return
+        lessons = self.archive.root / "lessons.md"
+        text = lessons.read_text(errors="replace") if lessons.exists() else ""
+        for g in range(1, done + 1):
+            if STOPPING.is_set() or self.interrupted:
+                return
+            if re.search(rf"^## Generation {g}\b", text, flags=re.M):
+                continue
+            cands = [c for c in self.archive.candidates() if (c.directive() or {}).get("generation") == g - 1]
+            if cands:
+                self._log(f"generation {g} has no reflection yet; reflecting now")
+                self.reflect(g, cands)
+
     def _generation(self, gen: int, n: int) -> None:
         k = max(1, self.cfg.proposals_per_iteration)
         self._log(f"generation {gen + 1}/{n}: proposing {k} candidate(s) with {self.proposer.name}")
@@ -656,6 +684,8 @@ class MetaHarnessLoop:
         if done and n:
             self._log(f"the archive already holds {self.proposals_done()} proposal(s) = {done} generation(s) of {k}; "
                       f"running {max(0, n - done)} more to reach {n} (raise --iters for more)")
+        if not self.interrupted:
+            self._catch_up_reflections(done)
         for gen in range(done, n):
             if self.interrupted:
                 break

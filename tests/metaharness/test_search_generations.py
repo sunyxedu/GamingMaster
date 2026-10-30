@@ -219,3 +219,36 @@ def test_per_seed_evaluations_merge_into_the_joint_result(tmp_path):
     out = merge_seed_evals([{"fatal": "load error: x", "episodes": []},
                             {"fatal": "model unavailable: quota", "episodes": []}], [0, 1])
     assert out["fatal"].startswith("model unavailable") and out["n_episodes"] == 0 and out["mean_score"] is None
+
+
+def test_a_missing_reflection_is_caught_up_and_a_timed_out_one_finishes(tmp_path):
+    from metaharness.models.base import ModelTimeout, System2Result
+
+    class Notes(ScriptedSystem2):
+        def __init__(self, timeout_first=False):
+            super().__init__(latency_s=0.1)
+            self.timeout_first = timeout_first
+
+        def run(self, prompt, *, session_id=None, **kw):
+            self.calls.append((prompt, session_id))
+            if self.timeout_first and len(self.calls) == 1:
+                raise ModelTimeout("deadline", session_id="r-1")
+            return System2Result(text=f"- note {len(self.calls)}", session_id="r-1")
+
+    archive = Archive(tmp_path / "a")
+    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    done = archive.new_candidate()                              # a generation-1 proposal, evaluated, no lessons
+    done.harness_path.write_text(IDLE + "\n# v1\n")
+    (done.dir / "directive.json").write_text(json.dumps({"mode": "explore", "parents": [], "generation": 0}))
+    cfg = LoopConfig(n_iterations=1, seeds_train=[0], seeds_heldout=[], clock_mode="virtual",
+                     budget=Budget(max_wall_s=30), harness_timeout_s=30)
+    notes = Notes(timeout_first=True)
+    loop = MetaHarnessLoop(archive=archive, game_factory=lambda **k: SnakeGame(max_ticks=20, **k), game_kwargs={},
+                           task_md="task", contract_doc="c", proposer=notes, system2=None,
+                           system1=HeuristicSystem1(), config=cfg, game_name="snake")
+    loop.run()
+    text = (archive.root / "lessons.md").read_text()
+    assert text.startswith("## Generation 1") and "note 2" in text           # caught up, after a finishing call
+    assert notes.calls[1][1] == "r-1" and "Your time is up" in notes.calls[1][0]
+    loop.run()                                                                # already there: no second reflection
+    assert (archive.root / "lessons.md").read_text() == text
