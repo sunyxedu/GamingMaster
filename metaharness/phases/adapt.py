@@ -57,6 +57,8 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
   some seeds are valid (a fixed set of levels / maps): the search trains on `train`, the proposer may try
   drafts on `dev`, finalists are re-evaluated on `validation`, the result is reported on `heldout`.
 * `score` must reflect playing well as described in study.json "scoring": {study.get('scoring', '')}
+  It must keep headroom: pick opponents, difficulty and scenario length so that neither a trivial policy nor a
+  competent scripted one reaches the maximum (a search cannot tell candidates apart on a saturated score).
 * `describe()` tells a model everything it may know a priori: rules, objective, action semantics,
   observation fields. `action_spec` lists every legal action name with a one-line meaning and a `noop`.
   Actions with parameters use a compact string grammar documented in `describe()` (e.g. `"move 3 4"`).
