@@ -630,6 +630,21 @@ def _env_kwargs(items: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def return_settings(args: Mapping[str, Any], game: str) -> Dict[str, Any]:
+    """What defines ``game``'s returns, hence its advantages' scale: the GAE gamma / lambda, its
+    --env_kw (e.g. arc3:novelty adds a reward), --shaping and --timeout_reward — read from a
+    run's arguments (``vars(args)``; a checkpoint keeps them under "args")."""
+    def items(key: str) -> List[str]:
+        return list(args.get(key) or [])
+    timeout = {**TIMEOUT_REWARD, **_pairs(items("timeout_reward"),
+                                         lambda v: None if v == "none" else float(v), "R")}
+    return {"gamma": _pairs(items("gamma"), float, "G").get(game, 1.0),
+            "lam": _pairs(items("lam"), float, "L").get(game, 0.95),
+            "env_kw": sorted((k, repr(v)) for k, v in _env_kwargs(items("env_kw")).get(game, {}).items()),
+            "shaping": {**SHAPING, **_pairs(items("shaping"), float, "S")}.get(game),
+            "timeout_reward": timeout.get(game)}
+
+
 def derive_seed(*parts: int) -> int:
     """A 32-bit seed from non-negative integer parts (seed, rank, iteration,
     tags): independent streams for every combination."""
@@ -3526,7 +3541,6 @@ class JointRLTrainer:
                 "priv_opt": self.priv_opt.state_dict() if self.priv_opt is not None else None,
                 "engine_rung": dict(self.engine_rung), "engine_high": dict(self.engine_high),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
-                "gae": {g: [float(self.rl[g].gamma), float(self.rl[g].lam)] for g in self.rl_games},
                 "init": self.args.init, "init_hash": self.init_hash}
 
     def _env_states(self) -> Optional[List[Dict[str, Any]]]:
@@ -3696,18 +3710,18 @@ class JointRLTrainer:
             if self.ema is not None else []
         self.popart.load_state_dict(st["popart"], mirrors=mirrors)
         self.advnorm.load_state_dict(st["advnorm"])
-        # a game whose GAE gamma / lambda changed restarts its advantage moments: the new
-        # advantages have another scale (lambda 0.95 -> 0.7 sums fewer TD errors), and the
-        # running std (decay --adv_decay) would hold the old one for ~100 iterations.  A
-        # checkpoint from before this record ran every game at the defaults (1.0, 0.95).
-        saved_gae = st.get("gae") or {}
+        # a game whose returns are defined differently from the checkpoint's run (GAE gamma /
+        # lambda, env kwargs, shaping, timeout reward: return_settings, read from the saved
+        # arguments) restarts its advantage moments: its advantages have another scale (lambda
+        # 0.95 -> 0.7 sums fewer TD errors; a novelty reward adds some), and the running std
+        # (decay --adv_decay) would hold the old one for ~1/(1 - decay) iterations
+        saved_args = ck.get("args") or {}
         for g in self.rl_games:
-            old = tuple(float(x) for x in saved_gae.get(g, (1.0, 0.95)))
-            new = (float(self.rl[g].gamma), float(self.rl[g].lam))
+            old, new = return_settings(saved_args, g), return_settings(vars(self.args), g)
             if old != new:
                 self.advnorm.reset(g)
-                self.log(f"[resume] {g}: GAE gamma/lambda {old[0]:g}/{old[1]:g} -> "
-                         f"{new[0]:g}/{new[1]:g}; its advantage statistics restart")
+                diff = "; ".join(f"{k} {old[k]} -> {new[k]}" for k in new if old[k] != new[k])
+                self.log(f"[resume] {g}: {diff} — its advantage statistics restart")
         self.entc.load_state_dict(st["entc"])
         self.klb.load_state_dict(st["klb"])
         self.sched.load_state_dict(st["sched"])
