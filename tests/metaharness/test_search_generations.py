@@ -79,6 +79,11 @@ def test_near_duplicates_are_detected_but_edits_are_not(tmp_path):
     changed = a.new_candidate()
     changed.harness_path.write_text(IDLE.replace("while not self.ctx.done:", "for _ in range(3):\n            if self.ctx.done: break"))
     assert generation.duplicate_of(a, changed) is None
+    one_line = a.new_candidate()                            # a one-line change is a proposal, however long the file
+    one_line.harness_path.write_text(IDLE + "\n" + "\n".join(f"X{i} = {i}" for i in range(500)) + "\n")
+    longer = a.new_candidate()
+    longer.harness_path.write_text(one_line.harness_path.read_text() + "Y = 1\n")
+    assert generation.duplicate_of(a, longer) is None
     assert generation.similarity(IDLE, REF) < 0.5
 
 

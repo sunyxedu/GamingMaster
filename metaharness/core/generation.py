@@ -121,17 +121,17 @@ def similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, la, lb, autojunk=False).ratio()
 
 
-def duplicate_of(archive: Archive, cand: Candidate, threshold: float = 0.98) -> Optional[tuple[Candidate, float]]:
-    """The earlier candidate this harness nearly repeats (similarity >= threshold), if any."""
-    src = cand.harness_path.read_text()
-    best: Optional[tuple[Candidate, float]] = None
+def duplicate_of(archive: Archive, cand: Candidate) -> Optional[tuple[Candidate, float]]:
+    """The earlier candidate whose code this harness repeats exactly (comments and blank lines aside), if any.
+    Not a similarity threshold: in a 1000-line harness a one-line change can be the whole hypothesis
+    (live: a parser fix that made System-2 replans usable scored as a 99.9 % "duplicate")."""
+    mine = code_lines(cand.harness_path.read_text())
     for other in archive.candidates():
         if other.idx >= cand.idx or not other.harness_path.exists():
             continue
-        s = similarity(src, other.harness_path.read_text())
-        if s >= threshold and (best is None or s > best[1]):
-            best = (other, s)
-    return best
+        if code_lines(other.harness_path.read_text()) == mine:
+            return other, 1.0
+    return None
 
 
 # -- reflection ------------------------------------------------------------------------------------

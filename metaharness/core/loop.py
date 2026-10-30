@@ -468,9 +468,9 @@ class MetaHarnessLoop:
                 keep.append(c)
                 continue
             other, sim = dup
-            self._new_candidate_eval(c, f"duplicate of candidates/{other.dir.name} ({sim:.0%} of the code lines "
-                                        "identical): not evaluated")
-            self._log(f"{c.dir.name}: duplicate of {other.dir.name} ({sim:.0%}); not evaluated")
+            self._new_candidate_eval(c, f"duplicate of candidates/{other.dir.name} (the same code, comments aside): "
+                                        "not evaluated")
+            self._log(f"{c.dir.name}: duplicate of {other.dir.name} (the same code); not evaluated")
         return keep
 
     def reflect(self, gen: int, cands: list[Candidate]) -> None:
