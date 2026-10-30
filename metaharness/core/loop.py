@@ -88,6 +88,20 @@ def _heldout_exposed(d: Path) -> bool:
     return any(p.stat().st_size > 0 for p in d.glob("trace_seed*.jsonl"))
 
 
+def _wait_all(futures: list, poll_s: float = 1.0) -> list:
+    """Results of ``futures`` in order. Waits in short polls: a signal (SIGTERM from a stopped lane,
+    Ctrl-C) is handled by the main thread only between bytecodes, and a thread blocked in one long
+    ``Future.result()`` never gets there — the search could not be stopped while proposers ran."""
+    for f in futures:
+        while True:
+            try:
+                f.result(timeout=poll_s)
+                break
+            except cf.TimeoutError:
+                continue
+    return [f.result() for f in futures]
+
+
 @contextlib.contextmanager
 def _archive_lock(root) -> Iterator[None]:
     """One search process per archive (a second loop, or an agent orphaned by Ctrl-C, would write into it)."""
@@ -432,8 +446,7 @@ class MetaHarnessLoop:
                 self.propose_one(cands[0], (it + 1, n), (0, 1))
                 continue
             with cf.ThreadPoolExecutor(max_workers=k, thread_name_prefix="propose") as pool:
-                for f in [pool.submit(self.propose_one, c, (it + 1, n), (i, k)) for i, c in enumerate(cands)]:
-                    f.result()
+                _wait_all([pool.submit(self.propose_one, c, (it + 1, n), (i, k)) for i, c in enumerate(cands)])
         if not self.interrupted and self.cfg.validate_top and self.cfg.seeds_val:
             self.validate_top()
         if self.interrupted:
@@ -472,8 +485,8 @@ class MetaHarnessLoop:
             return
         self._log(f"validation of the top {len(top)} on seeds {self.cfg.seeds_val}: " + ", ".join(c.dir.name for c in todo))
         with cf.ThreadPoolExecutor(max_workers=len(todo), thread_name_prefix="validate") as pool:
-            for f in [pool.submit(self.evaluate, c, self.cfg.seeds_val, "validation") for c in todo]:
-                self._stop_for(f.result())
+            for res in _wait_all([pool.submit(self.evaluate, c, self.cfg.seeds_val, "validation") for c in todo]):
+                self._stop_for(res)
         best = self.archive.best()
         if best:
             self._log(f"selected after validation: {best.dir.name}")

@@ -192,3 +192,14 @@ def test_seed_check_warns_when_training_seeds_do_not_vary(tmp_path):
     seeds = json.loads((tmp_path / "same" / "seeds.json").read_text())
     assert any("same observation" in w for w in seeds["warnings"])
     assert any("held-out seeds start exactly like" in w for w in seeds["warnings"])
+
+
+def test_wait_all_polls_and_keeps_order_and_exceptions():
+    import concurrent.futures as cf
+    from metaharness.core.loop import _wait_all
+    with cf.ThreadPoolExecutor(2) as pool:
+        futs = [pool.submit(lambda v=v: (time.sleep(0.05 * (3 - v)), v)[1]) for v in range(3)]
+        assert _wait_all(futs, poll_s=0.01) == [0, 1, 2]
+        bad = [pool.submit(lambda: 1 / 0)]
+        with pytest.raises(ZeroDivisionError):
+            _wait_all(bad, poll_s=0.01)
