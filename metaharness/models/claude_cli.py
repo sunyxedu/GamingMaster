@@ -230,6 +230,7 @@ class ClaudeCLI:
         system_file: Optional[Path] = None
         deadline = time.monotonic() + timeout_s
         attempt = 0
+        working = False          # an agent's time starts with its slot: queueing is not working time
         try:
             run_dir = (Path(cwd).resolve() if cwd else None) if agentic else self._player_cwd()
             if len(request.get("system", "").encode("utf-8")) > _SYSTEM_ARGV_MAX:
@@ -239,6 +240,10 @@ class ClaudeCLI:
                 argv = self._argv(session_id=session_id, new_session_id=new_session_id, system=system,
                                   agentic=agentic, web_search=web_search, stream=stream, system_file=system_file)
                 with _slot("agent" if agentic else "player"):
+                    if agentic and not working:
+                        deadline, working = time.monotonic() + timeout_s, True
+                    if deadline - time.monotonic() <= 0:     # a player whose time ran out waiting for a slot
+                        raise CLITimeout(f"no time left after waiting {timeout_s:g}s for a free slot")
                     proc = run_cli(argv, cwd=run_dir, stdin_text=stdin, timeout_s=max(1.0, deadline - time.monotonic()),
                                    env_overrides=_ISOLATION_ENV, env_drop=_ENV_DROP)
                 payload = _result_payload(proc.stdout or "", stream)

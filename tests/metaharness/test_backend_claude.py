@@ -432,3 +432,21 @@ def test_quota_failures_are_not_retried(fake):
     with pytest.raises(ModelUnavailable):
         ClaudeCLI(claude_bin=fake.bin).run("hi")
     assert len(fake.calls()) == 1
+
+
+def test_an_agents_time_starts_when_it_gets_a_slot(fake, tmp_path, monkeypatch):
+    import contextlib as _cl
+    waits = []
+
+    @_cl.contextmanager
+    def slow_slot(pool):
+        time.sleep(1.5)                     # another process held the slot
+        waits.append(pool)
+        yield
+
+    monkeypatch.setattr(claude_mod, "_slot", slow_slot)
+    fake.mode("ok")
+    assert ClaudeCLI(claude_bin=fake.bin).run("work", cwd=tmp_path, agentic=True, timeout_s=1.0).text == "up"
+    with pytest.raises(ModelTimeout):        # a player's wait is part of its latency: it times out
+        ClaudeCLI(claude_bin=fake.bin).run("move?", timeout_s=1.0)
+    assert waits == ["agent", "player"]
