@@ -333,8 +333,8 @@ class Archive:
         table = self._norm_table()
         head = ["#", "candidate", "parent"] + ([f"{g}" for g in games] if multi else ["mean score"]) + \
                (["selection (mean / worst norm.)"] if multi else []) + \
-               ["episodes", "stale ticks", "S1 calls", "S2 calls", "failed S1/S2", "Jev→act", "Astra→act",
-                "Jev p50/max s", "Astra p50/max s", "status"]
+               ["seeds median / min", "episodes", "stale ticks", "S1 calls", "S2 calls", "failed S1/S2", "Jev→act",
+                "Astra→act", "Jev p50/max s", "Astra p50/max s", "status"]
         rows = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
 
         def fmt(x, pct=False):
@@ -359,6 +359,8 @@ class Archive:
                 cells.append("–" if not _eligible(e) else f"{mean_n:.3f} / {worst_n:.3f}")
             else:
                 cells.append(fmt(e.get("mean_score")))
+            seed_scores = sorted(float(ep["score"]) for ep in _episodes(e) if isinstance(ep.get("score"), (int, float)))
+            cells.append(f"{seed_scores[len(seed_scores) // 2]:.3f} / {seed_scores[0]:.3f}" if seed_scores else "–")
             lat = latency_summary(e)
 
             def lat_cell(kind):
@@ -377,6 +379,9 @@ class Archive:
             text += ("Selection: each game's mean score is min-max normalised across eligible candidates; "
                      "candidates are ranked by the mean normalised score, then by their worst game. "
                      "A harness must work on every game.\n")
+        text += ("`seeds median / min`: the median and the worst per-seed score — a mean over a few seeds is "
+                 "noisy and can be carried by one lucky seed; an improvement that lifts the weak seeds is more likely "
+                 "to hold on unseen seeds. ")
         text += ("`Jev→act` / `Astra→act`: fraction of posted actions preceded by a fresh System-1 / System-2 "
                  "answer since the previous action (reported, not used for selection). Latency columns are the "
                  "median per-episode p50 and the worst observed call: design timeouts and pipelining from these "
