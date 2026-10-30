@@ -486,7 +486,13 @@ class MetaHarnessLoop:
         """Re-evaluate the top-k training candidates on the validation seeds (in parallel); the final
         selection is then the best train+validation mean among them (``Archive.best``). A candidate
         validated before (a resumed search) is not re-rolled."""
-        top = self.archive.ranked()[: self.cfg.validate_top]
+        ranked = self.archive.ranked()
+        top = ranked[: self.cfg.validate_top]
+        if len(ranked) > len(top):
+            # candidates tied with the last finalist on the training mean are finalists too: the
+            # tie-breaks (fewer calls, fewer steps) must not decide what the validation seeds should
+            cutoff = (top[-1].eval() or {}).get("mean_score")
+            top += [c for c in ranked[len(top):] if (c.eval() or {}).get("mean_score") == cutoff]
         todo = [c for c in top if c.validation() is None or _interrupted(c.validation())]
         if not todo:
             return

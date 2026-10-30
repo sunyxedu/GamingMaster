@@ -293,3 +293,29 @@ def test_resume_accepts_a_changed_task_text_but_not_changed_budgets(tmp_path):
                         system2=ScriptedSystem2(replies=["ACTION1"]), system1=None, game_name="rulepuzzle",
                         config=LoopConfig(n_iterations=1, seeds_train=[0, 1], seeds_heldout=[100], clock_mode="virtual",
                                           budget=Budget(max_system2_calls=9, max_wall_s=20), harness_timeout_s=20))
+
+
+def test_validation_includes_candidates_tied_with_the_last_finalist(tmp_path, monkeypatch):
+    root = tmp_path / "ties"
+    archive = Archive(root)
+    for score in (3.0, 3.0, 3.0, 3.0, 1.0):
+        c = archive.new_candidate()
+        c.harness_path.write_text(SLOW)
+        (c.dir / "proposal.md").write_text("parent: none\n")
+    loop = _loop(root, proposer=scripted_proposer(tier1), iters=0, validate_top=2, seeds_val=[7])
+    real = loop.evaluate
+    scores = {"0000": 3.0, "0001": 3.0, "0002": 3.0, "0003": 3.0, "0004": 1.0}
+
+    def fake_eval(cand, seeds, tag="", **kw):
+        res = real(cand, seeds, tag, **kw)
+        p = (cand.dir / tag if tag else cand.dir) / "eval.json"
+        e = json.loads(p.read_text())
+        e["mean_score"] = scores[cand.dir.name] if tag == "" else 2.0
+        for ep in e["episodes"]:
+            ep["score"] = e["mean_score"]
+        p.write_text(json.dumps(e))
+        return res
+    monkeypatch.setattr(loop, "evaluate", fake_eval)
+    loop.run()
+    validated = sorted(c.dir.name for c in archive.candidates() if c.validation())
+    assert validated == ["0000", "0001", "0002", "0003"]            # all four tied at 3.0; 0004 is out
