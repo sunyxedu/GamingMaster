@@ -78,8 +78,12 @@ _ENV_DROP = CLI_ENV_DROP + ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")   # a nested
 # the same session so an agent's work is not lost. 429 is transient, never ModelUnavailable.
 _SLOT_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "metaharness" / "claude-slots"
 _SLOT_DEFAULTS = {"agent": 4, "player": 8}
-_RATE_LIMIT_RE = re.compile(r"\b429\b|rate.?limit|too many requests", re.I)
-_RATE_LIMIT_WAITS = (15.0, 30.0, 60.0, 120.0, 240.0)
+# Retried (agents resume their session): rate limits and transient API / stream failures. Quota and auth
+# failures (_UNAVAILABLE_RE) never are.
+_RETRY_RE = re.compile(r"\b429\b|rate.?limit|too many requests|overloaded|\b5\d\d\b|upstream|stream error|"
+                       r"internal server error|service unavailable|bad gateway|gateway time-?out|temporar|"
+                       r"econnreset|socket hang up|connection (?:reset|refused|error|closed)|request timed out", re.I)
+_RETRY_WAITS = (15.0, 30.0, 60.0, 120.0, 240.0)
 _sleep = time.sleep          # module level, so tests can skip the waits
 _ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
 _AGENT_TOOLS = ("Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit")
@@ -240,18 +244,19 @@ class ClaudeCLI:
                 payload = _result_payload(proc.stdout or "", stream)
                 failed = proc.returncode != 0 or (payload is not None and payload.get("is_error"))
                 err = _error_text(payload, proc) if failed else ""
-                if not (failed and _RATE_LIMIT_RE.search(err)) or attempt >= len(_RATE_LIMIT_WAITS):
+                if not failed or attempt >= len(_RETRY_WAITS) or not _RETRY_RE.search(err) \
+                        or _UNAVAILABLE_RE.search(_TRANSIENT_LINE_RE.sub("", err)):
                     break
-                wait = _RATE_LIMIT_WAITS[attempt] * (0.75 + random.random() * 0.5)
+                wait = _RETRY_WAITS[attempt] * (0.75 + random.random() * 0.5)
                 if time.monotonic() + wait >= deadline:
                     break
                 attempt += 1
-                self._trace(trace, t0, request, None, f"rate limited (retry {attempt} in {wait:.0f}s): {err[-300:]}")
+                self._trace(trace, t0, request, None, f"transient failure (retry {attempt} in {wait:.0f}s): {err[-300:]}")
                 _sleep(wait)
                 # an agent resumes its session (its work so far is kept); a player repeats the request
                 if agentic and _session_exists(run_dir, sid):
                     session_id, new_session_id = sid, None
-                    stdin = "The previous turn was interrupted by an API rate limit. Continue where you left off."
+                    stdin = "The previous turn was interrupted by a transient API error. Continue where you left off."
                 elif not session_id:
                     new_session_id = sid = str(uuid.uuid4())
         except CLITimeout as e:
@@ -274,11 +279,11 @@ class ClaudeCLI:
         latency = time.time() - t0
         if failed:
             self._trace(trace, t0, request, None, err)
-            if _RATE_LIMIT_RE.search(err):
-                raise RuntimeError(f"claude -p rate limited after {attempt} retries: {err[-500:]}")
             hit = _UNAVAILABLE_RE.search(_TRANSIENT_LINE_RE.sub("", err))
             if hit:
                 raise ModelUnavailable(f"claude unavailable (matched {hit.group(0)!r}): {err[-800:]}")
+            if _RETRY_RE.search(err):
+                raise RuntimeError(f"claude -p failed after {attempt} retries (transient): {err[-500:]}")
             raise RuntimeError(f"claude -p failed (rc={proc.returncode}): {err}")
         text = payload.get("result") if payload is not None else None
         if not isinstance(text, str) or not text.strip():

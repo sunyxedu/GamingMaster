@@ -74,6 +74,13 @@ elif mode == "empty":
     print(json.dumps({**result, "result": ""}))
 elif mode == "sleep":
     time.sleep(30)
+elif mode == "error_once":
+    marker = os.environ["FAKE_CLAUDE_LOG"] + ".err"
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        print(json.dumps({**result, "is_error": True, "result": text}))
+        sys.exit(1)
+    print(json.dumps({**result, "result": "up"}))
 elif mode == "rate_limit_once":
     marker = os.environ["FAKE_CLAUDE_LOG"] + ".429"
     if not os.path.exists(marker):
@@ -248,7 +255,7 @@ def test_rate_limits_are_retried_and_agents_resume_their_session(fake, tmp_path)
     assert model.run("hi", trace=tr).text == "up"                        # a player repeats the request
     c1, c2 = fake.calls()
     assert _flag(c1["argv"], "--session-id") != _flag(c2["argv"], "--session-id") and c2["stdin"] == "hi"
-    assert "rate limited (retry 1" in tr.records[0]["error"] and tr.records[1]["ok"]
+    assert "transient failure (retry 1" in tr.records[0]["error"] and tr.records[1]["ok"]
     (tmp_path / "claude-calls.jsonl.429").unlink()
     store = tmp_path / "claude-config" / "projects" / "some-dir"
     store.mkdir(parents=True)
@@ -256,9 +263,9 @@ def test_rate_limits_are_retried_and_agents_resume_their_session(fake, tmp_path)
     assert model.run("design", cwd=tmp_path, agentic=True, session_id="abc").text == "up"
     c3, c4 = fake.calls()[2:]
     assert _flag(c3["argv"], "--resume") == "abc" and _flag(c4["argv"], "--resume") == "abc"
-    assert c4["stdin"].startswith("The previous turn was interrupted by an API rate limit")
+    assert c4["stdin"].startswith("The previous turn was interrupted by a transient API error")
     fake.mode("error", "API Error: 429 user rate limit exceeded (rpm)")
-    with pytest.raises(RuntimeError, match="rate limited after 5 retries") as ei:   # never unavailable
+    with pytest.raises(RuntimeError, match="after 5 retries") as ei:   # never unavailable
         model.run("hi")
     assert not isinstance(ei.value, ModelUnavailable)
 
@@ -403,3 +410,18 @@ def test_unusable_images_are_traced_errors(fake, tmp_path, name, data, match):
     with pytest.raises(RuntimeError, match=match):
         ClaudeCLI(claude_bin=fake.bin).run("look", images=[str(tmp_path / name)], trace=tr)
     assert fake.calls() == [] and tr.records[-1]["ok"] is False
+
+
+@pytest.mark.parametrize("message", ["API Error: Responses stream error: Upstream request failed (upstream_error)",
+                                     'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}',
+                                     "API Error: 500 Internal server error"])
+def test_transient_api_failures_are_retried(fake, message):
+    fake.mode("error_once", message)
+    assert ClaudeCLI(claude_bin=fake.bin).run("hi").text == "up" and len(fake.calls()) == 2
+
+
+def test_quota_failures_are_not_retried(fake):
+    fake.mode("error", "API Error: 503 · You've hit your usage limit")
+    with pytest.raises(ModelUnavailable):
+        ClaudeCLI(claude_bin=fake.bin).run("hi")
+    assert len(fake.calls()) == 1
