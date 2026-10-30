@@ -37,15 +37,17 @@ def calibrate(root: Path, *, system2: Optional[System2Model], system1: Optional[
     out: dict[str, Any] = {"measured": time.strftime("%Y-%m-%d %H:%M")}
     if _measurable(system2):
         for label, prompt in (("short", SHORT_PROMPT), ("long", LONG_PROMPT)):
-            t0 = time.monotonic()
-            try:
-                res = system2.run(prompt, agentic=False, timeout_s=900.0)
-                out[f"system2_{label}"] = {"latency_s": round(res.latency_s or time.monotonic() - t0, 2),
-                                           "output_tokens": (res.usage or {}).get("output_tokens")}
-            except ModelUnavailable:
-                raise
-            except Exception as e:  # noqa: BLE001 — a failed measurement is reported, not fatal
-                out[f"system2_{label}"] = {"error": f"{type(e).__name__}: {e}"[:200]}
+            for attempt in range(2):            # a sporadic failure (an empty reply) is measured again
+                t0 = time.monotonic()
+                try:
+                    res = system2.run(prompt, agentic=False, timeout_s=900.0)
+                    out[f"system2_{label}"] = {"latency_s": round(res.latency_s or time.monotonic() - t0, 2),
+                                               "output_tokens": (res.usage or {}).get("output_tokens")}
+                    break
+                except ModelUnavailable:
+                    raise
+                except Exception as e:  # noqa: BLE001 — a failed measurement is reported, not fatal
+                    out[f"system2_{label}"] = {"error": f"{type(e).__name__}: {e}"[:200]}
     if _measurable(system1):
         from ..models.jev import Choice
         game = None
