@@ -52,7 +52,11 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
 * Tier {tier}: {'real-time — implement RealtimeGame: tick(action) applies the *current* action, tick_s = the real cadence, ticks counts applied ticks; the runner calls tick on its own clock' if tier == 2 else 'turn-based — implement TurnGame: step(action) blocks until the game has applied the action and returns the next observation'}.
 * `reset(seed)` must start a fresh episode and vary it by seed as described in study.json "scenarios":
   {study.get('scenarios', '')}
-  If only some seeds are valid (a fixed set of levels / maps), declare them in `SEEDS`.
+  If only some seeds are valid (a fixed set of levels / maps), declare them in `SEEDS`. Every seed must be a
+  distinct episode (use the game's own seeded randomness), and train and held-out seeds must come from the same
+  mix of scenarios: held-out seeds measure new instances of the game the search trained on, so a scenario
+  family that appears only among held-out seeds measures transfer instead. Declare 8+ seeds per group when
+  episodes are short.
 * `score` must reflect playing well as described in study.json "scoring": {study.get('scoring', '')}
 * `describe()` tells a model everything it may know a priori: rules, objective, action semantics,
   observation fields. `action_spec` lists every legal action name with a one-line meaning and a `noop`.
