@@ -108,8 +108,10 @@ SIGNATURE_TIME_S = 30.0         # a signature cut short by this is not used: it 
 
 def _episode_signature(game: Any, seed: int) -> Optional[str]:
     """Hash of the observations under a fixed action script from reset(seed) (fields named like a seed
-    dropped: they label the episode, they are not its state); None if the game cannot play it or the
-    script did not finish within SIGNATURE_TIME_S."""
+    dropped: they label the episode, they are not its state); None if the game cannot play it, the
+    script did not finish within SIGNATURE_TIME_S, or the episode ended before SIGNATURE_STEPS (a
+    scripted player that dies early cannot see the seeds diverge later: two seeds sharing a first
+    obstacle would look identical)."""
     def state(obs: Any) -> str:
         if isinstance(obs, dict):
             obs = {k: v for k, v in obs.items() if "seed" not in str(k).lower()}
@@ -122,6 +124,7 @@ def _episode_signature(game: Any, seed: int) -> Optional[str]:
         complete = True
         for i in range(SIGNATURE_STEPS):
             if game.done:
+                complete = False
                 break
             if time.monotonic() > t_end:
                 complete = False

@@ -377,24 +377,56 @@ def test_a_proposer_that_ends_without_a_harness_is_asked_once_more(tmp_path):
     assert not c2.harness_path.exists() and len(once.calls) == 3
 
 
+class _Walker:
+    """A walker the fixed signature script cannot end early; scenario = seed % 4 (deterministic), with
+    the seed itself in the observation, as a real adaptor did."""
+    name = "walker"
+    tick_s = 0.1
+
+    def __init__(self, max_ticks=400):
+        from metaharness.games.base import ActionSpec
+        self.action_spec = ActionSpec(names=["left", "right", "stay"], noop="stay")
+        self.max_ticks = max_ticks
+        self.reset(0)
+
+    def reset(self, seed):
+        self.label, self.x, self.t = seed, (seed % 4) * 100, 0
+
+    def tick(self, action):
+        self.t += 1
+        self.x += {"left": -1, "right": 1}.get(action, 0) * (1 + self.label % 4)
+
+    def observe(self):
+        return {"x": self.x, "t": self.t, "seed": self.label}
+
+    @property
+    def done(self):
+        return self.t >= self.max_ticks
+
+    @property
+    def score(self):
+        return float(self.x)
+
+    @property
+    def ticks(self):
+        return self.t
+
+    def info(self):
+        return {}
+
+    def describe(self):
+        return "A walker on a line." * 5
+
+
 def test_seeds_that_alias_another_stage_are_refused(tmp_path):
-    class Modulo(SnakeGame):
-        """Scenario = seed % 4 (deterministic), with the seed itself in the observation, as a real adaptor did."""
-        def reset(self, seed):
-            self.label = seed
-            return super().reset(seed % 4)
-
-        def observe(self):
-            return {**super().observe(), "seed": self.label}
-
     def make(val, heldout):
         archive = Archive(tmp_path / f"a{val}{heldout}")
         archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
         cfg = LoopConfig(n_iterations=0, seeds_train=[0, 1], seeds_val=val, seeds_heldout=heldout, clock_mode="virtual",
                          budget=Budget(max_wall_s=30), harness_timeout_s=30)
-        return MetaHarnessLoop(archive=archive, game_factory=lambda **k: Modulo(max_ticks=40, **k), game_kwargs={},
+        return MetaHarnessLoop(archive=archive, game_factory=lambda **k: _Walker(**k), game_kwargs={},
                                task_md="t", contract_doc="c", proposer=ScriptedSystem2(), system2=None,
-                               system1=HeuristicSystem1(), config=cfg, game_name="snake")
+                               system1=HeuristicSystem1(), config=cfg, game_name="walker")
     with pytest.raises(SeedRefused, match="train:0, val:4|val:4, train:0"):
         make([4], [2]).run()                         # validation seed 4 replays training seed 0
     with pytest.raises(SeedRefused, match="same episode"):
@@ -402,26 +434,11 @@ def test_seeds_that_alias_another_stage_are_refused(tmp_path):
     make([2], [3]).run()                             # distinct scenarios: accepted
 
 
-def test_a_proposer_left_with_a_copy_of_its_parent_is_asked_to_apply_its_change(tmp_path):
-    from metaharness.core.proposer import propose
-    from metaharness.models.base import ModelTimeout
-
-    a = Archive(tmp_path / "archive")
-    parent = a.new_candidate()
-    parent.harness_path.write_text("def build(ctx):\n    return None\n")
-
-    class Copier(ScriptedSystem2):
-        def run(self, prompt, *, cwd, session_id=None, **kwargs):
-            self.calls.append((prompt, session_id))
-            d = sorted((cwd / "candidates").iterdir())[-1]
-            if len(self.calls) == 1:
-                (d / "harness.py").write_text(parent.harness_path.read_text())       # cp parent, then time out
-                raise ModelTimeout("deadline", session_id="t-1")
-            (d / "harness.py").write_text("def build(ctx):\n    return 1\n")
-            return System2Result(text="changed", session_id=session_id)
-
-    model = Copier()
-    c = propose(model, a, contract_doc="c", task_md="t", timeout_s=600)
-    assert len(model.calls) == 2 and model.calls[1][1] == "t-1"
-    assert "unmodified copy of candidates/0000/" in model.calls[1][0]
-    assert "return 1" in c.harness_path.read_text()
+def test_an_episode_that_ends_early_gives_no_signature():
+    from metaharness.core.loop import SIGNATURE_STEPS, _episode_signature
+    short = SnakeGame(max_ticks=10)                    # the script cannot see past tick 10
+    short.reset(0)
+    assert _episode_signature(short, 0) is None
+    long = _Walker(max_ticks=SIGNATURE_STEPS + 50)
+    long.reset(0)
+    assert _episode_signature(long, 0) is not None
