@@ -36,18 +36,28 @@ def calibrate(root: Path, *, system2: Optional[System2Model], system1: Optional[
         return None
     out: dict[str, Any] = {"measured": time.strftime("%Y-%m-%d %H:%M")}
     if _measurable(system2):
-        for label, prompt in (("short", SHORT_PROMPT), ("long", LONG_PROMPT)):
-            for attempt in range(2):            # a sporadic failure (an empty reply) is measured again
+        # short: the median of three (one call can wait minutes behind a busy machine); long: one
+        for label, prompt, samples in (("short", SHORT_PROMPT, 3), ("long", LONG_PROMPT, 1)):
+            got: list[tuple[float, Any]] = []
+            error = None
+            for attempt in range(samples + 1):  # a sporadic failure (an empty reply) is measured again
+                if len(got) >= samples:
+                    break
                 t0 = time.monotonic()
                 try:
                     res = system2.run(prompt, agentic=False, timeout_s=900.0)
-                    out[f"system2_{label}"] = {"latency_s": round(res.latency_s or time.monotonic() - t0, 2),
-                                               "output_tokens": (res.usage or {}).get("output_tokens")}
-                    break
+                    got.append((round(res.latency_s or time.monotonic() - t0, 2), (res.usage or {}).get("output_tokens")))
                 except ModelUnavailable:
                     raise
                 except Exception as e:  # noqa: BLE001 — a failed measurement is reported, not fatal
-                    out[f"system2_{label}"] = {"error": f"{type(e).__name__}: {e}"[:200]}
+                    error = f"{type(e).__name__}: {e}"[:200]
+            if got:
+                got.sort()
+                lat, tok = got[len(got) // 2]
+                out[f"system2_{label}"] = {"latency_s": lat, "output_tokens": tok,
+                                           **({"samples_s": [g[0] for g in got]} if len(got) > 1 else {})}
+            else:
+                out[f"system2_{label}"] = {"error": error}
     if _measurable(system1):
         from ..models.jev import Choice
         game = None

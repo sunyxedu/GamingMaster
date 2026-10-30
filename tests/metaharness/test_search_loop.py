@@ -124,7 +124,8 @@ def test_calibration_is_measured_once_and_rendered(tmp_path):
                     game_kwargs={}, seed=0, log=lambda m: None)
     assert cal["system2_long"]["output_tokens"] == 800 and "latency_s" in cal["system1"]
     assert calibrate(tmp_path, system2=s2, system1=Fake1(), game_factory=SnakeGame, game_kwargs={}, seed=0,
-                     log=lambda m: None) == cal and len(s2.calls) == 2           # cached, not re-measured
+                     log=lambda m: None) == cal and len(s2.calls) == 4           # cached, not re-measured
+    assert cal["system2_short"]["samples_s"] == [3.0, 3.0, 3.0]                       # short: median of three
     text = tier2.task_md("snake", Budget(), "wall", {}, calibration=cal)
     assert "Measured model latency" in text and "~800 output tokens: 12 s" in text
     assert calibrate(tmp_path / "x", system2=ScriptedSystem2(), system1=HeuristicSystem1(), game_factory=SnakeGame,
