@@ -19,7 +19,7 @@ from typing import Any, Optional
 from ..config import load_dotenv
 from ..games import adaptor as adaptor_mod
 from ..games import base as base_mod
-from ..models.base import System2Model, TraceSink
+from ..models.base import ModelTimeout, System2Model, TraceSink
 
 ADAPT_SYSTEM = """You are the Meta-Harness *adapt* agent: you write the code that connects a real game to a
 fixed Python interface so that model-driven harnesses can observe and act. You may install packages,
@@ -29,7 +29,7 @@ real game (or a faithful local instance) before declaring it done."""
 
 
 def adapt_prompt(game: str, study: dict[str, Any], study_dir: Path, out_dir: Path, feedback: str = "",
-                 notes: str = "", kwargs: Optional[dict[str, Any]] = None) -> str:
+                 notes: str = "", kwargs: Optional[dict[str, Any]] = None, timeout_s: Optional[float] = None) -> str:
     contract = inspect.getdoc(adaptor_mod) or ""
     base_src = Path(base_mod.__file__).read_text()
     tier = int(study["tier"])
@@ -70,6 +70,8 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
 * Test it yourself: `{sys.executable} -c "from metaharness.games.adaptor import validate_adaptor; print({check}.to_markdown())"`
   must print PASS (read its [!] warnings too). Then play a few random actions and check the observation and
   score make sense.
+{f"* Time: about {timeout_s / 60:.0f} minutes. Get a minimal adaptor that validates first, then improve its fidelity: "
+ "what is on disk is validated when the time is up." if timeout_s else ""}
 {('## Validation feedback from the orchestrator' + chr(10) + feedback) if feedback else ''}"""
 
 
@@ -158,13 +160,20 @@ def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, An
     rep = adaptor_mod.ValidationReport(ok=False, error="not run")
     try:
         for attempt in range(max_attempts):
-            prompt = adapt_prompt(game, study, study_dir, out, feedback, notes=notes, kwargs=kwargs)
+            prompt = adapt_prompt(game, study, study_dir, out, feedback, notes=notes, kwargs=kwargs, timeout_s=timeout_s)
             (out / f"prompt_{attempt}.md").write_text(prompt)
-            res = model.run(prompt if session is None else f"{feedback}\n\nFix the adaptor in `{out}` accordingly.",
-                            cwd=out, system=ADAPT_SYSTEM if session is None else None, agentic=True,
-                            timeout_s=timeout_s, trace=trace, session_id=session, web_search=True, full_access=True)
-            session = res.session_id
-            (out / f"agent_output_{attempt}.md").write_text(res.text or "")
+            try:
+                res = model.run(prompt if session is None else f"{feedback}\n\nFix the adaptor in `{out}` accordingly.",
+                                cwd=out, system=ADAPT_SYSTEM if session is None else None, agentic=True,
+                                timeout_s=timeout_s, trace=trace, session_id=session, web_search=True, full_access=True)
+                session = res.session_id
+                (out / f"agent_output_{attempt}.md").write_text(res.text or "")
+            except ModelTimeout as e:       # what it wrote is validated; the next round resumes the session
+                if not e.session_id:
+                    raise
+                session = e.session_id
+                (out / f"agent_output_{attempt}.md").write_text(f"(timed out after {timeout_s:.0f}s)\n")
+                log(f"adapt: the agent ran out of time (attempt {attempt + 1}/{max_attempts}); validating what it wrote")
             rep = validate()
             if rep.ok:
                 log(f"adapt: adaptor validated after {attempt + 1} attempt(s)")

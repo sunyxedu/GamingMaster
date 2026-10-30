@@ -301,3 +301,39 @@ def test_run_searches_the_adaptor_tier_and_passes_notes_and_kwargs(tmp_path, fak
     with pytest.raises(SystemExit, match="not valid JSON"):
         main(["run", "--game", "Count Game", "--agent", "fake-agent", "--game-kwargs", "{target: 4}",
               "--runs-dir", str(tmp_path)])
+
+
+def test_a_study_that_times_out_resumes_its_session_and_keeps_its_research(tmp_path):
+    from metaharness.models.base import ModelTimeout, System2Result
+    from metaharness.phases.study import FINISH_PROMPT, run_study
+
+    class SlowThenDone:
+        name = "slow"
+
+        def __init__(self):
+            self.calls = []
+
+        def run(self, prompt, *, cwd, session_id=None, timeout_s=0, **kw):
+            self.calls.append((prompt, session_id, timeout_s))
+            if len(self.calls) == 1:
+                raise ModelTimeout("timeout", session_id="s-1")
+            for name, text in STUDY_FILES.items():
+                (cwd / name).write_text(text)
+            return System2Result(text="done", session_id=session_id)
+
+    agent = SlowThenDone()
+    data = run_study(agent, tmp_path, "Count Game", timeout_s=3600, log=lambda m: None)
+    assert data["game"] and len(agent.calls) == 2
+    first, second = agent.calls
+    assert "Write a first complete version of all four files" in first[0] and first[1] is None
+    assert second == (FINISH_PROMPT, "s-1", 1800.0)                       # the same conversation, finishing
+    assert not (tmp_path / "study" / "session.json").exists()            # forgotten once the study validates
+
+    # a process killed after a timeout: the next run resumes the saved session instead of starting over
+    other = tmp_path / "again"
+    (other / "study").mkdir(parents=True)
+    (other / "study" / "session.json").write_text('{"session_id": "s-9"}')
+    agent2 = SlowThenDone()
+    agent2.calls.append(("(already timed out)", None, 0))
+    run_study(agent2, other, "Count Game", timeout_s=3600, log=lambda m: None)
+    assert agent2.calls[1][:2] == (FINISH_PROMPT, "s-9")

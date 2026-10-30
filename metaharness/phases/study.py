@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from ..models.base import System2Model, TraceSink
+from ..models.base import ModelTimeout, System2Model, TraceSink
 
 STUDY_JSON_SCHEMA = """{
   "game": "<canonical game name>",
@@ -50,7 +50,13 @@ you are given only by name. Research on the web, read documentation and communit
 your findings into files. Be concrete and cite URLs. Do not write any game-playing code yet."""
 
 
-def study_prompt(game: str, notes: str, tier_hint: Optional[int], out_dir: Path) -> str:
+FINISH_PROMPT = ("Your time is up. Do not start new research: from what you have already found, write (or complete) "
+                 "all four deliverables now — brief.md, interfaces.md, strategies.md and study.json exactly as "
+                 "specified in the first message — then stop.")
+
+
+def study_prompt(game: str, notes: str, tier_hint: Optional[int], out_dir: Path,
+                 timeout_s: Optional[float] = None) -> str:
     tier_txt = (f"The user says the game is tier {tier_hint}; verify and keep it unless clearly wrong."
                 if tier_hint else "Decide the tier yourself and justify it.")
     return f"""# Study the game: **{game}**
@@ -83,7 +89,26 @@ Astra thinks while Jev acts. {tier_txt}
 {STUDY_JSON_SCHEMA}
 ```
 Spend most effort on 2 and 3: the next phase must be able to build a working adaptor from `interfaces.md`
-alone, and the harness search will read `strategies.md` as its prior knowledge."""
+alone, and the harness search will read `strategies.md` as its prior knowledge.
+{_budget(timeout_s)}"""
+
+
+def _budget(timeout_s: Optional[float]) -> str:
+    if not timeout_s:
+        return ""
+    return (f"Time: about {timeout_s / 60:.0f} minutes. Write a first complete version of all four files within the "
+            "first third of it, then deepen them: the files on disk are what the next phase gets.")
+
+
+def _session_file(out: Path) -> Path:
+    return out / "session.json"
+
+
+def _saved_session(out: Path) -> Optional[str]:
+    try:
+        return json.loads(_session_file(out).read_text()).get("session_id")
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 REQUIRED_KEYS = ("game", "tier", "tier_rationale", "decision_latency_s", "interface", "scoring",
@@ -238,23 +263,42 @@ def run_study(model: System2Model, run_dir: Path, game: str, *, notes: str = "",
             return data
     notes_md.write_text(notes)
     trace = TraceSink(out / "study_trace.jsonl")
-    prompt = study_prompt(game, notes, tier_hint, out)
+    prompt = study_prompt(game, notes, tier_hint, out, timeout_s)
     (out / "prompt.md").write_text(prompt)
-    session = None
+    # A study cut off by its timeout (in this run or an earlier one) continues that conversation: its
+    # research is in the session, and starting over would repeat it.
+    session = _saved_session(out)
+    if session:
+        log(f"study: resuming the session {session} that ran out of time")
+        prompt = FINISH_PROMPT
     try:
         for attempt in range(max_repairs + 1):
-            res = model.run(prompt, cwd=out, system=STUDY_SYSTEM if attempt == 0 else None, agentic=True,
-                            timeout_s=timeout_s, trace=trace, session_id=session, web_search=True)
-            session = res.session_id
-            (out / f"agent_output_{attempt}.md").write_text(res.text or "")
+            try:
+                res = model.run(prompt, cwd=out, system=STUDY_SYSTEM if session is None else None, agentic=True,
+                                timeout_s=timeout_s if prompt is not FINISH_PROMPT else min(timeout_s, 1800.0),
+                                trace=trace, session_id=session, web_search=True)
+                session, timed_out = res.session_id, False
+                (out / f"agent_output_{attempt}.md").write_text(res.text or "")
+            except ModelTimeout as e:
+                if not e.session_id:
+                    raise
+                session, timed_out = e.session_id, True
+                log(f"study: the agent ran out of time ({timeout_s / 60:.0f} min); resuming its session to write "
+                    "the deliverables")
+            if session:
+                _session_file(out).write_text(json.dumps({"session_id": session}))
             try:
                 data = load_study(out)
                 if tier_hint:
                     data["tier"] = int(tier_hint)
                     (out / "study.json").write_text(json.dumps(data, indent=2))
+                _session_file(out).unlink(missing_ok=True)
                 log(f"study: done — tier {data['tier']}, interface {data['interface'].get('chosen')}")
                 return data
             except Exception as e:  # noqa: BLE001
+                if timed_out:
+                    prompt = FINISH_PROMPT
+                    continue
                 log(f"study: deliverables incomplete ({e}); asking for repair {attempt + 1}/{max_repairs}")
                 prompt = (f"The study deliverables are incomplete: {e}. Fix the files in `{out}` so that "
                           f"study.json matches the schema exactly and all three markdown files exist.")
