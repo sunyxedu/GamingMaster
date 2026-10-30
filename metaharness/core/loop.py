@@ -558,6 +558,12 @@ class MetaHarnessLoop:
             trace.close()
         (rdir / f"gen_{gen:03d}.md").write_text(res.text or "")
         after = lessons.read_text() if lessons.exists() else ""
+        if before and after != before and not after.startswith(before):
+            # the agent rewrote the file: keep every earlier section, add only its section for this generation
+            m = re.search(rf"^## Generation {gen}\b.*?(?=^## Generation |\Z)", after, flags=re.M | re.S)
+            write_atomic(lessons, before.rstrip("\n") + "\n\n" + (m.group(0).rstrip("\n") + "\n\n" if m else ""))
+            after = lessons.read_text()
+            self._log(f"reflection after generation {gen} rewrote lessons.md; earlier sections restored")
         if after == before and (res.text or "").strip():         # no tools, or it only answered: keep the text
             text = (res.text or "").strip()
             if not text.lower().startswith("## generation"):
@@ -688,7 +694,9 @@ class MetaHarnessLoop:
 
     def _catch_up_reflections(self, done: int) -> None:
         """A generation that has no section in lessons.md (its reflection failed, or the process stopped
-        before it) is reflected on now, before the next proposers read the notes."""
+        before it): the latest one is reflected on now, before the next proposers read the notes; an older
+        gap gets the numeric summary only (a model reflection per old generation cost hours on a shared
+        rate limit, for notes the newer sections have superseded)."""
         if not self.cfg.reflect:
             return
         lessons = self.archive.root / "lessons.md"
@@ -699,9 +707,17 @@ class MetaHarnessLoop:
             if re.search(rf"^## Generation {g}\b", text, flags=re.M):
                 continue
             cands = [c for c in self.archive.candidates() if (c.directive() or {}).get("generation") == g - 1]
-            if cands:
+            if not cands:
+                continue
+            if g == done:
                 self._log(f"generation {g} has no reflection yet; reflecting now")
                 self.reflect(g, cands)
+            else:
+                with open(lessons, "a") as fh:
+                    fh.write(f"\n## Generation {g} (automatic summary: no reflection was recorded)\n"
+                             + "\n".join(generation.digest(c, limit=400) for c in cands if c.eval() is not None)
+                             + "\n\n")
+                self._log(f"generation {g} had no reflection; recorded its numeric summary")
 
     def _generation(self, gen: int, n: int) -> None:
         k = max(1, self.cfg.proposals_per_iteration)

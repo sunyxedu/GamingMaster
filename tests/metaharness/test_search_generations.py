@@ -315,3 +315,50 @@ def test_a_reflection_that_writes_nothing_leaves_a_numeric_summary(tmp_path):
     loop.reflect(2, archive.candidates())
     text = (archive.root / "lessons.md").read_text()
     assert "## Generation 2 (automatic summary" in text and "candidates/0000-tier2_idle" in text and "mean score" in text
+
+
+def test_a_reflection_that_rewrites_lessons_keeps_the_earlier_sections(tmp_path):
+    class Rewriter(ScriptedSystem2):
+        def run(self, prompt, *, cwd, **kw):
+            (cwd / "lessons.md").write_text("## Generation 4\n- only the new section\n")
+            return System2Result(text="done", session_id="x")
+
+    from metaharness.models.base import System2Result
+    archive = Archive(tmp_path / "a")
+    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    (archive.root / "lessons.md").write_text("## Generation 3\n- an earlier lesson\n")
+    cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[], clock_mode="virtual",
+                     budget=Budget(max_wall_s=30), harness_timeout_s=30)
+    loop = MetaHarnessLoop(archive=archive, game_factory=lambda **k: SnakeGame(max_ticks=10, **k), game_kwargs={},
+                           task_md="t", contract_doc="c", proposer=Rewriter(), system2=None,
+                           system1=HeuristicSystem1(), config=cfg, game_name="snake")
+    loop.run()
+    loop.reflect(4, archive.candidates())
+    text = (archive.root / "lessons.md").read_text()
+    assert "an earlier lesson" in text and "only the new section" in text
+    assert text.index("## Generation 3") < text.index("## Generation 4")
+
+
+def test_older_missing_reflections_get_summaries_and_only_the_latest_a_model_call(tmp_path):
+    from metaharness.models.base import System2Result
+
+    class Notes(ScriptedSystem2):
+        def run(self, prompt, **kw):
+            self.calls.append(prompt)
+            return System2Result(text="- the latest generation", session_id="x")
+
+    archive = Archive(tmp_path / "a")
+    for gen in (0, 1, 2):
+        c = archive.new_candidate()
+        c.harness_path.write_text(IDLE + f"\n# g{gen}\n")
+        (c.dir / "directive.json").write_text(json.dumps({"mode": "explore", "parents": [], "generation": gen}))
+    cfg = LoopConfig(n_iterations=3, seeds_train=[0], seeds_heldout=[], clock_mode="virtual",
+                     budget=Budget(max_wall_s=30), harness_timeout_s=30, preflight=False)
+    notes = Notes()
+    loop = MetaHarnessLoop(archive=archive, game_factory=lambda **k: SnakeGame(max_ticks=10, **k), game_kwargs={},
+                           task_md="t", contract_doc="c", proposer=notes, system2=None,
+                           system1=HeuristicSystem1(), config=cfg, game_name="snake")
+    loop.run()
+    text = (archive.root / "lessons.md").read_text()
+    assert len(notes.calls) == 1 and "## Generation 3" in text
+    assert text.count("automatic summary: no reflection was recorded") == 2
