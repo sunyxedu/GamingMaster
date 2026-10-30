@@ -77,6 +77,7 @@ class LoopConfig:
     eval_spec: Optional[dict[str, Any]] = None               # model profiles + tier: evaluate in child processes
     more_games: list[GameSpec] = field(default_factory=list)  # training games besides the primary one
     heldout_game_adaptor: Optional[str] = None               # its directory, for child processes
+    patience: int = 0                                        # stop once the best is this many generations old
 
 
 def _unavailable(e: Optional[dict[str, Any]]) -> bool:
@@ -657,6 +658,19 @@ class MetaHarnessLoop:
             if self._stop_for(e, env_retry=retried):
                 break
 
+    def _plateaued(self, gen: int) -> bool:
+        """--patience: the best candidate has not improved during the last ``patience`` generations."""
+        p = self.cfg.patience
+        best = self.archive.best() if p > 0 and gen > 0 else None
+        if best is None:
+            return False
+        best_gen = int((best.directive() or {}).get("generation", -1))
+        if gen - 1 - best_gen < p:
+            return False
+        self._log(f"no improvement in the last {gen - 1 - best_gen} generation(s) (best {best.dir.name}, "
+                  f"patience {p}): the search stops after {gen} of up to {self.cfg.n_iterations}")
+        return True
+
     def _catch_up_reflections(self, done: int) -> None:
         """A generation that has no section in lessons.md (its reflection failed, or the process stopped
         before it) is reflected on now, before the next proposers read the notes."""
@@ -735,6 +749,8 @@ class MetaHarnessLoop:
             self._catch_up_reflections(done)
         for gen in range(done, n):
             if self.interrupted:
+                break
+            if self._plateaued(gen):
                 break
             self._generation(gen, n)
         if self.interrupted:

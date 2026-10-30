@@ -241,6 +241,7 @@ def _run_search(a: argparse.Namespace, games: list[tuple[str, str | None]], tier
                      heldout_game_adaptor=heldout_adaptor,
                      proposals_per_iteration=getattr(a, "proposals", 1), parallel=a.parallel,
                      finalists=getattr(a, "finalists", 3), reflect=not getattr(a, "no_reflect", False),
+                     patience=getattr(a, "patience", 0),
                      more_games=specs[1:],
                      eval_spec={"system1": a.system1, "system2": a.system2, "effort": a.effort, "tier": tier_n,
                                 "proposer": a.proposer, "proposer_effort": getattr(a, "proposer_effort", None)})
@@ -451,7 +452,10 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--proposer-effort", default=None, help="reasoning effort of the proposer (default: --effort)")
         sp.add_argument("--proposer-text", action="store_true", help="proposer answers in text (no tools)")
         sp.add_argument("--proposer-timeout", type=float, default=1800.0)
-        sp.add_argument("--iters", type=int, default=3, help="generations of proposals this archive should have")
+        sp.add_argument("--iters", type=int, default=3, help="generations of proposals this archive should have "
+                                                               "(at most, with --patience)")
+        sp.add_argument("--patience", type=int, default=0,
+                        help="stop proposing once the best candidate has not improved for this many generations")
         sp.add_argument("--proposals", type=int, default=1,
                         help="candidates proposed per generation (each with its own parent / mode directive)")
         sp.add_argument("--val-seeds", default="",

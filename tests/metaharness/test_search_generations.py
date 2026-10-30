@@ -274,3 +274,23 @@ def test_an_archive_that_pinned_validation_seeds_still_resumes(tmp_path):
     m["seeds_val"] = [5]                                    # what an earlier version wrote
     (archive.root / "manifest.json").write_text(json.dumps(m))
     make([7, 8])                                            # other validation seeds: still the same protocol
+
+
+def test_patience_stops_a_search_whose_best_is_stale(tmp_path):
+    a = Archive(tmp_path / "a")
+    cfg = LoopConfig(n_iterations=8, proposals_per_iteration=1, patience=2, seeds_train=[0, 1], seeds_heldout=[],
+                     clock_mode="virtual", budget=Budget(max_wall_s=30), harness_timeout_s=30, preflight=False)
+    loop = MetaHarnessLoop(archive=a, game_factory=lambda **k: SnakeGame(max_ticks=10, **k), game_kwargs={},
+                           task_md="t", contract_doc="c", proposer=ScriptedSystem2(), system2=None,
+                           system1=HeuristicSystem1(), config=cfg, game_name="snake")
+    seed = a.new_candidate("baseline")
+    seed.eval_path.write_text(json.dumps(_eval(1.0)))
+    for gen, score in ((0, 5.0), (1, 4.0), (2, 3.0)):          # generation 1 found the best, 2 and 3 did not
+        c = a.new_candidate()
+        c.eval_path.write_text(json.dumps(_eval(score)))
+        (c.dir / "directive.json").write_text(json.dumps({"mode": "refine", "parents": [0], "generation": gen}))
+    assert loop._plateaued(3) and not loop._plateaued(2)
+    cfg.patience = 3
+    assert not loop._plateaued(3) and loop._plateaued(4)
+    cfg.patience = 0
+    assert not loop._plateaued(7)
