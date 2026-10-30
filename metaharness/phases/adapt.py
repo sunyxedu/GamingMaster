@@ -59,8 +59,13 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
   trains on `train`, the proposer may try drafts on `dev`, finalists are re-evaluated on `validation`, the
   result is reported on `heldout`. Scenario groups must be drawn alike (same difficulty mix in every group).
 * `score` must reflect playing well as described in study.json "scoring": {study.get('scoring', '')}
-  It must keep headroom: pick opponents, difficulty and scenario length so that neither a trivial policy nor a
-  competent scripted one reaches the maximum (a search cannot tell candidates apart on a saturated score).
+  It must keep headroom: pick difficulty and scenario length so that neither a trivial policy nor a competent
+  scripted one reaches the maximum (a search cannot tell candidates apart on a saturated score).
+* When the game has opponents, they are the **strongest available**: the engine's best built-in AI, the
+  strongest open-source bot or engine that runs offline here, or — only if nothing exists — a scripted
+  policy with real lookahead. Never a random or deliberately weakened opponent, and no difficulty ladder
+  that a seed can lower. Name the opponent and its measured strength (e.g. its win rate against a simple
+  scripted player) in ADAPTOR.md.
 * `describe()` tells a model everything it may know a priori: rules, objective, action semantics,
   observation fields. `action_spec` lists every legal action name with a one-line meaning and a `noop`.
   Actions with parameters use a compact string grammar documented in `describe()` (e.g. `"move 3 4"`).
