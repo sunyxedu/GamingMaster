@@ -83,7 +83,8 @@ from .base import ActionSpec, close_game
 REQUIRED_FILES = ("game.py", "ADAPTOR.md")
 MALFORMED_ACTION = "__not_an_action__"
 MAX_OBS_CHARS = 200_000
-VARIETY_ACTIONS = 120             # fixed script played on two seeds: identical trajectories fail validation
+VARIETY_ACTIONS = 300             # fixed script played on two seeds: identical trajectories fail validation
+                                  # (intros that ignore input took one game ~240 steps to diverge)
 
 # source_sha256 scope (see its docstring): code only — data files are what adaptors write while they play
 # (r6's observations/<sha>.json frames, state.json, eula.txt, package-lock.json), and pinning them refused resumes

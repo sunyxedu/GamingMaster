@@ -97,12 +97,14 @@ def _interrupted(e: Optional[dict[str, Any]]) -> bool:
     return _unavailable(e) or (bool(e) and _env_failed(e.get("errors") or [], e.get("n_episodes", 0)))
 
 
-SIGNATURE_STEPS = 24
+SIGNATURE_STEPS = 300           # games open with intros that ignore input (one needed ~240 steps to diverge)
+SIGNATURE_TIME_S = 30.0         # a signature cut short by this is not used: it could alias distinct seeds
 
 
 def _episode_signature(game: Any, seed: int) -> Optional[str]:
     """Hash of the observations under a fixed action script from reset(seed) (fields named like a seed
-    dropped: they label the episode, they are not its state); None if the game cannot play it."""
+    dropped: they label the episode, they are not its state); None if the game cannot play it or the
+    script did not finish within SIGNATURE_TIME_S."""
     def state(obs: Any) -> str:
         if isinstance(obs, dict):
             obs = {k: v for k, v in obs.items() if "seed" not in str(k).lower()}
@@ -111,13 +113,18 @@ def _episode_signature(game: Any, seed: int) -> Optional[str]:
         names = list(game.action_spec.names)
         step = game.tick if hasattr(game, "tick") else game.step
         h = hashlib.sha256(state(game.observe()).encode())
+        t_end = time.monotonic() + SIGNATURE_TIME_S
+        complete = True
         for i in range(SIGNATURE_STEPS):
             if game.done:
+                break
+            if time.monotonic() > t_end:
+                complete = False
                 break
             step(names[(i // 3) % len(names)])
             h.update(state(game.observe()).encode())
         game.reset(seed)                     # leave it as the seed check found it
-        return h.hexdigest()[:16]
+        return h.hexdigest()[:16] if complete else None
     except Exception:  # noqa: BLE001 — a signature is a check, never a reason to refuse
         return None
 
