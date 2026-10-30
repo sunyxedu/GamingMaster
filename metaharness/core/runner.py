@@ -521,10 +521,12 @@ def run_episode(
         ended_by = "game_error"
     game_done = False
     # The game lock is free unless a call into the game never returned (a hung server): never wait
-    # for it unboundedly — record the hang and use what the ticker / steps published.
+    # for it unboundedly — record the hang and use what the ticker / steps published. A legitimate
+    # step can take seconds (an engine simulating the opponent, a server round trip), so the wait is
+    # the grace period, not a fixed two seconds: a false "game hung" would end the search as a dead game.
     breakdown: Optional[dict[str, float]] = None
     breakdown_error: Optional[str] = None
-    hung = not lock.acquire(timeout=2.0)          # a game call returns in well under that
+    hung = not lock.acquire(timeout=max(2.0, grace_s))
     if hung:
         err = ("game hung: a call into the game (tick/step/observe) did not return, so neither the "
                "harness nor the evaluator could use it" + (f" — also: {_last_line(err)}" if err else ""))

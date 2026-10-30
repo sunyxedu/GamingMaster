@@ -355,7 +355,7 @@ def test_preflight_caps_ticks_and_reports_coverage(tmp_path):
     t0 = time.monotonic()
     rep = preflight_harness(p, EndlessGame, tier2=True, max_ticks=500)
     assert rep["ok"] and rep["ended_by"] == "virtual_cap" and rep["steps"] <= 500
-    assert time.monotonic() - t0 < 10
+    assert time.monotonic() - t0 < 20   # deadline + grace to return + grace for the hang check
     assert any("never posted an action" in w for w in rep["warnings"])
 
 
@@ -407,7 +407,7 @@ def test_a_hung_game_call_ends_the_episode_instead_of_hanging_the_evaluator(tmp_
         assert time.monotonic() - t0 < 6, game.__name__
     t0 = time.monotonic()
     rep = preflight_harness(p, HangingTick, timeout_s=1.0)
-    assert not rep["ok"] and "game hung" in rep["error"] and time.monotonic() - t0 < 10
+    assert not rep["ok"] and "game hung" in rep["error"] and time.monotonic() - t0 < 20   # deadline + grace to return + grace for the hang check
 
 
 def test_a_timeout_clamped_to_the_deadline_is_a_deadline_end(tmp_path):
