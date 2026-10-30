@@ -54,6 +54,7 @@ def build_prompt(archive: Archive, candidate: Candidate, contract_doc: str, task
     if timeout_s:
         when += (f" You have {timeout_s / 60:.0f} minutes. Write `harness.py` and `proposal.md` first, then refine: "
                  "a harness written before the deadline is still evaluated, an unwritten one is lost.")
+    when += recent_latency_text(archive)
     return f"""# Meta-Harness iteration -> candidate `{candidate.dir.name}`{when}
 
 Working directory: `{archive.root}` (you have full read/write access here).
@@ -99,6 +100,29 @@ Model calls still in flight when the game ends or run_episode returns are cancel
 any other background work must stop when ctx.done. The default evaluation resets both memory and module
 globals per episode; only an explicit shared-memory protocol allows cross-episode caching. The manifest is
 authoritative."""
+
+
+def recent_latency_text(archive: Archive, last: int = 3) -> str:
+    """System-2 latency observed in the archive's most recent evaluations: a shared endpoint's latency
+    drifts with load, so the calibration in the task text goes stale and timeouts sized from it lose
+    calls (a Jericho candidate lost 35 of 74 calls to an 85 s timeout while answers took up to 82 s)."""
+    evals = [c.eval() for c in archive.candidates()]
+    evals = [e for e in evals if e and e.get("episodes")][-last:]
+    p50s, maxs, failed, total = [], [], 0, 0
+    for e in evals:
+        failed += int(e.get("failed_s2") or 0)
+        total += int(e.get("system2_calls") or 0)
+        for ep in e["episodes"]:
+            st = ep.get("latency_s2") or {}
+            if st.get("n"):
+                p50s.append(float(st["p50"]))
+                maxs.append(float(st["max"]))
+    if not p50s:
+        return ""
+    p50s.sort()
+    return (f"\nSystem-2 latency in the last {len(evals)} evaluation(s) of this archive: median {p50s[len(p50s) // 2]:.0f} s, "
+            f"worst {max(maxs):.0f} s per call; {failed} of {total + failed} calls failed (timeouts included). Size call "
+            "timeouts above the worst observed latency, not from the calibration in the task text.")
 
 
 def propose(

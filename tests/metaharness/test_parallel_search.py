@@ -203,3 +203,18 @@ def test_wait_all_polls_and_keeps_order_and_exceptions():
         bad = [pool.submit(lambda: 1 / 0)]
         with pytest.raises(ZeroDivisionError):
             _wait_all(bad, poll_s=0.01)
+
+
+def test_prompt_reports_recent_system2_latency(tmp_path):
+    from metaharness.core.proposer import build_prompt, recent_latency_text
+    archive = Archive(tmp_path / "lat")
+    assert recent_latency_text(archive) == ""
+    for n, (p50, mx, failed) in enumerate([(10.0, 20.0, 0), (50.0, 80.0, 3)]):
+        c = archive.new_candidate()
+        c.harness_path.write_text("def build(ctx): return None\n")
+        (c.dir / "eval.json").write_text(json.dumps({
+            "mean_score": 1.0, "n_episodes": 1, "system2_calls": 10, "failed_s2": failed,
+            "episodes": [{"seed": 0, "score": 1.0, "latency_s2": {"n": 5, "p50": p50, "max": mx}}]}))
+    text = recent_latency_text(archive)
+    assert "median 50 s" in text and "worst 80 s" in text and "3 of 23 calls failed" in text
+    assert text in build_prompt(archive, archive.new_candidate(), "C", "T")
