@@ -130,12 +130,29 @@ def propose(
         # A CLI can finish writing the deliverable and time out during its final checks. Keep
         # whatever harness it wrote as an explicitly incomplete proposal: pre-flight (load errors
         # get a repair round in the same session) and the evaluator establish whether it works.
+        # One that wrote nothing gets its session back once to write it from what it worked out.
         session = getattr(exc, "session_id", None)
         (cand.dir / "proposal_error.json").write_text(json.dumps({
             "error": str(exc), "type": type(exc).__name__, "status": "timed_out", "session_id": session,
         }, indent=2) + "\n")
         if session:
             (cand.dir / "session.json").write_text(json.dumps({"session_id": session}))
+        if session and not cand.harness_path.exists():
+            finish = (f"Your time is up. From what you have already worked out, write "
+                      f"`candidates/{cand.dir.name}/harness.py` (a complete module with build(ctx)) and "
+                      f"`candidates/{cand.dir.name}/proposal.md` now, then stop.")
+            try:
+                res = model.run(finish, cwd=archive.root, session_id=session, agentic=agentic,
+                                timeout_s=min(900.0, timeout_s / 2), trace=trace)
+                (cand.dir / "proposer_output.md").write_text(res.text or "")
+                if not cand.harness_path.exists():
+                    code = _fenced_python(res.text or "")
+                    if code:
+                        cand.harness_path.write_text(code)
+            except ModelUnavailable:
+                raise
+            except Exception:  # noqa: BLE001 — the original timeout is what gets reported
+                pass
         if cand.harness_path.exists():
             if not (cand.dir / "proposal.md").exists():
                 (cand.dir / "proposal.md").write_text("(the proposer timed out before writing proposal.md)\n")

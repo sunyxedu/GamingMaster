@@ -326,3 +326,23 @@ def test_heldout_results_on_several_candidates_leave_the_training_selection(tmp_
         d.mkdir(exist_ok=True)
         (d / "eval.json").write_text(json.dumps({"n_episodes": 3, "mean_score": 0.0}))
     assert loop.heldout_best().dir == best.dir
+
+
+def test_a_proposer_that_times_out_without_a_harness_finishes_in_its_session(tmp_path):
+    from metaharness.core.proposer import propose
+    from metaharness.models.base import ModelTimeout
+
+    class Slow(ScriptedSystem2):
+        def run(self, prompt, *, cwd, session_id=None, **kwargs):
+            self.calls.append((prompt, session_id))
+            if len(self.calls) == 1:
+                raise ModelTimeout("CLI deadline", session_id="thread-7")
+            d = sorted((cwd / "candidates").iterdir())[-1]
+            (d / "harness.py").write_text("build = lambda ctx: None\n")
+            return System2Result(text="written", session_id=session_id)
+
+    model = Slow()
+    c = propose(model, Archive(tmp_path / "archive"), contract_doc="c", task_md="t", timeout_s=600)
+    assert c.harness_path.exists() and len(model.calls) == 2
+    assert model.calls[1][1] == "thread-7" and "Your time is up" in model.calls[1][0]
+    assert "(the proposer timed out before writing proposal.md)" in (c.dir / "proposal.md").read_text()
