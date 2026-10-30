@@ -41,3 +41,14 @@ def test_tier2_baselines_run_on_any_realtime_game(game, kw, tmp_path):
                              system2=ScriptedSystem2(replies=["stay"], latency_s=0.3),
                              system1=HeuristicSystem1(latency_s=0.2), clock_mode="virtual", game_kwargs=kw)
         assert r.fatal is None and r.episodes[0].error is None, (name, game, r.episodes[0].error)
+
+
+def test_parse_action_handles_names_with_spaces_and_prefixes():
+    from metaharness.baselines._generic import parse_action
+    names = ["move 1", "move 2", "switch 3", "mega", "megaevolve"]
+    assert parse_action("I will use move 2 now", names) == "move 2"
+    assert parse_action("switch 3 then move 1", names) == "move 1"           # the last one mentioned
+    assert parse_action("MOVE 2", names) == "move 2"                           # canonical spelling
+    assert parse_action("megaevolve", names) == "megaevolve"                   # not the shorter prefix
+    assert parse_action("ACTION6 10 12", ["ACTION6", "ACTION1"]) == "ACTION6 10 12"
+    assert parse_action("nothing useful", names, default="move 1") == "move 1"
