@@ -210,13 +210,13 @@ class MetaHarnessLoop:
         }
         if config.game_source:
             manifest["game_source"] = config.game_source
-        if config.seeds_val:
-            manifest["seeds_val"] = config.seeds_val
+        # Validation and held-out seeds are not pinned: they never touch the training scores, and each
+        # candidate's validation result (like champion.json) is written once.
         if config.eval_spec:                 # how to rebuild the models / game outside this process
             manifest["run"] = {**config.eval_spec, "game": game_name, "adaptor": game_adaptor}
         if len(self.games) > 1:
-            manifest["games"] = [{"name": g.name, "kwargs": _jsonish(g.kwargs), "seeds_train": g.seeds_train,
-                                  "seeds_val": g.seeds_val, "seeds_heldout": g.seeds_heldout} for g in self.games]
+            manifest["games"] = [{"name": g.name, "kwargs": _jsonish(g.kwargs), "seeds_train": g.seeds_train}
+                                 for g in self.games]
         manifest_path = archive.root / "manifest.json"
         scored = any(c.eval() is not None for c in archive.candidates())
         if manifest_path.exists():
@@ -565,7 +565,8 @@ class MetaHarnessLoop:
         train = {v.get("obs_sha256") for k, v in results.items() if k.endswith("train:" + k.rsplit(":", 1)[-1])
                  and k.split(":")[-2] == "train" and v.get("ok")}
         same = [k for k, v in results.items() if k.split(":")[-2] in ("heldout", "val") and v.get("obs_sha256") in train]
-        warnings = ([f"held-out / validation seeds start exactly like a training seed: {', '.join(same)}"] if same else [])
+        warnings = ([f"held-out / validation seeds start like a training seed ({', '.join(same)}); fine when the "
+                     "seed changes the episode later, which adaptor validation checks"] if same else [])
         path.write_text(json.dumps({"key": key, "results": results, "refused": refused, "warnings": warnings},
                                    indent=2) + "\n")
         for w in warnings:
