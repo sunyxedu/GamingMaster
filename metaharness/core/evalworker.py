@@ -70,6 +70,57 @@ def run_job(job: EvalJob) -> dict[str, Any]:
     return res.to_json()
 
 
+def merge_seed_evals(parts: list[dict[str, Any]], seeds: list[int]) -> dict[str, Any]:
+    """One eval dict (the ``EvalResult.to_json`` shape) from evaluations of single seeds: episodes in
+    ``seeds`` order, totals and fractions recomputed from them, a model outage listed first among fatals."""
+    import collections
+    import statistics
+    order = {s: i for i, s in enumerate(seeds)}
+    eps = sorted((ep for p in parts for ep in p.get("episodes") or []),
+                 key=lambda ep: order.get(ep.get("seed"), len(order)))
+    fatals = sorted({str(p["fatal"]) for p in parts if p.get("fatal")},
+                    key=lambda f: not f.startswith("model unavailable"))
+    scores = [float(ep["score"]) for ep in eps if ep.get("score") is not None]
+
+    def tot(key: str) -> int:
+        return sum(int(ep.get(key) or 0) for ep in eps)
+
+    stale, decided, acts = tot("stale_ticks"), tot("decided_ticks"), tot("acts")
+    meta = dict(next((p.get("metadata") for p in parts if p.get("metadata")), None) or {})
+    meta.update(seeds=list(seeds), expected_episodes=len(seeds))
+    resolved: dict[str, set] = {}
+    for p in parts:
+        for kind, names in ((p.get("metadata") or {}).get("resolved_models") or {}).items():
+            resolved.setdefault(kind, set()).update(names)
+    meta["resolved_models"] = {k: sorted(v) for k, v in resolved.items()}
+    for key in ("invalid_trials", "memory_resets"):
+        vals = [x for p in parts for x in (p.get("metadata") or {}).get(key) or []]
+        if vals:
+            meta[key] = vals
+        else:
+            meta.pop(key, None)
+    steps = [float(ep.get("steps") or 0) for ep in eps]
+    return {
+        "harness_path": next((p.get("harness_path") for p in parts if p.get("harness_path")), None),
+        "game": next((p.get("game") for p in parts if p.get("game")), None),
+        "fatal": "; ".join(fatals) or None,
+        "mean_score": statistics.fmean(scores) if scores else None,
+        "stale_fraction": stale / (stale + decided) if stale + decided else None,
+        "n_episodes": len(eps),
+        "system1_calls": tot("system1_calls"), "system2_calls": tot("system2_calls"),
+        "mean_steps": statistics.fmean(steps) if steps else None,
+        "failed_s1": tot("failed_s1"), "failed_s2": tot("failed_s2"),
+        "timeouts_s1": tot("timeouts_s1"), "timeouts_s2": tot("timeouts_s2"),
+        "ended_by": dict(collections.Counter(ep.get("ended_by") for ep in eps)),
+        "s1_informed_fraction": tot("acts_after_s1") / acts if acts else None,
+        "s2_informed_fraction": tot("acts_after_s2") / acts if acts else None,
+        "errors": [ep["error"] for ep in eps if ep.get("error")],
+        "episodes": eps,
+        "metadata": meta,
+        "score_std": statistics.stdev(scores) if len(scores) > 1 else None,
+    }
+
+
 def _fatal(job: EvalJob, text: str) -> dict[str, Any]:
     e = {"harness_path": job.harness_path, "game": job.game_name or job.game, "fatal": text, "mean_score": None,
          "n_episodes": 0, "errors": [], "episodes": [], "metadata": {"seeds": list(job.seeds)}}

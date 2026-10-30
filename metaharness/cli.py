@@ -442,7 +442,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="seconds a harness has to return after the deadline (and spawned work after "
                              "run_episode returns) before it counts as an error")
         sp.add_argument("--parallel", type=int, default=1,
-                        help="concurrent evaluations (one child process per candidate and game) and proposers")
+                        help="concurrent episodes (one child process each; a shared-memory evaluation keeps a "
+                             "game's seeds in one) and concurrent proposers")
         sp.add_argument("--runs-dir", default=str(DEFAULT_RUNS_DIR))
 
     def loop_opts(sp):

@@ -95,7 +95,10 @@ def test_parallel_generations_validate_and_pick_a_champion(tmp_runs):
     assert names == ["0000-tier2_jev_only", "0001-tier2_astra_only", "0002-tier2_idle", "0003", "0004"]
     c3, c4 = a.candidates()[3], a.candidates()[4]
     assert c3.directive()["mode"] == "refine" and c3.directive()["parents"] == [c3.parent()]
-    assert c3.eval()["n_episodes"] == 2 and (c3.dir / "evalworker.json").exists()    # a child process evaluated it
+    assert c3.eval()["n_episodes"] == 2 and [ep["seed"] for ep in c3.eval()["episodes"]] == [0, 1]
+    for s in (0, 1):                                      # one child process per seed, traces merged back
+        assert (c3.dir / "seeds" / f"seed-{s}" / "evalworker.json").exists() and (c3.dir / f"trace_seed{s}.jsonl").exists()
+    assert c3.eval()["metadata"]["expected_episodes"] == 2 and c3.eval()["metadata"]["seeds"] == [0, 1]
     assert c4.eval()["fatal"].startswith("duplicate of candidates/0003")
     assert "Sibling proposers are writing candidates/0004/" in (c3.dir / "prompt.md").read_text()
     champion = json.loads((a.root / "champion.json").read_text())
@@ -193,3 +196,26 @@ def test_in_process_multi_game_loop_with_game_specs(tmp_path):
     assert held["per_game"]["snake"]["episodes"][0]["seed"] == 9 and held["per_game"]["lanerunner"]["episodes"][0]["seed"] == 9
     seeds = json.loads((archive.root / "seeds.json").read_text())["results"]
     assert "lanerunner:train:3" in seeds and "train:0" in seeds and "heldout:9" in seeds
+
+
+def test_per_seed_evaluations_merge_into_the_joint_result(tmp_path):
+    from metaharness.core.evalworker import merge_seed_evals
+    from metaharness.core.runner import evaluate_harness
+
+    def run(seeds, out):
+        return evaluate_harness(BASE / "tier2_reference.py", lambda **k: SnakeGame(max_ticks=40, **k), seeds,
+                                system2=ScriptedSystem2(latency_s=0.5), system1=HeuristicSystem1(latency_s=0.1),
+                                out_dir=out, clock_mode="virtual", budget_per_episode=Budget(max_wall_s=60),
+                                harness_timeout_s=60, game_name="snake").to_json()
+
+    joint = run([0, 1, 2], tmp_path / "joint")
+    merged = merge_seed_evals([run([s], tmp_path / f"s{s}") for s in (2, 0, 1)], [0, 1, 2])
+    for key in ("mean_score", "n_episodes", "system1_calls", "system2_calls", "stale_fraction", "mean_steps",
+                "failed_s1", "failed_s2", "ended_by", "errors", "s1_informed_fraction", "s2_informed_fraction",
+                "score_std", "game"):
+        assert merged[key] == joint[key], key
+    assert [ep["seed"] for ep in merged["episodes"]] == [0, 1, 2]
+    assert merged["metadata"]["seeds"] == [0, 1, 2] and merged["metadata"]["expected_episodes"] == 3
+    out = merge_seed_evals([{"fatal": "load error: x", "episodes": []},
+                            {"fatal": "model unavailable: quota", "episodes": []}], [0, 1])
+    assert out["fatal"].startswith("model unavailable") and out["n_episodes"] == 0 and out["mean_score"] is None

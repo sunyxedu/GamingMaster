@@ -2,8 +2,9 @@
 
 A *generation* proposes ``proposals_per_iteration`` candidates at once, each with a directive
 (parent and kind of change, ``core/generation.py``), pre-flights them, drops near-duplicates,
-evaluates the rest — ``parallel`` at a time, in child processes when the models are named by
-profile (``eval_spec``) — and records a reflection (``lessons.md``). After the last generation the
+evaluates the rest — when the models are named by profile (``eval_spec``) every episode is its own
+child process, ``parallel`` at a time (independent-memory evaluations; shared memory keeps a game's
+seeds in one process, in order) — and records a reflection (``lessons.md``). After the last generation the
 top ``finalists`` are re-evaluated on the validation seeds and the final pick ranks training +
 validation together (``champion.json``); only that candidate is tested on the held-out seeds / game.
 """
@@ -245,20 +246,49 @@ class MetaHarnessLoop:
         return out
 
     # -- evaluation ---------------------------------------------------------------------------
+    def _job(self, cand: Candidate, game: GameSpec, seeds: list[int], out: Path, label: Optional[str]
+             ) -> evalworker.EvalJob:
+        b = self.cfg.budget
+        return evalworker.EvalJob(
+            harness_path=str(cand.harness_path), out_dir=str(out), game=str(game.name), seeds=list(seeds),
+            adaptor_dir=game.adaptor_dir, game_kwargs=_jsonish(game.kwargs), models=dict(self.cfg.eval_spec or {}),
+            clock_mode=self.cfg.clock_mode,
+            budget={"max_system1_calls": b.max_system1_calls, "max_system2_calls": b.max_system2_calls,
+                    "max_wall_s": b.max_wall_s},
+            harness_timeout_s=self.cfg.harness_timeout_s, memory_mode=self.cfg.memory_mode,
+            grace_s=self.cfg.grace_s, latency_override=self.cfg.latency_override, game_name=label)
+
+    def _eval_children(self, units: list[tuple[int, Candidate, GameSpec, list[int], Path, Optional[str]]]
+                       ) -> list[dict[str, Any]]:
+        """Every unit's episodes in child processes, ``parallel`` at a time: one process per seed when
+        episodes are independent (a game's traces end up in the unit's directory, its eval.json merged),
+        else one per unit."""
+        jobs: list[evalworker.EvalJob] = []
+        owner: list[tuple[int, Optional[int]]] = []
+        for k, (_, cand, game, seeds, out, label) in enumerate(units):
+            split = self.cfg.memory_mode == "episode" and len(seeds) > 1
+            for s in (seeds if split else [None]):
+                where = out / "seeds" / f"seed-{s}" if s is not None else out
+                jobs.append(self._job(cand, game, [s] if s is not None else seeds, where, label))
+                owner.append((k, s))
+        results = evalworker.run_jobs(jobs, self.cfg.parallel)
+        evals = []
+        for k, (_, cand, game, seeds, out, label) in enumerate(units):
+            parts = [(s, r) for (kk, s), r in zip(owner, results) if kk == k]
+            if parts[0][0] is None:
+                evals.append(parts[0][1])
+                continue
+            for s, _ in parts:                      # traces where the proposer reads them
+                for t in (out / "seeds" / f"seed-{s}").glob("trace_seed*.jsonl"):
+                    os.replace(t, out / t.name)
+            merged = evalworker.merge_seed_evals([r for _, r in parts], seeds)
+            write_atomic(out / "eval.json", json.dumps(merged, indent=2, default=str))
+            evals.append(merged)
+        return evals
+
     def _eval_unit(self, cand: Candidate, game: GameSpec, seeds: list[int], out: Path, label: Optional[str]
                    ) -> dict[str, Any]:
-        """One candidate on one game, in a child process when the models are named (eval_spec)."""
-        if self.cfg.eval_spec is not None and (game.adaptor_dir or game.name):
-            b = self.cfg.budget
-            job = evalworker.EvalJob(
-                harness_path=str(cand.harness_path), out_dir=str(out), game=str(game.name), seeds=list(seeds),
-                adaptor_dir=game.adaptor_dir, game_kwargs=_jsonish(game.kwargs), models=dict(self.cfg.eval_spec),
-                clock_mode=self.cfg.clock_mode,
-                budget={"max_system1_calls": b.max_system1_calls, "max_system2_calls": b.max_system2_calls,
-                        "max_wall_s": b.max_wall_s},
-                harness_timeout_s=self.cfg.harness_timeout_s, memory_mode=self.cfg.memory_mode,
-                grace_s=self.cfg.grace_s, latency_override=self.cfg.latency_override, game_name=label)
-            return evalworker.run_jobs([job], 1)[0]
+        """One candidate on one game in this process (models given as objects: tests, scripted runs)."""
         res = evaluate_harness(
             cand.harness_path, game.factory, seeds, system2=self.system2, system1=self.system1, out_dir=out,
             clock_mode=self.cfg.clock_mode, budget_per_episode=self.cfg.budget,
@@ -278,8 +308,11 @@ class MetaHarnessLoop:
                 out = base / f"game-{_slug(g.name)}" if len(games) > 1 else base
                 label = g.name if (tag or len(games) > 1 or g is not self.games[0]) else self.game_name
                 units.append((i, cand, g, seeds[_slug(g.name)], out, label))
-        with _pool(self.cfg.parallel) as ex:
-            evals = list(ex.map(lambda u: self._eval_unit(u[1], u[2], u[3], u[4], u[5]), units))
+        if self.cfg.eval_spec is not None:
+            evals = self._eval_children(units)
+        else:
+            with _pool(self.cfg.parallel) as ex:
+                evals = list(ex.map(lambda u: self._eval_unit(u[1], u[2], u[3], u[4], u[5]), units))
         out: list[dict[str, Any]] = []
         for i, (cand, seeds, tag, games) in enumerate(requests):
             mine = [(u, e) for u, e in zip(units, evals) if u[0] == i]
