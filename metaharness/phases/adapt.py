@@ -19,7 +19,7 @@ from typing import Any, Optional
 from ..config import load_dotenv
 from ..games import adaptor as adaptor_mod
 from ..games import base as base_mod
-from ..models.base import ModelTimeout, System2Model, TraceSink
+from ..models.base import ModelTimeout, ModelUnavailable, System2Model, TraceSink
 
 ADAPT_SYSTEM = """You are the Meta-Harness *adapt* agent: you write the code that connects a real game to a
 fixed Python interface so that model-driven harnesses can observe and act. You may install packages,
@@ -182,6 +182,12 @@ def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, An
                 session, timed_out = e.session_id, True
                 (out / f"agent_output_{attempt}.md").write_text(f"(timed out after {timeout_s:.0f}s)\n")
                 log(f"adapt: the agent ran out of time (attempt {attempt + 1}/{max_attempts}); validating what it wrote")
+            except ModelUnavailable:
+                raise
+            except Exception as e:  # noqa: BLE001 — a failed call is an attempt: validate what is there, go on
+                (out / f"agent_output_{attempt}.md").write_text(f"(the call failed: {type(e).__name__}: {e})\n"[:2000])
+                log(f"adapt: the agent call failed (attempt {attempt + 1}/{max_attempts}): {type(e).__name__}: "
+                    f"{str(e)[:160]}; validating what it wrote")
             rep = validate()
             if rep.ok:
                 log(f"adapt: adaptor validated after {attempt + 1} attempt(s)")

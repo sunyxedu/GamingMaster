@@ -286,7 +286,10 @@ class ClaudeCLI:
                 raise RuntimeError(f"claude -p failed after {attempt} retries (transient): {err[-500:]}")
             raise RuntimeError(f"claude -p failed (rc={proc.returncode}): {err}")
         text = payload.get("result") if payload is not None else None
-        if not isinstance(text, str) or not text.strip():
+        if agentic and payload is not None and not isinstance(text, str) or agentic and isinstance(text, str) \
+                and not text.strip():
+            text = ""            # an agent's work is in its files; ending its turn without a final message is fine
+        elif not isinstance(text, str) or not text.strip():
             err = ("claude -p printed no JSON result: " + repr((proc.stdout or "")[-500:]) if payload is None
                    else "claude -p returned an empty result")
             self._trace(trace, t0, request, None, err)

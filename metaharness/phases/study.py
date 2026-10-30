@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from ..models.base import ModelTimeout, System2Model, TraceSink
+from ..models.base import ModelTimeout, ModelUnavailable, System2Model, TraceSink
 
 STUDY_JSON_SCHEMA = """{
   "game": "<canonical game name>",
@@ -285,6 +285,11 @@ def run_study(model: System2Model, run_dir: Path, game: str, *, notes: str = "",
                 session, timed_out = e.session_id, True
                 log(f"study: the agent ran out of time ({timeout_s / 60:.0f} min); resuming its session to write "
                     "the deliverables")
+            except ModelUnavailable:
+                raise
+            except Exception as e:  # noqa: BLE001 — a failed call: check what is on disk, then try again
+                timed_out = session is not None
+                log(f"study: the agent call failed ({type(e).__name__}: {str(e)[:160]})")
             if session:
                 _session_file(out).write_text(json.dumps({"session_id": session}))
             try:

@@ -249,6 +249,13 @@ def test_overload_and_server_errors_stay_runtime_errors(fake, mode, message):
     assert not isinstance(ei.value, ModelUnavailable)
 
 
+def test_an_agent_may_end_without_a_final_message_but_a_player_may_not(fake, tmp_path):
+    fake.mode("empty")
+    assert ClaudeCLI(claude_bin=fake.bin).run("work", cwd=tmp_path, agentic=True).text == ""
+    with pytest.raises(RuntimeError, match="empty result"):
+        ClaudeCLI(claude_bin=fake.bin).run("move?")
+
+
 def test_rate_limits_are_retried_and_agents_resume_their_session(fake, tmp_path):
     fake.mode("rate_limit_once")
     model, tr = ClaudeCLI(claude_bin=fake.bin), TraceSink()
