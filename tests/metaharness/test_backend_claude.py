@@ -142,7 +142,11 @@ def test_agentic_calls_keep_tools_but_not_web_unless_asked(fake, tmp_path):
     model.run("research", cwd=tmp_path, agentic=True, web_search=True)
     model.run("again", cwd=tmp_path, agentic=True, session_id="abc", system="SYS")
     c1, c2, c3 = fake.calls()
-    assert _flag(c1["argv"], "--permission-mode") == "bypassPermissions" and "--tools" not in c1["argv"]
+    assert _flag(c1["argv"], "--permission-mode") == "bypassPermissions"
+    # file / shell tools only: no subagents, skills, MCP servers or cross-session tools; web only when asked
+    assert _flag(c1["argv"], "--tools") == "Bash,Read,Write,Edit,Glob,Grep,NotebookEdit"
+    assert _flag(c2["argv"], "--tools").endswith(",WebSearch,WebFetch")
+    assert "--strict-mcp-config" in c1["argv"] and "--disable-slash-commands" in c1["argv"]
     assert c1["argv"][c1["argv"].index("--disallowedTools") + 1:][:2] == ["WebSearch", "WebFetch"]
     assert "--disallowedTools" not in c2["argv"]
     assert _flag(c1["argv"], "--system-prompt") == "SYS" and "--system-prompt" not in c3["argv"]

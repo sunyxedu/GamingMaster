@@ -13,9 +13,10 @@ A player (``agentic=False``) is isolated from the user's Claude Code setup: no t
 servers, hooks, skills / slash commands, CLAUDE.md or auto-memory, the inference-only
 instruction as its system prompt (instead of the coding-agent prompt with env and git status),
 and a private empty working directory, created once per instance and reused because sessions
-are stored per directory. Agents (study / adapt / proposer) keep their tools but run with the
-same CLAUDE.md, auto-memory and hook isolation: their run directory is their whole world, and
-nothing may carry state between iterations outside the archive. Not ``--bare``: it also drops
+are stored per directory. Agents (study / adapt / proposer) get the file, shell and (when asked)
+web tools only — no subagents, skills, MCP servers or cross-session tools, which multiplied
+requests against a shared rate limit and let an agent see other sessions — and the same CLAUDE.md,
+auto-memory and hook isolation: their run directory is their whole world. Not ``--bare``: it also drops
 settings-file auth (ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL in settings env), which some
 installs rely on.
 """
@@ -81,6 +82,8 @@ _RATE_LIMIT_RE = re.compile(r"\b429\b|rate.?limit|too many requests", re.I)
 _RATE_LIMIT_WAITS = (15.0, 30.0, 60.0, 120.0, 240.0)
 _sleep = time.sleep          # module level, so tests can skip the waits
 _ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
+_AGENT_TOOLS = ("Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit")
+_WEB_TOOLS = ("WebSearch", "WebFetch")
 
 
 def _isolation_settings() -> str:
@@ -170,10 +173,13 @@ class ClaudeCLI:
         if agentic:
             if system and not session_id:
                 argv += _system_flag(system, system_file)
-            argv += ["--permission-mode", "bypassPermissions", "--dangerously-skip-permissions",
+            # study / adapt research the game on the web; the proposer must not
+            tools = _AGENT_TOOLS + (_WEB_TOOLS if web_search else ())
+            argv += ["--tools", ",".join(tools), "--strict-mcp-config", "--disable-slash-commands",
+                     "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions",
                      "--settings", _isolation_settings()]
-            if not web_search:  # study / adapt research the game on the web; the proposer must not
-                argv += ["--disallowedTools", "WebSearch", "WebFetch"]
+            if not web_search:
+                argv += ["--disallowedTools", *_WEB_TOOLS]
         else:
             # Replaces the coding-agent system prompt. Sent on --resume too: the CLI keeps reusing
             # the prompt it recorded first, and renders this one again after a compaction.
