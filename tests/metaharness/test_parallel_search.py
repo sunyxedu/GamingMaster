@@ -269,3 +269,27 @@ def test_leaderboard_marks_identical_seed_scores(tmp_path):
             "episodes": [{"seed": i, "score": s} for i, s in enumerate(scores)]}))
     lb = archive.write_leaderboard()
     assert "3.000 / 3.000 (= all seeds)" in lb and "2.000 / 1.000 |" in lb
+
+
+def test_resume_accepts_a_changed_task_text_but_not_changed_budgets(tmp_path):
+    root = tmp_path / "res"
+    loop = _loop(root, proposer=scripted_proposer(tier1), iters=1)
+    loop.run()
+    again = _loop(root, proposer=scripted_proposer(tier1), iters=1)
+    again.task_md = "a different task text"
+    again2 = MetaHarnessLoop(archive=Archive(root), game_factory=lambda **k: RulePuzzleGame(**k), game_kwargs={},
+                             task_md="a different task text", contract_doc="contract",
+                             proposer=scripted_proposer(tier1), system2=ScriptedSystem2(replies=["ACTION1"]),
+                             system1=None, game_name="rulepuzzle",
+                             config=LoopConfig(n_iterations=1, seeds_train=[0, 1], seeds_heldout=[100],
+                                               clock_mode="virtual", budget=Budget(max_system2_calls=3, max_wall_s=20),
+                                               harness_timeout_s=20))
+    assert again2.task_changed
+    again2.run()
+    assert "task text differs" in (root / "loop.log").read_text()
+    with pytest.raises(ValueError, match="Search configuration changed \\(budget\\)"):
+        MetaHarnessLoop(archive=Archive(root), game_factory=lambda **k: RulePuzzleGame(**k), game_kwargs={},
+                        task_md="task", contract_doc="contract", proposer=scripted_proposer(tier1),
+                        system2=ScriptedSystem2(replies=["ACTION1"]), system1=None, game_name="rulepuzzle",
+                        config=LoopConfig(n_iterations=1, seeds_train=[0, 1], seeds_heldout=[100], clock_mode="virtual",
+                                          budget=Budget(max_system2_calls=9, max_wall_s=20), harness_timeout_s=20))

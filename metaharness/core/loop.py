@@ -195,13 +195,17 @@ class MetaHarnessLoop:
             manifest["game_source"] = config.game_source
         manifest_path = archive.root / "manifest.json"
         scored = any(c.eval() is not None for c in archive.candidates())
+        self.task_changed = False
         if manifest_path.exists():
             old = json.loads(manifest_path.read_text())
-            if old != manifest and scored:
-                changed = sorted(k for k in set(old) | set(manifest) if old.get(k) != manifest.get(k))
-                raise ValueError(f"Search configuration changed ({', '.join(changed)}) for the archive "
-                                 f"{archive.root}: its scores were measured differently. Search in a new "
-                                 "archive (loop: another --name; run: move that search/ directory away).")
+            changed = sorted(k for k in set(old) | set(manifest) if old.get(k) != manifest.get(k))
+            # The task text is what proposers were told, not how scores were measured: a resumed search
+            # may carry an updated task (every candidate's prompt.md records what its proposer saw).
+            self.task_changed = "task" in changed
+            if [k for k in changed if k != "task"] and scored:
+                raise ValueError(f"Search configuration changed ({', '.join(k for k in changed if k != 'task')}) "
+                                 f"for the archive {archive.root}: its scores were measured differently. Search in a "
+                                 "new archive (loop: another --name; run: move that search/ directory away).")
         elif scored:
             raise ValueError("Legacy archive has no protocol manifest; start a new search archive.")
         self._manifest = manifest           # written by run() once the seeds are known to work
@@ -406,6 +410,9 @@ class MetaHarnessLoop:
             self.qualify_seeds()
         # Pinned only now: a refused seed (or an adaptor fix after it) must not lock the archive
         # into a configuration that never produced a score.
+        if self.task_changed:
+            self._log("the task text differs from the one this archive was created with; proposals from now on "
+                      "see the new text (each candidate's prompt.md records what its proposer saw)")
         (self.archive.root / "manifest.json").write_text(json.dumps(self._manifest, indent=2) + "\n")
         self.archive.write_task(self.task_md)
         # evaluate unevaluated candidates first: seed baselines, a candidate whose evaluation was
