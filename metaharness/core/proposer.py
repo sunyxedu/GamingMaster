@@ -138,21 +138,8 @@ def propose(
         if session:
             (cand.dir / "session.json").write_text(json.dumps({"session_id": session}))
         if session and not cand.harness_path.exists():
-            finish = (f"Your time is up. From what you have already worked out, write "
-                      f"`candidates/{cand.dir.name}/harness.py` (a complete module with build(ctx)) and "
-                      f"`candidates/{cand.dir.name}/proposal.md` now, then stop.")
-            try:
-                res = model.run(finish, cwd=archive.root, session_id=session, agentic=agentic,
-                                timeout_s=min(900.0, timeout_s / 2), trace=trace)
-                (cand.dir / "proposer_output.md").write_text(res.text or "")
-                if not cand.harness_path.exists():
-                    code = _fenced_python(res.text or "")
-                    if code:
-                        cand.harness_path.write_text(code)
-            except ModelUnavailable:
-                raise
-            except Exception:  # noqa: BLE001 — the original timeout is what gets reported
-                pass
+            _finish(model, archive, cand, session, "Your time is up.", agentic=agentic, trace=trace,
+                    timeout_s=min(900.0, timeout_s / 2))
         if cand.harness_path.exists():
             if not (cand.dir / "proposal.md").exists():
                 (cand.dir / "proposal.md").write_text("(the proposer timed out before writing proposal.md)\n")
@@ -161,6 +148,10 @@ def propose(
     (cand.dir / "proposer_output.md").write_text(res.text or "")
     if res.session_id:
         (cand.dir / "session.json").write_text(json.dumps({"session_id": res.session_id}))
+    if res.session_id and not cand.harness_path.exists() and not _fenced_python(res.text or ""):
+        # an agent can end its turn after planning without writing the file: once more, same session
+        _finish(model, archive, cand, res.session_id, "You ended without writing the harness.", agentic=agentic,
+                trace=trace, timeout_s=min(900.0, timeout_s / 2))
     if isinstance(res.raw, list):
         (cand.dir / "proposer_events.jsonl").write_text(
             "".join(json.dumps(event, default=str) + "\n" for event in res.raw))
@@ -174,6 +165,25 @@ def propose(
     if not (cand.dir / "proposal.md").exists():
         (cand.dir / "proposal.md").write_text("(proposer wrote no proposal.md)\n")
     return cand
+
+
+def _finish(model: System2Model, archive: Archive, cand: Candidate, session: str, why: str, *, agentic: bool,
+            trace: Optional[TraceSink], timeout_s: float) -> None:
+    """Ask a proposer that produced no harness to write it now, from what it worked out (same session)."""
+    prompt = (f"{why} From what you have already worked out, write `candidates/{cand.dir.name}/harness.py` (a "
+              f"complete module with build(ctx)) and `candidates/{cand.dir.name}/proposal.md` now, then stop.")
+    try:
+        res = model.run(prompt, cwd=archive.root, session_id=session, agentic=agentic, timeout_s=timeout_s,
+                        trace=trace)
+    except ModelUnavailable:
+        raise
+    except Exception:  # noqa: BLE001 — the original outcome is what gets reported
+        return
+    (cand.dir / "proposer_finish_output.md").write_text(res.text or "")
+    if not cand.harness_path.exists():
+        code = _fenced_python(res.text or "")
+        if code:
+            cand.harness_path.write_text(code)
 
 
 def repair(

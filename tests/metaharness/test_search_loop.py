@@ -346,3 +346,27 @@ def test_a_proposer_that_times_out_without_a_harness_finishes_in_its_session(tmp
     assert c.harness_path.exists() and len(model.calls) == 2
     assert model.calls[1][1] == "thread-7" and "Your time is up" in model.calls[1][0]
     assert "(the proposer timed out before writing proposal.md)" in (c.dir / "proposal.md").read_text()
+
+
+def test_a_proposer_that_ends_without_a_harness_is_asked_once_more(tmp_path):
+    from metaharness.core.proposer import propose
+
+    class Planner(ScriptedSystem2):
+        def run(self, prompt, *, cwd, session_id=None, **kwargs):
+            self.calls.append((prompt, session_id))
+            if len(self.calls) == 1:
+                return System2Result(text="**Designing placement search****Planning**", session_id="s-3")
+            d = sorted((cwd / "candidates").iterdir())[-1]
+            (d / "harness.py").write_text("build = lambda ctx: None\n")
+            return System2Result(text="written", session_id=session_id)
+
+    model = Planner()
+    c = propose(model, Archive(tmp_path / "archive"), contract_doc="c", task_md="t", timeout_s=600)
+    assert c.harness_path.exists() and model.calls[1][1] == "s-3"
+    assert "You ended without writing the harness" in model.calls[1][0]
+    once = Planner()
+    once.calls.append(("x", None))                       # every call plans only: asked once, then given up
+    once.run = lambda prompt, **kw: (once.calls.append((prompt, kw.get("session_id"))),
+                                     System2Result(text="plans", session_id="s-4"))[1]
+    c2 = propose(once, Archive(tmp_path / "archive2"), contract_doc="c", task_md="t", timeout_s=600)
+    assert not c2.harness_path.exists() and len(once.calls) == 3
