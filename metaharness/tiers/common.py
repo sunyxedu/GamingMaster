@@ -59,7 +59,7 @@ def memory_text(memory_mode: str) -> str:
 
 
 def seconds(s: float) -> str:
-    return f"{s:.0f} s" if s >= 10 else f"{s:.1f} s"
+    return f"{s:.0f} s" if s >= 10 else f"{s:.1f} s" if s >= 1 else f"{s * 1000:.0f} ms"
 
 
 def calibration_text(cal: Optional[dict[str, Any]], tick_s: Optional[float] = None) -> str:
@@ -78,10 +78,13 @@ def calibration_text(cal: Optional[dict[str, Any]], tick_s: Optional[float] = No
     s1 = cal.get("system1") or {}
     if "latency_s" in s1:
         in_ticks = f" (= {s1['latency_s'] / tick_s:.1f} ticks)" if tick_s else ""
+        tail = (f", p90 {seconds(s1['p90_s'])}, max {seconds(s1['max_s'])} over {s1['n']} warm requests"
+                if s1.get("p90_s") is not None else "")
         lines.append(f"- System-1 (Jev), one request with the game's initial observation and a Choice over its "
-                     f"actions: {seconds(s1['latency_s'])}{in_ticks}"
+                     f"actions: median {seconds(s1['latency_s'])}{in_ticks}{tail}"
                      + (f"; first request on a new connection {seconds(s1['first_latency_s'])}"
-                        if s1.get("first_latency_s") else ""))
+                        if s1.get("first_latency_s") else "")
+                     + " — a timeout below the tail turns slow answers into failed calls")
     errors = [f"{k}: {v['error']}" for k, v in cal.items() if isinstance(v, dict) and v.get("error")]
     if errors:
         lines.append("- calibration errors: " + "; ".join(errors))
