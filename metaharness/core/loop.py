@@ -32,6 +32,9 @@ from .proposer import propose, repair
 from .runner import DEFAULT_GRACE_S, PROTOCOL_VERSION, evaluate_harness, preflight_harness
 
 
+ABLATION = "ablation-no-models"
+
+
 class SeedRefused(ValueError):
     """A configured seed cannot be played (the game refuses it); choose other seeds."""
 
@@ -78,6 +81,7 @@ class LoopConfig:
     more_games: list[GameSpec] = field(default_factory=list)  # training games besides the primary one
     heldout_game_adaptor: Optional[str] = None               # its directory, for child processes
     patience: int = 0                                        # stop once the best is this many generations old
+    ablate: bool = True                                      # the final pick without runtime models (reported)
 
 
 def _unavailable(e: Optional[dict[str, Any]]) -> bool:
@@ -284,20 +288,23 @@ class MetaHarnessLoop:
         return out
 
     # -- evaluation ---------------------------------------------------------------------------
-    def _job(self, cand: Candidate, game: GameSpec, seeds: list[int], out: Path, label: Optional[str]
-             ) -> evalworker.EvalJob:
+    def _job(self, cand: Candidate, game: GameSpec, seeds: list[int], out: Path, label: Optional[str],
+             no_models: bool = False) -> evalworker.EvalJob:
         b = self.cfg.budget
+        models = dict(self.cfg.eval_spec or {})
+        if no_models:
+            models.update(system1="none", system2="none")
         return evalworker.EvalJob(
             harness_path=str(cand.harness_path), out_dir=str(out), game=str(game.name), seeds=list(seeds),
-            adaptor_dir=game.adaptor_dir, game_kwargs=_jsonish(game.kwargs), models=dict(self.cfg.eval_spec or {}),
+            adaptor_dir=game.adaptor_dir, game_kwargs=_jsonish(game.kwargs), models=models,
             clock_mode=self.cfg.clock_mode,
             budget={"max_system1_calls": b.max_system1_calls, "max_system2_calls": b.max_system2_calls,
                     "max_wall_s": b.max_wall_s},
             harness_timeout_s=self.cfg.harness_timeout_s, memory_mode=self.cfg.memory_mode,
             grace_s=self.cfg.grace_s, latency_override=self.cfg.latency_override, game_name=label)
 
-    def _eval_children(self, units: list[tuple[int, Candidate, GameSpec, list[int], Path, Optional[str]]]
-                       ) -> list[dict[str, Any]]:
+    def _eval_children(self, units: list[tuple[int, Candidate, GameSpec, list[int], Path, Optional[str]]],
+                       no_models: bool = False) -> list[dict[str, Any]]:
         """Every unit's episodes in child processes, ``parallel`` at a time: one process per seed when
         episodes are independent (a game's traces end up in the unit's directory, its eval.json merged),
         else one per unit."""
@@ -307,7 +314,7 @@ class MetaHarnessLoop:
             split = self.cfg.memory_mode == "episode" and len(seeds) > 1
             for s in (seeds if split else [None]):
                 where = out / "seeds" / f"seed-{s}" if s is not None else out
-                jobs.append(self._job(cand, game, [s] if s is not None else seeds, where, label))
+                jobs.append(self._job(cand, game, [s] if s is not None else seeds, where, label, no_models))
                 owner.append((k, s))
         results = evalworker.run_jobs(jobs, self.cfg.parallel)
         evals = []
@@ -324,18 +331,19 @@ class MetaHarnessLoop:
             evals.append(merged)
         return evals
 
-    def _eval_unit(self, cand: Candidate, game: GameSpec, seeds: list[int], out: Path, label: Optional[str]
-                   ) -> dict[str, Any]:
+    def _eval_unit(self, cand: Candidate, game: GameSpec, seeds: list[int], out: Path, label: Optional[str],
+                   no_models: bool = False) -> dict[str, Any]:
         """One candidate on one game in this process (models given as objects: tests, scripted runs)."""
         res = evaluate_harness(
-            cand.harness_path, game.factory, seeds, system2=self.system2, system1=self.system1, out_dir=out,
+            cand.harness_path, game.factory, seeds, system2=None if no_models else self.system2,
+            system1=None if no_models else self.system1, out_dir=out,
             clock_mode=self.cfg.clock_mode, budget_per_episode=self.cfg.budget,
             latency_override=self.cfg.latency_override, harness_timeout_s=self.cfg.harness_timeout_s,
             game_kwargs=game.kwargs, memory_mode=self.cfg.memory_mode, grace_s=self.cfg.grace_s, game_name=label)
         return res.to_json()
 
-    def evaluate_many(self, requests: list[tuple[Candidate, dict[str, list[int]], str, list[GameSpec]]]
-                      ) -> list[dict[str, Any]]:
+    def evaluate_many(self, requests: list[tuple[Candidate, dict[str, list[int]], str, list[GameSpec]]],
+                      no_models: bool = False) -> list[dict[str, Any]]:
         """Evaluate several (candidate, seeds per game, tag, games) requests, ``parallel`` game
         evaluations at a time; writes each request's eval.json (combined over its games) and
         returns the eval dicts in request order."""
@@ -347,10 +355,10 @@ class MetaHarnessLoop:
                 label = g.name if (tag or len(games) > 1 or g is not self.games[0]) else self.game_name
                 units.append((i, cand, g, seeds[_slug(g.name)], out, label))
         if self.cfg.eval_spec is not None:
-            evals = self._eval_children(units)
+            evals = self._eval_children(units, no_models)
         else:
             with _pool(self.cfg.parallel) as ex:
-                evals = list(ex.map(lambda u: self._eval_unit(u[1], u[2], u[3], u[4], u[5]), units))
+                evals = list(ex.map(lambda u: self._eval_unit(u[1], u[2], u[3], u[4], u[5], no_models), units))
         out: list[dict[str, Any]] = []
         for i, (cand, seeds, tag, games) in enumerate(requests):
             mine = [(u, e) for u, e in zip(units, evals) if u[0] == i]
@@ -774,6 +782,10 @@ class MetaHarnessLoop:
                                              game_factory=lambda **k: make_game(name, **k),
                                              game_kwargs=self.cfg.heldout_game_kwargs, game_name=name,
                                              game_adaptor=self.cfg.heldout_game_adaptor))
+        if best and self.cfg.ablate and not self.interrupted and self._stage_needed(best, ABLATION):
+            # what the runtime models add: the pick again on its training seeds, both models switched off
+            self._log(f"ablation of {best.dir.name}: training seeds without runtime System-1 / System-2")
+            self._stop_for(self.evaluate_many([(best, self._seeds("train"), ABLATION, self.games)], no_models=True)[0])
         if self.interrupted:
             self._log(f"held-out evaluation interrupted ({self.interrupted[:200]}); rerun the same search on "
                       f"{self.archive.root} to complete it (the search itself stays closed)")

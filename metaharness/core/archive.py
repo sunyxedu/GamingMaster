@@ -466,5 +466,13 @@ class Archive:
                                 + (f", {len(e['errors'])} episode errors" if e.get("errors") else ""))
         if held:
             text += "\nHeld-out evaluations (not used for selection):\n" + "\n".join(held) + "\n"
+        for c in self.candidates():
+            ab = c.dir / "ablation-no-models" / "eval.json"
+            if ab.exists():
+                e = json.loads(ab.read_text())
+                ms, base = e.get("mean_score"), c.score
+                text += (f"\nAblation: `{c.dir.name}` without runtime System-1 / System-2 on its training seeds: "
+                         f"{'–' if ms is None else f'{ms:.3f}'} (with them: {'–' if base is None else f'{base:.3f}'}"
+                         + (f"; {len(e['errors'])} episode errors" if e.get("errors") else "") + ").\n")
         write_atomic(self.root / "leaderboard.md", text)
         return text

@@ -117,6 +117,9 @@ def test_parallel_generations_validate_and_pick_a_champion(tmp_runs):
     lb = (a.root / "leaderboard.md").read_text()
     assert "Validation seeds" in lb and f"Final pick: `{expected}`" in lb and "(refine of 0000-tier2_jev_only)" in lb
     assert (a.root / "lessons.md").exists() and "## Generation 1" in (a.root / "lessons.md").read_text()
+    ablation = json.loads((winner.dir / "ablation-no-models" / "eval.json").read_text())   # the pick, models off
+    assert ablation["n_episodes"] == 2 and ablation["system1_calls"] == 0 and ablation["system2_calls"] == 0
+    assert "Ablation: `" + expected + "` without runtime System-1 / System-2" in (a.root / "leaderboard.md").read_text()
     assert json.loads((a.root / "manifest.json").read_text())["run"]["system1"] == "heuristic"
     # the archive is closed: validation / held-out results exist, so no further proposals
     with pytest.raises(ValueError, match="held-out results"):
