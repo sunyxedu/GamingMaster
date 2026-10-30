@@ -83,6 +83,7 @@ from .base import ActionSpec, close_game
 REQUIRED_FILES = ("game.py", "ADAPTOR.md")
 MALFORMED_ACTION = "__not_an_action__"
 MAX_OBS_CHARS = 200_000
+VARIETY_ACTIONS = 120             # fixed script played on two seeds: identical trajectories fail validation
 
 # source_sha256 scope (see its docstring): code only — data files are what adaptors write while they play
 # (r6's observations/<sha>.json frames, state.json, eula.txt, package-lock.json), and pinning them refused resumes
@@ -406,6 +407,26 @@ def _seeds_text(seeds: list[int]) -> str:
     return ", ".join(map(str, seeds[:5])) + (", …" if len(seeds) > 5 else "")
 
 
+def _trajectory(new_game: Callable[[], Any], release: Callable[..., None], seed: int, actions: list[str]
+                ) -> tuple[str, int]:
+    """(hash of the observations, actions applied) of a fixed action script from reset(seed) on a fresh instance."""
+    g = new_game()
+    try:
+        g.reset(seed)
+        h = hashlib.sha256(json.dumps(g.observe(), sort_keys=True, default=str).encode())
+        step = g.tick if hasattr(g, "tick") else g.step
+        n = 0
+        for i in range(VARIETY_ACTIONS):
+            if g.done:
+                break
+            step(actions[(i // 3) % len(actions)])
+            n += 1
+            h.update(json.dumps(g.observe(), sort_keys=True, default=str).encode())
+        return h.hexdigest(), n
+    finally:
+        release(g, check=False)
+
+
 def validate_adaptor(path: Path | str, *, kwargs: dict[str, Any] | None = None,
                      seeds: tuple[int, ...] | None = None, max_actions: int = 12,
                      time_budget_s: float = 120.0, expected_tier: int | None = None) -> ValidationReport:
@@ -581,7 +602,17 @@ def _smoke_test(path: Path, *, kwargs: dict[str, Any] | None, seeds: tuple[int, 
                 rep.add("different seeds give different starts (scenario variety)", True, "")
             else:
                 rep.warn(f"seeds {s_a} and {s_b} give identical first observations — fine for a fixed opening "
-                         "position; otherwise vary reset(seed) by scenario")
+                         "position if the seed still changes the episode (checked next)")
+                # A fixed opening is fine, but the seed must still change the episode: with identical
+                # play two seeds must diverge, else held-out seeds replay the training seeds.
+                traj = {s: _trajectory(new_game, release, s, actions) for s in (s_a, s_b)}
+                same = traj[s_a] == traj[s_b]
+                rep.add("different seeds give different episodes (the same actions on two seeds diverge)", not same,
+                        f"seeds {s_a} and {s_b}: identical observations through {traj[s_a][1]} identical actions — "
+                        "held-out seeds would replay the training seeds and a fixed action sequence could be "
+                        "memorised; let the seed drive the game's own randomness (the platform's standard "
+                        "stochasticity, e.g. randomised starts or action noise, or a seeded scenario)"
+                        if same else f"seeds {s_a} and {s_b} start alike and diverge under identical play")
     except Exception:  # noqa: BLE001
         rep.ok = False
         rep.error = traceback.format_exc()
