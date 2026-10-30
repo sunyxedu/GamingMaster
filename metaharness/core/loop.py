@@ -620,7 +620,19 @@ class MetaHarnessLoop:
         if self.cfg.reflect:
             self.reflect(gen + 1, cands)
 
+    def _drop_abandoned(self) -> None:
+        """Candidate directories a stopped process left without a harness or an evaluation (proposers
+        that were killed) are moved to ``abandoned/``: the generation is proposed again on resume."""
+        for c in self.archive.candidates():
+            if "-" in c.dir.name or c.harness_path.exists() or c.eval_path.exists():
+                continue
+            dest = self.archive.root / "abandoned" / f"{c.dir.name}-{int(time.time())}"
+            dest.parent.mkdir(exist_ok=True)
+            os.replace(c.dir, dest)
+            self._log(f"{c.dir.name}: left without a harness by a stopped proposer; moved to {dest.name}")
+
     def _run(self) -> Optional[Candidate]:
+        self._drop_abandoned()
         if self.cfg.qualify_seeds:
             self.qualify_seeds()
         # Pinned only now: a refused seed (or an adaptor fix after it) must not lock the archive

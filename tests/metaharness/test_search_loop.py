@@ -217,8 +217,12 @@ def test_interrupted_heldout_resumes_with_the_same_iters(tmp_path):
 
 def test_an_empty_proposal_directory_does_not_count(tmp_path):
     loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=())
-    loop.archive.new_candidate()            # a proposer killed before writing anything
+    killed = loop.archive.new_candidate()   # a proposer killed before writing anything
+    (killed.dir / "prompt.md").write_text("p")
     assert loop.proposals_done() == 0
+    loop.run()                              # moved aside, so the next generation reuses the index
+    assert not killed.dir.exists() and list((tmp_path / "a" / "abandoned").glob("0001-*/prompt.md"))
+    assert [c.dir.name for c in loop.archive.candidates()] == ["0000-tier2_jev_only"]
 
 
 def test_a_candidate_that_breaks_the_game_is_retried_once_then_kept(tmp_path):
