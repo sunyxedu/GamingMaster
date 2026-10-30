@@ -175,3 +175,83 @@ def test_lopsided_go_waves_are_recorded_not_judged(tmp_path):
     rows = [json.loads(l) for l in open(run / "strength.jsonl")]
     assert len(rows) == 1 and rows[0]["skipped"] and rows[0]["file"] == path.name
     analyze_strength.summary(str(run))
+
+
+def test_cell_order_covers_every_evaluation_before_seconds():
+    """cell_order: each (game, opponent, iteration) cell's first file comes before any cell's
+    second file, oldest iteration first within a pass."""
+    from scripts.analyze_strength import archive_cell, cell_order
+
+    files = [f"/t/eval_chess_init_it{it}_r2_w{w}.npz" for it in (20, 40) for w in range(3)]
+    files += ["/t/eval_chess_engine_it20_r2_w0.npz", "/t/eval_go_init_it40_r3_w0.npz"]
+    order = [os.path.basename(p) for p in cell_order(files)]
+    assert archive_cell("eval_chess_variants_init_it40_r0_w2.npz") == ("chess_variants", "init", 40)
+    first = order[:4]
+    assert sorted(archive_cell(b) for b in first) == sorted(
+        [("chess", "engine", 20), ("chess", "init", 20), ("chess", "init", 40), ("go", "init", 40)])
+    assert [archive_cell(b)[2] for b in first] == sorted(archive_cell(b)[2] for b in first)
+    assert order[4:6] == ["eval_chess_init_it20_r2_w1.npz", "eval_chess_init_it40_r2_w1.npz"]
+    assert len(order) == len(files) and set(order) == {os.path.basename(p) for p in files}
+
+
+def test_cell_budget_and_failed_files_are_recorded_not_retried(tmp_path):
+    """main(): --cell_positions N stops judging a (game, opponent, iteration) once N positions are
+    in (counting earlier runs' rows) and records the cell's other files as skipped; a file whose
+    engine search fails is recorded as skipped (the next file gets a fresh engine) — neither is
+    queued again, and --summary ignores both."""
+    from scripts import analyze_strength
+
+    run = tmp_path / "run"
+    for w in range(4):
+        archive_eval_wave(str(run / "traces" / f"eval_chess_init_it3_r0_w{w}.npz"),
+                          _Env(_random_games("chess", 1, 8, seed=w)), [[True, False]],
+                          {"game": "chess", "opponent": "init", "iteration": 3, "rank": 0, "wave": w})
+    archive_eval_wave(str(run / "traces" / "eval_chess_init_it5_r0_w0.npz"),
+                      _Env(_random_games("chess", 1, 8, seed=9)), [[True, False]],
+                      {"game": "chess", "opponent": "init", "iteration": 5, "rank": 0, "wave": 0})
+    made = []
+
+    class FakeEngine:
+        name = "fake"
+
+        def __init__(self):
+            self.n = 0
+
+        def judge(self, start, moves, played, go):
+            self.n += 1
+            if len(made) == 1 and self.n == 1:          # the first engine's first search fails
+                raise analyze_strength.EngineError("fake: no 'bestmove' (exited None)")
+            return 10.0, 0.0, False
+
+        def close(self):
+            pass
+
+    def fake_make(game, command, go, threads):
+        made.append(game)
+        return FakeEngine()
+
+    orig = analyze_strength.make_engine
+    analyze_strength.make_engine = fake_make
+    try:
+        analyze_strength.sys.argv = ["analyze_strength.py", "--run", str(run), "--engine", "chess=x",
+                                     "--go", "chess=go depth 1", "--cell_positions", "6"]
+        analyze_strength.main()
+    finally:
+        analyze_strength.make_engine = orig
+    rows = {r["file"]: r for r in (json.loads(l) for l in open(run / "strength.jsonl"))}
+    assert len(rows) == 5                                    # every file recorded once
+    failed = [r for r in rows.values() if str(r.get("skipped", "")).startswith("engine error")]
+    assert len(failed) == 1 and len(made) == 2               # a fresh engine after the failure
+    judged = [r for r in rows.values() if not r.get("skipped")]
+    budget = [r for r in rows.values() if str(r.get("skipped", "")).startswith("cell budget")]
+    assert {r["iteration"] for r in judged} == {3, 5}
+    assert sum(r["positions"] for r in judged if r["iteration"] == 3) >= 6
+    assert budget and all("iteration 3" in r["skipped"] for r in budget)
+    # a second run judges nothing new: the failed and the over-budget files stay skipped
+    analyze_strength.make_engine = lambda *a, **k: (_ for _ in ()).throw(AssertionError("no engine"))
+    try:
+        analyze_strength.main()
+    finally:
+        analyze_strength.make_engine = orig
+    assert sum(1 for _ in open(run / "strength.jsonl")) == 5
+    analyze_strength.summary(str(run))

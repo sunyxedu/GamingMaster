@@ -184,6 +184,26 @@ def archive_game(base: str) -> Optional[str]:
 WINRATE_GAMES = ("go",)
 
 
+def archive_cell(base: str) -> Optional[Tuple[str, str, int]]:
+    """(game, opponent, iteration) of an archive file name: the unit --cell_positions caps."""
+    m = ARCHIVE.match(base)
+    return (m.group("game"), m.group("opponent"), int(m.group("iteration"))) if m else None
+
+
+def cell_order(files: Sequence[str]) -> List[str]:
+    """The archive files with every (game, opponent, iteration) cell's first file before any
+    cell's second, and so on — each pass covers every evaluation, oldest first: with a backlog,
+    every iteration gets a first sample before the older ones get more."""
+    rank: Dict[Tuple[str, str, int], int] = {}
+    keyed = []
+    for path in sorted(files, key=lambda p: (archive_cell(os.path.basename(p)) or ("", "", 0), p)):
+        cell = archive_cell(os.path.basename(path))
+        k = rank.get(cell, 0)
+        rank[cell] = k + 1
+        keyed.append(((k, cell[2] if cell else 0, cell or ("", "", 0), path), path))
+    return [p for _, p in sorted(keyed)]
+
+
 def lopsided(path: str, limit: float) -> Optional[str]:
     """Why the archive's wave is not worth judging on winrate (its learner score >= ``limit``
     or <= 1 - ``limit``), else None."""
@@ -331,6 +351,13 @@ def main() -> None:
     ap.add_argument("--skip_lopsided", type=float, default=0.9,
                     help="winrate-judged games (go): skip waves the learner scored >= this (or "
                          "<= 1 - this) in — decided positions, every move keeps the winrate")
+    ap.add_argument("--cell_positions", type=int, default=0,
+                    help="positions judged per (game, opponent, iteration) at most: once a cell has "
+                         "them, its other files are recorded as skipped (the sentinel does not queue "
+                         "them) — an evaluation archives 10-20 files a game, a few are enough for its "
+                         "number; 0 = every file")
+    ap.add_argument("--cell_positions_game", action="append", default=[], metavar="GAME=N",
+                    help="a game's own --cell_positions (go's files hold fewer positions)")
     ap.add_argument("--only", default="", help="comma-separated games")
     ap.add_argument("--summary", action="store_true", help="print the trend and exit")
     ap.add_argument("--verbose", action="store_true")
@@ -343,10 +370,23 @@ def main() -> None:
     budget = {g: int(v) for g, v in (x.split("=", 1) for x in a.max_positions_game)}
     out_path = os.path.join(a.run, "strength.jsonl")
     done = set()
+    cell_n: Dict[Tuple[str, str, int], int] = {}      # positions judged so far per cell
     if os.path.exists(out_path):
-        done = {json.loads(l)["file"] for l in open(out_path)}
-    files = sorted(glob.glob(os.path.join(a.run, "traces", "eval_*_it*_r*_w*.npz")),
-                   key=lambda p: (int(re.search(r"_it(\d+)_", p).group(1)), p))
+        for line in open(out_path):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            done.add(r["file"])
+            cell = archive_cell(r["file"])
+            if cell is not None and not r.get("skipped"):
+                cell_n[cell] = cell_n.get(cell, 0) + int(r.get("positions") or 0)
+    cap = {g: int(v) for g, v in (x.split("=", 1) for x in a.cell_positions_game)}
+    files = cell_order(glob.glob(os.path.join(a.run, "traces", "eval_*_it*_r*_w*.npz")))
+
+    def record(rec: Dict[str, Any]) -> None:
+        with open(out_path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
     only = set(a.only.split(",")) if a.only else None
     live: Dict[str, Any] = {}
     dead: Dict[str, str] = {}       # games whose engine does not start (e.g. an AVX2 build on an
@@ -359,14 +399,19 @@ def main() -> None:
             game = archive_game(base)
             if game not in engines or game in dead or (only and game not in only):
                 continue
+            cell = archive_cell(base)
+            limit = cap.get(game, a.cell_positions)
+            if limit > 0 and cell_n.get(cell, 0) >= limit:
+                record({"file": base, "game": game, "positions": 0,
+                        "skipped": f"cell budget: {cell_n[cell]} positions of {game} vs "
+                                   f"{cell[1]} at iteration {cell[2]} judged already"})
+                continue
             lop = lopsided(path, a.skip_lopsided) if game in WINRATE_GAMES else None
             if lop is not None:
                 # winrate points: in a wave the learner won (or lost) nearly every game of, the
                 # positions are decided and every move keeps the winrate — nothing to measure
                 # (go against its weakest referees: 1.00).  Recorded, so it is not queued again
-                rec = {"file": base, "game": game, "positions": 0, "skipped": lop}
-                with open(out_path, "a") as f:
-                    f.write(json.dumps(rec) + "\n")
+                record({"file": base, "game": game, "positions": 0, "skipped": lop})
                 continue
             if game not in live:
                 try:
@@ -380,13 +425,19 @@ def main() -> None:
                 rec = judge_file(path, live[game], game, limits.get(game, ""),
                                  budget.get(game, a.max_positions), a.verbose)
             except EngineError as e:
+                # a search that does not end (the engine's read timeout) fails on the same file
+                # every time (final-mem: the same 3-6 files in each 6-hour job, 10 min each):
+                # recorded as skipped, not tried again; the engine is restarted for the next file
                 print(f"{base}: {e}", file=sys.stderr, flush=True)
+                record({"file": base, "game": game, "positions": 0,
+                        "skipped": f"engine error: {e}"[:400]})
                 eng = live.pop(game, None)
                 if eng is not None:
                     eng.close()
                 continue
-            with open(out_path, "a") as f:
-                f.write(json.dumps(rec) + "\n")
+            record(rec)
+            if cell is not None:
+                cell_n[cell] = cell_n.get(cell, 0) + int(rec.get("positions") or 0)
             n_new += 1
     finally:
         for eng in live.values():
