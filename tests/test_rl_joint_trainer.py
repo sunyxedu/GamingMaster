@@ -1057,6 +1057,49 @@ def test_clear_alarms_resumes_a_stopped_game(stage1):
     assert cleared.stopped == {}
 
 
+def test_resume_with_a_new_lambda_restarts_that_games_advantage_statistics(stage1):
+    """--lam GAME=L on --resume: the checkpoint records every RL game's (gamma, lambda); a game
+    whose GAE settings changed restarts its advantage moments (its advantages have another
+    scale, and the running std would keep the old one for ~1/(1 - --adv_decay) iterations);
+    the other games keep theirs.  A checkpoint without the record ran at the defaults."""
+    from training import train_rl_joint
+    from training.train_rl_joint import JointRLTrainer, parse_args
+
+    torch.manual_seed(0)
+    train_rl_joint.main(_args(stage1, "rl_lam", "--iterations", "1"))
+    ck_path = stage1 / "rl_lam" / "rl_latest.pt"
+    ck = torch.load(ck_path, map_location="cpu", weights_only=False)
+    assert ck["rl_state"]["gae"] == {"generals": [1.0, 0.95], "othello": [1.0, 0.95]}
+    saved = ck["rl_state"]["advnorm"]["moments"]
+    assert saved["t"] == {"generals": 1, "othello": 1}
+
+    def resumed(*extra):
+        return JointRLTrainer(parse_args(_args(stage1, "rl_lam", "--iterations", "2",
+                                               "--resume", str(ck_path), *extra)))
+
+    def counts(tr):
+        return {g: tr.advnorm.moments.count(g) for g in ("generals", "othello")}
+
+    same = resumed()
+    assert counts(same) == {"generals": 1, "othello": 1}
+    assert same.advnorm.mean("othello") == pytest.approx(saved["m"]["othello"] / saved["w"]["othello"])
+    tr = resumed("--lam", "othello=0.7")
+    assert counts(tr) == {"generals": 1, "othello": 0}
+    assert tr.advnorm.std("othello") == 1.0 and tr.advnorm.mean("othello") == 0.0
+    assert tr.advnorm.std("generals") == same.advnorm.std("generals")
+    assert counts(resumed("--gamma", "generals=0.99")) == {"generals": 0, "othello": 1}
+    # a checkpoint from before the record: the defaults (1.0, 0.95)
+    del ck["rl_state"]["gae"]
+    torch.save(ck, ck_path)
+    assert counts(resumed()) == {"generals": 1, "othello": 1}
+    assert counts(resumed("--lam", "othello=0.7")) == {"generals": 1, "othello": 0}
+    # the new run records its own settings, and the moments restart from the next batch
+    tr = resumed("--lam", "othello=0.7")
+    tr.run_iteration()
+    assert tr._rl_state()["gae"]["othello"] == [1.0, 0.7]
+    assert tr.advnorm.moments.count("othello") == 1
+
+
 def test_stop_file_saves_and_exits_after_the_iteration(stage1):
     """--stop_file: once the file exists the trainer writes rl_latest.pt after the iteration
     and stops — no rl_final.pt (the job's wrapper continues with a handover)."""

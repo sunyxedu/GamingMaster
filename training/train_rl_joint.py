@@ -280,7 +280,9 @@ def parse_args(argv=None) -> argparse.Namespace:
            "keeps snapshots in host RAM and inline in checkpoints")
     # --- advantage / value ---
     a("--gamma", action="append", default=[], metavar="GAME=G", help="discount (default 1.0)")
-    a("--lam", action="append", default=[], metavar="GAME=L", help="GAE lambda (default 0.95)")
+    a("--lam", action="append", default=[], metavar="GAME=L",
+      help="GAE lambda (default 0.95); a change on --resume restarts the game's advantage "
+           "statistics")
     a("--popart_decay", type=float, default=0.99)
     a("--no_popart", action="store_true", help="identity value normalisation")
     a("--adv_decay", type=float, default=0.99, help="per-game advantage moment EMA decay")
@@ -3524,6 +3526,7 @@ class JointRLTrainer:
                 "priv_opt": self.priv_opt.state_dict() if self.priv_opt is not None else None,
                 "engine_rung": dict(self.engine_rung), "engine_high": dict(self.engine_high),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
+                "gae": {g: [float(self.rl[g].gamma), float(self.rl[g].lam)] for g in self.rl_games},
                 "init": self.args.init, "init_hash": self.init_hash}
 
     def _env_states(self) -> Optional[List[Dict[str, Any]]]:
@@ -3693,6 +3696,18 @@ class JointRLTrainer:
             if self.ema is not None else []
         self.popart.load_state_dict(st["popart"], mirrors=mirrors)
         self.advnorm.load_state_dict(st["advnorm"])
+        # a game whose GAE gamma / lambda changed restarts its advantage moments: the new
+        # advantages have another scale (lambda 0.95 -> 0.7 sums fewer TD errors), and the
+        # running std (decay --adv_decay) would hold the old one for ~100 iterations.  A
+        # checkpoint from before this record ran every game at the defaults (1.0, 0.95).
+        saved_gae = st.get("gae") or {}
+        for g in self.rl_games:
+            old = tuple(float(x) for x in saved_gae.get(g, (1.0, 0.95)))
+            new = (float(self.rl[g].gamma), float(self.rl[g].lam))
+            if old != new:
+                self.advnorm.reset(g)
+                self.log(f"[resume] {g}: GAE gamma/lambda {old[0]:g}/{old[1]:g} -> "
+                         f"{new[0]:g}/{new[1]:g}; its advantage statistics restart")
         self.entc.load_state_dict(st["entc"])
         self.klb.load_state_dict(st["klb"])
         self.sched.load_state_dict(st["sched"])

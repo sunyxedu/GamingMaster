@@ -61,6 +61,25 @@ class TestAdvantageNormalizer:
         assert norm.std("a") == pytest.approx(3.0, rel=0.1)
         assert norm.mean("a") == pytest.approx(1.0, abs=0.3)
 
+    def test_reset_restarts_one_game_from_its_next_batch(self):
+        norm = AdvantageNormalizer(["a", "b"], decay=0.99)
+        g = torch.Generator().manual_seed(2)
+        for _ in range(30):
+            norm.update({"a": torch.randn(1000, generator=g) * 4.0,
+                         "b": torch.randn(1000, generator=g) * 4.0}, sync=False)
+        std_b = norm.std("b")
+        norm.reset("a")
+        assert norm.moments.count("a") == 0 and norm.std("a") == 1.0 and norm.mean("a") == 0.0
+        assert norm.std("b") == std_b
+        x = torch.randn(1000, generator=g) * 1.5 + 0.5    # the new scale (a lower lambda)
+        norm.update({"a": x}, sync=False)
+        assert norm.std("a") == pytest.approx(float(x.double().std(unbiased=False)), rel=1e-6)
+        assert norm.mean("a") == pytest.approx(float(x.double().mean()), rel=1e-6)
+        prior = RunningMoments(["a"], prior_weight=1.0)    # PopArt's prior survives a reset
+        prior.update_from_moments({"a": (10.0, 5.0, 30.0)})
+        prior.reset("a")
+        assert prior.mean("a") == 0.0 and prior.std("a") == 1.0
+
     def test_uncentered(self):
         norm = AdvantageNormalizer(["a"], center=False)
         x = torch.tensor([1.0, 3.0])

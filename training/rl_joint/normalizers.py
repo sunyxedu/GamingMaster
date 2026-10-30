@@ -119,6 +119,14 @@ class RunningMoments:
         return self.update_from_moments(
             per_game_moments(batches, self.games, sync=sync, group=group))
 
+    def reset(self, game: str) -> None:
+        """Forget ``game``'s statistics (back to the constructor's state): its next update
+        yields that batch's own moments (with ``prior_weight`` 0)."""
+        self._m[game] = 0.0
+        self._sq[game] = self.prior_weight
+        self._w[game] = self.prior_weight
+        self._t[game] = 0
+
     # ---- persistence ----------------------------------------------------
 
     def state_dict(self) -> Dict[str, object]:
@@ -172,6 +180,11 @@ class AdvantageNormalizer:
 
     def std(self, game: str) -> float:
         return self.moments.std(game)
+
+    def reset(self, game: str) -> None:
+        """Restart ``game``'s moments: its advantages changed scale (e.g. another GAE
+        lambda), and the running std would keep the old scale for ~1/(1 - decay) updates."""
+        self.moments.reset(game)
 
     def normalize(self, game: str, adv: torch.Tensor,
                   mask: Optional[torch.Tensor] = None) -> torch.Tensor:
