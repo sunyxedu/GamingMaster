@@ -360,7 +360,10 @@ class Archive:
             else:
                 cells.append(fmt(e.get("mean_score")))
             seed_scores = sorted(float(ep["score"]) for ep in _episodes(e) if isinstance(ep.get("score"), (int, float)))
-            cells.append(f"{seed_scores[len(seed_scores) // 2]:.3f} / {seed_scores[0]:.3f}" if seed_scores else "–")
+            spread = f"{seed_scores[len(seed_scores) // 2]:.3f} / {seed_scores[0]:.3f}" if seed_scores else "–"
+            if len(seed_scores) > 1 and seed_scores[0] == seed_scores[-1]:
+                spread += " (= all seeds)"
+            cells.append(spread)
             lat = latency_summary(e)
 
             def lat_cell(kind):
@@ -381,7 +384,8 @@ class Archive:
                      "A harness must work on every game.\n")
         text += ("`seeds median / min`: the median and the worst per-seed score — a mean over a few seeds is "
                  "noisy and can be carried by one lucky seed; an improvement that lifts the weak seeds is more likely "
-                 "to hold on unseen seeds. ")
+                 "to hold on unseen seeds. `(= all seeds)`: every seed scored the same, which is what a "
+                 "scenario-independent script does; expect it to break on scenarios it was not written for. ")
         text += ("`Jev→act` / `Astra→act`: fraction of posted actions preceded by a fresh System-1 / System-2 "
                  "answer since the previous action (reported, not used for selection). Latency columns are the "
                  "median per-episode p50 and the worst observed call: design timeouts and pipelining from these "

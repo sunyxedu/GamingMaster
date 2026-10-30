@@ -77,7 +77,10 @@ episode, on every turn-game step and whenever a real-time score changes, and how
 
 ## What to do
 1. Read the best candidate(s) and the traces of their worst episodes. Diagnose the failure mode
-   concretely (quote evidence from traces).
+   concretely (quote evidence from traces). Look at the `seeds median / min` column and any validation
+   results: a leader with identical scores on every seed is a scenario-independent script — ask what
+   happens on a scenario it was not written for, and make the plan detect its own failure
+   (`ctx.progress()`) and re-plan through System-2 instead of tuning the script.
 2. Write `candidates/{candidate.dir.name}/harness.py` — a complete module with `build(ctx)`.
    It must import only the standard library and `metaharness.*`.
 3. Write `candidates/{candidate.dir.name}/proposal.md`. Its first line is `parent: NNNN` (the candidate

@@ -218,3 +218,54 @@ def test_prompt_reports_recent_system2_latency(tmp_path):
     text = recent_latency_text(archive)
     assert "median 50 s" in text and "worst 80 s" in text and "3 of 23 calls failed" in text
     assert text in build_prompt(archive, archive.new_candidate(), "C", "T")
+
+
+def test_ctx_progress_counts_stalls_and_rejected_actions(tmp_path):
+    (tmp_path / "h.py").write_text('''
+import json
+class H:
+    def __init__(self, ctx): self.ctx = ctx
+    def run_episode(self, game):
+        ctx = self.ctx
+        log = []
+        try:
+            ctx.act("BOGUS")                      # rejected by the game
+        except Exception:
+            pass
+        log.append(dict(ctx.progress()))
+        for _ in range(3):                        # ACTION5 does nothing in a key_door/teleport family
+            ctx.act("ACTION5")
+        log.append(dict(ctx.progress()))
+        ctx.memory["log"] = log
+def build(ctx): return H(ctx)
+''')
+    from metaharness.core.runner import evaluate_harness
+    res = evaluate_harness(tmp_path / "h.py", lambda **k: RulePuzzleGame(**k), [1], system2=None, system1=None,
+                           clock_mode="virtual", harness_timeout_s=10, memory_mode="shared")
+    assert res.episodes[0].error is None
+    # the shared memory of seed 1 is not returned; replay the harness logic through the context directly
+    from metaharness.core.contract import Budget, HarnessContext, VirtualClock
+    from metaharness.models.base import TraceSink
+    g = RulePuzzleGame(); g.reset(1)
+    ctx = HarnessContext(system2=None, system1=None, trace=TraceSink(), clock=VirtualClock(), budget=Budget(),
+                         memory={}, game_kind="turn", act_fn=g.step, observe_fn=g.observe, done_fn=lambda: g.done,
+                         score_fn=lambda: g.score)
+    with pytest.raises(ValueError):
+        ctx.act("BOGUS")
+    assert ctx.progress()["illegal_actions"] == 1 and ctx.progress()["acts"] == 0
+    for _ in range(3):
+        ctx.act("ACTION5")                        # the observation changes (actions_left), the score does not
+    p = ctx.progress()
+    assert p["acts"] == 3 and p["since_score_change"] == 2 and p["score"] == 0.0 and p["since_obs_change"] == 0
+
+
+def test_leaderboard_marks_identical_seed_scores(tmp_path):
+    archive = Archive(tmp_path / "eq")
+    for scores in ([3.0, 3.0, 3.0], [1.0, 2.0, 3.0]):
+        c = archive.new_candidate()
+        c.harness_path.write_text("def build(ctx): return None\n")
+        (c.dir / "eval.json").write_text(json.dumps({
+            "mean_score": sum(scores) / 3, "n_episodes": 3, "metadata": {"expected_episodes": 3},
+            "episodes": [{"seed": i, "score": s} for i, s in enumerate(scores)]}))
+    lb = archive.write_leaderboard()
+    assert "3.000 / 3.000 (= all seeds)" in lb and "2.000 / 1.000 |" in lb

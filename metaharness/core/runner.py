@@ -444,6 +444,7 @@ def run_episode(
     ctx = HarnessContext(system2=system2, system1=system1, trace=tee, clock=clock, budget=budget,
                          memory=memory, game_kind="realtime" if realtime else "turn",
                          act_fn=act_fn, observe_fn=view.observe, done_fn=lambda: view.done,
+                         score_fn=lambda: view.score,
                          latency_override=latency_override,
                          tick_s=tick_s if realtime else None,
                          ticks_fn=(lambda: published["ticks"]) if realtime else None,

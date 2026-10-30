@@ -36,7 +36,15 @@ with a legend, only what changed), what to remember between calls (rules learned
 plans), how to parse Astra's reply into actions robustly, how many actions to commit per call, when
 cheap scripted search or bookkeeping replaces a model call, and how to notice that a plan or belief was
 wrong. If the description says that rules or action effects are not given, discovering them by
-experiment is part of the task."""
+experiment is part of the task.
+
+A plan must be able to fail and recover. Whatever executes without the model (a compiled build order, a
+convention policy, a solver) must check its own effects after each step — `ctx.progress()` counts the
+actions since the score and the observation last changed and the actions the game rejected — and, when
+the evidence says the plan has stopped working, hand the situation with that evidence to Astra for
+re-planning, then verify the new plan the same way. Scenarios the training seeds never show are where a
+scripted plan breaks: a candidate with identical scores on every training seed is a scenario-independent
+script and will be judged on the unseen validation and held-out seeds."""
 
 
 STUDY_SECTION = """

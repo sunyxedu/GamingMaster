@@ -42,6 +42,9 @@ Exact signatures (use these; anything else is a contract error caught in pre-fli
     ctx.wait_for_tick() -> None                ctx.spawn(fn) -> concurrent.futures.Future
     ctx.log(*args, **fields) -> None           ctx.memory: dict     ctx.clock.now() -> float (s)
     ctx.budget.remaining() -> {"system2_calls": int, "system1_calls": int, "wall_s": float}
+    ctx.progress() -> {"acts": int, "since_score_change": int, "since_obs_change": int, "illegal_actions": int,
+                       "score": float | None}     # a plan-failure detector: acts since the score / the
+                                                   # observation last changed, actions the game rejected
     game.describe() -> str    game.action_spec.names / .descriptions / .noop / .notes    game.observe()
     game.tick_s (realtime only)    game.ticks    game.score    game.done
 
@@ -523,6 +526,7 @@ class HarnessContext:
         latency_override: Optional[Mapping[str, float]] = None,
         tick_s: Optional[float] = None,
         act_overhead_s: float = 0.001,
+        score_fn: Optional[Callable[[], Any]] = None,
         ticks_fn: Optional[Callable[[], int]] = None,
         tick_cv: Optional[threading.Condition] = None,
         tick_over_fn: Optional[Callable[[], bool]] = None,
@@ -555,6 +559,9 @@ class HarnessContext:
         # Decision provenance (reported, never used for selection): how many posted
         # actions were preceded by a fresh System-1 / System-2 answer since the last act.
         self.acts = 0
+        self._score = score_fn
+        self._prog = {"since_score_change": 0, "since_obs_change": 0, "illegal_actions": 0,
+                      "score": None, "obs_key": None}
         self.acts_after_s1 = 0
         self.acts_after_s2 = 0
         self._s1_credit = False
@@ -566,8 +573,13 @@ class HarnessContext:
         if self.done:
             return self._observe()
         self.budget.check()
-        out = self._act(action)
+        try:
+            out = self._act(action)
+        except Exception:
+            self._prog["illegal_actions"] += 1
+            raise
         self.acts += 1
+        self._track(out if self.game_kind == "turn" else None)
         if self._s1_credit:
             self.acts_after_s1 += 1
             self._s1_credit = False
@@ -591,13 +603,42 @@ class HarnessContext:
             with self._tick_cv:       # never touch the game (its lock) while holding tick_cv
                 self._tick_cv.wait_for(lambda: self._ticks() >= target or self._closed.is_set() or over(),
                                        timeout=2 * self.tick_s + 0.05)
+            self._track(None)
             return
         now = self.clock.now()
         nxt = (int(now / self.tick_s + 1e-9) + 1) * self.tick_s
         self.clock.sleep(max(1e-6, nxt - now))
+        self._track(None)
 
     def observe(self) -> Any:
         return self._observe()
+
+    def _track(self, obs: Any) -> None:
+        """Update the plan-failure counters after an action (turn games) or a tick (real-time games)."""
+        p = self._prog
+        try:
+            score = self._score() if self._score is not None else None
+        except Exception:  # noqa: BLE001 — the game's problem is reported elsewhere
+            score = p["score"]
+        if obs is None:
+            try:
+                obs = self._observe()
+            except Exception:  # noqa: BLE001
+                obs = None
+        try:
+            key = hash(json.dumps(obs, sort_keys=True, default=str)) if obs is not None else p["obs_key"]
+        except Exception:  # noqa: BLE001
+            key = p["obs_key"]
+        p["since_score_change"] = 0 if score != p["score"] else p["since_score_change"] + 1
+        p["since_obs_change"] = 0 if key != p["obs_key"] else p["since_obs_change"] + 1
+        p["score"], p["obs_key"] = score, key
+
+    def progress(self) -> dict[str, Any]:
+        """Evidence that a plan has stopped working, game-agnostic: how many actions since the score
+        or the observation last changed, and how many actions the game rejected. A harness that
+        executes a scripted plan should hand the situation (and this evidence) to System-2 for
+        re-planning when these grow instead of running the plan to the end."""
+        return {"acts": self.acts, **{k: v for k, v in self._prog.items() if k != "obs_key"}}
 
     @property
     def done(self) -> bool:
