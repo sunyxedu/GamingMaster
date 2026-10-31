@@ -86,9 +86,12 @@ _RETRY_RE = re.compile(r"\b429\b|rate.?limit|too many requests|overloaded|\b5\d\
                        r"econnreset|socket hang up|connection (?:reset|refused|error|closed)|request timed out|response stalled", re.I)
 _RETRY_WAITS = (15.0, 30.0, 60.0, 120.0, 240.0)
 _sleep = time.sleep          # module level, so tests can skip the waits
-# a shell command may run up to 15 min by default (a harness try, a build), 30 min when the agent asks
+# A shell command may run up to 15 min by default (a harness try, a build), 30 min when the agent asks.
+# Experimental betas off: behind a router, the context_management field they add was rejected by some
+# replicas (HTTP 500, about half of all 5xx); the effort beta and adaptive thinking are not among them.
 _ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
-                  "BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "1800000"}
+                  "BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "1800000",
+                  "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"}
 _AGENT_TOOLS = ("Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit")
 _WEB_TOOLS = ("WebSearch", "WebFetch")
 
