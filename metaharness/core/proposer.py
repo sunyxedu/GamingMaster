@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from typing import Optional
 
+from ..config import REPO_ROOT
 from ..models.base import ModelUnavailable, System2Model, TraceSink
 from .archive import Archive, Candidate
 from .generation import describe as describe_directive
@@ -92,7 +94,11 @@ Before the real evaluation the candidate is *pre-flighted*: one short episode wi
 that return arbitrary text / first options on a virtual clock. Any exception there (a contract
 misuse, an unhandled parse failure of model output) is sent back to you once for repair; a harness
 must survive garbage model output without crashing.
-Do not modify any other candidate. Do not run long experiments yourself; the evaluator will.
+Do not modify any other candidate. To watch your harness play before the evaluation, run (from `{REPO_ROOT}`)
+`{sys.executable} -m metaharness try {archive.root}/candidates/{candidate.dir.name}/harness.py --seed S`: one
+episode (`--minutes`, default 5) on training seed S with this archive's game and settings, Jev live, Astra off
+unless `--astra`; it prints the score and writes the trace under `candidates/{candidate.dir.name}/tries/`. Only
+training seeds are accepted. Write the harness first: tries play in real time and count against your deadline.
 Read only this archive and the interface documentation above. Do not inspect game implementation
 source, other experiment archives, credentials, or held-out games/results. Infer semantics from the
 public game description and observations supplied through ctx. Do not call model backends directly:

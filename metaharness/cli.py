@@ -404,6 +404,43 @@ def cmd_eval(a: argparse.Namespace) -> int:
     return 1 if res.fatal or any(e.error for e in res.episodes) else 0
 
 
+def cmd_try(a: argparse.Namespace) -> int:
+    """Play one harness for one episode on a training seed of the archive it sits in, with that archive's
+    game, clock, budget and System-1 (System-2 only with --astra): a proposer's experiment before the
+    evaluation. Validation and held-out seeds are refused."""
+    load_dotenv()
+    harness = Path(a.harness).resolve()
+    root = next((p for p in harness.parents if (p / "manifest.json").exists()), None)
+    m = json.loads((root / "manifest.json").read_text()) if root else {}
+    run, train = m.get("run") or {}, m.get("seeds_train")
+    if not run or "games" in m or not isinstance(train, list):
+        raise SystemExit(f"{harness}: try needs a single-game search archive made by `metaharness run` or `loop`")
+    seed = train[0] if a.seed is None else a.seed
+    if seed not in train:
+        raise SystemExit(f"seed {seed} is not a training seed of this archive {train}: validation and held-out "
+                         "seeds are the evaluator's")
+    kwargs = m.get("game_kwargs") or {}
+    key = register_adaptor(Path(run["adaptor"]), kwargs=kwargs or None) if run.get("adaptor") else run["game"]
+    budget = {**(m.get("budget") or {})}
+    budget["max_wall_s"] = wall = min(float(budget.get("max_wall_s") or 900.0), a.minutes * 60.0)
+    out = harness.parent / "tries" / f"seed{seed}-{time.strftime('%H%M%S')}"
+    tier_n = int(run.get("tier") or 2)
+    res = evaluate_harness(str(harness), lambda **k: make_game(key, **k), [seed],
+                           system2=_system2((run.get("system2") or "none") if a.astra else "none", run.get("effort")),
+                           system1=_system1_for(run.get("system1") or "none", tier_n), out_dir=out,
+                           clock_mode=m.get("clock_mode") or "wall", budget_per_episode=Budget(**budget),
+                           harness_timeout_s=wall, latency_override=m.get("latency_override"), game_kwargs=kwargs,
+                           memory_mode=m.get("memory_mode") or "episode", grace_s=float(m.get("grace_s") or DEFAULT_GRACE_S),
+                           game_name=run.get("game") or key)
+    for e in res.episodes:
+        print(f"seed {e.seed}: score={e.score} steps={e.steps} stale={e.stale_ticks}/{e.stale_ticks + e.decided_ticks} "
+              f"s1={e.system1_calls} s2={e.system2_calls} ended_by={e.ended_by}" + (f"\nerror: {e.error}" if e.error else ""))
+    if res.fatal:
+        print(f"fatal: {res.fatal}")
+    print(f"trace: {out}")
+    return 1 if res.fatal or any(e.error for e in res.episodes) else 0
+
+
 def cmd_validate_adaptor(a: argparse.Namespace) -> int:
     load_dotenv()
     from .games.adaptor import validate_adaptor
@@ -504,6 +541,13 @@ def main(argv: list[str] | None = None) -> int:
     ep.add_argument("--harness", required=True)
     ep.add_argument("--out", default="")
     ep.set_defaults(fn=cmd_eval)
+
+    tp = sub.add_parser("try", help="play a harness for one episode on a training seed of its archive")
+    tp.add_argument("harness")
+    tp.add_argument("--seed", type=int, default=None, help="a training seed of the archive (default: the first)")
+    tp.add_argument("--minutes", type=float, default=5.0, help="episode wall-clock cap (at most the evaluation's)")
+    tp.add_argument("--astra", action="store_true", help="System-2 on (default off: tries spend no Astra calls)")
+    tp.set_defaults(fn=cmd_try)
 
     vp = sub.add_parser("validate-adaptor", help="run the generic adaptor smoke test")
     vp.add_argument("path")
