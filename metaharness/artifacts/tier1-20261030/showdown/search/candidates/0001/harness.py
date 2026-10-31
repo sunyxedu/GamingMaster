@@ -132,6 +132,12 @@ def power_hint(o, p, q, move, tera=None):
         bp = 65
     eff = effectiveness(t, types(o, q))
     ability = ident(q.get('ability'))
+    for line in o.get('recent_events', []):
+        bits = line.split('|')
+        if len(bits) > 3 and re.sub(r'^(p[12])[a-z]:', r'\1:', bits[2]) == q.get('ident'):
+            for bit in bits[3:]:
+                if bit.startswith('[from] ability: '):
+                    ability = ident(bit.removeprefix('[from] ability: '))
     ownability = ident(p.get('ability'))
     if ownability not in ('moldbreaker', 'teravolt', 'turboblaze'):
         immunities = {'Ground': ('levitate', 'eartheater'), 'Water': ('waterabsorb', 'stormdrain', 'dryskin'),
@@ -197,7 +203,9 @@ def fallback(o, banned=()):
             mm = moves(o)
             if i < len(mm):
                 mid = mm[i].get('id', mm[i].get('move', ''))
-                score, _ = power_hint(o, p, q, mid, p.get('teraType') if 'terastallize' in a else None)
+                score, eff = power_hint(o, p, q, mid, p.get('teraType') if 'terastallize' in a else None)
+                if eff == 0:
+                    score = -250
                 if 'terastallize' in a:
                     score = score * .85 - 15
                 if ident(mid) in ('recover', 'roost', 'slackoff', 'softboiled', 'milkdrink', 'shoreup', 'synthesis', 'moonlight', 'morningsun'):
@@ -269,7 +277,9 @@ class Harness:
                 facts['ability'] = s[3]
             elif s[1] == '-terastallize':
                 facts['tera'] = s[3]
-            for field in s[4:]:
+            for field in s[3:]:
+                if field.startswith('[from] ability: ') and not any(x.startswith('[of]') for x in s[3:]):
+                    facts['ability'] = field.removeprefix('[from] ability: ')
                 if field.startswith('[from] item: ') and not any(x.startswith('[of]') for x in s[4:]):
                     facts['item'] = field.removeprefix('[from] item: ')
                     facts['item_state'] = 'observed_active'
@@ -429,6 +439,10 @@ class Harness:
                 break
         if not reason and not pl['follow']:
             lost = max(0, hp(me(old))-hp(me(o)))
+            # Recovery/drain can hide a lethal next hit in the net HP delta.
+            incoming = sum(x['damage_pct']/100 for x in self.damage
+                           if x['turn'] == old.get('turn') and x['target'] == me(o).get('ident'))
+            lost = max(lost, incoming)
             if hp(foe(old)) - hp(foe(o)) < .03:
                 reason = 'Authorized attack did not make sufficient net progress'
             elif hp(me(o)) <= lost*1.5 + .12:

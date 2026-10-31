@@ -150,6 +150,11 @@ def attack_proxy(o, action, target=None):
 def fallback(o, legal):
     moves = [a for a in legal if a.startswith('move ')]
     if moves:
+        # If every available attack is immune, escape rather than spamming a zero.
+        damaging = [a for a in moves if move_info(o,a)[1].get('category') in ('Physical','Special')]
+        switches = [a for a in legal if a.startswith('switch ')]
+        if damaging and max(attack_proxy(o,a) for a in damaging) <= 0 and switches:
+            return fallback(o,switches)
         p = active(o)
         for a in moves:
             req, d = move_info(o, a)
@@ -174,7 +179,7 @@ def context_signature(o):
     for side in ('p1', 'p2'):
         p = active(o, side)
         q = pub.get('pokemon', {}).get(p.get('ident'), {})
-        mons.append([p.get('ident'), species(p), p.get('ability'), p.get('item'),
+        mons.append([p.get('ident'), species(p), p.get('stats'), p.get('ability'), p.get('item'),
                      p.get('terastallized'), q.get('teraTypeRevealed'), q.get('moves'), q.get('boosts'),
                      q.get('volatiles'), q.get('status'), p.get('condition', '').split(' ')[1:]])
     return json.dumps([mons, pub.get('side_conditions'), pub.get('weather'), pub.get('field')], sort_keys=True)
@@ -291,6 +296,8 @@ def matrix_choice(text, legal):
                 pass
         if obj.get('action') in legal:
             return obj['action'], obj, {}, []
+        # A malformed matrix is not a ranked list. Do not execute its first row.
+        return None, {'parse_failure':'matrix has no complete finite legal payoff row'}, {}, []
     # Handles arbitrary first-option stand-ins and plain legal answers.
     for m in re.finditer(r'\b(?:move [1-4](?: terastallize)?|switch [1-6])\b', str(text).lower()):
         if m[0] in legal:
@@ -299,11 +306,11 @@ def matrix_choice(text, legal):
 
 
 SYSTEM = '''You are an expert Gen 9 Random Battle singles tactician. You control p1 against a strong MCTS opponent, with no team preview. Win first; preserve strategically useful HP second. Only supplied public observations and private p1 request are available. Unknown sets remain uncertain. Do not assume level 100 or OU spreads.
-Your task is an adversarial two-turn decision matrix, not a single intuitive move. Identify 2-3 plausible opponent responses (specific strongest attack, likely switch, setup/recovery as relevant), with probabilities summing to 1. Estimate the position after our action, their response, and our best next reply. Evaluate 3-4 genuinely distinct legal actions, including best attack, best defensive alternative (switch or Tera), and setup/recovery only when viable. On forced replacement, scenarios mean the opponent's next-turn plan; replacement itself does not grant a free attack. Revival Blessing can select a fainted ally.
-Scores are comparable values from -100 to 100: -100 immediate/forced loss, -70 lose an essential counter without compensation, -30 bad trade or lose tempo, 0 balanced, +30 favorable concrete progress, +70 decisive winning advantage, +100 forced win. Do not score mere type advantage as a win. Include speed/priority, entry hazards, residual/recoil, all boosts, abilities, accuracy, PP, switching and opponent defensive Tera. Compute approximate survival and KO before endorsing setup; if slower, your attack may never happen. Preserve an essential revealed-threat counter. Tera is a resource to spend when it changes the battle; do not save it until the final helpless Pokemon. Opponent switches are common; do not blindly chase them.
+Your task is an adversarial two-turn decision matrix, not a single intuitive move. Identify exactly TWO plausible opponent responses (specific strongest attack, likely switch, setup/recovery as relevant), with probabilities summing to 1. Estimate the position after our action, their response, and our best next reply. Evaluate THREE genuinely distinct legal actions (two if only two are available), including best attack, best defensive alternative (switch or Tera), and setup/recovery only when viable. On forced replacement, scenarios mean the opponent's next-turn plan; replacement itself does not grant a free attack. Revival Blessing can select a fainted ally.
+Scores are comparable values from -100 to 100: -100 immediate/forced loss, -70 lose an essential counter without compensation, -30 bad trade or lose tempo, 0 balanced, +30 favorable concrete progress, +70 decisive winning advantage, +100 forced win. Do not score mere type advantage as a win. Include speed/priority, entry hazards, residual/recoil, all boosts, abilities, accuracy, PP, switching and opponent defensive Tera. Check approximate survival and KO qualitatively before endorsing setup; do not reconstruct exact hidden stats or enumerate long battle trees; if slower, your attack may never happen. Preserve an essential revealed-threat counter. Tera is a resource to spend when it changes the battle; do not save it until the final helpless Pokemon. Opponent switches are common; do not blindly chase them.
 Code chooses 0.65*expected score + 0.35*worst score among responses with p>=0.08. Give honest counterfactual values; do not manipulate the matrix to force a favorite. Only options explicitly in legal_actions are executable. Match move and switch slots to CURRENT request, not previous turns.
-Return compact JSON only, normally <=350 output tokens:
-{"responses":[{"name":"specific foe response","p":0.6},{"name":"alternative","p":0.4}],"options":[{"action":"move 1","v":[20,-15],"why":"short survival/trade rationale","repeat":false}],"memory":"<=45 words: win condition, essential counter, what to test next"}.
+Return compact JSON only, <=220 visible output tokens. Every v MUST contain exactly TWO finite numbers, one per response in order. Each why is at most 8 words. Use rough ordinal judgments; do not write damage calculations:
+{"responses":[{"name":"specific foe response","p":0.6},{"name":"alternative","p":0.4}],"options":[{"action":"move 1","v":[20,-15],"why":"at most eight words","repeat":false}],"memory":"<=25 words: win condition, essential counter, next test"}.
 The repeat flag may be true ONLY for a straightforward damaging attack worth repeating once if both active Pokemon and all tactical conditions stay unchanged, it deals substantial damage, and we safely survive another observed hit. Never authorize repeat for setup, recovery, pivot, charge/recharge, or conditional attacks. Public summaries can miss unusual effects; protocol overrides them. Damage samples carry PRE-TURN context (same-turn setup may change it); each sample is one damage event, so sum multi-hit events. They are observations, not universal predictions (rolls, criticals, boosts, switches and items change damage). Move-order evidence is not necessarily speed order because priorities differ. A fainted target censors damage. Unknown opponent bench members are still threats.'''
 
 
@@ -312,7 +319,7 @@ class Harness:
         self.ctx = ctx
         self.ledger = Ledger()
         self.memo = ''
-        self.latencies = []
+        self.short_mode = False
         self.rejected = set()
 
     def prompt(self, o, progress):
@@ -321,6 +328,10 @@ class Harness:
             q = {k:p[k] for k in ('ident','details','condition','active','stats','moves','ability','item','teraType','terastallized','reviving') if k in p}
             q['slot'] = i
             q['types_now'] = types(o,p)
+            q['ordinary_attack_matchups_vs_current_foe'] = {
+                mid: {'type':o.get('move_dex',{}).get(mid,{}).get('type'),
+                      'multiplier':effectiveness(o.get('move_dex',{}).get(mid,{}).get('type'),types(o,active(o,'p2')))}
+                for mid in p.get('moves',[]) if o.get('move_dex',{}).get(mid,{}).get('category') in ('Physical','Special')}
             ps.append(q)
         moves = []
         for a in o.get('legal_actions', []):
@@ -340,7 +351,8 @@ class Harness:
                 'failure_evidence_REPLAN':list(self.ledger.failures),
                 'progress':{k:v for k,v in progress.items() if k!='score'},
                 'last_error':o.get('last_error'), 'budget':self.ctx.budget.remaining()}
-        return SYSTEM + '\nSTATE\n' + json.dumps(data, separators=(',',':'), ensure_ascii=False)
+        short = '\nA prior call timed out. Use only TWO candidate actions and TWO responses; omit why fields, <=150 visible tokens. Quick qualitative triage only.\n' if self.short_mode else ''
+        return SYSTEM + short + '\nSTATE\n' + json.dumps(data, separators=(',',':'), ensure_ascii=False)
 
     def repeat_ok(self, before, after, action, row, failures):
         if row.get('repeat') is not True or failures or 'terastallize' in action:
@@ -348,6 +360,9 @@ class Harness:
         if action not in after.get('legal_actions', []) or context_signature(before) != context_signature(after):
             return False
         req,d = move_info(after,action)
+        old_req,_ = move_info(before,action)
+        if req.get('id') != old_req.get('id'):
+            return False
         if d.get('category') not in ('Physical','Special') or not d.get('base_power'):
             return False
         mid=req.get('id','')
@@ -383,6 +398,7 @@ class Harness:
                 return
             progress=ctx.progress()
             row={}
+            expected_responses=[]
             origin='fallback'
             if len(legal)==1:
                 action=legal[0]
@@ -400,6 +416,10 @@ class Harness:
                     try:
                         res=ctx.think(self.prompt(o,progress), session_id=None, timeout_s=180.0)
                         action,obj,row,ranked=matrix_choice(res.text,legal)
+                        expected_responses=[str(r.get('name','')) for r in (obj.get('responses') or []) if isinstance(r,dict)]
+                        if obj.get('parse_failure'):
+                            self.ledger.failures.append({'model_schema_failure':obj['parse_failure']})
+                            self.short_mode=True
                         self.memo=str(obj.get('memory',self.memo))[:700]
                         ctx.memory['battle_plan']=self.memo
                         ctx.log('adversarial_matrix', turn=o.get('turn'), ranking=ranked,
@@ -408,6 +428,7 @@ class Harness:
                     except (BudgetExceeded,ModelUnavailable):
                         return
                     except (TimeoutError,RuntimeError,ValueError,TypeError) as e:
+                        self.short_mode=True
                         self.ledger.failures.append({'model_failure':str(e)[:180]})
                 if action is None:
                     action=fallback(o,legal)
@@ -429,6 +450,20 @@ class Harness:
                 o=unpack(ctx.observe())
                 continue
             failures=self.ledger.observe_effect(before,o,action,ctx.progress())
+            if expected_responses:
+                observed=[]
+                for event in lines(o.get('recent_events')):
+                    fields=event.split('|')
+                    if len(fields)>3 and fields[2].startswith('p2'):
+                        if fields[1]=='move':
+                            observed.append(fields[3])
+                        elif fields[1] in ('switch','drag'):
+                            observed.append('switch')
+                for actual in observed:
+                    if not any(key(actual) in key(label) for label in expected_responses):
+                        warning={'opponent_response_not_named':actual, 'expected_labels':expected_responses}
+                        self.ledger.failures.append(warning)
+                        failures.append(warning)
             if o.get('last_error'):
                 self.rejected.add(action)
                 errors+=1

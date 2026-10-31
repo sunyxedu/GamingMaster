@@ -1,0 +1,42 @@
+parent: 0001
+
+# Hypothesis: reserve deliberation for changed positions with an empirical exchange controller
+
+The leader delivers useful evidence but still pays for separate calls on already-observed exchanges. Its opt-in plans rarely execute: **14 checked-plan actions and 85 budget/parse fallback actions across 355 decisions** in its ten training traces. These are parent measurements, not this candidate's results. Fallback sometimes begins when an opposing sweeper or the final counter needs careful play.
+
+Concrete evidence from `candidates/0001/trace_seed181081.jsonl`: three separate Astra calls choose successive Drain Punches into Goodra-Hisui. The first does 38%, the second 33%, leaving 15%; Jirachi moves first both times. The second rationale even says “Drain Punch should finish Goodra” despite the previous 38% not covering its then 48% HP. The third finishing attack costs another call. Later, after Skarmory faints to boosted Zapdos-Galar, eight decisions use the cheap fallback. In seed 308081 there are 16 adjacent repeated moves, 39 calls and 17 fallback actions. These counts do not establish that every repetition is safe.
+
+There are genuine tactical errors too. In seed 232003, Astra switches Scyther into Mamoswine's repeatedly observed Icicle Crash and immediately loses it. In seed 282617 it uses Dragon Dance with Reshiram and dies to unrevealed High Horsepower. More late calls cannot alone fix coverage judgment. The new report explicitly shows revealed attack multipliers against each teammate, while the prompt asks about the strongest credible hidden coverage and distinguishes free replacement from voluntary switching.
+
+# Intervention
+
+Retain the leader's complete self-contained reports, public reveal/damage ledger, legality checks, fallback and fresh model sessions. Change the allocation of decisions:
+
+- After a model-selected damaging attack, compile an empirical exchange from direct hit sizes, action order, recovery and residual damage. Permit **at most two additional ordinary attacks**, remapping the move ID to the current request slot. No model opt-in is required. The initial opt-in version reproduced the parent's reluctance to authorize continuations; final code owns this narrowly defined decision.
+- Require a conservative one- or two-hit finish. Lower outgoing damage by the 0.85 roll factor plus two percentage points; raise incoming damage by division by 0.85 plus two points. Account for opposing recovery and our recoil/residuals, ignore our healing for safety, and require an additional HP cushion. Observed first action can reduce the number of incoming hits, only with a known valid opposing priority bracket. This is an empirical forecast, **not a guarantee** against hidden priority, coverage, speed ties or switching.
+- Abort on changed identities, status, boosts, items, abilities, field, unknown/failed/critical effects, unsafe HP, revealed bench immunity or unavailable moves. An intentionally selected ordinary Tera may supply the sample because it occurs before both attacks; other mechanical changes still cancel. No automatic setup, recovery, pivot, recharge or multi-turn sequence. Escalating Toxic, action-blocking status and dynamically growing attacks invalidate the stationary-damage assumption.
+- Verify every action with both protocol and `ctx.progress()`. A four-decision recovery-cycle check also detects repeated attacks that lose our HP without lasting opposing HP loss, even when every turn changes the score. A failed exchange goes back to Astra with its reason. Forced replacement can retain one model-specified, identity-bound attack after entry; this is canceled by unexpected effects. Voluntary switching is not scripted.
+- Add a defensive coverage table using **115 static public move descriptions verified in archived observations, with zero conflicting entries**. This is a move-rules catalog, not a species-to-set database. Only already-revealed opposing moves enter the table; current observation data overrides the catalog and unknown moves remain unknown. Multipliers include standard types and selected known abilities, not full damage mechanics. Variable/unsupported mechanics are labeled unknown.
+- Request <=110 words with action, tactical reason and strategic memory. Use 190–240-second call timeouts, always above the archive's 178-second maximum. Admission leaves a finishing window and adjusts to observed end-to-end call duration. Reserve the final call; catch timeout/transient failures and continue legally.
+
+No game implementation, hidden state, external inference, team databases or seed-dependent policies are used. The catalog contains only public move rules; no training matchups or decisions are stored in the controller.
+
+# Confirmation and refutation
+
+Support requires actual verified continuations, fewer fallback-only closing decisions, and more reasoning on newly revealed threats. Better weak-seed outcomes would support the full intervention. Refute if the gate rarely activates, if hidden coverage or switches punish its repetitions, or if more late reasoning does not improve decisions. A shorter response or the added coverage table may independently improve results; any win without executed exchanges does not confirm the exchange-controller hypothesis.
+
+# Local validation
+
+`checks.py` passes on 206 readable parent observations and 188 adjacent transitions. Truncated trace observations are skipped, not treated as complete states. Only **three** transitions qualify under the final gate: a Tera exchange and two consecutive Jirachi/Goodra exchanges. Thus call savings remain a substantial uncertainty; the test deliberately does not loosen guards merely to obtain a higher activation count.
+
+The real Jirachi sequence drives two checked actions followed by invalidation on the changed opponent. Negative controls cancel on critical hits, boosts, Tera changes, low HP, identity changes, Toxic, paralysis, growing opposing attacks, mismatched executed moves and rejection. Additional checks cover slot remapping, unavailable moves, dynamic public typing and recovery-cycle detection. Revealed Icicle Crash correctly shows 2x against Scyther and 0.5x against Thick Fat Piloswine. The actual run loop survives injected TimeoutError, RuntimeError, garbage output and a rejected action (nine model attempts/nine action attempts in the mocked run). Legal fallback/report construction are checked across the archive snapshots.
+
+Pre-flight passes with natural completion. Its short wall allowance exercises fallback only and warns that no System-2 answer was covered; the separate mock run covers that path. Pre-flight scores are not strength evidence.
+
+# Dev evaluation provenance
+
+Two dev invocations were started, one per permitted dev seed. Both loaded earlier revisions with the opt-in `hold` field. The first also used the initial stricter gate and lacked the coverage table. The second included the coverage table and observed-order gate. Final changes remove the ineffective opt-in, permit a sample following our intended Tera, refine variable move typing, add nonstationary-damage and recovery-cycle guards, and adjust call admission. These final changes are locally tested but are **not represented as fully model-evaluated**. Results from both invocations are recorded below; no full training evaluation was run.
+
+Dev seed **869431** completed in `dev/20261031-153920/`: **win +1.146930**, four survivors, 20 actions, 18 calls (17 answered), 1350 seconds, one caught 240-second timeout, no episode error. Two forced-entry follow-ups executed; no empirical repeats executed. Astra used Ground Tera Sunflora to KO Arceus-Steel with Earth Power and preserved Wugtrio to finish. The trace also includes a favorable Shadow Ball critical hit against Ogerpon and the final Gallade choosing Agility while losing to Liquidation. This win supports basic operation and timeout recovery, not the final empirical-gate hypothesis. Replaying the final gate on 16 readable transitions from this dev run found no qualifying exchange.
+
+Dev seed **895003** completed in `dev/20261031-154542/`: **win +1.027747**, 29 actions, 29 answered calls, no failures or episode error. The loaded revision predates the final recovery-cycle guard and did not execute a gate continuation; it spent calls on a long Bronzong/Malamar exchange and later won with Dipplin/Crawdaunt. This outcome confirms legal long-episode operation but cannot confirm call savings or the new cycle detector.

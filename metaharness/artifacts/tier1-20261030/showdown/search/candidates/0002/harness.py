@@ -332,7 +332,7 @@ class Harness:
         c = Combat(obs)
         return dump({'active':obs.get('active'), 'details':[p.get('details') for p in (c.own,c.foe)], 'effects':[{k:c.public(p).get(k) for k in ('status','boosts','volatiles','ability','teraTypeRevealed')} for p in (c.own,c.foe)], 'item':[p.get('item') for p in (c.own,c.foe)], 'field':c.pub.get('field'), 'weather':c.pub.get('weather'), 'sides':c.pub.get('side_conditions'), 'reveals':[{k:p.get(k) for k in ('ident','moves','ability','item','teraTypeRevealed')} for p in obs.get('opponent_revealed', [])]})
 
-    def feedback(self, before, action, after):
+    def feedback(self, before, action, after, source=None):
         cb, b = active_state(before)
         ca, a = active_state(after)
         ev = after.get('recent_events') or []
@@ -353,9 +353,11 @@ class Harness:
             failures.append('Plan invalidated: special mechanics require protocol review')
         if any('|-immune|' in e or '|-fail|' in e or '|cant|' in e or '|-miss|' in e for e in ev): failures.append('Action failed/immune/missed/blocked: see protocol')
         if self.plan and a['foe'] == b['foe'] and a['foehp'] >= b['foehp']: failures.append('Attack plan made no net HP progress')
+        if source == 'fallback':
+            failures.extend(self.failure[:2])
         self.failure = failures
         self.last_progress = prog
-        self.history.append({'turn':before.get('turn'), 'action':action, 'own':b['own'], 'foe':b['foe'], 'hp_before':[round(b['selfhp'],3),round(b['foehp'],3)], 'hp_after':[round(a['selfhp'],3),round(a['foehp'],3)], 'failures':failures})
+        self.history.append({'turn':before.get('turn'), 'action':action, 'source':source, 'own':b['own'], 'foe':b['foe'], 'hp_before':[round(b['selfhp'],3),round(b['foehp'],3)], 'hp_after':[round(a['selfhp'],3),round(a['foehp'],3)], 'failures':failures})
         self.history = self.history[-8:]
         # Keep direct, observed damage packets and move ordering with context. Not inferred speed facts.
         conds = {p.get('ident'):fraction(p) for p in cb.team + list(cb.records.values())}
@@ -460,8 +462,8 @@ class Harness:
           'max_observed_end_to_end_call_seconds':round(self.max_call_elapsed,1),
         }
         return '''You are an expert Gen 9 Random Battle singles player facing an MCTS opponent. Win the whole six-Pokemon battle. Use only supplied public/private information. This is a NEW stateless consultation; the strategy note below is your memory.
-Choose a legal action after a two-turn survival audit: (1) what is the foe's strongest plausible attack, priority, setup or switch? (2) who moves first, can we survive and actually execute our move, including entry hazards/recoil? (3) which teammate must remain alive to stop their most dangerous threat? If attacking loses a valuable mon before it moves, prefer a sound switch or defensive Tera; a deliberate sacrifice needs a concrete revenge-kill plan. Don't take 40% damage for 10% resisted chip. Don't use setup without a credible survival/payoff line. Consider known opponent switch-ins, not only the active target. Tera is usable once; spending it to save a decisive check or obtain a KO is better than dying with it unused. Avoid switching loops and make progress.
-Numbers in tactical_cards are REFERENCE estimates, not exact damage bounds: hidden foe uses neutral 31 IV/85 EV reference and no unobserved item; abilities/variable-power/special mechanics are incomplete. 90BP_STAB probes are hypothetical attacks, NOT claimed moves or a maximum threat: scale to actual likely moves (e.g. 160BP is much stronger), include coverage, priority, Scarf, boosts. Prefer observed damage and protocol over estimates. Own request.stats are unboosted; cards apply public boosts. Opponent HP is rounded. Recent protocol is authoritative for Illusion, Transform, boosts and effects. Look at priority before speed. Never infer hidden coverage is absent. Named Pokémon in memory are stable; team slots reorder. Forced replacements/pivots need a switch now, not an attack.
+Choose a legal action after a two-turn survival audit: (1) what is the foe's strongest plausible attack, priority, setup or switch? (2) who moves first, can we survive and actually execute our move, including entry hazards/recoil? (3) which teammate must remain alive to stop their most dangerous threat? A slower switch-in usually must survive TWO attacks, the entry hit and next turn's hit, before dealing damage; merely surviving entry does not make it a counter. If attacking loses a valuable mon before it moves, prefer a sound switch or defensive Tera; a deliberate sacrifice needs a concrete revenge-kill plan. Don't take 40% damage for 10% resisted chip. Don't use setup without a credible survival/payoff line. Consider known opponent switch-ins, not only the active target. Tera is usable once; spending it to save a decisive check or obtain a KO is better than dying with it unused. Avoid switching loops and make progress.
+Numbers in tactical_cards are REFERENCE estimates, not exact damage bounds: hidden foe uses neutral 31 IV/85 EV reference and no unobserved item; abilities/variable-power/special mechanics are incomplete. A nonzero damage estimate does NOT prove the move connects: check possible ability immunities, especially Ground against possible Levitate. 90BP_STAB probes are hypothetical attacks, NOT claimed moves or a maximum threat: scale to actual likely moves (e.g. 160BP is much stronger), include coverage, priority, Scarf, boosts. Prefer observed damage and protocol over estimates. Own request.stats are unboosted; cards apply public boosts. Opponent HP is rounded. Recent protocol is authoritative for Illusion, Transform, boosts and effects. Look at priority before speed. Never infer hidden coverage is absent. Named Pokémon in memory are stable; team slots reorder. Forced replacements/pivots need a switch now, not an attack.
 Return ONE JSON object under 160 words:
 {"action":"one exact legal string","audit":"brief survival + opponent response + why this line wins","memory":"updated strategy, preserved check and threat assumptions; distinguish observations from guesses","repeat":0,"min_self_hp":0.6,"max_foe_hp":1.0}
 repeat can be 1 or 2 ONLY to authorize that many extra uses of the SAME plain damaging attack if both actives, reveals, status/boosts/field are unchanged and it keeps reducing foe HP. Never authorize repeat for setup, recovery, switching, charge, lock-in, pivot or Tera. Code will also check HP and invalidate on surprises. Use repeat=0 at tactical turning points. min_self_hp/max_foe_hp are fractions [0,1] for extra attacks. No prose outside JSON.
@@ -476,7 +478,7 @@ STATE:
             try:
                 obj,_=decoder.raw_decode(text[match.start():])
                 if isinstance(obj,dict) and obj.get('action') in legal: return obj
-            except (ValueError,TypeError): pass
+            except (ValueError,TypeError,RecursionError,OverflowError): pass
         # Accept an exact legal response or a standalone action line, never stale arbitrary indices.
         text=text.strip().strip('`').strip()
         if text in legal: return {'action':text}
@@ -521,7 +523,7 @@ STATE:
                             self.failure=[]
                             c,s=active_state(obs)
                             try: repeats=max(0,min(2,int(reply.get('repeat',0))))
-                            except (TypeError,ValueError): repeats=0
+                            except (TypeError,ValueError,OverflowError): repeats=0
                             n=int(action.split()[1])-1 if action.startswith('move ') else -1
                             ms=(c.req.get('active') or [{}])[0].get('moves',[])
                             md=c.moves.get(ms[n].get('id'),{}) if 0<=n<len(ms) else {}
@@ -530,7 +532,7 @@ STATE:
                                 try:
                                     minh=max(.3,min(1,float(reply.get('min_self_hp',.6))))
                                     maxh=max(0,min(1,float(reply.get('max_foe_hp',1))))
-                                except (TypeError,ValueError): minh,maxh=.6,1
+                                except (TypeError,ValueError,OverflowError): minh,maxh=.6,1
                                 self.plan={'action':action,'remaining':repeats,'minhp':minh,'maxfoehp':maxh,'fingerprint':self.fingerprint(obs),'lastfoehp':s['foehp'],'lastloss':0}
                         else:
                             self.failure=['Astra response malformed/unavailable action; choose bounded fallback and replan next decision']
@@ -563,7 +565,7 @@ STATE:
             if self.plan:
                 cb,b=active_state(before); ca,a=active_state(obs)
                 self.plan['lastloss']=max(0,b['selfhp']-a['selfhp'])
-            self.feedback(before,action,obs)
+            self.feedback(before,action,obs,source)
             ctx.memory['combat_strategy']=self.notes
 
 
