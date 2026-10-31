@@ -232,6 +232,7 @@ class ClaudeCLI:
         system_file: Optional[Path] = None
         deadline = time.monotonic() + timeout_s
         attempt = 0
+        toolless_retry = False
         working = False          # an agent's time starts with its slot: queueing is not working time
         try:
             run_dir = (Path(cwd).resolve() if cwd else None) if agentic else self._player_cwd()
@@ -251,6 +252,14 @@ class ClaudeCLI:
                 payload = _result_payload(proc.stdout or "", stream)
                 failed = proc.returncode != 0 or (payload is not None and payload.get("is_error"))
                 err = _error_text(payload, proc) if failed else ""
+                if not failed and agentic and new_session_id and not toolless_retry and payload is not None \
+                        and payload.get("num_turns") == 1:
+                    # a new agent session that ended without one tool call: its tools did not reach the model
+                    # (seen behind the router); resuming would keep its "I cannot access files" belief
+                    toolless_retry = True
+                    self._trace(trace, t0, request, None, "the agent ended without using any tool; retrying in a new session")
+                    new_session_id = sid = str(uuid.uuid4())
+                    continue
                 if not failed or attempt >= len(_RETRY_WAITS) or not _RETRY_RE.search(err) \
                         or _UNAVAILABLE_RE.search(_TRANSIENT_LINE_RE.sub("", err)):
                     break

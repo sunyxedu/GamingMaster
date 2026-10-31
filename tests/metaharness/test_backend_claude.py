@@ -81,6 +81,11 @@ elif mode == "error_once":
         print(json.dumps({**result, "is_error": True, "result": text}))
         sys.exit(1)
     print(json.dumps({**result, "result": "up"}))
+elif mode == "toolless_once":
+    marker = os.environ["FAKE_CLAUDE_LOG"] + ".toolless"
+    first = not os.path.exists(marker)
+    open(marker, "w").close()
+    print(json.dumps({**result, "num_turns": 1 if first else 4, "result": "no access" if first else "done"}))
 elif mode == "rate_limit_once":
     marker = os.environ["FAKE_CLAUDE_LOG"] + ".429"
     if not os.path.exists(marker):
@@ -275,6 +280,20 @@ def test_rate_limits_are_retried_and_agents_resume_their_session(fake, tmp_path)
     with pytest.raises(RuntimeError, match="after 5 retries") as ei:   # never unavailable
         model.run("hi")
     assert not isinstance(ei.value, ModelUnavailable)
+
+
+def test_a_new_agent_session_without_tool_use_is_retried_once_in_a_new_session(fake, tmp_path):
+    fake.mode("toolless_once")
+    model, tr = ClaudeCLI(claude_bin=fake.bin), TraceSink()
+    assert model.run("design", cwd=tmp_path, agentic=True, trace=tr).text == "done"
+    c1, c2 = fake.calls()
+    assert _flag(c1["argv"], "--session-id") != _flag(c2["argv"], "--session-id") and c2["stdin"] == "design"
+    assert "without using any tool" in tr.records[0]["error"] and tr.records[1]["ok"]
+    marker = tmp_path / "claude-calls.jsonl.toolless"
+    for kw in ({"agentic": True, "session_id": "abc"}, {}):            # a resumed session, a player: as answered
+        marker.unlink()
+        assert model.run("go", cwd=tmp_path, **kw).text == "no access"
+    assert len(fake.calls()) == 4
 
 
 def test_a_temporary_line_does_not_hide_an_exhausted_account(fake):
