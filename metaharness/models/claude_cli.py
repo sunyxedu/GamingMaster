@@ -262,6 +262,7 @@ class ClaudeCLI:
         attempt = 0
         queued_at = time.time_ns()          # a retry keeps its place in the slot queue
         toolless_retry = False
+        nudges = 0
         working = False          # an agent's time starts with its slot: queueing is not working time
         try:
             run_dir = (Path(cwd).resolve() if cwd else None) if agentic else self._player_cwd()
@@ -288,6 +289,12 @@ class ClaudeCLI:
                     toolless_retry = True
                     self._trace(trace, t0, request, None, "the agent ended without using any tool; retrying in a new session")
                     new_session_id = sid = str(uuid.uuid4())
+                    continue
+                if not failed and agentic and nudges < 2 and _ended_after_api_error(sid):
+                    nudges += 1
+                    self._trace(trace, t0, request, None, "the agent's last answer came right after an API error; "
+                                f"resuming its session (nudge {nudges})")
+                    session_id, new_session_id, stdin = sid, None, _AFTER_ERROR_NUDGE
                     continue
                 if not failed or attempt >= len(_RETRY_WAITS) or not _RETRY_RE.search(err) \
                         or _UNAVAILABLE_RE.search(_TRANSIENT_LINE_RE.sub("", err)):
@@ -356,6 +363,42 @@ class ClaudeCLI:
                 "system2", self.name, t0, time.time() - t0, request,
                 {"text": res.text, "session_id": res.session_id} if res else None,
                 ok=err is None, error=err, usage=res.usage if res else {}))
+
+
+_AFTER_ERROR_NUDGE = ("Your previous answer came right after a transient API error and may be wrong about your "
+                      "environment: your tools (shell, file reads and writes) work and your working directory is "
+                      "accessible. Check with a command, then continue the task where you were and finish it.")
+
+
+def _ended_after_api_error(sid: Optional[str]) -> bool:
+    """The session's last answer came right after an API error, with no tool call or result in between.
+    Behind the router such an answer has twice claimed the session had no files or shell (Malody's adapt
+    agent: "the project directory is not mounted") right after its commands had worked."""
+    if not sid:
+        return False
+    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    path = next(projects.glob(f"*/{sid}.jsonl"), None)
+    after_error = ended = False
+    try:
+        for line in open(path, errors="replace") if path else ():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            content = (r.get("message") or {}).get("content") if isinstance(r, dict) else None
+            blocks = content if isinstance(content, list) else []
+            if r.get("type") == "system" and r.get("subtype") == "api_error":
+                after_error = True
+            elif r.get("type") == "user":
+                after_error = ended = False
+            elif r.get("type") == "assistant":
+                if any(isinstance(b, dict) and b.get("type") == "tool_use" for b in blocks):
+                    after_error = ended = False
+                else:
+                    ended = after_error
+    except OSError:
+        return False
+    return ended
 
 
 def _session_exists(run_dir: Optional[Path], sid: Optional[str]) -> bool:

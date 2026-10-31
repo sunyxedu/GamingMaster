@@ -86,6 +86,20 @@ elif mode == "toolless_once":
     first = not os.path.exists(marker)
     open(marker, "w").close()
     print(json.dumps({**result, "num_turns": 1 if first else 4, "result": "no access" if first else "done"}))
+elif mode == "error_then_answer":
+    # the CLI's transcript: the first answer follows an API error; the resumed turn uses a tool
+    store = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", "p")
+    os.makedirs(store, exist_ok=True)
+    with open(os.path.join(store, sid + ".jsonl"), "a") as fh:
+        rows = ([{"type": "user", "message": {"content": stdin}}, {"type": "system", "subtype": "api_error"},
+                 {"type": "assistant", "message": {"content": [{"type": "text", "text": "no files here"}]}}]
+                if "--resume" not in argv else
+                [{"type": "user", "message": {"content": stdin}},
+                 {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}},
+                 {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}},
+                 {"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}}])
+        fh.write("".join(json.dumps(r) + "\\n" for r in rows))
+    print(json.dumps({**result, "num_turns": 3, "result": "done" if "--resume" in argv else "no files here"}))
 elif mode == "rate_limit_once":
     marker = os.environ["FAKE_CLAUDE_LOG"] + ".429"
     if not os.path.exists(marker):
@@ -294,6 +308,17 @@ def test_a_new_agent_session_without_tool_use_is_retried_once_in_a_new_session(f
         marker.unlink()
         assert model.run("go", cwd=tmp_path, **kw).text == "no access"
     assert len(fake.calls()) == 4
+
+
+def test_an_answer_right_after_an_api_error_is_followed_by_a_resume(fake, tmp_path):
+    fake.mode("error_then_answer")
+    model, tr = ClaudeCLI(claude_bin=fake.bin), TraceSink()
+    assert model.run("build it", cwd=tmp_path, agentic=True, trace=tr).text == "done"
+    c1, c2 = fake.calls()
+    assert _flag(c2["argv"], "--resume") == _flag(c1["argv"], "--session-id")
+    assert c2["stdin"].startswith("Your previous answer came right after a transient API error")
+    assert "right after an API error" in tr.records[0]["error"] and tr.records[1]["ok"]
+    assert len(fake.calls()) == 2                                   # the resumed turn used a tool: done
 
 
 def test_a_temporary_line_does_not_hide_an_exhausted_account(fake):
