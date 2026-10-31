@@ -5,7 +5,10 @@ Astra (agentic, full access so it can install software / start servers) turns
 orchestrator runs the generic smoke test, feeds failures back, and stops when
 the adaptor passes or the user has to supply something (credentials, a running
 game client) — that is written to ``adaptor/NEEDS.md``. A rerun validates an
-existing adaptor first and only calls the agent when it fails.
+existing adaptor first and only calls the agent when it fails. With ``review``
+(the pipeline, before its first search) a validated adaptor without ``review.md``
+gets one more session that checks the observation against what a player
+perceives; review changes that break validation are undone.
 """
 from __future__ import annotations
 
@@ -63,6 +66,10 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
   Actions with parameters use a compact string grammar documented in `describe()` (e.g. `"move 3 4"`).
 * Observations are strict JSON (no NaN / inf, sets or objects) and compact (< 200 kB): structured state
   where the interface gives it; otherwise text; screenshots as file paths under `runtime/` in this directory.
+* The observation carries, decoded into named fields, what a strong player perceives and acts on (what is
+  where, its kind and motion, timers, resources). When the interface gives only raw memory or pixels, decode
+  them yourself or with an extraction tool from `interfaces.md`, and check the decoding against the game's
+  rendering; raw data may stay beside the decoded fields, never instead of them.
 * Everything the adaptor needs lives in this directory (downloads, builds, caches under `runtime/`), never
   in /tmp or elsewhere: the evaluator loads only this directory. Prefer the interface the study chose and
   its maintained packages over building your own bridge to the game.
@@ -80,6 +87,67 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
 {f"* Time: about {timeout_s / 60:.0f} minutes. Get a minimal adaptor that validates first, then improve its fidelity: "
  "what is on disk is validated when the time is up." if timeout_s else ""}
 {('## Validation feedback from the orchestrator' + chr(10) + feedback) if feedback else ''}"""
+
+
+REVIEW_PROMPT = """## Observation review
+The adaptor in this directory validates. Before any harness is written for it, check that its observation shows
+what a player needs:
+1. From the study (`brief.md`, `strategies.md`), list what a strong player perceives and acts on at each moment:
+   what is where, what kind it is, how it moves, timers, resources.
+2. For each item, check that the observation carries it decoded into named fields (raw memory or pixels alone do
+   not count) and that the values are right: compare them with the game's own rendering or state over several
+   seeds and hundreds of steps.
+3. Fill every gap (decode the raw memory or frames yourself, or use an extraction tool from `interfaces.md`) and
+   update `describe()` and `ADAPTOR.md`. Keep the observation compact; raw data may stay beside decoded fields.
+4. Re-run the validation command until it prints PASS.
+Write `review.md`: each item, the field that carries it, how you checked it, and what is still missing."""
+
+
+def _review(model: System2Model, out: Path, session: Optional[str], prompt: str, timeout_s: float, validate,
+            log) -> adaptor_mod.ValidationReport:
+    """One more session on a validated adaptor (resumed when it was just built). Changes that fail validation
+    get one repair round; if it still fails, the adaptor's top-level files are restored."""
+    saved = {f.name: f.read_bytes() for f in out.iterdir() if f.is_file()}
+    trace = TraceSink(out / "review_trace.jsonl")
+    log("adapt: reviewing the observation against what a player perceives")
+
+    def call(text: str) -> None:
+        nonlocal session
+        try:
+            res = model.run(text, cwd=out, system=None if session else ADAPT_SYSTEM, agentic=True, timeout_s=timeout_s,
+                            trace=trace, session_id=session, web_search=True, full_access=True)
+            session = res.session_id or session
+        except ModelTimeout as e:          # what it wrote is validated
+            session = e.session_id or session
+        except ModelUnavailable:
+            raise
+        except Exception as e:  # noqa: BLE001 — validate what is there
+            log(f"adapt: the review call failed: {type(e).__name__}: {str(e)[:160]}")
+
+    try:
+        call(REVIEW_PROMPT if session else f"{prompt}\n\n{REVIEW_PROMPT}")
+        rep = validate()
+        if not rep.ok and session:
+            call(f"{rep.to_markdown()}\n\nThe adaptor no longer validates: fix your review changes until it prints PASS.")
+            rep = validate()
+    finally:
+        trace.close()
+    review = out / "review.md"
+    if rep.ok:
+        if not review.exists():
+            review.write_text("(the review session ended without writing review.md)\n")
+        log("adapt: observation review done; the adaptor validates")
+        return rep
+    notes = review.read_text(errors="replace") if review.exists() else ""
+    for f in out.iterdir():
+        if f.is_file() and f.name not in saved and f.name != trace.path.name:
+            f.unlink()
+    for name, data in saved.items():
+        (out / name).write_bytes(data)
+    review.write_text("The review's changes failed validation and were undone (top-level files restored).\n\n"
+                      + rep.to_markdown() + ("\n\n## The reviewer's notes\n" + notes if notes else ""))
+    log("adapt: the observation review broke validation; its changes were undone")
+    return validate()
 
 
 def env_status(out_dir: Path) -> tuple[list[str], list[str]]:
@@ -107,7 +175,7 @@ def _fingerprint(p: Path) -> Optional[tuple[int, bytes]]:
 
 def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, Any], *, notes: str = "",
               timeout_s: float = 3600.0, max_attempts: int = 4, kwargs: Optional[dict[str, Any]] = None,
-              log=print) -> adaptor_mod.ValidationReport:
+              review: bool = False, log=print) -> adaptor_mod.ValidationReport:
     """Build / repair ``run_dir/adaptor`` until it validates (``kwargs``: the user's game kwargs).
 
     An existing ``game.py`` is validated first; the agent is only called with the failing report.
@@ -152,12 +220,18 @@ def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, An
             f"\n\nvalidation error:\n{rep.error}" if rep.error else "")
         return True
 
+    def reviewed(rep: adaptor_mod.ValidationReport, session: Optional[str]) -> adaptor_mod.ValidationReport:
+        if not (review and rep.ok) or (out / "review.md").exists():
+            return rep
+        prompt = adapt_prompt(game, study, study_dir, out, notes=notes, kwargs=kwargs, timeout_s=timeout_s)
+        return _review(model, out, session, prompt, timeout_s, validate, log)
+
     feedback = ""
     if (out / "game.py").exists():                 # resume: the adaptor may pass as it is (env vars now set...)
         rep = validate()
         if rep.ok:
             log("adapt: reusing validated adaptor")
-            return rep
+            return reviewed(rep, None)
         if wait_for_user(rep):
             return rep
         feedback = rep.to_markdown()
@@ -202,4 +276,4 @@ def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, An
             log(f"adapt: validation failed (attempt {attempt + 1}/{max_attempts}); feeding back")
     finally:
         trace.close()
-    return rep
+    return reviewed(rep, session)

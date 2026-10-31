@@ -209,6 +209,38 @@ def test_adapt_unset_variable_does_not_block_a_passing_adaptor(tmp_path, monkeyp
     assert any("COUNTGAME_REGION" in m and "validates without them" in m for m in logs)
 
 
+def test_adapt_review_resumes_the_session_that_built_the_adaptor(tmp_path):
+    write_study(tmp_path)
+    agent = ScriptedSystem2(files=[adaptor_files(TICK_GAME),
+                                   {"review.md": "position: field x (checked)", "ADAPTOR.md": "count adaptor, reviewed"}])
+    rep = run_adapt(agent, tmp_path, "countgame", STUDY, review=True, log=lambda *_: None)
+    out = tmp_path / "adaptor"
+    assert rep.ok and len(agent.calls) == 2
+    assert agent.calls[1].startswith("## Observation review")            # same session: no second task text
+    assert (out / "review.md").read_text() == "position: field x (checked)"
+    assert (out / "ADAPTOR.md").read_text() == "count adaptor, reviewed"
+    # reviewed once: a rerun reuses the adaptor without calling the agent
+    agent = ScriptedSystem2(replies=["never"])
+    assert run_adapt(agent, tmp_path, "countgame", STUDY, review=True, log=lambda *_: None).ok and agent.calls == []
+
+
+def test_adapt_review_that_breaks_validation_is_undone(tmp_path):
+    write_study(tmp_path)
+    out = tmp_path / "adaptor"
+    write_adaptor(out, TICK_GAME)
+    before = (out / "game.py").read_text()
+    agent = ScriptedSystem2(files=[{"game.py": BAD_ADAPTOR, "extra.py": "x = 1\n", "review.md": "rewrote it"},
+                                   {"game.py": BAD_ADAPTOR}])
+    rep = run_adapt(agent, tmp_path, "countgame", STUDY, review=True, log=lambda *_: None)
+    assert rep.ok and len(agent.calls) == 2
+    assert "Build the adaptor" in agent.calls[0] and "## Observation review" in agent.calls[0]   # fresh session
+    assert "no longer validates" in agent.calls[1] and "FAIL" in agent.calls[1]
+    assert (out / "game.py").read_text() == before and not (out / "extra.py").exists()
+    text = (out / "review.md").read_text()
+    assert text.startswith("The review's changes failed validation and were undone") and "rewrote it" in text
+    assert (out / "review_trace.jsonl").exists()
+
+
 # ----------------------------------------------------------------------------- prior documents
 
 def _doc(tag: str, n: int) -> str:

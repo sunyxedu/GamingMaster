@@ -355,7 +355,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     if a.stop_after == "study":
         return 0
     rep = run_adapt(agent, run_dir, a.game, study, notes=a.notes, kwargs=game_kwargs, timeout_s=a.phase_timeout,
-                    log=log)
+                    review=not (run_dir / "search").exists(), log=log)   # never under a running search
     if not rep.ok:
         log("run: adaptor not ready — " + (rep.error or "see adaptor/validation.md")[:500])
         needs = run_dir / "adaptor" / "NEEDS.md"
