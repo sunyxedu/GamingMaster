@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from metaharness.baselines._scripted import scripted_proposer
+import metaharness.cli as cli
 from metaharness.cli import main
 from metaharness.core.archive import Archive
 from metaharness.core.contract import Budget
@@ -144,8 +145,15 @@ def test_preflight_and_dev_eval_commands_read_the_archive_manifest(tmp_runs, cap
     assert len(dev) == 1 and (dev[0] / "digest.md").exists() and (dev[0] / "trace_seed9.jsonl").exists()
     with pytest.raises(SystemExit, match="not dev seeds"):
         main(["dev-eval", harness, "--archive", str(root), "--seeds", "0"])
+    seen = []
+    real = cli.evaluate_harness
+    with pytest.MonkeyPatch.context() as mp:                 # --minutes caps each episode (real-time games)
+        mp.setattr(cli, "evaluate_harness", lambda *x, **k: seen.append(k) or real(*x, **k))
+        assert main(["dev-eval", harness, "--archive", str(root), "--minutes", "0.5"]) == 0
+    assert seen[0]["budget_per_episode"].max_wall_s == 30.0 and seen[0]["harness_timeout_s"] <= 30.0
+    assert len(list((root / "candidates" / "0001" / "dev").iterdir())) == 2      # both dev evaluations kept
     prompt = (root / "candidates" / "0001" / "prompt.md").read_text()
-    assert "metaharness preflight" in prompt and "dev-eval" in prompt
+    assert "metaharness preflight" in prompt and "dev-eval" in prompt and "metaharness try" not in prompt
 
 
 def test_dev_seeds_must_not_overlap_the_scored_seeds(tmp_path):
