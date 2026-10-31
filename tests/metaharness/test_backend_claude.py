@@ -466,7 +466,8 @@ def test_unusable_images_are_traced_errors(fake, tmp_path, name, data, match):
 
 @pytest.mark.parametrize("message", ["API Error: Responses stream error: Upstream request failed (upstream_error)",
                                      'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}',
-                                     "API Error: 500 Internal server error"])
+                                     "API Error: 500 Internal server error",
+                                     "API Error: The response stalled before a response was produced. Try again."])
 def test_transient_api_failures_are_retried(fake, message):
     fake.mode("error_once", message)
     assert ClaudeCLI(claude_bin=fake.bin).run("hi").text == "up" and len(fake.calls()) == 2

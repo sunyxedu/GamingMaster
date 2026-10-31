@@ -83,7 +83,7 @@ _SLOT_DEFAULTS = {"agent": 4, "player": 8}
 # failures (_UNAVAILABLE_RE) never are.
 _RETRY_RE = re.compile(r"\b429\b|rate.?limit|too many requests|overloaded|\b5\d\d\b|upstream|stream error|"
                        r"internal server error|service unavailable|bad gateway|gateway time-?out|temporar|"
-                       r"econnreset|socket hang up|connection (?:reset|refused|error|closed)|request timed out", re.I)
+                       r"econnreset|socket hang up|connection (?:reset|refused|error|closed)|request timed out|response stalled", re.I)
 _RETRY_WAITS = (15.0, 30.0, 60.0, 120.0, 240.0)
 _sleep = time.sleep          # module level, so tests can skip the waits
 # a shell command may run up to 15 min by default (a harness try, a build), 30 min when the agent asks
