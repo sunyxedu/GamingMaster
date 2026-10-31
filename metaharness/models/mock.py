@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Mapping, Optional
 
-from .base import ModelCall, ModelTimeout, System1Answer, System2Result, TraceSink
+from .base import ModelCall, ModelCallCancelled, ModelTimeout, System1Answer, System2Result, TraceSink
 
 
 class ScriptedSystem2:
@@ -101,22 +101,36 @@ class HeuristicSystem1:
 
 
 class SilentModel:
-    """Every call fails as a backend error would (RuntimeError): the no-models ablation. A harness still
-    sees ``ctx.system1`` / ``ctx.system2`` and plays on its own fallbacks."""
+    """Every call fails as a backend error would (RuntimeError) after ``latency_s``, the real model's usual
+    latency, so a harness that calls again at once does not spend its budget faster than with the real one
+    (a shorter timeout_s ends the call with TimeoutError). The no-models ablation: a harness still sees
+    ``ctx.system1`` / ``ctx.system2`` and plays on its own fallbacks; an episode that ends cancels the wait."""
     name = "silent"
     model = None
 
-    def _fail(self, kind: str, trace: Optional[TraceSink]) -> None:
-        err = "no answer: this evaluation runs without runtime models"
+    def __init__(self, latency_s: float = 0.0) -> None:
+        self.latency_s = latency_s
+
+    def _fail(self, kind: str, timeout_s: float, trace: Optional[TraceSink]) -> None:
+        from ._cli import _CANCEL, POLL_S
+        wait, check = min(self.latency_s, timeout_s), _CANCEL.get()
+        end = time.monotonic() + wait
+        while (left := end - time.monotonic()) > 0:
+            reason = check() if check else None
+            if reason:
+                raise ModelCallCancelled(reason)
+            time.sleep(min(POLL_S, left))
+        timed_out = 0 < timeout_s <= self.latency_s
+        err = f"timeout: no answer within {timeout_s:g}s" if timed_out else "no answer: this evaluation runs without runtime models"
         if trace:
-            trace.log_call(ModelCall(kind, "silent", time.time(), 0.0, {}, None, ok=False, error=err))
-        raise RuntimeError(err)
+            trace.log_call(ModelCall(kind, "silent", time.time(), wait, {}, None, ok=False, error=err))
+        raise (TimeoutError if timed_out else RuntimeError)(err)
 
     def decide(self, state: Any, questions: Mapping[str, Any], *, timeout_s: float = 5.0,
                trace: Optional[TraceSink] = None) -> dict[str, System1Answer]:
-        self._fail("system1", trace)
+        self._fail("system1", timeout_s, trace)
         return {}
 
-    def run(self, prompt: str, *, trace: Optional[TraceSink] = None, **kw: Any) -> System2Result:
-        self._fail("system2", trace)
+    def run(self, prompt: str, *, timeout_s: float = 600.0, trace: Optional[TraceSink] = None, **kw: Any) -> System2Result:
+        self._fail("system2", timeout_s, trace)
         return System2Result(text="")

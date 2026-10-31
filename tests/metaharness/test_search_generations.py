@@ -417,3 +417,23 @@ def test_the_ablation_keeps_the_models_visible_and_failing(tmp_path):
     ep = res.episodes[0]
     assert ep.steps > 0 and ep.ended_by != "harness_return"
     assert ep.system1_calls > 0 and ep.failed_s1 == ep.system1_calls
+
+
+def test_silent_calls_fail_after_the_models_latency_and_end_with_the_episode():
+    import time as _time
+    from metaharness.cli import _system1, _system2
+    from metaharness.models._cli import cancel_scope
+    from metaharness.models.base import ModelCallCancelled
+    from metaharness.models.mock import SilentModel
+    assert _system1("silent:0.5").latency_s == 0.5 and _system2("silent", None).latency_s == 0.0
+    m = SilentModel(0.3)
+    t0 = _time.monotonic()
+    with pytest.raises(RuntimeError, match="without runtime models"):
+        m.decide({}, {}, timeout_s=5.0)
+    assert 0.25 < _time.monotonic() - t0 < 2.0                         # took the model's usual latency
+    with pytest.raises(TimeoutError):
+        m.decide({}, {}, timeout_s=0.1)                                 # a shorter timeout ends it first
+    t0 = _time.monotonic()
+    with cancel_scope(lambda: "episode closed"), pytest.raises(ModelCallCancelled):
+        SilentModel(60.0).run("plan", timeout_s=120.0)                  # the episode's end cancels the wait
+    assert _time.monotonic() - t0 < 2.0

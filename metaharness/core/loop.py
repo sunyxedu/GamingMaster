@@ -293,7 +293,8 @@ class MetaHarnessLoop:
         b = self.cfg.budget
         models = dict(self.cfg.eval_spec or {})
         if no_models:      # every call fails, as in an outage, with the same budget (tier 1 has no System-1)
-            models.update(system1="silent" if self.system1 is not None else "none", system2="silent")
+            s1, s2 = self._silent_latency()
+            models.update(system1=f"silent:{s1:g}" if self.system1 is not None else "none", system2=f"silent:{s2:g}")
         return evalworker.EvalJob(
             harness_path=str(cand.harness_path), out_dir=str(out), game=str(game.name), seeds=list(seeds),
             adaptor_dir=game.adaptor_dir, game_kwargs=_jsonish(game.kwargs), models=models,
@@ -331,14 +332,25 @@ class MetaHarnessLoop:
             evals.append(merged)
         return evals
 
+    def _silent_latency(self) -> tuple[float, float]:
+        """(System-1, System-2) latency of the ablation's failing calls: the calibrated medians on the wall clock
+        (defaults without a calibration), none on a virtual clock, where a failed call is charged as it ran."""
+        if self.cfg.clock_mode != "wall":
+            return 0.0, 0.0
+        try:
+            cal = json.loads((self.archive.root / "calibration.json").read_text())
+            return float(cal["system1"]["latency_s"]), float(cal["system2_short"]["latency_s"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return 0.25, 30.0
+
     def _eval_unit(self, cand: Candidate, game: GameSpec, seeds: list[int], out: Path, label: Optional[str],
                    no_models: bool = False) -> dict[str, Any]:
         """One candidate on one game in this process (models given as objects: tests, scripted runs)."""
         from ..models.mock import SilentModel
-        silent = SilentModel() if no_models else None
+        s1, s2 = self._silent_latency()
         res = evaluate_harness(
-            cand.harness_path, game.factory, seeds, system2=silent or self.system2,
-            system1=(silent if self.system1 is not None else None) if no_models else self.system1, out_dir=out,
+            cand.harness_path, game.factory, seeds, system2=SilentModel(s2) if no_models else self.system2,
+            system1=(SilentModel(s1) if self.system1 is not None else None) if no_models else self.system1, out_dir=out,
             clock_mode=self.cfg.clock_mode, budget_per_episode=self.cfg.budget,
             latency_override=self.cfg.latency_override, harness_timeout_s=self.cfg.harness_timeout_s,
             game_kwargs=game.kwargs, memory_mode=self.cfg.memory_mode, grace_s=self.cfg.grace_s, game_name=label)
