@@ -135,11 +135,18 @@ def duplicate_of(archive: Archive, cand: Candidate) -> Optional[tuple[Candidate,
 
 
 # -- reflection ------------------------------------------------------------------------------------
+def _episodes(e: dict[str, Any]) -> list[dict[str, Any]]:
+    return [ep for g in (e["per_game"].values() if isinstance(e.get("per_game"), dict) else [e]) for ep in g.get("episodes", [])]
+
+
 def digest(c: Candidate, limit: int = 1500) -> str:
     e = c.eval() or {}
     d = c.directive() or {}
     prop = (c.dir / "proposal.md").read_text(errors="replace")[:limit] if (c.dir / "proposal.md").exists() else "(none)"
-    eps = [ep for g in (e["per_game"].values() if isinstance(e.get("per_game"), dict) else [e]) for ep in g.get("episodes", [])]
+    eps = _episodes(e)
+    played = [(ep.get("seed"), ep.get("score"), ep.get("steps")) for ep in eps]
+    same = [p for p in d.get("parent_dirs") or [] if played and played == [
+        (ep.get("seed"), ep.get("score"), ep.get("steps")) for ep in _episodes(Candidate(0, c.dir.parent / p).eval() or {})]]
     seeds = " · ".join(f"seed {ep.get('seed')}: {ep.get('score')} {ep.get('ended_by', '')}"
                        + (f" ✗ {str(ep.get('error'))[-120:]}" if ep.get("error") else "") for ep in eps)
     lines = [f"### candidates/{c.dir.name} — {d.get('mode', 'seed')} of {', '.join(d.get('parent_dirs') or []) or '–'}",
@@ -148,6 +155,8 @@ def digest(c: Candidate, limit: int = 1500) -> str:
              f"{e.get('failed_s2', 0)}, stale {e.get('stale_fraction')}, Jev→act {e.get('s1_informed_fraction')}, "
              f"Astra→act {e.get('s2_informed_fraction')}",
              "proposal (head):", prop]
+    if same:
+        lines.insert(2, f"same episodes as {', '.join(same)} on every seed (score and length): the change never altered play")
     return "\n".join(lines)
 
 

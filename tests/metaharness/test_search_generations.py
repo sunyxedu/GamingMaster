@@ -362,3 +362,12 @@ def test_older_missing_reflections_get_summaries_and_only_the_latest_a_model_cal
     text = (archive.root / "lessons.md").read_text()
     assert len(notes.calls) == 1 and "## Generation 3" in text
     assert text.count("automatic summary: no reflection was recorded") == 2
+
+
+def test_digest_notes_a_child_that_replays_its_parent(tmp_path):
+    a = _archive(tmp_path, [(5.0, ()), (5.0, ()), (6.0, ())])
+    parent, same, other = a.candidates()
+    for c in (same, other):
+        (c.dir / "directive.json").write_text(json.dumps({"mode": "refine", "parent_dirs": [parent.dir.name]}))
+    assert f"same episodes as {parent.dir.name} on every seed" in generation.digest(same)
+    assert "same episodes as" not in generation.digest(other) and "same episodes as" not in generation.digest(parent)
