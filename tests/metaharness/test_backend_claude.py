@@ -453,12 +453,47 @@ def test_quota_failures_are_not_retried(fake):
     assert len(fake.calls()) == 1
 
 
+def test_slot_waiters_are_served_in_arrival_order(tmp_path, monkeypatch):
+    import subprocess
+    import threading
+    monkeypatch.setattr(claude_mod, "_SLOT_DIR", tmp_path / "slots")
+    monkeypatch.setenv("METAHARNESS_CLAUDE_AGENT_SLOTS", "1")
+    queue = tmp_path / "slots" / "agent.queue"
+    queue.mkdir(parents=True)
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    (queue / f"{1:020d}-{dead.pid}-deadbeef").touch()          # a ticket left by a process that died
+    order: list[str] = []
+    release = threading.Event()
+
+    def worker(name: str) -> None:
+        with claude_mod._slot("agent"):
+            order.append(name)
+            if name == "first":
+                release.wait(10)
+
+    first = threading.Thread(target=worker, args=("first",))
+    first.start()
+    while not order:
+        time.sleep(0.01)
+    threads = []
+    for name in ("second", "third", "fourth"):                  # queue up in this order behind "first"
+        threads.append(threading.Thread(target=worker, args=(name,)))
+        threads[-1].start()
+        while len(os.listdir(queue)) < len(threads):
+            time.sleep(0.01)
+    release.set()
+    for th in [first, *threads]:
+        th.join(10)
+    assert order == ["first", "second", "third", "fourth"] and os.listdir(queue) == []
+
+
 def test_an_agents_time_starts_when_it_gets_a_slot(fake, tmp_path, monkeypatch):
     import contextlib as _cl
     waits = []
 
     @_cl.contextmanager
-    def slow_slot(pool):
+    def slow_slot(pool, since=None):
         time.sleep(1.5)                     # another process held the slot
         waits.append(pool)
         yield

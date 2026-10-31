@@ -103,8 +103,11 @@ def _isolation_settings() -> str:
 
 
 @contextlib.contextmanager
-def _slot(pool: str) -> Iterator[None]:
-    """Hold one of the pool's slots (lock files shared by every process of this user) for the call."""
+def _slot(pool: str, since: Optional[int] = None) -> Iterator[None]:
+    """Hold one of the pool's slots (lock files shared by every process of this user) for the call.
+    Waiters are served in arrival order (ticket files in ``<pool>.queue/``; ``since``, a call's first
+    arrival in ns, keeps a retry's place): without the queue a waiter could lose every race for hours
+    while its sibling proposers' generation waited for it."""
     n = int(os.environ.get(f"METAHARNESS_CLAUDE_{pool.upper()}_SLOTS", _SLOT_DEFAULTS[pool]) or 0)
     try:
         import fcntl
@@ -113,26 +116,51 @@ def _slot(pool: str) -> Iterator[None]:
     if n <= 0:
         yield
         return
-    _SLOT_DIR.mkdir(parents=True, exist_ok=True)
+    queue = _SLOT_DIR / f"{pool}.queue"
+    queue.mkdir(parents=True, exist_ok=True)
+    ticket = queue / f"{since or time.time_ns():020d}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    ticket.touch()
     handles = [open(_SLOT_DIR / f"{pool}{i}.lock", "a") for i in range(n)]
     held = None
     try:
         while held is None:
-            for fh in handles:
-                try:
-                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    held = fh
-                    break
-                except OSError:
-                    continue
+            if _first_in_line(queue, ticket.name):
+                for fh in handles:
+                    try:
+                        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        held = fh
+                        break
+                    except OSError:
+                        continue
             if held is None:
                 time.sleep(0.1 + random.random() * 0.2)
+        ticket.unlink(missing_ok=True)
         yield
     finally:
+        ticket.unlink(missing_ok=True)
         if held is not None:
             fcntl.flock(held, fcntl.LOCK_UN)
         for fh in handles:
             fh.close()
+
+
+def _first_in_line(queue: Path, name: str) -> bool:
+    """No live ticket older than ``name`` (tickets of processes that died are removed)."""
+    for t in sorted(os.listdir(queue)):
+        if t >= name:
+            return True
+        try:
+            os.kill(int(t.split("-")[1]), 0)
+            return False
+        except ProcessLookupError:
+            with contextlib.suppress(OSError):
+                (queue / t).unlink()
+        except (ValueError, IndexError):
+            with contextlib.suppress(OSError):
+                (queue / t).unlink()
+        except PermissionError:   # alive (another user's process)
+            return False
+    return True
 
 
 class ClaudeCLI:
@@ -232,6 +260,7 @@ class ClaudeCLI:
         system_file: Optional[Path] = None
         deadline = time.monotonic() + timeout_s
         attempt = 0
+        queued_at = time.time_ns()          # a retry keeps its place in the slot queue
         toolless_retry = False
         working = False          # an agent's time starts with its slot: queueing is not working time
         try:
@@ -242,7 +271,7 @@ class ClaudeCLI:
             while True:
                 argv = self._argv(session_id=session_id, new_session_id=new_session_id, system=system,
                                   agentic=agentic, web_search=web_search, stream=stream, system_file=system_file)
-                with _slot("agent" if agentic else "player"):
+                with _slot("agent" if agentic else "player", queued_at):
                     if agentic and not working:
                         deadline, working = time.monotonic() + timeout_s, True
                     if deadline - time.monotonic() <= 0:     # a player whose time ran out waiting for a slot
