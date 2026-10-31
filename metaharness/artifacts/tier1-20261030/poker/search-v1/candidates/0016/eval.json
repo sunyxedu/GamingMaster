@@ -1,0 +1,250 @@
+{
+ "harness_path": "runs/poker/search/candidates/0016/harness.py",
+ "game": "Heads-up no-limit Texas Hold'em \u2014 heuristic-v1",
+ "fatal": null,
+ "mean_score": 642.6425,
+ "stale_fraction": null,
+ "n_episodes": 4,
+ "system1_calls": 0,
+ "system2_calls": 0,
+ "mean_steps": 184.0,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 3,
+  "harness_return": 1
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 0.0,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 1103,
+   "score": 810.87,
+   "steps": 197,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 1740.54739501304,
+   "error": null,
+   "info": {
+    "score": 810.87,
+    "ticks": 197,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "chips_per_hand": 810.87,
+     "total_chips": 81087.0,
+     "bb_per_hand": 8.1087,
+     "bb_per_100": 810.87,
+     "completed_hands": 100.0,
+     "required_hands": 100.0,
+     "complete": 1.0,
+     "illegal_actions": 0.0
+    }
+   },
+   "acts": 197,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 2207,
+   "score": 497.92,
+   "steps": 190,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 1726.9482160839252,
+   "error": null,
+   "info": {
+    "score": 497.92,
+    "ticks": 190,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "chips_per_hand": 497.92,
+     "total_chips": 49792.0,
+     "bb_per_hand": 4.9792000000000005,
+     "bb_per_100": 497.92,
+     "completed_hands": 100.0,
+     "required_hands": 100.0,
+     "complete": 1.0,
+     "illegal_actions": 0.0
+    }
+   },
+   "acts": 190,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 3301,
+   "score": 646.19,
+   "steps": 173,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 1734.3083320232108,
+   "error": null,
+   "info": {
+    "score": 646.19,
+    "ticks": 173,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "chips_per_hand": 646.19,
+     "total_chips": 64619.0,
+     "bb_per_hand": 6.461900000000001,
+     "bb_per_100": 646.19,
+     "completed_hands": 100.0,
+     "required_hands": 100.0,
+     "complete": 1.0,
+     "illegal_actions": 0.0
+    }
+   },
+   "acts": 173,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 4409,
+   "score": 615.59,
+   "steps": 176,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 1725.452358611161,
+   "error": null,
+   "info": {
+    "score": 615.59,
+    "ticks": 176,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "chips_per_hand": 615.59,
+     "total_chips": 61559.0,
+     "bb_per_hand": 6.1559,
+     "bb_per_100": 615.59,
+     "completed_hands": 89.0,
+     "required_hands": 100.0,
+     "complete": 0.0,
+     "illegal_actions": 0.0
+    }
+   },
+   "acts": 176,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_return",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   1103,
+   2207,
+   3301,
+   4409
+  ],
+  "expected_episodes": 4,
+  "game_kwargs": {
+   "hands": 100
+  },
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "2cdd6277a93a3b853abfa9befff0e98b3125ca848649dc0888e08ff2ca88f089",
+  "game_kind": "turn",
+  "resolved_models": {}
+ },
+ "score_std": 129.08590973327284
+}

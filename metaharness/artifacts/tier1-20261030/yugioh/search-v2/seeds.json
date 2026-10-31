@@ -1,0 +1,84 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          1101,
+          1102,
+          1103,
+          1104,
+          1105,
+          1106
+        ]
+      ],
+      [
+        "heldout",
+        [
+          2201,
+          2202,
+          2203,
+          2204,
+          2205,
+          2206
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "dbe67b8c80e41e2b6c134700a88744f014d0b089ac7140307c57c63b186978eb"
+  },
+  "results": {
+    "train:1101": {
+      "ok": true,
+      "obs_sha256": "402efbdf86de2a46"
+    },
+    "train:1102": {
+      "ok": true,
+      "obs_sha256": "750d60c7e008a6f9"
+    },
+    "train:1103": {
+      "ok": true,
+      "obs_sha256": "05a642fdc2fae8b9"
+    },
+    "train:1104": {
+      "ok": true,
+      "obs_sha256": "b9b94090d7cba9d0"
+    },
+    "train:1105": {
+      "ok": true,
+      "obs_sha256": "c21b3697ff195a97"
+    },
+    "train:1106": {
+      "ok": true,
+      "obs_sha256": "ff0461f18daa5355"
+    },
+    "heldout:2201": {
+      "ok": true,
+      "obs_sha256": "db4aa538c55b2fca"
+    },
+    "heldout:2202": {
+      "ok": true,
+      "obs_sha256": "1fc91e1aceecf0e8"
+    },
+    "heldout:2203": {
+      "ok": true,
+      "obs_sha256": "f591d73afaaa5954"
+    },
+    "heldout:2204": {
+      "ok": true,
+      "obs_sha256": "2821e15910c0c527"
+    },
+    "heldout:2205": {
+      "ok": true,
+      "obs_sha256": "bbf676eef5d801ed"
+    },
+    "heldout:2206": {
+      "ok": true,
+      "obs_sha256": "66be04358ed93dd3"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

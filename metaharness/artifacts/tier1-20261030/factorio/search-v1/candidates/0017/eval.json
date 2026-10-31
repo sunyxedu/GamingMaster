@@ -1,0 +1,243 @@
+{
+ "harness_path": "runs/factorio/search/candidates/0017/harness.py",
+ "game": "Factorio",
+ "fatal": null,
+ "mean_score": 3966.0,
+ "stale_fraction": null,
+ "n_episodes": 4,
+ "system1_calls": 0,
+ "system2_calls": 1,
+ "mean_steps": 128.0,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 4
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 0.0,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 101,
+   "score": 3896.0,
+   "steps": 128,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 219.01977459411137,
+   "error": null,
+   "info": {
+    "score": 3896.0,
+    "ticks": 128,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "bootstrap": 20.0,
+     "automation-science-pack": 1904.0,
+     "logistic-science-pack": 1972.0,
+     "chemical-science-pack": 0.0,
+     "production-science-pack": 0.0,
+     "utility-science-pack": 0.0,
+     "space-science-pack": 0.0
+    }
+   },
+   "acts": 128,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 202,
+   "score": 3933.0,
+   "steps": 128,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 217.46119981794618,
+   "error": null,
+   "info": {
+    "score": 3933.0,
+    "ticks": 128,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "bootstrap": 20.0,
+     "automation-science-pack": 1855.0,
+     "logistic-science-pack": 2058.0,
+     "chemical-science-pack": 0.0,
+     "production-science-pack": 0.0,
+     "utility-science-pack": 0.0,
+     "space-science-pack": 0.0
+    }
+   },
+   "acts": 128,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 303,
+   "score": 4057.0,
+   "steps": 128,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 219.16563694085926,
+   "error": null,
+   "info": {
+    "score": 4057.0,
+    "ticks": 128,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "bootstrap": 20.0,
+     "automation-science-pack": 1937.0,
+     "logistic-science-pack": 2100.0,
+     "chemical-science-pack": 0.0,
+     "production-science-pack": 0.0,
+     "utility-science-pack": 0.0,
+     "space-science-pack": 0.0
+    }
+   },
+   "acts": 128,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 404,
+   "score": 3978.0,
+   "steps": 128,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 218.16594190499745,
+   "error": null,
+   "info": {
+    "score": 3978.0,
+    "ticks": 128,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "bootstrap": 20.0,
+     "automation-science-pack": 1910.0,
+     "logistic-science-pack": 2048.0,
+     "chemical-science-pack": 0.0,
+     "production-science-pack": 0.0,
+     "utility-science-pack": 0.0,
+     "space-science-pack": 0.0
+    }
+   },
+   "acts": 128,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   101,
+   202,
+   303,
+   404
+  ],
+  "expected_episodes": 4,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "c1d44a5452a9ebf2799d4c65827f63360fca16cde628606c2a18470799100593",
+  "game_kind": "turn",
+  "resolved_models": {}
+ },
+ "score_std": 69.31570288662351
+}

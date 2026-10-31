@@ -1,0 +1,32 @@
+{
+  "game": "2048",
+  "tier": 1,
+  "tier_rationale": "2048 is turn based: after each arrow action the board resolves synchronously, adds at most one random tile, and waits for the next action. There is no gameplay clock, opponent, or animation deadline that penalizes a several-second Astra decision; only an external harness wall-clock limit may apply.",
+  "decision_latency_s": 60.0,
+  "interface": {
+    "chosen": "standalone Python rules engine",
+    "why": "A local engine is deterministic under reset(seed), works without a GUI or network, exposes the complete board and score directly, and avoids browser markup and website ToS risks.",
+    "software": [
+      "Python 3.12 standard library (the evaluator venv at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/2048/bin/python)"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Implement or vendor a 4x4 engine matching the MIT-licensed reference game's merge order and 90% 2 / 10% 4 spawn distribution.",
+      "Expose reset(seed), observe(), step(action), and legal_actions() to the generated harness.",
+      "Seed one local RNG per episode and record the seed for replay; spawn two initial tiles.",
+      "Serialize observations as JSON with board, score, moves, max_tile, game_over, and changed/spawn metadata.",
+      "Run transition checks against canonical merge cases before connecting Astra and Jev."
+    ],
+    "observation": "A JSON object containing a 4x4 integer board (zero means empty), cumulative score, move count, maximum tile, terminal flag, seed/replay metadata, and optionally the RNG state.",
+    "actions": "The adaptor sends one of up, down, left, or right. The engine compresses and merges each line once, spawns one random tile only when the board changed, updates score, and returns the next JSON observation; legal_actions reports directions that would change the board."
+  },
+  "scoring": "Report cumulative merge score and maximum tile after the fixed move budget. Score is the sum of values created by merges, while maximum tile measures progress toward the 2048 objective and discourages farming small merges.",
+  "scenarios": "Use reset(seed) with a reproducible per-episode RNG and vary held-out integer seeds. Each seed should generate the two-tile start and subsequent spawn locations/values; evaluate multiple seeds and fixed move budgets so a policy cannot memorize one opening.",
+  "strategy_summary": "Strong play fixes a corner anchor and builds a monotone snake of increasing tiles toward it while preserving empty cells. Code should implement exact transitions, seeded chance spawns, legal-action simulation, and shallow expectimax with emptiness, monotonicity, smoothness, anchor position, and merge-potential features. Astra should select the anchor, diagnose damaged layouts, and adapt search priorities. Jev should answer typed, fast rankings and safety checks over precomputed candidate boards. Reject random cycling and short-term merges that break the corner stack; continue playing after 2048 to maximize score and tile.",
+  "risks": [
+    "A rule mismatch (spawning after a no-op, wrong merge order, double merge, or wrong 90/10 distribution) changes evaluation results.",
+    "The official game is browser JavaScript; browser automation is fragile and unnecessary on the GUI-free server.",
+    "Community bot/environment licenses and assumptions must be checked before vendoring code.",
+    "External harness wall-clock limits may be lower than the nominal 60-second decision budget even though the game itself has no timeout."
+  ]
+}

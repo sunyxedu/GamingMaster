@@ -1,0 +1,76 @@
+- The Astra-only leader spent 40--69 seconds per call and completed only 2--8 of 100 hands before the 1800s deadline; throughput is a first-order strategic variable.
+- Its worst trace reached pocket aces on a flop at the deadline, so long reasoning can strand strong positions and make score depend on seed prefix.
+- A scripted policy must use the exact candidate ids and current-street raise totals; validate every action against `candidates` before posting.
+- `ctx.progress()` exposes illegal-action and stale-state evidence; check it after each scripted step and stop/replan rather than spin.
+- Catch model TimeoutError/RuntimeError in recovery paths; preflight stand-ins may return arbitrary text, so never trust a parsed action without candidate membership.
+
+- Candidate 0000's apparent lead is largely a throughput artifact: Astra latency (~50–60s) left the worst episode at two completed hands and a provisional score; a harness must budget calls around the 100-hand denominator.
+- Public history can support a useful inverse-policy model: condition opponent action likelihoods on street, wager size, and the documented equity thresholds while keeping a likelihood noise floor.
+- Exact legal candidate IDs and current-street raise totals are safer than formatting arbitrary model text; model overrides must be parsed and bounds-checked before `ctx.act`.
+- `ctx.progress()` is actionable evidence: rejected actions, unchanged observations, and unlikely predicted opponent responses can trigger a fresh audit rather than silently repeating a stopped plan.
+- River response-conditioned value sizing is a structural test against this opponent's random-hand equity calls; pre-river rollout remains approximate and should be discounted.
+- Candidate 0001 tests a structural throughput fix: Astra calibrates posture occasionally while a local policy executes checked actions, rather than paying one model latency per turn.
+- Exact five-card enumeration is cheap enough for every step and prevents treating a paired board or a weak one-pair hand as automatic stack-off value.
+- Calibration output is advisory and parsed by a three-word whitelist; arbitrary stand-in text, timeouts, and backend failures leave the safe policy running.
+- Current-street raise targets are selected from the engine's supplied candidate IDs, avoiding the common increment-versus-total sizing error.
+- Candidate 0001 refinement: use opponent action-conditioned equity and response-conditioned sizing; a raw made-hand category confuses board strength with private strength. A separate exact evaluator comparison caught and fixed an ace/wheel mask mistake.
+- Its synchronous development audit showed much longer end-to-end pauses than the returned model latency suggested. Final 0001 uses ctx.spawn for audits and discards stale action advice while retaining reusable mode/lessons.
+- Final 0001 preflight passed after 141 actions; its short deadline and lack of answered System-2 calls mean this is fallback/contract evidence, not a completed-match or real-model validation.
+- Candidate 0006 tests a separate architecture: sparse Astra posture reviews plus deterministic random-card equity, rather than a model call or posterior-range solve on individual turns.
+- Aggregate public action counts are safe adaptation evidence; a single showdown or hand result is too noisy to justify changing the policy.
+- Exact equity sampling must be deterministic from visible cards so it cannot consume or correlate with the game deal RNG.
+- Model posture values are bounded and advisory; malformed stand-in responses must leave a legal local policy running.
+- Candidate 0001's weak seed shows the model-risk pattern directly: the EV search ranked flop/turn shoves with called equity estimates of 0.65-0.67, and three such hands each lost 20,000 chips.
+- Candidate 0005 tests street-aware bet caps as a structural uncertainty control; all-in sizing requires a private monster instead of a high posterior estimate from a weak one-pair hand.
+- Public action likelihoods and opponent uniform-card equity are different information sets; treating their product as precise fold equity is a dead end for stack-sized decisions.
+- A cap must be enforced both while enumerating candidate targets and after EV ranking, because the legal maximum remains in the observation and can otherwise re-enter through a fallback or model override.
+- Opponent bet size and whether it is a raise are public evidence. For mc-pot-odds-v2, river raises and large value bets come from substantially stronger equity branches than the small mixed bet.
+- Candidate 0006 also lost a stack while value-betting K3 top pair into repeated calls, so river defense alone may not address the dominant leak; track large pots built with one pair separately.
+- A trace's action sequence must be read in hero-seat context before labeling a loss a call-down or a value-bet failure; hand 82 was hero's aggression, not calls against opponent bets.
+
+- Candidate 0009 refinement replaces its initial river call floors with an exact-card river endgame: subtract card-sharing rank distributions to calculate each possible opponent hand's uniform river equity without revealing hero holes to that calculation.
+- Exact card equity does not imply an exact posterior: 0009 omits flop/turn action selection and approximates out-of-position check value, so those remain explicit falsification targets.
+- The 0009 public-observation replay folds Kd9c to the archived 3,126 river bet; final preflight completes 261 actions without exception, but neither check validates real-model adaptation or establishes win rate.
+- Candidate 0010 restores all 990 legal river holes before replaying the public history: a discarded flop particle cannot otherwise recover when a later board changes its importance.
+- Complete support and exact river equity solve different problems; the prior-street action likelihoods remain approximate even when every legal hand is present.
+- Replaying 0005 seed 4409 hand 64 changes the nine-high-flush shove from 18,963 to 2,592, with 211 possible stronger combinations. This is a mechanism check, not a win-rate estimate.
+- Candidate 0010 uses one aggregate fold/call continuation against a modeled river raise; optimizing that response separately for each hypothetical hidden hand would overstate EV.
+- Candidate 0005's seed-4409 river loss was a non-nut flush (opponent 8cTd completed the higher flush on 6d7d2d3dKh), showing that a strong category alone does not establish nut value.
+- Candidate 0009 seed 4409 hand 66 lost 20,000 with K6 on 4s7hKh4d2s after calling a turn raise; the uniform random-hand equity estimate obscured the strength of the opponent's raise-conditioned range.
+- Exact river rank tables support a small public-card response tree, but each branch must aggregate a whole range before choosing fold/call/raise; per-hidden-hand clairvoyance would overstate EV.
+- Check-to-bet decisions differ by position: the button acts last after checking, while the big blind may face a value-selected river bet and should re-solve from that new observation.
+- Every response-tree node must budget its local search and leave time for the harness to return; `_SearchStopped` is a normal fallback trigger, not an uncaught episode error.
+- Candidate 0012 tests a distinct information hypothesis: exact river equity is insufficient when the river range ignores earlier flop/turn action selection; public-history conditioning must survive to the endgame.
+- Full combination support is safer than resampling for rare premiums, but shared board-completion samples are correlated approximation evidence and must be softened before likelihood updates.
+- A turn exact replay of parent 0009's K6 hand checked and folded to the archived reraise; the range model avoided the parent's river stack commitment by carrying that raise forward.
+- Public settlement histories can contain automatic opponent actions just before a new observation; deduplicate `(hand_id, history_index)` events when computing adaptation statistics.
+- Astra review payloads must label previous-state EV alternatives explicitly; stale alternatives beside a fresh observation can make the reviewer diagnose a legality problem that does not exist.
+- Candidate 0012 preliminary seed 901 scored 1147.29 before the runout exclusion fix; final-code seed 902 scored 1294.30 in 309s with no illegal actions, so validate final code across more independent matches before inferring strength.
+- Candidate 0015 tests a distinct parent-0010 hypothesis: opponent actions on one street share its cached equity latent, so use a joint per-street action likelihood instead of multiplying independent softened calls.
+- The leader 0012 seed-2207 hand 82 replay changed from an EV-ranked 17,500 turn raise (called equity .5962) to a call (EV about 1,449) under the cached-equity posterior; this is a mechanism difference, not proof the fold/call value was correct.
+- Public observation traces can provide sharp strategic replay cases without querying game internals; use them to test action legality, expected policy response, and CPU cost before spending a dev episode.
+- River support reconstruction costs about 2.4 seconds per replay on this runtime; keep one wall-time guard around enumeration and preserve a legal recovery action if it stops.
+- A response-likelihood check must distinguish latent opponent equity from our own sampled runout equity; the opponent's cached equity never removes hero's hidden cards, while hero's runouts exclude both private hands.
+- Candidate 0015's two dev matches completed at +689.49/+688.51 chips per hand, but Astra mistook repeated +50 blind wins for inconsistent settlements when hero_seat was omitted. The final audit payload supplies seats and opportunity-matched expected/observed response counts; dev scores predate that payload correction.
+
+- Candidate 0012's high mean hides fixed-denominator incompletion: two of four training seeds stop at 70/100 hands near the 1,800-second wall deadline, so prioritize throughput when reading provisional scores.
+- Preserve full opponent-hole support while reducing board-runout samples; compressing the range itself risks deleting rare strong holdings, whereas cached visible-board sampling targets the expensive axis.
+- Astra reviews compete directly with hand completion under a wall budget. Keep a substantial reserve and cap review count; a cancelled late review cannot improve the completed score.
+- Candidate 0014 tests coherent latent cached-equity hypotheses at the river against the information-loss weakness of independent softened event likelihoods; a response tree alone already regressed in 0011, so its contribution must be isolated.
+- Persistent thresholds must reflect the actual policy branch: free value-bet branches are disjoint, while a raise branch can make a call impossible; tests should verify these response partitions directly.
+- Prefix-sum equity distributions let a finite river policy search arbitrary legal integer totals; the compact candidate menu is convenient but is not the complete action space.
+- A completed dev match may cancel its outstanding Astra call; seed 901's local score provides no model-assisted evidence. Synchronous calibration on seed 902 answered but did not change policy, and two dev scores remain weak evidence.
+- River correctness cannot undo earlier-street selection errors: seed 902's 11,824-chip loss came after a turn call and oversized turn raise, so river-only fixes need independent evaluation and loss attribution.
+- Candidate 0015's 320 independent weighted particles can erase rare premiums on a flop/turn even when the full preflop posterior assigns them meaningful mass; this is a support-variance failure distinct from likelihood misspecification.
+- Systematic resampling is a bounded structural test: same particle count and posterior target, lower multinomial variance, no extra model calls.
+- Preserve a uniform fallback when posterior weights underflow; an empty range must trigger recovery rather than a division-by-zero or illegal action.
+- Effective sample size and unique-particle diagnostics make particle impoverishment falsifiable from traces instead of inferring it from one unlucky showdown.
+- Candidate 0013 provides a concrete continuation-model stress case: seed 2207 hand 57 called a large flop raise and turn/river bets with Q6 on a Q-high board, estimating roughly 0.53–0.61 equity before losing to KK; the loss motivates a replay, not a negative-EV conclusion.
+- Candidate 0015's shared latent-equity hypothesis scored below 0012, so better modeling of the opponent's cached equity is not sufficient evidence that the downstream commitment model is sound.
+- Candidate 0017 tests an explicit postflop commitment guard for non-monster hands, preserving checks/calls while preventing deep one-pair raises when the solver's edge relies on a single aggregate reply.
+- Keep gate inputs public and observable: posterior equity, current legal actions, board category, and stack exposure; every fallback still needs candidate/legal validation and progress checks.
+
+- Candidate 0012's full-combination solver had the best mean but seed 2207 stopped at 85/100 hands near the 1,800-second deadline; fixed-denominator completion is part of strategy, not just an evaluation detail.
+- Candidate 0016 tests fidelity scheduling: preserve every legal opponent hole while reducing only shared flop runouts as wall reserve shrinks, leaving exact turn/river calculations intact.
+- Wall-aware approximation should be monotone and deterministic from public state plus budget; it must never silently change legal action parsing or use hidden deal information.
+- A strong prefix score from an incomplete match can hide a throughput failure, so compare completed hands and per-hand score together when judging solver refinements.

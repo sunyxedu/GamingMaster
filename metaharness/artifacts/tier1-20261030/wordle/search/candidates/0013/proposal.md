@@ -1,0 +1,12 @@
+parent: 0012
+
+Hypothesis: candidate 0012's lexicographic tail objective is too risk averse for the evaluator's score. It reduced predicted fifth-guess outcomes on broad compatible-answer sets, but its two-seed dev run still solved both games in four guesses (mean 0.50), and the training leader's own difficult paths (`slate -> doric -> ... -> rerun`, `slate -> neper -> colby -> helix`, and `slate -> cornu -> guise -> issue`) show that avoiding late outcomes can trade away a three-guess solve. The better objective is expected finite-horizon reward; tail preference should only break exact expected-reward ties.
+
+What changed versus 0012:
+
+- Kept the public-list loading and hash checks, duplicate-aware green-first feedback, full-history candidate filtering, `slate` opener, action parser, progress checks, and bounded Astra recovery. No seed, answer, or evaluator-only state is used.
+- Replaced lexicographic histogram minimization with Bellman reward search. With `r` turns remaining, an immediate answer earns `r`, and each feedback child earns its recursively achievable reward. All legal probes are considered, equivalent partitions are deduplicated, and a diversified beam controls large states. The returned histogram is logged, but it is only a deterministic tie-break after total reward, so the policy matches the scalar score objective.
+- Increased the per-decision search allowance modestly and retained an attainable sequential incumbent. Search stops on `ctx.done`, the local deadline, or a low remaining wall budget; the best completed choice remains usable when interrupted.
+- Recovery is evidence driven. Every scripted or Astra-selected action is checked for legality, turn/history advancement, feedback membership in the predicted partition, rejection counters, and observation staleness. Garbage, timeout, and failed model calls fall back to a consistent unused answer without escaping the episode.
+
+Evidence that would confirm the hypothesis is a higher mean score, especially converting the leader's four-guess branches to three guesses without introducing losses, with similar behavior on unseen seeds. Refutation is a lower mean despite fewer tail outcomes, or search cutoffs that frequently fall back to poor sequential guesses. The search is exact for the small states it completes and bounded for broad states, so a finished beam is evidence about the policy selected, not a proof of global optimality.

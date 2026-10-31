@@ -1,0 +1,82 @@
+- The naive Astra loop can spend hundreds of seconds on one short answer; with a 1,800-second wall budget it completed only 1–4 of 100 hands.
+- A turn-game harness can use zero model calls and still satisfy the contract; exact candidate IDs are safer than parsing free-form model text.
+- `raise_to` amounts are current-street totals, so policy sizing must map through the observation's candidate list rather than submit increments.
+- Preflight stand-ins return arbitrary text, so a code-owned policy avoids parse failures and backend timeouts entirely.
+- Candidate 0001 completed all 100 hands but had extreme seed variance (-559.76 chips/hand on seed 2207), so completion alone is not evidence of a good policy.
+- Its postflop `value` flag used the full board-plus-hole category; a paired board can therefore trigger bets/calls without a hole-card improvement.
+- A useful structural test is board-relative strength: distinguish board-made pairs from pairs/two-pair improved by a private card before sizing value bets.
+- Large opponent bets should require stronger made hands than small bets; one-pair hands need an explicit pot-odds cap to avoid deep-stack leaks.
+- Candidate 0003 tests public-action range inference and response-aware sizing, independently of the category-policy line: a uniform-equity opponent can call huge wagers with hands that are badly dominated by the bettor's range.
+- Exact river equity for every possible hole pair can be computed cheaply by sorting all board-compatible hand ranks, then subtracting combinations sharing either hole card. Do not remove hero's private cards from the opponent's modeled information set.
+- Hypothetical future call/fold decisions must be shared across the whole response range. Choosing them separately for each sampled opponent holding introduces strategy fusion even when no actual hidden cards are accessed.
+- Public preflop history must distinguish an initial button open from subsequent reraises. Candidate 0001's seed 2207 called a 200bb shove with Qh5c; candidate 0003's replay folds both the reraise and shove observations.
+- Development losses need hand-level diagnosis: candidate 0003's Jd7c turn shove on Jh Ks 5h 8c lost when Ah9h completed a river flush. A single losing draw is not evidence that the value-shove hypothesis is wrong; compare independent completed matches.
+- Candidate 0003's strongest mechanism is also its highest-variance one: repeated 19,000–20,000 chip jams produce large seed-to-seed swings even when range equity is favorable.
+- A separate test can cap bets while preserving the heuristic exploit: medium value sizing should still be called by its price-insensitive branch, and avoids making one river card dominate a match block.
+- Monte Carlo equity must sample only from cards absent from the hero and exposed board; using the full deck creates impossible showdowns and overstates thin value.
+- A turn-game harness can spend all budget on deterministic bookkeeping; no Astra call is required when code owns parsing and exact candidate selection.
+- Clear the equity cache at hand boundaries. Public board plus hole cards is a sufficient key within a hand, but retaining old combinations wastes time over a 100-hand episode.
+- The leader's strongest exploit does not require repeating its all-in sizing: a distinct test is to attack the opponent's checked, low-equity branch with small in-position probes.
+- Public history's last event identifies whether a free street was checked by the opponent; this is safer than inferring initiative from seat alone.
+- Probe bets need a separate gate from value bets: blockers or draws can supply fold equity, but river bluffs against the heuristic's price-sensitive calls are unattractive.
+- Equity samplers must clear at each `hand_id`; retaining a public-card cache across fresh deals can silently reuse impossible card states.
+- Candidate 0004 tests the missing future-betting option in the leader's one-street EV: hand-22's turn passive EV was 335.4, yet the next river offered a modeled 3869.8-chip value bet. A low showdown-only baseline can make premature commitment look too attractive.
+- Preserve one hero decision per public information set. Different opponent equity branches can produce the same bet after minimum-size or stack clipping; merge those branches before optimizing the response (a diagnostic case gives 56.2 EV, versus an invalid 76.2 from separate hidden-branch choices).
+- Exact turn-to-river integration must account for card removal in the posterior: each opponent holding leaves 44 legal rivers after hero's two cards and the four-card board, even though 46 river cards are possible before choosing that holding.
+- Exact river response searches can use sorted random-hand-equity prefix moments for both range mass and hero showdown share. This makes multiple bet-size and public-response branches cheap without selecting actions separately for individual hidden holdings.
+- Candidate 0006's probe/value sampler completed dev seed 901 in about 60 seconds, so moderate per-turn equity sampling still leaves ample margin under the 1800-second episode limit.
+- Leader 0003 logs flop jams at 0.71–0.73 range equity and about 0.63–0.67 called equity; these establish exposure but do not alone establish negative expected value.
+- A bounded postflop size menu is a clean structural test of whether the opponent exploit survives without committing 200bb on medium-strength ranges.
+- Sizing constraints must retain current-street raise totals and legal bounds. The interface allows every integer inside those bounds, not only listed candidate IDs.
+
+- Candidate 0004 completed its dev matches but only 64/82/83/78 training hands before the wall deadline. Local dev runtime alone does not certify completion under parallel evaluator CPU contention.
+- Candidate 0009 tests compute architecture using parent 0004: bit-mask hand ranks and board specialization preserve all sample counts and policy choices while reducing repeated exact evaluation work.
+- A single strength-sorted sweep can compute every blocker-corrected random-hand equity exactly: subtract both hole-card incidence counts from lower/tied groups, adding the holding itself back once to ties. Do not update lower counts until the whole tie group is processed.
+- Counterfactual betting branches share each river's equity ordering and showdown shares; cache those columns and recompute only prefix weight moments. This avoids rebuilding a million temporary triples in one turn search.
+- Keep strategic and engineering hypotheses separate: old/new table and decision equivalence can validate a speedup, while only completed independent match blocks can assess whether deeper planning improves chips per hand.
+- Candidate 0003's hand-22 trace shows raw river equity can overstate value after a prior opponent call; public continuation actions should tighten later-street ranges.
+- A distinct structural test is to condition river thresholds and sizing on earlier calls/raises, preserving the parent policy on uncued rivers.
+- History fields use seat, street, action, and cost; count only opponent actions from prior streets to avoid treating hero's own bets as evidence.
+- Keep per-hand equity caches bounded: clear them when opaque hand_id changes, including automatic settlements between hero turns.
+- Candidate 0007 completed dev 901/902 at 635.00/393.87 chips per hand, but a four-pot cap can still reach stacks after an opponent raise (dev-902 hand-96); it is not a total-hand loss cap.
+- A distinct structural test from range inference is exposure control: cap medium-strength postflop bets while retaining stack-sized targets for near-nut posterior ranges.
+- The objective is net chips per fixed hand denominator, so a policy that completes 100 hands can still lose badly through a few 200bb variance events.
+- Any sizing cap must operate on current-street total raise targets and preserve legal min/max clipping; never submit an increment as `raise_to`.
+
+- Candidate 0009's exact turn/river planner had strong provisional scores but its resource policy was unsafe: seed 2207 entered `ctx.act` at 1799.41 s and hung past the 10 s grace period. A wall-clock reserve must cover observed game-step latency, not only local search.
+- An anytime turn planner should compute a complete cheap incumbent before optional lookahead; if the deeper search is interrupted, return only the last fully evaluated action and never a partially integrated branch.
+- Remaining hands and measured action latency are legitimate resource signals; score, seed, hole cards and hidden state must not influence adaptive compute allocation.
+- Reducing flop public runouts under pressure is a completion hypothesis with a clear tradeoff: it preserves legal zero-error play but can increase range-estimation variance, so traces should record the selected sample count.
+
+- Candidate 0010 tests a persistent within-street equity posterior: the opponent caches one sampled equity, so a public check below .62 rules out its later .80 raise branch on the same board. Independent sigmoid response predictions violate that constraint.
+- On leader 0003 seed-2207 hand-1, replaying the checked flop yields a spurious 0.0070864 raise-branch probability; interval conditioning makes it exactly zero without changing the card-equity tables.
+- Model integer bet sizes after minimum and stack clipping. Different equity/mixing branches may produce the same observed wager and must retain their combined probability.
+- Candidate 0009 posted an action at clock 1799.4118 and its game step outlived the 1800-second deadline grace. Reserve time for the opponent computation inside ctx.act, not just for harness CPU cancellation.
+- Candidate 0010 completed dev 901/902 at 503.75/273.25 chips per hand (mean 388.50; match-level SE 115.25), versus parent dev mean 394.375. Exact inference consistency did not establish a score gain; retain this negative/flat evidence rather than retuning to two seeds.
+- Candidate 0007's exposure cap still permits later stack commitment after an opponent raise; a separate current-street raise-response gate tests whether value-heavy raises need stronger thresholds.
+- Public history can safely distinguish an opponent raise on the current street from a passive call; use that cue before applying ordinary pot-odds EV.
+- A robust harness should keep the parent's bounded sizing and legal total-raise conversion while isolating one strategic change, so score changes are attributable to the raise-response hypothesis.
+- Candidate 0012 is a useful complete baseline: anytime planning and measured step reserves can finish all 100 hands while retaining exact river search.
+- Its traces still contain 16–26 postflop wagers costing more than three pots per match; completion does not imply exposure is well calibrated.
+- A post-planning gate is a clean test of variance control because it leaves the parent’s range model and legal arithmetic intact while changing only oversized medium-equity actions.
+- Gate current-street total raises, using observation bets and legal bounds; clipping an increment or whole-hand commitment would violate the action contract.
+- River actions are deterministic threshold branches in heuristic-v1; a soft likelihood floor can retain holdings that could never emit the observed river action.
+- Exact river filtering needs current street bets, remaining stacks, prior raise state, and the last full raise increment so stack-clipped sizes are matched as totals.
+- Public river replay across archived 0013/0014 traces supported 228 opponent actions and all 43 shown opponent holdings; zero-support recovery was not needed.
+- Exact terminal evidence changed few parent actions in replay, which is useful negative evidence: calibration improvements need not imply a strategic score gain.
+- Keep a recovery path for contradictory public observations; multiplying every holding by zero silently poisons later EV and can produce arbitrary folds.
+- Candidate 0012's fixed 200-chip button open gives heuristic-v1's BB a materially cheaper call than its own 250-chip opening price; public traces show 39–60 calls per match after these opens.
+- A current-street raise target must be passed through `legal_action`; the 250 target is legal only because it is the total street wager, not a 250-chip increment.
+- Preflop sizing is a separable experiment: retaining the parent's postflop planner makes changes in postflop range quality and runtime easier to attribute.
+- Public `last_hand.history` is sufficient to audit opponent response frequencies, but policies should avoid using terminal score or revealed folded cards when choosing future actions.
+- Parent 0015's preflop value-jam branch ran before checking public history, so q>=.60 could produce a 200bb first-in jam on an unopened or free-check hand.
+- A useful final-iteration experiment is to gate stack-sized preflop value by an observed opponent raise while preserving the parent’s ordinary open/check branches.
+- Keep the gate based on current observation history only; score, seed, and terminal cards are unavailable strategy signals.
+- When changing preflop behavior, retain `raise_to` total semantics and route every target through the observation's legal bounds.
+
+- Candidate 0016 isolates exact river evidence from leader 0014: its terminal solver already uses hard thresholds, while the parent's posterior retained a .003 likelihood floor for impossible river holdings.
+- Match observed integer bet totals after minimum-raise and stack clipping. Multiple policy branches can emit the same amount, so their likelihoods must be summed rather than assigning the bet to one fraction bucket.
+- A call does not exclude high-equity hands when the opponent cannot raise (including facing an all-in) or has already used its one voluntary raise on that street.
+- Exact inference consistency need not change play: replay of 0014's weakest match changed river posteriors but preserved all 22 river actions and all 173 nonriver posteriors. This verifies a numerical fix, not a win-rate improvement.
+- Audit only legally revealed hands. The 0016 river audit found 80 supported public actions and 20 revealed-hand/action pairs consistent with exact equity; automatic settlements left only 317 unique settlement histories across four 100-hand traces.
+- Candidate 0016's river-evidence-only replay changed no actions across all four leader traces. Refining the current-river size menu at exact call/fold boundaries changes seven of 22 decisions in the weakest match; integer brute-force checks verify the pricing gain under the same posterior. Hypothetical turn subtrees keep their bounded menu.

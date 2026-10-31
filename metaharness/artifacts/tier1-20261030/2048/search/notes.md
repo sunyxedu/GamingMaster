@@ -1,0 +1,77 @@
+- The naive leader spends nearly the whole 1,800-second budget on one Astra call per action; local computation is essential for a 200-move turn game.
+- Seed 83 exposed repeated `right` choices and only 24 merge score after six moves, so prompts need persistent strategy state and feedback rather than isolated observations.
+- A legal-action list and exact local transition simulator make malformed or no-op model text irrelevant to game safety.
+- Chance spawns are unknown to the harness, so expectimax should average all empty-cell 2/4 placements instead of assuming a particular seeded spawn.
+- The archived seed-83 trace ends at raw merge score 16, max tile 8, combined 24 after six moves; the deadline is the dominant baseline failure.
+- The adaptor's 4-spawn convention is low-tail (`random() < 0.1`), not high-tail; replaying every archived opening and 231 recorded transitions exposed and corrected this assumption.
+- `random.Random` replay is safe only as a hypothesis: validate slide, score, move count, spawn metadata, and full board after every action, then disable the stream on any mismatch.
+- A bounded root-separated beam keeps every legal first action alive while spending local computation between slow Astra calls; deadline checks inside layers are necessary.
+- Preflight stand-in models may answer nothing, so local defaults must complete 200 moves with zero model calls and tolerate arbitrary/malformed Astra text.
+- A useful alternative to seed replay is multi-ply chance search: treat spawn position and 2/4 value as uncertainty and verify only the realized board after each action.
+- Heuristic regimes should be allowed to change as empty-cell pressure changes; a corner policy can score well early yet strand the largest tile later.
+- `ctx.progress()` must trigger an explicit review path, while the local controller keeps running if Astra times out or returns malformed JSON.
+- Post-action checks should compare the exact slide, merge-score delta, move counter, and one spawn difference; this catches both stale observations and incorrect search assumptions.
+- Candidate 0002's mode reviews changed heuristic weights but did not change the snake geometry; a damaged corner can therefore remain damaged while every local move is still “valid.”
+- Candidate 0003's seed replay/deep beam reached strong scores on most seeds but seed 83 hit the 1800 s deadline after space collapsed, so deeper lookahead must have a hard local budget and a non-replay fallback.
+- Orientation should be inferred from observed board evidence with hysteresis: preserve a corner holding the maximum tile, otherwise select the best monotone snake instead of committing to one anchor for the episode.
+- A short chance search can adapt to arbitrary spawn positions without assuming RNG details; cap depth while many cells are empty because full expectimax branches explode in the opening.
+- Replanning triggers should include rejected actions and post-action transition disagreement as well as `ctx.progress()` stagnation; model output remains optional and malformed replies must leave deterministic defaults.
+- Candidate 0002 completed 200 moves on every training seed, so the remaining gap is move quality rather than a deadline or contract failure.
+- Its worst seed 37 had a 64 in the interior at move 90 and a 128 off-corner at move 135; changing only space/merge weights did not restore a corner stack.
+- A best-over-all-orientations leaf heuristic can reward rotating the snake from one ply to the next; a persistent anchor makes that strategic commitment explicit and reviewable.
+- Re-inferring the anchor on every small-tile move reduced candidate 0004's stand-in preflight score from 2700 to 2292; even the opening benefits from commitment.
+- Keep chance-node search spawn-agnostic, with exact post-action checks, when the seed stream is not required for the hypothesis being tested.
+- Candidate 0003's deep replay beam can hit the 1800 s deadline on seeds 83/97 even while exact rule checks pass; local search needs a hard shallow bound.
+- Candidate 0002 and 0003 both reliably reach a 256 tile, but final boards often retain equal pairs and only ~440–462 total tile mass; merge harvesting is a separate bottleneck from survival.
+- A spawn-agnostic chance model is safer than trusting public RNG replay when the objective is generic held-out performance; use observed legal actions as the authority.
+- Astra should choose a small heuristic regime rather than emit move sequences; malformed, slow, or cancelled reviews must preserve deterministic local play.
+- Anti-oscillation and single-continuation penalties are useful recovery signals, but must remain small enough not to suppress necessary setup reversals.
+- Candidate 0002's low seed can complete 200 turns yet leave 64/64 and 16/16 pairs unmerged; completion is not evidence of terminal-score quality.
+- Candidate 0003's deep beam reached a useful 24-step forecast but spent the remaining deadline in synchronous supervision, so a valid plan can still lose the episode to model latency.
+- Candidate 0006 demonstrates that even an opening Astra call can consume the whole wall budget; local defaults must act before and during every optional review.
+- Full archived replay validation matched 4,654 realized transitions, supporting seed-stream use only when every subsequent spawn is checked against the observation.
+- Complete-trajectory candidates should optimize terminal merge score plus max tile; snake and empty-cell heuristics belong in rollout generation, not final acceptance.
+- Asynchronous reviews need bounded launch conditions and defensive future polling so stale model responses cannot replace an already verified suffix.
+- Candidate 0002's weak seed 37 is a useful risk case: it completed 200 moves but had only four empties and an interior 64 at move 90, so survival alone does not imply good terminal merge value.
+- Equal-depth root comparison matters for anytime search; accepting a partially explored root can turn CPU timing into an action-selection bias.
+- Worst-spawn scoring should be conditional on space pressure. Applying it in the opening can reject setup moves whose average future value is high.
+- The evaluator's scalar is merge score plus max tile; fading shape bonuses near the 200-move horizon makes the local leaf objective match what is actually reported.
+- Reviews must carry concrete root rankings and ctx.progress evidence; a mode-only prompt cannot diagnose whether expected value or tail risk caused a stall.
+- Candidate 0009's seed-83 trace keeps an optimistic terminal forecast through several zero-gain moves, indicating that a realized-spawn suffix can be brittle even when replay checks pass.
+- A robust hedge should be conditional on pressure (few empty cells or repeated scoreless moves); applying worst-spawn scoring in the opening can suppress useful setup moves.
+- Keep the replay verifier as the authority after every hedge action so spawn-agnostic recovery cannot silently desynchronise the RNG cursor.
+- Candidate 0011 tests a resource ceiling: final tile mass is a direct upper bound on attainable max tile, so a 256 plateau with 438–446 mass cannot be fixed by rearrangement alone.
+- Candidate 0011 preserves empty-cell classes and distinct RNG cursors/mass totals: the initial mass-only beam kept 9–11 empties and pruned the dense setup paths needed to change rejection sampling.
+- Resource acquisition must be bounded and followed by consolidation; extra 4s that fill the board are harmful, so the controller switches modes on space pressure and fades shape bonuses near the move cap.
+- Verified seeded replay remains a hypothesis: every action checks board, score, move count, spawn, and mass gain, with all-spawn expectation as the fallback after disagreement.
+- Candidate 0011 preflight and fault injection survived garbage replies, timeout, rejected action, and transition disagreement. Dev scores 3052/3056 had mass 480/484 and no replay mismatches, but still max tile 256; acquisition alone has not demonstrated the 512 breakthrough. Reviews remained unanswered, so asynchronous supervision is not evidence of model contribution.
+- Candidate 0009's complete trajectory optimizer is liveness-safe and exact, but traces show terminal forecasts plateauing for >100 moves while all rule and seed checks pass; completion can hide a quality plateau.
+- Strictly accepting only a higher terminal objective discards equal-score layouts that may expose later merges; retain root-diverse alternatives with bounded population size.
+- Population members must be advanced only when their first predicted post-spawn board and RNG cursor match the realized observation; stale branches are unsafe even when their action is legal.
+- A bounded exact terminal search is useful only near the move cap; applying it in the opening would recreate the deep-search deadline risk.
+- Candidate 0012's full-horizon paired-rollout prototype collapsed by move 110 on dev seeds (scores 1164/1204); continuation-policy bias can overwhelm root variance reduction.
+- A safe recovery should only override a verified complete trajectory when both space pressure and a premature-death forecast are present; scoreless moves alone are insufficient evidence.
+- Candidate 0015 tests spawn-location robustness rather than RNG replay or mass acquisition: evaluate every possible 2/4 placement and hedge only when space is scarce.
+- One-action commitment after each chance evaluation keeps the realized observation authoritative; predicted multi-action suffixes can be brittle even when replay checks pass.
+- Persistent anchor hysteresis is a structural compromise: it avoids per-move geometry flips while allowing recovery after the maximum tile leaves its corner.
+- A model review that emits only anchor/mode guidance is cheap to ignore safely; arbitrary or cancelled Astra output must never control action parsing.
+- Candidate 0013's complete-horizon resource beam reached a 200-step verified forecast in 2.7 s at opening, preserving liveness while retaining occupancy/cursor diversity.
+- A protected terminal incumbent prevents a partially explored acquisition branch from replacing a known complete suffix; only exact terminal utility can challenge it.
+- Dev seeds 5 and 7 both completed 200 moves at 3072 with no rule or replay mismatches, a small improvement over the leader's dev evidence but still max tile 256.
+- Full-horizon forecasts can remain identical for many replans; this is useful evidence of a stable terminal plateau, not proof that the heuristic found the global optimum.
+- Candidate 0014's equal-depth action beam completed the full remaining horizon on dev seeds without replay or rule mismatches; branching all legal actions is liveness-safe when every layer has a hard stop.
+- The beam's terminal forecast remained 2928 on seed 5 despite 367k expansions, so complete search and terminal acceptance do not by themselves escape a resource/heuristic ceiling.
+- A complete incumbent suffix should be reinserted into each beam layer; otherwise an interrupted or shape-pruned layer can erase the only verified path to the move cap.
+- Dev seeds 5 and 7 both scored 3040 with 256 max tiles, indicating the beam's main demonstrated benefit is robust execution, not a proven 512 breakthrough.
+- Candidate 0017 separates late consolidation from resource acquisition: a terminal-only search can be evaluated on exact final utility without disturbing the opening beam.
+- A terminal frontier must return only complete suffixes; an interrupted partial search is evidence for keeping the incumbent, not permission to replace it.
+- Loose admissible bounds are safer than aggressive shape pruning near the move cap, where one missed merge dominates heuristic layout gains.
+- Candidate 0013 reaches complete 200-move verified plans, yet several terminal boards place 256 away from the chosen edge and plateau at 3056; smoothness and mass alone do not encode a persistent corner anchor.
+- Candidate 0016 tests anchor hysteresis as a narrow structural fix: keep a corner while healthy, recover only after visible damage, and include the anchor-relative snake in rollout ranking.
+- The exact terminal acceptance remains merge score plus max tile; anchor geometry guides future trajectories but cannot replace a verified incumbent.
+- Candidate 0018 tests coordinated action windows: preserving a complete suffix is insufficient when a useful setup requires several consecutive deviations.
+- Window candidates are ranked only by exact terminal utility after suffix repair; intermediate shape scores choose beam diversity but cannot replace a verified incumbent.
+- Every changed prefix must regenerate spawn placement from its own RNG cursor before reconnecting a suffix; reusing old boards silently invalidates replay.
+- A bounded local window search needs a hard per-replan stop and a width cap, otherwise terminal-path enumeration can steal the episode wall budget.
+- Candidate 0017's dev traces show terminal branch-and-bound can prove the final 8/4-move tails while keeping complete suffixes; seeds 5/7 scored 3060/3104 with no replay errors.
+- A complete late suffix can improve score without changing the 256 ceiling; terminal consolidation and mass acquisition remain separate bottlenecks.

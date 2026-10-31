@@ -1,0 +1,43 @@
+{
+  "game": "Crafter",
+  "tier": 1,
+  "tier_rationale": "Crafter is a synchronous local Gym environment: the simulation advances one tick only when the adaptor calls step(action). Hunger, thirst, energy, day/night, plants and mobs advance between actions, but waiting for Astra while no step is issued does not consume game time. Decisions can therefore take seconds to a minute without an in-game deadline; the practical limit is the harness wall-clock budget.",
+  "decision_latency_s": 60.0,
+  "interface": {
+    "chosen": "official env",
+    "why": "The upstream Python environment is the benchmark's deterministic simulator, works offline and headless, exposes exact discrete actions plus inventory and achievement mappings, and avoids GUI capture or account/network dependencies. A version-checked private-world serializer can provide the requested semantic local map.",
+    "software": [
+      "crafter (pin the available 1.8.x wheel)",
+      "numpy",
+      "Pillow",
+      "pygame and the Gym/Gymnasium dependency required by the pinned Crafter release"
+    ],
+    "env": [
+      {
+        "var": "SDL_VIDEODRIVER",
+        "description": "Set to dummy on headless Linux if Pygame initializes a display",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Install Crafter and pinned dependencies into /home/hemlix/GamingMaster-mh-tier1/runs/venvs/crafter using offline wheels.",
+      "Smoke-test Env.reset(seed), Env.step, action_space and observation_space; record the installed version and action-name mapping.",
+      "Implement a version-checked serializer for the public inventory/achievements and nearby world/player state (or a local RGB tile decoder fallback).",
+      "Implement reset(seed), synchronous step(action), old/new Gym tuple compatibility, and close in finally.",
+      "Run headless with SDL_VIDEODRIVER=dummy and test several held-out integer seeds."
+    ],
+    "observation": "Public observations provide RGB image plus inventory and achievements mappings (and reward/discount, with exact keys release-dependent). The adaptor should add JSON text containing a radius tile/entity grid, player coordinates/facing/vitals, inventory, achievements and recent transition; use env private world/player objects when present and retain image optionally.",
+    "actions": "Submit one discrete integer per step: noop, four directional moves, do/interact, sleep, and place stone/table/furnace/plant. Resolve IDs from env.action_space/package names at startup and advance only through Env.step(action)."
+  },
+  "scoring": "Report achievements unlocked per episode and the benchmark Crafter score: aggregate achievement success rates over held-out seeds (the paper defines the aggregate as a geometric mean). Do not use shaped reward as the primary score; it does not represent the named objectives.",
+  "scenarios": "Call reset(seed) with many fresh integer seeds for evaluation, preserving the standard world size and episode length. Use fixed seeds only for debugging. Held-out seeds should vary procedural terrain, resource locations, water/food proximity and enemy encounters; do not memorize routes.",
+  "strategy_summary": "Strong play follows the dependency chain wood -> table/wood tools -> stone -> furnace/coal -> iron -> diamond, while drinking, eating and planting before those vitals become critical. Maintain a semantic local map, face targets before do, batch only short safe action sequences, and replan after every meaningful step because mobs, day/night and resources change. Crafting legality, inventory, recipes, coordinates and achievement accounting belong in code; Astra chooses objectives and routes; Jev answers fast urgency, target, combat and legal-action questions. Kite enemies and retreat when health or supplies are low rather than pursuing a marginal achievement.",
+  "risks": [
+    "The package may be unavailable in the offline wheel cache or its Gym/Pygame dependency versions may conflict with Python 3.12.",
+    "The semantic map is not a stable public field; private world/player attributes are release-sensitive, so pin and smoke-test, with RGB decoding as fallback.",
+    "Headless Pygame may require SDL_VIDEODRIVER=dummy.",
+    "Long no-op/action sequences consume game ticks and can cause starvation, thirst, night combat or death.",
+    "Achievement names and observation tuple conventions vary across Crafter releases; discover them at runtime.",
+    "No external server, account or anti-cheat bypass is involved; screen injection is brittle and unnecessary."
+  ]
+}

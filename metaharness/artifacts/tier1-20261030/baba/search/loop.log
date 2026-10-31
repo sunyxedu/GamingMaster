@@ -1,0 +1,23 @@
+[19:33:22] seed check: 16 seed(s) reset ok
+[20:16:22] eval 0000-tier1_astra_naive: mean=0.75 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6, deadline 2
+[20:16:22] iteration 1/6 slot 1/3: proposing 0001 with codex:gpt-6-astra@router
+[20:16:22] iteration 1/6 slot 2/3: proposing 0002 with codex:gpt-6-astra@router
+[20:16:22] iteration 1/6 slot 3/3: proposing 0003 with codex:gpt-6-astra@router
+[20:35:27] preflight 0003: ok
+[20:49:30] preflight 0001: ok
+[20:55:12] preflight 0002: ok; warnings: no System-2 call was answered during the dry run
+[21:21:38] eval 0003: mean=0.875 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 7, deadline 1
+[21:22:32] eval 0002: mean=1.0 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[21:33:03] eval 0001: mean=0.75 stale=None fatal=None errors=0 failed s1/s2=0/2 ended: deadline 2, game_done 6
+[21:33:03] iteration 2/6 slot 1/3: proposing 0004 with codex:gpt-6-astra@router
+[21:33:03] iteration 2/6 slot 2/3: proposing 0005 with codex:gpt-6-astra@router
+[21:33:03] iteration 2/6 slot 3/3: proposing 0006 with codex:gpt-6-astra@router
+[21:33:45] the archive already holds 3 proposal(s) = 1 iteration(s); running 0 more to reach 1 (raise --iters for more)
+[21:33:45] validation of the top 4 on seeds [400, 401, 402, 403, 404, 405, 406, 407]: 0002, 0003, 0001, 0000-tier1_astra_naive
+[22:03:46] eval 0003/validation: mean=0.75 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: deadline 2, game_done 6
+[22:22:13] eval 0000-tier1_astra_naive/validation: mean=0.5 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: deadline 4, game_done 4
+[22:33:47] eval 0002/validation: mean=0.375 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: deadline 5, game_done 3
+[22:33:47] eval 0001/validation: mean=0.125 stale=None fatal=None errors=0 failed s1/s2=0/2 ended: deadline 7, game_done 1
+[22:33:47] selected after validation: 0003
+[22:33:47] held-out seeds evaluation of 0003
+[22:44:28] eval 0003/heldout: mean=1.0 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8

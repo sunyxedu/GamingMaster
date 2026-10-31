@@ -1,0 +1,7 @@
+catanatron @ git+https://github.com/bcollazo/catanatron.git@ecf931181b9a65bb4116a2153fb78c16f1438e00
+networkx==3.7
+click==8.5.0
+rich==15.0.0
+markdown-it-py==4.2.0
+mdurl==0.1.2
+pygments==2.21.0

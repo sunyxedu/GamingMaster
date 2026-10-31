@@ -1,0 +1,1 @@
+Linux x86_64 server without GUI; everything must run offline on this machine with free software. The evaluator's Python is the venv at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/textworld (install there). Tier 1: the agent plays turn by turn. pip textworld; generate games per seed with a fixed difficulty mix; score = normalised game score.

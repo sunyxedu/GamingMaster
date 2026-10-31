@@ -1,0 +1,146 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          600,
+          601,
+          602,
+          603,
+          604,
+          605,
+          606,
+          607,
+          608,
+          609,
+          610,
+          611
+        ]
+      ],
+      [
+        "heldout",
+        [
+          1201,
+          1202,
+          1203,
+          1204,
+          1205,
+          1206,
+          1207,
+          1208,
+          1209,
+          1210,
+          1211,
+          1212
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "76fac3fd9bd43e8e50f96cac2c2b672f3b20dce65ada0d0f528c2f75ab45e061"
+  },
+  "results": {
+    "train:600": {
+      "ok": true,
+      "obs_sha256": "4585ac41c65955b3"
+    },
+    "train:601": {
+      "ok": true,
+      "obs_sha256": "3782b907c930a0eb"
+    },
+    "train:602": {
+      "ok": true,
+      "obs_sha256": "c50b45b19eab1e08"
+    },
+    "train:603": {
+      "ok": true,
+      "obs_sha256": "4175d115d77d0bac"
+    },
+    "train:604": {
+      "ok": true,
+      "obs_sha256": "0f57668500362861"
+    },
+    "train:605": {
+      "ok": true,
+      "obs_sha256": "12dd01bcc74a3252"
+    },
+    "train:606": {
+      "ok": true,
+      "obs_sha256": "4585ac41c65955b3"
+    },
+    "train:607": {
+      "ok": true,
+      "obs_sha256": "3782b907c930a0eb"
+    },
+    "train:608": {
+      "ok": true,
+      "obs_sha256": "c50b45b19eab1e08"
+    },
+    "train:609": {
+      "ok": true,
+      "obs_sha256": "4175d115d77d0bac"
+    },
+    "train:610": {
+      "ok": true,
+      "obs_sha256": "0f57668500362861"
+    },
+    "train:611": {
+      "ok": true,
+      "obs_sha256": "12dd01bcc74a3252"
+    },
+    "heldout:1201": {
+      "ok": true,
+      "obs_sha256": "3782b907c930a0eb"
+    },
+    "heldout:1202": {
+      "ok": true,
+      "obs_sha256": "c50b45b19eab1e08"
+    },
+    "heldout:1203": {
+      "ok": true,
+      "obs_sha256": "4175d115d77d0bac"
+    },
+    "heldout:1204": {
+      "ok": true,
+      "obs_sha256": "0f57668500362861"
+    },
+    "heldout:1205": {
+      "ok": true,
+      "obs_sha256": "12dd01bcc74a3252"
+    },
+    "heldout:1206": {
+      "ok": true,
+      "obs_sha256": "4585ac41c65955b3"
+    },
+    "heldout:1207": {
+      "ok": true,
+      "obs_sha256": "3782b907c930a0eb"
+    },
+    "heldout:1208": {
+      "ok": true,
+      "obs_sha256": "c50b45b19eab1e08"
+    },
+    "heldout:1209": {
+      "ok": true,
+      "obs_sha256": "4175d115d77d0bac"
+    },
+    "heldout:1210": {
+      "ok": true,
+      "obs_sha256": "0f57668500362861"
+    },
+    "heldout:1211": {
+      "ok": true,
+      "obs_sha256": "12dd01bcc74a3252"
+    },
+    "heldout:1212": {
+      "ok": true,
+      "obs_sha256": "4585ac41c65955b3"
+    }
+  },
+  "refused": [],
+  "warnings": [
+    "held-out seeds start exactly like a training seed: heldout:1201, heldout:1202, heldout:1203, heldout:1204, heldout:1205, heldout:1206, heldout:1207, heldout:1208, heldout:1209, heldout:1210, heldout:1211, heldout:1212"
+  ]
+}

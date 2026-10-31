@@ -1,0 +1,18 @@
+[22:05:00] run: game="No-limit Texas Hold'em heads-up poker" dir=runs/poker agent=codex:gpt-6-astra@router
+[22:48:28] run: game="No-limit Texas Hold'em heads-up poker" dir=runs/poker agent=codex:gpt-6-astra@router
+[23:03:25] study: done — tier 1, interface bot library: PokerKit 0.7.6 in-process Python rules engine with a private-view turn-based adaptor and a frozen local heuristic opponent
+[23:20:00] adapt: adaptor validated after 1 attempt(s)
+[23:20:01] run: game="No-limit Texas Hold'em heads-up poker" dir=runs/poker agent=codex:gpt-6-astra@router
+[23:20:01] study: reusing runs/poker/study/study.json (tier 1)
+[23:20:03] adapt: reusing validated adaptor
+[23:20:03] search: tier 1 on adaptor game "Heads-up no-limit Texas Hold'em — heuristic-v1"
+[07:31:32] run: done — best 0014
+[20:38:06] run: game="No-limit Texas Hold'em heads-up poker" dir=runs/poker agent=codex:gpt-6-astra@router
+[20:38:06] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[20:38:06] study: reusing runs/poker/study/study.json (tier 1)
+[22:17:03] adapt: adaptor validated after 1 attempt(s)
+[22:17:03] run: game="No-limit Texas Hold'em heads-up poker" dir=runs/poker agent=codex:gpt-6-astra@router
+[22:17:03] study: reusing runs/poker/study/study.json (tier 1)
+[22:17:04] adapt: reusing validated adaptor
+[22:17:04] search: tier 1 on adaptor game "Heads-up no-limit Texas Hold'em — mc-pot-odds-v2"
+[07:41:37] run: done — best 0013

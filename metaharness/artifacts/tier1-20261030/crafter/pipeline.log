@@ -1,0 +1,10 @@
+[22:05:00] run: game='Crafter (open-world survival benchmark by Danijar Hafner)' dir=runs/crafter agent=codex:gpt-6-astra@router
+[22:11:23] run: game='Crafter (open-world survival benchmark by Danijar Hafner)' dir=runs/crafter agent=codex:gpt-6-astra@router
+[07:11:41] run: game='Crafter (open-world survival benchmark by Danijar Hafner)' dir=runs/crafter agent=codex:gpt-6-astra@router
+[07:29:53] study: done — tier 1, interface official env
+[07:54:26] adapt: adaptor validated after 1 attempt(s)
+[07:54:27] run: game='Crafter (open-world survival benchmark by Danijar Hafner)' dir=runs/crafter agent=codex:gpt-6-astra@router
+[07:54:27] study: reusing runs/crafter/study/study.json (tier 1)
+[07:54:31] adapt: reusing validated adaptor
+[07:54:31] search: tier 1 on adaptor game 'Crafter'
+[13:49:10] run: done — best 0010

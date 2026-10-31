@@ -1,0 +1,738 @@
+{
+ "harness_path": "runs/yugioh/search/candidates/0010/harness.py",
+ "game": "Yu-Gi-Oh! EDOPro \u2014 offline three-duel benchmark",
+ "fatal": null,
+ "mean_score": 0.47921875,
+ "stale_fraction": null,
+ "n_episodes": 12,
+ "system1_calls": 0,
+ "system2_calls": 19,
+ "mean_steps": 286.5,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 12
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 0.002036067481093659,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 1101,
+   "score": 0.3666666666666667,
+   "steps": 407,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 217.15433168318123,
+   "error": null,
+   "info": {
+    "score": 0.3666666666666667,
+    "ticks": 407,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.3666666666666667,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 0.6666666666666666,
+     "outcome_component": 0.3333333333333333,
+     "lp_component": 0.03333333333333333,
+     "wins": 2.0,
+     "losses": 1.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 407,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1102,
+   "score": 0.36708333333333343,
+   "steps": 340,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 217.1663748959545,
+   "error": null,
+   "info": {
+    "score": 0.36708333333333343,
+    "ticks": 340,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.36708333333333343,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 0.6666666666666666,
+     "outcome_component": 0.3333333333333333,
+     "lp_component": 0.03375,
+     "wins": 2.0,
+     "losses": 1.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 340,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1103,
+   "score": 1.09,
+   "steps": 262,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 215.1610816938337,
+   "error": null,
+   "info": {
+    "score": 1.09,
+    "ticks": 262,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 1.09,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 1.0,
+     "outcome_component": 1.0,
+     "lp_component": 0.09000000000000001,
+     "wins": 3.0,
+     "losses": 0.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 262,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1104,
+   "score": 0.3666666666666667,
+   "steps": 170,
+   "system1_calls": 0,
+   "system2_calls": 5,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 4,
+    "mean": 69.77341777086258,
+    "p50": 76.25959205627441,
+    "p90": 80.56616854667664,
+    "max": 80.56616854667664
+   },
+   "wall_s": 567.5416183129419,
+   "error": null,
+   "info": {
+    "score": 0.3666666666666667,
+    "ticks": 170,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.3666666666666667,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 0.6666666666666666,
+     "outcome_component": 0.3333333333333333,
+     "lp_component": 0.03333333333333333,
+     "wins": 2.0,
+     "losses": 1.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 170,
+   "acts_after_s1": 0,
+   "acts_after_s2": 4,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     80.566,
+     916
+    ],
+    [
+     48.197,
+     647
+    ],
+    [
+     74.071,
+     506
+    ],
+    [
+     76.26,
+     508
+    ]
+   ]
+  },
+  {
+   "seed": 1105,
+   "score": 0.3400000000000001,
+   "steps": 326,
+   "system1_calls": 0,
+   "system2_calls": 3,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 45.740859627723694,
+    "p50": 51.17224073410034,
+    "p90": 51.17224073410034,
+    "max": 51.17224073410034
+   },
+   "wall_s": 450.04816306591965,
+   "error": null,
+   "info": {
+    "score": 0.3400000000000001,
+    "ticks": 326,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.3400000000000001,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 0.6666666666666666,
+     "outcome_component": 0.3333333333333333,
+     "lp_component": 0.006666666666666668,
+     "wins": 2.0,
+     "losses": 1.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 326,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     40.309,
+     74
+    ],
+    [
+     51.172,
+     149
+    ]
+   ]
+  },
+  {
+   "seed": 1106,
+   "score": 1.0991666666666668,
+   "steps": 230,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 213.60615037404932,
+   "error": null,
+   "info": {
+    "score": 1.0991666666666668,
+    "ticks": 230,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 1.0991666666666668,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 1.0,
+     "outcome_component": 1.0,
+     "lp_component": 0.09916666666666667,
+     "wins": 3.0,
+     "losses": 0.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 230,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1107,
+   "score": 0.36624999999999996,
+   "steps": 263,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 215.1029790500179,
+   "error": null,
+   "info": {
+    "score": 0.36624999999999996,
+    "ticks": 263,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.36624999999999996,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 0.6666666666666666,
+     "outcome_component": 0.3333333333333333,
+     "lp_component": 0.03291666666666667,
+     "wins": 2.0,
+     "losses": 1.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 263,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1108,
+   "score": 0.3620833333333333,
+   "steps": 214,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 214.19457610789686,
+   "error": null,
+   "info": {
+    "score": 0.3620833333333333,
+    "ticks": 214,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.3620833333333333,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 0.6666666666666666,
+     "outcome_component": 0.3333333333333333,
+     "lp_component": 0.02875,
+     "wins": 2.0,
+     "losses": 1.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 214,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1109,
+   "score": 0.35791666666666666,
+   "steps": 401,
+   "system1_calls": 0,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 43.46373271942139,
+    "p50": 43.46373271942139,
+    "p90": 43.46373271942139,
+    "max": 43.46373271942139
+   },
+   "wall_s": 361.88103567808867,
+   "error": null,
+   "info": {
+    "score": 0.35791666666666666,
+    "ticks": 401,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.35791666666666666,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 0.6666666666666666,
+     "outcome_component": 0.3333333333333333,
+     "lp_component": 0.024583333333333332,
+     "wins": 2.0,
+     "losses": 1.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 401,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     43.464,
+     568
+    ]
+   ]
+  },
+  {
+   "seed": 1110,
+   "score": 0.35083333333333333,
+   "steps": 241,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 214.22803940600716,
+   "error": null,
+   "info": {
+    "score": 0.35083333333333333,
+    "ticks": 241,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.35083333333333333,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 0.6666666666666666,
+     "outcome_component": 0.3333333333333333,
+     "lp_component": 0.0175,
+     "wins": 2.0,
+     "losses": 1.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 241,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1111,
+   "score": -0.37333333333333335,
+   "steps": 195,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 214.27127023786306,
+   "error": null,
+   "info": {
+    "score": -0.37333333333333335,
+    "ticks": 195,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": -0.37333333333333335,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 0.3333333333333333,
+     "outcome_component": -0.3333333333333333,
+     "lp_component": -0.04,
+     "wins": 1.0,
+     "losses": 2.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 195,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1112,
+   "score": 1.0572916666666667,
+   "steps": 389,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 216.28246452100575,
+   "error": null,
+   "info": {
+    "score": 1.0572916666666667,
+    "ticks": 389,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 1.0572916666666667,
+     "completed_duels": 3.0,
+     "native_completed": 3.0,
+     "win_rate": 1.0,
+     "outcome_component": 1.0,
+     "lp_component": 0.05729166666666668,
+     "wins": 3.0,
+     "losses": 0.0,
+     "draws": 0.0,
+     "truncations": 0.0,
+     "forfeits": 0.0,
+     "technical_error": 0.0
+    }
+   },
+   "acts": 389,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   1101,
+   1102,
+   1103,
+   1104,
+   1105,
+   1106,
+   1107,
+   1108,
+   1109,
+   1110,
+   1111,
+   1112
+  ],
+  "expected_episodes": 12,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "b5ac181e58c7b2d56ce9ca45350ee39771e700b11fa3eb5cc22804cf9b8be2b4",
+  "game_kind": "turn",
+  "resolved_models": {
+   "system2": [
+    "codex:gpt-6-astra@router"
+   ]
+  }
+ },
+ "score_std": 0.41923895512163145
+}

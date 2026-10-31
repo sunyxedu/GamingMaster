@@ -1,0 +1,488 @@
+{
+ "harness_path": "runs/baba/search/candidates/0002/harness.py",
+ "game": "Baba Is AI",
+ "fatal": null,
+ "mean_score": 1.0,
+ "stale_fraction": null,
+ "n_episodes": 8,
+ "system1_calls": 0,
+ "system2_calls": 10,
+ "mean_steps": 10.5,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 8
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 0.11904761904761904,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 100,
+   "score": 1.0,
+   "steps": 5,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 0.011503759073093534,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 5,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "puzzles_solved": 1.0,
+     "puzzles_attempted": 1.0,
+     "solved_fraction": 1.0
+    }
+   },
+   "acts": 5,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 101,
+   "score": 1.0,
+   "steps": 3,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 0.006176055874675512,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 3,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "puzzles_solved": 1.0,
+     "puzzles_attempted": 1.0,
+     "solved_fraction": 1.0
+    }
+   },
+   "acts": 3,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 102,
+   "score": 1.0,
+   "steps": 2,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 0.004836317151784897,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 2,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "puzzles_solved": 1.0,
+     "puzzles_attempted": 1.0,
+     "solved_fraction": 1.0
+    }
+   },
+   "acts": 2,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 103,
+   "score": 1.0,
+   "steps": 21,
+   "system1_calls": 0,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 119.12977540493011,
+    "p50": 193.05119562149048,
+    "p90": 193.05119562149048,
+    "max": 193.05119562149048
+   },
+   "wall_s": 238.30482244305313,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 21,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "puzzles_solved": 1.0,
+     "puzzles_attempted": 1.0,
+     "solved_fraction": 1.0
+    }
+   },
+   "acts": 21,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     193.051,
+     5501
+    ],
+    [
+     45.208,
+     340
+    ]
+   ]
+  },
+  {
+   "seed": 104,
+   "score": 1.0,
+   "steps": 13,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 96.90026879310608,
+    "p50": 96.90026879310608,
+    "p90": 96.90026879310608,
+    "max": 96.90026879310608
+   },
+   "wall_s": 422.06767485500313,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 13,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "puzzles_solved": 1.0,
+     "puzzles_attempted": 1.0,
+     "solved_fraction": 1.0
+    }
+   },
+   "acts": 13,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     96.9,
+     2067
+    ]
+   ]
+  },
+  {
+   "seed": 105,
+   "score": 1.0,
+   "steps": 16,
+   "system1_calls": 0,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 58.462212800979614,
+    "p50": 63.71298170089722,
+    "p90": 63.71298170089722,
+    "max": 63.71298170089722
+   },
+   "wall_s": 1639.569582785014,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 16,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "puzzles_solved": 1.0,
+     "puzzles_attempted": 1.0,
+     "solved_fraction": 1.0
+    }
+   },
+   "acts": 16,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     63.713,
+     269
+    ],
+    [
+     53.211,
+     58
+    ]
+   ]
+  },
+  {
+   "seed": 106,
+   "score": 1.0,
+   "steps": 10,
+   "system1_calls": 0,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 46.063783049583435,
+    "p50": 47.3389093875885,
+    "p90": 47.3389093875885,
+    "max": 47.3389093875885
+   },
+   "wall_s": 478.29591326299123,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 10,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "puzzles_solved": 1.0,
+     "puzzles_attempted": 1.0,
+     "solved_fraction": 1.0
+    }
+   },
+   "acts": 10,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     44.789,
+     182
+    ],
+    [
+     47.339,
+     8
+    ]
+   ]
+  },
+  {
+   "seed": 107,
+   "score": 1.0,
+   "steps": 14,
+   "system1_calls": 0,
+   "system2_calls": 3,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 3,
+    "mean": 121.21089975039165,
+    "p50": 131.30443143844604,
+    "p90": 134.77781534194946,
+    "max": 134.77781534194946
+   },
+   "wall_s": 991.9120876151137,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 14,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "puzzles_solved": 1.0,
+     "puzzles_attempted": 1.0,
+     "solved_fraction": 1.0
+    }
+   },
+   "acts": 14,
+   "acts_after_s1": 0,
+   "acts_after_s2": 3,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     131.304,
+     3462
+    ],
+    [
+     97.55,
+     1783
+    ],
+    [
+     134.778,
+     3965
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   100,
+   101,
+   102,
+   103,
+   104,
+   105,
+   106,
+   107
+  ],
+  "expected_episodes": 8,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "27456cdef57e2c263e85e5559e97e4554cb678a7e668cba63a6dad7fb3cd96d8",
+  "game_kind": "turn",
+  "resolved_models": {
+   "system2": [
+    "codex:gpt-6-astra@router"
+   ]
+  }
+ },
+ "score_std": 0.0
+}

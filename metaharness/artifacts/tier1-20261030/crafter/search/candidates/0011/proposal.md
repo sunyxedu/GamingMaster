@@ -1,0 +1,12 @@
+parent: 0002
+
+Hypothesis: the leader's remaining failures are caused by a hostile induced movement loop after the useful progression is already complete.  Its nearest-hostile combat rule reacts to each new mob position independently, so a zombie at the edge of the remembered map can make the controller reverse direction every tick.  The result is death without unlocking the remaining rare or combat achievements.  In seed 1102 of candidate 0002, the run already had 16 achievements at step 540; steps 550--557 alternate around positions [1,46], [2,46], [1,46], then steps 568--577 alternate [0,46]/[0,45] while two zombies close in, ending with health 0.  Seed 1101 reached 21/22 and still died at step 516 with food 0.  These are late survival/control failures rather than early recipe failures.
+
+What changed versus 0002:
+
+- Added a code-owned `threat_escape` mode before strategic objectives and ordinary combat.  When health is at most 7, multiple hostiles are nearby, or daylight is deep night, it commits for a short lock window to a movement that increases separation and reduces the local danger field.  The lock prevents a moving zombie from immediately reversing the chosen direction.
+- During quiet daylight, the harness records a safe anchor from the actual explored position.  Escape scoring prefers returning toward that anchor once separation is adequate, while still using only observed map cells.
+- Added two-cell positional cycle detection.  If the same A/B positions repeat, one low-danger neighboring route is chosen for a tick to break the oscillation.
+- Kept the parent's observation-driven pathfinding, verified recipe deltas, asynchronous adviser, bounded sleep, and malformed-response handling.  Astra still chooses objectives, but cannot override a threat lock.
+
+Evidence that would confirm the hypothesis: traces should show `threat_escape` actions replacing long A/B runs, fewer endings with health zero while food/drink remain usable, and higher minimum scores on seeds that previously died to night mobs.  A confirming late trace has a hostile sighting, a monotone increase in distance from the hostile or a return to the anchor, then resumption of crafting/exploration after the lock expires.  The hypothesis is refuted if escape locks strand the player away from resources, reduce early combat achievements, or deaths continue with no positional oscillation and healthy separation.  Compare the action reasons and the last 30 positions, not only aggregate score.

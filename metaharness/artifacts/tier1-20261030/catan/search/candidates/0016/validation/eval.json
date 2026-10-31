@@ -1,0 +1,320 @@
+{
+ "harness_path": "runs/catan/search/candidates/0016/harness.py",
+ "game": "Settlers of Catan (Catanatron AlphaBeta depth 2)",
+ "fatal": null,
+ "mean_score": 0.325,
+ "stale_fraction": null,
+ "n_episodes": 4,
+ "system1_calls": 0,
+ "system2_calls": 12,
+ "mean_steps": 91.25,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "harness_return": 3,
+  "game_done": 1
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 0.024657534246575342,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 401,
+   "score": 0.07,
+   "steps": 80,
+   "system1_calls": 0,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 54.487648725509644,
+    "p50": 73.89802622795105,
+    "p90": 73.89802622795105,
+    "max": 73.89802622795105
+   },
+   "wall_s": 1127.206001524115,
+   "error": null,
+   "info": {
+    "score": 0.07,
+    "ticks": 80,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "win": 0.0,
+     "true_vp": 7.0,
+     "public_vp": 6.0,
+     "turns": 69.0,
+     "action_count": 268.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 80,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_return",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     35.077,
+     62
+    ],
+    [
+     73.898,
+     1090
+    ]
+   ]
+  },
+  {
+   "seed": 402,
+   "score": 0.07,
+   "steps": 110,
+   "system1_calls": 0,
+   "system2_calls": 4,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 4,
+    "mean": 54.218836069107056,
+    "p50": 51.58033537864685,
+    "p90": 68.00219774246216,
+    "max": 68.00219774246216
+   },
+   "wall_s": 1376.7518041769508,
+   "error": null,
+   "info": {
+    "score": 0.07,
+    "ticks": 110,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "win": 0.0,
+     "true_vp": 7.0,
+     "public_vp": 6.0,
+     "turns": 94.0,
+     "action_count": 349.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 110,
+   "acts_after_s1": 0,
+   "acts_after_s2": 3,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_return",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     68.002,
+     560
+    ],
+    [
+     50.808,
+     279
+    ],
+    [
+     46.484,
+     804
+    ],
+    [
+     51.58,
+     230
+    ]
+   ]
+  },
+  {
+   "seed": 403,
+   "score": 1.1,
+   "steps": 87,
+   "system1_calls": 0,
+   "system2_calls": 3,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 32.65565323829651,
+    "p50": 45.07088661193848,
+    "p90": 45.07088661193848,
+    "max": 45.07088661193848
+   },
+   "wall_s": 907.2550370979588,
+   "error": null,
+   "info": {
+    "score": 1.1,
+    "ticks": 87,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "win": 1.0,
+     "true_vp": 10.0,
+     "public_vp": 10.0,
+     "turns": 67.0,
+     "action_count": 269.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 87,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     45.071,
+     550
+    ],
+    [
+     20.24,
+     146
+    ]
+   ]
+  },
+  {
+   "seed": 404,
+   "score": 0.06,
+   "steps": 88,
+   "system1_calls": 0,
+   "system2_calls": 3,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 39.894885301589966,
+    "p50": 54.975610971450806,
+    "p90": 54.975610971450806,
+    "max": 54.975610971450806
+   },
+   "wall_s": 1445.6146125439554,
+   "error": null,
+   "info": {
+    "score": 0.06,
+    "ticks": 88,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "win": 0.0,
+     "true_vp": 6.0,
+     "public_vp": 4.0,
+     "turns": 84.0,
+     "action_count": 354.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 88,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_return",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     54.976,
+     447
+    ],
+    [
+     24.814,
+     106
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   401,
+   402,
+   403,
+   404
+  ],
+  "expected_episodes": 4,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "69f0b26a47bff200294b13f4954c3eac3e09a0ee6a7fcffea1e3c1189d7dbdd3",
+  "game_kind": "turn",
+  "resolved_models": {
+   "system2": [
+    "codex:gpt-6-astra@router"
+   ]
+  }
+ },
+ "score_std": 0.516688171595467
+}

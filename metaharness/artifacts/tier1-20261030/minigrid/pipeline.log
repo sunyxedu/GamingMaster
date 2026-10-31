@@ -1,0 +1,14 @@
+[22:05:00] run: game='MiniGrid / BabyAI' dir=runs/minigrid agent=codex:gpt-6-astra@router
+[22:11:23] run: game='MiniGrid / BabyAI' dir=runs/minigrid agent=codex:gpt-6-astra@router
+[19:29:33] run: game='MiniGrid / BabyAI' dir=runs/minigrid agent=codex:gpt-6-astra@router
+[19:54:53] study: done — tier 1, interface official env
+[20:23:07] adapt: adaptor validated after 1 attempt(s)
+[20:23:07] run: game='MiniGrid / BabyAI' dir=runs/minigrid agent=codex:gpt-6-astra@router
+[20:23:07] study: reusing runs/minigrid/study/study.json (tier 1)
+[20:23:07] adapt: reusing validated adaptor
+[20:23:07] search: tier 1 on adaptor game 'MiniGrid / BabyAI'
+[00:47:20] run: game='MiniGrid / BabyAI' dir=runs/minigrid agent=codex:gpt-6-astra@router
+[00:47:20] study: reusing runs/minigrid/study/study.json (tier 1)
+[00:47:20] adapt: reusing validated adaptor
+[00:47:20] search: tier 1 on adaptor game 'MiniGrid / BabyAI'
+[00:55:21] run: done — best 0002

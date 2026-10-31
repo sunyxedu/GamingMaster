@@ -1,0 +1,75 @@
+{
+  "game": "Yu-Gi-Oh! Trading Card Game (headless EDOPro / YGOPro duel core)",
+  "tier": 1,
+  "tier_rationale": "A locally embedded duel core advances through automatic events and waits for requested player responses, including chain decisions on the opponent's turn. It has no inherent real-time reaction requirement or local thinking clock, so Astra can take seconds to a minute and Jev is optional. The proposed adaptor imposes an external, configurable 300-second agent decision deadline for evaluation; this is not a Yu-Gi-Oh! rule or a measured core limit. Online server clocks are outside this offline benchmark.",
+  "decision_latency_s": 300.0,
+  "interface": {
+    "chosen": "native API: pinned EDOPro core through a local C/C++ bridge and Python 3.12 ctypes",
+    "why": "Uses the real automated duel rules in a headless offline process, avoids GUI automation and public services, and requires no unverified CPython 3.12 extension wheel or training stack. A bridge compiled against the pinned core header owns ABI-sensitive structures and callbacks. The adaptor must implement the matching binary request protocol, legal semantic actions, and player-specific hidden-information filtering. This is a proposed interface, not a built or tested integration.",
+    "software": [
+      "Pinned compatible source snapshot of edo9300/ygopro-core, with license and its required build dependencies",
+      "Matching Lua implementation and development headers or vendored Lua sources required by the selected core",
+      "Matching ProjectIgnis/CardScripts bundle including shared helpers and startup scripts",
+      "Matching ProjectIgnis/BabelCDB card database plus required system/effect description strings",
+      "Matching ProjectIgnis/EDOPro client source as protocol, startup, and visibility reference; GUI build not required",
+      "GCC/G++, Git, and the upstream-selected build system; CMake/Ninja are present, Premake may be needed depending on the pinned revision",
+      "Evaluator Python 3.12.3 at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/yugioh/bin/python; standard-library ctypes, sqlite3, struct, json, and process supervision",
+      "Adaptor-phase native bridge and semantic prompt parser; no game-playing implementation has been written during study",
+      "Frozen three-deck 40-card benchmark manifest from interfaces.md, with resolved card IDs, asset hashes, rule flags, and a seeded random-legal opponent policy"
+    ],
+    "env": [
+      {
+        "var": "YGO_ASSET_ROOT",
+        "description": "Proposed adaptor variable: absolute path to the staged, pinned offline database/scripts/strings/deck bundle; default can be resolved from the local manifest. No credentials required.",
+        "required": false
+      },
+      {
+        "var": "YGO_CORE_LIB",
+        "description": "Proposed adaptor variable: absolute path to the compatible built core/bridge shared library; derive from the local build by default.",
+        "required": false
+      },
+      {
+        "var": "YGO_SCENARIO_MANIFEST",
+        "description": "Proposed adaptor variable: path to the fixed deck, rules, asset-version, and opponent configuration manifest; use the bundled manifest by default.",
+        "required": false
+      },
+      {
+        "var": "YGO_DECISION_TIMEOUT_S",
+        "description": "Proposed adaptor variable: external per-agent-decision timeout in seconds, default 300; not an engine or tournament clock.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Stage an offline compatible core, Lua, scripts, database, strings, reference-client source, and license bundle. Network requests failed with DNS resolution errors during study and no local game bundle was found.",
+      "Pin and hash all sources, binaries, scripts, database, rule configuration, and deck manifest. Inspect the actual core header/build instructions and matching client response handlers before choosing flags or wire layouts.",
+      "Build only the headless native core and a small C/C++ bridge against the selected ABI. Verify Lua ABI and dependencies rather than assuming the installed Lua runtime supplies headers or matches the core.",
+      "Use /home/hemlix/GamingMaster-mh-tier1/runs/venvs/yugioh/bin/python for every import and test. No additional Python packages are required by the recommended standard-library route; if needed later, install only compatible offline wheels into that venv with appropriate filesystem access.",
+      "Read the actual CDB schema, resolve and validate all proposed deck card names to numeric IDs, supply card-data/script/log callbacks, retain native callback buffers for their required lifetime, and load startup scripts in the matching client's order.",
+      "Configure ordinary two-player Master Rule duels, 8000 LP, five initial cards, and the documented custom three-copy format with empty Extra/Side Decks. Deterministically select decks and first player and initialize independent core/shuffle and opponent RNG streams from reset(seed).",
+      "Implement bounded binary message parsing and exact response encoding for every prompt encountered by the pool, including chains, card subsets, tributes, zones, positions, options, and forced choices. Do not mix legacy set_responsei/set_responseb conventions with modern OCG APIs.",
+      "Expose an acting-player JSON view with known card text and validated semantic action IDs. Filter hidden cards, raw queries/logs, RNG seeds, and hidden-state-derived identifiers from both policies.",
+      "Run a seeded random-legal opponent locally through the same response and visibility path. Optionally add a versioned scripted heuristic opponent; WindBot requires a separate compatible local host and supported decks.",
+      "Validate full offline duels for all fixed deck pairings, deterministic replay, legal prompt coverage, hidden-information boundaries, terminal winner mapping, and explicit crash/timeout/truncation reporting before evaluating Astra. Do not claim a working adaptor until these checks pass."
+    ],
+    "observation": "Proposed JSON: episode and prompt tokens, state version, agent/acting/turn seats, turn and phase, LP and zone counts, own legal private information, public field/Graveyard/face-up banished cards, current card text/stats and relationships, chain links/costs/targets, public event history, known restrictions, and the current request with legal actions or exact selection constraints. Unknown opponent hands, face-down identities, deck order, secret seed, raw native queries, and private logs are excluded. Native messages are binary and require an adaptor; the core does not directly supply this JSON.",
+    "actions": "Choose one opaque legal action ID tied to the current prompt token, or a validated constrained subset/permutation for a compound prompt. Choices cover summon/set/position/activation/attack/phase progression, chain response or legal decline, costs/targets/tributes/materials, zones, positions, options, numbers, and announcements. The bridge packs the matching native response; step then processes events and opponent prompts until the next agent decision or terminal result, including decisions during the opponent's turn."
+  },
+  "scoring": "Report native win/loss/draw and terminal reason, LP, turns, decisions, and error/truncation flags. For completed duels use w + 0.1*clamp((agent_LP-opponent_LP)/8000,-1,1), with w=1 for a win, -1 for a loss, and 0 for a true draw; also report win rate separately. Engine winner overrides LP, including deck-out and alternate wins. Proposed 300-second agent-response timeout is an identifiable forfeit, while engine/script/parser failures are technical errors. Proposed 200-turn or 10000-decision cap produces a separately reported benchmark truncation with score 0, not a claimed native draw.",
+  "scenarios": "Freeze the three exact 40-card deck recipes in interfaces.md: normal_pressure, flip_control, and tribute_pressure, all using a shared 16-card Spell/Trap package and empty Extra/Side Decks in a custom three-copy format, not a claimed current tournament format. Resolve card IDs against pinned assets before use. reset(seed) deterministically varies both deck choices, first player/seat, all shuffles, and the random-legal opponent stream through documented independent seed derivations. Balance ordered deck matchups and first/second positions over held-out seeds, use the same scenarios for policy comparisons, keep seed/RNG state private, and report per-stratum results. Additional modern decks or stronger opponents require separately versioned manifests and new prompt-coverage validation.",
+  "strategy_summary": "Code must enforce legal responses, exact battle arithmetic, selection constraints, public knowledge tracking, and prompt ownership while the engine resolves rules. Astra should prioritize established wins and survival, then useful resource exchanges, meaningful interaction, and next-turn follow-up. In the initial pool, pressure decks use efficient low-level attackers, flip-control decks seek removal and recovery value, and tribute decks preserve bodies only when a larger threat justifies the investment. Sequence removal, summons, and attacks around plausible hidden responses, and remember that destroying an effect source usually does not negate an already activated effect. Preserve interaction for the threat that matters rather than activating every available card or overextending into mass removal. Jev is optional for typed role/threat/relevance judgments on known information; it should not plan combos, calculate lethal, or infer exact hidden cards. Evaluate improvements over held-out seeds and both starting positions using win rate and completion/error rates, not LP margin alone.",
+  "risks": [
+    "Web research was blocked by DNS/network restrictions; cited URLs were not retrieved, and current repository contents, licenses, releases, and build recipes remain unverified.",
+    "No core, scripts, card database, or decks were found in the inspected local caches; an offline compatible bundle must be supplied before an adaptor can be built.",
+    "The study sandbox cannot write the evaluator venv; any later package installation needs appropriate filesystem access. The recommended runtime itself uses Python 3.12 standard-library modules only.",
+    "No build or duel was tested. Python 3.12.3 imports and local toolchain availability were checked, but ygoenv native-extension compatibility and environment-only dependencies were not.",
+    "EDOPro and legacy YGOPro APIs/protocols are not interchangeable. Incorrect native structures, response encodings, seed layouts, or buffer lifetimes can corrupt state or crash the worker.",
+    "Core, Lua version, shared helpers, per-card scripts, database, text strings, and rules flags must be compatible and frozen together; missing or mismatched assets can silently change rules unless treated as errors.",
+    "There is no verified generic built-in AI in the core; use a seeded random-legal opponent first. WindBot needs compatible hosting and supported decks and is not a drop-in native opponent.",
+    "Hidden-information leakage through raw queries, card IDs, seeds, persistent hidden-card tags, logs, or true-state search would invalidate evaluation even if the displayed board looks filtered.",
+    "Compound selections, forced chains, damage timing, announcements, and uncommon prompts require complete handling. Never silently truncate actions or guess responses to unsupported messages.",
+    "The proposed pool is intentionally limited and unbalanced across deck types; it is not a current competitive format. Matchup and seat stratification are necessary, and modern expansion needs further tests and strategy research.",
+    "Random policies can stall or make nonsensical choices, and native Lua processing can hang; keep deterministic episode caps, isolated workers, and separate technical-error and truncation reporting.",
+    "The 300-second decision latency is a proposed external evaluation deadline, not an intrinsic game timer; the offline engine itself can wait indefinitely for a response.",
+    "Open-source engine licenses do not automatically license all card text or artwork for redistribution. Retain verified software licenses, inspect asset terms when acquiring the bundle, and omit art/audio."
+  ]
+}

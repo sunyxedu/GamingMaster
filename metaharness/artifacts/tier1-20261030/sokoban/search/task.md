@@ -1,0 +1,237 @@
+Design a harness for a **turn-based** game (tier 1: the world waits for the agent).
+
+Game: `Sokoban (Boxoban ASCII)` — Sokoban is a deterministic turn-based box-pushing puzzle. Reach every goal ('.') with a box. The player ('@') walks on floor and cannot pull boxes; pushing a box requires the square behind it to be free, and a push cannot be undone unless another route allows it. Walls are '#', boxes '$', boxes on goals '*', player on a goal '+'. Each step accepts exactly one action string: up, down, left, right, or noop. A blocked or malformed action consumes one action but leaves the board still. The observation is JSON with the ASCII board, coordinates, reachable player cells, legal actions, pushes, walking steps, total actions, boxes_on_goals, done, and the action cap. The episode ends when all goals have boxes or the action cap is reached. Score prioritizes solved, then boxes on goals, then fewer pushes and actions; score_breakdown() exposes solved, boxes_on_goals, pushes, walk_steps, total_actions, and action-cap termination. Seeds select fixed Boxoban levels by SHA-256 modulo the pinned corpus, so reset(seed) is reproducible.
+
+Actions:
+- up: Walk up; if a box is directly above, push it one square up when free.
+- down: Walk down; if a box is directly below, push it one square down when free.
+- left: Walk left; if a box is directly left, push it one square left when free.
+- right: Walk right; if a box is directly right, push it one square right when free.
+- noop: Take no movement action; the board and counters other than actions stay unchanged.
+(real-time games: ticks apply 'noop' until the first action is posted; afterwards a tick without a fresh action repeats the last posted action)
+A blocked move is legal but leaves the player and boxes unchanged. Coordinates are [row, column], 0-based.
+
+Model available through `ctx`: `ctx.think(prompt, session_id=...)` — Astra (System-2). Budget: 40 calls
+per episode; one call may return a plan of several actions. `ctx.act(action)` applies one action and
+returns the next observation. Each episode has a wall-clock deadline of 1800 s, including model
+latency (`ctx.budget.remaining()["wall_s"]`); when it passes, or the call budget is used up, the episode
+ends with the score reached. Each episode starts cold: fresh `ctx.memory` and fresh module globals.
+
+Evaluation: mean score over the training seeds (the game's own score, see the description), then fewer
+System-2 calls, then fewer actions. A candidate can only be selected if none of its training episodes
+ends with an error (see the contract: e.g. a TimeoutError from a model call that the harness does not
+catch).
+
+What the harness must design: how observations are shown to Astra (full history, a diff, an ASCII map
+with a legend, only what changed), what to remember between calls (rules learned, states visited,
+plans), how to parse Astra's reply into actions robustly, how many actions to commit per call, when
+cheap scripted search or bookkeeping replaces a model call, and how to notice that a plan or belief was
+wrong. If the description says that rules or action effects are not given, discovering them by
+experiment is part of the task.
+
+A plan must be able to fail and recover. Whatever executes without the model (a compiled build order, a
+convention policy, a solver) must check its own effects after each step — `ctx.progress()` counts the
+actions since the score and the observation last changed and the actions the game rejected — and, when
+the evidence says the plan has stopped working, hand the situation with that evidence to Astra for
+re-planning, then verify the new plan the same way. Scenarios the training seeds never show are where a
+scripted plan breaks: a candidate with identical scores on every training seed is a scenario-independent
+script and will be judged on the unseen validation and held-out seeds.
+
+**Evaluation scope.** The harness is selected on the training seeds of this game and then reported on
+unseen seeds of the same game; there is no held-out game. Rules, strategies and search that the game
+description or the study establish may be implemented as code once they are verified against
+observations — but nothing specific to the training seeds.
+
+## Prior knowledge from the study phase
+The study phase researched this game (rules, interface, community strategies). Use it: implement exact
+rules, bookkeeping and search as code and put planning and adaptation into Astra prompts — but verify
+every claim against observations, because sources can be wrong or outdated for this build of the game.
+
+The full documents are readable in this archive under `prior/` (`prior/strategies.md`, `prior/brief.md`, `prior/interfaces.md`, `prior/study.json`, `prior/ADAPTOR.md`). Below: excerpts within a size budget; every cut is marked `…(truncated; full text in prior/<file>)`.
+
+### study/study.json (summary)
+- strategy_summary: Strong play maintains player reachability and box-goal assignments while avoiding taboo squares, freeze deadlocks, 2x2 blocks, and premature corridor goals. Precompute static dead squares and reverse-push feasibility, then search over push states with matching-based lower bounds, transposition tables, and deterministic deadlock pruning. Fill deep or constrained goals before shallow transit goals, and verify the player's standing square for every push. Astra should plan and replan short push sequences from complete JSON observations; Jev should answer independent typed legality, deadlock, reachability, and solved-state questions. Code should own parsing, flood fill, counters, snapshots, action validation, and search bookkeeping.
+- scoring: For each seeded reset, report solved (all goals occupied), boxes_on_goals, pushes, walk_steps, total actions, and action-cap termination. Rank primarily by solved levels, then boxes placed, then fewer pushes and actions; this reflects Sokoban's completion objective and traditional push/move efficiency while retaining diagnostics.
+- interface.observation: JSON containing level_id, seed, rows/cols, canonical ASCII board, player coordinate, box and goal coordinates, reachable player mask or cells, valid_actions, last_action, last_event, pushes, walk_steps, actions, boxes_on_goals, done, and the configured action cap.
+- interface.actions: Send one of four primitive actions: up, down, left, or right. Walking into free floor moves the player; pushing an adjacent box into free floor or a goal moves both and increments pushes; walls, edges, and blocked pushes are counted attempted actions and leave the state unchanged. Stop when done or the action cap is reached.
+
+### study/strategies.md
+# Sokoban strategy prior
+
+Sokoban has no opening book or opponent. Strong play is a sequence of safe pushes selected with full knowledge of the static board. The search literature emphasizes reachability, deadlock pruning, and assignment-aware lower bounds ([Sokoban Wiki: Solver](http://sokobano.de/wiki/index.php?title=Solver), [Deadlocks](http://sokobano.de/wiki/index.php?title=Deadlocks), Junghanns & Schaeffer [DOI](https://doi.org/10.1016/S0004-3702(01)00109-6), and the Rolling Stone project [page](https://webdocs.cs.ualberta.ca/~games/Sokoban/)).
+
+## Tactics and ownership
+
+| Tactic | What a strong player does | Put it in |
+|---|---|---|
+| Parse and bookkeeping | Keep immutable walls/goals, current player coordinate, box set, pushes, and reachable player region. Treat a walk path as cheap only after verifying it does not cross a box needed as a gate. | **Code**: canonical state, flood fill, counters, undo/replay, and deterministic seed mapping. |
+| Taboo/dead squares | Precompute non-goal corners and wall pockets where a box can never reach any goal. Extend this with reverse pull reachability: a cell is useful only if a box could be pulled backward from a goal through empty geometry. Never push into a taboo cell. | **Code** for exact masks; **Jev question** can label a proposed destination `safe/taboo/uncertain` for a visual state. Sources: [Deadlocks](http://sokobano.de/wiki/index.php?title=Deadlocks), [How to detect deadlocks](http://sokobano.de/wiki/index.php?title=How_to_detect_deadlocks). |
+| Freeze and wall deadlocks | Reject states where a box (or a mutually blocking cluster) is immobile off goals, or where boxes fill a wall segment while goals remain mismatched. Check after every push, including 2x2 freezes and corridor closures. | **Code**: deterministic deadlock predicates and pruning; ask Astra to explain an uncertain cluster. |
+| Player reachability | Before considering a push, flood-fill from the player with boxes blocked; a push requires access to the square behind the box. Recompute after each push because one box can open or close a region. | **Code**. Jev may answer a typed `can_player_reach(square)` query, but must not invent a route. |
+| Goal assignment | Match boxes to goals using feasible reverse-push distances, not nearest Manhattan distance. Reserve constrained goals and boxes first; detect bipartite conflicts when two boxes compete for one goal. | **Code** for distance matrix/matching lower bound; **Astra** chooses among equivalent assignments and explains ordering. |
+| Goal order and corridors | Fill deep goals before shallow goals in one-cell corridors and rooms. Put a box on a goal only when it will not block the player's standing square or the route needed by another box. Keep transit squares and bottleneck goals open until their dependencies are satisfied. | **Astra prompts** for dependency planning; **code** checks resulting reachability and deadlocks. |
+| Tunnels and macro-actions | In a one-cell tunnel with no branch, repeated forced walking/pushing can be compressed into a macro, but stop before a goal, junction, or irreversible push. | **Code** for safe forced-walk compression; **Astra** approves macros containing a push. |
+| Push-first search | Optimize pushes first, then walking. Use BFS/A* over push states (player reachable region plus box coordinates), transposition tables, deadlock pruning, and a lower bound from box-goal matching. Iterative deepening A* or a well-pruned A* is a practical exact solver for small levels; hard levels may need long search. | **Code** for search and bookkeeping; **Astra** sets a subgoal and replans when search hits a frontier. See [Solver](http://sokobano.de/wiki/index.php?title=Solver) and [Junghanns & Schaeffer](https://doi.org/10.1016/S0004-3702(01)00109-6). |
+| Execute conservatively | After planning a push sequence, send one primitive action at a time, verify the returned JSON, and stop/undo on an unexpected transition. A walking typo is recoverable; an irreversible bad push often is not. | **Astra prompts**: request a short next-action plan and a stated invariant; **code** validates action legality and keeps snapshots. |
+| Recognition questions | For fast typed judgments, ask Jev independent yes/no or choice questions over the JSON board: “Is the proposed push legal?”, “Is destination a known taboo square?”, “Which of these two boxes is more constrained?”, “Is the level solved?”, “Did the last action push or walk?”. Include candidate coordinates and require `yes/no/uncertain` or an enum. | **Jev questions** only. Jev should not perform multi-push planning, arithmetic, or choose among unenumerated actions. |
+
+## Common mistakes and counters
+
+* **Pushing into a non-goal corner or dead wall end.** A visually close box can become permanently useless. Static taboo masks and reverse pull analysis prevent this.
+* **Filling an easy goal too early.** The box may occupy a standing square, seal a corridor, or prevent a different box from reaching a deep goal. Plan goal dependencies first.
+* **Using Manhattan distance as the plan.** Walls, push direction, and player access dominate; use legal reverse-push distances and matching.
+* **Assuming a box on a goal is always fixed.** Some goals are transit cells; allow moving a solved box only when the assignment and deadlock checks prove it is required.
+* **Ignoring the player's side of a box.** A geometrically possible box route fails if the player cannot get behind the box at each turn. Recompute reachable regions after every push.
+* **Continuing after an irreversible error.** Keep snapshots and request an undo/restart when an invariant fails. In a benchmark, restarting the same seed is preferable to spending the remaining action budget in a dead state.
+* **Confusing walking and pushing.** Count both for the local budget, but optimize pushes first and avoid long exploratory walks when the push state is unchanged.
+
+## Prompt guidance for Astra
+
+Give Astra the complete JSON board plus the static goals/walls and counters. Ask it to (1) identify taboo squares and bottlenecks, (2) assign boxes to goals, (3) state the next push dependency and the required player standing square, and (4) emit a short primitive action sequence whose every push has a legality reason. After each action or macro, provide the new JSON and ask it to compare the observed transition with the prediction. When no safe push is apparent, have Astra revise the assignment or search horizon instead of blindly walking.
+
+## Benchmark implications
+
+Held-out seeds should select different fixed levels, not randomize walls or give an opponent. Report solved levels, boxes on goals, pushes, walks, and actions. A level solved with fewer pushes is stronger, but a solver that leaves a box on a goal while another goal is empty has made no progress toward completion. Preserve the corpus revision and level ID so a strategy result is reproducible.
+
+### study/brief.md
+# Sokoban study brief
+
+## What the game is
+
+Sokoban is a deterministic, single-player grid puzzle. A level contains walls, floor, goals, a player, and one box for each goal. The player walks on free floor and can push an adjacent box one square when the square behind the box is free; boxes cannot be pulled. A level is solved when every goal is occupied by a box. The compact rules and the conventional symbols are documented by the Sokoban overview and XSB level-format references ([Wikipedia](https://en.wikipedia.org/wiki/Sokoban), [Sokoban Wiki: Level format](http://sokobano.de/wiki/index.php?title=Level_format)).
+
+Use these ASCII symbols when presenting state to Astra or Jev:
+
+| Symbol | Meaning |
+|---|---|
+| `#` | wall (impassable) |
+| space or `-` | floor (the parser should normalize one chosen empty-floor spelling) |
+| `.` | goal |
+| `@` | player on floor |
+| `+` | player on goal |
+| `$` | box on floor |
+| `*` | box on goal |
+
+Rows may have different lengths; cells outside a row are treated as walls. Preserve the original rectangular dimensions in observations so coordinates remain stable. A level is invalid if it has no player, or if the number of boxes and goals differs.
+
+## Objective and progress
+
+The primary objective is to solve as many seeded levels as possible. Within a level, report `solved`, number of boxes on goals, pushes, walking steps, total actions, and whether the action cap was reached. A push is the meaningful scarce action; walking is still counted against the evaluator's action budget. Classic Sokoban traditionally rewards fewer pushes and then fewer moves, while many engines expose a shaped reward for newly filled goals ([Wikipedia](https://en.wikipedia.org/wiki/Sokoban); [gym-sokoban environment](https://github.com/mpSchrader/gym-sokoban/blob/master/gym_sokoban/envs/sokoban_env.py)). The harness should therefore rank first by solved levels, then by boxes on goals, then by pushes and total actions; do not treat an intermediate reward as a proof of solvability.
+
+The benchmark-specific score is a local contract, not an upstream Sokoban rule: for each `reset(seed)`, select one level, stop at the first solved state or `MAX_ACTIONS`, and return the number of solved levels and boxes placed (plus diagnostic counts). Keep the raw counters so a judge can apply its own weighting. A solved level must have every goal occupied; a box merely moved closer does not count.
+
+## Actions and transition semantics
+
+Expose exactly four primitive actions, encoded as `up`, `down`, `left`, and `right` (or `U,D,L,R` at the wire boundary). On an action:
+
+1. If the destination is a wall or outside the board, leave the state unchanged and count one attempted action.
+2. If the destination is empty floor or goal, move the player there and count a walking step.
+3. If the destination contains a box and the next cell in the same direction is empty floor or goal, move the box and player together and count one push.
+4. If the box cannot be pushed, leave the state unchanged and count one attempted action.
+
+Goals are properties of cells, so walking off a goal or pushing a box off a goal must retain that goal underneath. A solved state is terminal for scoring; the adaptor may reject further actions or record them as no-ops. Gym-sokoban's action/state conventions are a useful compatibility reference, but its exact reward and API are version-dependent and must be inspected before use ([repository](https://github.com/mpSchrader/gym-sokoban), [implementation](https://github.com/mpSchrader/gym-sokoban/blob/master/gym_sokoban/envs/sokoban_env.py)).
+
+For search, derive player reachability by flood fill with boxes treated as obstacles. A push is legal only if the player can reach the square behind the box and the destination is free. Include the complete symbolic board, player coordinate, box coordinates, goals, last action, and counters in each observation; these fields let Astra reason without a screenshot.
+
+## Pace and tier
+
+This is Tier 1. The board changes only after an agent action and there is no real-time clock, opponent, animation, or network server. Astra may spend seconds to a minute planning between actions without an in-game penalty; the only practical limit is the harness wall-clock and action cap. Set the adaptor's documented decision budget to 60 seconds per model turn (and make it configurable), while treating the game's intrinsic decision latency as unbounded. If a run-level timeout is needed, timeout handling belongs to the harness rather than the game rules.
+
+## Sources and scope
+
+Rules and notation: [Wikipedia](https://en.wikipedia.org/wiki/Sokoban), [Sokoban Wiki level format](http://sokobano.de/wiki/index.php?title=Level_format). Deadlock and solver terminology: [Deadlocks](http://sokobano.de/wiki/index.php?title=Deadlocks), [Solver](http://sokobano.de/wiki/index.php?title=Solver), and Junghanns & Schaeffer, *Sokoban: Enhancing General Single-Agent Search Methods Using Domain Knowledge* ([DOI](https://doi.org/10.1016/S0004-3702(01)00109-6)). Boxoban is an appropriate offline corpus; obtain and pin its revision and license from [google-deepmind/boxoban-levels](https://github.com/google-deepmind/boxoban-levels) and [LICENSE](https://github.com/google-deepmind/boxoban-levels/blob/master/LICENSE). The local source-status record notes that these URLs were not reachable from this sandbox, so release details must be verified when staging the corpus.
+
+### adaptor/ADAPTOR.md
+# Sokoban adaptor
+
+This is a Tier 1, turn-based Sokoban game. `game.py` implements a small offline
+XSB engine and loads a pinned subset of the [Boxoban levels](https://github.com/google-deepmind/boxoban-levels)
+repository. The bundled corpus is `runtime/boxoban/{train_000,valid_000}.txt`,
+from Boxoban revision `78011d8c86ad423bfb2e1005012393b4c3c24409`; its license
+notice is retained beside the levels. The two files contain 2,000 fixed levels
+and their SHA-256 values are recorded in `info()` at runtime.
+
+`reset(seed)` chooses a level with SHA-256 of the decimal seed modulo the
+corpus size. This mapping is stable across processes and is included in
+`info()` as `level_index` and `level_id`. The declared train, held-out, dev,
+and validation seed groups are disjoint and use the same corpus distribution.
+Set `SOKOBAN_LEVELSET` to a directory of `.txt`/`.xsb` Boxoban/XSB files (or one
+XSB file) to use another pinned offline corpus; when unset, the bundled subset is
+used. `SOKOBAN_MAX_ACTIONS` or the `max_actions` constructor argument can set
+the per-episode action cap.
+
+The observation is strict JSON: an ASCII board, dimensions, player/box/goal
+coordinates, reachable player cells, valid actions, transition event, counters,
+and termination state. Actions are `up`, `down`, `left`, `right`, and `noop`.
+Walking moves one square; pushing moves an adjacent box when its destination is
+free and increments `pushes`. Walls and blocked pushes consume an action and
+leave the board unchanged. The episode ends when every goal is occupied or the
+action cap is reached. Malformed actions are ignored and reported in the next
+observation rather than raising.
+
+The numeric score gives solved levels priority, then boxes on goals, then fewer
+pushes and actions. `score_breakdown()` reports `solved`, `boxes_on_goals`,
+`pushes`, `walk_steps`, `total_actions`, and `action_cap_terminated`.
+There are no servers, accounts, credentials, or background processes; `close()`
+is idempotent and only clears the in-memory episode.
+
+The staged data hashes are `train_000.txt` =
+`674dda499261deface252c90077ae67181b5c7704c235baf0dd0bd2d16bf072e` and
+`valid_000.txt` =
+`52cd811af721d69eef71a4e3cfc40cd4f635269a8e26d42ec017aa43af02b8a9`.
+
+### study/interfaces.md
+# Sokoban interfaces
+
+Sokoban has no network service or universal official gameplay API. The useful interfaces are local simulators, level files, and (only for a graphical commercial copy) screen/input automation. The recommendation below is designed for the Linux headless evaluator and Python 3.12.3 at `/home/hemlix/GamingMaster-mh-tier1/runs/venvs/sokoban/bin/python`.
+
+## Options
+
+| Interface | Maturity and exposure | Latency | Cost and legal/ToS risk |
+|---|---|---|---|
+| **Standalone Python ASCII-grid engine over pinned Boxoban (chosen)** | Small deterministic engine; parse XSB text, expose JSON observation and four-action transition. Full control, reproducible seeds, push/walk counters, and no rendering dependency. It must be implemented by the adaptor phase. | Microseconds to milliseconds per action; model latency dominates. | Python standard library only and free. Boxoban is generally distributed under Apache-2.0, but verify the pinned repository's [LICENSE](https://github.com/google-deepmind/boxoban-levels/blob/master/LICENSE) and retain notices. No service account or anti-cheat issue. |
+| `gym-sokoban` legacy Gym package | Mature reference implementation with discrete actions, RGB/state-array rendering, rewards, and done flags; inspect [README](https://github.com/mpSchrader/gym-sokoban) and [sokoban_env.py](https://github.com/mpSchrader/gym-sokoban/blob/master/gym_sokoban/envs/sokoban_env.py). It may pull NumPy, Gym, and pygame and its old Gym API can conflict with Python 3.12. | Fast locally, but import/render overhead and dependency installation add setup risk. | Open-source project; check its license and transitive licenses. No external ToS. Do not rely on its reward numbers without pinning a commit. |
+| Jumanji Sokoban | Modern functional/JAX environment family ([repository](https://github.com/instadeepai/jumanji), [docs](https://instadeepai.github.io/jumanji/)); useful for batched training and typed state, but requires JAX and its version-specific API. | Fast after JAX warm-up; heavy install and possible CPU memory cost. | Open source; verify licenses and Python 3.12 wheels. No external service. |
+| Pycolab custom game | Headless ASCII-grid engine from DeepMind ([repository](https://github.com/google-deepmind/pycolab)). It supplies scheduling/rendering primitives, but Sokoban rules and deadlock logic still must be written. | Low runtime latency. | Open source; old dependencies and project maintenance make it a weaker current choice. |
+| Griddly declarative environment | C++/Python grid-game engine ([repository](https://github.com/Bam4d/Griddly)); can expose observations/actions and headless execution if its Sokoban example and wheels are available. | Low once initialized; native install can be substantial. | Open source; verify current package and license. No game-server ToS. |
+| JSoko or another desktop solver | Java GUI application with a strong solver and level editor ([SourceForge](https://sourceforge.net/projects/jsoko/)). Can be driven only through its file/solver interfaces or GUI automation. | Solver can be fast, but process and GUI automation add seconds and brittle synchronization. | Free software, but check distribution license. GUI is unsuitable for the server and using its solver may make the benchmark trivial or violate an intended agent restriction. |
+| Screen capture plus input injection | `xdotool`, XTest, Wayland tools, or OCR against a third-party graphical game. Observes pixels and controls keyboard events only. | Tens to hundreds of ms per frame, plus OCR errors. | Requires GUI and a copy of the game; possible game EULA/anti-cheat violation. No value on the headless machine. |
+| Emulator hooks | Relevant only if running a console/old binary ROM. Memory addresses and input APIs are version-specific; no canonical Sokoban hook. | Potentially low, but reverse engineering and synchronization dominate. | ROM and emulator licensing/ToS risk; not appropriate for this free offline benchmark. |
+
+## Chosen adaptor contract
+
+Choose the standalone engine. It avoids unavailable wheels and GUI, gives Astra a lossless textual state, and makes seed-to-level mapping and scoring explicit. It is also easier to audit than a shaped-reward package. The adaptor phase should implement the following small boundary:
+
+```text
+reset(seed: int) -> observation JSON
+step(action: "up"|"down"|"left"|"right") -> observation JSON
+```
+
+`reset` must map a seed deterministically to a level in the pinned corpus (for example, `index = stable_hash(seed) % len(levels)`; never use process-randomized Python `hash`). `step` applies the transition rules in [brief.md](brief.md), increments `actions`, and returns `done` when all goals are occupied or the action cap is reached. Include `level_id`, `seed`, `rows`, `cols`, `player`, `boxes`, `goals`, `reachable` (or a reachable mask), `last_action`, `last_event` (`walk`, `push`, `blocked`, or `solved`), `pushes`, `walk_steps`, `actions`, `boxes_on_goals`, `done`, and `valid_actions` in JSON. A canonical ASCII board in the same object is useful for prompt readability.
+
+The engine should normalize CRLF, preserve spaces inside rows, reject malformed levels, and compute `valid_actions` from the current state. Keep level order and a SHA-256 manifest in the run metadata. Do not silently download, generate, or substitute levels during evaluation.
+
+## Installation and environment
+
+No third-party package is required. Use the evaluator interpreter explicitly:
+
+```text
+/home/hemlix/GamingMaster-mh-tier1/runs/venvs/sokoban/bin/python
+```
+
+The user/staging process must provide:
+
+* `SOKOBAN_LEVELSET` (required): absolute path to the pinned Boxoban or separately licensed classic XSB corpus copied onto the offline machine. Do not put a credential or secret in this variable.
+* `SOKOBAN_MAX_ACTIONS` (optional): integer action cap supplied by the benchmark harness; record the value in each run.
+
+Setup steps are: (1) obtain Boxoban from [google-deepmind/boxoban-levels](https://github.com/google-deepmind/boxoban-levels) on a connected staging machine, verify the license, revision, and SHA-256; (2) copy only the selected text split and notices into the offline workspace; (3) parse every level once and fail fast on mismatched box/goal counts; (4) run deterministic transition and reset smoke tests; and (5) expose the JSON boundary above to the generated harness. There are no server addresses, account credentials, API keys, or network calls.
+
+## Why not install a package anyway?
+
+`gym-sokoban` and Jumanji are useful references and optional validation backends. They are poor defaults here because the venv currently has only pip, network resolution is unavailable, and old Gym/pygame/JAX dependency stacks can be difficult to reproduce. If a connected staging machine installs one, pin exact versions and compare its transitions against the standalone engine on a small hand-checked level set before trusting it.
+
+
+## Measured model latency (at archive creation, 2026-10-30 14:30)
+- System-2 (Astra), one-word answer: 41 s
+- System-2, an answer of ~824 output tokens: 81 s — latency grows with the length of the answer; size timeouts for the answers your prompts actually request
+Later measurements per candidate are on the leaderboard (latency columns, a latency fit).

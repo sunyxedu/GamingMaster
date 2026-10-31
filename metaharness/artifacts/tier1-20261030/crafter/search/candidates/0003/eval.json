@@ -1,0 +1,687 @@
+{
+ "harness_path": "runs/crafter/search/candidates/0003/harness.py",
+ "game": "Crafter",
+ "fatal": null,
+ "mean_score": 0.6818181818181819,
+ "stale_fraction": null,
+ "n_episodes": 8,
+ "system1_calls": 0,
+ "system2_calls": 9,
+ "mean_steps": 333.375,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 8
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 0.003374578177727784,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 1101,
+   "score": 0.8181818181818182,
+   "steps": 315,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 44.000497817993164,
+    "p50": 44.000497817993164,
+    "p90": 44.000497817993164,
+    "max": 44.000497817993164
+   },
+   "wall_s": 57.82595152291469,
+   "error": null,
+   "info": {
+    "score": 0.8181818181818182,
+    "ticks": 315,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "achievements_unlocked": 18.0,
+     "achievement_fraction": 0.8181818181818182,
+     "achievement_total": 22.0,
+     "collect_coal": 1.0,
+     "collect_diamond": 0.0,
+     "collect_drink": 1.0,
+     "collect_iron": 1.0,
+     "collect_sapling": 1.0,
+     "collect_stone": 1.0,
+     "collect_wood": 1.0,
+     "defeat_skeleton": 0.0,
+     "defeat_zombie": 1.0,
+     "eat_cow": 1.0,
+     "eat_plant": 0.0,
+     "make_iron_pickaxe": 1.0,
+     "make_iron_sword": 0.0,
+     "make_stone_pickaxe": 1.0,
+     "make_stone_sword": 1.0,
+     "make_wood_pickaxe": 1.0,
+     "make_wood_sword": 1.0,
+     "place_furnace": 1.0,
+     "place_plant": 1.0,
+     "place_stone": 1.0,
+     "place_table": 1.0,
+     "wake_up": 1.0
+    }
+   },
+   "acts": 315,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     44.0,
+     252
+    ]
+   ]
+  },
+  {
+   "seed": 1102,
+   "score": 0.5,
+   "steps": 222,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 29.74515438079834,
+    "p50": 29.74515438079834,
+    "p90": 29.74515438079834,
+    "max": 29.74515438079834
+   },
+   "wall_s": 73.41452062618919,
+   "error": null,
+   "info": {
+    "score": 0.5,
+    "ticks": 222,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "achievements_unlocked": 11.0,
+     "achievement_fraction": 0.5,
+     "achievement_total": 22.0,
+     "collect_coal": 0.0,
+     "collect_diamond": 0.0,
+     "collect_drink": 1.0,
+     "collect_iron": 0.0,
+     "collect_sapling": 0.0,
+     "collect_stone": 1.0,
+     "collect_wood": 1.0,
+     "defeat_skeleton": 0.0,
+     "defeat_zombie": 1.0,
+     "eat_cow": 1.0,
+     "eat_plant": 0.0,
+     "make_iron_pickaxe": 0.0,
+     "make_iron_sword": 0.0,
+     "make_stone_pickaxe": 1.0,
+     "make_stone_sword": 1.0,
+     "make_wood_pickaxe": 1.0,
+     "make_wood_sword": 1.0,
+     "place_furnace": 0.0,
+     "place_plant": 0.0,
+     "place_stone": 0.0,
+     "place_table": 1.0,
+     "wake_up": 1.0
+    }
+   },
+   "acts": 222,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     29.745,
+     389
+    ]
+   ]
+  },
+  {
+   "seed": 1103,
+   "score": 0.9545454545454546,
+   "steps": 832,
+   "system1_calls": 0,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 23.682228922843933,
+    "p50": 31.696279048919678,
+    "p90": 31.696279048919678,
+    "max": 31.696279048919678
+   },
+   "wall_s": 323.3482170221396,
+   "error": null,
+   "info": {
+    "score": 0.9545454545454546,
+    "ticks": 832,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "achievements_unlocked": 21.0,
+     "achievement_fraction": 0.9545454545454546,
+     "achievement_total": 22.0,
+     "collect_coal": 1.0,
+     "collect_diamond": 1.0,
+     "collect_drink": 1.0,
+     "collect_iron": 1.0,
+     "collect_sapling": 1.0,
+     "collect_stone": 1.0,
+     "collect_wood": 1.0,
+     "defeat_skeleton": 1.0,
+     "defeat_zombie": 1.0,
+     "eat_cow": 1.0,
+     "eat_plant": 0.0,
+     "make_iron_pickaxe": 1.0,
+     "make_iron_sword": 1.0,
+     "make_stone_pickaxe": 1.0,
+     "make_stone_sword": 1.0,
+     "make_wood_pickaxe": 1.0,
+     "make_wood_sword": 1.0,
+     "place_furnace": 1.0,
+     "place_plant": 1.0,
+     "place_stone": 1.0,
+     "place_table": 1.0,
+     "wake_up": 1.0
+    }
+   },
+   "acts": 832,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     31.696,
+     261
+    ],
+    [
+     15.668,
+     225
+    ]
+   ]
+  },
+  {
+   "seed": 1104,
+   "score": 0.3181818181818182,
+   "steps": 241,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 29.576757192611694,
+    "p50": 29.576757192611694,
+    "p90": 29.576757192611694,
+    "max": 29.576757192611694
+   },
+   "wall_s": 268.03966981498525,
+   "error": null,
+   "info": {
+    "score": 0.3181818181818182,
+    "ticks": 241,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "achievements_unlocked": 7.0,
+     "achievement_fraction": 0.3181818181818182,
+     "achievement_total": 22.0,
+     "collect_coal": 0.0,
+     "collect_diamond": 0.0,
+     "collect_drink": 0.0,
+     "collect_iron": 0.0,
+     "collect_sapling": 0.0,
+     "collect_stone": 0.0,
+     "collect_wood": 1.0,
+     "defeat_skeleton": 0.0,
+     "defeat_zombie": 1.0,
+     "eat_cow": 1.0,
+     "eat_plant": 0.0,
+     "make_iron_pickaxe": 0.0,
+     "make_iron_sword": 0.0,
+     "make_stone_pickaxe": 0.0,
+     "make_stone_sword": 0.0,
+     "make_wood_pickaxe": 1.0,
+     "make_wood_sword": 1.0,
+     "place_furnace": 0.0,
+     "place_plant": 0.0,
+     "place_stone": 0.0,
+     "place_table": 1.0,
+     "wake_up": 1.0
+    }
+   },
+   "acts": 241,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     29.577,
+     443
+    ]
+   ]
+  },
+  {
+   "seed": 1105,
+   "score": 0.7727272727272727,
+   "steps": 213,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 38.095221281051636,
+    "p50": 38.095221281051636,
+    "p90": 38.095221281051636,
+    "max": 38.095221281051636
+   },
+   "wall_s": 151.0527216012124,
+   "error": null,
+   "info": {
+    "score": 0.7727272727272727,
+    "ticks": 213,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "achievements_unlocked": 17.0,
+     "achievement_fraction": 0.7727272727272727,
+     "achievement_total": 22.0,
+     "collect_coal": 1.0,
+     "collect_diamond": 0.0,
+     "collect_drink": 1.0,
+     "collect_iron": 1.0,
+     "collect_sapling": 1.0,
+     "collect_stone": 1.0,
+     "collect_wood": 1.0,
+     "defeat_skeleton": 1.0,
+     "defeat_zombie": 1.0,
+     "eat_cow": 0.0,
+     "eat_plant": 0.0,
+     "make_iron_pickaxe": 0.0,
+     "make_iron_sword": 0.0,
+     "make_stone_pickaxe": 1.0,
+     "make_stone_sword": 1.0,
+     "make_wood_pickaxe": 1.0,
+     "make_wood_sword": 1.0,
+     "place_furnace": 1.0,
+     "place_plant": 1.0,
+     "place_stone": 1.0,
+     "place_table": 1.0,
+     "wake_up": 1.0
+    }
+   },
+   "acts": 213,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     38.095,
+     266
+    ]
+   ]
+  },
+  {
+   "seed": 1106,
+   "score": 0.7727272727272727,
+   "steps": 306,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 85.77726030349731,
+    "p50": 85.77726030349731,
+    "p90": 85.77726030349731,
+    "max": 85.77726030349731
+   },
+   "wall_s": 98.2620312969666,
+   "error": null,
+   "info": {
+    "score": 0.7727272727272727,
+    "ticks": 306,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "achievements_unlocked": 17.0,
+     "achievement_fraction": 0.7727272727272727,
+     "achievement_total": 22.0,
+     "collect_coal": 1.0,
+     "collect_diamond": 0.0,
+     "collect_drink": 1.0,
+     "collect_iron": 1.0,
+     "collect_sapling": 1.0,
+     "collect_stone": 1.0,
+     "collect_wood": 1.0,
+     "defeat_skeleton": 0.0,
+     "defeat_zombie": 1.0,
+     "eat_cow": 1.0,
+     "eat_plant": 0.0,
+     "make_iron_pickaxe": 0.0,
+     "make_iron_sword": 0.0,
+     "make_stone_pickaxe": 1.0,
+     "make_stone_sword": 1.0,
+     "make_wood_pickaxe": 1.0,
+     "make_wood_sword": 1.0,
+     "place_furnace": 1.0,
+     "place_plant": 1.0,
+     "place_stone": 1.0,
+     "place_table": 1.0,
+     "wake_up": 1.0
+    }
+   },
+   "acts": 306,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     85.777,
+     553
+    ]
+   ]
+  },
+  {
+   "seed": 1107,
+   "score": 0.5909090909090909,
+   "steps": 298,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 30.983983755111694,
+    "p50": 30.983983755111694,
+    "p90": 30.983983755111694,
+    "max": 30.983983755111694
+   },
+   "wall_s": 279.84268371085636,
+   "error": null,
+   "info": {
+    "score": 0.5909090909090909,
+    "ticks": 298,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "achievements_unlocked": 13.0,
+     "achievement_fraction": 0.5909090909090909,
+     "achievement_total": 22.0,
+     "collect_coal": 1.0,
+     "collect_diamond": 0.0,
+     "collect_drink": 1.0,
+     "collect_iron": 0.0,
+     "collect_sapling": 0.0,
+     "collect_stone": 1.0,
+     "collect_wood": 1.0,
+     "defeat_skeleton": 0.0,
+     "defeat_zombie": 1.0,
+     "eat_cow": 0.0,
+     "eat_plant": 0.0,
+     "make_iron_pickaxe": 0.0,
+     "make_iron_sword": 0.0,
+     "make_stone_pickaxe": 1.0,
+     "make_stone_sword": 1.0,
+     "make_wood_pickaxe": 1.0,
+     "make_wood_sword": 1.0,
+     "place_furnace": 1.0,
+     "place_plant": 0.0,
+     "place_stone": 1.0,
+     "place_table": 1.0,
+     "wake_up": 1.0
+    }
+   },
+   "acts": 298,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     30.984,
+     433
+    ]
+   ]
+  },
+  {
+   "seed": 1108,
+   "score": 0.7272727272727273,
+   "steps": 240,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 17.629024982452393,
+    "p50": 17.629024982452393,
+    "p90": 17.629024982452393,
+    "max": 17.629024982452393
+   },
+   "wall_s": 230.92306614201516,
+   "error": null,
+   "info": {
+    "score": 0.7272727272727273,
+    "ticks": 240,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "achievements_unlocked": 16.0,
+     "achievement_fraction": 0.7272727272727273,
+     "achievement_total": 22.0,
+     "collect_coal": 1.0,
+     "collect_diamond": 0.0,
+     "collect_drink": 1.0,
+     "collect_iron": 0.0,
+     "collect_sapling": 1.0,
+     "collect_stone": 1.0,
+     "collect_wood": 1.0,
+     "defeat_skeleton": 0.0,
+     "defeat_zombie": 1.0,
+     "eat_cow": 1.0,
+     "eat_plant": 0.0,
+     "make_iron_pickaxe": 0.0,
+     "make_iron_sword": 0.0,
+     "make_stone_pickaxe": 1.0,
+     "make_stone_sword": 1.0,
+     "make_wood_pickaxe": 1.0,
+     "make_wood_sword": 1.0,
+     "place_furnace": 1.0,
+     "place_plant": 1.0,
+     "place_stone": 1.0,
+     "place_table": 1.0,
+     "wake_up": 1.0
+    }
+   },
+   "acts": 240,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     17.629,
+     250
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   1101,
+   1102,
+   1103,
+   1104,
+   1105,
+   1106,
+   1107,
+   1108
+  ],
+  "expected_episodes": 8,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "0096e6cdaa1ed5c32670605b2689ccd52bec1ae301e5e6d2cc23c6d92d432f34",
+  "game_kind": "turn",
+  "resolved_models": {
+   "system2": [
+    "codex:gpt-6-astra@router"
+   ]
+  }
+ },
+ "score_std": 0.20182169179116954
+}

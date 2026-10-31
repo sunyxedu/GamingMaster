@@ -1,0 +1,1 @@
+Linux x86_64 server without GUI; everything must run offline on this machine with free software. The evaluator's Python is the venv at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/minesweeper (install there). Tier 1: the agent plays turn by turn. Own implementation is fine; seeds select boards; score = fraction of safe cells revealed and wins.

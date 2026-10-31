@@ -1,0 +1,9 @@
+[22:54:07] seed check: 12 seed(s) reset ok
+[23:42:20] eval 0000-tier1_astra_naive: mean=-0.9444444444444445 stale=None fatal=None errors=0 failed s1/s2=0/3 ended: deadline 1, game_done 5
+[23:42:20] iteration 1/6 slot 1/3: proposing 0001 with codex:gpt-6-astra@router
+[23:42:20] iteration 1/6 slot 2/3: proposing 0002 with codex:gpt-6-astra@router
+[23:42:20] iteration 1/6 slot 3/3: proposing 0003 with codex:gpt-6-astra@router
+[00:10:28] preflight 0002: ok; warnings: no System-2 call was answered during the dry run
+[00:13:22] eval 0002: mean=1.0997916666666667 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[00:17:02] preflight 0001: ok; warnings: no System-2 call was answered during the dry run
+[00:18:02] preflight 0003: ok; warnings: no System-2 call was answered during the dry run

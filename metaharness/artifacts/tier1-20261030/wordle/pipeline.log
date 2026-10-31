@@ -1,0 +1,10 @@
+[22:05:00] run: game='Wordle and Mastermind' dir=runs/wordle agent=codex:gpt-6-astra@router
+[22:11:23] run: game='Wordle and Mastermind' dir=runs/wordle agent=codex:gpt-6-astra@router
+[04:16:04] run: game='Wordle and Mastermind' dir=runs/wordle agent=codex:gpt-6-astra@router
+[04:40:38] study: done — tier 1, interface api
+[05:27:57] adapt: adaptor validated after 1 attempt(s)
+[05:27:57] run: game='Wordle and Mastermind' dir=runs/wordle agent=codex:gpt-6-astra@router
+[05:27:57] study: reusing runs/wordle/study/study.json (tier 1)
+[05:27:57] adapt: reusing validated adaptor
+[05:27:57] search: tier 1 on adaptor game 'Wordle'
+[11:02:19] run: done — best 0016

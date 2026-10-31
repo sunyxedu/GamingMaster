@@ -1,0 +1,7 @@
+parent: none
+
+Hypothesis: candidate 0000 fails because Astra is forced to invent every guess from a large observation and is never given a deterministic duplicate-letter constraint engine. The traces show 0 solved games, 10–33 guesses per episode, repeated/invalid-looking guesses, and eventual deadlines; this is a planning and bookkeeping failure rather than a lack of model latency.
+
+What changed: this harness reads the public answer and allowed-guess paths from the rules, simulates the green/yellow/gray algorithm exactly, filters the answer set against the complete history, and chooses an information-maximizing legal guess (with a possible-answer tie break when turns are scarce). It checks each action with progress counters and catches action/model failures. Astra is reserved for the exceptional case where public feedback makes the candidate set empty or the game rejects the verified action, and its output is strictly extracted and validated as a five-letter word.
+
+Evidence that would confirm/refute it: on dev and training seeds, a solver that reaches terminal wins in at most six accepted guesses with no model calls would confirm that exact bookkeeping was the missing capability. Failures with a nonempty candidate set or inconsistent path/feedback schema would refute the path-discovery or observation-parsing assumptions and motivate an Astra-assisted adaptor in the next iteration.

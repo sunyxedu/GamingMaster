@@ -1,0 +1,43 @@
+{
+  "game": "TextArena (text game suite)",
+  "tier": 1,
+  "tier_rationale": "The intended offline TextArena environment advances when the controller submits a turn through step; it is not a continuously ticking GUI game. Astra can reason for seconds to a minute while state waits, and native move or guess limits count actions rather than wall time. The selected release must still be audited for timer exceptions. No evaluator episode timeout was provided. decision_latency_s uses -1.0 as an explicit sentinel for no finite known native decision deadline, not as a negative duration or a promise of unlimited evaluator time.",
+  "decision_latency_s": -1.0,
+  "interface": {
+    "chosen": "official env: local TextArena Python API",
+    "why": "Direct player observations, string actions and native outcomes support headless offline play with low local overhead. This avoids remote matchmaking, model-service credentials and GUI parsing. A per-release compatibility layer and per-game manifest are required because TextArena is a suite, not a single shared ruleset.",
+    "software": [
+      "Existing evaluator Python 3.12.3 at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/textarena/bin/python",
+      "TextArena distribution with exact version selected and pinned during setup; currently not installed and no compatible release verified",
+      "Complete pinned dependency wheelhouse and audited local assets for the frozen games; exact requirements must come from the acquired release metadata and imports",
+      "Evaluator-supplied offline baseline policies, or explicitly defined and frozen local baselines if none are supplied"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Obtain the evaluator's TextArena version, fixed game mixture, baseline definitions and scoring rules; if unspecified, freeze them explicitly before evaluation. Candidate game names and IDs in the study are proposals, not verified evaluator contents.",
+      "Acquire a Python 3.12 Linux x86_64 compatible TextArena release and full dependency/asset closure on a connected staging machine. Record version, licenses and SHA-256 hashes; verify any optional imports and prohibit runtime downloads or hosted judges.",
+      "With write access to the specified evaluator venv, install using its Python and pip --no-index --find-links ./wheelhouse --require-hashes -r requirements.lock, then run pip check. Network downloads and installation could not be completed in this study session.",
+      "Inspect the installed registry, source and public API. Confirm make, reset, get_observation, step and close signatures and return shapes; verify LLMObservationWrapper behavior if used. Do not assume Gymnasium tuples or an upstream random baseline class.",
+      "Create a frozen per-game manifest with constructor settings, player count, action grammar, observation parser, offline baseline, learner seat policy, native limits and score formula. Isolate private state and use separate environment/opponent random streams.",
+      "Implement the turn controller during the adaptor phase: reset, cache the active player's observation once, execute baseline turns until the learner is active, submit one legal native action, and capture authoritative terminal results before cleanup.",
+      "Validate complete offline episodes for every entry, repeat-seed traces, both seats, illegal-action behavior, natural terminal and budget truncation, score mapping, non-leaking observations, and absence of state advancement while idle. Freeze release, manifest and asset checksums."
+    ],
+    "observation": "Reference API: env.get_observation() supplies the active player ID and that player's observations; raw message sequences and text produced by LLMObservationWrapper are version-sensitive and unverified here. The adaptor should expose cached rules/current text plus reliably parsed public state, own private state, legal actions where known and relevant history. Do not expose a raw internal game_state dump, hidden answers, opponent hands, deck order or seed-derived secrets.",
+    "actions": "Submit one game-specific native string through env.step(action=...). Many games use bracketed commands, coordinates or guesses, but syntax and coordinate bases must be taken from the installed game's prompt/source. The reference step result is done, info; verify the installed release. Follow the returned active player rather than blindly alternating seats, and handle terminal results according to that release's close/state contract."
+  },
+  "scoring": "Use authoritative evaluator scoring when provided. Otherwise freeze win=1, draw=0.5, loss/forfeit=0 for two-player outcomes and solved=1/failed=0 for binary puzzles; report literal win rate separately if needed. Numeric-score games require an explicit fixed per-game normalization from native score and declared bounds, not empirical batch maxima. Retain raw rewards, terminal reason, normalized score, seat, opponent and move count; aggregate by frozen game weights with per-game results. Mark wrapper truncations and infrastructure failures separately and freeze their treatment.",
+  "scenarios": "Map reset(seed) deterministically to a frozen manifest entry, legal variant/puzzle seed, learner seat and baseline policy/seed using a stable mapping with independent RNG streams. Stratify games and balance or pair seats. Replay identical seeds and actions to test determinism; audit constructor and global RNG behavior. For deterministic empty-board games, vary seat and baseline behavior, adding legal opening prefixes only if evaluator-approved. Do not expose puzzle-generating seeds or silently change games, assets or scoring on failure.",
+  "strategy_summary": "Dispatch by exact game and variant, preserve player-visible history and validate action grammar before submitting moves. Put rules, arithmetic, legal moves, bookkeeping, constraint solving and bounded search in code. Solve small alignment games and Nim exactly; use tactical search for larger public boards and candidate elimination with exact feedback for hidden-code puzzles. Use constraint propagation and search for Sudoku and path puzzles, and information-safe belief tracking for hidden boards or cards. Astra handles strategic plans, unfamiliar rules, language and opponent adaptation using computed features. Jev is optional for typed semantic classification or ranking supplied legal choices; it should not plan, calculate probabilities or replace exact legality checks. Optimize the frozen outcome/normalized-score objective and verify gains across held-out seeds, seats and baseline variants.",
+  "risks": [
+    "TextArena is absent from the evaluator venv; web requests failed DNS resolution and no cached package/source was found. Current package metadata and API details could not be verified.",
+    "This session can write only in the study directory and /tmp, not the evaluator venv; the adaptor setup phase needs package artifacts and appropriate venv write access.",
+    "No exact release, game mixture, baseline implementation, weights or normalization was supplied. The proposed mix must not be mistaken for the evaluator's actual suite.",
+    "Python 3.12.3 compatibility must be established using the selected release, dependency wheels, imports and complete episodes; system Python is not the target.",
+    "Some catalogue games, agents or judging paths may require APIs, paid services, runtime downloads or missing assets; audit and freeze an entirely offline mixture.",
+    "Action grammars, coordinate conventions, observations, return shapes and invalid-move penalties may differ across games and releases.",
+    "Internal state can expose secret targets, hands, fleets and future randomness. Reading it into player observations invalidates hidden-information evaluation.",
+    "reset(seed) may not seed constructor randomness, all RNG libraries or baseline policies; careless global RNG sharing can break reproducibility.",
+    "No outer evaluator time/call budget is known. The -1.0 latency sentinel expresses no finite native turn deadline, not unlimited runtime.",
+    "Web citations are source locators and prior-knowledge references, not successfully fetched current pages; exact upstream claims require confirmation when artifacts become available."
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          1100,
+          1101,
+          1200,
+          1201,
+          1300,
+          1301,
+          1400,
+          1401
+        ]
+      ],
+      [
+        "heldout",
+        [
+          2100,
+          2101,
+          2200,
+          2201,
+          2300,
+          2301,
+          2400,
+          2401
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "2a1fb117377a36c0ed0c4491135da969df1c2c6a1f048096f6e42aee8cb78e13"
+  },
+  "results": {
+    "train:1100": {
+      "ok": true,
+      "obs_sha256": "e48e163fb4c33abe"
+    },
+    "train:1101": {
+      "ok": true,
+      "obs_sha256": "226ba7614d6be657"
+    },
+    "train:1200": {
+      "ok": true,
+      "obs_sha256": "e8a66ae509ca3824"
+    },
+    "train:1201": {
+      "ok": true,
+      "obs_sha256": "48a4b86bdcbb067d"
+    },
+    "train:1300": {
+      "ok": true,
+      "obs_sha256": "35234befac0afbed"
+    },
+    "train:1301": {
+      "ok": true,
+      "obs_sha256": "183e8b475a2d2296"
+    },
+    "train:1400": {
+      "ok": true,
+      "obs_sha256": "e3c9cb1b71e5e96a"
+    },
+    "train:1401": {
+      "ok": true,
+      "obs_sha256": "e3ec51254fd9a24d"
+    },
+    "heldout:2100": {
+      "ok": true,
+      "obs_sha256": "12ac6770b695567a"
+    },
+    "heldout:2101": {
+      "ok": true,
+      "obs_sha256": "0163e362fca761e7"
+    },
+    "heldout:2200": {
+      "ok": true,
+      "obs_sha256": "932bbacc6efe45ca"
+    },
+    "heldout:2201": {
+      "ok": true,
+      "obs_sha256": "aeda0e78e667d447"
+    },
+    "heldout:2300": {
+      "ok": true,
+      "obs_sha256": "72222c0efab9c582"
+    },
+    "heldout:2301": {
+      "ok": true,
+      "obs_sha256": "54e862a353f4d392"
+    },
+    "heldout:2400": {
+      "ok": true,
+      "obs_sha256": "25c659ea8d0a5b1e"
+    },
+    "heldout:2401": {
+      "ok": true,
+      "obs_sha256": "b1a5ac16c3601e48"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

@@ -1,0 +1,65 @@
+[23:25:48] seed check: 8 seed(s) reset ok
+[23:55:48] eval 0000-tier1_astra_naive: mean=59.625 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: deadline 4
+[23:55:48] iteration 1/6 slot 1/3: proposing 0001 with codex:gpt-6-astra@router
+[23:55:48] iteration 1/6 slot 2/3: proposing 0002 with codex:gpt-6-astra@router
+[23:55:48] iteration 1/6 slot 3/3: proposing 0003 with codex:gpt-6-astra@router
+[00:07:23] preflight 0001: ok; warnings: no System-2 call was answered during the dry run
+[00:17:32] eval 0001: mean=-79.99249999999999 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[00:33:44] preflight 0002: ok; warnings: no System-2 call was answered during the dry run
+[00:44:07] preflight 0003: FAILED — harness did not return within 5.0s after the episode deadline (60.0s); ctx calls were refused and in-flight model calls cancelled
+[00:44:36] eval 0002: mean=109.51 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[00:51:17] preflight 0003: ok after repair; warnings: no System-2 call was answered during the dry run
+[01:16:00] eval 0003: mean=548.6875 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[01:16:00] iteration 2/6 slot 1/3: proposing 0004 with codex:gpt-6-astra@router
+[01:16:00] iteration 2/6 slot 2/3: proposing 0005 with codex:gpt-6-astra@router
+[01:16:00] iteration 2/6 slot 3/3: proposing 0006 with codex:gpt-6-astra@router
+[01:29:01] preflight 0005: ok; warnings: no System-2 call was answered during the dry run
+[01:35:52] preflight 0006: ok; warnings: no System-2 call was answered during the dry run
+[01:44:42] preflight 0004: ok; warnings: no System-2 call was answered during the dry run
+[01:51:09] eval 0005: mean=33.0225 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[02:01:13] eval 0006: mean=14.027499999999995 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[02:14:59] eval 0004: mean=517.75 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: harness_return 4
+[02:14:59] iteration 3/6 slot 1/3: proposing 0007 with codex:gpt-6-astra@router
+[02:14:59] iteration 3/6 slot 2/3: proposing 0008 with codex:gpt-6-astra@router
+[02:14:59] iteration 3/6 slot 3/3: proposing 0009 with codex:gpt-6-astra@router
+[02:39:20] preflight 0009: ok; warnings: no System-2 call was answered during the dry run
+[02:40:53] preflight 0007: ok; warnings: no System-2 call was answered during the dry run
+[02:42:38] preflight 0008: FAILED — game hung: a call into the game (tick/step/observe) did not return, so neither the harness nor the evaluator could use it — also: harness did not return within 5.0s after the episode deadline (60.0s);
+[02:52:48] preflight 0008: ok after repair; warnings: no System-2 call was answered during the dry run
+[03:10:11] eval 0009: mean=681.0625 stale=None fatal=None errors=1 failed s1/s2=0/0 ended: deadline 2, game_error 1, harness_return 1
+[03:11:38] eval 0007: mean=268.6875 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: harness_return 2, deadline 2
+[03:15:22] eval 0008: mean=2.2399999999999913 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[03:15:22] iteration 4/6 slot 1/3: proposing 0010 with codex:gpt-6-astra@router
+[03:15:22] iteration 4/6 slot 2/3: proposing 0011 with codex:gpt-6-astra@router
+[03:15:22] iteration 4/6 slot 3/3: proposing 0012 with codex:gpt-6-astra@router
+[03:37:47] preflight 0011: ok; warnings: no System-2 call was answered during the dry run
+[03:41:02] preflight 0010: ok; warnings: no System-2 call was answered during the dry run
+[03:45:47] preflight 0012: ok; warnings: no System-2 call was answered during the dry run
+[04:09:33] eval 0011: mean=410.0 stale=None fatal=None errors=1 failed s1/s2=0/0 ended: harness_return 1, game_error 1, deadline 2
+[04:11:02] eval 0010: mean=659.4375 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: harness_return 4
+[04:14:33] eval 0012: mean=548.8425 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[04:14:33] iteration 5/6 slot 1/3: proposing 0013 with codex:gpt-6-astra@router
+[04:14:33] iteration 5/6 slot 2/3: proposing 0014 with codex:gpt-6-astra@router
+[04:14:33] iteration 5/6 slot 3/3: proposing 0015 with codex:gpt-6-astra@router
+[04:36:12] preflight 0013: ok; warnings: no System-2 call was answered during the dry run
+[04:43:06] preflight 0015: ok; warnings: no System-2 call was answered during the dry run
+[05:03:49] preflight 0014: ok; warnings: no System-2 call was answered during the dry run
+[05:04:32] eval 0013: mean=788.3125 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[05:13:57] eval 0015: mean=539.3125 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: harness_return 2, deadline 2
+[05:25:18] eval 0014: mean=799.3625 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[05:25:18] iteration 6/6 slot 1/3: proposing 0016 with codex:gpt-6-astra@router
+[05:25:18] iteration 6/6 slot 2/3: proposing 0017 with codex:gpt-6-astra@router
+[05:25:18] iteration 6/6 slot 3/3: proposing 0018 with codex:gpt-6-astra@router
+[06:08:24] preflight 0017: ok; warnings: no System-2 call was answered during the dry run
+[06:12:15] preflight 0018: ok; warnings: no System-2 call was answered during the dry run
+[06:15:55] preflight 0016: ok; warnings: no System-2 call was answered during the dry run
+[06:39:44] eval 0017: mean=475.5625 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: deadline 3, harness_return 1
+[06:42:33] eval 0018: mean=529.375 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: harness_return 4
+[06:45:14] eval 0016: mean=642.6425 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 3, harness_return 1
+[06:45:14] validation of the top 3 on seeds [15101, 26203, 37309, 48407]: 0014, 0013, 0010
+[07:14:26] eval 0013/validation: mean=788.375 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: harness_return 4
+[07:14:27] eval 0014/validation: mean=829.375 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: harness_return 4
+[07:14:27] eval 0010/validation: mean=399.4375 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: harness_return 4
+[07:14:27] selected after validation: 0014
+[07:14:27] held-out seeds evaluation of 0014
+[07:31:32] eval 0014/heldout: mean=724.2475 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4

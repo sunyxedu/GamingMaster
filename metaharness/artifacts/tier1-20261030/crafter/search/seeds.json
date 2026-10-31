@@ -1,0 +1,104 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          1101,
+          1102,
+          1103,
+          1104,
+          1105,
+          1106,
+          1107,
+          1108
+        ]
+      ],
+      [
+        "heldout",
+        [
+          2201,
+          2202,
+          2203,
+          2204,
+          2205,
+          2206,
+          2207,
+          2208
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "b17293e0a982b3b163a0cc45fc8cad99829bb3f212d027c872ef8badd36cb982"
+  },
+  "results": {
+    "train:1101": {
+      "ok": true,
+      "obs_sha256": "aa9a6f3c05686b93"
+    },
+    "train:1102": {
+      "ok": true,
+      "obs_sha256": "c68e4019426544dd"
+    },
+    "train:1103": {
+      "ok": true,
+      "obs_sha256": "2483dbbe950f531a"
+    },
+    "train:1104": {
+      "ok": true,
+      "obs_sha256": "f231aedc92647cbf"
+    },
+    "train:1105": {
+      "ok": true,
+      "obs_sha256": "d9fa4721dbb8d294"
+    },
+    "train:1106": {
+      "ok": true,
+      "obs_sha256": "71ed07c8b7de8e43"
+    },
+    "train:1107": {
+      "ok": true,
+      "obs_sha256": "59aefa94e1d3dce8"
+    },
+    "train:1108": {
+      "ok": true,
+      "obs_sha256": "cd2194bf0b11f4ec"
+    },
+    "heldout:2201": {
+      "ok": true,
+      "obs_sha256": "1b6ce6a30898158b"
+    },
+    "heldout:2202": {
+      "ok": true,
+      "obs_sha256": "74fe3ae9d71e1c86"
+    },
+    "heldout:2203": {
+      "ok": true,
+      "obs_sha256": "24aceca6bb25aa7c"
+    },
+    "heldout:2204": {
+      "ok": true,
+      "obs_sha256": "1e1a7b089542225f"
+    },
+    "heldout:2205": {
+      "ok": true,
+      "obs_sha256": "ca06cc67476ca2ac"
+    },
+    "heldout:2206": {
+      "ok": true,
+      "obs_sha256": "fa8c13d649f7f18e"
+    },
+    "heldout:2207": {
+      "ok": true,
+      "obs_sha256": "d0ed3a0eb601e894"
+    },
+    "heldout:2208": {
+      "ok": true,
+      "obs_sha256": "fed24dbd959b8f98"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

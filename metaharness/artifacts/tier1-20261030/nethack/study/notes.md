@@ -1,0 +1,1 @@
+Linux x86_64 server without GUI; everything must run offline on this machine with free software. The evaluator's Python is the venv at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/nethack (install there). Tier 1: the agent plays turn by turn. pip nle (wheels first; a source build may need cmake/bison/flex); textual observation; score = in-game score or depth reached.

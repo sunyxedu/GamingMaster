@@ -1,0 +1,13 @@
+parent: 0015
+
+Hypothesis: the remaining low-score episodes are caused by stale route commitments rather than missing recipes. The controller remembers every observed tile, and its shortest-path planner can keep selecting a compact loop after a resource has moved, a hostile has blocked an edge, or a model objective has become impossible. Candidate 0015 already detects one exact A/B oscillation and clears a reserve/conversion lock, but it misses three- and four-cell loops and can repeat a no-effect interaction or placement target for many ticks.
+
+Evidence: candidate 0015's traces include long late movement sequences after the last achievement (for example seed 1101 reaches collect_iron at step 202 and then spends the remaining episode retracing remembered terrain without crafting; seed 1108 ends at 15/22 after a dense hostile movement sequence at daylight 0.046). Earlier leader traces show the same symptom as a two-cell A/B alternation. These are route failures after useful progression, not failures to parse recipes. The parent’s reserve and rare-conversion locks address resource urgency but do not invalidate a stale target unless the exact six-sample A/B pattern occurs.
+
+What changed versus 0015:
+
+- Generalize the cycle watchdog to periods 2, 3, and 4 over the recent position trace. On a repeated period, temporarily block the re-entered cell and one preceding cell, clear exploration/adviser commitments, and let the normal path search choose another branch. The blacklist expires within 14 ticks and is episode-local.
+- Add a no-effect watchdog: seven consecutive unchanged actions clear placement and strategic objectives and reset the counter. This catches a failed interaction, a blocked remembered route, or a mobile target that has left the visible map without spending another model call.
+- Keep the parent’s verified recipe deltas, vital reserve lock, bounded rare-resource conversion, sleep guards, combat logic, asynchronous Astra adviser, and robust garbage-response handling unchanged.
+
+Evidence that would confirm or refute it: traces should show `route_watchdog` or `stale_objective` immediately before a new frontier/resource interaction, fewer repeated position patterns, and more iron/diamond/tool achievements after the first rare pickup. The hypothesis is refuted if watchdog breaks mostly interrupt productive mining, if the temporary blacklist forces harmful detours in open terrain, or if late no-progress tails remain with no improvement in worst-seed survival. The bounded expiry and only-on-repeat trigger make that tradeoff visible without permanently deleting map knowledge.

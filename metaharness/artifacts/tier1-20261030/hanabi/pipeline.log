@@ -1,0 +1,10 @@
+[22:04:59] run: game='Hanabi (card game)' dir=runs/hanabi agent=codex:gpt-6-astra@router
+[22:11:23] run: game='Hanabi (card game)' dir=runs/hanabi agent=codex:gpt-6-astra@router
+[22:17:29] run: game='Hanabi (card game)' dir=runs/hanabi agent=codex:gpt-6-astra@router
+[22:32:35] study: done — tier 1, interface api: local headless standard-library Python equivalent simulator, with optional HLE reference backend
+[22:39:33] adapt: adaptor validated after 1 attempt(s)
+[22:39:33] run: game='Hanabi (card game)' dir=runs/hanabi agent=codex:gpt-6-astra@router
+[22:39:33] study: reusing runs/hanabi/study/study.json (tier 1)
+[22:39:33] adapt: reusing validated adaptor
+[22:39:33] search: tier 1 on adaptor game 'Hanabi (offline standard)'
+[03:11:20] run: done — best 0013

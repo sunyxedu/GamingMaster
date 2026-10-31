@@ -1,0 +1,328 @@
+{
+ "harness_path": "runs/catan/search/candidates/0013/harness.py",
+ "game": "Settlers of Catan (Catanatron AlphaBeta depth 2)",
+ "fatal": null,
+ "mean_score": 0.3225,
+ "stale_fraction": null,
+ "n_episodes": 4,
+ "system1_calls": 0,
+ "system2_calls": 14,
+ "mean_steps": 69.0,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 3,
+  "harness_return": 1
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 0.043478260869565216,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 401,
+   "score": 0.07,
+   "steps": 64,
+   "system1_calls": 0,
+   "system2_calls": 4,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 3,
+    "mean": 34.9220966498057,
+    "p50": 29.10473084449768,
+    "p90": 51.27117085456848,
+    "max": 51.27117085456848
+   },
+   "wall_s": 1232.5814764259849,
+   "error": null,
+   "info": {
+    "score": 0.07,
+    "ticks": 64,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "win": 0.0,
+     "true_vp": 7.0,
+     "public_vp": 6.0,
+     "turns": 72.0,
+     "action_count": 270.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 64,
+   "acts_after_s1": 0,
+   "acts_after_s2": 3,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     29.105,
+     232
+    ],
+    [
+     51.271,
+     316
+    ],
+    [
+     24.39,
+     119
+    ]
+   ]
+  },
+  {
+   "seed": 402,
+   "score": 0.05,
+   "steps": 54,
+   "system1_calls": 0,
+   "system2_calls": 4,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 3,
+    "mean": 30.206981420516968,
+    "p50": 31.32568883895874,
+    "p90": 31.58492922782898,
+    "max": 31.58492922782898
+   },
+   "wall_s": 1183.8257765281014,
+   "error": null,
+   "info": {
+    "score": 0.05,
+    "ticks": 54,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "win": 0.0,
+     "true_vp": 5.0,
+     "public_vp": 4.0,
+     "turns": 59.0,
+     "action_count": 234.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 54,
+   "acts_after_s1": 0,
+   "acts_after_s2": 3,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     31.326,
+     138
+    ],
+    [
+     27.71,
+     159
+    ],
+    [
+     31.585,
+     114
+    ]
+   ]
+  },
+  {
+   "seed": 403,
+   "score": 0.07,
+   "steps": 66,
+   "system1_calls": 0,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 46.13109636306763,
+    "p50": 48.24997854232788,
+    "p90": 48.24997854232788,
+    "max": 48.24997854232788
+   },
+   "wall_s": 1055.6141138439998,
+   "error": null,
+   "info": {
+    "score": 0.07,
+    "ticks": 66,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "win": 0.0,
+     "true_vp": 7.0,
+     "public_vp": 7.0,
+     "turns": 59.0,
+     "action_count": 226.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 66,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_return",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     44.012,
+     97
+    ],
+    [
+     48.25,
+     145
+    ]
+   ]
+  },
+  {
+   "seed": 404,
+   "score": 1.1,
+   "steps": 92,
+   "system1_calls": 0,
+   "system2_calls": 4,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 4,
+    "mean": 64.2065018415451,
+    "p50": 64.58999037742615,
+    "p90": 80.37553715705872,
+    "max": 80.37553715705872
+   },
+   "wall_s": 1318.6171208668966,
+   "error": null,
+   "info": {
+    "score": 1.1,
+    "ticks": 92,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "win": 1.0,
+     "true_vp": 10.0,
+     "public_vp": 6.0,
+     "turns": 96.0,
+     "action_count": 359.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 92,
+   "acts_after_s1": 0,
+   "acts_after_s2": 4,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     64.59,
+     545
+    ],
+    [
+     80.376,
+     378
+    ],
+    [
+     60.143,
+     575
+    ],
+    [
+     51.717,
+     164
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   401,
+   402,
+   403,
+   404
+  ],
+  "expected_episodes": 4,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "099a20cacfbad253a20f2badbb08cc35385679ed3961fa1791c5f2fa8e2d413c",
+  "game_kind": "turn",
+  "resolved_models": {
+   "system2": [
+    "codex:gpt-6-astra@router"
+   ]
+  }
+ },
+ "score_std": 0.5184190711512583
+}

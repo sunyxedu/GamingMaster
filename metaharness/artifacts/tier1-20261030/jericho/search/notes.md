@@ -1,0 +1,84 @@
+- Candidate 0002 uses a fresh conditional-policy compiler: anticipated parser outcomes choose branches for repair or clarification without buying another Astra call. This is distinct from a linear action queue.
+- All baseline commands were rejected by transport, so archive evidence cannot distinguish puzzle strategies. A score gain over that baseline proves transport repair; conditional control needs branch-use and actions-per-call evidence too.
+- Do not deduplicate ordered commands: repeated directions and retry-after-unlock can be necessary. Bound execution by node visits and repeated command/result pairs instead.
+- Model-authored notebook entries are hypotheses until supported by timestamped parser responses; explicit recent evidence and old clue retrieval make each planning call auditable.
+- Candidate 0002 discarded its initial opening-imperative compiler: arbitrary narrative imperatives are not verified objectives. The final harness contains no opening quest script or game/seed-specific route.
+- Trace evidence distinguishes the sole action name (`command`) from its parser payload; forwarding the payload is a correctness fix before strategic tuning.
+- A plan suffix must be invalidated on score changes and parser/clarification text, since a successful first turn can alter object references or parser mode.
+- Catching model timeouts and malformed outputs is part of eligibility: a pre-flight stand-in may return arbitrary text, so extraction and fallback must be total.
+- Candidate 0001 verified the serialization diagnosis across every baseline trace: all 209 submitted actions were literally `command`, including calls whose answers were `inventory` or JSON containing `help`. No baseline puzzle strategy was actually tested.
+- The baseline's detective score was its initial score, so apparent nonzero performance is not evidence of successful actions; compare final native score to the recorded initial score for diagnosis.
+- Candidate 0001 uses optional literal response guards plus explicit stop checkpoints to amortize inference. A positive score alone need not cancel an otherwise expected plan; unexpected parser state or failed prerequisites must cancel it.
+- Keep model-written notebooks explicitly separate from exact observations. Store the submitted command and parser response together with step/score/moves so planning mistakes can be audited and corrected.
+- `dev-eval --seeds` accepts a comma-separated value (e.g. `16,19`), not separate positional seed arguments. Pre-flight can pass with no posted action when its arbitrary replies are rejected; test real command-decoding cases separately.
+- Candidate 0002 dev seed 19 exposed character-input menus: `help` displayed `Q = resume game`, then five clue commands returned empty text. Menu signatures and empty responses must interrupt clue collection; the contextual exit instruction is observed, but its real-game effect remains untested after the partial dev run was stopped.
+- Candidate 0001 dev seeds 16/19 each spent the entire 1800-second episode awaiting their first model response: no model_call records, zero actions, clean deadline endings after caught EpisodeOver, and no pending tasks. This validates cancellation handling but cannot measure command repair or planning quality; distinguish admitted requests from completed inference when interpreting call counts.
+- Candidate 0003 traces show session continuation can grow Astra input from roughly 14k to 50k tokens while actions collapse into repeated single-direction routes; fresh sessions with a bounded evidence packet are a plausible structural fix.
+- Exact recent transcript and score events should replace hidden conversation history when resetting sessions; include the opening text so an early mission clue is not lost.
+- Positive score changes do not necessarily invalidate a planned suffix; clearing every batch on reward can spend another slow call for an obvious next step, while parser errors and hazards still require immediate replanning.
+- Keep menu/empty-response detection and total garbage-output parsing from 0002/0003: character-input help screens can otherwise consume an entire macro silently.
+- Candidate 0003 reaches genuine points after fixing parser-command transport, but its implementation still clears pending routes on every score change; successful rewards therefore trigger another 40-second Astra call.
+- Positive native score changes are useful route evidence in these turn games. A safer batching test is to retain the suffix on positive deltas and invalidate on parser/context failures, hazards, negative deltas, or repeated identical responses.
+- Long plans need literal response guards and a hard cap: without both, a successful first command can make a suffix stale or let arbitrary stand-in text crash pre-flight.
+- Keep model output parsing total across strict JSON, fenced JSON, tagged lines, and garbage; catch `BudgetExceeded`, `EpisodeOver`, timeouts, and action errors so deadline cancellation remains a normal episode end.
+- Candidate 0002’s library traces reveal a distinct failure from transport: identical `examine ID card` and `look` actions recur across separate Astra programs even when the response and score are unchanged.
+- Candidate 0003’s successful Balances and Library routes still spend 14–17k input tokens per planning call; prompt growth is a wall-clock failure mode under the 1800-second episode deadline.
+- Candidate 0006 tests an episode-wide exact command/response/score ledger, allowing a route command again only after its observed context changes.
+- Compact bounded evidence should preserve score events, recent parser text, and failed actions while avoiding an ever-growing transcript in every Astra request.
+- Code-generated noun probes are an emergency fallback for malformed or stalled planning; they remain generic and transcript-derived, so their value must be measured against wasted exploratory turns.
+- Candidate 0005 reached 0.50 on library seed 11, showing that positive score changes can safely preserve a short route; the same trace still ended in a near-deadline model timeout.
+- A model request can consume the entire 1,800-second episode without a completed model_call (0005 seed 1 and 0004 seed 2); per-call timeout must be bounded independently of remaining wall time.
+- Continuing one Astra session defeats a bounded visible transcript: hidden thread context grows across calls. Fresh sessions need a compact evidence packet and explicit notebook if clues are to survive.
+- Repeated movement and parser failures on 0005 seed 2 show that retaining batches needs an exact command/response recurrence guard, not only score-based invalidation.
+- Decoder totality remains a pre-flight requirement: arbitrary stand-in text, fenced JSON, tagged commands, and the adaptor's sole `command` action name must never become an exception or literal payload.
+- Candidate 0008 tests fresh Astra sessions with a bounded evidence packet; 0003/0005 traces show continued sessions can grow hidden input while repeating routes.
+- A short per-call timeout is a structural latency guard: one in-flight first call in 0005 seed 1 consumed the full episode without an action.
+- Generic noun probes are unsafe in parser prose; 0006 submitted `examine can't`, `read can't`, and `take can't` after extracting words from error text.
+- Positive score changes can preserve a route suffix, but parser errors, hazards, losses, and repeated exact response states must invalidate it.
+- Candidate 0005 seed 2 demonstrates that alternating commands can evade an exact pair guard: west/look/east can revisit identical room prose and score.
+- A normalized response-plus-score recurrence counter is a cheap structural detector for loops; it should trigger replanning after several visits while allowing one or two legitimate revisits.
+- Fresh Astra sessions prevent hidden continuation context from defeating a bounded visible evidence packet, but the packet must retain the opening mission and failed actions.
+- A room-text-plus-score key can hide meaningful state: spell learning, opening a container, and inventory changes often leave both fields unchanged.
+- Versioning the local world context after substantive commands permits a previously blocked edge to be retried when its prerequisite changed; transition counts still cap true oscillations.
+- Parser direction aliases are safest as one-shot repairs after explicit “I don't know the word” or blocked-exit text, never as generic candidate generation.
+- Preflight stand-ins exercised the total decoder successfully for 0015 (40 actions, no failed calls); contract safety still depends on catching model and action exceptions.
+- Cycle recovery prompts should demand an information-seeking action grounded in observed nouns or exits; generic noun probing previously produced unsafe fragments such as `examine can't`.
+- Candidate 0005 seed 2 shows a distinct alternating movement loop (`west`/`look`/`east`) with unchanged Long Road prose; an exact command/response guard alone does not catch every cycle.
+- Candidate 0002's `bozbar snake` branch ended with the explicit death text “knocking you over the edge”; response-conditioned programs need an evidence or risk gate before irreversible puzzle guesses.
+- A directed transcript ledger can use room-text plus score as a provisional state key while excluding native move count; revisits should trigger replanning, not an unconditional permanent edge ban.
+- Conditional programs should remain bounded and total: unknown model fields, malformed JSON, action errors, and stand-in garbage must terminate or recover without escaping `run_episode`.
+- Keep model beliefs explicitly provisional and retain exact command/response/score records in code; a notebook alone cannot verify inventory or reachability.
+- Candidate 0012 tests a transactional route: every suffix command needs a literal response anchor, so a plausible first move cannot silently authorize stale follow-up actions.
+- The 0005 enchanter seed-2 trace alternates `west`/`look`/`east` on unchanged Long Road text; score-based batching and exact command-pair guards alone did not stop this route.
+- A response guard must be checked after each action and combined with parser, hazard, menu, negative-score, and repeated-state interrupts; model-declared risk is advisory only.
+- Contextual `q` is valid only after live help text says `Q = resume game`; lifecycle-token rejection remains necessary for arbitrary model output.
+- Strict guard schemas can reduce actions per call when Astra omits anchors, so evaluation should measure anchor coverage as well as final score and deaths.
+- Candidate 0005's enchanter seed 2 gives concrete evidence for a frontier test: `west`/`look`/`east` repeats the unchanged Long Road state after the score remains zero.
+- A model-authored route can preserve a stale suffix through harmless observations; a transcript-derived directed edge ledger makes repeated state/action attempts an explicit replan trigger.
+- Generic fallback noun extraction is unsafe (0006 submitted `examine can't`); 0011 limits scripted recovery to directions explicitly present in the current prose, then bounded `look`/`inventory` checks.
+- Fresh Astra sessions plus a 75-second cap test latency structurally: 0009 lost many calls to 120-second timeouts, while 0005 could spend the whole episode inside one first request.
+- Textual room signatures are only provisional: they prevent obvious loops but may block legitimate return trips when hidden inventory or timers differ; future work should add observed object provenance.
+- Candidate 0011 traces expose a parser-lexicon failure separate from route planning: Astra emitted `northeast` and `north` in Enchanter, receiving “I don't know the word” / “You can't go that way” before replanning.
+- A conservative alias retry can test this mechanically: only map an immediately rejected direction token (`northeast`→`ne`, etc.), log it, and count the replacement as a separate bounded edge so repairs cannot loop.
+- Mentioned directions in room prose are not proof of parser vocabulary or a currently available exit; the model prompt should prefer exact observed short tokens, while code should avoid speculative aliasing on ordinary responses.
+- Preflight confirms arbitrary stand-in model text can be decoded and the 0014 control loop returns cleanly with no System-1 dependency.
+- Candidate 0011 exposed a memory failure beyond route cycling: its eight-turn packet and replace-on-update notebook lost early inventory and directional clues by the time a puzzle was reached.
+- A safe, transcript-derived `inventory` bootstrap is a cheap test of the study opening procedure; skip it when the opening is visibly a menu or clarification prompt.
+- Preserve exact high-information responses in a bounded ledger, while keeping model beliefs provisional; append-only memory must still be capped to avoid latency-driven prompt growth.
+- A no-reward action counter can force replanning after a long movement/puzzle suffix even when textual state keys differ; use it as a heuristic, not a claimed game rule.
+- 0015 tests versioned recurrence memory: room prose plus score can hide spell and container prerequisites, so substantive actions advance a local context epoch.
+- Transition counts remain unversioned to stop true three-transition oscillations while allowing a command to be retried after an observed prerequisite change.
+- A direction alias is useful only after explicit parser rejection; prose alone must not generate diagonal abbreviations.
+- 0015 preflight completed 40 stand-in actions with zero failed model calls or contract warnings.
+- 0011 traces show a late self-loop distinct from map cycling: after `rezrov` is reported unavailable, Astra emits the same gate-opening plan repeatedly without posting an action.
+- A plan fingerprint is safer than a global command blacklist when it is counted only across calls with no intervening action; legitimate routes may repeat after the world changes.
+- A short code-only cooldown can preserve the episode deadline after repeated Astra answers, but it must be bounded and use only exits extracted from the live observation.
+- Returning cleanly when a repeated-plan cooldown has no observed frontier is preferable to spending the remaining wall time on identical 40–75 second model calls.
+- Candidate 0011/0015 traces show that a nominally bounded packet still duplicated the opening response, current response, and long edge records; input size and Astra latency can be a control failure even when transcript rows are capped.
+- Candidate 0011 Enchanter seed 2 reached the closed gate but spent subsequent turns on `open gate`, `unlock gate`, `examine chain`, and an uncommitted `rezrov gate` without a score event; frontier exploration alone does not establish puzzle progress.
+- Candidate 0015 seed 10 ended with 31 mostly directional/observation actions and four model timeouts, including a final request with only seconds left; reserve wall-clock headroom and cap model-visible evidence.
+- Shortening a route commitment should be paired with preserving score-changing rows and the opening mission, since those are high-value context while repeated ordinary observations are low-value.
+- Candidate 0011’s score gains came from correct parser payload transport and short positive-score batches; its worst traces still burned turns on `look` immediately after movement.
+- A room-text frontier does not detect two-room A-B-A-B oscillations when each arrival has different prose; a bounded transition history is a cheap general cycle signal.
+- Prompt size is a wall-clock resource: keeping five short recent rows and a few failures preserves evidence while avoiding the 15k+ token packets seen late in episodes.
+- Lowering a single Astra timeout can be safer than repeatedly waiting 75 seconds near the deadline, provided malformed and timeout paths fall back without escaping.

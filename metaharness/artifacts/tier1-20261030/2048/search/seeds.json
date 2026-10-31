@@ -1,0 +1,106 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          11,
+          23,
+          37,
+          41,
+          59,
+          71,
+          83,
+          97
+        ]
+      ],
+      [
+        "heldout",
+        [
+          101,
+          113,
+          127,
+          139,
+          151,
+          163,
+          179,
+          191
+        ]
+      ]
+    ],
+    "game_kwargs": {
+      "max_moves": 200
+    },
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "01845639e9818f7e83c417909343e294f763ea05defeef86961cd807b63cb106"
+  },
+  "results": {
+    "train:11": {
+      "ok": true,
+      "obs_sha256": "6693cc09fbda1218"
+    },
+    "train:23": {
+      "ok": true,
+      "obs_sha256": "c82ce9733350b46d"
+    },
+    "train:37": {
+      "ok": true,
+      "obs_sha256": "f2a93a61792b26f8"
+    },
+    "train:41": {
+      "ok": true,
+      "obs_sha256": "ab1d74dc90fdb57b"
+    },
+    "train:59": {
+      "ok": true,
+      "obs_sha256": "8da89877d417fdb9"
+    },
+    "train:71": {
+      "ok": true,
+      "obs_sha256": "73ca0062574ba177"
+    },
+    "train:83": {
+      "ok": true,
+      "obs_sha256": "e77ecb82017c1bb8"
+    },
+    "train:97": {
+      "ok": true,
+      "obs_sha256": "d10e3cc67df957f9"
+    },
+    "heldout:101": {
+      "ok": true,
+      "obs_sha256": "7bc222c03a99945b"
+    },
+    "heldout:113": {
+      "ok": true,
+      "obs_sha256": "365e6edf42953cd6"
+    },
+    "heldout:127": {
+      "ok": true,
+      "obs_sha256": "e615e68f8e88b3fc"
+    },
+    "heldout:139": {
+      "ok": true,
+      "obs_sha256": "5c0563e079378e1a"
+    },
+    "heldout:151": {
+      "ok": true,
+      "obs_sha256": "8c75c7bbde193370"
+    },
+    "heldout:163": {
+      "ok": true,
+      "obs_sha256": "73e6be28dca15fa0"
+    },
+    "heldout:179": {
+      "ok": true,
+      "obs_sha256": "f5b6dccb7b30da0d"
+    },
+    "heldout:191": {
+      "ok": true,
+      "obs_sha256": "a4ef9e5d70210a1d"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

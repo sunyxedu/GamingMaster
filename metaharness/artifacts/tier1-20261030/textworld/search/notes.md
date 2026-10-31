@@ -1,0 +1,7 @@
+- The incumbent's frozen initial action list is fatal: traces show Astra selected `go north`, `insert spork into dresser`, and `drop golf ball`, while submitted actions became unrelated `drop`/`examine` commands. Rebind every proposal against the current observation.
+- Repeating an admissible action can still be a failed plan: seed 103 repeatedly examined `table` while the cabinet goal remained untouched. A state-conditioned loop guard must trigger replanning.
+- Native cumulative score stayed at zero because episodes hit the 1800 s deadline after only 0–26 actions; Astra calls are roughly 51 s median and can reach 132 s. Keep prompts compact, cap output, catch timeout/deadline exceptions, and avoid background workers.
+- A plan should advance only after an observed postcondition, while preserving partial score and terminal flags. `score_delta == 0` does not prove an action failed, so movement and prerequisite effects need text/state checks too.
+- Indexing the *current* admissible list eliminates stale command spelling and extraction ambiguity; the index must never be reused after a step.
+- A fresh one-step prompt can avoid carrying a bad conversation or plan across state changes, but its latency may still make long quests infeasible.
+- Strict output parsing needs a bounded fallback for arbitrary preflight model replies; an unrelated default action can itself create loops.

@@ -1,0 +1,39 @@
+{
+  "game": "NetHack (NetHack Learning Environment)",
+  "tier": 1,
+  "tier_rationale": "NLE is a local turn-based emulator: the engine advances when the adaptor submits a command, and it is paused between commands. Monsters act during that command but there is no wall-clock deadline while Astra reasons, so seconds to a minute of deliberation is acceptable; only game turns spent waiting or choosing a dangerous action incur penalty.",
+  "decision_latency_s": 60.0,
+  "interface": {
+    "chosen": "official env",
+    "why": "The official NLE Gym wrapper is headless, offline, free, and exposes structured glyphs, terminal text, messages, cursor and blstats in one step API. It avoids brittle OCR/terminal injection and avoids public-server credentials or anti-cheat policy.",
+    "software": [
+      "nle (NetHack Learning Environment)",
+      "gymnasium or the gym version required by the pinned NLE release",
+      "numpy",
+      "cmake",
+      "bison",
+      "flex",
+      "C/C++ compiler (source-build fallback)"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Use /home/hemlix/GamingMaster-mh-tier1/runs/venvs/nethack/bin/python for every pip command.",
+      "Install a cp312 NLE wheel if available; otherwise install cmake, bison, flex and a compiler and run pip install --no-binary nle nle.",
+      "Instantiate nle.env.NetHackScore (or NetHackChallenge) with observation keys including glyphs, chars, colors, blstats, message, tty_chars and tty_cursor.",
+      "Call reset(seed=seed), serialize arrays and decoded messages for Astra/Jev, and retain NumPy arrays internally.",
+      "Map each planned key to nle.nethack.ACTIONS and call step; answer menus and yes/no prompts with subsequent actions until the prompt clears.",
+      "Track final score, termination and maximum dungeon depth, then close the environment."
+    ],
+    "observation": "A Python dict/NumPy observation: 21x79 glyphs and terminal character/color/special arrays, tty cursor, latest message, and blstats containing coordinates, HP/energy, level, strength, gold, dungeon depth, hunger, alignment and time. Convert to JSON-friendly lists/text at model boundaries.",
+    "actions": "Submit one integer per turn via env.step(action), using nle.nethack.ACTIONS for vi movement, wait, inventory, item use, stairs and extended-command keys; inspect message/tty output and submit follow-up keys for menus or prompts. reset(seed=...) starts a seeded episode."
+  },
+  "scoring": "Report the terminal NetHack score from the environment/info as the primary score because it combines gold, experience, dungeon progress and achievements; also report maximum dungeon depth and an ascension/success flag so survival and true completion are visible.",
+  "scenarios": "For reset(seed), use held-out integer seeds and vary NetHack's randomized role/race/alignment, starting inventory, dungeon layouts, monster/item placements and branch choices when the pinned NLE build permits it. Include ordinary score episodes and staircase/challenge curriculum episodes, while never training on a fixed map or seed.",
+  "strategy_summary": "Strong play explores cautiously, records the map and inventory, keeps food/healing and an escape route, and fights from favorable terrain. Exact bookkeeping for HP, hunger, encumbrance, BUC, item identities, resistances, charges, prompts and map coordinates belongs in code. Astra should plan role-specific routes, identification experiments, branch choices, combat retreats and ascension preparation from that belief state. Jev should answer fast typed questions about immediate threats, unresolved prompts, safe adjacent squares, item/monster recognition and whether a deterministic safety gate is met. Before Gehennom, require a resistance/escape ascension kit, retrieve the Amulet, and return by a safe route.",
+  "risks": [
+    "A cp312 binary wheel may be unavailable; NLE then needs cmake, bison, flex, compiler and a successful source build.",
+    "NLE releases differ in Gym versus Gymnasium step signatures and observation keys; pin and test the installed version.",
+    "NetHack's stochastic partial observability and prompt/menu states can cause deaths if the adaptor ignores messages or sends an action under an unresolved prompt.",
+    "The bundled engine is offline and needs no credentials; public-server/GUI approaches add network, account, ToS, anti-cheat and headless-display risks."
+  ]
+}

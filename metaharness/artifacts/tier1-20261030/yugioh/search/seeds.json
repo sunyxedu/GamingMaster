@@ -1,0 +1,144 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          1101,
+          1102,
+          1103,
+          1104,
+          1105,
+          1106,
+          1107,
+          1108,
+          1109,
+          1110,
+          1111,
+          1112
+        ]
+      ],
+      [
+        "heldout",
+        [
+          2201,
+          2202,
+          2203,
+          2204,
+          2205,
+          2206,
+          2207,
+          2208,
+          2209,
+          2210,
+          2211,
+          2212
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "a0e63476204ccf2b75826ff5c79a200b102e538bc475a750fe78ed077d441a92"
+  },
+  "results": {
+    "train:1101": {
+      "ok": true,
+      "obs_sha256": "402efbdf86de2a46"
+    },
+    "train:1102": {
+      "ok": true,
+      "obs_sha256": "750d60c7e008a6f9"
+    },
+    "train:1103": {
+      "ok": true,
+      "obs_sha256": "05a642fdc2fae8b9"
+    },
+    "train:1104": {
+      "ok": true,
+      "obs_sha256": "fb5fa1f936f17bf6"
+    },
+    "train:1105": {
+      "ok": true,
+      "obs_sha256": "aaceea95974d0dcf"
+    },
+    "train:1106": {
+      "ok": true,
+      "obs_sha256": "ff0461f18daa5355"
+    },
+    "train:1107": {
+      "ok": true,
+      "obs_sha256": "7549baf7125760bd"
+    },
+    "train:1108": {
+      "ok": true,
+      "obs_sha256": "efc375e51198d134"
+    },
+    "train:1109": {
+      "ok": true,
+      "obs_sha256": "623493a80dc95899"
+    },
+    "train:1110": {
+      "ok": true,
+      "obs_sha256": "e0b9de9d6a66e07d"
+    },
+    "train:1111": {
+      "ok": true,
+      "obs_sha256": "790a9b9b367747e4"
+    },
+    "train:1112": {
+      "ok": true,
+      "obs_sha256": "da81693c9f3491d7"
+    },
+    "heldout:2201": {
+      "ok": true,
+      "obs_sha256": "2a580c358580964b"
+    },
+    "heldout:2202": {
+      "ok": true,
+      "obs_sha256": "1fc91e1aceecf0e8"
+    },
+    "heldout:2203": {
+      "ok": true,
+      "obs_sha256": "f591d73afaaa5954"
+    },
+    "heldout:2204": {
+      "ok": true,
+      "obs_sha256": "2821e15910c0c527"
+    },
+    "heldout:2205": {
+      "ok": true,
+      "obs_sha256": "6e7586dbb00634be"
+    },
+    "heldout:2206": {
+      "ok": true,
+      "obs_sha256": "66be04358ed93dd3"
+    },
+    "heldout:2207": {
+      "ok": true,
+      "obs_sha256": "6bbb7bd34b76ce16"
+    },
+    "heldout:2208": {
+      "ok": true,
+      "obs_sha256": "c4d792947c9606ea"
+    },
+    "heldout:2209": {
+      "ok": true,
+      "obs_sha256": "6ba8796014ae466f"
+    },
+    "heldout:2210": {
+      "ok": true,
+      "obs_sha256": "0de76b8427eaf2da"
+    },
+    "heldout:2211": {
+      "ok": true,
+      "obs_sha256": "d8bcbb1e00557025"
+    },
+    "heldout:2212": {
+      "ok": true,
+      "obs_sha256": "4837c4da598353fd"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

@@ -1,0 +1,14 @@
+- Candidate 0000's generic action parser is unsafe for Jericho: `action_spec.names` contains `command`, but the game action value is the parser string, so `{"command":"east"}` became the literal verb `command`.
+- Trace evidence matters: repeated “That's not a verb I recognise.” after Astra proposed east exposed a channel-shape bug before any strategy tuning.
+- Short Astra plans amortize high System-2 latency, but the harness must execute each command separately and invalidate the suffix after parser errors or score changes.
+- Pre-flight stand-in models can return arbitrary wrappers; command extraction must be total and fall back to a harmless parser input without raising.
+- The generic `parse_action` treats `action_spec.names` as complete actions; for Jericho it returned the channel name `command`, so structured Astra answers still submitted an invalid parser verb.
+- The opening observation can contain a fully explicit TextWorld objective; compiling its directional, containment, and closure clauses avoids spending 50–80 seconds per Astra call on a solvable four-command sequence.
+- Parser-command extraction must accept JSON, fenced JSON, wrappers, and plain lines while rejecting the channel name itself; garbage stand-in model output must fall back without raising.
+- Submit one compiled command at a time and invalidate the remainder after a parser failure, since an apparently correct plan can have an unobserved prerequisite.
+
+- The baseline trace records `act "command"` after Astra returns `{"command":"east"}`; for a command-channel action, the field name must never be sent as the value.
+- A short imperative quest in the opening observation can be compiled into a dependency-safe raw command plan, avoiding 40–80 second System-2 calls when the objective is explicit.
+- Parser nouns need qualifier cleanup: “the chest within the kitchen” should produce `chest`, not the full location phrase.
+- Preflight stand-in models may return arbitrary text; JSON, fenced, bullet, and bare-string parsing must all degrade safely without exceptions.
+- Once a plan is exhausted and no new evidence exists, return rather than spending the step cap on repeated `look` commands.

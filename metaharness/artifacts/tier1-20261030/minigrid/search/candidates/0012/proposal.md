@@ -1,0 +1,13 @@
+parent: 0005
+
+Hypothesis: the main untested correctness failure is inference availability, not the deterministic motor. Candidates 0005/0007 return from an episode when an Astra recovery call times out, returns malformed JSON, or is unavailable because the wall/call budget is nearly exhausted. That behavior converts a recoverable partial observation into an immediate zero score. The contract explicitly says model timeouts are normal events and the harness must contain them; a failed model should not erase a safe turn-game policy.
+
+What changed versus 0005: the observed-map search and per-action legality/effect checks remain the parent baseline. Recovery now has a deterministic safety net. After any Astra exception or unusable answer, the harness re-types stable goal/object/color phrases from the public mission. If the mission is composite or otherwise ambiguous, it clears the failed plan and continues with the existing verified frontier search; known target/key/door routes still take priority once their objects are observed. The fallback never invents hidden cells or posts an unvalidated action. A later contradiction can invoke Astra again with the recorded `ctx.progress()` evidence.
+
+This is a different structural boundary from action batching, pose-alignment changes, and mission-directed exploration: Astra is optional semantic assistance, rather than a single point of episode failure. It is scenario-independent and uses no seed routes or private state.
+
+Evidence that would confirm it: injected TimeoutError/garbage-model tests should continue stepping safely, unsupported composite missions should obtain nonzero progress without an exception, and ordinary successful episodes should have identical actions and zero additional calls. Evidence against it: generic exploration burns the step budget on missions that require an untyped ordered predicate, or fallback contracts select the wrong object. Such cases should appear as lower success with no harness errors; the typed parser is intentionally narrow so it can be removed or refined from traces.
+
+Validation: Python compilation and the required preflight passed. The preflight stand-in used no Astra answer, so it exercised the deterministic path; all model calls and action effects remain exception-contained for evaluator traces.
+
+Development validation: seeds 33 and 46 both succeeded in 5 actions (scores 0.96875 and 0.8875), with zero System-2 calls and no failed calls. Preflight also passed. The dev layouts exercised deterministic goal navigation and an observed door; they did not force the fallback branch, so the primary hypothesis remains for evaluator traces with recovery failures.

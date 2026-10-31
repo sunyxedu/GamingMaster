@@ -1,0 +1,23 @@
+[22:05:00] run: game='Settlers of Catan' dir=runs/catan agent=codex:gpt-6-astra@router
+[22:11:23] run: game='Settlers of Catan' dir=runs/catan agent=codex:gpt-6-astra@router
+[02:35:31] run: game='Settlers of Catan' dir=runs/catan agent=codex:gpt-6-astra@router
+[03:02:51] study: done — tier 1, interface bot library
+[03:28:22] adapt: adaptor validated after 1 attempt(s)
+[03:28:23] run: game='Settlers of Catan' dir=runs/catan agent=codex:gpt-6-astra@router
+[03:28:23] study: reusing runs/catan/study/study.json (tier 1)
+[03:28:23] adapt: reusing validated adaptor
+[03:28:23] search: tier 1 on adaptor game 'Settlers of Catan (Catanatron)'
+[07:09:02] run: game='Settlers of Catan' dir=runs/catan agent=codex:gpt-6-astra@router
+[07:09:02] study: reusing runs/catan/study/study.json (tier 1)
+[07:09:02] adapt: reusing validated adaptor
+[07:09:02] search: tier 1 on adaptor game 'Settlers of Catan (Catanatron)'
+[07:09:32] run: done — best 0009
+[03:13:22] run: game='Settlers of Catan' dir=runs/catan agent=codex:gpt-6-astra@router
+[03:13:22] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[03:13:22] study: reusing runs/catan/study/study.json (tier 1)
+[04:28:17] adapt: adaptor validated after 1 attempt(s)
+[04:28:18] run: game='Settlers of Catan' dir=runs/catan agent=codex:gpt-6-astra@router
+[04:28:18] study: reusing runs/catan/study/study.json (tier 1)
+[04:28:19] adapt: reusing validated adaptor
+[04:28:19] search: tier 1 on adaptor game 'Settlers of Catan (Catanatron AlphaBeta depth 2)'
+[11:53:36] run: done — best 0009

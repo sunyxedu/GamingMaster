@@ -1,0 +1,25 @@
+[22:05:00] run: game='Jericho interactive fiction (Zork and other classic text adventures)' dir=runs/jericho agent=codex:gpt-6-astra@router
+[04:39:36] run: game='Jericho interactive fiction (Zork and other classic text adventures)' dir=runs/jericho agent=codex:gpt-6-astra@router
+[04:56:11] study: done — tier 1, interface api: local jericho.FrotzEnv Python environment backed by modified Frotz
+[05:32:22] adapt: adaptor validated after 1 attempt(s)
+[05:32:22] run: game='Jericho interactive fiction (Zork and other classic text adventures)' dir=runs/jericho agent=codex:gpt-6-astra@router
+[05:32:22] study: reusing runs/jericho/study/study.json (tier 1)
+[05:32:22] adapt: reusing validated adaptor
+[05:32:22] search: tier 1 on adaptor game 'jericho-interactive-fiction'
+[06:24:53] run: game='Jericho interactive fiction (Zork and other classic text adventures)' dir=runs/jericho agent=codex:gpt-6-astra@router
+[06:24:53] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[06:24:53] study: reusing runs/jericho/study/study.json (tier 1)
+[07:06:34] adapt: adaptor validated after 1 attempt(s)
+[07:06:34] run: game='Jericho interactive fiction (Zork and other classic text adventures)' dir=runs/jericho agent=codex:gpt-6-astra@router
+[07:06:34] study: reusing runs/jericho/study/study.json (tier 1)
+[07:06:34] adapt: reusing validated adaptor
+[07:06:34] search: tier 1 on adaptor game 'jericho-interactive-fiction'
+[19:04:11] run: done — best 0005
+[00:47:18] run: game='Jericho interactive fiction (Zork and other classic text adventures)' dir=runs/jericho agent=codex:gpt-6-astra@router
+[00:47:18] study: reusing runs/jericho/study/study.json (tier 1)
+[00:47:18] adapt: reusing validated adaptor
+[00:47:18] run: game='Jericho interactive fiction (Zork and other classic text adventures)' dir=runs/jericho agent=codex:gpt-6-astra@router
+[00:47:18] study: reusing runs/jericho/study/study.json (tier 1)
+[00:47:18] adapt: reusing validated adaptor
+[00:47:18] search: tier 1 on adaptor game 'jericho-interactive-fiction'
+[00:47:19] run: done — best 0005

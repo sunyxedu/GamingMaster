@@ -1,0 +1,13 @@
+parent: 0006
+
+Hypothesis: the remaining score loss is primarily a vital-reserve failure, rather than an inability to craft or fight.  The controller often has the dependency chain complete, then continues a long expedition until food and drink are already zero.  At that point a retreat or a model recommendation cannot recover the run; starvation damage and hostile damage finish it.  Refilling earlier and giving recovery actions priority should raise the worst-seed score while preserving the broad progression policy.
+
+Evidence in the parent traces is unusually direct.  In `candidates/0006/trace_seed1101.jsonl`, steps 365–384 show food=0, drink=0, energy=0 and health 2→0 while the controller alternates `move_up`/`move_down`; it already has wood and stone swords, coal, and 16 unlocked achievements.  Seed 1102 ends at step 540 with food/drink/energy depleted and health 0 after repeated vertical reversals, despite 15 achievements.  Seed 1108 reaches 12 achievements but dies at step 200 with daylight 0.02 and health 0.  The existing panic mode only reacts to a visible hostile, so it cannot prevent damage from an unseen enemy or from depleted vitals.  The leader's seed 1101 has the same shape: 21 achievements, then health 5→0 over steps 505–516 at night.
+
+What changed versus parent 0006:
+
+- Added a deterministic `recovery_action` governor before adviser preferences, crafting, and exploration objectives.  It treats food or drink ≤7 as a reserve refill, and ≤3 (or health ≤3) as urgent.  It routes to known water, plants, or cows using a larger path radius and, when no recovery tile is known, forces frontier exploration so the next observation can reveal one.
+- Raised the hysteretic refill targets from the parent's critical threshold of 5 to 9.  This leaves enough supplies for a return trip and prevents the controller from spending the newly found resource immediately.
+- Kept the parent's asynchronous adviser, verified recipe deltas, panic retreat, safe sleep, map search, and malformed-response handling.  Advice cannot override the reserve governor.
+
+The hypothesis is confirmed if training traces show food and drink staying above zero during late expeditions, fewer health-zero endings, and a higher minimum score without sacrificing early table/tool achievements.  It is refuted if the larger recovery radius causes excessive wandering, prevents iron/diamond conversion, or deaths still occur with reserves intact.  Useful discriminating evidence is the action reason (`recovery_*`/`search_*`) immediately before a refill and whether the player reaches a recovery tile before health falls below three.

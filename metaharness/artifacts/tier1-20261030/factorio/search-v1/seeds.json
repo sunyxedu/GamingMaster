@@ -1,0 +1,64 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          101,
+          202,
+          303,
+          404
+        ]
+      ],
+      [
+        "heldout",
+        [
+          1101,
+          1202,
+          1303,
+          1404
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "3290213227b486f9f85a3acaba53daa4e4ef9277ea960d4cc369a5c7dd45d920"
+  },
+  "results": {
+    "train:101": {
+      "ok": true,
+      "obs_sha256": "0bc4797622be3a23"
+    },
+    "train:202": {
+      "ok": true,
+      "obs_sha256": "0f24b7ec27f585ee"
+    },
+    "train:303": {
+      "ok": true,
+      "obs_sha256": "9f0d793454218b39"
+    },
+    "train:404": {
+      "ok": true,
+      "obs_sha256": "ae4186ddfce5ff7e"
+    },
+    "heldout:1101": {
+      "ok": true,
+      "obs_sha256": "66e5d2f2b1c5c3e7"
+    },
+    "heldout:1202": {
+      "ok": true,
+      "obs_sha256": "fe18022a96c47758"
+    },
+    "heldout:1303": {
+      "ok": true,
+      "obs_sha256": "41412b456e92b695"
+    },
+    "heldout:1404": {
+      "ok": true,
+      "obs_sha256": "b6dffc2c92b4bb49"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

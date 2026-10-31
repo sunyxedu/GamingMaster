@@ -1,0 +1,7 @@
+parent: 0000-tier1_astra_naive
+
+Hypothesis: the leader fails before game reasoning matters. Its traces show the first response `guess crane` being parsed into an action named `guess` with no argument; the subsequent bare `crane` and JSON replies are rejected the same way. The board remains at turn 0 and the harness spends the 1,800-second deadline on 10–33 model calls per seed. A deterministic solver should remove this action-channel failure and make progress on every seed.
+
+What changed vs. the parent: this harness loads the public answer and allowed-guess files named in the observation rules, simulates duplicate-aware green/yellow/gray feedback, filters the exact surviving answer set after every observation, and chooses an entropy-maximizing legal candidate. It posts a fully formed `guess <word>` action and checks that the turn advances. Any illegal or stale result is treated as evidence that the public variant differs; only then does it ask Astra for one legal recovery word. Model output is parsed defensively and never controls the normal path.
+
+Evidence that would confirm or refute it: confirmation is a solved episode with advancing turns, zero invalid actions, and far fewer System-2 calls than the parent. Refutation would be a zero-score episode despite valid turns, indicating a word-list or feedback interpretation mismatch; repeated stale turns would indicate an action-format or observation-shape error in the harness.

@@ -1,0 +1,42 @@
+{
+  "game": "Settlers of Catan",
+  "tier": 1,
+  "tier_rationale": "A local Catanatron game advances only when the adaptor submits a legal action; dice and opponent bots are stepped by the engine, so an Astra call taking seconds or roughly a minute does not incur an in-game timing penalty. A turn contains multiple discrete prompts, so the adaptor must step action by action. decision_latency_s = -1.0 is a documented sentinel for no finite game-imposed timeout; a suggested 60-second operational model budget is a harness policy, not a game rule.",
+  "decision_latency_s": -1.0,
+  "interface": {
+    "chosen": "bot library",
+    "why": "The Catanatron Python engine is headless, local, free, and designed for automated players. Its structured state and legal-action mechanism avoid browser timing, GUI/OCR fragility, and online account or anti-cheat risk. A pinned release must be smoke-tested because exact symbols and Python 3.12 support are version-sensitive; see interfaces.md and https://github.com/bcollazo/catanatron.",
+    "software": [
+      "Catanatron core engine: resolve catanatron versus historical catanatron-core from inspected metadata, then pin a Python-3.12-compatible release or commit",
+      "all dependencies declared by that release, installed into /home/hemlix/GamingMaster-mh-tier1/runs/venvs/catan",
+      "pip in the evaluator venv (26.2.2 is already installed; no project minimum was verified)"
+    ],
+    "env": [
+      {
+        "var": "CATAN_WHEELHOUSE",
+        "description": "Optional path containing the pinned Catanatron wheel and all dependency wheels for offline pip installation; leave unset when packages are already installed.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Use /home/hemlix/GamingMaster-mh-tier1/runs/venvs/catan/bin/python and verify Python 3.12.3 on Linux x86_64.",
+      "Provision a Python-3.12-compatible pinned Catanatron distribution, exact dependency lock, and complete Linux x86_64 wheelhouse; install them from CATAN_WHEELHOUSE with pip --no-index in a context permitted to write the evaluator venv, then run pip check.",
+      "Run a smoke probe that constructs a four-player seeded game, serializes state, enumerates legal actions, applies legal actions, and reaches a terminal game against built-in bots.",
+      "Verify base-game rules, randomization, hidden-information boundaries, and exact action/state method names against the pinned source; record package version and commit.",
+      "Implement reset(seed, opponents, options), a hard episode cap, deterministic run metadata, and a player-view serializer that filters opponent hands and deck order.",
+      "Keep an observation-revision-scoped mapping from JSON action IDs to engine-owned legal action objects; reject stale or missing IDs. Normalize map and resource identifiers without fabricating unsupported choices."
+    ],
+    "observation": "A JSON player view containing phase, current player, turn, pending decision, board topology/terrain/numbers/robber/buildings/roads/ports, the agent's resources and development-card identities, opponent resource and development-card counts, played Knights, pieces, public VP, awards, bank counts, last events, dice result, legal_actions, and terminal status. Hidden opponent cards and unplayed deck order must be filtered.",
+    "actions": "Return one ID from the current legal list, mapped back to an engine action object. Depending on verified capabilities, decisions include initial placement, roll, discard, combined or separate robber/victim choices, maritime or supported domestic trade, builds, development purchase/play, and end turn. Randomized discards or bundled choices must retain the engine's actual granularity. Apply one action and advance bots/chance only until the next controlled-player decision or termination."
+  },
+  "scoring": "Report terminal true victory points for the agent, win (1/0), winner, public VP, turns, action count, and termination reason. The primary benchmark is win rate against the specified built-in bots; mean terminal true VP is secondary. Include hidden VP cards and award points in true VP, and mark hard-cap episodes as truncated rather than wins.",
+  "scenarios": "reset(seed) should use the engine's valid standard-map generator and seed board, ports, tokens, dice, development deck, theft/discards, and randomized opponent policies while keeping rules fixed. Initial settlements remain player decisions, not random preplacements. Rotate the controlled player through all four seats and record realized order; evaluate a fixed held-out seed split against random and verified built-in heuristic bots. Isolate RNG state so planning does not consume live randomness; the same seed plus action sequence should replay exactly. Record seed, map, engine version, opponents, capabilities, caps, and rule switches; do not assume action-dependent random streams stay identical between policies.",
+  "strategy_summary": "Rank opening intersections by dice-pip production, resource diversity, grain/ore access, expansion routes, and useful ports; use the second settlement to complete a coherent build plan. Expand to productive legal vertices, city strong production, and buy development cards when they do not delay a winning build; pursue Longest Road or Largest Army only when the race changes the win path. Track resources, card age, pieces, awards, hidden VP, and immediate wins in code, while Astra plans several turns and adapts to opponent threats. Use Jev for fast rankings and yes/no tactical checks over a precomputed legal candidate list. Rob the leader's key production and protect a near-term win, but let the engine determine legality and exact award computation.",
+  "risks": [
+    "DNS/network is unavailable during this study, so the Catanatron release, license, API names, dependencies, and Python 3.12 compatibility still require a provisioning-time verification.",
+    "The evaluator venv is outside this workspace's writable roots; installation must occur in a context permitted to modify /home/hemlix/GamingMaster-mh-tier1/runs/venvs/catan or use a prebuilt wheelhouse.",
+    "Gym wrappers and alternate engines may flatten pending decisions or implement rule variants; compare behavior with the pinned source and official rulebook before benchmarking.",
+    "Online CATAN services and GUI automation introduce accounts, network dependence, anti-cheat/terms risk, display-server requirements, and latency, so they are unsuitable for the offline headless benchmark.",
+    "A model can leak or exploit hidden engine state unless the adaptor explicitly filters opponent resources, development identities, and deck order."
+  ]
+}

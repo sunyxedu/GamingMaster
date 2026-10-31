@@ -1,0 +1,24 @@
+# Adaptor validation: PASS
+
+- [x] load game.py and make_game() — name=Minesweeper (offline deterministic) tier=tier1 realtime=False
+- [x] TIER agrees with the game's kind (2 <=> tick()) — TIER=1; the game is turn-based (no tick)
+- [x] tier 1, as the study decided — the game is turn-based (no tick), tier1
+- [x] SEEDS: non-empty, disjoint train / held-out lists of ints — 12 train (600, 601, 602, 603, 604, …), 12 held-out (1201, 1202, 1203, 1204, 1205, …)
+- [x] action_spec is an ActionSpec with >=1 action
+- [x] describe() returns a non-trivial string — 799 chars
+- [x] seed 600: observe() JSON-serialisable — 1141 bytes
+- [x] seed 600: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 600: applied 5 actions without exception
+- [x] seed 600: done is bool and score is a finite number after the actions — done=False score=0.0
+- [x] seed 600: observations after the actions are strict JSON
+- [x] seed 600: info() is a dict
+- [x] seed 1201: observe() JSON-serialisable — 3083 bytes
+- [x] seed 1201: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 1201: applied 5 actions without exception
+- [x] seed 1201: done is bool and score is a finite number after the actions — done=False score=0.0
+- [x] seed 1201: observations after the actions are strict JSON
+- [x] seed 1201: info() is a dict
+- [x] malformed action '__not_an_action__' does not raise
+- [x] close() releases the instance (called after every episode)
+- [x] DETERMINISTIC: reset(seed) on a fresh instance reproduces the first observation
+- [x] different seeds give different starts (scenario variety)

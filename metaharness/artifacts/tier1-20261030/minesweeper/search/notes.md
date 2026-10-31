@@ -1,0 +1,59 @@
+- The baseline's first Astra call can consume the entire 1800 s deadline (seed 600), so a turn-game harness must avoid spending the budget before the first action.
+- Repeated model calls made progress on easy fronts but stalled on larger boards while Astra toggled speculative flags; flags are annotations and should not be trusted as mine facts.
+- Exact eight-neighbour residual and subset equations are cheap enough to run on every observation; recomputing after each flood-fill avoids stale plans.
+- A harness must catch model/action failures and tolerate arbitrary pre-flight output; this design avoids model parsing entirely and contains act/observe exceptions.
+- Independent component probabilities can be badly misleading: the board-wide remaining-mine count must weight component assignments and unconstrained cells together.
+- Flags are annotations; withholding speculative flags avoids poisoning equations and chording after an incorrect belief.
+- Exact subset closure is useful, but its derived-equation set must be bounded or recomputed from fresh observations to avoid stale plans.
+- Turn-game model latency is pure cost; deterministic code can spend that budget on many immediate actions and still satisfy the contract.
+- A deterministic opening action prevents the baseline failure where a first Astra call consumed the complete deadline.
+- Frontier equations should treat only code-proven mines as facts; visible flags are annotations and can encode a wrong model guess.
+- Subset differences plus small-component enumeration provide useful risk rankings without a model call; unconstrained cells need a global mine-rate fallback.
+- Chording is valuable only after proven flags are posted, since the adaptor checks adjacent flag count rather than internal beliefs.
+- A first-click-safe opening is a structural choice: corners have only three neighbours, so they may produce zero floods more often than the conventional center opening.
+- When posterior mine risks tie, selecting a low-degree edge or corner can buy information through zero expansion; center-distance alone is not an information objective.
+- Global component enumeration must exclude internally confirmed mines from the unconstrained-cell count, or the binomial coupling can assign probability mass to already-known cells.
+- Preflight's arbitrary-model dry run is easiest to survive by keeping the core loop model-free and catching both malformed observations and `ctx.act` failures.
+- Pre-flight accepts a no-model harness and reports a warning, provided `build`, `run_episode`, and exception handling satisfy the contract.
+- In weak traces, 0001 spends its first ambiguous turns on central/high-degree cells; equal-risk boundary cells can have a larger zero-flood opportunity.
+- Global component weighting must retain an explicit residual pool for cells in oversized or unenumerated components; otherwise exact small components become overconfident.
+- Bounded backtracking needs a node cap as well as a variable cap so dense frontiers cannot consume the turn loop.
+- Keep visible flags out of the facts unless the harness itself proved them; treating foreign/speculative annotations as mines can erase valid candidates.
+- Candidate 0005: 0006 seed 607 loses after two isolated safe reveals; this motivates measuring expected progress, but one losing trace does not prove a risk-optimal guess was wrong.
+- A corner clue of 1 can make its three neighbors riskier than the remote pool. Moving away is rational; choosing among remote cells still needs an estimate of flood size, not just zero probability.
+- A fixed frontier premium did not improve candidate 0005's dev-2404 failure. Predictive flood/deduction planning instead selected a cell at identical risk with greater expected gain; both final dev episodes won, which remains weak generalization evidence.
+- Candidate 0005 passed preflight and independent brute-force checks on 80 small constraint systems. Repeated unchanged observations need a stop guard even when action exceptions are caught.
+- Posterior predictive lookahead can estimate flood-fill and next-clue value without exposing mines: sample complete layouts only for ranking, and keep sampled mines out of the proof state.
+- Posterior sampling must weight component assignments by global completion counts and exclude proven mines from the free pool. Discard incomplete search results; the inherited fallback is approximate on oversized components.
+- Candidate 0006's seed 607 failure is a geometric tie case: exact risk was not enough when three disconnected corners were equally plausible.
+- Posterior lookahead can overreact to tiny sampled gain differences; candidate 0007 gates overrides at a 10% gain over the exact-risk baseline.
+- Keep the exact-risk baseline in diagnostics and require complete candidate rows before trusting a sampled plan; malformed or partial model/planner output must not alter control.
+- A no-model solver remains safest for preflight and avoids spending the turn-game deadline on Astra latency.
+- Candidate 0009 tests continuation value from parent 0005: use posterior worlds to simulate a reveal, exhaust visible-clue deductions, then make up to three further guesses; score total additional safe cells rather than immediate gain per hazard.
+- A rollout must choose actions from hypothetical visible clues only. Hidden sampled mines may determine reveal outcomes, but must never decide the policy's safe cells or guesses.
+- Balance time-limited Monte Carlo comparisons by completing the same world for every candidate before recording it; discard unfinished rounds and keep an exact-risk fallback.
+- Separate exact root survival from sampled continuation progress. Approximate continuation probabilities are acceptable for ranking a simulated policy, but must never become live safety proofs.
+- Candidate 0009 passed preflight, 160 brute-force constraint cases, and 80 synthetic-board checks; both dev seeds won in about 20 seconds with zero model calls. Leading rollout values remained close relative to sampling error, so those wins do not establish superiority to 0005.
+
+- Candidate 0008: distinguish bad inference from posterior uncertainty. Leader 0006's dominant failure is two isolated safe clues followed by a legitimate low-risk guess; its other losses are almost-complete endgame coin flips.
+- A posterior rollout policy must select actions solely from simulated visible clues. Sampled mine locations may generate reveal/flood feedback, but must never certify safe moves or enter live memory.
+- Evaluate candidate actions in balanced sample rounds and discard partial rounds at a time limit; otherwise candidates whose continuations are cheap can receive a different sample distribution.
+- Exact root survival weighting reduces mine-frequency sampling noise, but continuation values still have substantial uncertainty. In 0008, 64-round dev estimates had standard errors up to roughly 11 cells; 256 rounds reduced them to about five on the larger dev board.
+- Policy-state caching is valid only when its key includes all visible clues and proven facts. Synthetic comparisons of cached and fresh continuations caught no disagreements across 436 small-board cases.
+- Candidate 0008 passed preflight and won both final dev seeds with zero calls in about 6–11 seconds. This validates practical rollout cost, not superiority on training or unseen seeds; the finite horizon and oversized-component fallback remain explicit limitations.
+
+- Candidate 0010: the leader's final losses on 602, 608, and 611 are genuine two-world 50/50 posteriors; selecting the other endpoint can change the score without improving expected play. Do not interpret such tie luck as repaired inference.
+- Exact analysis of 0008's earlier seed-611 endgame gives 0.75 expected additional safe cells for every candidate, while 256-round estimates ranged from 0.7132 to 0.7689. Tiny complete posteriors should be enumerated rather than sampled.
+- A finite posterior permits exact observation-tree planning with integer world-summed gains. Group worlds by the entire revealed clue/flood signature before selecting the next action; partitioning by hidden layout would be an oracle leak.
+- Revealing a certain-safe cell first preserves optimal expected progress and avoids factorial safe-order search. This pruning does not prove the secondary expected-click count globally minimal, so document that distinction.
+- Candidate 0010 passed an independent exhaustive oracle on 86 synthetic endgames and pre-flight. Both dev episodes won with the parent's choices, but neither invoked the new endgame branch; those wins validate compatibility, not the strategic hypothesis.
+- Candidate 0012 tests a structural action change: publish only exact mines that touch a revealed clue, then chord once flag counts match; remote proven mines stay private until useful.
+- Chording must be gated by the current visible flags and exact closure. A speculative flag can make a legal-looking chord fatal, so sampled posterior worlds never create annotations.
+- Flag turns have a real cost in the action metric; prioritizing clue-adjacent proven mines avoids spending turns on annotations that cannot enable a chord.
+- The leader's seed-611 loss is a true equal-risk endgame, so this proposal targets action compression and earlier frontier exposure rather than claiming to remove all coin flips.
+
+- Candidate 0011: all three 0008 losses end with exactly two equally likely completions and one safe cell left; a changed tie-break can change deterministic scores without adding information or improving expected play.
+- Exact posterior Bellman search is practical on small endgames: group layouts by complete visible reveal/flood feedback, optimize each branch, and count safe progress retained before a loss. Integer world-weighted values eliminate Monte Carlo tie noise.
+- Revealing every universally safe cell before another gamble is lossless for the progress objective. A cache needs both the surviving-layout subset and remaining hidden cells so that observation histories are not conflated.
+- A capped enumeration or partially evaluated root tree must never become a live proof or preferred action. Candidate 0011 discards incomplete results and keeps the parent's planner as fallback, with cancellation throughout.
+- Candidate 0011 passed preflight and an independent oracle on 80 synthetic observed boards plus three complete prior trees. Ten synthetic cases separate equally safe moves by exact continuation value, but both winning dev episodes bypassed the new branch, so dev success is only regression evidence.

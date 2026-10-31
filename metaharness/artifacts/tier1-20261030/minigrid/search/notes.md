@@ -1,0 +1,49 @@
+- The naive leader can spend an entire 1,800 s deadline on one unanswered Astra request: seed 1 and seed 6 both ended with zero actions after one request, so action progress must not depend on a model call.
+- Astra's successful traces still spend one call per action; repeated turn pairs and an ineffective `done` show that a short, verified action compiler can save calls and steps.
+- `ctx.progress()` exposes rejected actions and stale observations; a scripted route must treat those as evidence for re-planning rather than repeat an action.
+- Keep unknown cells distinct from empty and preserve the initial egocentric frame when interpreting “behind you” and other relative mission language.
+- Preflight stand-in models may return arbitrary text, so JSON/action parsing and all model exceptions need containment; a clean preflight can legitimately use zero model calls.
+- The first structural opportunity is batching: one Astra call can safely propose several turn-game actions because the world waits while the model thinks.
+- Batch plans need a short horizon under partial observability; execute each action and trigger replanning on adaptor-reported illegal actions or ineffective manipulation.
+- Semantic observation keys should ignore counters and recent-action metadata, but movement in a symmetric room must not be declared failed solely because its rendered view is unchanged.
+- A model timeout must not leave the control loop spinning until the deadline; use a bounded fallback action and keep all contract exceptions contained.
+- Batching is useful only with a per-action verifier: a plan that crosses a door or interaction precondition must be discarded as soon as public evidence disagrees.
+- Prefix prompts should request several actions but keep the horizon below the point where partial observability makes the route speculative.
+- Local fallback should treat locked doors as unsafe unless the carried key color matches; an invalid exploratory toggle still consumes a turn.
+- JSON extraction must degrade to a regex action sequence or a safe local action so arbitrary stand-in model text cannot escape the episode loop.
+- Generic MiniGrid MultiRoom goal wording is semantically unambiguous; compiling it into the verified map search avoids paying two slow Astra calls for a route the public goal predicate already specifies.
+- Candidate 0003’s 4–10 action prefixes can spend many turns on a stale route: seed 6 used four Astra calls and 20 actions for 0.71875, so batching is not a substitute for a pose-aware map planner.
+- Candidate 0002’s map controller completed MultiRoom seed 3 after two short recovery calls, showing that per-step belief alignment is useful when the mission compiler escalates.
+- Keep Astra as an exception planner with evidence from ctx.progress(); generic goal compilation must still replan on rejected actions or map contradictions.
+- Candidate 0002's strongest result came from deterministic typed-map search: five audited families completed without Astra; model calls should be reserved for unsupported language or contradictions.
+- The weakest leader trace (seed 3) had the explicit mission `traverse the rooms to get to the goal` and needed two Astra recovery calls despite being a goal-reach problem; mission normalization is a structural opportunity.
+- A turn or forward move can preserve the symbolic view in a symmetric corridor, so stale-view thresholds must not invalidate a plan unless an interaction expected to change state failed.
+- Astra recovery prefixes are useful only when bounded and checked after every action; extending a prefix without a legality/effect check would recreate candidate 0003's speculative detours.
+- Candidate 0003's weakest success (GoToRedBall seed 6) repeated `forward` four times into a visible grey box; pre-action semantic vetoes are preferable to post-hoc batch invalidation.
+- Candidate 0002's zero-call map search is the strongest baseline (0.918 mean); preserve its deterministic map/path behavior while using Astra only for typed mission ambiguity.
+- A persistent semantic contract lets the executor jointly search for matching keys, locked doors, and target poses instead of asking Astra to count turns in every call.
+- Relative mission qualifiers must stay in the initial frame; a contract normalizer must be forbidden from collapsing ordered/composite instructions into a single target.
+- `ctx.progress()` is useful evidence for stale plans, but unchanged rendered views can occur during valid movement; combine it with public front-cell legality and pose bookkeeping.
+- A known openable door is an explicit exploration subgoal: generic view-gain estimates can prefer several rotations before the only route to a new room.
+- Normalize audited goal missions before inference; MultiRoom's `traverse the rooms to get to the goal` was an avoidable semantic exception in 0002.
+- Door exploration must remain conditional on public state and inventory; locked doors without a matching held key are not legal frontier actions.
+- A shorter inference wall time is not itself a higher game score; compare steps and success after each semantic compiler change.
+- The leader's MultiRoom model-call usage reports about 14k input tokens, including wrapper context; this does not isolate map size as the latency cause. Compact prompts and bounded calls still make recovery easier to audit.
+- Candidate 0004's deterministic generic-goal normalization still spent four exploratory rotations before opening an observed door; mission compilation alone does not define a good frontier objective.
+- Candidate 0005's joint search preserves success and legality checks, but its greedy information gain is a policy choice that can be isolated from the motor planner.
+- A useful Astra role for turn games is selecting among code-computed, safe exploration endpoints; it should never emit unverified motor actions for that choice.
+- Menu-choice inference needs a deterministic fallback because preflight stand-ins return arbitrary text and a model timeout must not leave the episode without an action.
+- Candidate 0009 tests transition bookkeeping rather than exploration policy: MiniGrid's documented traversable-front rule can update pose exactly, while rendered-view alignment is ambiguous in symmetric corridors.
+- Interaction actions should be included in the searched route; stopping at an adjacent pickup/open pose creates an avoidable extra planning cycle.
+- A clean preflight can miss recovery branches entirely, so model-output parsing and exception containment must be audited even when the dry run uses zero System-2 calls.
+- The leader's traces show action cost is the main weakness (all training episodes succeed); hypotheses should target turn/route overhead rather than inventing failure recovery where none occurred.
+- Candidate 0009's seed 2 failure was a typed-interaction violation: it picked up a visible grey key while the mission required a purple key behind the initial frame, permanently occupying the carrying slot.
+- Exploration should be interaction-pure until the mission target is identified; a wrong pickup is more damaging than a wasted turn because it can make every later route impossible.
+- Initial-frame qualifiers can guide information gain without exposing hidden state: weight unknown cells on the requested side, but keep unknown cells non-traversable and verify all resulting actions.
+- Frontier bookkeeping keyed only by map revision can permit heading oscillations in stable rooms; cap repeated pose frontiers while allowing a newly opened door to create a fresh revision.
+- Candidate 0010 tests mission-directed orientation: relative qualifiers can choose the first safe scan heading instead of generic frontier rotations.
+- The side scan is bounded to one alignment and uses the existing legality veto; it must not infer hidden cells or treat unknown as traversable.
+- A useful change should target action count because the current leader already succeeds on every training episode; extra Astra calls risk latency without improving score.
+- Candidate 0012 tests model-failure containment: an Astra timeout or malformed answer should trigger a safe local predicate/frontier fallback, not an immediate episode return.
+- Composite missions remain untyped in the fallback; generic exploration preserves a chance to expose the target while avoiding invented hidden-map actions.
+- Keep fallback parsing narrow and public-text-only; broad verb matching can silently collapse ordered BabyAI instructions into the wrong terminal predicate.

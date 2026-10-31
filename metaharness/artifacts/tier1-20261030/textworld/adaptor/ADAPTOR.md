@@ -1,0 +1,11 @@
+# TextWorld adaptor
+
+This Tier 1 adaptor uses the official native TextWorld 1.6.2 Python API and its bundled Git-Glulx interpreter. Each `reset(seed)` closes the previous interpreter, deterministically generates a fresh generic quest with `textworld.make(GameOptions)`, validates its private walkthrough, and starts the compiled `.ulx` story with `textworld.start`. Generation and interpreter calls run in bounded, disposable worker processes; no network is needed.
+
+Seeds select a balanced profile by `seed % 3`: easy (3 rooms, 5 objects, quest length 2, 100 submitted commands), medium (5 rooms, 10 objects, length 5, 200), or hard (10 rooms, 20 objects, length 10, 400). Generation retries up to five deterministic alternate generation seeds while retaining the profile. No account, server, GUI, or environment variable is required.
+
+The observation is an allowlist of native feedback, description, inventory, objective, admissible commands, cumulative score/max score, terminal flags, move count, and command-budget diagnostics. Facts, walkthroughs, policy commands, and internal game objects are withheld. `step` accepts one exact current admissible command (plus `look` and `inventory`) and blocks until the native environment applies it. Malformed non-string actions are rejected without advancing; other rejected strings consume one command and are reported in `protocol_error`. Command batching, debug commands, undo/restart, and save/load are rejected. `look` is the noop.
+
+The reported `score` is the native cumulative score divided by strictly positive native `max_score`; partial score remains after loss or command-cap truncation. `info()` separately reports win, loss, truncation, command count, and infrastructure validity. `close()` is idempotent and releases the worker and native interpreter. Runtime artifacts are disposable and live only under `runtime/`.
+
+This adaptor has no opponents. The benchmark is the generated quest itself. TextWorld's native admissible-command list is intentionally exposed as a declared assistance level. TextWorld is MIT licensed; bundled Inform 7 is Artistic License 2.0, Git-Glulx is MIT, and Jericho is GPLv2 (licenses are recorded by the installed package and upstream metadata). A complete hash-locked wheelhouse is included under `runtime/wheelhouse`; `setup.sh` installs it offline into the evaluator venv.

@@ -1,0 +1,3 @@
+The four deliverables are in the study directory: [brief.md](/home/hemlix/GamingMaster-mh-tier1/runs/wordle/study/brief.md), [interfaces.md](/home/hemlix/GamingMaster-mh-tier1/runs/wordle/study/interfaces.md), [strategies.md](/home/hemlix/GamingMaster-mh-tier1/runs/wordle/study/strategies.md), and [study.json](/home/hemlix/GamingMaster-mh-tier1/runs/wordle/study/study.json). The JSON parses with the evaluator’s Python 3.12.3.
+
+I kept both games at tier 1 and recommended a local, seeded API so play can run offline and headless. One limitation: outbound DNS was unavailable, so I could not verify the cited pages live. The sources are included for follow-up verification.

@@ -1,0 +1,104 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108
+        ]
+      ],
+      [
+        "heldout",
+        [
+          201,
+          202,
+          203,
+          204,
+          205,
+          206,
+          207,
+          208
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "2082a88b1d0ef1dab93fcaebeaabe937f79b4d349f717d6af751193d7d9d5dd4"
+  },
+  "results": {
+    "train:101": {
+      "ok": true,
+      "obs_sha256": "ed459bfbed0b9ccc"
+    },
+    "train:102": {
+      "ok": true,
+      "obs_sha256": "b304d7c41072f3c2"
+    },
+    "train:103": {
+      "ok": true,
+      "obs_sha256": "216ff4110497c75e"
+    },
+    "train:104": {
+      "ok": true,
+      "obs_sha256": "2eb68c9285890185"
+    },
+    "train:105": {
+      "ok": true,
+      "obs_sha256": "628ce077037f55e0"
+    },
+    "train:106": {
+      "ok": true,
+      "obs_sha256": "bc1d42457fd0d577"
+    },
+    "train:107": {
+      "ok": true,
+      "obs_sha256": "479101e05f6e16a5"
+    },
+    "train:108": {
+      "ok": true,
+      "obs_sha256": "1f024673d5ef47f2"
+    },
+    "heldout:201": {
+      "ok": true,
+      "obs_sha256": "36b9efbd20e8d7bb"
+    },
+    "heldout:202": {
+      "ok": true,
+      "obs_sha256": "6f1d57370ed323bc"
+    },
+    "heldout:203": {
+      "ok": true,
+      "obs_sha256": "a221ba89d2ffd09b"
+    },
+    "heldout:204": {
+      "ok": true,
+      "obs_sha256": "8aa485b68526860c"
+    },
+    "heldout:205": {
+      "ok": true,
+      "obs_sha256": "8a2b38195204e87f"
+    },
+    "heldout:206": {
+      "ok": true,
+      "obs_sha256": "2a838bb2a12bef44"
+    },
+    "heldout:207": {
+      "ok": true,
+      "obs_sha256": "1726609f8bdf1c46"
+    },
+    "heldout:208": {
+      "ok": true,
+      "obs_sha256": "ef9cf6e33ebefa18"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}
