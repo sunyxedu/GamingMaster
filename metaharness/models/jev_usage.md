@@ -1,7 +1,7 @@
 ## Jev model context and usage for Meta-Harness
 
-Snapshot: 2026-10-22 (docs.typesafe.ai: API, models, primitives, confidence, request rules and the
-jev-1.13 known-failure page). This is design context for the Astra proposer and for runtime Astra
+Snapshot: 2026-10-29 (docs.typesafe.ai: API, models, primitives, confidence, patterns, cookbooks, request
+rules and the jev-1.13 known-failure page; plus the design of deployed open-source Jev agents). This is design context for the Astra proposer and for runtime Astra
 when it designs Jev questions. The Python interface below is GamingMaster's wrapper, which differs
 from the provider SDK. The model profile and episode budgets in the experiment manifest are
 authoritative.
@@ -16,10 +16,10 @@ step — code, or Astra via `ctx.think(images=[...])` — before Jev can judge i
 Calibration describes aggregate predictions, not correctness of each answer.
 See [System One](https://docs.typesafe.ai/concepts/system-one).
 
-Model ids: `jev-latest` is the stable alias (jev-1.13.0 at this snapshot) and `jev-preview`
-the newest build (jev-1.14.0, from 2026-10-14). An alias can move between calls; every
-answer records the version that produced it, and the leaderboard warns when an archive
-mixes versions.
+Model ids: `jev-latest` and `jev-preview` both resolve to jev-1.14.0 at this snapshot (released
+2026-10-14; jev-1.13.0 remains available). An alias can move between calls; every answer records
+the version that produced it, and the leaderboard warns when an archive mixes versions. Limits:
+64k tokens per request, 32k per question; English is the primary training language.
 
 In this architecture, Astra can interpret unfamiliar rules, choose subgoals and
 design the decision interface. Jev can recognize situations, assess whether a
@@ -72,6 +72,32 @@ speculatively and combine them in code. Put the complete judgment in
 `instructions`: question IDs are invisible to Jev. Refer to input fields
 explicitly, e.g. `plan.preconditions`. See
 [Questions](https://docs.typesafe.ai/primitives).
+
+### Patterns that deployed Jev systems share (provider cookbooks, open-source agents)
+
+* **Code computes facts, Jev judges, code decides.** Successful controllers send a small JSON
+  state of *derived facts* (distances as named buckets, what is adjacent, time to contact,
+  the last action and its measured outcome, the measured age of the observation) rather than
+  raw grids or numbers, then ask atomic questions and combine the probabilities in code.
+* **One request, several atomic questions.** A per-tick request typically carries 3–8
+  independent questions (e.g. a Choice over the legal actions, a Score of immediate danger, a
+  Noul per precondition or per candidate), including speculative ones whose answers code may
+  ignore; a request with many questions costs about the same latency as one with one.
+* **Structured criteria.** Option descriptions as objects (`what`, `not_for`, `examples`) and
+  instructions that name the state fields (`` `threats.nearest` ``) measurably beat prose.
+* **Freshness and fallbacks.** Every answer is tagged with the observation / plan version it
+  judged; a late answer is dropped, and an executable fallback (the last safe action, a
+  conservative rule) runs while waiting. Deadlines per question are short and explicit.
+* **Confidence gates per consequence.** Irreversible or lethal actions need a higher top
+  probability than cheap ones; a top probability under ~0.6 is treated as "undecided" (route to
+  the fallback or to System-2), not as a weak yes. Ask high-stakes Choices twice with the options
+  reordered and act only when both agree.
+* **Large option sets** (more than 255, or many near-identical options) are handled in two
+  stages: Score or Noul each candidate independently, then one Choice over the shortlist.
+* **System-2 authors, System-1 runs.** The slow model designs the state schema, the questions,
+  the thresholds and the fallback policy — and re-authors them when the evidence says the
+  questions are wrong — rather than being asked per tick. Harnesses that let System-2 revise
+  the System-1 interface on observed failures improved most across iterations.
 
 ### Exact local call and answer contract
 

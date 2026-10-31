@@ -280,7 +280,9 @@ def parse_args(argv=None) -> argparse.Namespace:
            "keeps snapshots in host RAM and inline in checkpoints")
     # --- advantage / value ---
     a("--gamma", action="append", default=[], metavar="GAME=G", help="discount (default 1.0)")
-    a("--lam", action="append", default=[], metavar="GAME=L", help="GAE lambda (default 0.95)")
+    a("--lam", action="append", default=[], metavar="GAME=L",
+      help="GAE lambda (default 0.95); a change on --resume restarts the game's advantage "
+           "statistics")
     a("--popart_decay", type=float, default=0.99)
     a("--no_popart", action="store_true", help="identity value normalisation")
     a("--adv_decay", type=float, default=0.99, help="per-game advantage moment EMA decay")
@@ -389,6 +391,15 @@ def parse_args(argv=None) -> argparse.Namespace:
            "a space: go+nodes+10, level+3, plies+1, visits+16 for KataGo), opt.NAME "
            "(--eval_engine_opt); e.g. chess=opt.UCI_Elo=1500;opt.UCI_Elo=1800;opt.UCI_LimitStrength=false")
     a("--eval_engine_step_up", type=float, default=0.9)
+    a("--eval_engine_step_down", type=float, default=0.0,
+      help="the ladder's way back: once the learner scores at most this against its referee in "
+           "two consecutive evaluations, the referee goes down one rung (rebuilt from its base "
+           "settings, its alarm baseline measured again) — a referee set or stepped too strong "
+           "returns to where its score says something (0 = never down)")
+    a("--eval_engine_rung", action="append", default=[], metavar="GAME=K",
+      help="put the game's referee at rung K of its --eval_engine_ladder (0 = its base "
+           "settings), once: a resumed run that already applied this K keeps the rung its ladder "
+           "has moved to since, so the flag can stay in the run's settings")
     a("--eval_engine_workers", type=int, default=4,
       help="engine processes per referee (UCI / USI / GTP engines and Egaroucid), one thread "
            "each: a wave's games are answered in parallel")
@@ -626,6 +637,21 @@ def _env_kwargs(items: Sequence[str]) -> Dict[str, Dict[str, Any]]:
             val = v
         out.setdefault(g, {})[k] = val
     return out
+
+
+def return_settings(args: Mapping[str, Any], game: str) -> Dict[str, Any]:
+    """What defines ``game``'s returns, hence its advantages' scale: the GAE gamma / lambda, its
+    --env_kw (e.g. arc3:novelty adds a reward), --shaping and --timeout_reward — read from a
+    run's arguments (``vars(args)``; a checkpoint keeps them under "args")."""
+    def items(key: str) -> List[str]:
+        return list(args.get(key) or [])
+    timeout = {**TIMEOUT_REWARD, **_pairs(items("timeout_reward"),
+                                         lambda v: None if v == "none" else float(v), "R")}
+    return {"gamma": _pairs(items("gamma"), float, "G").get(game, 1.0),
+            "lam": _pairs(items("lam"), float, "L").get(game, 0.95),
+            "env_kw": sorted((k, repr(v)) for k, v in _env_kwargs(items("env_kw")).get(game, {}).items()),
+            "shaping": {**SHAPING, **_pairs(items("shaping"), float, "S")}.get(game),
+            "timeout_reward": timeout.get(game)}
 
 
 def derive_seed(*parts: int) -> int:
@@ -2273,6 +2299,14 @@ class JointRLTrainer:
             if g not in self.eval_engine:
                 raise SystemExit(f"--eval_engine_opt {item!r}: {g} has no --eval_engine")
             self.eval_engine_opt.setdefault(g, {})[k] = v
+        #: each laddered referee's settings before any rung: a rung change rebuilds from these
+        self.engine_base_settings: Dict[str, Tuple[Optional[float], Optional[str], Dict[str, str]]] = {
+            g: (self.eval_engine_eps.get(g), self.eval_engine_go.get(g),
+                dict(self.eval_engine_opt.get(g, {}))) for g in self.engine_ladder}
+        #: consecutive evaluations at/below --eval_engine_step_down; the --eval_engine_rung
+        #: values already applied (kept in the RL state: each is applied once)
+        self.engine_low: Dict[str, int] = {}
+        self.engine_forced: Dict[str, int] = {}
         self._engines: Dict[str, Any] = {}
         #: --teacher: per game the labeled share of the learner's decisions, the engine and its
         #: settings, the term's weight; the engine policies (lazily, on the rank playing it)
@@ -2336,6 +2370,16 @@ class JointRLTrainer:
         self.timing: Dict[str, float] = {}
         if a.resume:
             self._load_resume(a.resume)
+        for g, k in _pairs(a.eval_engine_rung, int, "K").items():
+            if g not in self.engine_ladder:
+                raise SystemExit(f"--eval_engine_rung {g}: {g} has no --eval_engine_ladder")
+            if not 0 <= k <= len(self.engine_ladder[g]):
+                raise SystemExit(f"--eval_engine_rung {g}={k}: its ladder has rungs 0..{len(self.engine_ladder[g])}")
+            if self.engine_forced.get(g) == k:
+                continue                          # applied before: the ladder moves on from it
+            if self.engine_rung.get(g, 0) != k:
+                self._set_rung(g, k, f"--eval_engine_rung {g}={k}")
+            self.engine_forced[g] = k
         if self.rank0:
             os.makedirs(a.save_dir, exist_ok=True)
             if a.resume:
@@ -3183,6 +3227,35 @@ class JointRLTrainer:
                             bf16=self.args.bf16)
         return self._eval_against(g, r, it, gi, "init", ref, episodes)
 
+    def _set_rung(self, g: str, k: int, why: str) -> None:
+        """Put ``g``'s referee at rung ``k`` (0 = its base settings): its eps / go / options
+        rebuilt from the base settings plus rungs 0..k-1, the engine process closed (the next
+        evaluation builds the new referee), its alarm baseline measured again."""
+        eps, go, opt = self.engine_base_settings[g]
+        for d, v in ((self.eval_engine_eps, eps), (self.eval_engine_go, go)):
+            if v is None:
+                d.pop(g, None)
+            else:
+                d[g] = v
+        self.eval_engine_opt[g] = dict(opt)
+        eng = self._engines.pop(g, None)
+        if eng is not None:
+            try:
+                eng.close()
+            except Exception:   # noqa: BLE001
+                pass
+        for i in range(k):
+            self._apply_rung(g, i)
+        self.engine_rung[g] = k
+        self.engine_high[g] = 0
+        self.engine_low[g] = 0
+        for d in (self.engine_base, self.engine_base_n, self.engine_streak):
+            d.pop(g, None)
+        ladder = self.engine_ladder[g]
+        self.log(f"[eval] {g}: referee at rung {k}/{len(ladder)} "
+                 f"({ladder[k - 1] if k else 'base settings'}) — {why}; its baseline is measured "
+                 f"again at the next evaluation")
+
     def _apply_rung(self, g: str, k: int) -> None:
         """Rung ``k`` of ``g``'s --eval_engine_ladder: its settings into the referee's eps / go /
         options; the current referee process (if any) is closed, the next evaluation builds
@@ -3361,19 +3434,18 @@ class JointRLTrainer:
                                    f"{self.engine_base[g]:.3f} - {margin:.3f}")
             ladder = getattr(self, "engine_ladder", {}).get(g)
             if ladder and math.isfinite(ve) and row.get("vs_engine_n", 0) >= a.alarm_min_episodes:
-                high = ve >= a.eval_engine_step_up
-                self.engine_high[g] = self.engine_high.get(g, 0) + 1 if high else 0
                 k = self.engine_rung.get(g, 0)
+                row["referee_at"] = k                  # the rung this evaluation was played at
+                high = ve >= a.eval_engine_step_up
+                low = 0 < a.eval_engine_step_down and ve <= a.eval_engine_step_down
+                self.engine_high[g] = self.engine_high.get(g, 0) + 1 if high else 0
+                self.engine_low[g] = self.engine_low.get(g, 0) + 1 if low else 0
                 if self.engine_high[g] >= 2 and k < len(ladder):
-                    self._apply_rung(g, k)
-                    self.engine_rung[g] = k + 1
-                    self.engine_high[g] = 0
-                    for d in (self.engine_base, self.engine_base_n, self.engine_streak):
-                        d.pop(g, None)
+                    self._set_rung(g, k + 1, f"scored {ve:.3f} twice against it, stepped up")
                     row["referee_rung"] = k + 1
-                    self.log(f"[eval] {g}: scored {ve:.3f} twice against its referee — stepped up "
-                             f"to rung {k + 1}/{len(ladder)} ({ladder[k]}); its baseline is "
-                             f"measured again at the next evaluation")
+                elif self.engine_low[g] >= 2 and k > 0:
+                    self._set_rung(g, k - 1, f"scored {ve:.3f} twice against it, stepped down")
+                    row["referee_rung"] = k - 1
             if why:
                 row["alarm"] = "; ".join(why)
             if why and max(self.alarm_streak[g], self.vs_init_streak.get(g, 0),
@@ -3523,6 +3595,7 @@ class JointRLTrainer:
                 "priv_games": list(self.priv_games),
                 "priv_opt": self.priv_opt.state_dict() if self.priv_opt is not None else None,
                 "engine_rung": dict(self.engine_rung), "engine_high": dict(self.engine_high),
+                "engine_low": dict(self.engine_low), "engine_forced": dict(self.engine_forced),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
                 "init": self.args.init, "init_hash": self.init_hash}
 
@@ -3693,6 +3766,18 @@ class JointRLTrainer:
             if self.ema is not None else []
         self.popart.load_state_dict(st["popart"], mirrors=mirrors)
         self.advnorm.load_state_dict(st["advnorm"])
+        # a game whose returns are defined differently from the checkpoint's run (GAE gamma /
+        # lambda, env kwargs, shaping, timeout reward: return_settings, read from the saved
+        # arguments) restarts its advantage moments: its advantages have another scale (lambda
+        # 0.95 -> 0.7 sums fewer TD errors; a novelty reward adds some), and the running std
+        # (decay --adv_decay) would hold the old one for ~1/(1 - decay) iterations
+        saved_args = ck.get("args") or {}
+        for g in self.rl_games:
+            old, new = return_settings(saved_args, g), return_settings(vars(self.args), g)
+            if old != new:
+                self.advnorm.reset(g)
+                diff = "; ".join(f"{k} {old[k]} -> {new[k]}" for k in new if old[k] != new[k])
+                self.log(f"[resume] {g}: {diff} — its advantage statistics restart")
         self.entc.load_state_dict(st["entc"])
         self.klb.load_state_dict(st["klb"])
         self.sched.load_state_dict(st["sched"])
@@ -3704,6 +3789,8 @@ class JointRLTrainer:
         self.eval_cost = dict(st.get("eval_cost", {}))
         self.timing = dict(st.get("timing", {}))
         self.engine_high = dict(st.get("engine_high", {}))
+        self.engine_low = dict(st.get("engine_low", {}))
+        self.engine_forced = dict(st.get("engine_forced", {}))
         for g, k in st.get("engine_rung", {}).items():      # the referees as stepped up so far
             rungs = self.engine_ladder.get(g, [])
             for i in range(min(int(k), len(rungs))):

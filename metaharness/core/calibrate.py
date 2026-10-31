@@ -19,6 +19,7 @@ SHORT_PROMPT = "Reply with the single word: ready"
 LONG_PROMPT = ("Write a plain-text checklist of 40 numbered, one-sentence rules that a careful player of an "
                "unknown video game could follow (about 600 words). No preamble, no closing remarks.")
 OFFLINE = ("scripted", "heuristic")         # stand-ins report declared latencies; nothing to measure
+JEV_SAMPLES = 12                            # warm System-1 requests: the tail matters for timeouts
 
 
 def _measurable(model: Any) -> bool:
@@ -35,16 +36,28 @@ def calibrate(root: Path, *, system2: Optional[System2Model], system1: Optional[
         return None
     out: dict[str, Any] = {"measured": time.strftime("%Y-%m-%d %H:%M")}
     if _measurable(system2):
-        for label, prompt in (("short", SHORT_PROMPT), ("long", LONG_PROMPT)):
-            t0 = time.monotonic()
-            try:
-                res = system2.run(prompt, agentic=False, timeout_s=900.0)
-                out[f"system2_{label}"] = {"latency_s": round(res.latency_s or time.monotonic() - t0, 2),
-                                           "output_tokens": (res.usage or {}).get("output_tokens")}
-            except ModelUnavailable:
-                raise
-            except Exception as e:  # noqa: BLE001 — a failed measurement is reported, not fatal
-                out[f"system2_{label}"] = {"error": f"{type(e).__name__}: {e}"[:200]}
+        # short: the median of three (one call can wait minutes behind a busy machine); long: one
+        for label, prompt, samples in (("short", SHORT_PROMPT, 3), ("long", LONG_PROMPT, 1)):
+            got: list[tuple[float, Any]] = []
+            error = None
+            for attempt in range(samples + 1):  # a sporadic failure (an empty reply) is measured again
+                if len(got) >= samples:
+                    break
+                t0 = time.monotonic()
+                try:
+                    res = system2.run(prompt, agentic=False, timeout_s=900.0)
+                    got.append((round(res.latency_s or time.monotonic() - t0, 2), (res.usage or {}).get("output_tokens")))
+                except ModelUnavailable:
+                    raise
+                except Exception as e:  # noqa: BLE001 — a failed measurement is reported, not fatal
+                    error = f"{type(e).__name__}: {e}"[:200]
+            if got:
+                got.sort()
+                lat, tok = got[len(got) // 2]
+                out[f"system2_{label}"] = {"latency_s": lat, "output_tokens": tok,
+                                           **({"samples_s": [g[0] for g in got]} if len(got) > 1 else {})}
+            else:
+                out[f"system2_{label}"] = {"error": error}
     if _measurable(system1):
         from ..models.jev import Choice
         game = None
@@ -57,11 +70,14 @@ def calibrate(root: Path, *, system2: Optional[System2Model], system1: Optional[
             q = {"action": Choice("Which action should the player take now?",
                                   {n: spec.descriptions.get(n) or None for n in names})}
             lat = []
-            for _ in range(2):          # the first request also pays for the connection
+            for _ in range(1 + JEV_SAMPLES):    # the first request also pays for the connection
                 t0 = time.monotonic()
                 system1.decide(obs, q, timeout_s=30.0)
                 lat.append(time.monotonic() - t0)
-            out["system1"] = {"latency_s": round(lat[1], 3), "first_latency_s": round(lat[0], 3)}
+            warm = sorted(lat[1:])
+            out["system1"] = {"latency_s": round(warm[len(warm) // 2], 3), "first_latency_s": round(lat[0], 3),
+                              "p90_s": round(warm[min(len(warm) - 1, int(0.9 * len(warm)))], 3),
+                              "max_s": round(warm[-1], 3), "n": len(warm)}
         except ModelUnavailable:
             raise
         except Exception as e:  # noqa: BLE001

@@ -124,7 +124,8 @@ def test_calibration_is_measured_once_and_rendered(tmp_path):
                     game_kwargs={}, seed=0, log=lambda m: None)
     assert cal["system2_long"]["output_tokens"] == 800 and "latency_s" in cal["system1"]
     assert calibrate(tmp_path, system2=s2, system1=Fake1(), game_factory=SnakeGame, game_kwargs={}, seed=0,
-                     log=lambda m: None) == cal and len(s2.calls) == 2           # cached, not re-measured
+                     log=lambda m: None) == cal and len(s2.calls) == 4           # cached, not re-measured
+    assert cal["system2_short"]["samples_s"] == [3.0, 3.0, 3.0]                       # short: median of three
     text = tier2.task_md("snake", Budget(), "wall", {}, calibration=cal)
     assert "Measured model latency" in text and "~800 output tokens: 12 s" in text
     assert calibrate(tmp_path / "x", system2=ScriptedSystem2(), system1=HeuristicSystem1(), game_factory=SnakeGame,
@@ -147,7 +148,7 @@ def test_proposer_timeout_keeps_a_harness_without_proposal(tmp_path):
     assert c.harness_path.exists() and "timed out" in (c.dir / "proposal.md").read_text()
     assert json.loads((c.dir / "session.json").read_text())["session_id"] == "thread-1"
     prompt = (c.dir / "prompt.md").read_text()
-    assert "iteration 2 of 3" in prompt and "10 minutes" in prompt
+    assert "generation 2 of 3" in prompt and "10 minutes" in prompt
 
 
 def test_leaderboard_has_no_pseudo_games_and_explains_ineligibility(tmp_path):
@@ -217,8 +218,12 @@ def test_interrupted_heldout_resumes_with_the_same_iters(tmp_path):
 
 def test_an_empty_proposal_directory_does_not_count(tmp_path):
     loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=())
-    loop.archive.new_candidate()            # a proposer killed before writing anything
+    killed = loop.archive.new_candidate()   # a proposer killed before writing anything
+    (killed.dir / "prompt.md").write_text("p")
     assert loop.proposals_done() == 0
+    loop.run()                              # moved aside, so the next generation reuses the index
+    assert not killed.dir.exists() and list((tmp_path / "a" / "abandoned").glob("0001-*/prompt.md"))
+    assert [c.dir.name for c in loop.archive.candidates()] == ["0000-tier2_jev_only"]
 
 
 def test_a_candidate_that_breaks_the_game_is_retried_once_then_kept(tmp_path):
@@ -326,3 +331,114 @@ def test_heldout_results_on_several_candidates_leave_the_training_selection(tmp_
         d.mkdir(exist_ok=True)
         (d / "eval.json").write_text(json.dumps({"n_episodes": 3, "mean_score": 0.0}))
     assert loop.heldout_best().dir == best.dir
+
+
+def test_a_proposer_that_times_out_without_a_harness_finishes_in_its_session(tmp_path):
+    from metaharness.core.proposer import propose
+    from metaharness.models.base import ModelTimeout
+
+    class Slow(ScriptedSystem2):
+        def run(self, prompt, *, cwd, session_id=None, **kwargs):
+            self.calls.append((prompt, session_id))
+            if len(self.calls) == 1:
+                raise ModelTimeout("CLI deadline", session_id="thread-7")
+            d = sorted((cwd / "candidates").iterdir())[-1]
+            (d / "harness.py").write_text("build = lambda ctx: None\n")
+            return System2Result(text="written", session_id=session_id)
+
+    model = Slow()
+    c = propose(model, Archive(tmp_path / "archive"), contract_doc="c", task_md="t", timeout_s=600)
+    assert c.harness_path.exists() and len(model.calls) == 2
+    assert model.calls[1][1] == "thread-7" and "Your time is up" in model.calls[1][0]
+    assert "(the proposer timed out before writing proposal.md)" in (c.dir / "proposal.md").read_text()
+
+
+def test_a_proposer_that_ends_without_a_harness_is_asked_once_more(tmp_path):
+    from metaharness.core.proposer import propose
+
+    class Planner(ScriptedSystem2):
+        def run(self, prompt, *, cwd, session_id=None, **kwargs):
+            self.calls.append((prompt, session_id))
+            if len(self.calls) == 1:
+                return System2Result(text="**Designing placement search****Planning**", session_id="s-3")
+            d = sorted((cwd / "candidates").iterdir())[-1]
+            (d / "harness.py").write_text("build = lambda ctx: None\n")
+            return System2Result(text="written", session_id=session_id)
+
+    model = Planner()
+    c = propose(model, Archive(tmp_path / "archive"), contract_doc="c", task_md="t", timeout_s=600)
+    assert c.harness_path.exists() and model.calls[1][1] == "s-3"
+    assert "You ended without writing the harness" in model.calls[1][0]
+    once = Planner()
+    once.calls.append(("x", None))                       # every call plans only: asked once, then given up
+    once.run = lambda prompt, **kw: (once.calls.append((prompt, kw.get("session_id"))),
+                                     System2Result(text="plans", session_id="s-4"))[1]
+    c2 = propose(once, Archive(tmp_path / "archive2"), contract_doc="c", task_md="t", timeout_s=600)
+    assert not c2.harness_path.exists() and len(once.calls) == 3
+
+
+class _Walker:
+    """A walker the fixed signature script cannot end early; scenario = seed % 4 (deterministic), with
+    the seed itself in the observation, as a real adaptor did."""
+    name = "walker"
+    tick_s = 0.1
+
+    def __init__(self, max_ticks=400):
+        from metaharness.games.base import ActionSpec
+        self.action_spec = ActionSpec(names=["left", "right", "stay"], noop="stay")
+        self.max_ticks = max_ticks
+        self.reset(0)
+
+    def reset(self, seed):
+        self.label, self.x, self.t = seed, (seed % 4) * 100, 0
+
+    def tick(self, action):
+        self.t += 1
+        self.x += {"left": -1, "right": 1}.get(action, 0) * (1 + self.label % 4)
+
+    def observe(self):
+        return {"x": self.x, "t": self.t, "seed": self.label}
+
+    @property
+    def done(self):
+        return self.t >= self.max_ticks
+
+    @property
+    def score(self):
+        return float(self.x)
+
+    @property
+    def ticks(self):
+        return self.t
+
+    def info(self):
+        return {}
+
+    def describe(self):
+        return "A walker on a line." * 5
+
+
+def test_seeds_that_alias_another_stage_are_refused(tmp_path):
+    def make(val, heldout):
+        archive = Archive(tmp_path / f"a{val}{heldout}")
+        archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+        cfg = LoopConfig(n_iterations=0, seeds_train=[0, 1], seeds_val=val, seeds_heldout=heldout, clock_mode="virtual",
+                         budget=Budget(max_wall_s=30), harness_timeout_s=30)
+        return MetaHarnessLoop(archive=archive, game_factory=lambda **k: _Walker(**k), game_kwargs={},
+                               task_md="t", contract_doc="c", proposer=ScriptedSystem2(), system2=None,
+                               system1=HeuristicSystem1(), config=cfg, game_name="walker")
+    with pytest.raises(SeedRefused, match="train:0, val:4|val:4, train:0"):
+        make([4], [2]).run()                         # validation seed 4 replays training seed 0
+    with pytest.raises(SeedRefused, match="same episode"):
+        make([2], [6]).run()                         # held-out 6 replays validation 2
+    make([2], [3]).run()                             # distinct scenarios: accepted
+
+
+def test_an_episode_that_ends_early_gives_no_signature():
+    from metaharness.core.loop import SIGNATURE_STEPS, _episode_signature
+    short = SnakeGame(max_ticks=10)                    # the script cannot see past tick 10
+    short.reset(0)
+    assert _episode_signature(short, 0) is None
+    long = _Walker(max_ticks=SIGNATURE_STEPS + 50)
+    long.reset(0)
+    assert _episode_signature(long, 0) is not None

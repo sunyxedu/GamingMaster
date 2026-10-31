@@ -21,22 +21,30 @@ from __future__ import annotations
 
 import json
 import math
-import re
+import os
 import shutil
-import threading
+import tempfile
+from contextlib import suppress as contextlib_suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-_PARENT_RE = re.compile(r"^\s*parent\s*:\s*`?(\d{4})", re.I | re.M)
+
+def write_atomic(path: Path, text: str) -> None:
+    """Replace ``path`` in one step: proposers and evaluations read the archive while it is written,
+    and several writers (parallel proposers regenerating the leaderboard) must not trip over each other."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib_suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
-def atomic_write(path: Path, text: str) -> None:
-    """Write ``text`` so a concurrent reader (a parallel proposer reading eval.json or the leaderboard)
-    sees the old file or the new one, never a partial one."""
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text)
-    tmp.replace(path)
+atomic_write = write_atomic
 
 
 @dataclass
@@ -71,16 +79,21 @@ class Candidate:
         e = self.eval()
         return None if not e else e.get("mean_score")
 
-    def parent(self) -> Optional[str]:
-        """The candidate this one was derived from: a ``parent: NNNN`` line in proposal.md."""
-        p = self.dir / "proposal.md"
-        if not p.exists():
+    def directive(self) -> Optional[dict[str, Any]]:
+        """How this candidate was proposed (``{"mode", "parents", "parent_dirs", "generation"}``); None for seeds."""
+        p = self.dir / "directive.json"
+        try:
+            return json.loads(p.read_text()) if p.exists() else None
+        except ValueError:
             return None
-        m = _PARENT_RE.search(p.read_text(errors="replace")[:4000])
-        return m.group(1) if m else None
+
+    def parent(self) -> Optional[int]:
+        """Index of the candidate's first parent, or None."""
+        parents = (self.directive() or {}).get("parents") or []
+        return int(parents[0]) if parents else None
 
     def validation(self) -> Optional[dict[str, Any]]:
-        """The top-k re-evaluation on the validation seeds, if this candidate had one."""
+        """The validation-seeds evaluation (``validation/eval.json``), or None."""
         p = self.dir / "validation" / "eval.json"
         return json.loads(p.read_text()) if p.exists() else None
 
@@ -124,7 +137,10 @@ def combine_evals(per_game: dict[str, dict[str, Any]], seeds: list[int]) -> dict
                                                   "latency_s2", "calls_s2", "info") if k in ep}
                          for ep in g.get("episodes", [])]}
             for name, g in per_game.items()},
-        "metadata": {"seeds": seeds, "games": games, "expected_episodes": len(seeds) * len(games),
+        "metadata": {"seeds": seeds, "games": games,
+                     # games may play different seed lists: expect what each game's evaluation expected
+                     "expected_episodes": sum(g.get("metadata", {}).get("expected_episodes", len(seeds))
+                                              for g in per_game.values()),
                      "game_kind": next((g.get("metadata", {}).get("game_kind") for g in per_game.values()), None)},
     }
 
@@ -207,7 +223,6 @@ class Archive:
         self.root = Path(root)
         self.cand_dir = self.root / "candidates"
         self.cand_dir.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()        # parallel proposals / evaluations share the archive
 
     # -- candidates -----------------------------------------------------
     def candidates(self) -> list[Candidate]:
@@ -222,12 +237,11 @@ class Archive:
         return (cs[-1].idx + 1) if cs else 0
 
     def new_candidate(self, label: str = "") -> Candidate:
-        with self._lock:
-            idx = self.next_index()
-            name = f"{idx:04d}" + (f"-{label}" if label else "")
-            d = self.cand_dir / name
-            d.mkdir(parents=True, exist_ok=False)
-            return Candidate(idx, d)
+        idx = self.next_index()
+        name = f"{idx:04d}" + (f"-{label}" if label else "")
+        d = self.cand_dir / name
+        d.mkdir(parents=True, exist_ok=False)
+        return Candidate(idx, d)
 
     def add_seed(self, harness_file: Path, label: str = "baseline", note: str = "") -> Candidate:
         c = self.new_candidate(label)
@@ -279,9 +293,15 @@ class Archive:
             return (float("-inf"), float("-inf"))
         return (sum(n.values()) / len(n), min(n.values()))
 
+    def best(self) -> Optional[Candidate]:
+        ranked = self.ranked()
+        return ranked[0] if ranked else None
+
     def ranked(self) -> list[Candidate]:
-        """Eligible candidates, best first, by the training evaluation."""
+        """Eligible candidates, best first (the training selection order)."""
         scored = [c for c in self.candidates() if _eligible(c.eval() or {})]
+        if not scored:
+            return []
         table = self._norm_table()
 
         def key(c: Candidate):
@@ -297,41 +317,23 @@ class Archive:
                     steps if realtime else -steps)
         return sorted(scored, key=key, reverse=True)
 
-    @staticmethod
-    def combined_score(c: Candidate) -> Optional[float]:
-        """Mean episode score over the training and validation evaluations together (one eligible
-        validation evaluation is required): what the top-k re-evaluation selects on."""
-        v = c.validation()
-        if not v or not _eligible(v):
+    def champion(self) -> Optional[Candidate]:
+        """The candidate the validation stage picked (``champion.json``), or None."""
+        p = self.root / "champion.json"
+        if not p.exists():
             return None
-        scores = [ep.get("score") for ep in _episodes(c.eval() or {}) + _episodes(v)]
-        scores = [float(x) for x in scores if isinstance(x, (int, float))]
-        return (sum(scores) / len(scores)) if scores else None
-
-    def best(self) -> Optional[Candidate]:
-        """The training leader; once candidates were re-evaluated on validation seeds, the best
-        combined train+validation mean among them (the training leader's score is a max over noisy
-        evaluations — the re-evaluation corrects the winner's curse)."""
-        ranked = self.ranked()
-        validated = [(self.combined_score(c), c) for c in ranked]
-        validated = [(s, c) for s, c in validated if s is not None]
-        if validated:
-            return max(validated, key=lambda sc: (round(sc[0], 9), -sc[1].idx))[1]
-        return ranked[0] if ranked else None
+        name = json.loads(p.read_text()).get("candidate")
+        return next((c for c in self.candidates() if c.dir.name == name), None)
 
     # -- docs -----------------------------------------------------------
     def write_task(self, text: str) -> None:
-        (self.root / "task.md").write_text(text)
+        write_atomic(self.root / "task.md", text)
 
     def write_leaderboard(self) -> str:
-        with self._lock:
-            return self._write_leaderboard()
-
-    def _write_leaderboard(self) -> str:
         games = self.games()
         multi = len(games) > 1
         table = self._norm_table()
-        head = ["#", "candidate", "parent"] + ([f"{g}" for g in games] if multi else ["mean score"]) + \
+        head = ["#", "candidate"] + ([f"{g}" for g in games] if multi else ["mean score"]) + \
                (["selection (mean / worst norm.)"] if multi else []) + \
                ["seeds median / min", "episodes", "stale ticks", "S1 calls", "S2 calls", "failed S1/S2", "Jev→act",
                 "Astra→act", "Jev p50/max s", "Astra p50/max s", "status"]
@@ -344,15 +346,13 @@ class Archive:
 
         for c in self.candidates():
             e = c.eval()
-            parent = c.parent() or "–"
             if e is None:
-                rows.append("| " + " | ".join([f"{c.idx:04d}", c.dir.name, parent] + ["–"] * (len(head) - 4)
-                                              + ["not evaluated"]) + " |")
+                rows.append("| " + " | ".join([f"{c.idx:04d}", c.dir.name] + ["–"] * (len(head) - 3) + ["not evaluated"]) + " |")
                 continue
             why = ineligibility(e)
             status = "ok" if why is None else "✗ " + why[:120].replace("|", "/")
             ge = c.game_evals()
-            cells = [f"{c.idx:04d}", c.dir.name, parent]
+            cells = [f"{c.idx:04d}", c.dir.name]
             if multi:
                 cells += [fmt(ge[g].get("mean_score")) if g in ge else "–" for g in games]
                 mean_n, worst_n = self.selection_score(c, table)
@@ -392,20 +392,7 @@ class Archive:
                  "measurements, not from assumptions.\n\n")
         text += (f"Best so far: `{best.dir.name}` (mean score {best.score:.3f})\n" if best else "No scored candidate yet.\n")
         text += ("Only candidates whose status is `ok` can be selected: a fatal, partial or erroneous evaluation "
-                 "cannot win, whatever its score. A used-up call budget or the deadline is not an error. "
-                 "`parent` is the candidate a proposal says it was derived from (`parent: NNNN` in proposal.md).\n")
-        val_rows = []
-        for c in self.candidates():
-            v = c.validation()
-            if v:
-                ms, why = v.get("mean_score"), ineligibility(v)
-                comb = self.combined_score(c)
-                val_rows.append(f"- `{c.dir.name}`: validation {'–' if ms is None else f'{ms:.3f}'} over "
-                                f"{v.get('n_episodes', 0)} episodes" + (f"; train+validation {comb:.3f}" if comb is not None else "")
-                                + (f"; ✗ {why[:100]}" if why else ""))
-        if val_rows:
-            text += ("\nValidation (top candidates re-evaluated on unseen seeds; the final selection is the best "
-                     "train+validation mean among them):\n" + "\n".join(val_rows) + "\n")
+                 "cannot win, whatever its score. A used-up call budget or the deadline is not an error.\n")
         # per-seed outcome: which seeds failed, how each episode ended and how much of the deadline it used
         ep_rows = []
         for c in self.candidates():
@@ -423,7 +410,9 @@ class Archive:
                     part += f" ✗ {_last_line(ep['error'], 100)}"
                 parts.append(part)
             if parts:
-                ep_rows.append(f"- `{c.dir.name}`: " + " · ".join(parts))
+                d = c.directive()
+                lineage = f" ({d.get('mode')} of {', '.join(d.get('parent_dirs') or []) or '–'})" if d else ""
+                ep_rows.append(f"- `{c.dir.name}`{lineage}: " + " · ".join(parts))
         if ep_rows:
             text += "\nEpisodes (score, how it ended, wall time; ✗ = error):\n" + "\n".join(ep_rows) + "\n"
         calls = [(float(lat), int(tok)) for c in self.candidates() for ep in _episodes(c.eval() or {})
@@ -457,6 +446,22 @@ class Archive:
                     f"{k} {sum(b.get(k, 0.0) for b in bds) / len(bds):.2f}" for k in keys))
         if comp_rows:
             text += "\nScore composition (mean per episode, from the adaptor's score_breakdown):\n" + "\n".join(comp_rows) + "\n"
+        val = []
+        for c in self.candidates():
+            ej = c.dir / "validation" / "eval.json"
+            if ej.exists():
+                e = json.loads(ej.read_text())
+                ms = e.get("mean_score")
+                val.append(f"- `{c.dir.name}`: validation mean score {'–' if ms is None else f'{ms:.3f}'} over "
+                           f"{e.get('n_episodes', 0)} episodes" + (f", fatal: {e['fatal'][:80]}" if e.get("fatal") else "")
+                           + (f", {len(e['errors'])} episode errors" if e.get("errors") else ""))
+        if val:
+            text += ("\nValidation seeds (finalists only; the final pick ranks training + validation together):\n"
+                     + "\n".join(val) + "\n")
+        ch = self.champion()
+        if ch is not None:
+            info = json.loads((self.root / "champion.json").read_text())
+            text += f"\nFinal pick: `{ch.dir.name}` (training {info.get('train')}, validation {info.get('val')}).\n"
         held = []
         for c in self.candidates():
             for d in sorted(c.dir.glob("heldout*")):
@@ -470,5 +475,13 @@ class Archive:
                                 + (f", {len(e['errors'])} episode errors" if e.get("errors") else ""))
         if held:
             text += "\nHeld-out evaluations (not used for selection):\n" + "\n".join(held) + "\n"
-        atomic_write(self.root / "leaderboard.md", text)
+        for c in self.candidates():
+            ab = c.dir / "ablation-no-models" / "eval.json"
+            if ab.exists():
+                e = json.loads(ab.read_text())
+                ms, base = e.get("mean_score"), c.score
+                text += (f"\nAblation: `{c.dir.name}` without runtime System-1 / System-2 on its training seeds: "
+                         f"{'–' if ms is None else f'{ms:.3f}'} (with them: {'–' if base is None else f'{base:.3f}'}"
+                         + (f"; {len(e['errors'])} episode errors" if e.get("errors") else "") + ").\n")
+        write_atomic(self.root / "leaderboard.md", text)
         return text

@@ -302,18 +302,20 @@ def test_validator_warnings_never_fail(tmp_path):
 
         class Game(TurnCount):
             def start(self, seed):
+                self.drift = seed % 2 + 1           # the seed drives the game after a fixed opening
                 return 0                            # a fixed opening position
 
             def step(self, action):
                 if action not in self.action_spec.names:
                     raise ValueError(f"unknown action {action!r}")
+                self.value += self.drift
                 return super().step(action)
     """
     rep = validate_adaptor(write_adaptor(tmp_path / "a", body, kind="TurnCount"), expected_tier=1)
     assert rep.ok, rep.to_markdown()
     md = rep.to_markdown()
     assert "- [!] step('__not_an_action__') raised ValueError" in md
-    assert "- [!] seeds 0 and 1 give identical first observations" in md
+    assert "- [!] seeds 0 and 1 give identical first observations" in md and "diverge under identical play" in md
     assert rep.to_json()["warnings"] == rep.warnings and len(rep.warnings) == 2
 
 
@@ -447,7 +449,10 @@ def test_validator_closes_every_instance(tmp_path):
 
 
 def test_validation_json_and_markdown_carry_warnings(tmp_path):
-    a = write_adaptor(tmp_path / "a", "TIER = 2\n\nclass Game(TickCount):\n    def start(self, seed):\n        return 1\n")
+    a = write_adaptor(tmp_path / "a", "TIER = 2\n\nclass Game(TickCount):\n    def start(self, seed):\n"
+                                      "        self.drift = seed % 2 + 1\n        return 1\n"
+                                      "    def tick(self, action):\n        self.value += self.drift\n"
+                                      "        super().tick(action)\n")
     rep = validate_adaptor(a)
     data = json.loads(json.dumps(rep.to_json()))
     assert data["ok"] is True and data["warnings"] and "identical first observations" in data["warnings"][0]
@@ -578,3 +583,64 @@ def test_adaptors_keep_their_own_namespace_package_helpers(tmp_path, clean_regis
     finally:
         for name in [n for n in sys.modules if n == "mh_tst_ns" or n.startswith("mh_tst_ns.")]:
             sys.modules.pop(name, None)
+
+
+SAME_EPISODE_GAME = '''
+from metaharness.games.base import ActionSpec
+
+class Game:
+    name = "same"
+    tick_s = 0.05
+    action_spec = ActionSpec(names=["a", "b", "wait"], noop="wait")
+
+    def __init__(self, seeded=False):
+        self.seeded = seeded
+
+    def reset(self, seed):
+        self.t, self.x, self.seed = 0, 0, seed
+
+    def tick(self, action):
+        self.t += 1
+        self.x += {"a": 1, "b": -1}.get(action, 0) + ((self.seed * self.t) % 3 if self.seeded else 0)
+
+    def observe(self):
+        return {"x": self.x}
+
+    @property
+    def ticks(self):
+        return self.t
+
+    @property
+    def done(self):
+        return self.t >= 400
+
+    @property
+    def score(self):
+        return float(self.x)
+
+    def info(self):
+        return {}
+
+    def describe(self):
+        return "A walker on a line: a moves right, b moves left; the seed adds drift in the seeded version." * 2
+'''
+
+
+def test_seeds_that_replay_the_same_episode_fail_validation(tmp_path):
+    from metaharness.games.adaptor import validate_adaptor
+    write_adaptor(tmp_path / "a", SAME_EPISODE_GAME)
+    rep = validate_adaptor(tmp_path / "a")
+    check = next(c for c in rep.checks if "different episodes" in c["check"])
+    assert not rep.ok and not check["ok"] and "replay the training seeds" in check["detail"]
+    seeded = validate_adaptor(tmp_path / "a", kwargs={"seeded": True})
+    assert seeded.ok and next(c for c in seeded.checks if "different episodes" in c["check"])["ok"]
+
+
+def test_a_seed_label_in_the_observation_does_not_hide_identical_episodes(tmp_path):
+    from metaharness.games.adaptor import validate_adaptor
+    labelled = SAME_EPISODE_GAME.replace(
+        'return {"x": self.x}', 'return {"x": self.x, "seed": self.seed, "rng_seeds": [self.seed]}')
+    write_adaptor(tmp_path / "a", labelled)
+    rep = validate_adaptor(tmp_path / "a")
+    check = next(c for c in rep.checks if "different episodes" in c["check"])
+    assert not rep.ok and not check["ok"]

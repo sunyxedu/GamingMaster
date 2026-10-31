@@ -1057,6 +1057,90 @@ def test_clear_alarms_resumes_a_stopped_game(stage1):
     assert cleared.stopped == {}
 
 
+def test_resume_with_new_return_settings_restarts_that_games_advantage_statistics(stage1):
+    """On --resume a game whose returns are defined differently from the checkpoint's run (GAE
+    gamma / lambda, env kwargs, shaping, timeout reward — compared with the checkpoint's saved
+    arguments) restarts its advantage moments: its advantages have another scale, and the
+    running std would keep the old one for ~1/(1 - --adv_decay) iterations.  The other games
+    keep theirs."""
+    from training import train_rl_joint
+    from training.train_rl_joint import JointRLTrainer, parse_args, return_settings
+
+    torch.manual_seed(0)
+    train_rl_joint.main(_args(stage1, "rl_lam", "--iterations", "1"))
+    ck_path = stage1 / "rl_lam" / "rl_latest.pt"
+    ck = torch.load(ck_path, map_location="cpu", weights_only=False)
+    saved = ck["rl_state"]["advnorm"]["moments"]
+    assert saved["t"] == {"generals": 1, "othello": 1}
+    assert return_settings(ck["args"], "othello") == {
+        "gamma": 1.0, "lam": 0.95, "env_kw": [], "shaping": None, "timeout_reward": None}
+    assert return_settings(ck["args"], "generals")["env_kw"] == [
+        ("max_turns", "10"), ("n_cities", "1"), ("n_mountains", "2")]
+
+    def resumed(*extra):
+        return JointRLTrainer(parse_args(_args(stage1, "rl_lam", "--iterations", "2",
+                                               "--resume", str(ck_path), *extra)))
+
+    def counts(tr):
+        return {g: tr.advnorm.moments.count(g) for g in ("generals", "othello")}
+
+    same = resumed()
+    assert counts(same) == {"generals": 1, "othello": 1}
+    assert same.advnorm.mean("othello") == pytest.approx(saved["m"]["othello"] / saved["w"]["othello"])
+    tr = resumed("--lam", "othello=0.7")
+    assert counts(tr) == {"generals": 1, "othello": 0}
+    assert tr.advnorm.std("othello") == 1.0 and tr.advnorm.mean("othello") == 0.0
+    assert tr.advnorm.std("generals") == same.advnorm.std("generals")
+    assert counts(resumed("--gamma", "generals=0.99")) == {"generals": 0, "othello": 1}
+    assert counts(resumed("--timeout_reward", "othello=0")) == {"generals": 1, "othello": 0}
+    assert counts(resumed("--env_kw", "generals:n_cities=2")) == {"generals": 0, "othello": 1}
+    assert counts(resumed("--lam", "othello=0.95")) == {"generals": 1, "othello": 1}   # the default
+    # the moments restart from the next batch, and the new run's checkpoint carries its settings
+    tr = resumed("--lam", "othello=0.7")
+    tr.run_iteration()
+    assert tr.advnorm.moments.count("othello") == 1
+    assert return_settings(vars(tr.args), "othello")["lam"] == 0.7
+
+
+def test_eval_engine_rung_sets_the_referee_once(stage1):
+    """--eval_engine_rung GAME=K puts the referee at rung K of its ladder (rebuilt from the base
+    settings) once: a resume whose checkpoint already applied that K keeps the rung the ladder has
+    moved to since; another K sets it again.  A game without a ladder, or a rung past its end, is
+    refused."""
+    from training import train_rl_joint
+    from training.train_rl_joint import JointRLTrainer, parse_args
+
+    eng = ["--eval_engine", "othello=/bin/true", "--eval_engine_eps", "othello=0.25",
+           "--eval_engine_ladder", "othello=eps=0.1;eps=0;go=level+2", "--eval_every", "1000"]
+    tr = JointRLTrainer(parse_args(_args(stage1, "rl_rung", "--iterations", "1", *eng,
+                                         "--eval_engine_rung", "othello=2")))
+    assert tr.engine_rung == {"othello": 2} and tr.engine_forced == {"othello": 2}
+    assert tr.eval_engine_eps["othello"] == 0.0 and "othello" not in tr.eval_engine_go
+    torch.manual_seed(0)
+    train_rl_joint.main(_args(stage1, "rl_rung", "--iterations", "1", *eng,
+                              "--eval_engine_rung", "othello=2"))
+    ck_path = stage1 / "rl_rung" / "rl_latest.pt"
+    ck = torch.load(ck_path, map_location="cpu", weights_only=False)
+    assert ck["rl_state"]["engine_rung"] == {"othello": 2}
+    assert ck["rl_state"]["engine_forced"] == {"othello": 2}
+    ck["rl_state"]["engine_rung"] = {"othello": 1}             # the ladder stepped down since
+    torch.save(ck, ck_path)
+
+    def resumed(*extra):
+        return JointRLTrainer(parse_args(_args(stage1, "rl_rung", "--iterations", "2", *eng,
+                                               "--resume", str(ck_path), *extra)))
+
+    kept = resumed("--eval_engine_rung", "othello=2")
+    assert kept.engine_rung == {"othello": 1} and kept.eval_engine_eps["othello"] == 0.1
+    moved = resumed("--eval_engine_rung", "othello=3")
+    assert moved.engine_rung == {"othello": 3} and moved.engine_forced == {"othello": 3}
+    assert moved.eval_engine_go["othello"] == "level 2" and moved.eval_engine_eps["othello"] == 0.0
+    assert "othello" not in moved.engine_base
+    for bad in ("generals=1", "othello=4"):
+        with pytest.raises(SystemExit, match="--eval_engine_rung"):
+            resumed("--eval_engine_rung", bad)
+
+
 def test_stop_file_saves_and_exits_after_the_iteration(stage1):
     """--stop_file: once the file exists the trainer writes rl_latest.pt after the iteration
     and stops — no rl_final.pt (the job's wrapper continues with a handover)."""

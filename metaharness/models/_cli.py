@@ -26,6 +26,9 @@ POLL_S = 0.2
 # (SIGTERM / Ctrl-C unwind through SystemExit / KeyboardInterrupt, so atexit runs).
 _LIVE: set[subprocess.Popen] = set()
 _LIVE_LOCK = threading.Lock()
+# Set once the process is shutting down (SIGTERM / Ctrl-C): a CLI call that fails from now on was
+# killed by us, and callers must not record it as the model's failure.
+STOPPING = threading.Event()
 
 
 @contextlib.contextmanager
@@ -70,7 +73,8 @@ def _kill(proc: subprocess.Popen) -> tuple[str, str]:
 
 
 def kill_all() -> None:
-    """Kill every CLI invocation still running (interpreter exit)."""
+    """Kill every CLI invocation still running (interpreter exit, stop of the process)."""
+    STOPPING.set()
     with _LIVE_LOCK:
         procs = list(_LIVE)
     for proc in procs:
