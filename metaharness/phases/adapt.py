@@ -55,12 +55,28 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
 * Tier {tier}: {'real-time — implement RealtimeGame: tick(action) applies the *current* action, tick_s = the real cadence, ticks counts applied ticks; the runner calls tick on its own clock' if tier == 2 else 'turn-based — implement TurnGame: step(action) blocks until the game has applied the action and returns the next observation'}.
 * `reset(seed)` must start a fresh episode and vary it by seed as described in study.json "scenarios":
   {study.get('scenarios', '')}
-  If only some seeds are valid (a fixed set of levels / maps), declare them in `SEEDS`. Every seed must be a
-  distinct episode (use the game's own seeded randomness), and train and held-out seeds must come from the same
-  mix of scenarios: held-out seeds measure new instances of the game the search trained on, so a scenario
-  family that appears only among held-out seeds measures transfer instead. Declare 8+ seeds per group when
-  episodes are short.
+  Declare `SEEDS = {{"train": [...], "heldout": [...], "dev": [...], "validation": [...]}}` (disjoint; 1-2 dev
+  seeds; 4-6 train / held-out / validation seeds when an episode is expensive, 8-12 each when an episode is
+  cheap — a mean over few seeds is noisy and lets a harness overfit the training scenarios) whenever seeds
+  select scenarios, and always when only some seeds are valid (a fixed set of levels / maps): the search
+  trains on `train`, the proposer may try drafts on `dev`, finalists are re-evaluated on `validation`, the
+  result is reported on `heldout`. Every seed must be a distinct episode (use the game's own seeded
+  randomness), and all groups must come from the same mix of scenarios: held-out seeds measure new instances
+  of the game the search trained on, so a scenario family that appears only among held-out seeds measures
+  transfer instead.
 * `score` must reflect playing well as described in study.json "scoring": {study.get('scoring', '')}
+  It must keep headroom: pick difficulty and scenario length so that neither a trivial policy nor a competent
+  scripted one reaches the maximum (a search cannot tell candidates apart on a saturated score).
+* When the game has opponents, they are the **strongest available**: the engine's best built-in AI, the
+  strongest open-source bot or engine that runs offline here, or — only if nothing exists — a scripted
+  policy with real lookahead. Never a random or deliberately weakened opponent, and no difficulty ladder
+  that a seed can lower. Name the opponent and its measured strength (e.g. its win rate against a simple
+  scripted player) in ADAPTOR.md.
+* An episode must fit the evaluation: `step()` (including the opponent's thinking and engine time) must
+  return within a few seconds, and a whole episode played at that pace must finish well inside the
+  per-episode deadline the search uses (default 30 minutes) with time left for the agent's own model
+  calls. Bound the opponent's compute per decision (search time / iterations) and the episode length
+  accordingly, and report the measured step latency and episode duration in ADAPTOR.md.
 * `describe()` tells a model everything it may know a priori: rules, objective, action semantics,
   observation fields. `action_spec` lists every legal action name with a one-line meaning and a `noop`.
   Actions with parameters use a compact string grammar documented in `describe()` (e.g. `"move 3 4"`).

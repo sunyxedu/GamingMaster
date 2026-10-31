@@ -1,0 +1,5 @@
+Implemented the Tier 1 adaptor by reusing the saved engine plumbing and adding a hard deadline around Foul Play’s search. The search keeps completed MCTS results; a 3-second watchdog invalidates a stalled worker. I also fixed an Illusion protocol case that could crash observation parsing.
+
+Bounded Foul Play won **103 of 110 games (93.6%)** against the old heuristic. Across those battles, median step latency was **0.95 s**, p95 **1.89 s**, maximum **2.55 s**, and mean battle duration **21.36 s**. Both full random-player dev battles completed normally. Details and reproduction commands are in [ADAPTOR.md](/home/hemlix/GamingMaster-mh-tier1/runs/showdown/adaptor/ADAPTOR.md).
+
+The generic adaptor validator passes with no warnings. Deadline fault-injection, offline execution, source-hash stability, process cleanup, and the engine-time-limit tie behavior also passed. No live server or credentials are required.

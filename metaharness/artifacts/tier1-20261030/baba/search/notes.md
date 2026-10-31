@@ -1,0 +1,9 @@
+- The naive leader solves 6/8 seeds but spends one slow Astra call per primitive turn; the two failures wander until the 1800 s deadline.
+- Compact coordinate and stack summaries should preserve planning facts while avoiding repeated 14k-token observations.
+- Short model-selected action batches can reduce calls, but every primitive still needs an observation and progress check because word pushes change the rules.
+- Active-rule changes and repeated unchanged states are useful generic replanning triggers; fixed seed scripts would fail on held-out layouts.
+- The leader's seed 103/107 traces show 27–34 one-action Astra calls and deadline termination; repeated re-solving is the main failure mode.
+- Rule-word tiles also carry an `object` field, so observation code must exclude `rule_object` cells when locating physical agents and goals.
+- Conservative BFS over an already-active goal solved the leader's simple layouts without a model call while avoiding unverified push semantics.
+- Explicit `PLAN:` parsing survives arbitrary stand-in model text; broad extraction of direction words would turn explanations into accidental actions.
+- A dev seed with a rule change solved in two batched Astra calls and 15 primitive actions, confirming that queue invalidation can coexist with recovery.

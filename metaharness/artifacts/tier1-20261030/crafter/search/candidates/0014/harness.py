@@ -1,0 +1,799 @@
+"""Observation-driven achievement planner with sparse strategic consultation.
+Only ctx supplies observations/actions/inference; no simulator access or seed logic.
+"""
+from __future__ import annotations
+import collections
+import heapq
+import json
+import re
+
+DIRS = ((1, 0, 'move_right'), (0, 1, 'move_down'), (-1, 0, 'move_left'), (0, -1, 'move_up'))
+FLOOR = {'grass', 'path', 'sand'}
+HOSTILE = {'zombie', 'skeleton'}
+# Recipe hypotheses; successes replace costs with observed inventory consumption.
+RECIPES = {'place_table': {'wood': 2}, 'place_furnace': {'stone': 4},
+           'place_stone': {'stone': 1}, 'place_plant': {'sapling': 1}}
+for tier in ('wood', 'stone', 'iron'):
+    for tool in ('pickaxe', 'sword'):
+        RECIPES['make_' + tier + '_' + tool] = ({'wood': 1} if tier == 'wood' else
+            {'wood': 1, 'stone': 1} if tier == 'stone' else {'wood': 1, 'coal': 1, 'iron': 1})
+
+
+def plus(p, d):
+    return p[0] + d[0], p[1] + d[1]
+
+
+def dist(p, q):
+    return abs(p[0] - q[0]) + abs(p[1] - q[1])
+
+
+class Harness:
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.world = {}
+        self.visible = {}
+        self.visits = collections.Counter()
+        self.recipes = {k: dict(v) for k, v in RECIPES.items()}
+        self.failures = collections.Counter()
+        self.blocked = {}
+        self.interact_fail = collections.Counter()
+        self.history = collections.deque(maxlen=16)
+        self.step = 0
+        self.last_progress = 0
+        self.calls = 0
+        self.last_call = -1000
+        self.preference = 'progress'
+        self.prefer_until = 0
+        self.explore_target = None
+        self.placing = None
+        self.hunger_target = 0
+        self.thirst_target = 0
+        self.last_sleep = -1000
+        self.no_effect = 0
+        self.stocked = False
+        self.advice_start = {}
+        self.plant_probes = 0
+        # Crops are represented by the adaptor as plant_growing for their
+        # entire visible lifetime.  Keep first-seen and last-probe ticks so a
+        # crop can be revisited without hammering do every tick.
+        self.plant_sites = {}
+        self.plant_last_probe = {}
+        self.future = None
+        self.verified_recipes = set()
+        self.bad_placements = collections.Counter()
+        self.previous_daylight = None
+        self.daylight_trend = 0.0
+        # A daylight-only anchor mode prevents late expeditions from dying in the open.
+        self.anchor = None
+        self.anchor_quality = -1
+        self.night_mode = False
+        self.night_started = -1
+        self.night_until = -1
+
+    def ingest(self, obs):
+        if isinstance(obs, str):
+            try:
+                obs = json.loads(obs)
+            except Exception:
+                obs = {}
+        if not isinstance(obs, dict):
+            obs = {}
+        self.obs = obs
+        self.step = int(obs.get('step', self.step))
+        self.inv = dict(obs.get('inventory', {}))
+        self.player = obs.get('player', {})
+        light = self.player.get('daylight', 1.0)
+        if self.previous_daylight is not None:
+            self.daylight_trend = light - self.previous_daylight
+        self.previous_daylight = light
+        self.pos = tuple(self.player.get('position', [32, 32]))
+        self.face = tuple(self.player.get('facing', [0, 1]))
+        self.ach = {k for k, v in obs.get('achievements', {}).items() if v}
+        self.ach.update(obs.get('unlocked', []))
+        self.visible = {}
+        rows = obs.get('local_map', {}).get('rows', [])
+        for row in rows:
+            for cell in row:
+                if not isinstance(cell, dict) or 'x' not in cell or 'y' not in cell:
+                    continue
+                p = (cell['x'], cell['y'])
+                c = dict(cell)
+                c['material'] = str(c.get('material', 'unknown')).lower()
+                c['object'] = str(c.get('object', '')).lower()
+                if c['object'].startswith('plant_'):
+                    raw_plant = c['object']
+                    if p not in self.plant_sites:
+                        self.plant_sites[p] = self.step
+                    c['plant_raw'] = raw_plant
+                    c['plant_age'] = self.step - self.plant_sites[p]
+                    c['ripe'] = any(word in raw_plant for word in ('ripe', 'mature', 'grown'))
+                    c['object'] = 'plant'
+                c['seen_step'] = self.step
+                self.world[p] = c
+                self.visible[p] = c
+        self.visits[self.pos] += 1
+        # Learn a return point only from a quiet, healthy daytime observation.
+        # A station-adjacent tile is a useful shelter proxy and is entirely
+        # observation-derived; it is discarded if the remembered map no longer
+        # connects to it.
+        quiet = (self.amount('health') >= 6 and self.amount('food') >= 5 and
+                 self.amount('drink') >= 5 and light >= 0.62 and
+                 not any(c.get('object') in HOSTILE for c in self.visible.values()))
+        if quiet:
+            near_station = self.near('table', self.pos) or self.near('furnace', self.pos)
+            if near_station:
+                quality = self.step
+                if self.anchor is None or quality > self.anchor_quality:
+                    self.anchor = self.pos
+                    self.anchor_quality = quality
+        self.ctx.memory['achievements'] = sorted(self.ach)
+
+    def amount(self, key):
+        return self.inv.get(key, 0)
+
+    def material(self, p):
+        return self.world.get(p, {}).get('material', 'unknown')
+
+    def obj(self, p):
+        # Do not freeze mobile creatures outside the current field of view.
+        return self.visible.get(p, {}).get('object', '')
+
+    def mineable(self, mat):
+        if mat == 'tree':
+            return True
+        if mat in ('stone', 'coal'):
+            return any(self.amount(t + '_pickaxe') for t in ('wood', 'stone', 'iron'))
+        if mat == 'iron':
+            return self.amount('stone_pickaxe') or self.amount('iron_pickaxe')
+        if mat == 'diamond':
+            return self.amount('iron_pickaxe')
+        return False
+
+    def walkable(self, p):
+        return (self.material(p) in FLOOR and self.obj(p) in ('', 'player') and
+                self.blocked.get(p, -1) < self.step)
+
+    def danger(self, p):
+        score = 0
+        for q, c in self.visible.items():
+            if c.get('object') in HOSTILE:
+                d = dist(p, q)
+                score += max(0, 5 - d) * (4 if self.amount('health') < 5 else 1)
+            elif c.get('object') == 'arrow' and dist(p, q) <= 1:
+                score += 8
+        return score
+
+    def paths(self, mining=False):
+        costs = {self.pos: 0}
+        first = {self.pos: None}
+        queue = [(0, self.pos)]
+        while queue:
+            cost, p = heapq.heappop(queue)
+            if cost != costs[p]:
+                continue
+            for dx, dy, action in DIRS:
+                q = (p[0] + dx, p[1] + dy)
+                if q not in self.world:
+                    continue
+                floor = self.walkable(q)
+                mine = mining and self.mineable(self.material(q)) and not self.obj(q)
+                if not floor and not mine:
+                    continue
+                nc = cost + (1 if floor else 4) + self.danger(q) + min(self.visits[q], 20) * .015
+                if nc < costs.get(q, 1e9):
+                    costs[q] = nc
+                    first[q] = q if p == self.pos else first[p]
+                    heapq.heappush(queue, (nc, q))
+        return costs, first
+
+    def movement(self, q):
+        delta = (q[0] - self.pos[0], q[1] - self.pos[1])
+        action = next((a for dx, dy, a in DIRS if (dx, dy) == delta), None)
+        if action and not self.walkable(q) and self.mineable(self.material(q)):
+            return 'do' if self.face == delta else action
+        return action
+
+    def face_do(self, q):
+        delta = (q[0] - self.pos[0], q[1] - self.pos[1])
+        if self.face == delta:
+            return 'do'
+        return next((a for dx, dy, a in DIRS if (dx, dy) == delta), None)
+
+    def target(self, kind, max_cost=1e6, mining=True):
+        candidates = []
+        source = self.visible if kind in ('cow', 'zombie', 'skeleton') else self.world
+        for q, c in source.items():
+            matches = c.get('object') == kind if kind in ('cow', 'zombie', 'skeleton', 'plant') else c.get('material') == kind
+            if kind == 'plant' and matches:
+                # This build exposes crops as plant_growing rather than a
+                # separate mature token.  Age is the only stable signal, so
+                # probe an old crop at a coarse cadence and let the resulting
+                # inventory/achievement delta verify whether it is edible.
+                age = max(c.get('plant_age', 0), self.step - self.plant_sites.get(q, self.step))
+                due = self.step - self.plant_last_probe.get(q, -999) >= 25
+                matches = bool(c.get('ripe', False) or c.get('grown', False) or age >= 70) and due
+            if matches and self.interact_fail[(kind, q)] < 8:
+                candidates.append(q)
+        if not candidates:
+            return None
+        costs, first = self.path_cache[mining]
+        options = []
+        for q in candidates:
+            for dx, dy, _ in DIRS:
+                p = (q[0] + dx, q[1] + dy)
+                if p in costs and (p == self.pos or self.walkable(p)):
+                    penalty = self.danger(p) * (0 if kind in HOSTILE else 1)
+                    options.append((costs[p] + penalty, q, p))
+        if not options:
+            return None
+        cost, q, p = min(options)
+        if cost > max_cost:
+            return None
+        self.intent_target = (kind, q)
+        return self.face_do(q) if p == self.pos else self.movement(first[p])
+
+    def explore(self):
+        costs, first = self.path_cache[True]
+        if self.explore_target in costs and self.pos != self.explore_target and self.walkable(self.explore_target):
+            return self.movement(first[self.explore_target])
+        candidates = []
+        for p, cost in costs.items():
+            if p == self.pos or not self.walkable(p):
+                continue
+            unseen = sum((p[0] + dx, p[1] + dy) not in self.world for dx in range(-4, 5) for dy in range(-4, 5))
+            if unseen:
+                value = cost - unseen * .27 + self.visits[p] * .7
+                candidates.append((value, p))
+        if candidates:
+            self.explore_target = min(candidates)[1]
+            return self.movement(first[self.explore_target])
+        # If enclosed by minable rock/trees, expose one tile at a time.
+        for mat in ('stone', 'tree', 'coal', 'iron'):
+            if self.mineable(mat):
+                action = self.target(mat, mining=True)
+                if action:
+                    return action
+        options = [q for q in first if q != self.pos and first[q] is not None]
+        if options:
+            q = min(options, key=lambda q: self.visits[q] * 4 + costs[q])
+            return self.movement(first[q])
+        return 'noop'
+
+    def near(self, mat, p=None):
+        p = self.pos if p is None else p
+        return any(self.material((p[0] + dx, p[1] + dy)) == mat for dx, dy, _ in DIRS)
+
+    def station(self, furnace=False):
+        costs, first = self.path_cache[True]
+        options = [(c, p) for p, c in costs.items() if self.walkable(p) and self.near('table', p) and
+                   (not furnace or self.near('furnace', p))]
+        if not options:
+            return None
+        _, p = min(options)
+        return ('ready', p) if p == self.pos else (self.movement(first[p]), p)
+
+    def place(self, action, table_near=False):
+        if self.placing and self.placing[0] != action:
+            self.placing = None
+        if self.placing:
+            _, stand, target, back = self.placing
+            delta = (target[0] - stand[0], target[1] - stand[1])
+            legal = self.walkable(target) and self.bad_placements[(action, target)] < 2 and (action != 'place_plant' or self.material(target) == 'grass')
+            if not legal:
+                self.placing = None
+            elif self.pos == stand and self.face == delta:
+                self.placing = None
+                return action
+            elif self.pos == back:
+                return self.movement(stand)
+            elif back in self.path_cache[False][0] and self.pos != back:
+                return self.movement(self.path_cache[False][1][back])
+            else:
+                self.placing = None
+        options = []
+        costs, first = self.path_cache[False]
+        for stand in costs:
+            if table_near and not self.near('table', stand):
+                continue
+            if dist(stand, self.pos) > 8:
+                continue
+            for dx, dy, _ in DIRS:
+                target = (stand[0] + dx, stand[1] + dy)
+                back = (stand[0] - dx, stand[1] - dy)
+                if not self.walkable(target) or self.bad_placements[(action, target)] >= 2:
+                    continue
+                if action == 'place_plant' and self.material(target) != 'grass':
+                    continue
+                if stand == self.pos and self.face == (dx, dy):
+                    return action
+                if back in costs and self.walkable(back):
+                    options.append((costs[back] + 2 + self.danger(stand), stand, target, back))
+        if options:
+            _, stand, target, back = min(options)
+            self.placing = (action, stand, target, back)
+            return self.movement(stand) if self.pos == back else self.movement(first[back])
+        return None
+
+    def signature(self, action):
+        return (action, tuple(self.amount(k) for k in ('wood', 'stone', 'coal', 'iron', 'sapling')),
+                self.near('table'), self.near('furnace'))
+
+    def craft_goal(self, action, depth=0):
+        if depth > 8:
+            return None
+        for resource, needed in self.recipes.get(action, {}).items():
+            if self.amount(resource) < needed:
+                return self.acquire(resource, depth + 1)
+        if action.startswith('make_'):
+            furnace = 'iron' in action
+            station = self.station(furnace)
+            if station:
+                if station[0] != 'ready':
+                    travel = self.path_cache[True][0].get(station[1], 1000)
+                    # Portable workbenches cost less than repeated cross-map journeys.
+                    if not furnace and travel > 14:
+                        if self.amount('wood') >= self.recipes[action].get('wood', 0) + 2:
+                            local_table = self.place('place_table')
+                            if local_table:
+                                return local_table
+                        else:
+                            nearby_wood = self.target('tree', max_cost=8)
+                            if nearby_wood:
+                                return nearby_wood
+                    return station[0]
+                if self.failures[self.signature(action)] < 2:
+                    return action
+                return None
+            if furnace and self.station(False):
+                return self.craft_goal('place_furnace', depth + 1)
+            return self.craft_goal('place_table', depth + 1)
+        if action == 'place_furnace' and not self.near('table'):
+            station = self.station(False)
+            if station and station[0] != 'ready':
+                return station[0]
+            if not station:
+                return self.craft_goal('place_table', depth + 1)
+        return self.place(action, table_near=action == 'place_furnace')
+
+    def acquire(self, resource, depth=0):
+        if depth > 8:
+            return None
+        if resource in ('stone', 'coal') and not self.mineable(resource):
+            return self.craft_goal('make_wood_pickaxe', depth + 1)
+        if resource == 'iron' and not self.mineable(resource):
+            return self.craft_goal('make_stone_pickaxe', depth + 1)
+        if resource == 'diamond' and not self.mineable(resource):
+            return self.craft_goal('make_iron_pickaxe', depth + 1)
+        mat = {'wood': 'tree', 'sapling': 'grass'}.get(resource, resource)
+        return self.target(mat) or self.explore()
+
+    def farm_goal(self):
+        """Return a bounded crop visit for the otherwise missing eat_plant.
+
+        The normal progression plants once and then leaves the coordinate
+        behind.  A crop is cheap to probe, while a failed probe is throttled
+        and forgotten after a few attempts so farming cannot trap the run.
+        """
+        if 'eat_plant' in self.ach or self.step < 120 or not self.amount('wood_sword'):
+            return None
+        # Prefer a remembered crop that has had time to mature.  target() sets
+        # intent_target, allowing the post-step bookkeeping to identify the
+        # exact coordinate even when it is outside the current 9x9 view.
+        action = self.target('plant', max_cost=70, mining=False)
+        if action:
+            if action == 'do' and self.intent_target:
+                self.plant_last_probe[self.intent_target[1]] = self.step
+            return action, 'farm_probe'
+        # A second nearby crop makes at least one successful probe likely on
+        # seeds where the first plant is destroyed by a mob.  Placement remains
+        # bounded by the existing legal-position planner and sapling stock.
+        known = len(self.plant_sites)
+        if known < 2 and self.amount('sapling') and self.plant_probes < 8:
+            action = self.place('place_plant')
+            if action:
+                self.plant_probes += 1
+                return action, 'farm_expand'
+        return None
+
+    def combat(self):
+        enemies = [(dist(self.pos, p), p, c) for p, c in self.visible.items() if c.get('object') in HOSTILE]
+        if not enemies:
+            return None
+        # Prefer a target already in our facing tile, then a wounded opponent.
+        enemies.sort(key=lambda item: (item[0], item[1] != plus(self.pos, self.face), item[2].get('health', 9)))
+        d, q, c = enemies[0]
+        crowd = sum(e[0] <= 3 for e in enemies)
+        strength = 5 if self.amount('iron_sword') else 3 if self.amount('stone_sword') else 2 if self.amount('wood_sword') else 1
+        # During the dark shelter interval, moving away from the anchor caused
+        # the parent to alternate two cells while zombies closed in. Hold the
+        # station and attack in place for close hostiles; the next observation
+        # decides whether the target has moved into the facing tile.
+        if self.night_mode and d <= 3:
+            self.intent_target = (c['object'], q)
+            return 'do'
+        if d <= 1:
+            can_finish = c.get('health', 9) <= strength and plus(self.pos, self.face) == q
+            if can_finish or (self.amount('health') >= 5 and crowd <= 2):
+                self.intent_target = (c['object'], q)
+                return self.face_do(q)
+            escapes = [(self.danger(plus(self.pos, direction)) - .3 * sum(self.walkable(plus(plus(self.pos, direction), d2)) for d2 in DIRS), -dist(plus(self.pos, direction), q), direction[2])
+                       for direction in DIRS if self.walkable(plus(self.pos, direction))]
+            if escapes:
+                return min(escapes)[2]
+            return self.face_do(q)
+        if d <= 3 and (self.amount('health') < 5 or crowd >= 3):
+            escapes = [(self.danger(plus(self.pos, direction)), direction[2]) for direction in DIRS
+                       if self.walkable(plus(self.pos, direction))]
+            if escapes and min(escapes)[0] < self.danger(self.pos):
+                return min(escapes)[1]
+        # Hold a safe facing stance for an approaching lone zombie instead of
+        # stepping into its attack range with our back turned.
+        if d == 2 and crowd == 1 and c.get('object') == 'zombie':
+            if q[0] == self.pos[0] or q[1] == self.pos[1]:
+                delta = ((q[0] > self.pos[0]) - (q[0] < self.pos[0]),
+                         (q[1] > self.pos[1]) - (q[1] < self.pos[1]))
+                if self.face == delta:
+                    return 'do'
+        return None
+
+    def night_shelter(self):
+        """Return a bounded shelter action once daylight becomes dangerous.
+
+        The parent controller kept its strategic objective active at dusk. This
+        mode uses a station tile learned from observations as a temporary home:
+        route there with the current map, sleep there when quiet, and resume
+        after a bounded interval. It never invents coordinates or assumes a
+        fixed day length.
+        """
+        daylight = float(self.player.get('daylight', 1.0) or 0.0)
+        # Enter early enough to finish a short return before the hostile phase.
+        if not self.night_mode and daylight <= 0.26:
+            self.night_mode = True
+            self.night_started = self.step
+            self.night_until = self.step + 150
+            self.explore_target = None
+            # Prefer the nearest currently reachable station over an old
+            # anchor.  The map grows while travelling, and a stale home can
+            # otherwise send the controller toward a disconnected frontier.
+            costs, _ = self.paths(False)
+            stations = [(cost, p) for p, cost in costs.items()
+                        if self.walkable(p) and
+                        (self.near('table', p) or self.near('furnace', p))]
+            if stations:
+                self.anchor = min(stations)[1]
+            self.ctx.log('night_mode', started=self.step, anchor=self.anchor)
+        # A bounded lock avoids trapping a run if the guessed anchor is bad.
+        if self.night_mode and self.step >= self.night_until:
+            self.night_mode = False
+            self.anchor = None
+            self.ctx.log('night_release', step=self.step)
+            return None
+        if not self.night_mode:
+            return None
+        if self.anchor is not None and self.pos != self.anchor:
+            costs, first = self.paths(False)
+            if self.anchor in costs and first.get(self.anchor) is not None:
+                return self.movement(first[self.anchor]), 'night_return'
+            # Unknown/disconnected shelter is worse than continuing with a
+            # fresh local map; forget it rather than oscillating at a boundary.
+            self.anchor = None
+        if self.anchor is not None and self.pos == self.anchor:
+            if any(c.get('object') in HOSTILE for c in self.visible.values()):
+                return 'do', 'night_shelter_attack_hold'
+            # Sleeping at a quiet station is the lowest-risk way to spend the
+            # dark interval and may unlock wake_up. A visible hostile is handled
+            # by combat() before this method is reached.
+            if (self.amount('health') >= 6 and self.amount('food') >= 4 and
+                    self.amount('drink') >= 4 and
+                    not any(c.get('object') in HOSTILE for c in self.visible.values())):
+                return 'sleep', 'night_shelter_sleep'
+            # Keep facing the most useful adjacent known cell while waiting.
+            for dx, dy, action in DIRS:
+                q = plus(self.pos, (dx, dy))
+                if self.walkable(q) and self.danger(q) <= self.danger(self.pos):
+                    return action, 'night_shelter_step'
+            return 'do', 'night_shelter_hold'
+        # No anchor was available. Freeze the long-range objective and use a
+        # local danger-minimizing move; this still lets the map reveal itself.
+        options = []
+        for dx, dy, action in DIRS:
+            q = plus(self.pos, (dx, dy))
+            if self.walkable(q):
+                options.append((self.danger(q), self.visits[q], action))
+        if options:
+            return min(options)[2], 'night_local_escape'
+        return 'do', 'night_hold'
+
+    def choose(self):
+        self.intent_target = None
+        self.path_cache = {False: self.paths(False), True: self.paths(True)}
+        emergency = self.combat()
+        if emergency:
+            return emergency, 'combat'
+        if self.player.get('sleeping'):
+            return 'sleep', 'sleeping'
+        drink = self.amount('drink')
+        food = self.amount('food')
+        if drink <= 5:
+            self.thirst_target = 9
+        if drink >= 9:
+            self.thirst_target = 0
+        if food <= 5:
+            self.hunger_target = 9
+        if food >= 9:
+            self.hunger_target = 0
+        if self.thirst_target or 'collect_drink' not in self.ach:
+            action = self.target('water', max_cost=100 if drink < 3 else 22 if self.thirst_target else 6)
+            if action:
+                return action, 'drink'
+        if self.hunger_target or 'eat_cow' not in self.ach:
+            action = self.target('plant', max_cost=35)
+            if action == 'do' and self.intent_target:
+                self.plant_last_probe[self.intent_target[1]] = self.step
+            if not action:
+                action = self.target('cow', max_cost=65 if food < 3 else 35 if self.hunger_target else 6)
+            if action:
+                return action, 'food'
+        daylight = self.player.get('daylight', 1.0)
+        # Dev observations showed roughly 11 sleep ticks per restored energy.
+        # Do not start a long sleep shortly before dusk: it cannot be cancelled
+        # reliably by movement, and a sleeping hit removed seven health.
+        estimated_sleep = 12 * max(0, 9 - self.amount('energy')) + 5
+        safe_day = daylight >= .75 and daylight + min(0, self.daylight_trend) * estimated_sleep >= .75
+        if safe_day and (self.amount('energy') <= 3 or ('wake_up' not in self.ach and self.amount('energy') <= 7)):
+            if not any(c.get('object') in HOSTILE for c in self.visible.values()):
+                if food >= 3 and drink >= 3:
+                    self.last_sleep = self.step
+                    return 'sleep', 'rest'
+        if safe_day and self.amount('health') <= 4 and food >= 5 and drink >= 5 and self.amount('energy') < 8 and not any(c.get('object') in HOSTILE for c in self.visible.values()):
+            return 'sleep', 'heal'
+        shelter = self.night_shelter()
+        if shelter:
+            return shelter
+        # Sparse model preference is advisory; safety and prerequisites stay in code.
+        if self.step < self.prefer_until:
+            action = None
+            if self.preference == 'explore':
+                needed = 'stone' if not self.amount('stone_pickaxe') else 'iron' if not self.amount('iron_pickaxe') else 'diamond'
+                # Discovery completes exploration; never walk past the new resource
+                # merely because a model's tick allowance has not expired.
+                if self.target(needed) is not None:
+                    self.prefer_until = 0
+                else:
+                    action = self.explore()
+            elif self.preference in ('wood', 'stone', 'coal', 'iron', 'diamond', 'sapling'):
+                if self.amount(self.preference) > self.advice_start.get(self.preference, 0):
+                    self.prefer_until = 0
+                else:
+                    action = self.acquire(self.preference)
+            elif self.preference in RECIPES:
+                if self.preference in self.ach:
+                    self.prefer_until = 0
+                else:
+                    action = self.craft_goal(self.preference)
+            elif self.preference in ('cow', 'plant', 'zombie', 'skeleton', 'water'):
+                action = self.target(self.preference, max_cost=80)
+            if action:
+                return action, 'advice:' + self.preference
+        # Carry a small expedition reserve so upgrading does not require one
+        # return trip per ingredient. Gathering is bounded to nearby resources.
+        if self.amount('wood_sword') and not self.stocked:
+            if self.amount('wood') >= 6:
+                self.stocked = True
+            else:
+                action = self.target('tree', max_cost=12)
+                if action:
+                    return action, 'wood_reserve'
+                self.stocked = True
+        if self.amount('wood_sword') and not self.amount('stone_sword') and self.amount('stone') < 3:
+            action = self.target('stone', max_cost=10)
+            if action:
+                return action, 'stone_reserve'
+        # Plant early enough for a crop to mature during crafting/exploration.
+        if self.amount('wood_sword') and 'place_plant' not in self.ach and self.plant_probes < 25:
+            if self.amount('sapling'):
+                action = self.place('place_plant')
+            else:
+                action = self.target('grass', max_cost=2, mining=False)
+                if action == 'do':
+                    self.plant_probes += 1
+            if action:
+                return action, 'early_garden'
+        # A stone sword is a larger survival upgrade than the second pickaxe.
+        for tool in ('wood_pickaxe', 'wood_sword', 'stone_sword', 'stone_pickaxe'):
+            if not self.amount(tool):
+                action = self.craft_goal('make_' + tool)
+                if action:
+                    return action, tool
+        if 'place_stone' not in self.ach and self.amount('stone') >= 1:
+            action = self.craft_goal('place_stone')
+            if action:
+                return action, 'place_stone'
+        if 'place_plant' not in self.ach:
+            if self.amount('sapling'):
+                action = self.craft_goal('place_plant')
+            else:
+                action = self.target('grass', max_cost=4, mining=False)
+            if action:
+                return action, 'planting'
+        if 'place_furnace' not in self.ach:
+            action = self.craft_goal('place_furnace')
+            if action:
+                return action, 'furnace'
+        for tool in ('iron_pickaxe', 'iron_sword'):
+            if not self.amount(tool):
+                action = self.craft_goal('make_' + tool)
+                if action:
+                    return action, tool
+        # Give old crops a periodic, code-owned visit before the expensive
+        # diamond expedition.  Core tools are already complete here, so a
+        # failed maturity hypothesis cannot sacrifice the dependency chain.
+        farm = self.farm_goal()
+        if farm:
+            return farm
+        if 'collect_diamond' not in self.ach:
+            return self.acquire('diamond'), 'diamond'
+        if 'eat_plant' not in self.ach:
+            action = self.target('plant')
+            if action:
+                return action, 'eat_plant'
+            if self.amount('sapling') and sum(c.get('object') == 'plant' for c in self.visible.values()) < 4:
+                action = self.place('place_plant')
+                if action:
+                    return action, 'garden'
+        for monster in ('zombie', 'skeleton'):
+            if 'defeat_' + monster not in self.ach and self.amount('health') >= 6:
+                action = self.target(monster, max_cost=30)
+                if action:
+                    return action, 'hunt_' + monster
+        return self.explore(), 'explore'
+
+    def consult(self, reason):
+        remaining = self.ctx.budget.remaining()
+        if self.future is not None or self.calls >= 8 or remaining.get('system2_calls', 0) <= 1 or remaining.get('wall_s', 0) < 180:
+            return
+        self.calls += 1
+        self.last_call = self.step
+        resources = {}
+        for kind in ('tree', 'stone', 'coal', 'iron', 'diamond', 'water', 'table', 'furnace'):
+            pts = [p for p, c in self.world.items() if c.get('material') == kind]
+            resources[kind] = sorted(pts, key=lambda p: dist(p, self.pos))[:8]
+        state = {'step': self.step, 'position': self.pos, 'inventory': self.inv,
+                 'achievements': sorted(self.ach), 'resources': resources,
+                 'plant_sites': [{'position': p, 'age': self.step - born,
+                                  'last_probe': self.plant_last_probe.get(p, -1)}
+                                 for p, born in list(self.plant_sites.items())[-8:]],
+                 'visible_objects': [c for c in self.visible.values() if c.get('object') and c.get('object') != 'player'],
+                 'recent_transitions': list(self.history), 'recipe_hypotheses': self.recipes,
+                 'failed_recipes': [{'action': k[0], 'inventory_wood_stone_coal_iron_sapling': k[1], 'table': k[2], 'furnace': k[3], 'count': v} for k, v in list(self.failures.items())[-8:]],
+                 'anchor': self.anchor, 'night_mode': self.night_mode,
+                 'reason': reason}
+        prompt = ('You are the strategic supervisor of a Crafter controller. Maximize unique achievements out of 22. '
+                  'Code already handles pathfinding, facing, survival, combat, recipe dependencies, dusk shelter and one-tick observation feedback. '
+                  'Choose a useful short objective, especially to repair stalled progress. Do not give movement lists. '
+                  'A recipe hypothesis may be incorrect; failures and observed deltas are evidence. '
+                  'Return a JSON object with objective (progress, explore, wood, stone, coal, iron, diamond, sapling, '
+                  'cow, plant, zombie, skeleton, water, or a make_/place_ action), ticks (8..80), '
+                  'and optionally recipes mapping action to resource costs if a correction is needed. '
+                  'If an old plant_site exists, prefer a short plant objective so eat_plant can be verified. '
+                  'Use progress to resume the standard dependency plan. Keep response under 150 words.\n' + json.dumps(state, separators=(',', ':')))
+        request_step = self.step
+        timeout = min(150.0, remaining['wall_s'] - 20)
+
+        def request():
+            # Only the model request and pure parsing run on the background thread.
+            # No shared controller state is mutated here; the main loop applies advice.
+            try:
+                result = self.ctx.think(prompt, session_id=None, timeout_s=timeout)
+                match = re.search(r'\{[\s\S]*\}', result.text)
+                data = json.loads(match.group(0)) if match else {}
+                return request_step, data if isinstance(data, dict) else {}, None
+            except Exception as exc:
+                return request_step, {}, type(exc).__name__
+        try:
+            self.future = self.ctx.spawn(request)
+        except Exception as exc:
+            self.ctx.log('strategy_failed', error=type(exc).__name__)
+
+    def receive_advice(self):
+        if self.future is None or not self.future.done():
+            return
+        future = self.future
+        self.future = None
+        try:
+            request_step, data, error = future.result()
+            if error:
+                self.ctx.log('strategy_failed', error=error)
+                return
+            objective = data.get('objective', 'progress')
+            valid = {'progress', 'explore', 'wood', 'stone', 'coal', 'iron', 'diamond', 'sapling', 'cow', 'plant', 'zombie', 'skeleton', 'water'} | set(RECIPES)
+            if isinstance(objective, str) and objective in valid and self.step - request_step <= 160:
+                ticks = max(8, min(80, int(data.get('ticks', 35))))
+                self.preference = objective
+                self.advice_start = dict(self.inv)
+                self.prefer_until = self.step + ticks
+            changes = data.get('recipes', {})
+            if isinstance(changes, dict):
+                for key, costs in changes.items():
+                    if key not in self.recipes or key in self.verified_recipes or not isinstance(costs, dict) or not costs:
+                        continue
+                    if all(k in ('wood', 'stone', 'coal', 'iron', 'sapling') and type(v) is int and 0 < v <= 9 for k, v in costs.items()):
+                        self.recipes[key] = dict(costs)
+            self.ctx.log('strategy', objective=self.preference, until=self.prefer_until, age_ticks=self.step-request_step)
+        except Exception as exc:
+            self.ctx.log('strategy_failed', error=type(exc).__name__)
+
+    def run_episode(self, game):
+        self.names = set(game.action_spec.names)
+        self.ingest(self.ctx.observe())
+        while not self.ctx.done and not self.obs.get('done', False):
+            if len(self.ach) >= 22:
+                break
+            self.receive_advice()
+            # Advice is nonblocking, including backend admission/queue latency.
+            if self.step >= 100 and self.step - self.last_call >= 180 and (
+                self.calls == 0 or self.step - self.last_progress > 160 or self.no_effect >= 8):
+                self.consult('stalled' if self.step - self.last_progress > 160 else 'strategic review')
+                if self.ctx.done:
+                    break
+            action, reason = self.choose()
+            if action not in self.names:
+                action = 'noop'
+            before_inv = dict(self.inv)
+            before_ach = set(self.ach)
+            before_pos = self.pos
+            front = plus(self.pos, self.face)
+            before_cell = dict(self.visible.get(front, {}))
+            signature = self.signature(action)
+            target = self.intent_target
+            try:
+                obs = self.ctx.act(action)
+            except Exception as exc:
+                if self.ctx.done:
+                    break
+                self.ctx.log('action_failed', action=action, error=type(exc).__name__)
+                self.no_effect += 1
+                if self.no_effect >= 12:
+                    return
+                self.ingest(self.ctx.observe())
+                continue
+            self.ingest(obs if obs is not None else self.ctx.observe())
+            delta = {k: v - before_inv.get(k, 0) for k, v in self.inv.items() if v != before_inv.get(k, 0)}
+            gained = sorted(self.ach - before_ach)
+            if gained:
+                self.last_progress = self.step
+                self.ctx.log('achievement', names=gained, step=self.step)
+            meaningful = bool(gained or any(k not in ('food', 'drink', 'energy', 'health') for k in delta))
+            self.no_effect = 0 if meaningful or self.pos != before_pos else self.no_effect + 1
+            if action in self.recipes:
+                success = action in gained or (action.startswith('make_') and delta.get(action[5:], 0) > 0) or any(v < 0 and k in self.recipes[action] for k, v in delta.items())
+                if success:
+                    costs = {k: -v for k, v in delta.items() if v < 0 and k in ('wood', 'stone', 'coal', 'iron', 'sapling')}
+                    if costs:
+                        self.recipes[action] = costs
+                        self.verified_recipes.add(action)
+                else:
+                    self.failures[signature] += 1
+                    if action.startswith('place_'):
+                        self.bad_placements[(action, front)] += 1
+            if action.startswith('move_') and self.pos == before_pos:
+                d = next(((dx, dy) for dx, dy, a in DIRS if a == action), None)
+                q = plus(before_pos, d) if d else before_pos
+                if self.material(q) in FLOOR and not self.obj(q):
+                    self.blocked[q] = self.step + 5
+            if action == 'do' and target:
+                after_cell = self.visible.get(front, {})
+                unchanged = all(after_cell.get(k) == v for k, v in before_cell.items() if k != 'seen_step') and not meaningful and not delta.get('drink', 0) and not delta.get('food', 0)
+                if unchanged:
+                    self.interact_fail[target] += 1
+                else:
+                    self.interact_fail[target] = 0
+            if meaningful or gained or action in self.recipes or self.step % 20 == 0:
+                self.history.append({'step': self.step, 'action': action, 'goal': reason, 'delta': delta, 'gained': gained, 'position': self.pos})
+            # A hard cap prevents accidental infinite loops even with imperfect fake observations.
+            if self.step >= 9800:
+                break
+
+
+def build(ctx):
+    return Harness(ctx)

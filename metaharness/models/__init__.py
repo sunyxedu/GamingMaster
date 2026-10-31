@@ -43,6 +43,7 @@ def load_profiles(path: Optional[Path | str] = None) -> dict[str, dict[str, dict
         data = tomllib.load(fh)
     data.setdefault("system2", {})
     data.setdefault("system1", {})
+    data.setdefault("providers", {})
     return data
 
 
@@ -57,6 +58,17 @@ def _profile(kind: str, name: str) -> dict[str, Any]:
     return dict(profiles[name])
 
 
+def _provider(pid: Optional[str], profile: str) -> Optional[dict[str, Any]]:
+    """The ``[providers.<pid>]`` table a profile names (an OpenAI-compatible endpoint for codex)."""
+    if not pid:
+        return None
+    providers = load_profiles()["providers"]
+    if pid not in providers:
+        raise ValueError(f"system2 profile {profile!r} names provider {pid!r}, which is not a [providers.*] "
+                         f"table in {DEFAULT_PROFILES}; known: {sorted(providers)}")
+    return {"id": pid, **providers[pid]}
+
+
 def make_system2(name: str, **overrides: Any) -> System2Model:
     """Build the System-2 model named by a ``[system2.<name>]`` profile.
     ``overrides`` (e.g. ``reasoning_effort=``) win over the profile."""
@@ -67,7 +79,8 @@ def make_system2(name: str, **overrides: Any) -> System2Model:
         from .codex_cli import CodexCLI
         if not prof.get("model"):
             raise ValueError(f"system2 profile {name!r} (codex) needs a model id in {DEFAULT_PROFILES}")
-        return CodexCLI(model=prof["model"], reasoning_effort=prof.get("reasoning_effort"))
+        return CodexCLI(model=prof["model"], reasoning_effort=prof.get("reasoning_effort"),
+                        provider=_provider(prof.get("provider"), name))
     if backend == "claude":
         from .claude_cli import ClaudeCLI
         return ClaudeCLI(model=prof.get("model") or None, reasoning_effort=prof.get("reasoning_effort"))

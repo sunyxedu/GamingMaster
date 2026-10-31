@@ -1,0 +1,1 @@
+Linux x86_64 server without GUI; everything must run offline on this machine with free software. The evaluator's Python is the venv at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/sokoban (install there). Tier 1: the agent plays turn by turn. Use a level set (Boxoban or classic levels); seeds select levels; score = boxes placed and levels solved within an action budget.

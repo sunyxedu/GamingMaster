@@ -1,0 +1,471 @@
+{
+ "harness_path": "runs/factorio/search/candidates/0000-tier1_astra_naive/harness.py",
+ "game": "Factorio",
+ "fatal": null,
+ "mean_score": 0.0,
+ "stale_fraction": null,
+ "n_episodes": 4,
+ "system1_calls": 0,
+ "system2_calls": 51,
+ "mean_steps": 11.75,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "deadline": 4
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 1.0,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 101,
+   "score": 0.0,
+   "steps": 10,
+   "system1_calls": 0,
+   "system2_calls": 11,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 10,
+    "mean": 46.58676962852478,
+    "p50": 50.658626556396484,
+    "p90": 120.3482038974762,
+    "max": 120.3482038974762
+   },
+   "wall_s": 1800.0505281810183,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 10,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "bootstrap": 0.0,
+     "automation-science-pack": 0.0,
+     "logistic-science-pack": 0.0,
+     "chemical-science-pack": 0.0,
+     "production-science-pack": 0.0,
+     "utility-science-pack": 0.0,
+     "space-science-pack": 0.0
+    }
+   },
+   "acts": 10,
+   "acts_after_s1": 0,
+   "acts_after_s2": 10,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     56.644,
+     475
+    ],
+    [
+     9.644,
+     38
+    ],
+    [
+     10.427,
+     16
+    ],
+    [
+     23.331,
+     50
+    ],
+    [
+     65.182,
+     46
+    ],
+    [
+     50.659,
+     56
+    ],
+    [
+     120.348,
+     51
+    ],
+    [
+     22.517,
+     169
+    ],
+    [
+     34.496,
+     102
+    ],
+    [
+     72.621,
+     43
+    ]
+   ]
+  },
+  {
+   "seed": 202,
+   "score": 0.0,
+   "steps": 13,
+   "system1_calls": 0,
+   "system2_calls": 14,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 13,
+    "mean": 46.945845072086044,
+    "p50": 34.486631870269775,
+    "p90": 90.1136360168457,
+    "max": 111.72818517684937
+   },
+   "wall_s": 1800.0980722578242,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 13,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "bootstrap": 0.0,
+     "automation-science-pack": 0.0,
+     "logistic-science-pack": 0.0,
+     "chemical-science-pack": 0.0,
+     "production-science-pack": 0.0,
+     "utility-science-pack": 0.0,
+     "space-science-pack": 0.0
+    }
+   },
+   "acts": 13,
+   "acts_after_s1": 0,
+   "acts_after_s2": 13,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     90.114,
+     2256
+    ],
+    [
+     44.908,
+     197
+    ],
+    [
+     12.526,
+     27
+    ],
+    [
+     16.654,
+     157
+    ],
+    [
+     24.738,
+     109
+    ],
+    [
+     34.487,
+     271
+    ],
+    [
+     30.504,
+     186
+    ],
+    [
+     111.728,
+     109
+    ],
+    [
+     19.193,
+     239
+    ],
+    [
+     55.277,
+     58
+    ],
+    [
+     61.596,
+     186
+    ],
+    [
+     89.734,
+     237
+    ],
+    [
+     18.836,
+     39
+    ]
+   ]
+  },
+  {
+   "seed": 303,
+   "score": 0.0,
+   "steps": 14,
+   "system1_calls": 0,
+   "system2_calls": 15,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 14,
+    "mean": 50.689975942884175,
+    "p50": 39.759716510772705,
+    "p90": 125.56270146369934,
+    "max": 133.16155767440796
+   },
+   "wall_s": 1800.3632855308242,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 14,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "bootstrap": 0.0,
+     "automation-science-pack": 0.0,
+     "logistic-science-pack": 0.0,
+     "chemical-science-pack": 0.0,
+     "production-science-pack": 0.0,
+     "utility-science-pack": 0.0,
+     "space-science-pack": 0.0
+    }
+   },
+   "acts": 14,
+   "acts_after_s1": 0,
+   "acts_after_s2": 14,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     39.76,
+     1511
+    ],
+    [
+     19.605,
+     164
+    ],
+    [
+     13.834,
+     305
+    ],
+    [
+     17.849,
+     565
+    ],
+    [
+     20.405,
+     216
+    ],
+    [
+     60.559,
+     208
+    ],
+    [
+     58.667,
+     812
+    ],
+    [
+     37.941,
+     128
+    ],
+    [
+     59.904,
+     211
+    ],
+    [
+     125.563,
+     145
+    ],
+    [
+     19.987,
+     59
+    ],
+    [
+     18.922,
+     166
+    ],
+    [
+     83.503,
+     134
+    ],
+    [
+     133.162,
+     172
+    ]
+   ]
+  },
+  {
+   "seed": 404,
+   "score": 0.0,
+   "steps": 10,
+   "system1_calls": 0,
+   "system2_calls": 11,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 10,
+    "mean": 58.13509178161621,
+    "p50": 60.984742641448975,
+    "p90": 126.69258427619934,
+    "max": 126.69258427619934
+   },
+   "wall_s": 1800.4896765721496,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 10,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "bootstrap": 0.0,
+     "automation-science-pack": 0.0,
+     "logistic-science-pack": 0.0,
+     "chemical-science-pack": 0.0,
+     "production-science-pack": 0.0,
+     "utility-science-pack": 0.0,
+     "space-science-pack": 0.0
+    }
+   },
+   "acts": 10,
+   "acts_after_s1": 0,
+   "acts_after_s2": 10,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     63.663,
+     390
+    ],
+    [
+     96.949,
+     66
+    ],
+    [
+     40.142,
+     39
+    ],
+    [
+     60.985,
+     63
+    ],
+    [
+     49.691,
+     304
+    ],
+    [
+     30.197,
+     152
+    ],
+    [
+     25.02,
+     216
+    ],
+    [
+     18.227,
+     98
+    ],
+    [
+     126.693,
+     28
+    ],
+    [
+     69.785,
+     171
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   101,
+   202,
+   303,
+   404
+  ],
+  "expected_episodes": 4,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "faf6391328032aa4a1913053a46239fe9f0a3fb2fc48af0dbd54d2b715973945",
+  "game_kind": "turn",
+  "resolved_models": {
+   "system2": [
+    "codex:gpt-6-astra@router"
+   ]
+  }
+ },
+ "score_std": 0.0
+}

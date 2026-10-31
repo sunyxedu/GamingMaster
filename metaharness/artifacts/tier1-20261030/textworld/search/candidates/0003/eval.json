@@ -1,0 +1,710 @@
+{
+ "harness_path": "runs/textworld/search/candidates/0003/harness.py",
+ "game": "TextWorld generic Glulx quests (admissible commands)",
+ "fatal": null,
+ "mean_score": 0.6666666666666666,
+ "stale_fraction": null,
+ "n_episodes": 9,
+ "system1_calls": 0,
+ "system2_calls": 53,
+ "mean_steps": 5.555555555555555,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "deadline": 3,
+  "game_done": 6
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 1.0,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 100,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 1800.4309009560384,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "normalized_score": 0.0,
+     "native_score": 0.0,
+     "native_max_score": 1.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 101,
+   "score": 1.0,
+   "steps": 10,
+   "system1_calls": 0,
+   "system2_calls": 10,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 10,
+    "mean": 50.338578057289126,
+    "p50": 43.807780265808105,
+    "p90": 103.29148077964783,
+    "max": 103.29148077964783
+   },
+   "wall_s": 535.2139880650211,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 10,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "normalized_score": 1.0,
+     "native_score": 1.0,
+     "native_max_score": 1.0
+    }
+   },
+   "acts": 10,
+   "acts_after_s1": 0,
+   "acts_after_s2": 10,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     42.757,
+     56
+    ],
+    [
+     103.291,
+     1990
+    ],
+    [
+     56.672,
+     462
+    ],
+    [
+     16.717,
+     9
+    ],
+    [
+     38.951,
+     9
+    ],
+    [
+     43.808,
+     148
+    ],
+    [
+     73.476,
+     9
+    ],
+    [
+     37.778,
+     150
+    ],
+    [
+     36.623,
+     149
+    ],
+    [
+     53.311,
+     125
+    ]
+   ]
+  },
+  {
+   "seed": 102,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 1800.4396393380594,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "normalized_score": 0.0,
+     "native_score": 0.0,
+     "native_max_score": 1.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 103,
+   "score": 1.0,
+   "steps": 5,
+   "system1_calls": 0,
+   "system2_calls": 5,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 5,
+    "mean": 47.72802019119263,
+    "p50": 49.899211168289185,
+    "p90": 55.366000175476074,
+    "max": 55.366000175476074
+   },
+   "wall_s": 284.9298573010601,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 5,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "normalized_score": 1.0,
+     "native_score": 1.0,
+     "native_max_score": 1.0
+    }
+   },
+   "acts": 5,
+   "acts_after_s1": 0,
+   "acts_after_s2": 5,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     43.313,
+     39
+    ],
+    [
+     55.366,
+     447
+    ],
+    [
+     49.899,
+     9
+    ],
+    [
+     52.808,
+     154
+    ],
+    [
+     37.254,
+     392
+    ]
+   ]
+  },
+  {
+   "seed": 104,
+   "score": 0.0,
+   "steps": 3,
+   "system1_calls": 0,
+   "system2_calls": 4,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 3,
+    "mean": 55.183760245641075,
+    "p50": 55.96130704879761,
+    "p90": 62.92599034309387,
+    "max": 62.92599034309387
+   },
+   "wall_s": 1800.2619932978414,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 3,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "normalized_score": 0.0,
+     "native_score": 0.0,
+     "native_max_score": 1.0
+    }
+   },
+   "acts": 3,
+   "acts_after_s1": 0,
+   "acts_after_s2": 3,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     62.926,
+     9
+    ],
+    [
+     46.664,
+     64
+    ],
+    [
+     55.961,
+     188
+    ]
+   ]
+  },
+  {
+   "seed": 105,
+   "score": 1.0,
+   "steps": 2,
+   "system1_calls": 0,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 58.25763499736786,
+    "p50": 64.66254997253418,
+    "p90": 64.66254997253418,
+    "max": 64.66254997253418
+   },
+   "wall_s": 636.4226488608401,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 2,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "normalized_score": 1.0,
+     "native_score": 1.0,
+     "native_max_score": 1.0
+    }
+   },
+   "acts": 2,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     64.663,
+     47
+    ],
+    [
+     51.853,
+     52
+    ]
+   ]
+  },
+  {
+   "seed": 106,
+   "score": 1.0,
+   "steps": 18,
+   "system1_calls": 0,
+   "system2_calls": 18,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 18,
+    "mean": 60.025685760709976,
+    "p50": 61.28229904174805,
+    "p90": 84.48963570594788,
+    "max": 84.87212109565735
+   },
+   "wall_s": 1766.1261329769623,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 18,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "normalized_score": 1.0,
+     "native_score": 1.0,
+     "native_max_score": 1.0
+    }
+   },
+   "acts": 18,
+   "acts_after_s1": 0,
+   "acts_after_s2": 18,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     43.532,
+     130
+    ],
+    [
+     54.876,
+     151
+    ],
+    [
+     55.423,
+     9
+    ],
+    [
+     70.25,
+     742
+    ],
+    [
+     45.144,
+     34
+    ],
+    [
+     61.927,
+     142
+    ],
+    [
+     84.872,
+     1255
+    ],
+    [
+     55.349,
+     1017
+    ],
+    [
+     44.155,
+     33
+    ],
+    [
+     74.898,
+     43
+    ],
+    [
+     63.023,
+     1353
+    ],
+    [
+     65.879,
+     2072
+    ],
+    [
+     72.108,
+     276
+    ],
+    [
+     45.182,
+     110
+    ],
+    [
+     84.49,
+     22
+    ],
+    [
+     61.282,
+     741
+    ],
+    [
+     52.875,
+     50
+    ],
+    [
+     45.198,
+     41
+    ]
+   ]
+  },
+  {
+   "seed": 107,
+   "score": 1.0,
+   "steps": 10,
+   "system1_calls": 0,
+   "system2_calls": 10,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 10,
+    "mean": 61.30243501663208,
+    "p50": 55.896069288253784,
+    "p90": 118.27050352096558,
+    "max": 118.27050352096558
+   },
+   "wall_s": 1214.5878854028415,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 10,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "normalized_score": 1.0,
+     "native_score": 1.0,
+     "native_max_score": 1.0
+    }
+   },
+   "acts": 10,
+   "acts_after_s1": 0,
+   "acts_after_s2": 10,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     48.428,
+     57
+    ],
+    [
+     118.271,
+     101
+    ],
+    [
+     45.869,
+     115
+    ],
+    [
+     50.597,
+     9
+    ],
+    [
+     47.67,
+     124
+    ],
+    [
+     48.778,
+     9
+    ],
+    [
+     83.108,
+     496
+    ],
+    [
+     58.294,
+     234
+    ],
+    [
+     56.114,
+     406
+    ],
+    [
+     55.896,
+     282
+    ]
+   ]
+  },
+  {
+   "seed": 108,
+   "score": 1.0,
+   "steps": 2,
+   "system1_calls": 0,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 61.406360387802124,
+    "p50": 67.46460485458374,
+    "p90": 67.46460485458374,
+    "max": 67.46460485458374
+   },
+   "wall_s": 286.07091525988653,
+   "error": null,
+   "info": {
+    "score": 1.0,
+    "ticks": 2,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "normalized_score": 1.0,
+     "native_score": 1.0,
+     "native_max_score": 1.0
+    }
+   },
+   "acts": 2,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     55.348,
+     67
+    ],
+    [
+     67.465,
+     383
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   100,
+   101,
+   102,
+   103,
+   104,
+   105,
+   106,
+   107,
+   108
+  ],
+  "expected_episodes": 9,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "fc07f2c52cdb1ee2a668f223c7bb8d6981a9e43548e53cfb14775e11d0146637",
+  "game_kind": "turn",
+  "resolved_models": {
+   "system2": [
+    "codex:gpt-6-astra@router"
+   ]
+  }
+ },
+ "score_std": 0.5
+}

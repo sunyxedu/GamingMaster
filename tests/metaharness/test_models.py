@@ -79,11 +79,15 @@ def test_jev_live_snake_decision():
 # ---------------------------------------------------------------- profiles
 
 
-def test_profiles_resolve_backend_and_model():
+def test_profiles_resolve_backend_and_model(monkeypatch):
+    monkeypatch.setenv("MH_ROUTER_API_KEY", "k")          # the router profiles need their key
     m = make_system2("astra")
     assert isinstance(m, CodexCLI) and m.model == "gpt-6-astra" and m.reasoning_effort == "high"
+    assert m.provider["id"] == "router" and m.provider["base_url"].endswith("/v1") and m.name.endswith("@router")
     assert make_system2("astra", reasoning_effort="low").reasoning_effort == "low"
-    assert make_system2("sol").model == "gpt-5.6-sol"
+    assert make_system2("sol").model == "gpt-6.1-sol"
+    login = make_system2("astra-login")
+    assert login.provider is None and login.codex_home is None and login.name == "codex:gpt-6-astra"
     from metaharness.models.claude_cli import ClaudeCLI
     c = make_system2("claude")
     assert isinstance(c, ClaudeCLI) and c.model is None

@@ -1,0 +1,38 @@
+{
+  "game": "Baba Is AI (Baba Is You puzzle benchmark)",
+  "tier": 1,
+  "tier_rationale": "The requested benchmark is a discrete-turn puzzle environment: the logical state changes when an action is submitted, and autonomous objects, if implemented, advance on game turns. Astra can spend seconds or a minute deciding without an in-game real-time penalty. An evaluator wall-clock limit or per-puzzle action budget may still apply, but neither makes this a continuously ticking tier-2 game. Exact package behavior remains to be verified after source acquisition.",
+  "decision_latency_s": -1.0,
+  "interface": {
+    "chosen": "Python environment API (baba-is-ai, pending source verification)",
+    "why": "An in-process symbolic, turn-based interface fits the user-designated benchmark, offline Linux server, and headless operation. It avoids image recognition, GUI input timing, and commercial-game licensing. The exact import name, API signatures, and observation fidelity are unverified because neither a local artifact nor network access was available.",
+    "software": [
+      "Python 3.12.3 evaluator venv at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/baba",
+      "Pinned baba-is-ai distribution or verified upstream source artifact",
+      "Pinned transitive dependencies determined from the selected artifact's metadata; provisioned as offline wheels"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Acquire the actual baba-is-ai release or its identified GitHub source, package metadata, license, levels/assets, and complete dependency wheels on a connected provisioning machine; pin hashes and version.",
+      "Confirm Requires-Python and all dependencies support the evaluator's Python 3.12.3 on Linux x86_64; inspect reset, step, observations, actions, success, and level selection in the selected source.",
+      "With write access to the evaluator venv, install only from the local wheelhouse using that venv's python -m pip install --no-index --find-links, then run python -m pip check.",
+      "Construct and reset the environment headlessly and offline; record its actual import name, signatures, action mapping, observation encoding, success predicate, and supported rule vocabulary.",
+      "Build a lossless JSON board adapter and deterministic seed-to-level manifest consistent with the environment's public observation and evaluation policy; execute exactly one native turn per accepted action.",
+      "Verify identical seed/action replay, non-mutating observation, every action mapping, rule updates, and one-point-only scoring on engine-confirmed wins."
+    ],
+    "observation": "Prefer the environment's native symbolic observation, serialized as JSON with scenario identity, dimensions, every cell layer and word tile, active rules where exposed, directions and other future-relevant attributes, turn count, and separate success/termination/truncation fields. The exact upstream format is unverified; do not expose private engine fields if the evaluation contract intends partial observability.",
+    "actions": "Submit one verified native action for each of north, east, south, and west; expose wait, undo, or restart only if the selected release and evaluation policy permit them. Reset by deterministic scenario seed. Exact enum values and signatures must be read from source; no integer mapping is assumed."
+  },
+  "scoring": "One point per scheduled puzzle if and only if the native engine confirms success, with at most one point per episode. Report total puzzles solved and attempted, solved fraction, seed/level identity, step count, and termination reason. Raw reward or truncation alone does not imply a solved puzzle.",
+  "scenarios": "Map reset(seed) reproducibly to actual supplied level identities, using native selection if it meets that contract or a versioned, sorted manifest otherwise. Held-out seeds must refer to held-out levels or templates rather than duplicate layouts. Record collisions if the finite corpus is smaller than the seed space; do not claim new puzzles from reseeding a fixed board or from unverified random scrambling.",
+  "strategy_summary": "Inspect all active text rules, controlled objects, goals, and available word pushes before moving. Consider changing the goal, changing control, or removing blocking rules as alternatives to walking toward the current WIN object. Plan backward from a candidate win, preserve pushing access and a path to future control, and reassess every rule affected by a text push in both axes. Use the native engine for exact simulation or carefully bounded search where authorized; treat ordinary Sokoban deadlock heuristics as warnings until fixed-rule conditions are proved. Execute primitive turns with observation checks and replan whenever the actual transition differs from expectation. Astra owns subgoals and adaptation; code owns exact state, legal transitions, bookkeeping, and score. Jev is optional for typed candidate ranking, with no timing-critical control role.",
+  "risks": [
+    "PyPI and GitHub DNS resolution failed during study, and no baba-is-ai artifact was found locally; upstream API, package availability, license, and Python 3.12 compatibility remain unverified.",
+    "The designated evaluator venv contains only pip and lies outside the session's writable roots; installation requires an accessible offline wheelhouse and write access in the adaptor phase.",
+    "A package may depend on GUI initialization, non-free assets, incompatible dependencies, or network-fetched levels despite an apparently usable Python API.",
+    "Public observations may omit overlapping objects or future-relevant state; private engine extraction must respect the evaluation observation contract.",
+    "Seed may reseed randomness without selecting distinct puzzles, making held-out seed evaluation misleading unless a level manifest is verified.",
+    "Unsupported original-game grammar, incorrect action integers, or wrong win/termination interpretation can invalidate an adapter and solver.",
+    "No in-game real-time deadline is known; evaluator wall-clock and step limits may still constrain planning. decision_latency_s = -1.0 denotes no finite in-game deadline, not unlimited evaluation time."
+  ]
+}

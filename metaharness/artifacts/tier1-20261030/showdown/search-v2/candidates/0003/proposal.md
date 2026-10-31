@@ -1,0 +1,35 @@
+parent: none
+
+Hypothesis: repeated actions should be justified by observed damage and move order, rather than by a future action sequence or model-authored policy. The leader's main tactical failure is continuing losing exchanges without the authoritative evidence in its prompt. A controller that exposes complete tactical evidence, then selectively reuses empirically favorable attacks, may make better decisions while saving calls on genuinely stable matchups. This is a fresh design: Astra selects a single action; code measures and validates the exchange before deciding whether another attack is warranted.
+
+Archive evidence:
+
+- Every leader training episode ended at the 1800-second deadline; the mean was 12.7 decisions and 11.9 turns, with outcome zero. The worst two episodes posted only 14 and 15 actions. This establishes the cost of one slow call per action, but does not establish that blindly taking more actions would win.
+- In `trace_seed333667.jsonl`, step 2 uses Haze while Giratina's Dragon Pulse reduces Volcanion from 256/256 to 135/256. Step 3 repeats Steam Eruption, takes another 84 HP, and leaves Giratina at 90/100 after Leftovers. Step 4 finally switches to Clefable; the same Dragon Pulse produces `|-immune|p1a: Clefable`. Later, Clefable's resisted Moonblast into Typhlosion costs 198/293 HP from Eruption. These are concrete bad damage exchanges.
+- The leader's rendered observation is cut after 6000 characters: in that trace's opening model request, the tail ends inside Nuzzle's description. Neither the observation's `species_dex` nor `recent_events` reaches Astra. The protocol is the authority, but the baseline does not show it.
+- In `trace_seed282617.jsonl`, Espathra's Calm Mind and Speed Boost precede Stored Power fainting Chesnaught; Altaria later reveals Dragon Dance, Ground Tera, and Brave Bird. These changes invalidate extrapolation from an earlier exchange.
+
+What changed:
+
+1. Show a fresh structured snapshot on every consultation: all six exact own sets, move slots/PP/legality, all revealed opponents, field effects, species/move reference data, recent HP trades, the latest measured exchange, and the last 65 authoritative protocol events. Do not truncate JSON mid-field. Fresh sessions avoid accumulating duplicate requests. A short explicit memo preserves the win condition, counter to save, and uncertainty.
+2. Astra returns one legal action and a strategic memo, with no future sequence or rules. The controller measures direct damage, net damage after recovery/residuals, and observed action order from the resulting protocol. Only attacks against the same still-active opponent are eligible for reuse; move IDs are checked again against current slots and legal actions.
+3. Before reusing an attack, reduce observed outgoing damage to 75% minus a rounding allowance, and increase observed incoming damage by 30% plus a reserve. Require either a faster finishing hit or a favorable race to KO while surviving the next hit. Every replay is verified again. At most four follow-ups occur before fresh consultation. Recoil and residual loss contribute to the incoming cost; net enemy recovery reduces the predicted progress.
+4. Revoke reuse after active identity, status, stat stage, Tera/form, ability/item or field/volatile changes; failed/immune attacks; unexpected HP loss; or stalled `ctx.progress()` counters. Critical hits, misses, protection/activation events, charging moves, pivots and conditional counter/priority attacks do not provide reusable calibration. A foe's recovery/setup turn is not evidence that its attacks are harmless. Ordinary immunity on our side is distinguished from our attack hitting immunity.
+5. Maintain a player-visible ledger for boosts, revealed abilities/items, and Tera. Haze's targetless reset is processed in event order. Exact private fields override historical own item/ability information. No evaluator-only score is used for planning; progress counters are used to detect stalls.
+6. Malformed answers, timeouts, or the final budget reserve use a bounded approximate type/damage fallback over current legal choices. It uses public dex data and revealed mechanics only. Hidden stats, weight-dependent moves, and some exceptional mechanics remain estimates; it is not a simulator or hidden-set oracle. This permits a battle to finish after the thinking reserve is reached.
+7. Model timeout is 180 seconds, above the archived 124.3-second maximum. Timeout/backend/action exceptions are handled. The controller does not start another ordinary call with less than 240 seconds left, retains a call, and caps consultations at 28; a single legal choice is executed without a model call.
+
+Difference from the other iteration directions: candidate 0001 queues positional commands and candidate 0002 compiles named conditional policies. This candidate requires an observed damage exchange before autonomous reuse and asks Astra only for the current action. An early local draft used model-authored rules, but was replaced after the parallel proposals became visible; it is not the submitted hypothesis.
+
+Confirmation/refutation:
+
+- Confirm if complete evidence prevents repeated losing trades, empirically justified attacks save calls without surprising KOs, and completed-battle outcomes improve across varied teams.
+- Refute if too few favorable exchanges qualify, unseen coverage consistently breaks the envelope, or the emergency fallback dominates decisions. Throughput alone is not success. The action trace identifies `astra`, `empirical_replay`, `only_legal`, and `emergency`, and includes the measured exchange and invalidation reason.
+- The envelope is a conservative empirical extrapolation, not a mathematical guarantee against a hidden move or switch. Unusual mechanics are deliberately handed back to Astra through the authoritative protocol.
+
+Validation:
+
+- Final control-loop preflight passes: no warnings, one stand-in System-2 answer, 23 accepted actions, and normal game termination. The first local preflight exposed `request: null` at termination; null-safe request access and terminal checking repaired it.
+- All 137 archived observations produced legal fallback choices. All 127 archived transitions passed post-action parsing. Only one attack continuation was authorized in those largely losing baseline trajectories, out of ten exchanges surviving invalidation. This is evidence that the controller is conservative, not evidence of a score improvement.
+- Targeted checks cover terminal requests, malformed JSON, Tera command parsing, move-slot identity, targetless Haze ordering, changed opponents, unsafe incoming damage, and mechanically changed states.
+- One permitted real dev run on seed 869431 was started for the obsolete rule-compilation draft and deliberately interrupted after inspecting its live trace. Its first answer put numeric commands in move-ID rule fields, illustrating interface fragility; no completed `eval.json`/digest was produced and no dev score is claimed. No full training evaluation, held-out results, hidden sets, or game implementation source informed the final controller.

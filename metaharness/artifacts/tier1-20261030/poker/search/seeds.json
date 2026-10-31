@@ -1,0 +1,66 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          1103,
+          2207,
+          3301,
+          4409
+        ]
+      ],
+      [
+        "heldout",
+        [
+          51001,
+          62003,
+          73009,
+          84011
+        ]
+      ]
+    ],
+    "game_kwargs": {
+      "hands": 100
+    },
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "f814dee1eddf00aea90cafb743707775bef8d121b83c7034e917dcd3e2bddf78"
+  },
+  "results": {
+    "train:1103": {
+      "ok": true,
+      "obs_sha256": "97552330dc67f616"
+    },
+    "train:2207": {
+      "ok": true,
+      "obs_sha256": "f98e9fd4ce40da54"
+    },
+    "train:3301": {
+      "ok": true,
+      "obs_sha256": "eb11705174769572"
+    },
+    "train:4409": {
+      "ok": true,
+      "obs_sha256": "ab2d73c5d6ae85be"
+    },
+    "heldout:51001": {
+      "ok": true,
+      "obs_sha256": "5df7c87ed64a9f13"
+    },
+    "heldout:62003": {
+      "ok": true,
+      "obs_sha256": "f7f011020429ee8a"
+    },
+    "heldout:73009": {
+      "ok": true,
+      "obs_sha256": "46c35605038ae157"
+    },
+    "heldout:84011": {
+      "ok": true,
+      "obs_sha256": "5e67a34a836cea6c"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

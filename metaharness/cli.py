@@ -211,7 +211,7 @@ def _game_specs(a: argparse.Namespace, games: list[tuple[str, str | None]]) -> l
         kwargs, declared = _game_setup(a, key)
         train = _parse_seeds(a.seeds) if a.seeds is not None else list(declared.get("train") or [0, 1, 2])
         held = _parse_seeds(a.heldout) if a.heldout is not None else list(declared.get("heldout") or [100, 101, 102])
-        val = _parse_seeds(a.val_seeds) if getattr(a, "val_seeds", "") else []
+        val = _parse_seeds(a.val_seeds) if getattr(a, "val_seeds", "") else list(declared.get("validation") or [])
         if not val and a.seeds is None and declared.get("train") and len(train) >= 4:
             n_val = max(1, len(train) // 4)
             val, train = train[-n_val:], train[:-n_val]
@@ -236,8 +236,13 @@ def _run_search(a: argparse.Namespace, games: list[tuple[str, str | None]], tier
     system1 = _system1_for(a.system1, tier_n)
     system2 = _system2(a.system2, a.effort)
     sources = [s for s in (getattr(_adaptor_spec(g.name), "source_sha256", None) for g in specs) if s]
+    declared = _game_setup(a, first.name)[1]
+    dev_arg = getattr(a, "dev_seeds", None)
+    seeds_dev = _parse_seeds(dev_arg) if dev_arg else list(declared.get("dev") or [])
     cfg = LoopConfig(n_iterations=a.iters, seeds_train=first.seeds_train, seeds_heldout=first.seeds_heldout,
                      seeds_val=first.seeds_val or [],
+                     seeds_dev=seeds_dev, proposer_dev_evals=getattr(a, "dev_evals", 2) if seeds_dev else 0,
+                     proposer_tools=not getattr(a, "no_proposer_tools", False),
                      clock_mode=a.clock, budget=budget, proposer_agentic=not a.proposer_text,
                      proposer_timeout_s=a.proposer_timeout, harness_timeout_s=budget.max_wall_s,
                      latency_override=json.loads(a.latency_override) if a.latency_override else None,
@@ -447,6 +452,69 @@ def cmd_try(a: argparse.Namespace) -> int:
     return 1 if res.fatal or any(e.error for e in res.episodes) else 0
 
 
+def _archive_setup(a: argparse.Namespace) -> tuple[dict, Path, str, dict]:
+    """(manifest, archive root, registered game key, game kwargs) of the archive a proposer works in:
+    the game and the profiles come from manifest.json, so the proposer's tools evaluate exactly what
+    the search evaluates."""
+    load_dotenv()
+    root = Path(a.archive).resolve()
+    mp = root / "manifest.json"
+    if not mp.exists():
+        raise SystemExit(f"{mp} not found: run this from the search archive (or pass --archive DIR)")
+    manifest = json.loads(mp.read_text())
+    run = manifest.get("run") or {}
+    if not run.get("game"):
+        raise SystemExit("this archive's manifest names no game (older protocol); the tools need a current archive")
+    game = register_adaptor(Path(run["adaptor"])) if run.get("adaptor") else run["game"]
+    return manifest, root, game, dict(manifest.get("game_kwargs") or {})
+
+
+def cmd_preflight(a: argparse.Namespace) -> int:
+    """Proposer tool: the evaluator's pre-flight of a harness, with the archive's game and budgets."""
+    from .core.runner import preflight_harness
+    manifest, root, game, kwargs = _archive_setup(a)
+    b = manifest.get("budget") or {}
+    budget = Budget(max_system2_calls=b.get("max_system2_calls", 40), max_system1_calls=b.get("max_system1_calls", 4000),
+                    max_wall_s=b.get("max_wall_s", 900.0))
+    seeds = manifest.get("seeds_train") or [0]
+    rep = preflight_harness(Path(a.harness), lambda **k: make_game(game, **k), game_kwargs=kwargs,
+                            tier2=manifest.get("models", {}).get("system1") is not None, budget=budget, seed=seeds[0])
+    print(json.dumps(rep, indent=2, default=str))
+    return 0 if rep["ok"] else 1
+
+
+def cmd_dev_eval(a: argparse.Namespace) -> int:
+    """Proposer tool: a real-model evaluation of a harness on the archive's dev seeds (never scored)."""
+    manifest, root, game, kwargs = _archive_setup(a)
+    run = manifest["run"]
+    dev = manifest.get("seeds_dev") or []
+    seeds = _parse_seeds(a.seeds) if a.seeds else dev
+    if not seeds:
+        raise SystemExit("this archive has no dev seeds (--dev-seeds of the search); nothing to evaluate on")
+    bad = set(seeds) - set(dev)
+    if bad:
+        raise SystemExit(f"seeds {sorted(bad)} are not dev seeds of this archive (dev seeds: {dev})")
+    b = manifest["budget"]
+    budget = Budget(max_system2_calls=b["max_system2_calls"], max_system1_calls=b["max_system1_calls"],
+                    max_wall_s=b["max_wall_s"])
+    harness = Path(a.harness).resolve()
+    out = Path(a.out) if a.out else harness.parent / "dev" / time.strftime("%Y%m%d-%H%M%S")
+    tier_n = int(run.get("tier") or 1)
+    res = evaluate_harness(harness, lambda **k: make_game(game, **k), seeds,
+                           system2=_system2(run["system2"], run.get("effort")),
+                           system1=_system1_for(run.get("system1"), tier_n), out_dir=out,
+                           clock_mode=manifest.get("clock_mode", "wall"), budget_per_episode=budget,
+                           harness_timeout_s=manifest.get("harness_timeout_s", budget.max_wall_s),
+                           latency_override=manifest.get("latency_override"), game_kwargs=kwargs,
+                           memory_mode=manifest.get("memory_mode", "episode"), grace_s=manifest.get("grace_s", DEFAULT_GRACE_S),
+                           game_name=game, parallel=len(seeds))
+    for e in res.episodes:
+        print(f"seed {e.seed}: score={e.score} steps={e.steps} s2={e.system2_calls} failed_s2={e.failed_s2} "
+              f"ended_by={e.ended_by} err={'yes' if e.error else 'no'}")
+    print(f"mean score: {res.mean_score}  fatal: {res.fatal}\nout: {out} (eval.json, digest.md, trace_seed*.jsonl)")
+    return 1 if res.fatal or any(e.error for e in res.episodes) else 0
+
+
 def cmd_validate_adaptor(a: argparse.Namespace) -> int:
     load_dotenv()
     from .games.adaptor import validate_adaptor
@@ -505,6 +573,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="validation seeds: the top --finalists training candidates are re-evaluated on them "
                              "and the final pick ranks training + validation together")
         sp.add_argument("--finalists", type=int, default=3)
+        sp.add_argument("--dev-seeds", default=None,
+                        help="seeds the proposer may evaluate its draft on itself (default: the adaptor's "
+                             "declared dev split, else none)")
+        sp.add_argument("--dev-evals", type=int, default=2, help="dev evaluations allowed per candidate")
+        sp.add_argument("--no-proposer-tools", action="store_true",
+                        help="do not tell the proposer about the pre-flight / dev-eval commands")
         sp.add_argument("--no-reflect", action="store_true", help="no lessons.md reflection after each generation")
         sp.add_argument("--heldout", default=None,
                         help="held-out seeds, same game (default: the adaptor's declared split, else 100,101,102)")
@@ -554,6 +628,18 @@ def main(argv: list[str] | None = None) -> int:
     tp.add_argument("--minutes", type=float, default=5.0, help="episode wall-clock cap (at most the evaluation's)")
     tp.add_argument("--astra", action="store_true", help="System-2 on (default off: tries spend no Astra calls)")
     tp.set_defaults(fn=cmd_try)
+
+    pp = sub.add_parser("preflight", help="(proposer tool) the evaluator's pre-flight of a harness, in an archive")
+    pp.add_argument("harness")
+    pp.add_argument("--archive", default=".", help="search archive with manifest.json (default: cwd)")
+    pp.set_defaults(fn=cmd_preflight)
+
+    dp = sub.add_parser("dev-eval", help="(proposer tool) evaluate a harness on the archive's dev seeds with the real models")
+    dp.add_argument("harness")
+    dp.add_argument("--archive", default=".")
+    dp.add_argument("--seeds", default="", help="a subset of the dev seeds (default: all)")
+    dp.add_argument("--out", default="", help="output directory (default: <harness dir>/dev/<timestamp>)")
+    dp.set_defaults(fn=cmd_dev_eval)
 
     vp = sub.add_parser("validate-adaptor", help="run the generic adaptor smoke test")
     vp.add_argument("path")

@@ -1,0 +1,42 @@
+- Candidate 0003: preserve the leader’s productive compiler on healthy paths; dev 9002 reached 4030 with zero Astra calls after the detector fix.
+- In the parent’s worst training trace (202), the only repair request starts with roughly 55 seconds of game execution left and ends as `advisor_failed: EpisodeOver`. A 16-turn advice expiry is only about 27 wall seconds, shorter than typical model latency. Paused synchronous replanning fits this turn game.
+- Corrective placements must update the stored task coordinates and furnace/chest/assembler role maps, or the compiler can undo the model’s intended repair. Validate a connected group of edits atomically.
+- A six-turn science stall window must include six turns during which the machine existed. Candidate 0003’s first dev run falsely alarmed immediately after an assembler was placed; the model spent roughly 210 seconds rediscovering its normal setup step. The detector now checks machine age.
+- `ctx.progress()` and rejected operations are useful evidence but cannot alone diagnose a dead power/science chain while smelters still add score. Compare actual science production and lab consumption and retain status history.
+- A validated pump site validates only the pump. Footprint checks against observed water/bounds are cheap, but moving linked machines independently can break ports and power coverage; terrain repair remains an empirical hypothesis, not a demonstrated dev improvement.
+- Candidate 0004 tests demand-ranked transfers: assembler outputs and furnace buffers are lossless, so moving them every turn can waste the shared 100-item quota while labs wait for the active pack.
+- Research observations may expose an opaque `current` sentinel; a safe allocator must fall back to both attainable science packs rather than assuming a named technology.
+- Downstream deficits should outrank nominal stock targets: feed assemblers reporting ingredient shortage and labs missing required packs before bulk plate extraction.
+- A strong deterministic controller should remain untouched on the healthy path; Astra is best reserved for concrete rejected operations or measured stagnation.
+- Failed batched operations need task-level reconciliation because earlier operations in the same turn still commit and the compiler may otherwise advance a cursor past missing buildings.
+- `ctx.progress()` is useful as a liveness signal, but thresholds must be short enough for a 128-turn horizon and long model latency must be bounded.
+- Nearby coordinate search is a safer first repair for collision/terrain failures than asking a model to replay a full build order.
+- Candidate 0006 preserves the leader’s compiler and fixes a concrete recovery consistency bug: moving a task coordinate must also move furnace, chest, and assembler role-map keys.
+- Placement recovery should be atomic across all coordinate-indexed bookkeeping; otherwise a successful repair can create a permanently idle machine.
+- Healthy-path score is already flat and high, so structural robustness on unseen geometry is a better target than tuning quotas or call counts.
+- Candidate 0007: the leader’s `materials_collected` one-shot guard strands later furnace output; seed 202 shows zero iron stock while assemblers report ingredient shortage.
+- A closed-loop controller should re-extract furnace results and refill mapped furnace sources every turn, after preserving fuel and lab transfers.
+- The shared 100-item transfer quota makes extraction order material: downstream assembler deficits are evidence for which plate to pull, while large unconditional stockpiles are wasteful.
+- Adaptive expansion is safe only after a measured multi-turn rate deficit and an explicit machine shortage; adding capacity before confirming the bottleneck can reduce the science score.
+- Candidate 0008 tests synchronous, evidence-gated replanning: asynchronous Astra advice can be canceled after the remaining horizon because observed System-2 latency is roughly 139 seconds.
+- Generic progress stagnation is ambiguous in a turn factory; compare cumulative engine science and lab consumption while requiring the same configured machine or stocked lab across a multi-turn window.
+- A repair prompt should carry measured deltas and exact machine IDs, while a bounded parser must treat malformed or timed-out advice as an empty repair.
+- Synchronous calls are viable for tier 1 because the engine is paused between actions; reserve them for rare faults to preserve the zero-call healthy path.
+- Candidate 0011 tests transactional relocation: coordinate keyed furnace and assembler role maps must move with a successful local placement retry.
+- A placement retry can silently succeed while leaving a machine semantically disconnected; absence of exceptions is not evidence of a repaired plan.
+- Pending drill/furnace companions should be translated together when a furnace has not yet been commissioned.
+- Candidate 0009: local placement retries must preserve electric coverage; an accepted machine outside pole range is a silent failure, not an operation error.
+- Coordinate role maps and spatial connectivity are one recovery transaction: moving a footprint without moving its semantic role can produce an idle but valid entity.
+- The healthy compiler should remain zero-call; geometry checks belong on the rejected-placement path and should use only observed poles and entities.
+- Candidate 0010: result arrays preserve earlier successes after later failures; filtering only rejected results destroys operation indices and can retry the wrong placement.
+- Reconciliation should rebuild the task cursor from observed entities each turn, because a batch is sequential and non-atomic even when submitted as one string.
+- Coordinate keyed semantic maps (furnace ore and assembler science role) must move with any accepted relocation before production bookkeeping runs.
+- Candidate 0015 carries the partial-batch fix into the current leader without changing its healthy zero-call path: retain each rejected result's original operation index before local repair.
+- A repair must synchronize furnace, coal-chest, and assembler role coordinates together; moving only the task tuple creates a silent idle machine after a successful nearby placement.
+- Pending burner drills are companions of their furnace during pre-commissioning relocation; translating only one half can preserve collision success while breaking ore flow.
+- Candidate 0017: aggregate science counters can hide one blocked assembler while a sibling continues; retain per-entity status history and escalate only persistent diagnostic statuses.
+- Factorio observations expose useful `status_name` values such as `item_ingredient_shortage`, `full_output`, and `missing_science_packs`; include them in repair evidence rather than asking Astra to infer a cause from score alone.
+- Status-aware recovery must avoid treating one-turn ingredient shortage as a fault because the shared 100-item transfer quota makes transient shortages normal.
+- Candidate 0016: persistent engine status can reveal an accepted but disconnected placement; gate Astra repair on three observations of null/zero electric network or no-power/fuel so routine science/input starvation stays cheap.
+- Candidate 0016: do not escalate every `missing_science_packs` or `no_ingredients` status; these are common during quota-limited transfers and would spend slow System-2 calls on healthy paths.
+- The leader’s training traces show successful results and `electric_network_id: 1` even while labs wait, so silent-network repair remains a held-out robustness hypothesis rather than a claimed training fix.

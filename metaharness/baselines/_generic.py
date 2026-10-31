@@ -21,17 +21,16 @@ def obs_text(obs: Any, limit: int = 6000) -> str:
 
 
 def parse_action(text: str, names: Sequence[str], default: str | None = None) -> str | None:
-    """Last action name mentioned in ``text`` (longest names first); keeps
+    """Last action name mentioned in ``text`` (longest names first; names may contain spaces); keeps
     numeric arguments that follow it (e.g. 'ACTION6 10 12')."""
     if not text:
         return default
-    best = None
+    best: tuple[int, int, str, str] | None = None        # (end, start, canonical name, args)
     for n in sorted(names, key=len, reverse=True):
-        for m in re.finditer(re.escape(n) + r"(?:\s+-?\d+){0,2}", text, flags=re.I):
-            if best is None or m.end() > best.end():
-                best = m
+        for m in re.finditer(r"(?<![A-Za-z0-9_])" + re.escape(n) + r"((?:\s+-?\d+){0,2})", text, flags=re.I):
+            key = (m.end(), -m.start())
+            if best is None or key > (best[0], -best[1]):
+                best = (m.end(), m.start(), n, m.group(1))
     if best is None:
         return default
-    tok = best.group(0).split()
-    canon = next(n for n in names if n.lower() == tok[0].lower())
-    return " ".join([canon] + tok[1:])
+    return " ".join([best[2]] + best[3].split())

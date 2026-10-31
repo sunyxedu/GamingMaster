@@ -1,0 +1,17 @@
+- The Astra-only baseline spent about 45–60 seconds per choice; 7–17 decisions in an 1800-second episode left every training battle unfinished.
+- A useful structural change is bounded multi-action planning: ask for a short legal line, then validate every command against the fresh request because switch slots reorder and forced replacements add decisions.
+- Model output parsing must suppress substring matches (`move 1` inside `move 1 terastallize`) and fall back to an available action when stand-in models return arbitrary text.
+- `ctx.progress()` is cumulative evidence; once an illegal action is seen, clear any cached plan and replan from the authoritative observation.
+
+- Candidate 0003: the leader's 6000-character observation cut occurs before `recent_events` and `species_dex` in its worst trace. Preserve a complete structured snapshot and a bounded protocol tail instead of slicing JSON.
+- Candidate 0003: the final design uses observed damage/order to justify attack reuse, independently of the parallel action-batch and model-policy candidates. Only one of 127 losing baseline transitions qualified; conservatism is measurable, but throughput improvement is unproven.
+- Candidate 0003: `|-clearallboost` has no target; process Haze in event order before target parsing. Terminal `request: null` also requires explicit handling. The repaired preflight completed normally without warnings.
+- Candidate 0003: a first dev answer used numeric commands inside move-ID policy fields. The obsolete policy draft was stopped without a completed score; the final interface asks only for one current action plus memory.
+- Candidate 0003: distinguish our attack hitting immunity from the opponent hitting our immunity, and distinguish a recovery turn from evidence of low incoming attack damage. Every reused action still needs fresh legality, HP, mechanics, and progress checks.
+
+- Candidate 0002 tests a matchup-policy compiler rather than a positional action batch: HP/boost/status guards are re-evaluated every decision, and named moves/species are remapped to the latest slots.
+- The worst baseline trace contains tactical counterexamples to blind repetition: Volcanion fell to 51/256 against Giratina before using a healthy Dragon-immune Clefable, while repeated Thunderbolt later correctly finished a weakened Typhlosion. Reuse needs state-dependent conditions.
+- Public Tera revelations in the archived observations use `teraTypeRevealed`; assuming a generic `tera_type` field silently keeps the wrong defensive typing after Tera. A replay check caught this before the dev run.
+- A short preflight may skip model calls when the harness reserves substantial wall time. Supplement it with direct malformed-JSON, named-switch remapping, and current-legality checks; do not interpret a successful game-only dry run as parser coverage.
+- Approximate damage arithmetic must be labeled as such: neutral-stat and generic-STAB priors omit hidden sets and unusual mechanics. Protocol contradictions should revoke a policy and be passed to Astra, not hidden by confident numeric rankings.
+- Candidate 0002's initial dev run completed 33 decisions with seven calls and no harness error, but lost -1.041667; completion is not a win-rate claim. Its trace showed that net HP loss hides switch-in damage and damage masked by Leftovers/Rest. The final verifier extracts direct protocol damage and lets critical contradictions bypass the normal replanning cooldown; targeted replays passed, but the refinement has no second live score.

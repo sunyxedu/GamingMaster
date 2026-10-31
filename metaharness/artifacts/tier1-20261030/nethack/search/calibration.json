@@ -1,0 +1,11 @@
+{
+  "measured": "2026-10-30 07:26",
+  "system2_short": {
+    "latency_s": 64.92,
+    "output_tokens": 5
+  },
+  "system2_long": {
+    "latency_s": 100.32,
+    "output_tokens": 938
+  }
+}

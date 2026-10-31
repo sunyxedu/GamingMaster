@@ -1,0 +1,68 @@
+{
+  "game": "Jericho interactive fiction (Zork and other classic text adventures)",
+  "tier": 1,
+  "tier_rationale": "For admitted untimed Z-machine stories, the interpreter waits for a parser input and game time advances through commands, not while Astra reasons. Lamps, combat, NPC movement, and puzzle deadlines are generally turn-based; even failed or observational commands can consume turns. Exclude timed-input stories from this pool. Astra may take seconds or minutes per decision without an in-game penalty; any evaluator wall-clock limit is a separate infrastructure policy. decision_latency_s uses -1.0 as an explicit sentinel for no finite game-imposed deadline, not an actual negative timeout.",
+  "decision_latency_s": -1.0,
+  "interface": {
+    "chosen": "api: local jericho.FrotzEnv Python environment backed by modified Frotz",
+    "why": "Direct parser text input/output, native scoring and terminal hooks for supported exact story builds, deterministic seeds, and optional snapshots/action assistance fit turn-by-turn offline Linux play. This avoids GUI/OCR, browser overhead, and brittle transcript-only score parsing. Python 3.12 compatibility and corpus support must still be verified; Jericho is not installed in the evaluator venv.",
+    "software": [
+      "Evaluator Python 3.12.3 at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/jericho/bin/python (already present)",
+      "jericho, pinned to a release or commit actually built and tested with that interpreter; version not yet verified",
+      "All runtime dependencies from the selected Jericho release, locked with hashes and staged as Python 3.12/Linux x86_64-compatible wheels",
+      "pip and compatible setuptools/wheel plus gcc, make, and Python 3.12 headers as required for native/source builds",
+      "Explicitly redistributable supported Z-machine story binaries, preserved license notices, and a checksum-pinned manifest; none approved yet",
+      "Any NLP/tokenizer/model resources required by the selected optional action helpers, prepackaged for offline use"
+    ],
+    "env": [
+      {
+        "var": "JERICHO_GAME_MANIFEST",
+        "description": "Proposed adaptor configuration: absolute path to the local approved story manifest, including story paths, hashes, licensing evidence, positive score maxima, support status, and stable game IDs. No account or API key is needed.",
+        "required": true
+      },
+      {
+        "var": "JERICHO_MAX_STEPS",
+        "description": "Proposed adaptor configuration: maximum submitted inputs per episode; suggested initial default 1000, frozen for comparisons. This is not the native move count or a wall-clock deadline.",
+        "required": false
+      },
+      {
+        "var": "JERICHO_OBSERVATION_MODE",
+        "description": "Proposed adaptor configuration: text for the portable baseline, actions for validated valid-action assistance, or state_search for an explicitly specified bounded-search variant. Freeze and report this choice.",
+        "required": false
+      },
+      {
+        "var": "NLTK_DATA",
+        "description": "Conditional package configuration: local prepackaged NLTK resource directory only if the selected release/helpers require it. No runtime downloads.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Retrieve Jericho metadata/source and cited documentation in a network-enabled staging environment; this session's requests failed DNS resolution. Pin an inspected version/commit and verify exact reset/step/helper signatures.",
+      "Intersect exact supported story builds with explicit redistribution permission and positive reliable native score maxima. Verify untimed input and terminal detection; preserve licenses and SHA-256 hashes. Investigate Adventure and Balances first but do not assume their specific binaries are approved.",
+      "Stage vendor/wheels and vendor/requirements.lock with all transitive hashes for Python 3.12/Linux x86_64; package any required language data. Stage games/manifest.json and licensed story assets.",
+      "In a phase with write access to the evaluator venv, run /home/hemlix/GamingMaster-mh-tier1/runs/venvs/jericho/bin/python -m pip install --no-index --find-links=/home/hemlix/GamingMaster-mh-tier1/runs/jericho/study/vendor/wheels --require-hashes -r /home/hemlix/GamingMaster-mh-tier1/runs/jericho/study/vendor/requirements.lock. The current study sandbox cannot write that sibling venv.",
+      "Run pip check and import/build smoke checks with the evaluator interpreter. For each game verify native score deltas, maximum, moves, death/victory flags, and exact hash support; an opening screen alone does not establish instrumentation support.",
+      "Implement reset(seed) using a frozen game manifest and logged positive VM seed; close/recreate environments as needed. Adapt Jericho's expected reset pair and step four-tuple to the evaluator protocol without assuming Gymnasium signatures.",
+      "Expose one parser input per step, preserve clarification state, separate terminated/truncated, and freeze final native score before cleanup. Keep lifecycle/save/restore/undo commands under evaluator control.",
+      "Validate deterministic replay, nonmutating inspection, bounded command handling, offline operation, and native snapshot restoration if used. Freeze manifest, seed mapping, observation mode, and command budget before evaluation. No game-playing code has been written in the study phase."
+    ],
+    "observation": "JSON wrapping verbatim initial/latest parser text, last action, manifest game ID and seeds, native current/max score and delta, native moves when reliable, evaluator submission count, termination/truncation and verified win/loss metadata. Room/inventory memory is transcript-derived and timestamped. Optional valid actions or VM-object/search observations must be identified as assisted; never inject walkthroughs or assume extra look/inventory commands are free.",
+    "actions": "Submit one bounded parser text line through FrotzEnv.step, such as north, examine lamp, open window, take sword, put treasure in case, or an answer to a pending clarification. Ordinary free-text commands remain available even with generated candidates. Reject multiline/compound bypasses and evaluator lifecycle commands; track rejected submissions against the step cap. Evaluator reset/close are separate from scored actions."
+  },
+  "scoring": "For each admitted exact story build with verified maximum M > 0, report final native score S divided by M at termination or truncation, plus S, M, initial score, win/loss, and steps as diagnostics. Use final score, not peak score, summed positive rewards, or exploration bonuses. Retain genuine negative native scores unless the evaluator specifies a different convention; scores above M indicate an instrumentation/manifest error. Exclude unknown/zero maxima. Aggregate normalized episode scores with balanced per-game sampling.",
+  "scenarios": "Freeze an ordered manifest of N legally approved supported games. For a nonnegative evaluator seed s, select game index s mod N and proposed positive VM seed 1 + (floor(s/N) mod 32767), validating the native seed range and reproducibility before freezing. Log game ID, exact binary hash, both seeds, and manifest version. Each episode starts at the normal opening without random warm-up moves. Partition game IDs into train and held-out pools before seed mapping for novel-game evaluation; separate RNG seeds within titles test execution robustness but do not create new puzzles. No approved corpus is currently provisioned, so N must be made positive before evaluation.",
+  "strategy_summary": "Use Astra for clue interpretation, puzzle dependencies, route planning, and adapting after surprising responses, while code maintains exact scores, a directed map, inventory provenance, and parser context. Seek reachable prerequisites such as light and access before risky exploration, and bank treasure when the selected game's scoring rules reward it. Execute one command at a time, predict its effect, and revise plans after failures, theft, hazards, or changed exits. Generate commands from observed nouns and relevant templates while retaining unusual free-text verbs and clarification answers; optional Jericho valid actions are helpful but incomplete and not safety guarantees. Track scarce turns and unique items, avoid repeated grammar failures and irreversible losses, and distinguish preparation from immediate reward. Optional bounded snapshot search must be a declared assisted mode with exact restoration and trial limits. Jev is unnecessary for timing but can batch typed hazard, parser-response, and candidate-relevance classifications; do not assign planning or arithmetic to it.",
+  "risks": [
+    "Live web research failed DNS resolution for all attempted sources; citations are verification targets rather than pages successfully read in this session.",
+    "Jericho is absent from the specified Python 3.12.3 venv, vendor is empty, and no package version, dependency closure, or runtime compatibility has been verified.",
+    "The study sandbox cannot write the sibling evaluator venv and approval escalation is disabled; installation must occur in a permitted provisioning phase.",
+    "No freely redistributable exact story binary has been approved or staged. Interpreter licensing, public mirrors, and historical free downloads do not establish story redistribution rights.",
+    "Supported scoring and terminal hooks can depend on exact ROM hashes; rebuilt or unsupported stories may run while returning unusable instrumentation.",
+    "Optional NLP helpers can require separately staged resources or incompatible historical dependencies; runtime auto-downloads would violate offline operation.",
+    "Timed-input Z-machine stories must be excluded from the Tier 1 pool. Parser commands, including failures or observations, may advance native game time.",
+    "Valid-action enumeration is incomplete, can be expensive, and may expose privileged affordances; snapshots and auxiliary probes must restore the live state exactly.",
+    "Native interpreter instances may require process isolation; clarification prompts, pagination, restart dialogs, and compound input need explicit handling.",
+    "A small legal corpus limits held-out-game diversity; alternate RNG seeds alone do not provide novel maps or puzzles.",
+    "Classic adventures can softlock without terminating; an evaluator command cap is necessary and must preserve final native score on truncation."
+  ]
+}

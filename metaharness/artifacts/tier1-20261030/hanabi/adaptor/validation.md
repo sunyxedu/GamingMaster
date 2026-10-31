@@ -1,0 +1,24 @@
+# Adaptor validation: PASS
+
+- [x] load game.py and make_game() — name=Hanabi (offline standard) tier=tier1 realtime=False
+- [x] TIER agrees with the game's kind (2 <=> tick()) — TIER=1; the game is turn-based (no tick)
+- [x] tier 1, as the study decided — the game is turn-based (no tick), tier1
+- [x] SEEDS: non-empty, disjoint train / held-out lists of ints — 4 train (11, 12, 13, 14), 4 held-out (101, 102, 103, 104)
+- [x] action_spec is an ActionSpec with >=1 action
+- [x] describe() returns a non-trivial string — 3428 chars
+- [x] seed 11: observe() JSON-serialisable — 2730 bytes
+- [x] seed 11: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 11: applied 6 actions without exception
+- [x] seed 11: done is bool and score is a finite number after the actions — done=False score=0.0
+- [x] seed 11: observations after the actions are strict JSON
+- [x] seed 11: info() is a dict
+- [x] seed 101: observe() JSON-serialisable — 2734 bytes
+- [x] seed 101: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 101: applied 6 actions without exception
+- [x] seed 101: done is bool and score is a finite number after the actions — done=False score=0.0
+- [x] seed 101: observations after the actions are strict JSON
+- [x] seed 101: info() is a dict
+- [x] malformed action '__not_an_action__' does not raise
+- [x] close() releases the instance (called after every episode)
+- [x] DETERMINISTIC: reset(seed) on a fresh instance reproduces the first observation
+- [x] different seeds give different starts (scenario variety)

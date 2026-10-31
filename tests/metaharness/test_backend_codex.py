@@ -58,7 +58,8 @@ def _answer(text: str, thread: str = "t-1", usage: dict | None = None) -> str:
 def _fake_run_cli(stdout: str, rc: int = 0, stderr: str = "", seen: list | None = None):
     def run_cli(argv, *, cwd, stdin_text, timeout_s, env_overrides=None, env_drop=()):
         if seen is not None:
-            seen.append({"argv": list(argv), "stdin": stdin_text, "env_drop": tuple(env_drop)})
+            seen.append({"argv": list(argv), "stdin": stdin_text, "env_drop": tuple(env_drop),
+                         "env_overrides": env_overrides})
         return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr=stderr)
     return run_cli
 
@@ -238,7 +239,11 @@ def test_player_turns_off_file_and_hook_features(tmp_path):
     player = a._argv(cwd=None, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
     agent = a._argv(cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
     for feature in ("view_image", "image_generation", "plugins", "hooks", "memories"):
-        assert f"features.{feature}=false" in player and f"features.{feature}=false" not in agent
+        assert f"features.{feature}=false" in player
+    for feature in ("view_image", "image_generation"):
+        assert f"features.{feature}=false" not in agent                 # an agent may look at screenshots
+    for feature in ("multi_agent", "plugins", "hooks", "memories"):
+        assert f"features.{feature}=false" in agent                     # but is one agent, without plugins
 
 
 def test_player_prompt_and_env(monkeypatch):
@@ -253,3 +258,122 @@ def test_codex_binary_that_cannot_start_is_unavailable(tmp_path):
     from metaharness.models.base import ModelUnavailable
     with pytest.raises(ModelUnavailable, match="could not run"):
         CodexCLI(model="m", codex_bin=str(tmp_path / "no-such-codex")).run("hi")
+
+
+# ---------------------------------------------------------------- providers (OpenAI-compatible endpoint)
+
+ROUTER = {"id": "router", "name": "r", "base_url": "http://127.0.0.1:8787/v1", "env_key": "MH_ROUTER_API_KEY",
+          "wire_api": "responses"}
+
+
+def test_provider_profile_runs_with_overrides_and_its_own_codex_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_ROUTER_API_KEY", "secret")
+    seen: list = []
+    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(_answer("up"), seen=seen))
+    home = tmp_path / "codex-home"
+    model = CodexCLI(model="gpt-6-astra", provider={**ROUTER, "codex_home": str(home)})
+    assert model.name == "codex:gpt-6-astra@router"
+    assert model.run("state").text == "up"
+    argv = seen[0]["argv"]
+    cfg = {a.split("=", 1)[0]: a.split("=", 1)[1] for a in argv if "=" in a}
+    assert cfg["model_provider"] == '"router"'
+    assert cfg["model_providers.router.base_url"] == '"http://127.0.0.1:8787/v1"'
+    assert cfg["model_providers.router.env_key"] == '"MH_ROUTER_API_KEY"'
+    assert cfg["model_providers.router.wire_api"] == '"responses"'
+    assert "shell_environment_policy.exclude" not in cfg          # a player has no shell
+    assert seen[0]["env_overrides"] == {"CODEX_HOME": str(home)}
+    toml = (home / "config.toml").read_text()                     # reproducible by hand: CODEX_HOME=<dir> codex
+    assert 'model_provider = "router"' in toml and "[model_providers.router]" in toml and "secret" not in toml
+    assert "MH_ROUTER_API_KEY" not in seen[0]["env_drop"]         # codex itself must see the key
+
+
+def test_provider_key_is_hidden_from_the_agent_shell(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_ROUTER_API_KEY", "secret")
+    model = CodexCLI(model="m", provider={**ROUTER, "codex_home": str(tmp_path)})
+    agent = model._argv(cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
+    assert 'shell_environment_policy.exclude=["MH_ROUTER_API_KEY"]' in agent
+    resumed = model._argv(cwd=tmp_path, session_id="t", agentic=True, last_msg_path=tmp_path / "l")
+    assert 'model_provider="router"' in resumed                   # resume gets the provider too
+
+
+def test_provider_without_its_key_is_refused_at_construction(monkeypatch):
+    monkeypatch.delenv("MH_ROUTER_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="MH_ROUTER_API_KEY.*not set"):
+        CodexCLI(model="m", provider=ROUTER)
+    with pytest.raises(ValueError, match="base_url"):
+        CodexCLI(model="m", provider={"id": "x"})
+    with pytest.raises(ValueError, match="provider id"):
+        CodexCLI(model="m", provider={"id": "bad id", "base_url": "http://x"})
+
+
+def test_profile_naming_an_unknown_provider_is_an_error(tmp_path, monkeypatch):
+    from metaharness.models import make_system2
+    cfg = tmp_path / "models.toml"
+    cfg.write_text('[system2.x]\nbackend = "codex"\nmodel = "m"\nprovider = "nowhere"\n')
+    monkeypatch.setenv("METAHARNESS_MODELS", str(cfg))
+    with pytest.raises(ValueError, match="provider 'nowhere'"):
+        make_system2("x")
+
+
+def test_toml_values():
+    from metaharness.models.codex_cli import _toml
+    assert _toml("a") == '"a"' and _toml(True) == "true" and _toml(3) == "3"
+    assert _toml(["k"]) == '["k"]' and _toml({"a": 1}) == "{a = 1}"
+
+
+def test_rate_limited_call_is_retried_and_resumes_its_thread(monkeypatch):
+    """codex gives up on 429 after its own retries; the backend waits and resumes the thread."""
+    limited = _events({"type": "thread.started", "thread_id": "t-rl"},
+                      {"type": "error", "message": "exceeded retry limit, last status: 429 Too Many Requests"},
+                      {"type": "turn.failed", "error": {"message": "exceeded retry limit, last status: 429 Too Many Requests"}})
+    outcomes = iter([(limited, 1), (limited, 1), (_answer("done", "t-rl"), 0)])
+    seen: list = []
+
+    def run_cli(argv, *, cwd, stdin_text, timeout_s, env_overrides=None, env_drop=()):
+        seen.append({"argv": list(argv), "stdin": stdin_text})
+        stdout, rc = next(outcomes)
+        return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr="")
+    monkeypatch.setattr(codex_mod, "run_cli", run_cli)
+    naps: list = []
+    monkeypatch.setattr(codex_mod.time, "sleep", naps.append)
+    tr = TraceSink()
+    res = CodexCLI(model="m").run("build it", agentic=True, trace=tr)
+    assert res.text == "done" and len(seen) == 3 and len(naps) == 2 and naps[1] > naps[0] / 4
+    assert seen[1]["argv"][:3] == ["codex", "exec", "resume"] and seen[1]["argv"][3] == "t-rl"
+    assert "rate-limited" in seen[1]["stdin"] and seen[0]["stdin"] == "build it"
+    assert [r["type"] for r in tr.records].count("rate_limited") == 2 and tr.records[-1]["ok"] is True
+    # a player call is simply sent again (same prompt, no thread continuation text)
+    outcomes = iter([(limited, 1), (_answer("up"), 0)])
+    seen.clear()
+    assert CodexCLI(model="m").run("state").text == "up" and seen[1]["stdin"] == seen[0]["stdin"]
+
+
+def test_rate_limit_retries_give_up_after_the_wait_budget(monkeypatch):
+    limited = _events({"type": "turn.failed", "error": {"message": "429 Too Many Requests"}})
+    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(limited, rc=1))
+    monkeypatch.setattr(codex_mod.time, "sleep", lambda s: None)
+    model = CodexCLI(model="m")
+    model.rate_limit_wait_s = 12.0            # 5 s + 10 s backoff: one retry fits, the second does not
+    with pytest.raises(RuntimeError, match="429") as ei:
+        model.run("hi")
+    assert not isinstance(ei.value, ModelUnavailable) and type(ei.value) is RuntimeError
+
+
+def test_concurrency_slots_are_shared_through_lock_files(tmp_path):
+    from metaharness.models.codex_cli import concurrency_slot
+    active, peak, lock = [0], [0], threading.Lock()
+
+    def worker():
+        with concurrency_slot(tmp_path / "slots", 2, poll_s=0.01):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            time.sleep(0.05)
+            with lock:
+                active[0] -= 1
+    ts = [threading.Thread(target=worker) for _ in range(6)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert peak[0] == 2 and sorted(p.name for p in (tmp_path / "slots").iterdir()) == ["0.lock", "1.lock"]

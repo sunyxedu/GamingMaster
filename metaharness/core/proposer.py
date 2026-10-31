@@ -38,7 +38,7 @@ def build_prompt(archive: Archive, candidate: Candidate, contract_doc: str, task
                  directive: Optional[dict] = None, siblings: tuple[str, ...] = ()) -> str:
     lb = archive.write_leaderboard()
     skip = set(siblings) | {candidate.dir.name}
-    prior = "\n".join(f"- candidates/{c.dir.name}/ (harness.py, proposal.md, eval.json, trace_seed*.jsonl)"
+    prior = "\n".join(f"- candidates/{c.dir.name}/ (harness.py, proposal.md, eval.json, digest.md, trace_seed*.jsonl)"
                       for c in archive.candidates() if c.dir.name not in skip)
     if (archive.root / "prior").is_dir():
         prior += "\n- prior/ (the full study documents and the adaptor's interface documentation)"
@@ -54,6 +54,7 @@ def build_prompt(archive: Archive, candidate: Candidate, contract_doc: str, task
     if timeout_s:
         when += (f" You have {timeout_s / 60:.0f} minutes. Write `harness.py` and `proposal.md` first, then refine: "
                  "a harness written before the deadline is still evaluated, an unwritten one is lost.")
+    when += recent_latency_text(archive)
     if siblings:
         when += (f"\nSibling proposers are writing {', '.join(f'candidates/{s}/' for s in siblings)} right now: those "
                  "directories are unfinished and unevaluated — ignore them and never write into them.")
@@ -79,9 +80,12 @@ episode, on every turn-game step and whenever a real-time score changes, and how
 {prior or '- (none yet)'}
 {lessons_md}
 ## What to do
-1. Read your parent candidate(s), the best candidate and the traces of their worst episodes. Diagnose the
-   failure mode concretely (quote evidence from traces). Check lessons.md so you do not repeat a refuted
-   hypothesis.
+1. Read your parent candidate(s), the best candidate and the traces of their worst episodes (each evaluation's
+   `digest.md` indexes its traces: every model call, step and score change). Diagnose the failure mode
+   concretely (quote evidence from traces). Check lessons.md so you do not repeat a refuted hypothesis. Look
+   at the `seeds median / min` column and any validation results: a leader with identical scores on every
+   seed is a scenario-independent script — ask what happens on a scenario it was not written for, and make
+   the plan detect its own failure (`ctx.progress()`) and re-plan through System-2 instead of tuning the script.
 2. Write `candidates/{candidate.dir.name}/harness.py` — a complete module with `build(ctx)`.
    It must import only the standard library and `metaharness.*`. A harness whose code repeats an existing
    candidate's (comments aside) is not evaluated.
@@ -109,6 +113,50 @@ globals per episode; only an explicit shared-memory protocol allows cross-episod
 authoritative."""
 
 
+def recent_latency_text(archive: Archive, last: int = 3) -> str:
+    """System-2 latency observed in the archive's most recent evaluations: a shared endpoint's latency
+    drifts with load, so the calibration in the task text goes stale and timeouts sized from it lose
+    calls (a Jericho candidate lost 35 of 74 calls to an 85 s timeout while answers took up to 82 s)."""
+    evals = [c.eval() for c in archive.candidates()]
+    evals = [e for e in evals if e and e.get("episodes")][-last:]
+    p50s, maxs, failed, total = [], [], 0, 0
+    for e in evals:
+        failed += int(e.get("failed_s2") or 0)
+        total += int(e.get("system2_calls") or 0)
+        for ep in e["episodes"]:
+            st = ep.get("latency_s2") or {}
+            if st.get("n"):
+                p50s.append(float(st["p50"]))
+                maxs.append(float(st["max"]))
+    if not p50s:
+        return ""
+    p50s.sort()
+    return (f"\nSystem-2 latency in the last {len(evals)} evaluation(s) of this archive: median {p50s[len(p50s) // 2]:.0f} s, "
+            f"worst {max(maxs):.0f} s per call; {failed} of {total + failed} calls failed (timeouts included). Size call "
+            "timeouts above the worst observed latency, not from the calibration in the task text.")
+
+
+def tools_text(python: str, repo_root: str, dev_seeds: list[int], dev_evals: int) -> str:
+    """What the proposer may run itself (the ``extra`` of the prompt): the evaluator's pre-flight and,
+    on dedicated dev seeds, a real-model evaluation of its draft. The dev seeds are neither training
+    nor held-out seeds, so what it learns there is procedure, not answers."""
+    cmd = f"PYTHONPATH={repo_root} {python} -m metaharness"
+    text = f"""
+## Tools you may run yourself (from the archive root)
+- Pre-flight (seconds, no model calls, the same check the evaluator runs first):
+  `{cmd} preflight candidates/NNNN/harness.py`
+  Run it before you finish; a failure costs you a repair round, a second failure the whole candidate."""
+    if dev_seeds and dev_evals > 0:
+        text += f"""
+- Dev evaluation (real models, the evaluation's budgets, one episode per dev seed, output under
+  `candidates/NNNN/dev/<timestamp>/` with eval.json, digest.md and the traces):
+  `{cmd} dev-eval candidates/NNNN/harness.py` (dev seeds {dev_seeds}; add `--seeds` to pick some of them)
+  Use at most {dev_evals} dev evaluation(s) per candidate: they take as long as a real episode, so start
+  one only when the harness is complete, and read its digest and traces before deciding what to fix.
+  Dev results are not the score: only the evaluator's training seeds count."""
+    return text
+
+
 def propose(
     model: System2Model,
     archive: Archive,
@@ -123,7 +171,10 @@ def propose(
     iteration: Optional[tuple[int, int]] = None,
     directive: Optional[dict] = None,
     siblings: tuple[str, ...] = (),
+    full_access: bool = False,
 ) -> Candidate:
+    """``full_access``: the agent may run the evaluator's own tools (pre-flight, a dev evaluation through
+    the model backends), which need the network and directories outside the archive."""
     cand = candidate or archive.new_candidate()
     if directive:
         (cand.dir / "directive.json").write_text(json.dumps(directive, indent=2) + "\n")
@@ -132,7 +183,7 @@ def propose(
     (cand.dir / "prompt.md").write_text(prompt)
     try:
         res = model.run(prompt, cwd=archive.root, system=PROPOSER_SYSTEM, agentic=agentic,
-                        timeout_s=timeout_s, trace=trace)
+                        timeout_s=timeout_s, trace=trace, full_access=full_access)
     except TimeoutError as exc:
         # A CLI can finish writing the deliverable and time out during its final checks. Keep
         # whatever harness it wrote as an explicitly incomplete proposal: pre-flight (load errors
@@ -150,7 +201,7 @@ def propose(
             why = "Your time is up." + (f" Your harness.py is still an unmodified copy of candidates/{copy[0].dir.name}/."
                                         if copy else "")
             _finish(model, archive, cand, session, why, agentic=agentic, trace=trace,
-                    timeout_s=min(900.0, timeout_s / 2))
+                    timeout_s=min(900.0, timeout_s / 2), full_access=full_access)
         if cand.harness_path.exists():
             if not (cand.dir / "proposal.md").exists():
                 (cand.dir / "proposal.md").write_text("(the proposer timed out before writing proposal.md)\n")
@@ -162,12 +213,13 @@ def propose(
     if res.session_id and not cand.harness_path.exists() and not _fenced_python(res.text or ""):
         # an agent can end its turn after planning without writing the file: once more, same session
         _finish(model, archive, cand, res.session_id, "You ended without writing the harness.", agentic=agentic,
-                trace=trace, timeout_s=min(900.0, timeout_s / 2))
+                trace=trace, timeout_s=min(900.0, timeout_s / 2), full_access=full_access)
     elif res.session_id and cand.harness_path.exists():
         copy = duplicate_of(archive, cand)
         if copy:
             _finish(model, archive, cand, res.session_id, f"Your harness.py is an unmodified copy of "
-                    f"candidates/{copy[0].dir.name}/.", agentic=agentic, trace=trace, timeout_s=min(900.0, timeout_s / 2))
+                    f"candidates/{copy[0].dir.name}/.", agentic=agentic, trace=trace, timeout_s=min(900.0, timeout_s / 2),
+                    full_access=full_access)
     if isinstance(res.raw, list):
         (cand.dir / "proposer_events.jsonl").write_text(
             "".join(json.dumps(event, default=str) + "\n" for event in res.raw))
@@ -184,7 +236,7 @@ def propose(
 
 
 def _finish(model: System2Model, archive: Archive, cand: Candidate, session: str, why: str, *, agentic: bool,
-            trace: Optional[TraceSink], timeout_s: float) -> None:
+            trace: Optional[TraceSink], timeout_s: float, full_access: bool = False) -> None:
     """Ask a proposer that produced no harness to write it now, from what it worked out (same session)."""
     from ..models._cli import STOPPING
     if STOPPING.is_set():
@@ -194,7 +246,7 @@ def _finish(model: System2Model, archive: Archive, cand: Candidate, session: str
               "of an existing candidate is not evaluated: write your own change, even a partial one.")
     try:
         res = model.run(prompt, cwd=archive.root, session_id=session, agentic=agentic, timeout_s=timeout_s,
-                        trace=trace)
+                        trace=trace, full_access=full_access)
     except ModelUnavailable:
         raise
     except Exception:  # noqa: BLE001 — the original outcome is what gets reported
@@ -214,6 +266,7 @@ def repair(
     agentic: bool = True,
     trace: Optional[TraceSink] = None,
     timeout_s: float = 900.0,
+    full_access: bool = False,
 ) -> bool:
     """One repair round after a failed pre-flight: same session if we have one."""
     session = None
@@ -227,7 +280,7 @@ def repair(
     (cand.dir / "repair_prompt.md").write_text(prompt)
     try:
         res = model.run(prompt, cwd=cand.dir.parent.parent, session_id=session, agentic=agentic,
-                        timeout_s=timeout_s, trace=trace)
+                        timeout_s=timeout_s, trace=trace, full_access=full_access)
     except ModelUnavailable:
         raise                     # the search must stop, not evaluate an unrepaired candidate
     except Exception as exc:  # noqa: BLE001 — a failed repair is data

@@ -1,0 +1,7 @@
+parent: 0001
+
+Hypothesis: 0001's large gains come from exact local deductions, but its weak seeds (601 = 0.0417, 604 = 0.1385, 608 = 0.0604) show that its fallback probability is wrong. It enumerates each frontier component independently and ranks cells without enforcing the single global mine total, so cells that look equally safe locally can have very different conditional risk. The terminal traces show repeated one-cell reveals followed by a mine loss while many components remain disconnected.
+
+What changed vs. the parent: this harness keeps the parent's equation and subset closure but computes assignment distributions for every small frontier component and combines them with the remaining unconstrained cells using the global mine count and binomial completion weights. It chooses the minimum conditional mine probability, uses proved safe cells immediately, and opens the center first. It does not trust or create flags, and it never invokes slow Astra calls; all model output is therefore irrelevant to pre-flight and turn latency.
+
+Evidence that would confirm/refute it: compared with 0001, the weak dense-board seeds should lose less often and improve their minimum scores, especially after the first ambiguous frontier. If scores remain near 0001 while losses occur at globally coupled boundaries, then component-size caps or the need for Astra review of oversized components is the remaining failure mode. A trace should show probability-driven choices changing when disconnected component mine counts change.

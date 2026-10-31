@@ -1,0 +1,2 @@
+# Build-time only. Gameplay uses Python's standard library.
+meson==1.12.1

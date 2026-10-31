@@ -1,0 +1,9 @@
+parent: 0002
+
+Hypothesis: the leader's remaining weak tail is partly an exploration objective error, not a pathfinding error. Its local mission grammar misses MultiRoom's public goal wording, and its generic view-gain heuristic does not value an observed closed door as a route to an unseen room. In the seed 3 trace, the initial observation says `traverse the rooms to get to the goal` and already shows a closed grey door at relative (1,1), yet the controller made two Astra calls (48.9 s and 73.6 s) for an eight-action solution. The seed 2 PickupLoc trace shows the other side of the same issue: three initial left turns before a target route, costing 13 actions on a 64-step budget.
+
+Change versus 0002: preserve its observed-map, turn-aware route search, typed targets, and per-action belief checks. Normalize goal-reaching wording for the audited MiniGrid family. When a reach target is not yet visible, route directly to an observed, currently openable door and toggle it before using the generic view-gain frontier search. This is a semantic exploration subgoal, not a seed route: the door, approach pose, and legal key state all come from public observations. The executor still recomputes after each action and calls Astra with `ctx.progress()` evidence if its predicted transition fails.
+
+Confirmation would be a zero-call, eight-step or better MultiRoom seed 3, and fewer wasted frontier rotations on unseen room layouts without losing success. Refutation would be unnecessary door openings that displace useful target exploration, especially in layouts with multiple doors, or a newly blocked/ineffective toggle. The existing recovery path should catch such contradictions; validation should assess both success and action count, not just call count.
+
+Validation: the required preflight passed (stand-in episode, score 0.975 in 4 steps, zero model calls and no contract errors). No full training evaluation was run locally.

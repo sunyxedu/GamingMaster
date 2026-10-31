@@ -1,0 +1,39 @@
+[22:04:59] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[22:11:23] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[22:17:29] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[22:29:37] study: done — tier 1, interface native API: pinned EDOPro core through a local C/C++ bridge and Python 3.12 ctypes
+[22:51:14] adapt: adaptor validated after 1 attempt(s)
+[22:51:16] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[22:51:16] study: reusing runs/yugioh/study/study.json (tier 1)
+[22:51:20] adapt: reusing validated adaptor
+[22:51:22] search: tier 1 on adaptor game 'Yu-Gi-Oh! EDOPro — offline three-duel benchmark'
+[00:18:36] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[00:18:36] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[00:18:36] study: reusing runs/yugioh/study/study.json (tier 1)
+[00:18:40] adapt: reusing validated adaptor
+[00:18:42] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[00:18:42] study: reusing runs/yugioh/study/study.json (tier 1)
+[00:18:46] adapt: reusing validated adaptor
+[00:18:47] search: tier 1 on adaptor game 'Yu-Gi-Oh! EDOPro — offline three-duel benchmark'
+[00:20:03] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[00:20:03] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[00:20:03] study: reusing runs/yugioh/study/study.json (tier 1)
+[00:47:10] adapt: adaptor validated after 1 attempt(s)
+[00:47:12] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[00:47:12] study: reusing runs/yugioh/study/study.json (tier 1)
+[00:47:16] adapt: reusing validated adaptor
+[00:47:18] search: tier 1 on adaptor game 'Yu-Gi-Oh! EDOPro — offline three-duel benchmark'
+[03:23:11] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[03:23:11] study: reusing runs/yugioh/study/study.json (tier 1)
+[03:23:15] adapt: reusing validated adaptor
+[03:23:17] search: tier 1 on adaptor game 'Yu-Gi-Oh! EDOPro — offline three-duel benchmark'
+[03:36:38] run: done — best 0004
+[20:38:06] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[20:38:06] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[20:38:06] study: reusing runs/yugioh/study/study.json (tier 1)
+[21:32:41] adapt: adaptor validated after 1 attempt(s)
+[21:32:43] run: game='Yu-Gi-Oh! (ygopro / EDOPro duel simulator)' dir=runs/yugioh agent=codex:gpt-6-astra@router
+[21:32:43] study: reusing runs/yugioh/study/study.json (tier 1)
+[21:32:47] adapt: reusing validated adaptor
+[21:32:49] search: tier 1 on adaptor game 'Yu-Gi-Oh! EDOPro — offline three-duel benchmark'
+[08:48:42] run: done — best 0008

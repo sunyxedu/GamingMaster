@@ -1,0 +1,106 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17
+        ]
+      ],
+      [
+        "heldout",
+        [
+          110,
+          111,
+          112,
+          113,
+          114,
+          115,
+          116,
+          117
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "d7b35a483445cb5d72b8a335aee00ab224faf9f92d213dd02a10d9aeab065eba"
+  },
+  "results": {
+    "train:10": {
+      "ok": true,
+      "obs_sha256": "346f74b6c1b263f1"
+    },
+    "train:11": {
+      "ok": true,
+      "obs_sha256": "e8982420b584bce2"
+    },
+    "train:12": {
+      "ok": true,
+      "obs_sha256": "3515c5679122e057"
+    },
+    "train:13": {
+      "ok": true,
+      "obs_sha256": "e8982420b584bce2"
+    },
+    "train:14": {
+      "ok": true,
+      "obs_sha256": "bcb24bb2976b578e"
+    },
+    "train:15": {
+      "ok": true,
+      "obs_sha256": "e8982420b584bce2"
+    },
+    "train:16": {
+      "ok": true,
+      "obs_sha256": "3515c5679122e057"
+    },
+    "train:17": {
+      "ok": true,
+      "obs_sha256": "e8982420b584bce2"
+    },
+    "heldout:110": {
+      "ok": true,
+      "obs_sha256": "9a8365ad4ca0d39d"
+    },
+    "heldout:111": {
+      "ok": true,
+      "obs_sha256": "e8982420b584bce2"
+    },
+    "heldout:112": {
+      "ok": true,
+      "obs_sha256": "3515c5679122e057"
+    },
+    "heldout:113": {
+      "ok": true,
+      "obs_sha256": "e8982420b584bce2"
+    },
+    "heldout:114": {
+      "ok": true,
+      "obs_sha256": "9a8365ad4ca0d39d"
+    },
+    "heldout:115": {
+      "ok": true,
+      "obs_sha256": "e8982420b584bce2"
+    },
+    "heldout:116": {
+      "ok": true,
+      "obs_sha256": "3515c5679122e057"
+    },
+    "heldout:117": {
+      "ok": true,
+      "obs_sha256": "e8982420b584bce2"
+    }
+  },
+  "refused": [],
+  "warnings": [
+    "held-out seeds start exactly like a training seed: heldout:111, heldout:112, heldout:113, heldout:115, heldout:116, heldout:117"
+  ]
+}

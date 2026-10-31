@@ -257,14 +257,16 @@ def test_referee_ladder_steps_up_after_two_high_scores_and_rebaselines():
     t = SimpleNamespace(
         args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
                              alarm_engine_drop=0.15, alarm_engine_z=2.5, alarm_patience=2, alarm_min_episodes=8,
-                             alarm_min_tokens=1000, eval_engine_step_up=0.9),
+                             alarm_min_tokens=1000, eval_engine_step_up=0.9, eval_engine_step_down=0.0),
         rl_games=["chess"], kl_budget={"chess": 0.03}, alarm_base_len={"chess": 100.0},
         alarm_streak={}, vs_init_streak={}, engine_base={}, engine_base_n={}, init_base={}, init_base_n={},
         engine_streak={}, stopped={}, iteration=0, log=lambda m: None,
-        engine_ladder=ladder, engine_rung={}, engine_high={},
+        engine_ladder=ladder, engine_rung={}, engine_high={}, engine_low={},
         eval_engine_eps={"chess": 0.5}, eval_engine_go={"chess": "go nodes 5"}, eval_engine_opt={},
+        engine_base_settings={"chess": (0.5, "go nodes 5", {})},
         _engines={"chess": SimpleNamespace(close=lambda: closed.append(1))})
     t._apply_rung = lambda g, k: JointRLTrainer._apply_rung(t, g, k)
+    t._set_rung = lambda g, k, why: JointRLTrainer._set_rung(t, g, k, why)
     base = {"episodes": 16, "timeout_rate": 0.0, "ep_len": 100.0, "kl": 0.01, "vs_engine_n": 64}
     JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": 0.60}}})      # the baseline
     assert t.engine_base == {"chess": 0.60} and t.engine_rung == {} and t.engine_high == {"chess": 0}
@@ -288,6 +290,66 @@ def test_referee_ladder_steps_up_after_two_high_scores_and_rebaselines():
     for ve in (0.95, 0.95, 0.95):                                                       # no rung left
         JointRLTrainer._alarms(t, {"games": {"chess": {**base, "vs_engine": ve}}})
     assert t.engine_rung == {"chess": 3} and not t.stopped
+    rec = {"games": {"chess": {**base, "vs_engine": 0.05}}}
+    for _ in range(3):                                   # --eval_engine_step_down 0 (off): stays
+        JointRLTrainer._alarms(t, rec)
+    assert t.engine_rung == {"chess": 3} and rec["games"]["chess"]["referee_at"] == 3
+
+
+def test_referee_ladder_steps_down_after_two_low_scores_rebuilt_from_its_base():
+    """--eval_engine_step_down: a referee the learner scores at most that against twice in a row
+    goes back one rung — its settings rebuilt from the base settings plus the lower rungs (an eps
+    the higher rung had removed comes back), the engine process dropped, the baseline cleared;
+    never below rung 0.  Every evaluation records the rung it was played at (referee_at)."""
+    from types import SimpleNamespace
+
+    from training.train_rl_joint import JointRLTrainer, parse_ladder
+
+    ladder = parse_ladder(["go=eps=0.25;eps=0;go=visits+16"])
+    closed = []
+    logs = []
+    t = SimpleNamespace(
+        args=SimpleNamespace(alarm_timeout=0.05, alarm_len_x=2.0, alarm_kl_x=3.0, alarm_vs_init=0.35,
+                             alarm_engine_drop=0.15, alarm_engine_z=2.5, alarm_patience=2, alarm_min_episodes=8,
+                             alarm_min_tokens=1000, eval_engine_step_up=0.65, eval_engine_step_down=0.25),
+        rl_games=["go"], kl_budget={"go": 0.03}, alarm_base_len={"go": 100.0},
+        alarm_streak={}, vs_init_streak={}, engine_base={}, engine_base_n={}, init_base={}, init_base_n={},
+        engine_streak={}, stopped={}, iteration=0, log=logs.append,
+        engine_ladder=ladder, engine_rung={}, engine_high={}, engine_low={},
+        eval_engine_eps={"go": 0.5}, eval_engine_go={"go": "visits 1"}, eval_engine_opt={},
+        engine_base_settings={"go": (0.5, "visits 1", {})}, _engines={})
+    t._apply_rung = lambda g, k: JointRLTrainer._apply_rung(t, g, k)
+    t._set_rung = lambda g, k, why: JointRLTrainer._set_rung(t, g, k, why)
+    base = {"episodes": 16, "timeout_rate": 0.0, "ep_len": 100.0, "kl": 0.01, "vs_engine_n": 64}
+
+    def ev(ve):
+        rec = {"games": {"go": {**base, "vs_engine": ve}}}
+        JointRLTrainer._alarms(t, rec)
+        return rec["games"]["go"]
+
+    assert ev(0.70)["referee_at"] == 0 and t.engine_rung == {}
+    row = ev(0.66)                                       # 0.70, 0.66 >= 0.65: up to rung 1
+    assert row["referee_at"] == 0 and row["referee_rung"] == 1 and t.engine_rung == {"go": 1}
+    for ve in (0.8, 0.8):                                # up to rung 2: eps 0, the base search
+        ev(ve)
+    assert t.engine_rung == {"go": 2} and t.eval_engine_eps == {"go": 0.0}
+    for ve in (0.9, 0.9):
+        ev(ve)
+    assert t.engine_rung == {"go": 3} and t.eval_engine_go == {"go": "visits 16"}
+    t._engines["go"] = SimpleNamespace(close=lambda: closed.append(1))
+    assert ev(0.30)["referee_at"] == 3 and t.engine_rung == {"go": 3}   # above step_down
+    ev(0.20)
+    row = ev(0.10)                                       # twice <= 0.25: back to rung 2
+    assert row["referee_rung"] == 2 and t.engine_rung == {"go": 2} and closed == [1]
+    assert t.eval_engine_go == {"go": "visits 1"} and t.eval_engine_eps == {"go": 0.0}
+    assert "go" not in t.engine_base and "go" not in t._engines
+    for ve in (0.1, 0.1, 0.1, 0.1):                      # down to rung 1, then rung 0
+        ev(ve)
+    assert t.engine_rung == {"go": 0} and t.eval_engine_eps == {"go": 0.5}
+    for ve in (0.1, 0.1):                                # nothing below rung 0
+        ev(ve)
+    assert t.engine_rung == {"go": 0} and not t.stopped
+    assert any("stepped down" in m for m in logs) and any("stepped up" in m for m in logs)
 
 
 def test_archive_eval_wave_keeps_gmrules_trajectories(tmp_path):

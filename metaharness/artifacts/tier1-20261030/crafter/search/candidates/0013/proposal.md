@@ -1,0 +1,13 @@
+parent: 0002
+
+Hypothesis: the leader's remaining loss is a pair of scheduling failures after otherwise successful progression. Seed 1102 collected iron at tick 536, then held one iron and no iron tool until dying at tick 577. Seed 1108 reached 15/22 at tick 227 and died at daylight 0.047 among a skeleton and three zombies. A bounded rare-resource conversion lock should force an iron pickup into an iron-pickaxe checkpoint before exploration resumes; a bounded dusk mode should return to a learned station tile before the hostile night.
+
+Evidence: candidate 0002 seed 1108's final observation has health 0, daylight 0.0467, player [18,7], a skeleton at [18,3], zombies at [21,6] and [19,7], and 15 unlocked achievements. In seed 1102, the trace shows iron inventory 1 with no iron pickaxe/sword from tick 550 through tick 577; health falls from 3 to 0 while movement repeats near the frontier. Existing sleep guards avoid starting sleep at dusk but leave the long-range objective active, and they have no post-pickup conversion priority.
+
+What changed versus parent 0002:
+
+- Learn an episode-local anchor only from an observed table/furnace-adjacent, healthy, well-fed, quiet daytime state. At daylight <= 0.26, enter a bounded night mode, route to the anchor through the current danger-weighted map, and sleep there when no hostile is visible. If the anchor is disconnected, forget it and choose the least-dangerous local move; release the lock after 150 ticks.
+- Detect increases in iron or diamond from inventory deltas. For iron, for at most 70 ticks/20 attempts, prioritize an existing station, then a nearby table/furnace placement, then the verified station route; craft the iron pickaxe before resuming the strategic plan. A short A/B position detector blocks one edge for 12 ticks to break frontier oscillations.
+- Retain the parent's asynchronous Astra adviser, crop probes, verified recipes, danger-weighted map and survival interrupts. Astra sees the anchor/night/conversion context but remains advisory.
+
+Evidence that would confirm the hypothesis: traces should show inventory iron gain followed by `convert_iron`/`make_iron_pickaxe` within 70 ticks, fewer iron-held deaths, `night_mode` before hostile-heavy darkness, and more episodes surviving beyond tick 250 to craft iron or defeat a skeleton. The training score should rise especially on seeds that previously ended around 15–17 achievements. It is refuted if conversion mostly wastes time placing stations, anchors are disconnected, sleep at the anchor causes more damage than travel, or the locks reduce rare-resource collection without improving survival.

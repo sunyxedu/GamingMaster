@@ -1,0 +1,23 @@
+# Adaptor validation: PASS
+
+- [x] load game.py and make_game() — name=Pokémon Showdown — Gen 9 Random Battle tier=tier1 realtime=False
+- [x] TIER agrees with the game's kind (2 <=> tick()) — TIER=1; the game is turn-based (no tick)
+- [x] tier 1, as the study decided — the game is turn-based (no tick), tier1
+- [x] SEEDS: non-empty, disjoint train / held-out lists of ints — 10 train (104729, 130363, 155921, 181081, 206369, …), 10 held-out (359357, 384673, 410117, 435907, 461273, …)
+- [x] action_spec is an ActionSpec with >=1 action
+- [x] describe() returns a non-trivial string — 2813 chars
+- [x] seed 104729: observe() JSON-serialisable — 10066 bytes
+- [x] seed 104729: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 104729: applied 12 actions without exception
+- [x] seed 104729: done is bool and score is a finite number after the actions — done=False score=-0.024357072205736907
+- [x] seed 104729: observations after the actions are strict JSON
+- [x] seed 104729: info() is a dict
+- [x] seed 359357: observe() JSON-serialisable — 9675 bytes
+- [x] seed 359357: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 359357: applied 12 actions without exception
+- [x] seed 359357: done is bool and score is a finite number after the actions — done=False score=-0.0291005291005291
+- [x] seed 359357: observations after the actions are strict JSON
+- [x] seed 359357: info() is a dict
+- [x] malformed action '__not_an_action__' does not raise
+- [x] close() releases the instance (called after every episode)
+- [x] different seeds give different starts (scenario variety)

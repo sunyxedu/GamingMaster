@@ -1,0 +1,45 @@
+{
+  "game": "Sokoban",
+  "tier": 1,
+  "tier_rationale": "Sokoban is a deterministic single-player puzzle: the board changes only after an explicit move or push, with no opponent, animation, or real-time clock. The agent can spend seconds or about a minute planning between actions without an in-game penalty; only the harness wall-clock and configured action cap constrain it.",
+  "decision_latency_s": 60.0,
+  "interface": {
+    "chosen": "standalone offline ASCII-grid engine",
+    "why": "A small standard-library engine over a pinned XSB/Boxoban text corpus is headless, deterministic, auditable, and available offline. It exposes lossless JSON state and exact push legality without the GUI, wheel, JAX, or legacy Gym dependency risks of the alternatives.",
+    "software": [
+      "Python 3.12.3 standard library",
+      "Pinned Boxoban level snapshot (or separately licensed classic XSB corpus)"
+    ],
+    "env": [
+      {
+        "var": "SOKOBAN_LEVELSET",
+        "description": "Absolute path to the pinned offline level corpus and its manifest",
+        "required": true
+      },
+      {
+        "var": "SOKOBAN_MAX_ACTIONS",
+        "description": "Optional integer action cap supplied by the benchmark harness",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Stage Boxoban from https://github.com/google-deepmind/boxoban-levels on a connected machine, verify its pinned revision, SHA-256, and license, and copy the text split plus notices to the offline host.",
+      "Parse and validate every level using the XSB symbols; reject malformed boards and mismatched box/goal counts.",
+      "Map each integer seed with a stable documented hash to one level ID, preserving a corpus manifest so held-out seeds are reproducible.",
+      "Expose reset(seed) and step(up|down|left|right) JSON calls, and run deterministic transition, deadlock, solved-state, and reset smoke tests before evaluation.",
+      "Record the action cap, corpus revision, level ID, and SHA-256 manifest in each run; never download or silently substitute levels."
+    ],
+    "observation": "JSON containing level_id, seed, rows/cols, canonical ASCII board, player coordinate, box and goal coordinates, reachable player mask or cells, valid_actions, last_action, last_event, pushes, walk_steps, actions, boxes_on_goals, done, and the configured action cap.",
+    "actions": "Send one of four primitive actions: up, down, left, or right. Walking into free floor moves the player; pushing an adjacent box into free floor or a goal moves both and increments pushes; walls, edges, and blocked pushes are counted attempted actions and leave the state unchanged. Stop when done or the action cap is reached."
+  },
+  "scoring": "For each seeded reset, report solved (all goals occupied), boxes_on_goals, pushes, walk_steps, total actions, and action-cap termination. Rank primarily by solved levels, then boxes placed, then fewer pushes and actions; this reflects Sokoban's completion objective and traditional push/move efficiency while retaining diagnostics.",
+  "scenarios": "Use a pinned Boxoban or classic XSB corpus and map each reset(seed) deterministically to a level index with a stable hash modulo corpus size. Training and visible seeds may cover one split; held-out seeds must select other fixed levels from the same documented distribution. Do not randomize board geometry, add opponents, or substitute levels, and record seed-to-level mapping for replay.",
+  "strategy_summary": "Strong play maintains player reachability and box-goal assignments while avoiding taboo squares, freeze deadlocks, 2x2 blocks, and premature corridor goals. Precompute static dead squares and reverse-push feasibility, then search over push states with matching-based lower bounds, transposition tables, and deterministic deadlock pruning. Fill deep or constrained goals before shallow transit goals, and verify the player's standing square for every push. Astra should plan and replan short push sequences from complete JSON observations; Jev should answer independent typed legality, deadlock, reachability, and solved-state questions. Code should own parsing, flood fill, counters, snapshots, action validation, and search bookkeeping.",
+  "risks": [
+    "The offline host currently has no level corpus; stage and pin Boxoban or a separately licensed classic set before evaluation.",
+    "Boxoban contents, default branch names, and licenses must be verified at the pinned revision; retain the license notice.",
+    "Optional Gym/JAX/GUI interfaces may be unavailable or incompatible with Python 3.12 and are unnecessary for the chosen engine.",
+    "A mistaken push is often irreversible; enforce deadlock checks, snapshots, and a restart policy.",
+    "The benchmark action cap and score weighting are local harness policy and must be recorded rather than inferred from an upstream package."
+  ]
+}

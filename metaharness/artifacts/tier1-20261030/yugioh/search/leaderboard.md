@@ -1,0 +1,80 @@
+# Leaderboard
+
+| # | candidate | parent | mean score | seeds median / min | episodes | stale ticks | S1 calls | S2 calls | failed S1/S2 | Jev→act | Astra→act | Jev p50/max s | Astra p50/max s | status |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0000 | 0000-tier1_astra_naive | – | -1.000 | -1.000 / -1.000 (= all seeds) | 12 | – | 0 | 112 | 0 / 0 | 0% | 100% | – | 54.5 / 106 | ok |
+| 0001 | 0001 | 0000 | -0.535 | -0.367 / -1.079 | 12 | – | 0 | 18 | 0 / 0 | 0% | 0% | – | 59.5 / 68 | ok |
+| 0002 | 0002 | 0000 | -0.640 | -0.667 / -1.000 | 12 | – | 0 | 107 | 0 / 0 | 0% | 74% | – | 53.5 / 90 | ok |
+| 0003 | 0003 | – | -0.229 | -0.344 / -1.048 | 12 | – | 0 | 14 | 0 / 0 | 0% | 0% | – | 59.3 / 63 | ok |
+| 0004 | 0004 | 0003 | 0.366 | 0.366 / -0.373 | 12 | – | 0 | 31 | 0 / 0 | 0% | 1% | – | 68.8 / 97 | ok |
+| 0005 | 0005 | 0001 | -0.771 | -1.046 / -1.084 | 12 | – | 0 | 28 | 0 / 0 | 0% | 0% | – | 50.5 / 89 | ok |
+| 0006 | 0006 | 0002 | -0.543 | -0.667 / -0.721 | 12 | – | 0 | 170 | 0 / 0 | 0% | 30% | – | 53.1 / 120 | ok |
+| 0007 | 0007 | 0004 | 0.424 | 0.366 / -0.381 | 12 | – | 0 | 20 | 0 / 0 | 0% | 0% | – | 66.2 / 101 | ok |
+| 0008 | 0008 | 0004 | 0.541 | 0.367 / -0.373 | 12 | – | 0 | 28 | 0 / 0 | 0% | 0% | – | 62.6 / 81 | ok |
+| 0009 | 0009 | 0004 | 0.363 | 0.366 / -0.373 | 12 | – | 0 | 44 | 0 / 0 | 0% | 1% | – | 55.5 / 108 | ok |
+| 0010 | 0010 | 0008 | 0.479 | 0.367 / -0.373 | 12 | – | 0 | 19 | 0 / 0 | 0% | 0% | – | 51.2 / 81 | ok |
+| 0011 | 0011 | 0007 | 0.428 | 0.367 / -1.078 | 12 | – | 0 | 19 | 0 / 0 | 0% | 0% | – | 54.7 / 61 | ok |
+| 0012 | 0012 | 0007 | 0.365 | 0.366 / -0.383 | 12 | – | 0 | 13 | 0 / 0 | 0% | 0% | – | 55.7 / 56 | ok |
+| 0013 | 0013 | 0008 | 0.541 | 0.367 / -0.366 | 12 | – | 0 | 23 | 0 / 0 | 0% | 0% | – | 59.9 / 68 | ok |
+| 0014 | 0014 | 0007 | 0.423 | 0.366 / -0.381 | 12 | – | 0 | 15 | 0 / 0 | 0% | 0% | – | 47.7 / 56 | ok |
+| 0015 | 0015 | 0007 | 0.483 | 0.366 / -0.353 | 12 | – | 0 | 20 | 0 / 0 | 0% | 0% | – | 66.1 / 86 | ok |
+| 0016 | 0016 | 0013 | 0.479 | 0.367 / -0.373 | 12 | – | 0 | 14 | 0 / 0 | 0% | 0% | – | 53.4 / 57 | ok |
+| 0017 | 0017 | 0015 | 0.424 | 0.366 / -0.381 | 12 | – | 0 | 16 | 0 / 0 | 0% | 0% | – | 52.5 / 77 | ok |
+| 0018 | 0018 | 0017 | 0.541 | 0.367 / -0.353 | 12 | – | 0 | 48 | 0 / 0 | 0% | 1% | – | 50.3 / 111 | ok |
+
+`seeds median / min`: the median and the worst per-seed score — a mean over a few seeds is noisy and can be carried by one lucky seed; an improvement that lifts the weak seeds is more likely to hold on unseen seeds. `(= all seeds)`: every seed scored the same, which is what a scenario-independent script does; expect it to break on scenarios it was not written for. `Jev→act` / `Astra→act`: fraction of posted actions preceded by a fresh System-1 / System-2 answer since the previous action (reported, not used for selection). Latency columns are the median per-episode p50 and the worst observed call: design timeouts and pipelining from these measurements, not from assumptions.
+
+Best so far: `0008` (mean score 0.541)
+Only candidates whose status is `ok` can be selected: a fatal, partial or erroneous evaluation cannot win, whatever its score. A used-up call budget or the deadline is not an error. `parent` is the candidate a proposal says it was derived from (`parent: NNNN` in proposal.md).
+
+Validation (top candidates re-evaluated on unseen seeds; the final selection is the best train+validation mean among them):
+- `0008`: validation 0.476 over 12 episodes; train+validation 0.508
+- `0013`: validation 0.474 over 12 episodes; train+validation 0.507
+- `0018`: validation 0.357 over 12 episodes; train+validation 0.449
+
+Episodes (score, how it ended, wall time; ✗ = error):
+- `0000-tier1_astra_naive`: seed 1101: -1.00 game_done 1021s · seed 1102: -1.00 game_done 1407s · seed 1103: -1.00 game_done 1718s · seed 1104: -1.00 game_done 1362s · seed 1105: -1.00 game_done 1634s · seed 1106: -1.00 game_done 1186s · seed 1107: -1.00 game_done 1107s · seed 1108: -1.00 game_done 1535s · seed 1109: -1.00 game_done 1128s · seed 1110: -1.00 game_done 1002s · seed 1111: -1.00 game_done 1325s · seed 1112: -1.00 game_done 1170s
+- `0001`: seed 1101: -0.36 game_done 174s · seed 1102: -0.37 game_done 173s · seed 1103: -1.03 game_done 340s · seed 1104: -1.06 game_done 176s · seed 1105: -1.08 game_done 311s · seed 1106: -0.37 game_done 606s · seed 1107: -0.36 game_done 172s · seed 1108: -0.36 game_done 166s · seed 1109: 0.35 game_done 171s · seed 1110: 0.36 game_done 166s · seed 1111: -1.05 game_done 171s · seed 1112: -1.07 game_done 169s
+- `0002`: seed 1101: -0.67 deadline 1801s · seed 1102: -0.33 deadline 1800s · seed 1103: -0.33 deadline 1800s · seed 1104: -1.00 game_done 1800s · seed 1105: -0.67 deadline 1800s · seed 1106: -0.67 deadline 1800s · seed 1107: -0.67 deadline 1801s · seed 1108: -0.33 deadline 1800s · seed 1109: -1.00 game_done 1724s · seed 1110: -0.68 deadline 1800s · seed 1111: -0.67 deadline 1800s · seed 1112: -0.67 deadline 1801s
+- `0003`: seed 1101: -0.39 game_done 142s · seed 1102: -0.36 game_done 143s · seed 1103: 0.39 game_done 262s · seed 1104: -0.34 game_done 140s · seed 1105: -0.34 game_done 144s · seed 1106: 0.38 game_done 142s · seed 1107: -0.35 game_done 144s · seed 1108: -1.05 game_done 141s · seed 1109: -0.34 game_done 145s · seed 1110: 0.37 game_done 141s · seed 1111: -0.35 game_done 141s · seed 1112: -0.36 game_done 230s
+- `0004`: seed 1101: -0.35 game_done 310s · seed 1102: 0.37 game_done 623s · seed 1103: 1.08 game_done 568s · seed 1104: 0.37 game_done 406s · seed 1105: -0.33 game_done 349s · seed 1106: 1.10 game_done 414s · seed 1107: 0.37 game_done 272s · seed 1108: 0.37 game_done 582s · seed 1109: 0.36 game_done 313s · seed 1110: 0.37 game_done 302s · seed 1111: -0.37 game_done 214s · seed 1112: 1.08 game_done 397s
+- `0005`: seed 1101: -1.08 game_done 187s · seed 1102: -0.38 game_done 339s · seed 1103: -1.06 game_done 174s · seed 1104: -1.05 game_done 172s · seed 1105: -1.07 game_done 298s · seed 1106: -1.07 game_done 534s · seed 1107: -0.36 game_done 279s · seed 1108: -0.36 game_done 223s · seed 1109: -0.35 game_done 173s · seed 1110: -1.06 game_done 169s · seed 1111: -0.34 game_done 649s · seed 1112: -1.07 game_done 476s
+- `0006`: seed 1101: -0.35 deadline 1800s · seed 1102: -0.67 deadline 1800s · seed 1103: -0.33 deadline 1800s · seed 1104: -0.67 deadline 1801s · seed 1105: -0.72 deadline 1800s · seed 1106: -0.33 deadline 1800s · seed 1107: -0.33 deadline 1800s · seed 1108: -0.70 deadline 1800s · seed 1109: -0.69 deadline 1800s · seed 1110: -0.67 deadline 1800s · seed 1111: -0.69 deadline 1800s · seed 1112: -0.37 deadline 1800s
+- `0007`: seed 1101: -0.35 game_done 354s · seed 1102: 0.37 game_done 516s · seed 1103: 1.09 game_done 215s · seed 1104: 0.37 game_done 214s · seed 1105: 0.36 game_done 216s · seed 1106: 1.10 game_done 216s · seed 1107: 0.37 game_done 215s · seed 1108: 0.37 game_done 214s · seed 1109: 0.36 game_done 220s · seed 1110: 0.37 game_done 588s · seed 1111: -0.38 game_done 214s · seed 1112: 1.08 game_done 543s
+- `0008`: seed 1101: 0.37 game_done 407s · seed 1102: 1.10 game_done 409s · seed 1103: 1.09 game_done 624s · seed 1104: 0.37 game_done 213s · seed 1105: 0.34 game_done 452s · seed 1106: 1.10 game_done 215s · seed 1107: 0.37 game_done 217s · seed 1108: 0.36 game_done 479s · seed 1109: 0.36 game_done 219s · seed 1110: 0.35 game_done 216s · seed 1111: -0.37 game_done 215s · seed 1112: 1.06 game_done 612s
+- `0009`: seed 1101: -0.35 game_done 634s · seed 1102: 0.37 game_done 217s · seed 1103: 1.09 game_done 275s · seed 1104: 0.37 game_done 634s · seed 1105: -0.33 game_done 217s · seed 1106: 1.10 game_done 445s · seed 1107: 0.37 game_done 215s · seed 1108: 0.37 game_done 379s · seed 1109: 0.36 game_done 409s · seed 1110: 0.35 game_done 360s · seed 1111: -0.37 game_done 214s · seed 1112: 1.06 game_done 781s
+- `0010`: seed 1101: 0.37 game_done 217s · seed 1102: 0.37 game_done 217s · seed 1103: 1.09 game_done 215s · seed 1104: 0.37 game_done 568s · seed 1105: 0.34 game_done 450s · seed 1106: 1.10 game_done 214s · seed 1107: 0.37 game_done 215s · seed 1108: 0.36 game_done 214s · seed 1109: 0.36 game_done 362s · seed 1110: 0.35 game_done 214s · seed 1111: -0.37 game_done 214s · seed 1112: 1.06 game_done 216s
+- `0011`: seed 1101: 0.36 game_done 218s · seed 1102: 0.37 game_done 218s · seed 1103: 1.09 game_done 215s · seed 1104: 0.37 game_done 214s · seed 1105: 0.36 game_done 215s · seed 1106: 1.10 game_done 215s · seed 1107: 0.37 game_done 494s · seed 1108: 1.09 game_done 216s · seed 1109: 0.37 game_done 333s · seed 1110: 0.37 game_done 351s · seed 1111: -1.08 game_done 588s · seed 1112: 0.38 game_done 216s
+- `0012`: seed 1101: -0.35 game_done 217s · seed 1102: 0.37 game_done 310s · seed 1103: 1.09 game_done 215s · seed 1104: 0.37 game_done 214s · seed 1105: 0.34 game_done 216s · seed 1106: 1.10 game_done 215s · seed 1107: 0.37 game_done 216s · seed 1108: 0.37 game_done 214s · seed 1109: 0.36 game_done 219s · seed 1110: 0.37 game_done 214s · seed 1111: -0.38 game_done 215s · seed 1112: 0.39 game_done 217s
+- `0013`: seed 1101: 0.37 game_done 217s · seed 1102: 1.10 game_done 629s · seed 1103: 1.09 game_done 347s · seed 1104: 0.37 game_done 540s · seed 1105: 0.34 game_done 215s · seed 1106: 1.10 game_done 214s · seed 1107: 0.37 game_done 215s · seed 1108: 0.36 game_done 214s · seed 1109: 0.36 game_done 217s · seed 1110: 0.35 game_done 214s · seed 1111: -0.37 game_done 214s · seed 1112: 1.06 game_done 836s
+- `0014`: seed 1101: -0.35 game_done 217s · seed 1102: 0.37 game_done 315s · seed 1103: 1.09 game_done 272s · seed 1104: 0.37 game_done 214s · seed 1105: 0.35 game_done 215s · seed 1106: 1.10 game_done 215s · seed 1107: 0.37 game_done 295s · seed 1108: 0.37 game_done 215s · seed 1109: 0.36 game_done 219s · seed 1110: 0.37 game_done 214s · seed 1111: -0.38 game_done 215s · seed 1112: 1.08 game_done 217s
+- `0015`: seed 1101: -0.35 game_done 218s · seed 1102: 0.37 game_done 218s · seed 1103: 1.09 game_done 216s · seed 1104: 0.37 game_done 215s · seed 1105: 0.35 game_done 411s · seed 1106: 1.10 game_done 215s · seed 1107: 0.37 game_done 353s · seed 1108: 0.37 game_done 215s · seed 1109: 0.36 game_done 381s · seed 1110: 0.37 game_done 568s · seed 1111: 0.34 game_done 523s · seed 1112: 1.08 game_done 217s
+- `0016`: seed 1101: 0.37 game_done 217s · seed 1102: 0.37 game_done 217s · seed 1103: 1.09 game_done 216s · seed 1104: 0.37 game_done 213s · seed 1105: 0.34 game_done 216s · seed 1106: 1.10 game_done 214s · seed 1107: 0.37 game_done 215s · seed 1108: 0.36 game_done 215s · seed 1109: 0.36 game_done 217s · seed 1110: 0.35 game_done 297s · seed 1111: -0.37 game_done 310s · seed 1112: 1.06 game_done 217s
+- `0017`: seed 1101: -0.35 game_done 218s · seed 1102: 0.37 game_done 218s · seed 1103: 1.09 game_done 216s · seed 1104: 0.37 game_done 214s · seed 1105: 0.36 game_done 216s · seed 1106: 1.10 game_done 406s · seed 1107: 0.37 game_done 216s · seed 1108: 0.37 game_done 215s · seed 1109: 0.36 game_done 332s · seed 1110: 0.37 game_done 323s · seed 1111: -0.38 game_done 214s · seed 1112: 1.08 game_done 343s
+- `0018`: seed 1101: -0.35 game_done 319s · seed 1102: 0.37 game_done 217s · seed 1103: 1.08 game_done 850s · seed 1104: 0.37 game_done 812s · seed 1105: 0.36 game_done 529s · seed 1106: 1.10 game_done 215s · seed 1107: 1.07 game_done 600s · seed 1108: 0.37 game_done 651s · seed 1109: 0.36 game_done 910s · seed 1110: 0.37 game_done 349s · seed 1111: 0.34 game_done 488s · seed 1112: 1.08 game_done 685s
+
+System-2 latency ≈ 50.2 s + 19.9 ms × output tokens (fit over 550 archived calls, r = 0.47; slowest 120 s): long answers are slow — size timeouts from this, not from short baseline answers.
+
+Score composition (mean per episode, from the adaptor's score_breakdown):
+- `0000-tier1_astra_naive`: completed_duels 3.00, draws 0.00, forfeits 3.00, losses 0.00, lp_component 0.00, native_completed 0.00, outcome_component -1.00, score -1.00, technical_error 0.00, truncations 0.00, win_rate 0.00, wins 0.00
+- `0001`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 2.25, lp_component -0.04, native_completed 3.00, outcome_component -0.50, score -0.54, technical_error 0.00, truncations 0.00, win_rate 0.25, wins 0.75
+- `0002`: completed_duels 1.92, draws 0.00, forfeits 1.92, losses 0.00, lp_component -0.00, native_completed 0.00, outcome_component -0.64, score -0.64, technical_error 0.00, truncations 0.00, win_rate 0.00, wins 0.00
+- `0003`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 1.83, lp_component -0.01, native_completed 3.00, outcome_component -0.22, score -0.23, technical_error 0.00, truncations 0.00, win_rate 0.39, wins 1.17
+- `0004`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 1.00, lp_component 0.03, native_completed 3.00, outcome_component 0.33, score 0.37, technical_error 0.00, truncations 0.00, win_rate 0.67, wins 2.00
+- `0005`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 2.58, lp_component -0.05, native_completed 3.00, outcome_component -0.72, score -0.77, technical_error 0.00, truncations 0.00, win_rate 0.14, wins 0.42
+- `0006`: completed_duels 1.58, draws 0.00, forfeits 1.25, losses 0.33, lp_component -0.01, native_completed 0.33, outcome_component -0.53, score -0.54, technical_error 0.00, truncations 0.00, win_rate 0.00, wins 0.00
+- `0007`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 0.92, lp_component 0.03, native_completed 3.00, outcome_component 0.39, score 0.42, technical_error 0.00, truncations 0.00, win_rate 0.69, wins 2.08
+- `0008`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 0.75, lp_component 0.04, native_completed 3.00, outcome_component 0.50, score 0.54, technical_error 0.00, truncations 0.00, win_rate 0.75, wins 2.25
+- `0009`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 1.00, lp_component 0.03, native_completed 3.00, outcome_component 0.33, score 0.36, technical_error 0.00, truncations 0.00, win_rate 0.67, wins 2.00
+- `0010`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 0.83, lp_component 0.03, native_completed 3.00, outcome_component 0.44, score 0.48, technical_error 0.00, truncations 0.00, win_rate 0.72, wins 2.17
+- `0011`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 0.92, lp_component 0.04, native_completed 3.00, outcome_component 0.39, score 0.43, technical_error 0.00, truncations 0.00, win_rate 0.69, wins 2.08
+- `0012`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 1.00, lp_component 0.03, native_completed 3.00, outcome_component 0.33, score 0.36, technical_error 0.00, truncations 0.00, win_rate 0.67, wins 2.00
+- `0013`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 0.75, lp_component 0.04, native_completed 3.00, outcome_component 0.50, score 0.54, technical_error 0.00, truncations 0.00, win_rate 0.75, wins 2.25
+- `0014`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 0.92, lp_component 0.03, native_completed 3.00, outcome_component 0.39, score 0.42, technical_error 0.00, truncations 0.00, win_rate 0.69, wins 2.08
+- `0015`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 0.83, lp_component 0.04, native_completed 3.00, outcome_component 0.44, score 0.48, technical_error 0.00, truncations 0.00, win_rate 0.72, wins 2.17
+- `0016`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 0.83, lp_component 0.03, native_completed 3.00, outcome_component 0.44, score 0.48, technical_error 0.00, truncations 0.00, win_rate 0.72, wins 2.17
+- `0017`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 0.92, lp_component 0.03, native_completed 3.00, outcome_component 0.39, score 0.42, technical_error 0.00, truncations 0.00, win_rate 0.69, wins 2.08
+- `0018`: completed_duels 3.00, draws 0.00, forfeits 0.00, losses 0.75, lp_component 0.04, native_completed 3.00, outcome_component 0.50, score 0.54, technical_error 0.00, truncations 0.00, win_rate 0.75, wins 2.25
+
+Held-out evaluations (not used for selection):
+- `0008` / heldout (Yu-Gi-Oh! EDOPro — offline three-duel benchmark): mean score 0.299 over 12 episodes

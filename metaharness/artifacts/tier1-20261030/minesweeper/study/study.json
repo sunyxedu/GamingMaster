@@ -1,0 +1,32 @@
+{
+  "game": "Minesweeper",
+  "tier": 1,
+  "tier_rationale": "Minesweeper is a finite turn-based puzzle: the board changes only when the agent reveals, flags, or chords a cell, and there is no opponent or real-time clock in the standard rules. Astra can spend seconds to a minute deriving constraints between actions without losing progress; an adaptor timeout is only an infrastructure safeguard.",
+  "decision_latency_s": 60.0,
+  "interface": {
+    "chosen": "api",
+    "why": "A local deterministic JSON API around a pure-Python engine is headless, offline, reproducible under reset(seed), low latency, and exposes structured cells directly. Browser, screenshot, curses, and native-game hooks add GUI fragility, external dependencies, or ToS risk without helping this benchmark.",
+    "software": [
+      "Python 3.12 standard library from /home/hemlix/GamingMaster-mh-tier1/runs/venvs/minesweeper"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Implement the documented reset, observe, and act JSON calls in the generated adaptor.",
+      "Use a documented seeded PRNG to place unique mines and enforce first-click safety.",
+      "Compute eight-neighbor counts, zero flood fill, flag toggling, chording, and terminal states.",
+      "Keep mine locations private until a terminal observation and return safe_revealed and safe_total.",
+      "Run deterministic smoke tests for reset(seed), edge/corner counts, flood fill, loss, and win."
+    ],
+    "observation": "JSON containing width, height, mine count, status, a grid of unknown/revealed:n/flagged cells, safe_revealed, and safe_total; mine coordinates are hidden while playing.",
+    "actions": "One JSON action per turn: reveal(row,col), flag(row,col) to toggle a hidden-cell flag, or chord(row,col) on a revealed number when its adjacent flag count is satisfied. Return the next observation and terminal reason."
+  },
+  "scoring": "Report safe_revealed divided by (width*height - mine_count) as the progress score, plus a separate won boolean. The fraction rewards every safe cell opened even on a loss, while won records the objective of revealing all safe cells.",
+  "scenarios": "reset(seed) must deterministically vary mine layouts, with held-out seeds sampled from the same generator. Evaluate classic 9x9/10, 16x16/40, and 30x16/99 presets plus a few custom dimensions/densities; keep first-click safety and rule semantics fixed so generalization tests deduction rather than interface changes.",
+  "strategy_summary": "Strong play repeatedly applies local constraint rules: residual zero means all adjacent unknowns are safe, and residual equal to the unknown count means all are mines. Store frontier equations, use subset differences and exact component enumeration to derive probabilities, and choose the safest move when a guess is unavoidable. Open near the center in first-click-safe games, exploit zero flood fills, and chord only when confirmed flags satisfy a number. Put bookkeeping, search, and probability in code; use Astra for planning and ambiguous cases and Jev for fast typed pattern or chord checks.",
+  "risks": [
+    "The benchmark has no official external API; the generated adaptor must define first-click and chord semantics precisely.",
+    "Incorrect flags are annotations but can cause an unsafe chord if the adaptor trusts them.",
+    "Screen/browser/native-client approaches are GUI dependent, brittle, and may violate a third-party site's Terms of Service.",
+    "Seeds, dimensions, and first-click handling must be deterministic or held-out scenario scores will be noisy."
+  ]
+}

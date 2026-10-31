@@ -1,0 +1,23 @@
+[22:04:59] run: game='Dominion (deck-building card game)' dir=runs/dominion agent=codex:gpt-6-astra@router
+[22:11:23] run: game='Dominion (deck-building card game)' dir=runs/dominion agent=codex:gpt-6-astra@router
+[22:17:29] run: game='Dominion (deck-building card game)' dir=runs/dominion agent=codex:gpt-6-astra@router
+[22:33:26] study: done — tier 1, interface bot library: local pyminion Python simulator with a blocking JSON decision adaptor (provisional pending source and Python 3.12 validation)
+[22:46:42] adapt: adaptor validated after 1 attempt(s)
+[22:46:42] run: game='Dominion (deck-building card game)' dir=runs/dominion agent=codex:gpt-6-astra@router
+[22:46:42] study: reusing runs/dominion/study/study.json (tier 1)
+[22:46:42] adapt: reusing validated adaptor
+[22:46:42] search: tier 1 on adaptor game 'Dominion (offline pyminion)'
+[22:50:00] run: game='Dominion (deck-building card game)' dir=runs/dominion agent=codex:gpt-6-astra@router
+[22:50:00] study: reusing runs/dominion/study/study.json (tier 1)
+[22:50:01] adapt: reusing validated adaptor
+[22:50:01] search: tier 1 on adaptor game 'Dominion (offline pyminion)'
+[02:32:55] run: done — best 0017
+[03:13:22] run: game='Dominion (deck-building card game)' dir=runs/dominion agent=codex:gpt-6-astra@router
+[03:13:22] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[03:13:22] study: reusing runs/dominion/study/study.json (tier 1)
+[04:11:18] adapt: adaptor validated after 1 attempt(s)
+[04:11:18] run: game='Dominion (deck-building card game)' dir=runs/dominion agent=codex:gpt-6-astra@router
+[04:11:18] study: reusing runs/dominion/study/study.json (tier 1)
+[04:11:19] adapt: reusing validated adaptor
+[04:11:19] search: tier 1 on adaptor game 'Dominion (offline pyminion)'
+[12:22:38] run: done — best 0016

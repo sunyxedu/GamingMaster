@@ -1,0 +1,799 @@
+{
+ "harness_path": "runs/sokoban/search/candidates/0003/harness.py",
+ "game": "Sokoban (Boxoban ASCII)",
+ "fatal": null,
+ "mean_score": 7299.769,
+ "stale_fraction": null,
+ "n_episodes": 10,
+ "system1_calls": 0,
+ "system2_calls": 59,
+ "mean_steps": 438.1,
+ "failed_s1": 0,
+ "failed_s2": 9,
+ "timeouts_s1": 0,
+ "timeouts_s2": 9,
+ "ended_by": {
+  "game_done": 9,
+  "deadline": 1
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 0.01072814425930153,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 100,
+   "score": 10395.15,
+   "steps": 35,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 133.44062089920044,
+    "p50": 133.44062089920044,
+    "p90": 133.44062089920044,
+    "max": 133.44062089920044
+   },
+   "wall_s": 664.2233148701489,
+   "error": null,
+   "info": {
+    "score": 10395.15,
+    "ticks": 35,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "solved": 1.0,
+     "boxes_on_goals": 4.0,
+     "pushes": 9.0,
+     "walk_steps": 26.0,
+     "total_actions": 35.0,
+     "action_cap_terminated": 0.0
+    }
+   },
+   "acts": 35,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     133.441,
+     3011
+    ]
+   ]
+  },
+  {
+   "seed": 101,
+   "score": 74.5,
+   "steps": 2000,
+   "system1_calls": 0,
+   "system2_calls": 5,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 1799.0495768322144,
+   "error": null,
+   "info": {
+    "score": 74.5,
+    "ticks": 2000,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "solved": 0.0,
+     "boxes_on_goals": 1.0,
+     "pushes": 11.0,
+     "walk_steps": 1989.0,
+     "total_actions": 2000.0,
+     "action_cap_terminated": 1.0
+    }
+   },
+   "acts": 2000,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 5,
+   "timeouts_s1": 0,
+   "timeouts_s2": 5,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 102,
+   "score": 10393.12,
+   "steps": 38,
+   "system1_calls": 0,
+   "system2_calls": 4,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 99.85470223426819,
+    "p50": 99.85470223426819,
+    "p90": 99.85470223426819,
+    "max": 99.85470223426819
+   },
+   "wall_s": 1460.8263673479669,
+   "error": null,
+   "info": {
+    "score": 10393.12,
+    "ticks": 38,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "solved": 1.0,
+     "boxes_on_goals": 4.0,
+     "pushes": 13.0,
+     "walk_steps": 25.0,
+     "total_actions": 38.0,
+     "action_cap_terminated": 0.0
+    }
+   },
+   "acts": 38,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 3,
+   "timeouts_s1": 0,
+   "timeouts_s2": 3,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     99.855,
+     7294
+    ]
+   ]
+  },
+  {
+   "seed": 103,
+   "score": -21.5,
+   "steps": 2000,
+   "system1_calls": 0,
+   "system2_calls": 22,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 21,
+    "mean": 43.4038264864967,
+    "p50": 38.18235158920288,
+    "p90": 75.5967071056366,
+    "max": 140.00844478607178
+   },
+   "wall_s": 1799.0013142109383,
+   "error": null,
+   "info": {
+    "score": -21.5,
+    "ticks": 2000,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "solved": 0.0,
+     "boxes_on_goals": 0.0,
+     "pushes": 3.0,
+     "walk_steps": 1997.0,
+     "total_actions": 2000.0,
+     "action_cap_terminated": 1.0
+    }
+   },
+   "acts": 2000,
+   "acts_after_s1": 0,
+   "acts_after_s2": 19,
+   "failed_s1": 0,
+   "failed_s2": 1,
+   "timeouts_s1": 0,
+   "timeouts_s2": 1,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     140.008,
+     11021
+    ],
+    [
+     53.544,
+     1545
+    ],
+    [
+     48.94,
+     468
+    ],
+    [
+     49.547,
+     208
+    ],
+    [
+     44.104,
+     105
+    ],
+    [
+     15.598,
+     246
+    ],
+    [
+     9.14,
+     390
+    ],
+    [
+     18.944,
+     44
+    ],
+    [
+     22.37,
+     20
+    ],
+    [
+     32.816,
+     401
+    ],
+    [
+     23.639,
+     51
+    ],
+    [
+     44.217,
+     46
+    ],
+    [
+     38.182,
+     109
+    ],
+    [
+     29.653,
+     84
+    ],
+    [
+     40.02,
+     334
+    ],
+    [
+     20.099,
+     60
+    ],
+    [
+     60.624,
+     658
+    ],
+    [
+     95.304,
+     1581
+    ],
+    [
+     75.597,
+     879
+    ],
+    [
+     26.209,
+     101
+    ],
+    [
+     22.924,
+     107
+    ]
+   ]
+  },
+  {
+   "seed": 104,
+   "score": 10395.19,
+   "steps": 31,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 116.02194213867188,
+    "p50": 116.02194213867188,
+    "p90": 116.02194213867188,
+    "max": 116.02194213867188
+   },
+   "wall_s": 501.23652262287214,
+   "error": null,
+   "info": {
+    "score": 10395.19,
+    "ticks": 31,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "solved": 1.0,
+     "boxes_on_goals": 4.0,
+     "pushes": 9.0,
+     "walk_steps": 22.0,
+     "total_actions": 31.0,
+     "action_cap_terminated": 0.0
+    }
+   },
+   "acts": 31,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     116.022,
+     3330
+    ]
+   ]
+  },
+  {
+   "seed": 105,
+   "score": 10392.63,
+   "steps": 37,
+   "system1_calls": 0,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 85.5762984752655,
+    "p50": 117.76448845863342,
+    "p90": 117.76448845863342,
+    "max": 117.76448845863342
+   },
+   "wall_s": 353.75136611494236,
+   "error": null,
+   "info": {
+    "score": 10392.63,
+    "ticks": 37,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "solved": 1.0,
+     "boxes_on_goals": 4.0,
+     "pushes": 14.0,
+     "walk_steps": 23.0,
+     "total_actions": 37.0,
+     "action_cap_terminated": 0.0
+    }
+   },
+   "acts": 37,
+   "acts_after_s1": 0,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     117.764,
+     2590
+    ],
+    [
+     53.388,
+     194
+    ]
+   ]
+  },
+  {
+   "seed": 106,
+   "score": 192.51,
+   "steps": 99,
+   "system1_calls": 0,
+   "system2_calls": 21,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 20,
+    "mean": 54.03213996887207,
+    "p50": 49.81140661239624,
+    "p90": 80.88066387176514,
+    "max": 100.11252164840698
+   },
+   "wall_s": 1800.4125420849305,
+   "error": null,
+   "info": {
+    "score": 192.51,
+    "ticks": 99,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "solved": 0.0,
+     "boxes_on_goals": 2.0,
+     "pushes": 13.0,
+     "walk_steps": 86.0,
+     "total_actions": 99.0,
+     "action_cap_terminated": 0.0
+    }
+   },
+   "acts": 99,
+   "acts_after_s1": 0,
+   "acts_after_s2": 20,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     100.113,
+     9207
+    ],
+    [
+     68.285,
+     3397
+    ],
+    [
+     29.938,
+     762
+    ],
+    [
+     39.383,
+     762
+    ],
+    [
+     49.531,
+     629
+    ],
+    [
+     34.075,
+     280
+    ],
+    [
+     38.134,
+     310
+    ],
+    [
+     49.811,
+     125
+    ],
+    [
+     45.798,
+     148
+    ],
+    [
+     54.098,
+     151
+    ],
+    [
+     44.334,
+     270
+    ],
+    [
+     44.816,
+     184
+    ],
+    [
+     59.004,
+     54
+    ],
+    [
+     80.881,
+     859
+    ],
+    [
+     47.051,
+     465
+    ],
+    [
+     77.597,
+     938
+    ],
+    [
+     60.202,
+     175
+    ],
+    [
+     55.644,
+     186
+    ],
+    [
+     54.411,
+     55
+    ],
+    [
+     47.538,
+     89
+    ]
+   ]
+  },
+  {
+   "seed": 107,
+   "score": 10389.4,
+   "steps": 60,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 169.62992596626282,
+    "p50": 169.62992596626282,
+    "p90": 169.62992596626282,
+    "max": 169.62992596626282
+   },
+   "wall_s": 320.3972559659742,
+   "error": null,
+   "info": {
+    "score": 10389.4,
+    "ticks": 60,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "solved": 1.0,
+     "boxes_on_goals": 4.0,
+     "pushes": 20.0,
+     "walk_steps": 40.0,
+     "total_actions": 60.0,
+     "action_cap_terminated": 0.0
+    }
+   },
+   "acts": 60,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     169.63,
+     4361
+    ]
+   ]
+  },
+  {
+   "seed": 108,
+   "score": 10395.07,
+   "steps": 43,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 139.45761036872864,
+    "p50": 139.45761036872864,
+    "p90": 139.45761036872864,
+    "max": 139.45761036872864
+   },
+   "wall_s": 165.55670005991124,
+   "error": null,
+   "info": {
+    "score": 10395.07,
+    "ticks": 43,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "solved": 1.0,
+     "boxes_on_goals": 4.0,
+     "pushes": 9.0,
+     "walk_steps": 34.0,
+     "total_actions": 43.0,
+     "action_cap_terminated": 0.0
+    }
+   },
+   "acts": 43,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     139.458,
+     3893
+    ]
+   ]
+  },
+  {
+   "seed": 109,
+   "score": 10391.62,
+   "steps": 38,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 84.5342116355896,
+    "p50": 84.5342116355896,
+    "p90": 84.5342116355896,
+    "max": 84.5342116355896
+   },
+   "wall_s": 219.62144325487316,
+   "error": null,
+   "info": {
+    "score": 10391.62,
+    "ticks": 38,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "solved": 1.0,
+     "boxes_on_goals": 4.0,
+     "pushes": 16.0,
+     "walk_steps": 22.0,
+     "total_actions": 38.0,
+     "action_cap_terminated": 0.0
+    }
+   },
+   "acts": 38,
+   "acts_after_s1": 0,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     84.534,
+     5428
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   100,
+   101,
+   102,
+   103,
+   104,
+   105,
+   106,
+   107,
+   108,
+   109
+  ],
+  "expected_episodes": 10,
+  "game_kwargs": {
+   "max_actions": 2000
+  },
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "49a914b93be531bf635ff4ca335e3e44d5c6945df2f3597cac9c00cb3718f7d5",
+  "game_kind": "turn",
+  "resolved_models": {
+   "system2": [
+    "codex:gpt-6-astra@router"
+   ]
+  }
+ },
+ "score_std": 4981.10314941145
+}

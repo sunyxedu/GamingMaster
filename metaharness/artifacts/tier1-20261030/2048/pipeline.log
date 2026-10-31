@@ -1,0 +1,10 @@
+[22:05:00] run: game='2048' dir=runs/2048 agent=codex:gpt-6-astra@router
+[22:11:23] run: game='2048' dir=runs/2048 agent=codex:gpt-6-astra@router
+[19:32:29] run: game='2048' dir=runs/2048 agent=codex:gpt-6-astra@router
+[19:39:24] study: done — tier 1, interface standalone Python rules engine
+[19:58:20] adapt: adaptor validated after 1 attempt(s)
+[19:58:21] run: game='2048' dir=runs/2048 agent=codex:gpt-6-astra@router
+[19:58:21] study: reusing runs/2048/study/study.json (tier 1)
+[19:58:21] adapt: reusing validated adaptor
+[19:58:21] search: tier 1 on adaptor game '2048'
+[04:16:03] run: done — best 0013

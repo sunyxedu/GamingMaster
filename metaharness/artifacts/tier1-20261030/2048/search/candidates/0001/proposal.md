@@ -1,0 +1,7 @@
+parent: 0000
+
+Hypothesis: the leader fails mainly because one slow Astra decision is required for every move. Its seed-83 trace repeatedly chooses `right` in the opening (steps 2, 4, 5, and 6), reaching only 24 merge score by step 6, and the 1,800-second deadline ends the episode after about 30–35 actions. The model is also given no persistent anchor or feedback about plan failure, so it cannot maintain a snake or recover from a damaged layout.
+
+What changed vs. the parent: this harness implements the verified 2048 transition rules, legal-action filtering, chance-node expectimax, and a snake/empty-cell heuristic locally. It executes one locally selected action per turn, allowing the full 200-move budget to be used. Astra is called at the opening to select the corner anchor and once more after 12 scoreless actions to diagnose/replan; both calls are safely caught on timeout, budget exhaustion, or malformed output. Every move checks the returned observation and `ctx.progress()`, and a stale action is retried with a legal fallback.
+
+Evidence that would confirm the hypothesis: training and validation episodes should make substantially more than 30 moves and raise both merge score and maximum tile, with fewer than three Astra calls per episode. Refutation would be similar scores despite the extra moves, or failures concentrated after the local search locks the wrong anchor; the traces would then show whether the replan threshold or heuristic needs changing.

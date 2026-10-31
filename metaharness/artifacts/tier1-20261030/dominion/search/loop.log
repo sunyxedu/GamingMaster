@@ -1,0 +1,63 @@
+[04:13:11] seed check: 16 seed(s) reset ok
+[05:13:11] eval 0000-tier1_astra_naive: mean=-4.875 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 1, deadline 7
+[05:13:11] iteration 1/6 slot 1/3: proposing 0001 with codex:gpt-6-astra@router
+[05:13:11] iteration 1/6 slot 2/3: proposing 0002 with codex:gpt-6-astra@router
+[05:13:11] iteration 1/6 slot 3/3: proposing 0003 with codex:gpt-6-astra@router
+[05:34:10] preflight 0003: ok
+[05:58:12] preflight 0001: ok; warnings: no System-2 call was answered during the dry run
+[06:04:53] eval 0001: mean=5.0 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[06:20:06] preflight 0002: ok; warnings: no System-2 call was answered during the dry run
+[06:34:11] eval 0003: mean=-2.0 stale=None fatal=None errors=0 failed s1/s2=0/2 ended: deadline 8
+[06:54:14] eval 0002: mean=-23.0 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 7, deadline 1
+[06:54:14] iteration 2/6 slot 1/3: proposing 0004 with codex:gpt-6-astra@router
+[06:54:14] iteration 2/6 slot 2/3: proposing 0005 with codex:gpt-6-astra@router
+[06:54:14] iteration 2/6 slot 3/3: proposing 0006 with codex:gpt-6-astra@router
+[07:17:17] preflight 0005: ok; warnings: no System-2 call was answered during the dry run
+[07:19:17] preflight 0006: ok; warnings: no System-2 call was answered during the dry run
+[07:19:18] eval 0006: mean=-0.25 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[07:34:18] preflight 0004: ok; warnings: no System-2 call was answered during the dry run
+[07:49:12] eval 0004: mean=4.625 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[07:54:00] eval 0005: mean=-25.75 stale=None fatal=None errors=0 failed s1/s2=0/4 ended: game_done 8
+[07:54:00] iteration 3/6 slot 1/3: proposing 0007 with codex:gpt-6-astra@router
+[07:54:00] iteration 3/6 slot 2/3: proposing 0008 with codex:gpt-6-astra@router
+[07:54:00] iteration 3/6 slot 3/3: proposing 0009 with codex:gpt-6-astra@router
+[08:14:15] preflight 0007: ok; warnings: no System-2 call was answered during the dry run
+[08:14:16] eval 0007: mean=-2.875 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[08:36:02] preflight 0008: ok; warnings: no System-2 call was answered during the dry run
+[08:36:58] preflight 0009: ok; warnings: no System-2 call was answered during the dry run
+[08:45:24] eval 0008: mean=3.0 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[09:11:15] eval 0009: mean=-3.875 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[09:11:15] iteration 4/6 slot 1/3: proposing 0010 with codex:gpt-6-astra@router
+[09:11:15] iteration 4/6 slot 2/3: proposing 0011 with codex:gpt-6-astra@router
+[09:11:15] iteration 4/6 slot 3/3: proposing 0012 with codex:gpt-6-astra@router
+[09:25:58] preflight 0010: ok; warnings: no System-2 call was answered during the dry run
+[09:25:59] eval 0010: mean=2.625 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[09:27:04] preflight 0012: ok; warnings: no System-2 call was answered during the dry run
+[09:37:54] eval 0012: mean=-4.25 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[09:51:18] preflight 0011: ok; warnings: no System-2 call was answered during the dry run
+[10:09:04] eval 0011: mean=9.0 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[10:09:04] iteration 5/6 slot 1/3: proposing 0013 with codex:gpt-6-astra@router
+[10:09:04] iteration 5/6 slot 2/3: proposing 0014 with codex:gpt-6-astra@router
+[10:09:04] iteration 5/6 slot 3/3: proposing 0015 with codex:gpt-6-astra@router
+[10:21:20] preflight 0013: ok; warnings: no System-2 call was answered during the dry run
+[10:24:55] eval 0013: mean=6.625 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[10:36:40] preflight 0015: ok; warnings: no System-2 call was answered during the dry run
+[10:47:30] eval 0015: mean=5.25 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[10:51:28] preflight 0014: ok; warnings: no System-2 call was answered during the dry run
+[11:09:52] eval 0014: mean=3.375 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[11:09:52] iteration 6/6 slot 1/3: proposing 0016 with codex:gpt-6-astra@router
+[11:09:52] iteration 6/6 slot 2/3: proposing 0017 with codex:gpt-6-astra@router
+[11:09:52] iteration 6/6 slot 3/3: proposing 0018 with codex:gpt-6-astra@router
+[11:33:54] preflight 0018: ok; warnings: no System-2 call was answered during the dry run
+[11:34:00] preflight 0017: ok; warnings: no System-2 call was answered during the dry run
+[11:40:02] preflight 0016: ok; warnings: no System-2 call was answered during the dry run
+[11:46:54] eval 0017: mean=2.125 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[11:49:57] eval 0018: mean=0.625 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[11:57:12] eval 0016: mean=14.5 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[11:57:12] validation of the top 3 on seeds [4100, 4101, 4200, 4201, 4300, 4301, 4400, 4401]: 0016, 0011, 0013
+[12:03:16] eval 0013/validation: mean=7.125 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[12:12:38] eval 0016/validation: mean=11.0 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[12:12:51] eval 0011/validation: mean=10.625 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[12:12:51] selected after validation: 0016
+[12:12:51] held-out seeds evaluation of 0016
+[12:22:38] eval 0016/heldout: mean=1.625 stale=None fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8

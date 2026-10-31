@@ -1,0 +1,24 @@
+# Adaptor validation: PASS
+
+- [x] load game.py and make_game() — name=TextArena (TicTacToe / Mastermind) tier=tier1 realtime=False
+- [x] TIER agrees with the game's kind (2 <=> tick()) — TIER=1; the game is turn-based (no tick)
+- [x] tier 1, as the study decided — the game is turn-based (no tick), tier1
+- [x] SEEDS: non-empty, disjoint train / held-out lists of ints — 8 train (10, 11, 12, 13, 14, …), 8 held-out (110, 111, 112, 113, 114, …)
+- [x] action_spec is an ActionSpec with >=1 action
+- [x] describe() returns a non-trivial string — 1600 chars
+- [x] seed 10: observe() JSON-serialisable — 1164 bytes
+- [x] seed 10: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 10: applied 4 actions without exception
+- [x] seed 10: done is bool and score is a finite number after the actions — done=True score=0.0
+- [x] seed 10: observations after the actions are strict JSON
+- [x] seed 10: info() is a dict
+- [x] seed 110: observe() JSON-serialisable — 1164 bytes
+- [x] seed 110: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 110: applied 5 actions without exception
+- [x] seed 110: done is bool and score is a finite number after the actions — done=True score=0.0
+- [x] seed 110: observations after the actions are strict JSON
+- [x] seed 110: info() is a dict
+- [x] malformed action '__not_an_action__' does not raise
+- [x] close() releases the instance (called after every episode)
+- [x] DETERMINISTIC: reset(seed) on a fresh instance reproduces the first observation
+- [x] different seeds give different starts (scenario variety)

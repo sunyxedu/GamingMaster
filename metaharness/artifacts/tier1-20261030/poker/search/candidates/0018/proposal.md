@@ -1,0 +1,23 @@
+parent: 0015
+
+## Hypothesis
+
+Candidate 0015's 320-particle flop/turn posterior is vulnerable to particle impoverishment: it uses independent weighted draws with replacement, so a rare premium or nut-combination cluster can disappear before later public actions select for it. The resulting range can be overconfidently capped and make thin value bets or folds from an incorrectly reconstructed opponent range. A low-variance systematic resampler should preserve the same expected posterior while reducing this accidental support deletion, without spending more model calls or materially increasing CPU cost.
+
+## Archive evidence
+
+The leaderboard's leader, 0012, has a weak-seed score of 702.77 (seed 2207); its two incomplete episodes stop at 70/100 hands near the 1,800-second deadline. In that seed-2207 trace, hand 82's `complete_range_search` chose `raise_to 17500` at estimated EV 3,610.18 with called equity 0.5962; the next observation revealed Kh2c and recorded a 20,000-chip loss. That result does not show the raise was wrong—the hero was ahead at commitment—but it is an example where a range estimate's response composition matters greatly. Parent 0015 cuts its full posterior to 320 flop particles by multinomial resampling. Its seed-1103 hand 86 also shows how sharply later evidence can move a range: with AsQs on Jc Qh Kd, its solver estimated equity 0.7094 and chose a 1,500 bet; facing the flop raise, it estimated 0.3639 and called 3,750, then folded when facing 12,500 on the blank 7c turn. This sequence does not establish a bad decision, but it is a concrete stress case for preserving combinations through sequential updates. This proposal tests whether compression can randomly discard rare strong holdings and distort later response estimates, independently of the leader's larger solver.
+
+## What changed
+
+I retained 0015's cached-equity latent sequence model, legal-action validation, exact river support, staged sizing, response verification, and sparse Astra audits. The only strategic change is the flop/turn reduction from the full preflop posterior: 320 particles are now selected by one systematic-resampling sweep rather than 320 independent weighted choices. The sweep preserves multiplicity for common hands but gives every region of the cumulative posterior a deterministic interval, making rare high-weight combinations much less likely to vanish. Zero total weight falls back to uniform support. The harness logs source size, unique particles, and effective sample size so later traces can test whether support collapse was actually reduced.
+
+## Evidence that would confirm or refute it
+
+Confirmation would be lower support loss for premium/strong-draw classes after the flop, fewer large-pot decisions whose predicted opponent range is capped, and improved weak-seed chips/hand without more illegal actions, calls, or deadline truncation. A replay should show systematic and independent resampling agree on aggregate posterior mass while differing on rare-combination retention. Refute the hypothesis if scores and support diagnostics are unchanged, if systematic resampling introduces a deterministic bias, or if the extra bookkeeping pushes matches toward the wall deadline. Individual showdown results are not sufficient evidence; compare independent completed match blocks and inspect response-calibration traces.
+
+## Verification
+
+The module uses only the standard library and `metaharness.*`. Actions remain candidate-validated and all model output is parsed defensively. On the public flop state from 0015 seed-1103 hand 86, a 1,000-repetition resampling check at the same 320-particle budget reduced mean squared weight error from 0.00311 (multinomial) to 0.00166 (systematic); systematic draws retained 320 unique combinations versus 256 on average for multinomial. This validates the mechanism on a trace state, not strategic performance. Preflight passed with 87 actions, zero System-2 answers, and no exception. One development match completed seed 901 at +868.74 chips/hand in 1,277 seconds, with two successful Astra reviews, 241 actions, no illegal actions, and no low-probability response alarms. Astra left the range parameters unchanged after calibration reviews, so this episode mainly validates execution and recovery paths; one seed cannot establish score superiority.
+
+Fault-injection checks also passed for garbage text, arrays, malformed objects, NaN/infinite fields, an out-of-range raise override, TimeoutError, and RuntimeError. A rejected action was detected through the changed observation and the model's `call` override was accepted only because it matched a current legal candidate.

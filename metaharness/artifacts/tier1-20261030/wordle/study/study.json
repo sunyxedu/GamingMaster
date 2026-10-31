@@ -1,0 +1,34 @@
+{
+  "game": "Wordle and Mastermind",
+  "tier": 1,
+  "tier_rationale": "Both Wordle and classic Mastermind are finite turn-based deduction puzzles: the hidden answer does not change while the player considers a complete guess, and the next state appears only after submission. The evaluator explicitly describes seeded targets and turn-by-turn play, so there is no gameplay penalty for Astra taking seconds or a minute; decision latency is effectively unbounded apart from an external runner timeout.",
+  "decision_latency_s": 0.0,
+  "interface": {
+    "chosen": "api",
+    "why": "A local deterministic environment is the only option that satisfies the offline, headless, seeded-evaluator constraints without a server, account, GUI, or online dependency. It exposes exact structured observations and actions and can implement both games under explicit, versioned rules.",
+    "software": [
+      "Python 3.12.3 at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/wordle/bin/python",
+      "Python standard library",
+      "bundled versioned Wordle answer and allowed-guess data"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Pin and bundle the evaluator-approved answer and allowed-guess word lists; record source, license, version, and checksum.",
+      "Implement Wordle and Mastermind as separately configured local environments with reset(seed) and step(action).",
+      "Use seeded PRNG selection from the configured secret set and do not expose the secret before terminal state.",
+      "Serialize observations and terminal score metadata as JSON; validate actions before consuming a turn.",
+      "Confirm the active game and its exact ruleset from evaluator configuration before starting an episode."
+    ],
+    "observation": "JSON with game mode, public rules, turn count, limit, prior guesses and exact feedback, and terminal status. Keep the target word or code hidden until terminal evaluation. Wordle feedback is one green/yellow/gray value per position; Mastermind feedback is exact and misplaced peg counts.",
+    "actions": "Wordle submits one valid five-letter guess string. Mastermind submits a four-color sequence for classic rules. Return structured invalid-action errors without consuming a turn; otherwise return updated observation, done status, and score metadata."
+  },
+  "scoring": "Report solved status, guesses_used, and max_guesses as the primary result. Wordle uses the evaluator's six-guess limit; classic Mastermind commonly uses ten guesses. Keep failures distinct from wins and calculate any scalar reward at the evaluator boundary so guesses-used semantics remain explicit.",
+  "scenarios": "reset(seed) must reproducibly select a hidden Wordle answer from the pinned approved answer set or a Mastermind code from the configured secret space. Use disjoint held-out seeds and report the word-list/ruleset version. For Mastermind, vary target codes across the complete configured space without changing rules between train and test; if evaluating variant generalization, make variant config explicit and hold out whole variants separately.",
+  "strategy_summary": "For Wordle, maintain the exact surviving answer set by simulating duplicate-aware feedback, then choose guesses that split candidates well while respecting remaining turns and hard-mode legality. For classic Mastermind, enumerate codes and use Knuth-style minimax over exact black/white feedback, with a deterministic tie-break. Put arithmetic and state tracking in code; reserve Astra for adapting to rule variations and Jev for optional typed rankings. Verify the active game variant before applying a strategy.",
+  "risks": [
+    "NYT does not provide a supported public solver API, and its online game is incompatible with the required offline server.",
+    "The NYT's private word lists are not a stable public API; the adapter must use the evaluator-approved bundled list and document its provenance.",
+    "Mastermind rules vary across editions; peg count, colors, repeats, feedback, and turn limit must be configured explicitly.",
+    "The source session could not reach external websites because DNS/network access was unavailable; cited references should be checked when network access is available."
+  ]
+}

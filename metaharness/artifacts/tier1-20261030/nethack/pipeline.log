@@ -1,0 +1,18 @@
+[22:05:00] run: game='NetHack (NetHack Learning Environment)' dir=runs/nethack agent=codex:gpt-6-astra@router
+[22:11:23] run: game='NetHack (NetHack Learning Environment)' dir=runs/nethack agent=codex:gpt-6-astra@router
+[06:25:54] run: game='NetHack (NetHack Learning Environment)' dir=runs/nethack agent=codex:gpt-6-astra@router
+[06:48:42] study: done — tier 1, interface official env
+[07:26:27] adapt: adaptor validated after 1 attempt(s)
+[07:26:27] run: game='NetHack (NetHack Learning Environment)' dir=runs/nethack agent=codex:gpt-6-astra@router
+[07:26:27] study: reusing runs/nethack/study/study.json (tier 1)
+[07:26:28] adapt: reusing validated adaptor
+[07:26:28] search: tier 1 on adaptor game 'NetHack (NetHack Learning Environment)'
+[14:29:49] run: done — best 0016
+[00:47:19] run: game='NetHack (NetHack Learning Environment)' dir=runs/nethack agent=codex:gpt-6-astra@router
+[00:47:19] study: reusing runs/nethack/study/study.json (tier 1)
+[00:47:20] adapt: reusing validated adaptor
+[00:47:20] run: game='NetHack (NetHack Learning Environment)' dir=runs/nethack agent=codex:gpt-6-astra@router
+[00:47:20] study: reusing runs/nethack/study/study.json (tier 1)
+[00:47:21] adapt: reusing validated adaptor
+[00:47:21] search: tier 1 on adaptor game 'NetHack (NetHack Learning Environment)'
+[00:50:31] run: done — best 0016

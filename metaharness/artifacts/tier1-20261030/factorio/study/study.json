@@ -1,0 +1,86 @@
+{
+  "game": "Factorio",
+  "tier": 1,
+  "tier_rationale": "Ordinary Factorio is real-time, normally running at 60 simulation ticks per second, but this evaluation must pause the official headless engine at every observation boundary and advance exactly 1800 ticks per accepted action batch. Keep tier 1 as requested: Astra may reason for seconds or minutes with no in-game penalty while paused, and Jev is optional for typed state classification. Paused RCON access and exact stopping must be proven on the selected dedicated-server build before evaluation; they were not testable in this study. The 3600-second latency value is a proposed harness timeout, not a natural gameplay deadline: a correctly paused world has no finite decision deadline.",
+  "decision_latency_s": 3600.0,
+  "interface": {
+    "chosen": "mod: official Factorio Linux headless server with a trusted Lua control mod, local Source RCON, and a typed Python adaptor",
+    "why": "The official headless engine runs real factory production without a GUI or purchased graphical client. A small custom bridge can expose exact state, enforce finite resources and fixed simulated time, and measure production/research using engine counters. Python's standard library can handle RCON, so Docker, FLE's unverified dependency stack, external accounts and model-provider API keys are unnecessary. FLE is a documented fallback if a known working offline checkout is supplied. This is a proposed remote-manager benchmark, not an already installed environment or an assertion of vanilla avatar semantics.",
+    "software": [
+      "Official Linux x86_64 Factorio headless archive: pin and hash one exact base-game 2.0.x release after staging; proprietary but zero purchase cost, subject to applicable terms",
+      "Host runtime libraries required by that pinned binary; x86_64 and glibc 2.39 are locally confirmed, but binary compatibility remains untested",
+      "Existing CPython 3.12.3 at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/factorio/bin/python; socket, struct, json, subprocess, pathlib, hashlib and time suffice for the selected client design",
+      "New study-control Lua mod to implement in the adaptor phase, with finite stock/manual jobs, typed commands, tick control, observations and scoring; no game-playing code has been written in this study",
+      "Version-matched runtime API documentation, server/map settings examples, local configuration files and reproducible per-seed initial saves",
+      "Optional only: a pinned Python 3.12-compatible RCON client and offline wheelhouse installed into the evaluator venv; no third-party Python dependency is mandatory"
+    ],
+    "env": [
+      {
+        "var": "FACTORIO_BINARY",
+        "description": "Absolute path to the locally staged official factorio/bin/x64/factorio executable. This is an adaptor-defined variable.",
+        "required": true
+      },
+      {
+        "var": "FACTORIO_WRITE_DIR",
+        "description": "Absolute writable directory within this workspace for mods, config, saves, logs and script output; use a different directory per server worker.",
+        "required": true
+      },
+      {
+        "var": "FACTORIO_RCON_HOST",
+        "description": "Local RCON address, default 127.0.0.1. No public server address is needed.",
+        "required": false
+      },
+      {
+        "var": "FACTORIO_RCON_PORT",
+        "description": "Local TCP RCON port, default 27015; allocate a distinct port per concurrent worker.",
+        "required": false
+      },
+      {
+        "var": "FACTORIO_RCON_PASSWORD",
+        "description": "Locally generated RCON authentication secret supplied at runtime; never store its value in study files, observations or logs. No Factorio account credential is needed.",
+        "required": true
+      },
+      {
+        "var": "FACTORIO_GAME_PORT",
+        "description": "UDP multiplayer port for the dedicated server, default 34197; allocate a distinct port per worker even though no graphical client connects.",
+        "required": false
+      },
+      {
+        "var": "FACTORIO_ARTIFACT_MANIFEST",
+        "description": "Optional path to local engine/mod/docs/settings hashes and the benchmark ruleset manifest.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Stage an official headless archive and matching API/settings documentation through an available local bundle or separate network-enabled provisioning phase; DNS failed here, so no current release or FLE source was retrieved. Verify license, binary version, SHA-256 and --help. If exclusively open-source software is required, stop: the proprietary Factorio engine is incompatible with that constraint.",
+      "Extract within the study workspace and create explicit read-data/write-data configuration. Use the evaluator's Python 3.12.3. No pip install is required; if an optional client is used later, stage compatible wheels and install only into the named evaluator venv in an execution context that permits writing there.",
+      "Implement the study-control mod specified in interfaces.md using the pinned 2.0 runtime API. Enable only base and this mod; disable expansion mods. Use explicit force/surface references and a 200-slot script inventory instead of relying on game.player in an empty dedicated server.",
+      "Register a /study JSON command with hello, observe, submit_step and step_status methods. Enforce schema/revision checks, request IDs, deduplication, bounded responses and per-operation results. Restrict model actions to the typed allowlist; keep administrative console/reset capabilities inside trusted code.",
+      "Create per-seed map-generation and map-settings files with accessible finite iron, copper, coal and stone, harvestable trees and a valid offshore-pump site within the revealed [-128,128) square. Disable enemy generation, expansion, evolution and pollution for the primary family; validate feasibility deterministically.",
+      "Create server settings with public and LAN visibility disabled, online user verification disabled and auto_pause=false so the mod owns stepping. Supply a local RCON password from the environment and restrict RCON reachability to the local machine; no account, token, Steam login or cloud API key is needed.",
+      "Create a seed save with the enabled mod using --create, --map-gen-settings and --map-settings; start it with --start-server, --server-settings, unique game/RCON ports and the runtime RCON password. Verify all flags with the staged binary and launch without shell interpolation or secret-bearing logs.",
+      "Initialize finite stock to one burner mining drill, one stone furnace, eight iron plates and one wood; use normal base technologies and recipes. Baseline counters after setup, persist episode state and pause the engine. Freeze this complete initial state for reset.",
+      "Implement 128 turns of 1800 simulation ticks each, with at most 32 typed operations and 100 manually transferred items per turn. Manual mining/tree mining/handcrafting run on one serial worker with at most 60 seconds of queued work and 32 jobs; construction consumes stock. Pure observations advance no time.",
+      "Prove paused RCON/resume, on_tick target stopping, exact fixed-tick advancement, timing invariance, inventory conservation, real production/research accounting, duplicate-step safety and complete deterministic reset using the acceptance tests in interfaces.md. Do not label an unpaused server tier 1.",
+      "Measure final score and raw components at the charged horizon. Reset by restarting from a pristine per-seed save, clearing client state and episode IDs; never carry technologies, inventories, queues or counters between episodes. Keep all runtime artifacts offline."
+    ],
+    "observation": "Revision-tagged JSON at paused boundaries: episode/seed/tick/turn budget; stock and reserved manual jobs; bounded revealed terrain and resources; stable entity IDs, positions, orientations, statuses, recipes, inventories, fluids and power; recipe/prototype data with exact costs/times; current and available research; cumulative baseline-adjusted engine production/consumption, score components and prior action results. Page detailed queries and cache immutable prototypes. No screenshot or connected player is required.",
+    "actions": "A new typed bridge exposes mine_resource, mine_tree, handcraft, place, rotate, set_recipe, insert, extract, mine_building, set_research and wait through local RCON. These are proposed adaptor names, not verified FLE methods. All construction and transfers use owned items; manual work consumes actual ingredients/deposits and simulated work time. Apply up to 32 operations sequentially at a paused boundary, preserve successful operations if later ones fail, and then run exactly 1800 ticks. Empty wait and accepted batches with failed operations still consume a turn. Malformed/stale envelopes change nothing. Read-only observe calls do not consume turns; no arbitrary Lua, item spawning, technology grants or clock changes are agent actions."
+  },
+  "scoring": "Proposed benchmark score, not an official vanilla or verified FLE score: let P(i) be genuinely engine-produced cumulative items after the reset baseline and L(i) be science packs genuinely consumed for research, verified against labs/research. B = 0.01*min(P(iron-plate),1000) + 0.01*min(P(copper-plate),1000) + 0.02*min(P(iron-gear-wheel),200) + 0.05*min(P(electronic-circuit),200), capped at 34. Final score = B + sum over automation/logistic/chemical/production/utility/space science of weights 1/2/6/12/12/30 times [P(i)+4*L(i)]. This provides an early bootstrap signal and rewards sustained science plus research consumption. Initial stock, transfers, returned buildings and virtual manual output never increase P; track manual output separately, and count its packs only if genuinely consumed in labs. Validate API counter direction/surface/quality and report raw production, consumption, research IDs/progress, transfers, manual output and exactly charged ticks alongside the scalar.",
+  "scenarios": "Derive map seeds and bounded map-setting choices deterministically from reset(seed). Primary cold starts vary real patch shape, resource distance/direction/richness, coast, trees and build corridors while guaranteeing accessible iron/copper/coal/stone, trees, a valid pump site and useful construction space inside the allowed area. Use deterministic rejection/retry for infeasible seeds and enough finite resources for the horizon. Freeze base-only mods, initial stock and ruleset. Report separately any seeded bottleneck-repair factories, later researched/oil-access starts or combat families because their score opportunities differ. Reset the entire save/world/force/RNG/queues/counters, not just stock; held-out seeds must change physical constraints rather than relabel the same factory.",
+  "strategy_summary": "Strong play builds complete fueled and powered production chains before expanding their nominal capacity. Bootstrap coal and iron, add copper and stone, establish water-boiler-steam-engine power, and research Automation before building assemblers. Automate red science and its laboratory consumption, then add the full belt/inserter/circuit chain for green science while maintaining balanced inputs. Encode recipe expansion, output multiplicities, footprints, resource reservations, throughput, quotas, tick accounting and bottleneck diagnostics in code using pinned engine prototypes. Astra should choose milestones, layout, research and investments whose completion and payback fit the remaining simulated horizon. Check configuration, energy, inputs, blocked outputs and logistics before adding more machines; keep restart fuel and consume available science near the end. Jev is optional for batched typed classifications of supplied evidence and repair candidates, never arithmetic or long-range planning.",
+  "risks": [
+    "Outbound DNS failed for factorio.com, wiki.factorio.com and raw.githubusercontent.com, and no web tool or local game documentation was available. Citations are unverified reference targets; current releases, API behavior, license text and FLE metadata were not read in this session.",
+    "No Factorio binary was found on PATH, no FLE/RCON package is installed in the evaluator venv, and no game integration test was run. An offline artifact bundle is required before implementation can be exercised.",
+    "The official free headless server is proprietary. If free software means exclusively libre/open-source licensing, Factorio cannot satisfy the requirement. A graphical full client or Space Age expansion must not become an unacknowledged paid dependency.",
+    "Tier 1 depends on dedicated-server pause/resume and exact tick-target behavior. These are implementation acceptance gates, not verified capabilities on this machine; ordinary Factorio continues simulating while models think.",
+    "The trusted Lua bridge is new work. Virtual manual jobs, remote placement and the 100-item transfer allowance define a modified benchmark and must not be misrepresented as vanilla movement or existing FLE semantics.",
+    "Factorio 1.1, 2.0 and expansion APIs/recipes differ, including storage/prototype/production-statistics access. Pin all artifacts and use matching docs; do not assume a current FLE checkout supports this engine or Python 3.12.3.",
+    "Offline installation fails if binaries, optional wheels, Docker images or docs are fetched lazily. The selected standard-library client avoids mandatory pip/Docker dependencies; this study sandbox also does not permit writes to the sibling evaluator venv.",
+    "RCON is privileged and unencrypted; keep it local and expose only typed validated game actions to the model. Protect its secret from logs and observations. Large or split responses require framing and pagination.",
+    "Scoring can be corrupted by scripted stock insertion, inventory recycling, wrong counter signs/scopes, reset baselines or uncharged simulation time. Verify engine-produced counts and genuine research consumption using deterministic fixtures.",
+    "Empty-server auto-pause, nil game.player, retries after lost acknowledgments, stale entity IDs, stock overflow and incomplete save resets can silently break an otherwise plausible adaptor; all have explicit acceptance tests in interfaces.md.",
+    "A short horizon favors useful red/green production; changing score weights, start families, manual-transfer limits or simulation ticks changes the optimal strategy and requires a new versioned ruleset."
+  ]
+}

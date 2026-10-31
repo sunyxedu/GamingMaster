@@ -1,0 +1,126 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109
+        ]
+      ],
+      [
+        "heldout",
+        [
+          200,
+          201,
+          202,
+          203,
+          204,
+          205,
+          206,
+          207,
+          208,
+          209
+        ]
+      ]
+    ],
+    "game_kwargs": {
+      "max_actions": 2000
+    },
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "4c5b82ca8296b878887855f576beb44c07b0fae9d45df309d15a212796f5ba51"
+  },
+  "results": {
+    "train:100": {
+      "ok": true,
+      "obs_sha256": "02fe5f5b322bc6e4"
+    },
+    "train:101": {
+      "ok": true,
+      "obs_sha256": "e367e876716ad127"
+    },
+    "train:102": {
+      "ok": true,
+      "obs_sha256": "8a623f53e9b553a9"
+    },
+    "train:103": {
+      "ok": true,
+      "obs_sha256": "0bef4ef83b2f7e21"
+    },
+    "train:104": {
+      "ok": true,
+      "obs_sha256": "6dc0cd45d0666ec3"
+    },
+    "train:105": {
+      "ok": true,
+      "obs_sha256": "74ac766bebd5669f"
+    },
+    "train:106": {
+      "ok": true,
+      "obs_sha256": "51f8b302e9232123"
+    },
+    "train:107": {
+      "ok": true,
+      "obs_sha256": "80b7879154b756b5"
+    },
+    "train:108": {
+      "ok": true,
+      "obs_sha256": "0287b2d22ccdee9c"
+    },
+    "train:109": {
+      "ok": true,
+      "obs_sha256": "854f6523d2a6e3d6"
+    },
+    "heldout:200": {
+      "ok": true,
+      "obs_sha256": "a63ca66bc538df65"
+    },
+    "heldout:201": {
+      "ok": true,
+      "obs_sha256": "df34d31f5d96cb7a"
+    },
+    "heldout:202": {
+      "ok": true,
+      "obs_sha256": "33d25aeb2b2f7c04"
+    },
+    "heldout:203": {
+      "ok": true,
+      "obs_sha256": "1327b3dd6e65fb97"
+    },
+    "heldout:204": {
+      "ok": true,
+      "obs_sha256": "6d355579954ea498"
+    },
+    "heldout:205": {
+      "ok": true,
+      "obs_sha256": "6a903fd0f3b88e81"
+    },
+    "heldout:206": {
+      "ok": true,
+      "obs_sha256": "83dc67adf10b86c2"
+    },
+    "heldout:207": {
+      "ok": true,
+      "obs_sha256": "23d54482acd78862"
+    },
+    "heldout:208": {
+      "ok": true,
+      "obs_sha256": "6f5948a01326d2e6"
+    },
+    "heldout:209": {
+      "ok": true,
+      "obs_sha256": "6a9ea2d5eae9429b"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

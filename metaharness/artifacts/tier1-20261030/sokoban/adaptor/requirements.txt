@@ -1,0 +1,1 @@
+# The adaptor uses only Python 3.12 standard-library modules and metaharness.

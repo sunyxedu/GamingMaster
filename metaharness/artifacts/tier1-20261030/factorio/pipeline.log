@@ -1,0 +1,25 @@
+[22:04:59] run: game='Factorio' dir=runs/factorio agent=codex:gpt-6-astra@router
+[22:16:11] run: game='Factorio' dir=runs/factorio agent=codex:gpt-6-astra@router
+[22:36:16] study: done — tier 1, interface mod: official Factorio Linux headless server with a trusted Lua control mod, local Source RCON, and a typed Python adaptor
+[23:09:35] adapt: adaptor validated after 1 attempt(s)
+[23:09:52] run: game='Factorio' dir=runs/factorio agent=codex:gpt-6-astra@router
+[23:09:52] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[23:09:52] study: reusing runs/factorio/study/study.json (tier 1)
+[23:10:06] adapt: reusing validated adaptor
+[23:10:06] run: game='Factorio' dir=runs/factorio agent=codex:gpt-6-astra@router
+[23:10:06] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[23:10:06] study: reusing runs/factorio/study/study.json (tier 1)
+[23:10:20] adapt: reusing validated adaptor
+[23:10:20] search: tier 1 on adaptor game 'Factorio'
+[04:39:09] run: done — best 0007
+[18:06:36] run: game='Factorio' dir=runs/factorio agent=codex:gpt-6-astra@router
+[18:06:36] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[18:06:36] study: reusing runs/factorio/study/study.json (tier 1)
+[18:06:50] adapt: reusing validated adaptor
+[18:06:50] search: tier 1 on adaptor game 'Factorio'
+[21:26:38] run: game='Factorio' dir=runs/factorio agent=codex:gpt-6-astra@router
+[21:26:38] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[21:26:38] study: reusing runs/factorio/study/study.json (tier 1)
+[21:26:53] adapt: reusing validated adaptor
+[21:26:53] search: tier 1 on adaptor game 'Factorio'
+[22:36:12] run: done — best 0011

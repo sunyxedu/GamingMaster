@@ -1,0 +1,7 @@
+parent: 0015
+
+Hypothesis: candidate 0015’s expected-reward quotient search was evaluated with `soare`, while the study explicitly identifies `crane` as a strong, broad-letter opener. A conventional opener may produce different duplicate-aware partitions than `soare` and give the exact continuation search smaller residual families. This is a distinct opener test from the parallel slate-first proposal.
+
+What changed versus the parent: retain the duplicate-aware filtering, public list/hash loading, inherited partition search, expected-reward recurrence, and post-action verification/recovery. Change only the deterministic first action to `crane` when present, then fall back to `slate` or `soare`; later actions are recomputed from observed feedback. The search still maximizes evaluator reward with a candidate-only incumbent if interrupted. Every action is checked for legal acceptance, turn/history advancement, predicted feedback membership, candidate reduction, and `ctx.progress()` evidence; contradictions are handed to bounded Astra recovery and then re-verified.
+
+Evidence that would confirm or refute it: compare guesses-used and score against 0015 and the other opener experiments, with zero errors and 100% solve rate. Confirmation is more three-guess solves or a higher mean without additional rejected actions; a tie or regression would show that the continuation policy dominates this opener choice. Traces should record the selected opener, attainable reward, and any interrupted-search gap.

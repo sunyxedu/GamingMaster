@@ -1,0 +1,694 @@
+{
+ "harness_path": "runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py",
+ "game": "Pok\u00e9mon Showdown \u2014 Gen 9 Random Battle",
+ "fatal": null,
+ "mean_score": 0.0,
+ "stale_fraction": null,
+ "n_episodes": 10,
+ "system1_calls": 0,
+ "system2_calls": 10,
+ "mean_steps": 0.0,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "harness_error": 10
+ },
+ "s1_informed_fraction": null,
+ "s2_informed_fraction": null,
+ "errors": [
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n"
+ ],
+ "episodes": [
+  {
+   "seed": 104729,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 56.99513339996338,
+    "p50": 56.99513339996338,
+    "p90": 56.99513339996338,
+    "max": 56.99513339996338
+   },
+   "wall_s": 74.51193889789283,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "outcome": 0.0,
+     "self_hp_fraction": 1.0,
+     "opponent_hp_fraction": 1.0,
+     "hp_margin": 0.0,
+     "self_survivors": 6.0,
+     "opponent_survivors": 6.0,
+     "turns": 1.0,
+     "decisions": 0.0,
+     "score": 0.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     56.995,
+     161
+    ]
+   ]
+  },
+  {
+   "seed": 130363,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 51.51025938987732,
+    "p50": 51.51025938987732,
+    "p90": 51.51025938987732,
+    "max": 51.51025938987732
+   },
+   "wall_s": 126.05368100199848,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "outcome": 0.0,
+     "self_hp_fraction": 1.0,
+     "opponent_hp_fraction": 1.0,
+     "hp_margin": 0.0,
+     "self_survivors": 6.0,
+     "opponent_survivors": 6.0,
+     "turns": 1.0,
+     "decisions": 0.0,
+     "score": 0.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     51.51,
+     244
+    ]
+   ]
+  },
+  {
+   "seed": 155921,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 41.46682071685791,
+    "p50": 41.46682071685791,
+    "p90": 41.46682071685791,
+    "max": 41.46682071685791
+   },
+   "wall_s": 167.52704573678784,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "outcome": 0.0,
+     "self_hp_fraction": 1.0,
+     "opponent_hp_fraction": 1.0,
+     "hp_margin": 0.0,
+     "self_survivors": 6.0,
+     "opponent_survivors": 6.0,
+     "turns": 1.0,
+     "decisions": 0.0,
+     "score": 0.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     41.467,
+     202
+    ]
+   ]
+  },
+  {
+   "seed": 181081,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 33.895373821258545,
+    "p50": 33.895373821258545,
+    "p90": 33.895373821258545,
+    "max": 33.895373821258545
+   },
+   "wall_s": 151.44567152601667,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "outcome": 0.0,
+     "self_hp_fraction": 1.0,
+     "opponent_hp_fraction": 1.0,
+     "hp_margin": 0.0,
+     "self_survivors": 6.0,
+     "opponent_survivors": 6.0,
+     "turns": 1.0,
+     "decisions": 0.0,
+     "score": 0.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     33.895,
+     495
+    ]
+   ]
+  },
+  {
+   "seed": 206369,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 33.286757469177246,
+    "p50": 33.286757469177246,
+    "p90": 33.286757469177246,
+    "max": 33.286757469177246
+   },
+   "wall_s": 43.79861768800765,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "outcome": 0.0,
+     "self_hp_fraction": 1.0,
+     "opponent_hp_fraction": 1.0,
+     "hp_margin": 0.0,
+     "self_survivors": 6.0,
+     "opponent_survivors": 6.0,
+     "turns": 1.0,
+     "decisions": 0.0,
+     "score": 0.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     33.287,
+     49
+    ]
+   ]
+  },
+  {
+   "seed": 232003,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 41.56354355812073,
+    "p50": 41.56354355812073,
+    "p90": 41.56354355812073,
+    "max": 41.56354355812073
+   },
+   "wall_s": 285.1557076780591,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "outcome": 0.0,
+     "self_hp_fraction": 1.0,
+     "opponent_hp_fraction": 1.0,
+     "hp_margin": 0.0,
+     "self_survivors": 6.0,
+     "opponent_survivors": 6.0,
+     "turns": 1.0,
+     "decisions": 0.0,
+     "score": 0.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     41.564,
+     369
+    ]
+   ]
+  },
+  {
+   "seed": 257053,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 47.1334273815155,
+    "p50": 47.1334273815155,
+    "p90": 47.1334273815155,
+    "max": 47.1334273815155
+   },
+   "wall_s": 72.14849952491932,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "outcome": 0.0,
+     "self_hp_fraction": 1.0,
+     "opponent_hp_fraction": 1.0,
+     "hp_margin": 0.0,
+     "self_survivors": 6.0,
+     "opponent_survivors": 6.0,
+     "turns": 1.0,
+     "decisions": 0.0,
+     "score": 0.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     47.133,
+     275
+    ]
+   ]
+  },
+  {
+   "seed": 282617,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 68.966144323349,
+    "p50": 68.966144323349,
+    "p90": 68.966144323349,
+    "max": 68.966144323349
+   },
+   "wall_s": 84.47921812604181,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "outcome": 0.0,
+     "self_hp_fraction": 1.0,
+     "opponent_hp_fraction": 1.0,
+     "hp_margin": 0.0,
+     "self_survivors": 6.0,
+     "opponent_survivors": 6.0,
+     "turns": 1.0,
+     "decisions": 0.0,
+     "score": 0.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     68.966,
+     523
+    ]
+   ]
+  },
+  {
+   "seed": 308081,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 42.225308895111084,
+    "p50": 42.225308895111084,
+    "p90": 42.225308895111084,
+    "max": 42.225308895111084
+   },
+   "wall_s": 163.2761112919543,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "outcome": 0.0,
+     "self_hp_fraction": 1.0,
+     "opponent_hp_fraction": 1.0,
+     "hp_margin": 0.0,
+     "self_survivors": 6.0,
+     "opponent_survivors": 6.0,
+     "turns": 1.0,
+     "decisions": 0.0,
+     "score": 0.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     42.225,
+     332
+    ]
+   ]
+  },
+  {
+   "seed": 333667,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 39.5141282081604,
+    "p50": 39.5141282081604,
+    "p90": 39.5141282081604,
+    "max": 39.5141282081604
+   },
+   "wall_s": 235.59558899980038,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/core/runner.py\", line 472, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier1/runs/showdown/search/candidates/0000-tier1_astra_naive/harness.py\", line 33, in run_episode\n    obs = ctx.act(parse_action(res.text, names, default=names[0]))\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier1/metaharness/baselines/_generic.py\", line 36, in parse_action\n    canon = next(n for n in names if n.lower() == tok[0].lower())\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nStopIteration\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 0,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 1800.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "outcome": 0.0,
+     "self_hp_fraction": 1.0,
+     "opponent_hp_fraction": 1.0,
+     "hp_margin": 0.0,
+     "self_survivors": 6.0,
+     "opponent_survivors": 6.0,
+     "turns": 1.0,
+     "decisions": 0.0,
+     "score": 0.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system2": [
+     "codex:gpt-6-astra@router"
+    ]
+   },
+   "calls_s2": [
+    [
+     39.514,
+     414
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   104729,
+   130363,
+   155921,
+   181081,
+   206369,
+   232003,
+   257053,
+   282617,
+   308081,
+   333667
+  ],
+  "expected_episodes": 10,
+  "game_kwargs": {
+   "opponent": "heuristic",
+   "max_turns": 300,
+   "max_decisions": 900
+  },
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 1800.0,
+  "deadline_s": 1800.0,
+  "grace_s": 10.0,
+  "parallel": 4,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 1800.0
+  },
+  "models": {
+   "system1": null,
+   "system2": {
+    "name": "codex:gpt-6-astra@router",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled-and-audited",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "faf6391328032aa4a1913053a46239fe9f0a3fb2fc48af0dbd54d2b715973945",
+  "game_kind": "turn",
+  "resolved_models": {
+   "system2": [
+    "codex:gpt-6-astra@router"
+   ]
+  }
+ },
+ "score_std": 0.0
+}

@@ -34,6 +34,7 @@ from typing import Any, Optional
 
 from ..games.base import close_game
 from ..models.base import ModelUnavailable, System1Model, System2Model, TraceSink
+from .archive import atomic_write
 from .contract import (Budget, BudgetExceeded, HarnessContext, VirtualClock, WallClock, load_harness_module,
                        unload_harness_module)
 
@@ -443,6 +444,7 @@ def run_episode(
     ctx = HarnessContext(system2=system2, system1=system1, trace=tee, clock=clock, budget=budget,
                          memory=memory, game_kind="realtime" if realtime else "turn",
                          act_fn=act_fn, observe_fn=view.observe, done_fn=lambda: view.done,
+                         score_fn=lambda: view.score,
                          latency_override=latency_override,
                          tick_s=tick_s if realtime else None,
                          ticks_fn=(lambda: published["ticks"]) if realtime else None,
@@ -520,10 +522,12 @@ def run_episode(
         ended_by = "game_error"
     game_done = False
     # The game lock is free unless a call into the game never returned (a hung server): never wait
-    # for it unboundedly — record the hang and use what the ticker / steps published.
+    # for it unboundedly — record the hang and use what the ticker / steps published. A legitimate
+    # step can take seconds (an engine simulating the opponent, a server round trip), so the wait is
+    # the grace period, not a fixed two seconds: a false "game hung" would end the search as a dead game.
     breakdown: Optional[dict[str, float]] = None
     breakdown_error: Optional[str] = None
-    hung = not lock.acquire(timeout=2.0)          # a game call returns in well under that
+    hung = not lock.acquire(timeout=max(2.0, grace_s))
     if hung:
         err = ("game hung: a call into the game (tick/step/observe) did not return, so neither the "
                "harness nor the evaluator could use it" + (f" — also: {_last_line(err)}" if err else ""))
@@ -621,7 +625,10 @@ def evaluate_harness(
     grace_s: float = DEFAULT_GRACE_S,
     game_name: Optional[str] = None,
     invalid_retries: int = 1,
+    parallel: int = 1,
 ) -> EvalResult:
+    """``parallel``: how many seeds play at once (each with its own game, module and trace). Shared
+    memory orders the seeds, so it is always sequential. Episodes are reported in seed order."""
     if memory_mode not in {"episode", "shared"}:
         raise ValueError("memory_mode must be episode or shared")
     if not seeds or len(set(seeds)) != len(seeds):
@@ -636,11 +643,12 @@ def evaluate_harness(
     result = EvalResult(harness_path=str(harness_path), game=game_name or "unknown", episodes=[])
     b = budget_per_episode or Budget()
     deadline_s = min(b.max_wall_s, harness_timeout_s)
+    workers = max(1, int(parallel)) if memory_mode == "episode" else 1
     result.metadata = {
         "protocol_version": PROTOCOL_VERSION, "seeds": seeds, "expected_episodes": len(seeds),
         "game_kwargs": game_kwargs or {}, "clock_mode": clock_mode, "latency_override": latency_override,
         "memory_mode": memory_mode, "harness_timeout_s": harness_timeout_s, "deadline_s": deadline_s,
-        "grace_s": grace_s,
+        "grace_s": grace_s, "parallel": min(workers, len(seeds)),
         "budget": {"max_system1_calls": b.max_system1_calls,
                    "max_system2_calls": b.max_system2_calls, "max_wall_s": b.max_wall_s},
         "models": {kind: None if model is None else {
@@ -651,31 +659,31 @@ def evaluate_harness(
     }
     try:
         result.metadata["harness_sha256"] = hashlib.sha256(harness_path.read_bytes()).hexdigest()
-        module = load_harness_module(harness_path)
+        load_harness_module(harness_path)       # a load error is fatal before any episode
     except Exception as e:  # noqa: BLE001
         result.fatal = "load error: " + _tb(e, 3000)
         _dump(result, out_dir)
         return result
-    carried: dict[str, Any] = {}           # shared mode: memory after the last accepted episode
+    meta_lock = threading.Lock()
     resolved: dict[str, set[str]] = {}
-    first = True
-    for seed in seeds:
+    stop = threading.Event()                 # a model outage: seeds not started yet are skipped
+
+    def play(seed: int, memory: dict[str, Any], note: Optional[str]) -> Optional[EpisodeResult]:
+        """One seed, replayed once on an invalid trial. Returns None on a fatal (recorded)."""
         for attempt in range(invalid_retries + 1):
-            # Fresh game/module prevent timed-out workers and globals contaminating another seed.
-            if not first:
-                try:
-                    module = load_harness_module(harness_path)
-                except Exception as e:  # noqa: BLE001 — the file changed under the evaluator
-                    result.fatal = "load error: " + _tb(e, 3000)
-                    break
-            first = False
-            note = None
+            if stop.is_set():
+                return None
             try:
-                memory, note = _copy_memory(carried) if memory_mode == "shared" else ({}, None)
-            except RuntimeError as e:   # the previous episode's harness never returned (already an error)
-                memory, note = {}, str(e)
+                # Fresh game/module per episode: timed-out workers and globals never contaminate another seed.
+                module = load_harness_module(harness_path)
+            except Exception as e:  # noqa: BLE001 — the file changed under the evaluator
+                with meta_lock:
+                    result.fatal = result.fatal or "load error: " + _tb(e, 3000)
+                stop.set()
+                return None
             if note:
-                result.metadata.setdefault("memory_resets", []).append({"seed": seed, "reason": note})
+                with meta_lock:
+                    result.metadata.setdefault("memory_resets", []).append({"seed": seed, "reason": note})
             trace_path = out_dir / f"trace_seed{seed}.jsonl" if out_dir else None
             trace = TraceSink(trace_path, append=False)
             budget = Budget(max_system2_calls=b.max_system2_calls, max_system1_calls=b.max_system1_calls,
@@ -693,15 +701,18 @@ def evaluate_harness(
                                        ended_by="construction_failed")
                     trace.write({"type": "episode_end", **ep.summary()})
                 else:
-                    if result.game == "unknown":
-                        result.game = game.name
-                    result.metadata["game_kind"] = "realtime" if hasattr(game, "tick") else "turn"
+                    with meta_lock:
+                        if result.game == "unknown":
+                            result.game = game.name
+                        result.metadata["game_kind"] = "realtime" if hasattr(game, "tick") else "turn"
                     ep = run_episode(module, game, seed=seed, system2=system2, system1=system1, trace=trace,
                                      memory=memory, budget=budget, clock_mode=clock_mode,
                                      latency_override=latency_override, harness_timeout_s=harness_timeout_s,
                                      grace_s=grace_s)
             except ModelUnavailable as e:
-                result.fatal = f"model unavailable: {e}"
+                with meta_lock:
+                    result.fatal = result.fatal or f"model unavailable: {e}"
+                stop.set()
                 trace.write({"type": "episode_unavailable", "seed": seed, "error": str(e)})
             finally:
                 trace.close()
@@ -711,24 +722,46 @@ def evaluate_harness(
                         ep.info["close_error"] = close_err
                 if ep is None or not ep.info.get("harness_alive"):
                     unload_harness_module(module)
-            if result.fatal or ep is None:
-                break
+            if ep is None or stop.is_set():
+                return None
             if ep.invalid and attempt < invalid_retries:     # the failure may have raised as well
                 # infrastructure failure the adaptor detected: replay the seed once on a fresh game
                 if trace_path and trace_path.exists():
                     trace_path.rename(trace_path.with_name(f"trace_seed{seed}.invalid{attempt}.jsonl"))
-                result.metadata.setdefault("invalid_trials", []).append({"seed": seed, "reason": ep.invalid})
+                with meta_lock:
+                    result.metadata.setdefault("invalid_trials", []).append({"seed": seed, "reason": ep.invalid})
                 continue
             if ep.invalid:      # also when the failure raised: it is the infrastructure's, not the harness's
                 ep.error = (f"invalid trial (reported by the game): {ep.invalid}"
                             + (f" — also: {_last_line(ep.error)}" if ep.error else ""))
-            for kind, names in ep.backends.items():
-                resolved.setdefault(kind, set()).update(names)
+            with meta_lock:
+                for kind, names in ep.backends.items():
+                    resolved.setdefault(kind, set()).update(names)
+            return ep
+        return None
+
+    episodes: dict[int, EpisodeResult] = {}
+    if workers == 1:
+        carried: dict[str, Any] = {}           # shared mode: memory after the last accepted episode
+        for seed in seeds:
+            try:
+                memory, note = _copy_memory(carried) if memory_mode == "shared" else ({}, None)
+            except RuntimeError as e:   # the previous episode's harness never returned (already an error)
+                memory, note = {}, str(e)
+            ep = play(seed, memory, note)
+            if ep is None:
+                break
             carried = memory
-            result.episodes.append(ep)
-            break
-        if result.fatal:
-            break
+            episodes[seed] = ep
+    else:
+        import concurrent.futures as cf
+        with cf.ThreadPoolExecutor(max_workers=min(workers, len(seeds)), thread_name_prefix="eval-seed") as pool:
+            futs = {seed: pool.submit(play, seed, {}, None) for seed in seeds}
+            for seed, fut in futs.items():
+                ep = fut.result()
+                if ep is not None:
+                    episodes[seed] = ep
+    result.episodes = [episodes[s] for s in seeds if s in episodes]
     result.metadata["resolved_models"] = {k: sorted(v) for k, v in resolved.items()}
     _dump(result, out_dir)
     return result
@@ -736,7 +769,77 @@ def evaluate_harness(
 
 def _dump(result: EvalResult, out_dir: Optional[Path]) -> None:
     if out_dir:
-        (out_dir / "eval.json").write_text(json.dumps(result.to_json(), indent=2, default=str))
+        atomic_write(out_dir / "eval.json", json.dumps(result.to_json(), indent=2, default=str))
+        try:
+            atomic_write(out_dir / "digest.md", digest(result, out_dir))
+        except Exception as e:  # noqa: BLE001 — a reading aid, never a failed evaluation
+            atomic_write(out_dir / "digest.md", f"(digest failed: {type(e).__name__}: {e})\n")
+
+
+def digest(result: EvalResult, out_dir: Path, max_rows: int = 400) -> str:
+    """A per-episode index of the traces (what happened when), so a reader finds the right place in
+    the full JSONL before reading it: every model call (clock, latency, output tokens, answer length,
+    error) and every turn-game step (action, score change) or, for real-time games, the score changes.
+    It summarises; the traces stay the evidence."""
+    out = [f"# Episode digest — {result.game}", ""]
+    if result.fatal:
+        out.append(f"fatal: {result.fatal.splitlines()[-1][:300]}")
+    for ep in result.episodes:
+        out += [f"## seed {ep.seed}: score {ep.score:g}, {ep.steps} steps, ended by {ep.ended_by}, "
+                f"{ep.wall_s:.0f} s wall, S2 calls {ep.system2_calls} (failed {ep.failed_s2}), S1 calls {ep.system1_calls}"
+                + (f", stale ticks {ep.stale_ticks}/{ep.stale_ticks + ep.decided_ticks}" if ep.stale_ticks + ep.decided_ticks else "")]
+        if ep.error:
+            out.append(f"error: {_last_line(ep.error, 300)}")
+        path = out_dir / f"trace_seed{ep.seed}.jsonl"
+        if not path.exists():
+            out.append("")
+            continue
+        rows, last_score, n = [], None, 0
+        for line in path.open(encoding="utf-8", errors="replace"):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            t = r.get("type")
+            if t == "model_call":
+                resp = r.get("response") or {}
+                text = resp.get("text") if isinstance(resp, dict) else None
+                tok = (r.get("usage") or {}).get("output_tokens")
+                rows.append(f"| {r.get('t_start', 0) - ep_start(path):.0f} | {r.get('kind')} call | "
+                            f"{r.get('latency_s', 0):.1f} s" + (f", {tok} tok" if tok else "")
+                            + (f", {len(text)} chars" if isinstance(text, str) else "")
+                            + (f", ERROR {_last_line(r.get('error'), 80)}" if not r.get("ok") else "") + " | |")
+            elif t == "step":
+                score = r.get("score")
+                delta = "" if last_score is None or score == last_score else f" ({score - last_score:+g})"
+                last_score = score
+                rows.append(f"| step {r.get('step')} | act `{str(r.get('action'))[:40]}` | score {score:g}{delta} | |")
+            elif t == "step_error":
+                rows.append(f"| | act `{str(r.get('action'))[:40]}` | ILLEGAL: {str(r.get('error'))[:100]} | |")
+            elif t == "tick":
+                score = r.get("score")
+                if last_score is not None and score != last_score:
+                    rows.append(f"| tick {r.get('tick')} | act `{str(r.get('action'))[:40]}` | score {score:g} ({score - last_score:+g}) | |")
+                last_score = score
+            elif t in ("deadline", "game_error", "harness") and n < 50:
+                n += 1
+                keep = {k: v for k, v in r.items() if k not in ("type", "t", "seed", "clock")}
+                rows.append(f"| {t} | {json.dumps(keep, default=str)[:160]} | | |")
+        if len(rows) > max_rows:
+            rows = rows[: max_rows // 2] + [f"| … {len(rows) - max_rows} rows omitted … | | | |"] + rows[-max_rows // 2:]
+        out += ["", "| when | what | result | |", "|---|---|---|---|"] + rows + [""]
+    return "\n".join(out)
+
+
+def ep_start(path: Path) -> float:
+    """Wall time of the episode's first trace record (digest timestamps are relative to it)."""
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            try:
+                return float(json.loads(line).get("t", 0.0))
+            except ValueError:
+                continue
+    return 0.0
 
 
 class _CountingSink(TraceSink):

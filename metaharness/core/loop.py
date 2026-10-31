@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 import os
+import sys
 import re
 import time
 from dataclasses import dataclass, field
@@ -28,7 +29,7 @@ from ..models.base import ModelUnavailable, System1Model, System2Model, TraceSin
 from . import evalworker, generation
 from .archive import Archive, Candidate, combine_evals, ineligibility, write_atomic
 from .contract import Budget
-from .proposer import propose, repair
+from .proposer import propose, repair, tools_text
 from .runner import DEFAULT_GRACE_S, PROTOCOL_VERSION, evaluate_harness, preflight_harness
 
 
@@ -82,6 +83,9 @@ class LoopConfig:
     heldout_game_adaptor: Optional[str] = None               # its directory, for child processes
     patience: int = 0                                        # stop once the best is this many generations old
     ablate: bool = True                                      # the final pick without runtime models (reported)
+    seeds_dev: list[int] = field(default_factory=list)       # the proposer's own dev evaluations (never scored)
+    proposer_dev_evals: int = 0                              # ... how many per candidate (0: no dev tool)
+    proposer_tools: bool = True                              # pre-flight (and dev-eval) commands in the prompt
 
 
 def _unavailable(e: Optional[dict[str, Any]]) -> bool:
@@ -251,19 +255,33 @@ class MetaHarnessLoop:
         # candidate's validation result (like champion.json) is written once.
         if config.eval_spec:                 # how to rebuild the models / game outside this process
             manifest["run"] = {**config.eval_spec, "game": game_name, "adaptor": game_adaptor}
+        if config.seeds_dev:                 # the proposer's dev-eval tool reads them; never scored
+            manifest["seeds_dev"] = list(config.seeds_dev)
+            for g in self.games:
+                overlap = set(config.seeds_dev) & (set(g.seeds_train or config.seeds_train)
+                                                   | set(g.seeds_heldout or config.seeds_heldout)
+                                                   | set(g.seeds_val or config.seeds_val))
+                if overlap:
+                    raise ValueError(f"dev seeds overlap training / validation / held-out seeds: {sorted(overlap)}")
         if len(self.games) > 1:
             manifest["games"] = [{"name": g.name, "kwargs": _jsonish(g.kwargs), "seeds_train": g.seeds_train}
                                  for g in self.games]
         manifest_path = archive.root / "manifest.json"
         scored = any(c.eval() is not None for c in archive.candidates())
+        self.task_changed = False
         if manifest_path.exists():
             old = json.loads(manifest_path.read_text())
             old.pop("seeds_val", None)                 # pinned by earlier versions; not part of the protocol
             for g in old.get("games") or []:
                 for k in ("seeds_val", "seeds_heldout"):
                     g.pop(k, None)
-            if old != manifest and scored:
-                changed = sorted(k for k in set(old) | set(manifest) if old.get(k) != manifest.get(k))
+            changed = sorted(k for k in set(old) | set(manifest) if old.get(k) != manifest.get(k))
+            # The task text is what proposers were told, not how scores were measured: a resumed search
+            # may carry an updated task (every candidate's prompt.md records what its proposer saw).
+            # Dev seeds are never scored either.
+            self.task_changed = "task" in changed
+            changed = [k for k in changed if k not in ("task", "seeds_dev")]
+            if changed and scored:
                 raise ValueError(f"Search configuration changed ({', '.join(changed)}) for the archive "
                                  f"{archive.root}: its scores were measured differently. Search in a new "
                                  "archive (loop: another --name; run: move that search/ directory away).")
@@ -279,6 +297,14 @@ class MetaHarnessLoop:
             fh.write(line + "\n")
 
     # -- seeds per stage ----------------------------------------------------------------------
+    def _tools(self) -> str:
+        """The proposer's own tools (pre-flight, dev-eval), when it works agentically and the archive
+        carries what the tools need (``manifest["run"]``)."""
+        if not self.cfg.proposer_tools or not self.cfg.proposer_agentic or not self.cfg.eval_spec:
+            return ""
+        from ..config import REPO_ROOT
+        return tools_text(sys.executable, str(REPO_ROOT), self.cfg.seeds_dev, self.cfg.proposer_dev_evals)
+
     def _seeds(self, stage: str, games: Optional[list[GameSpec]] = None) -> dict[str, list[int]]:
         out = {}
         for g in games or self.games:
@@ -456,7 +482,7 @@ class MetaHarnessLoop:
             ptrace = TraceSink(cand.dir / "proposer_trace.jsonl")
             try:
                 repair(self.proposer, cand, rep["error"], agentic=self.cfg.proposer_agentic, trace=ptrace,
-                       timeout_s=min(900.0, self.cfg.proposer_timeout_s))
+                       timeout_s=min(900.0, self.cfg.proposer_timeout_s), full_access=bool(self._tools()))
             finally:
                 ptrace.close()
         return False
@@ -488,10 +514,11 @@ class MetaHarnessLoop:
         """Run one proposer; returns a 'model unavailable' reason when the proposer is gone."""
         ptrace = TraceSink(cand.dir / "proposer_trace.jsonl")
         try:
+            tools = self._tools()
             propose(self.proposer, self.archive, contract_doc=self.contract_doc, task_md=self.task_md,
-                    extra=self.proposer_extra, agentic=self.cfg.proposer_agentic, trace=ptrace,
+                    extra=self.proposer_extra + tools, agentic=self.cfg.proposer_agentic, trace=ptrace,
                     timeout_s=self.cfg.proposer_timeout_s, candidate=cand, iteration=iteration,
-                    directive=directive, siblings=siblings)
+                    directive=directive, siblings=siblings, full_access=bool(tools))
         except ModelUnavailable as e:
             self._log(f"{cand.dir.name}: proposer unavailable: {e}")
             if not cand.harness_path.exists():
@@ -781,6 +808,9 @@ class MetaHarnessLoop:
             self.qualify_seeds()
         # Pinned only now: a refused seed (or an adaptor fix after it) must not lock the archive
         # into a configuration that never produced a score.
+        if self.task_changed:
+            self._log("the task text differs from the one this archive was created with; proposals from now on "
+                      "see the new text (each candidate's prompt.md records what its proposer saw)")
         write_atomic(self.archive.root / "manifest.json", json.dumps(self._manifest, indent=2) + "\n")
         self.archive.write_task(self.task_md)
         self._pending()
@@ -840,9 +870,14 @@ class MetaHarnessLoop:
         val = self._seeds("val")
         if not any(val.values()):
             return None
-        ranked = self.archive.ranked()[:max(1, self.cfg.finalists)]
+        all_ranked = self.archive.ranked()
+        ranked = all_ranked[:max(1, self.cfg.finalists)]
         if not ranked:
             return None
+        # candidates tied with the last finalist on the training mean are finalists too: the tie-breaks
+        # (fewer calls, fewer steps) must not decide which of several equal scripts the validation judges
+        cutoff = (ranked[-1].eval() or {}).get("mean_score")
+        ranked += [c for c in all_ranked[len(ranked):] if (c.eval() or {}).get("mean_score") == cutoff]
         todo = [c for c in ranked if self._stage_needed(c, "validation")]
         if todo:
             self._log(f"validation of {len(todo)} finalist(s) on seeds {val}")

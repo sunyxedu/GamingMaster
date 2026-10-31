@@ -1,0 +1,13 @@
+# Jericho interactive fiction adaptor
+
+This Tier 1 adaptor connects the harness to Jericho 3.3.1's local `FrotzEnv`. There is no server, GUI, account, or runtime network request. The interpreter is recreated on every `reset(seed)`, and `close()` releases it.
+
+`runtime/manifest.json` is a frozen manifest of eight supported, untimed Z-machine stories from the `BYU-PCCL/z-machine-games` Jericho game suite (source commit `bfd7544aa1f50549fc327bd4eb3bc8144bfd80ea`). The bundled files are under `runtime/games/`; their SHA-256 and Jericho native MD5 identifiers, positive native maxima, and provenance are recorded in the manifest. The manifest's first four entries (`balances`, `detective`, `enchanter`, `library`) are the training pool and its last four (`omniquest`, `zork1`, `zork2`, `zork3`) are held out. This gives novel-game evaluation rather than merely changing a random number in one fixture. The repository README is retained as the corpus provenance notice.
+
+For a nonnegative evaluator seed `s`, the game is entry `s % N` and the VM seed is `1 + ((s // N) % 32767)`, where `N` is eight. No warm-up commands are sent. `SEEDS` contains disjoint train/dev/validation/held-out integers; the train and held-out groups select disjoint story pools.
+
+The only action is one parser command string per turn, at most 200 characters, with no newline or NUL. Commands can be ordinary movement, examination, inventory, manipulation, or a story's clarification answer. The parser output is returned verbatim in a compact JSON observation together with game ID, story hash, both seeds, native score and maximum, score delta, native moves, step count, and terminal flags. Failed parser commands are still submitted turns. Lifecycle commands (`restart`, `restore`, `save`, `quit`, `undo`, and transcript controls) are reserved for the evaluator and are reported as an action error. No implicit `look` or `inventory` command is issued.
+
+The public `score` is the current native score divided by the manifest maximum; it is signed and uses the final score at victory, game over, or truncation. `score_breakdown()` and `info()` retain native and normalized diagnostics, initial score, win/loss, seeds, hashes, and termination reason. The default submitted-command cap is 1000. If Jericho itself fails, `info()` marks the trial invalid so the evaluator can retry it; malformed player actions do not crash the episode. Observations contain only JSON-safe values and text.
+
+`JERICHO_GAME_MANIFEST` can point to another checksum-pinned manifest with the same fields. `JERICHO_MAX_STEPS` changes the command cap, and `JERICHO_OBSERVATION_MODE` is recorded as `text` (the shipped policy). No credentials are read.

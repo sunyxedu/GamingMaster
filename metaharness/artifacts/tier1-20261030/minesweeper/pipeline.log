@@ -1,0 +1,14 @@
+[22:05:00] run: game='Minesweeper' dir=runs/minesweeper agent=codex:gpt-6-astra@router
+[22:11:23] run: game='Minesweeper' dir=runs/minesweeper agent=codex:gpt-6-astra@router
+[14:29:50] run: game='Minesweeper' dir=runs/minesweeper agent=codex:gpt-6-astra@router
+[14:56:47] study: done — tier 1, interface api
+[15:22:12] adapt: adaptor validated after 1 attempt(s)
+[15:22:12] run: game='Minesweeper' dir=runs/minesweeper agent=codex:gpt-6-astra@router
+[15:22:12] study: reusing runs/minesweeper/study/study.json (tier 1)
+[15:22:13] adapt: reusing validated adaptor
+[15:22:13] search: tier 1 on adaptor game 'Minesweeper (offline deterministic)'
+[19:32:30] run: game='Minesweeper' dir=runs/minesweeper agent=codex:gpt-6-astra@router
+[19:32:30] study: reusing runs/minesweeper/study/study.json (tier 1)
+[19:32:30] adapt: reusing validated adaptor
+[19:32:30] search: tier 1 on adaptor game 'Minesweeper (offline deterministic)'
+[19:39:57] run: done — best 0011

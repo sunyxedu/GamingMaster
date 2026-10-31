@@ -1,0 +1,1 @@
+Linux x86_64 server without GUI; everything must run offline on this machine with free software. The evaluator's Python is the venv at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/jericho (install there). Tier 1: the agent plays turn by turn. pip jericho; use freely redistributable game files; seeds select games; score = normalised in-game score.

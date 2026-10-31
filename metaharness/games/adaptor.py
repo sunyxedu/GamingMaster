@@ -24,7 +24,8 @@ additionally ``name`` (str). Optional module-level declarations:
     DETERMINISTIC = True   reset(seed) on a fresh instance reproduces the first observation
     SEEDS = {"train": [...], "heldout": [...]}   non-empty, disjoint lists of ints: the
                            scenarios the search trains on and is judged on (declare them when
-                           only some seeds are valid, e.g. a fixed set of levels or maps)
+                           only some seeds are valid, e.g. a fixed set of levels or maps); optional
+                           "dev" (the proposer's own trials) and "validation" (top-k re-evaluation)
     EVAL_KWARGS = {...}    JSON kwargs the evaluator passes to make_game
 
 Optional methods: ``score_breakdown() -> dict[str, float]`` (numeric components of the current
@@ -96,6 +97,9 @@ ORCHESTRATOR_FILES = re.compile(r"(validation\.(md|json)|prompt_\d+\.md|agent_ou
 MAX_SUBDIR_BYTES = 20 * 2**20
 MAX_SUBDIR_FILES = 5000
 MAX_HASHED_BYTES = 2 * 2**20
+
+
+_SEED_GROUPS = ("train", "heldout", "dev", "validation")
 
 
 class DeclarationError(ValueError):
@@ -230,12 +234,16 @@ def _declared_seeds(module: Any) -> dict[str, list[int]] | None:
     raw = getattr(module, "SEEDS", None)
     if raw is None:
         return None
-    if not isinstance(raw, dict) or set(raw) != {"train", "heldout"}:
-        raise DeclarationError(f'SEEDS must be {{"train": [int, ...], "heldout": [int, ...]}}, got {raw!r:.200}')
-    seeds = {k: _seed_list(raw[k], k) for k in ("train", "heldout")}
-    overlap = sorted(set(seeds["train"]) & set(seeds["heldout"]))
-    if overlap:
-        raise DeclarationError(f"SEEDS train and heldout must be disjoint; both contain {overlap[:10]}")
+    if not isinstance(raw, dict) or not {"train", "heldout"} <= set(raw) or not set(raw) <= set(_SEED_GROUPS):
+        raise DeclarationError(f'SEEDS must be {{"train": [int, ...], "heldout": [int, ...]}} (optional "dev", '
+                               f'"validation"), got {raw!r:.200}')
+    seeds = {k: _seed_list(raw[k], k) for k in _SEED_GROUPS if k in raw}
+    names = list(seeds)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            overlap = sorted(set(seeds[a]) & set(seeds[b]))
+            if overlap:
+                raise DeclarationError(f"SEEDS {a} and {b} must be disjoint; both contain {overlap[:10]}")
     return seeds
 
 

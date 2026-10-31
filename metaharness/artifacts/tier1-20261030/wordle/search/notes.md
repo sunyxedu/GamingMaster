@@ -1,0 +1,75 @@
+- Opaque one-action Astra prompting can consume the whole 1800-second deadline without solving; model output must not be the source of truth for finite deduction games.
+- Public rules expose absolute word-list paths, so the harness can load the exact evaluator snapshot without bundling a seed-specific dictionary.
+- Duplicate-aware feedback must mark greens first, then consume remaining letter counts while assigning yellows left to right.
+- Candidate filtering should be recomputed from the full accepted history each turn; this makes recovery from stale plans and repeated guesses observable.
+- ctx.progress() is useful around scripted actions: rejected actions and unchanged observations trigger a recovery path instead of an escaping exception.
+- Candidate-only partitioning trades some information for speed: every probe remains a possible answer, and late turns never waste a guess on a non-answer.
+- Recovery calls must catch TimeoutError, budget closure, and arbitrary model text because preflight stand-ins may return garbage.
+- Progress and the returned observation should both be checked after ctx.act(); rejection may be represented in either place.
+- The baseline traces specifically show `guess crane`, bare `crane`, and JSON replies all reaching the parser as a missing-value `guess`; complete action construction belongs in the harness.
+- A candidate-only entropy policy is a structural improvement over repeated model guesses and remains scenario-independent because it uses only the public lists and observed feedback.
+- Recovery is gated on stale turns or an empty candidate set, preserving the call budget for genuine rule or observation mismatches.
+- Candidate 0004: the leader is worst-bucket-first, with an alphabetical cap on nonanswer probes; its four-guess wins motivate expected terminal-reward search, not a repair to exact elimination.
+- Finite-horizon reward search must count the all-green branch as an immediate solve; identifying a singleton with a nonanswer probe still requires another guess. Even with two turns left, a probe can outperform guessing a candidate under the evaluator's mean-score objective.
+- Partition equivalence and the bound `(r-1)*n+1` prune small Wordle decision trees; all-word scanning plus a bounded large-state beam avoids the leader's alphabetical blind spot without claiming global optimality.
+- Candidate 0004 passed preflight and synthetic duplicate/Bellman/recovery checks, then solved both dev seeds in 3/4 guesses without model calls or errors. Those two games do not establish an improvement over the leader.
+- An unchanged score before the final Wordle solve is normal. Recovery should use turn/history advancement, feedback consistency, candidate reduction, and rejection/observation counters instead of treating unchanged score alone as plan failure.
+- 0006 tests decision-tree reward rather than a partition statistic: with r guesses left, a solve contributes r reward units, and other feedback branches contribute their future achievable reward.
+- 0006 corrects a late-game assumption: with TWO turns left a non-answer probe can still identify an answer for the final guess. Compare `2 * is_candidate + number_of_non_green_bins`; only the final turn universally requires an answer.
+- 0006's strict parser lesson: `gray` and `green` share their first letter. An abbreviation fallback caused a false empty candidate set; exact named-color decoding matches all 85 archived feedback pairs checked.
+- 0006's small-state recurrence matched an independent exhaustive solver in 12 crafted cases, including repeated letters and shared-suffix families. Large-state beam search remains approximate and logs that fact.
+- Every recovery guess must pass the same turn/history/progress/predicted-feedback checks as ordinary search actions; a separate unchecked recovery action path can silently repeat the original failure.
+- A worst-partition policy can solve reliably yet plateau on four-guess branches; expected residual candidate count is a distinct objective worth testing.
+- Public allowed guesses enable legal information probes, but they should be statically ranked and bounded so exact partitioning remains predictable.
+- Candidate 0005 correction: on the penultimate turn a non-answer probe can still improve reward by distinguishing more possible final answers; only the final turn necessarily forces an answer.
+
+- Candidate 0005: exact endgame reward is t for an immediate win plus recursive branch rewards at t-1; memoizing candidate subsets and merging equivalent partitions makes small states tractable.
+- Candidate 0005: progress counters alone do not verify a plan; check turn advancement, the appended guess, and membership of observed feedback in the predicted partition, then pass failures to Astra.
+- Candidate 0009 retains 0006's opener and tests all-action branch-and-bound, because parallel slots already cover opener selection; its early opener draft was replaced before dev evaluation.
+- Candidate 0009: a complete candidate-only rollout is an attainable fallback and reward lower bound; a leaf heuristic alone is not a certified policy value.
+- Candidate 0009: distinguish a finished beam from a proved optimum. Logs should report the incumbent reward, an admissible upper bound, and their gap when a search deadline interrupts work.
+- Candidate 0008 tests opener selection as a structural variable: rank public legal words by a two-turn reward bound and balanced duplicate-aware partitions instead of hard-coding `slate` or `soare`.
+- A first-move objective must count both immediate answer wins and non-green bins that can be solved on the next turn; pure entropy can prefer probes that spend a turn without improving terminal reward.
+- Public-list adaptation is scenario-independent only when the hidden seed never enters ranking; log the pool and objective to make that assumption auditable.
+- Candidate 0007 tests the root decision separately from continuation search: exact residual-bucket scoring can adapt the opener to the public word-list snapshot without using seed information.
+- The leader's four-guess traces (`slate -> decor -> bairn -> rerun` and similar) show successful elimination with avoidable late turns, so opener quality remains a plausible source of expected-score loss after Bellman continuation search.
+- A small, audited opener pool keeps first-turn computation bounded; scanning every allowed word at the root would spend the episode budget on redundant feedback rows.
+- Root heuristics must retain the same post-action verification and Astra recovery path as recursive search; a better partition statistic is not evidence that an action was accepted.
+- Candidate 0009 validation: all-action search proved zero-gap continuation values for 87- and 59-answer dev states, but tied the parent's two-seed score. On a 117-answer archived clue it still timed out, with reward bounds 369–374; proof progress and score improvement are different claims.
+- Candidate 0012 tests a different tree objective: lexicographically minimize failures, then latest solves, then earlier solves. Additive outcome histograms make this tail preference consistent across feedback branches; immediate bucket size alone does not describe it.
+- A risk-averse tree can sacrifice the evaluator's mean reward. Better minimum score and better mean are separate hypotheses; log the outcome histogram and its implied reward to measure both.
+- Read actual traces before copying prior prose: 0004 seed 0 is `slate -> diner -> heron -> rerun`; `slate -> decor -> bairn -> rerun` belongs to 0003 and was misattributed in later proposals.
+- A completed beam is not an exact tree optimum. Candidate 0012 records both beam use and completion and keeps an attainable sequential fallback when interrupted.
+- Candidate 0012's dev mean fell to 0.50 (two four-guess wins), despite conditional-policy reductions in fifth-guess solves: 11 to 8 across the 221-answer all-gray `slate` clue, and 3 to 0 across the 86-answer yellow-`t` clue. Tail protection worked in the planned distributions but sacrificed mean reward; the two-seed minimum did not improve.
+
+- Candidate 0014: deep opener lookahead over every probe can hit its wall guard before reaching strong familiar probes; cheap partition screening followed by a small lookahead pool keeps the first action timely.
+- Candidate 0014: a candidate-only one-step tail can choose a probe that leaves a two-word repeated-letter pair for two extra turns; exact memoized Bellman search on small states fixes this concrete late-game failure.
+- Candidate 0014: adaptive public-list opener selection is scenario-independent, but its expected-reward estimate must be treated as an attainable bound and checked against actual feedback; dev paths `slate -> tonic -> turbo -> tutor -> tumor` show the remaining risk.
+
+- Candidate 0013 tests a soft version of the tail idea: Bellman expected reward is primary, and outcome histograms only break equal-reward ties. This keeps the evaluator's mean-score objective explicit while retaining deterministic preference among equivalent policies.
+- A broad compatible-answer histogram can improve late-tail counts while lowering total reward; dev evidence from 0012 is a concrete warning against selecting a risk objective from minimum score alone.
+- Search interruptions need an attainable incumbent and a low-wall-time guard. The harness must still return a legal action or a consistent candidate if the broad all-word beam is cut short.
+- Recovery remains a separate evidence path: malformed history, stale observations, rejected actions, and empty candidate sets should trigger bounded Astra re-planning, while normal exact deduction should make zero model calls.
+
+- Candidate 0011 tests repeated one-step policy improvement from parent 0009: evaluate every legal root probe with attainable candidate-only tails, then repeat after real feedback. The restriction is in the simulated tail, not in the next real action.
+- Restricting hypothetical tails substantially reduces search cost but can undervalue useful later probes: on the 117-answer archived clue, 0011 completed 3,698 root alternatives in 6.31 s with reward 366, below 0009's recorded attainable 369 after 150 s. Completion of a restricted scan is not global optimality.
+- 0011's two dev games tied the parent's mean 0.583333 with zero errors or model calls, in about 13/12 s instead of 74/45 s. This supports computational efficiency, not score improvement; selection still depends on training and unseen outcomes.
+- Recovery after garbage or a model timeout can use a still-consistent unused candidate, but fallback attempts need their own cap: a model-call cap alone does not bound retries when no calls remain. Persistent-rejection tests cover both budget conditions.
+
+- Candidate 0015 carries behavioral equivalence classes of feedback partitions into child states using bit-mask intersections; equal partitions remain equal after conditioning, so this compression preserves all legal continuations.
+- Local value equivalence is weaker than behavioral equivalence: identical non-singleton branches, singleton count and immediate-win flag imply equal uniform-prior reward here, but singleton identities must be retained in catalogs propagated to children.
+- 0015 certified reward 369 on the public 117-answer clue in 133.78 s, closing 0009's previously reported 369–374 gap. Its dev score still tied 0009 at 0.583333 with identical guesses; proof efficiency is not an outcome improvement.
+- Projected catalogs can accumulate millions of records even when memoized values are small. Release a resolved child's catalog, preserve its exact value, and re-project only if another horizon needs it; keep complete parent catalogs on the active recursion path.
+- 0015 final resource check retained the exact 117-answer value in 138.06 s at 39,464 KiB maximum RSS after catalog release; two dev runs and final preflight remained error-free. Behavioral-class counts are cumulative work, not simultaneously live memory.
+- Candidate 0018 tests balanced-root first-pass scheduling before all-action quotient proof search; promote informative partitions, then revisit every deferred root within the original deadline.
+- A root scheduling change must not truncate the catalog propagated to children: preserve all legal future probes, and reorder only the current decision records.
+- Candidate 0018 keeps the parent's opener, scalar reward, and 150-second guard fixed. Two-phase root ordering needs suffix maxima for valid interrupted bounds; a dominated first-pass root cannot justify breaking before deferred roots.
+
+- Candidate 0015's quotient compression improved proof speed but still opened `soare` on every seed; its training mean was 3.50 guesses. A faster exact search does not help if the first partition is weaker.
+- Candidate 0012 provides a clean opener signal: the same public-list puzzle with `slate` averaged 3.25 guesses and scored 0.625. Candidate 0016 isolates this by changing only opener order while retaining 0015's solver and verifier.
+- A fixed opener is acceptable only when selected from public rules and legal lists; never infer it from seed, hidden answer, or training-seed memorization.
+- Keep recovery actions on the same verification path as scripted search. Opener changes should not bypass checks for turn advancement, predicted feedback, rejection counters, or stale observations.
+- Candidate 0017 tests a conventional `crane` opener with 0015's expected-reward quotient search; keeping continuation code fixed makes the opener effect measurable and distinct from the parallel slate-first experiment.
+- Expected terminal reward should remain the primary objective when the evaluator ranks mean score; tail histograms are useful diagnostics but can trade away earlier wins.
+- A fixed opener is acceptable only as a testable baseline when every later action is recomputed from public lists and observed feedback; it must not encode training seeds.
+- Candidate 0018's final dev tied 0015 at 0.583333 with identical guesses and exact root values (282/196); the 117-answer public-clue audit reached reward 369 in its first pass and then proved it. This validates staging and bounds, not a score improvement or a causal runtime gain across different host loads.

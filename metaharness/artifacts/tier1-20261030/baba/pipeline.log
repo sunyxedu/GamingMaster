@@ -1,0 +1,14 @@
+[22:05:00] run: game='Baba Is AI (Baba Is You puzzle benchmark)' dir=runs/baba agent=codex:gpt-6-astra@router
+[22:11:23] run: game='Baba Is AI (Baba Is You puzzle benchmark)' dir=runs/baba agent=codex:gpt-6-astra@router
+[19:01:01] run: game='Baba Is AI (Baba Is You puzzle benchmark)' dir=runs/baba agent=codex:gpt-6-astra@router
+[19:12:59] study: done — tier 1, interface Python environment API (baba-is-ai, pending source verification)
+[19:31:57] adapt: adaptor validated after 1 attempt(s)
+[19:31:58] run: game='Baba Is AI (Baba Is You puzzle benchmark)' dir=runs/baba agent=codex:gpt-6-astra@router
+[19:31:58] study: reusing runs/baba/study/study.json (tier 1)
+[19:31:59] adapt: reusing validated adaptor
+[19:31:59] search: tier 1 on adaptor game 'Baba Is AI'
+[21:33:45] run: game='Baba Is AI (Baba Is You puzzle benchmark)' dir=runs/baba agent=codex:gpt-6-astra@router
+[21:33:45] study: reusing runs/baba/study/study.json (tier 1)
+[21:33:45] adapt: reusing validated adaptor
+[21:33:45] search: tier 1 on adaptor game 'Baba Is AI'
+[22:44:28] run: done — best 0003

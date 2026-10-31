@@ -1,0 +1,11 @@
+parent: 0004
+
+Hypothesis: depth-first search spends too much of its decision budget completing a few root alternatives. A graph of feasible policy lower bounds and optimistic reward upper bounds can compare root alternatives broadly, then refine only branches that can change the decision. This should improve expected solve reward without changing the opener or the public uniform answer prior.
+
+Concrete archive evidence: the leader's seed-0 trace records `candidates:165, guess:diner, total_reward:528, search_finished:false, nodes:106`; seed 1 reaches the same public state and incumbent but only 76 nodes. Seed 0 follows `slate -> diner -> heron -> rerun`, scoring 0.50. Its other four-guess paths include `slate -> weber -> colin -> helix` and `slate -> cornu -> guise -> issue`. These actions were accepted and consistent. They motivate a computation-allocation experiment, not a claim that their eventual revealed answers should have been guessed earlier. Candidate 0009 already showed that simply removing the beam and extending depth-first search need not improve training score.
+
+Changes: retain the leader's `slate` opener, exact green-first duplicate handling, hash-checked public lists, full-history candidate reconstruction, one-action execution, observation/progress verification, and bounded Astra recovery. Replace depth-first continuation evaluation with shared candidate-subset nodes, each carrying an attainable policy lower bound and a reward ceiling. Initialize alternatives with complete candidate-only policies, then refine the most optimistic action and an unresolved child. Equivalent partitions share subproblems; search reports its incumbent, upper bound, and unresolved gap. No seed, secret, answer frequency prior, cross-episode cache, or private game state is used.
+
+Confirmation: better mean training and unseen score without errors, with logs showing broader root initialization and smaller bound gaps on broad clues. Refutation: equal/lower score despite bounds closing, or initialization consuming the search budget before selective refinement. A four-guess trace alone does not establish suboptimality: decisions must average over every public answer consistent with the clue.
+
+Implementation and validation results will be appended after the complete harness is preflighted.

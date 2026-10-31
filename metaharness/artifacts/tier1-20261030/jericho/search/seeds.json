@@ -1,0 +1,104 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          0,
+          1,
+          2,
+          3,
+          8,
+          9,
+          10,
+          11
+        ]
+      ],
+      [
+        "heldout",
+        [
+          4,
+          5,
+          6,
+          7,
+          12,
+          13,
+          14,
+          15
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "0022d82f78df2ffa3290cd871f4fdcac298b7f32b4c2990f9fba63d0ff72c8ba"
+  },
+  "results": {
+    "train:0": {
+      "ok": true,
+      "obs_sha256": "9d8e4f0a680696a5"
+    },
+    "train:1": {
+      "ok": true,
+      "obs_sha256": "53d647929cb8ebc3"
+    },
+    "train:2": {
+      "ok": true,
+      "obs_sha256": "3fd014a5e9fcdcb5"
+    },
+    "train:3": {
+      "ok": true,
+      "obs_sha256": "17dff786a5f8c9d9"
+    },
+    "train:8": {
+      "ok": true,
+      "obs_sha256": "4111ad0d567b054f"
+    },
+    "train:9": {
+      "ok": true,
+      "obs_sha256": "cd4aa0ecc61ed67b"
+    },
+    "train:10": {
+      "ok": true,
+      "obs_sha256": "7ad4b0ecd97cdd11"
+    },
+    "train:11": {
+      "ok": true,
+      "obs_sha256": "548e7211508ec1c6"
+    },
+    "heldout:4": {
+      "ok": true,
+      "obs_sha256": "0699f30bcc85b4db"
+    },
+    "heldout:5": {
+      "ok": true,
+      "obs_sha256": "d6185604a6c29e94"
+    },
+    "heldout:6": {
+      "ok": true,
+      "obs_sha256": "903661beef5b6b72"
+    },
+    "heldout:7": {
+      "ok": true,
+      "obs_sha256": "0b70df62a3e8fa0c"
+    },
+    "heldout:12": {
+      "ok": true,
+      "obs_sha256": "a9bb7096a7664428"
+    },
+    "heldout:13": {
+      "ok": true,
+      "obs_sha256": "b27a6638226ab5ce"
+    },
+    "heldout:14": {
+      "ok": true,
+      "obs_sha256": "d936993b35b4e5c4"
+    },
+    "heldout:15": {
+      "ok": true,
+      "obs_sha256": "0aa3b63b55a574b0"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

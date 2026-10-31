@@ -1,0 +1,36 @@
+{
+  "game": "Pok\u00e9mon Showdown (Gen 9 Random Battle)",
+  "tier": 1,
+  "tier_rationale": "The selected interface is the local BattleStream simulator. It advances only after all required player choices are submitted, so Astra may reason for seconds or minutes without an in-game wall-clock penalty; a server-backed battle would add a separate timer and network latency. State can change several times after one choice because attacks, faints, pivots, and forced replacements are resolved before the next request.",
+  "decision_latency_s": -1.0,
+  "interface": {
+    "chosen": "api",
+    "why": "Showdown's first-party BattleStream is deterministic, offline, free, and exposes the same partial-information protocol as a player. It avoids GUI fragility, network clocks, account/ToS risk, and the extra adapter needed by server-only Python bot libraries.",
+    "software": [
+      "Node.js >=22.18.0",
+      "/home/hemlix/gm-tools/pokemon-showdown checkout (npm install if needed)",
+      "Python 3.12.3 at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/showdown/bin/python for the evaluator harness"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Pin and use the supplied Pokemon Showdown checkout and format gen9randombattle.",
+      "Launch a fresh BattleStream or simulate-battle subprocess for each reset(seed).",
+      "Send >start with formatid gen9randombattle and a four-integer seed, then create p1 and p2 with team null so the engine generates legal random teams.",
+      "Wrap the stream with getPlayerStreams and expose only p1 updates/sideupdates to the agent; retain omniscient output only in a referee for scoring.",
+      "Parse |request| JSON, validate the legal move or switch, send a p1 command, and continue through chained forced-switch requests until the next decision or end.",
+      "At end, compute outcome and terminal HP fractions from referee state and label resource-limit termination as truncated."
+    ],
+    "observation": "Newline-and-pipe protocol text. The p1 stream contains public battle events plus sideupdate |request| JSON with active legal moves, PP/disabled flags, own six-Pokemon exact HP/status and revealed opponent information. Unrevealed opponent set details are absent. The referee may separately read omniscient state for scoring.",
+    "actions": "Write one legal command to the p1 stream: move <1-based slot>, move <slot> terastallize, or switch <1-based team slot>; parse errors and the replacement request before retrying. Start/reset and player setup are sent as >start and >player commands to the parent stream."
+  },
+  "scoring": "Report win/loss/tie (outcome +1/0/-1), terminal HP fraction for each six-slot team, hp_margin = self_fraction - opponent_fraction, surviving counts, turns, and termination reason. If one scalar is required use outcome + 0.25*hp_margin so winning remains primary while remaining HP distinguishes wins; retain components for the evaluator's specified formula.",
+  "scenarios": "reset(seed) should start a fresh gen9randombattle with held-out four-integer seeds, random generated teams for both sides, and the supplied heuristic or random opponent. Vary seeds across episodes so leads, species, levels, items, abilities, move sets, Tera types, damage rolls and tie outcomes vary; optionally include fixed packed teams only in diagnostic tests, never as the sole evaluation scenario.",
+  "strategy_summary": "Strong play begins by making safe progress while revealing the opponent's set, since random battles have no team preview. Track roles, exact HP/status/PP, hazards, speed and priority, and preserve the one Pok\u00e9mon that checks a revealed threat. Use hazards, status, pivots and setup when they create a concrete endgame; switch according to type, ability, entry damage and likely coverage. Treat the assigned one-use Tera as an emergency or win-condition resource and update matchups after spending it. Astra should plan and adapt under uncertainty, Jev should answer typed threat/choice questions, and code should enforce protocol legality, mechanics, bookkeeping and bounded damage checks.",
+  "risks": [
+    "The chosen simulator requires a compatible Node installation and a pinned checkout; protocol and random sets can change across versions.",
+    "Feeding omniscient or spectator output to the agent leaks hidden opponent information and invalidates evaluation.",
+    "The direct simulator has no wall-clock move timer, but a public WebSocket server has clocks, network failures, anti-bot controls and account/ToS risk.",
+    "A pipe adaptor must handle protocol framing, backpressure, invalid-choice retries, chained forced switches and truncated episodes.",
+    "No GUI, API key, account, or network connection is available or required for the chosen offline interface."
+  ]
+}

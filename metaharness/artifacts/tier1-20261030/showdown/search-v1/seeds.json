@@ -1,0 +1,128 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          104729,
+          130363,
+          155921,
+          181081,
+          206369,
+          232003,
+          257053,
+          282617,
+          308081,
+          333667
+        ]
+      ],
+      [
+        "heldout",
+        [
+          359357,
+          384673,
+          410117,
+          435907,
+          461273,
+          486719,
+          512009,
+          537593,
+          563051,
+          588599
+        ]
+      ]
+    ],
+    "game_kwargs": {
+      "opponent": "heuristic",
+      "max_turns": 300,
+      "max_decisions": 900
+    },
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "58c7d12e4c22941071f4794c2b0e7b9d7a001e2a9c51167f11b9ef38c2508961"
+  },
+  "results": {
+    "train:104729": {
+      "ok": true,
+      "obs_sha256": "f071ea757e47a2ee"
+    },
+    "train:130363": {
+      "ok": true,
+      "obs_sha256": "f83a323a1a83e6ca"
+    },
+    "train:155921": {
+      "ok": true,
+      "obs_sha256": "396372165ace8ce3"
+    },
+    "train:181081": {
+      "ok": true,
+      "obs_sha256": "4a1ad34a792855c9"
+    },
+    "train:206369": {
+      "ok": true,
+      "obs_sha256": "983faeedbf3403a4"
+    },
+    "train:232003": {
+      "ok": true,
+      "obs_sha256": "21554370fe5f3a52"
+    },
+    "train:257053": {
+      "ok": true,
+      "obs_sha256": "c2c6e3c973ac4280"
+    },
+    "train:282617": {
+      "ok": true,
+      "obs_sha256": "ca045386bbd98f4a"
+    },
+    "train:308081": {
+      "ok": true,
+      "obs_sha256": "f39614578c40da63"
+    },
+    "train:333667": {
+      "ok": true,
+      "obs_sha256": "4652f6a6a4061d66"
+    },
+    "heldout:359357": {
+      "ok": true,
+      "obs_sha256": "7110d51500ff3de4"
+    },
+    "heldout:384673": {
+      "ok": true,
+      "obs_sha256": "8d3fc81ae73d9088"
+    },
+    "heldout:410117": {
+      "ok": true,
+      "obs_sha256": "84a34e1fe231f8f3"
+    },
+    "heldout:435907": {
+      "ok": true,
+      "obs_sha256": "0db09e3c00b85ba7"
+    },
+    "heldout:461273": {
+      "ok": true,
+      "obs_sha256": "b348c23fbd76c490"
+    },
+    "heldout:486719": {
+      "ok": true,
+      "obs_sha256": "8abbf2cbd30e1319"
+    },
+    "heldout:512009": {
+      "ok": true,
+      "obs_sha256": "aa8f79e8a8081958"
+    },
+    "heldout:537593": {
+      "ok": true,
+      "obs_sha256": "e8f089b2f49c798c"
+    },
+    "heldout:563051": {
+      "ok": true,
+      "obs_sha256": "2bb63863f3ee2c65"
+    },
+    "heldout:588599": {
+      "ok": true,
+      "obs_sha256": "b2f1e10b4bef137d"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

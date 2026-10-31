@@ -1,0 +1,18 @@
+[22:05:00] run: game='Sokoban' dir=runs/sokoban agent=codex:gpt-6-astra@router
+[22:11:23] run: game='Sokoban' dir=runs/sokoban agent=codex:gpt-6-astra@router
+[13:49:10] run: game='Sokoban' dir=runs/sokoban agent=codex:gpt-6-astra@router
+[14:09:32] study: done — tier 1, interface standalone offline ASCII-grid engine
+[14:30:32] adapt: adaptor validated after 1 attempt(s)
+[14:30:32] run: game='Sokoban' dir=runs/sokoban agent=codex:gpt-6-astra@router
+[14:30:32] study: reusing runs/sokoban/study/study.json (tier 1)
+[14:30:32] adapt: reusing validated adaptor
+[14:30:32] search: tier 1 on adaptor game 'Sokoban (Boxoban ASCII)'
+[19:01:03] run: game='Sokoban' dir=runs/sokoban agent=codex:gpt-6-astra@router
+[19:01:03] study: reusing runs/sokoban/study/study.json (tier 1)
+[19:01:03] adapt: reusing validated adaptor
+[19:01:03] search: tier 1 on adaptor game 'Sokoban (Boxoban ASCII)'
+[19:04:47] run: game='Sokoban' dir=runs/sokoban agent=codex:gpt-6-astra@router
+[19:04:47] study: reusing runs/sokoban/study/study.json (tier 1)
+[19:04:47] adapt: reusing validated adaptor
+[19:04:47] search: tier 1 on adaptor game 'Sokoban (Boxoban ASCII)'
+[19:05:04] run: done — best 0005

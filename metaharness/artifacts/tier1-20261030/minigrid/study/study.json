@@ -1,0 +1,40 @@
+{
+  "game": "MiniGrid / BabyAI",
+  "tier": 1,
+  "tier_rationale": "MiniGrid is a synchronous Gymnasium simulator: the state changes only when the adaptor calls step(action), and elapsed Astra deliberation does not advance the environment. Even dynamic-obstacle tasks update on discrete steps and can be re-observed after each action. Therefore the game has no intrinsic decision deadline; an external evaluator timeout is separate from game mechanics. The decision_latency_s value -1.0 is a sentinel meaning no intrinsic limit, not a literal timeout.",
+  "decision_latency_s": -1.0,
+  "interface": {
+    "chosen": "official env",
+    "why": "The maintained minigrid package is the benchmark itself and exposes deterministic reset(seed), structured symbolic observations, exact discrete actions, rewards, and termination without GUI, network access, credentials, or screen parsing. Direct internals and wrappers remain useful for diagnostics but are version-sensitive or can change intended observability.",
+    "software": [
+      "minigrid (pin a locally validated release)",
+      "gymnasium (compatible resolved version)",
+      "numpy (Linux x86_64 CPython 3.12-compatible wheel)",
+      "pygame (install if declared/imported by the chosen MiniGrid release)",
+      "Python 3.12.3 at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/minigrid/bin/python"
+    ],
+    "env": [],
+    "setup_steps": [
+      "In a phase with write access to the evaluator venv, install a pinned minigrid and its declared dependencies there from a Linux x86_64 Python 3.12-compatible offline wheelhouse; run pip check and import smoke tests without rendering.",
+      "Import minigrid before gym.make so MiniGrid and BabyAI IDs are registered; record package versions and the evaluator's registered ID list.",
+      "Construct the evaluator-selected ID without rendering, inspect action_space, observation_space, spec, and effective max_steps including TimeLimit.",
+      "For every scenario call obs, info = env.reset(seed=seed), serialize the symbolic observation to text/JSON, and stop after terminated or truncated.",
+      "Decode actions from the installed Actions enum at runtime, validate Astra's action, and call exactly one env.step(action) per decision.",
+      "Extract success from info/verifier/positive terminal reward as appropriate for the installed task, and log raw reward, steps, remaining steps, and terminal flags."
+    ],
+    "observation": "Default Gymnasium dict: image (uint8 object/color/state codes indexed [x,y,channel] for the visible egocentric grid, commonly 7x7), direction (orientation integer), and mission (text). Decode codes to names and preserve unknown/occluded cells. The base partial view encodes inventory at (V//2,V-1); confirm this for the installed wrapper and do not disclose hidden grid/verifier objects. Add tracked action count, budget, raw reward, terminal flags and a compact history. Full-grid/RGB wrappers are alternatives only if their altered observability is explicitly intended.",
+    "actions": "Discrete Actions enum, normally left=0, right=1, forward=2, pickup=3, drop=4, toggle=5, done=6. Actions turn, move one cell, or interact with the adjacent facing object; invalid/blocked actions normally still consume a step. Query the actual action space and task semantics at runtime."
+  },
+  "scoring": "Report success, steps_used, max_steps, remaining_steps, remaining_fraction, raw reward/return, terminated, truncated, environment ID, and seed. For standard sparse tasks use success multiplied by (0.1 + 0.9 * remaining_fraction), equivalent to the usual successful reward 1 - 0.9 * steps/max_steps; keep task-specific raw reward as a diagnostic and never award failed episodes positive credit.",
+  "scenarios": "Use the evaluator-supplied ID when available; otherwise freeze an ordered audited allowlist, explicit weights, and a stable seed-to-ID rule. Derive independent ID-selection and reset seeds with a documented SHA-256 domain-separated mapping, never Python hash or registry order. Log the external seed, actual reset seed, ID, kwargs and package versions. Prefer procedural object/mission/random-start tasks so held-out seeds meaningfully vary layouts; fixed Empty variants are smoke tests only. Report results per family and audit custom success semantics before admission.",
+  "strategy_summary": "Parse the mission into typed predicates and dependencies: then preserves order, after reverses it, and and normally requires both without a fixed order. Maintain a persistent observed map with orientation, inventory, hazards, doors and unknown cells; preserve the initial reference frame for relative descriptions. Use turn-aware search and replan on material new observations, while code enforces interaction preconditions, carrying capacity, hazard rules and step budgets. Astra chooses exploration frontiers, staging cells and plans for ambiguous multi-room tasks. Jev is optional and should answer bounded language-to-object recognition questions, leaving exact decoding, arithmetic, search and bookkeeping to code. Stop on environment termination/truncation and use audited task-specific success extraction, never a model judgment alone.",
+  "risks": [
+    "The evaluator venv currently has no minigrid package and this host cannot resolve external DNS; an offline wheelhouse or cached packages must be supplied.",
+    "Environment IDs, wrappers, reward details, and private object-code mappings vary by minigrid release; pin and record the installed version and audit every selected ID.",
+    "Default observations are partial symbolic views, so a serializer that treats occluded cells as empty will cause systematic failures.",
+    "Some task variants have custom BabyAI verifiers or action restrictions; do not infer success from terminated alone or assume done means completion.",
+    "Rendering/screen-input fallbacks require Pygame/display support and are slower and less reliable on a headless Linux server.",
+    "There is no anti-cheat or online ToS issue for the official local simulator, but unofficial forks can change benchmark semantics.",
+    "The current study sandbox cannot write to the evaluator venv; installation requires a later phase with that path writable. Package compatibility and source claims remain unverified because upstream retrieval failed."
+  ]
+}

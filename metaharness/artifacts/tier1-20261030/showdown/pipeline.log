@@ -1,0 +1,25 @@
+[22:05:00] run: game='Pokémon Showdown (random battles)' dir=runs/showdown agent=codex:gpt-6-astra@router
+[02:35:31] run: game='Pokémon Showdown (random battles)' dir=runs/showdown agent=codex:gpt-6-astra@router
+[03:00:45] study: done — tier 1, interface api
+[03:16:39] adapt: adaptor validated after 1 attempt(s)
+[03:16:39] run: game='Pokémon Showdown (random battles)' dir=runs/showdown agent=codex:gpt-6-astra@router
+[03:16:39] study: reusing runs/showdown/study/study.json (tier 1)
+[03:16:42] adapt: reusing validated adaptor
+[03:16:42] search: tier 1 on adaptor game 'Pokémon Showdown — Gen 9 Random Battle'
+[19:29:33] run: done — best 0014
+[07:43:36] run: game='Pokémon Showdown (random battles)' dir=runs/showdown agent=codex:gpt-6-astra@router
+[07:43:37] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[07:43:37] study: reusing runs/showdown/study/study.json (tier 1)
+[08:16:23] adapt: adaptor validated after 1 attempt(s)
+[08:16:23] run: game='Pokémon Showdown (random battles)' dir=runs/showdown agent=codex:gpt-6-astra@router
+[08:16:23] study: reusing runs/showdown/study/study.json (tier 1)
+[08:16:33] adapt: reusing validated adaptor
+[08:16:33] search: tier 1 on adaptor game 'Pokémon Showdown — Gen 9 Random Battle'
+[11:51:40] run: game='Pokémon Showdown (random battles)' dir=runs/showdown agent=codex:gpt-6-astra@router
+[11:51:40] study: WARNING — --notes differ from the notes this study was made with (study/notes.md); reusing it anyway — delete study/study.json to redo the study with the new notes
+[11:51:40] study: reusing runs/showdown/study/study.json (tier 1)
+[12:10:52] adapt: adaptor validated after 1 attempt(s)
+[12:10:53] run: game='Pokémon Showdown (random battles)' dir=runs/showdown agent=codex:gpt-6-astra@router
+[12:10:53] study: reusing runs/showdown/study/study.json (tier 1)
+[12:11:03] adapt: reusing validated adaptor
+[12:11:03] search: tier 1 on adaptor game 'Pokémon Showdown — Gen 9 Random Battle'

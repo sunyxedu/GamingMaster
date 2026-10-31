@@ -1,0 +1,14 @@
+[22:05:00] run: game='TextWorld (Microsoft text adventure generator)' dir=runs/textworld agent=codex:gpt-6-astra@router
+[22:11:23] run: game='TextWorld (Microsoft text adventure generator)' dir=runs/textworld agent=codex:gpt-6-astra@router
+[21:33:42] run: game='TextWorld (Microsoft text adventure generator)' dir=runs/textworld agent=codex:gpt-6-astra@router
+[21:59:18] study: done — tier 1, interface official env: native TextWorld Python API with generated Glulx .ulx stories and JSON sidecars
+[22:50:49] adapt: adaptor validated after 1 attempt(s)
+[22:50:49] run: game='TextWorld (Microsoft text adventure generator)' dir=runs/textworld agent=codex:gpt-6-astra@router
+[22:50:49] study: reusing runs/textworld/study/study.json (tier 1)
+[22:50:55] adapt: reusing validated adaptor
+[22:50:55] search: tier 1 on adaptor game 'TextWorld generic Glulx quests (admissible commands)'
+[01:58:55] run: game='TextWorld (Microsoft text adventure generator)' dir=runs/textworld agent=codex:gpt-6-astra@router
+[01:58:55] study: reusing runs/textworld/study/study.json (tier 1)
+[01:59:01] adapt: reusing validated adaptor
+[01:59:01] search: tier 1 on adaptor game 'TextWorld generic Glulx quests (admissible commands)'
+[03:06:55] run: done — best 0001

@@ -1,0 +1,1 @@
+Seed candidate: the winner of the previous search archive (search-v1/candidates/0007): a fixed build plan compiled by one System-2 call. It scored 4030 on three held-out maps and 74.85 on the fourth (seed 1101), where the plan broke and nothing re-planned.

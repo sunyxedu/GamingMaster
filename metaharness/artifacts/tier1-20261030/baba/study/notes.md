@@ -1,0 +1,1 @@
+Linux x86_64 server without GUI; everything must run offline on this machine with free software. The evaluator's Python is the venv at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/baba (install there). Tier 1: the agent plays turn by turn. pip baba-is-ai or the GitHub package; seeds select puzzles; score = puzzles solved.

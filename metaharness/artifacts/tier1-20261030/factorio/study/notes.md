@@ -1,0 +1,2 @@
+Linux x86_64 server without GUI; everything must run offline on this machine with free software. The evaluator's Python is the venv at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/factorio (install there). Tier 1: the agent plays turn by turn. Prefer the free Factorio headless server (factorio.com headless download) driven through RCON / the Factorio Learning Environment (FLE) or a similar programmatic interface. Each step may run a batch of commands; score = real factory progress (production score / items crafted / research) over a fixed number of steps.
+yugioh

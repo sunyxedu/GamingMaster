@@ -1,0 +1,149 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          7,
+          8,
+          11,
+          13,
+          17,
+          43
+        ]
+      ],
+      [
+        "heldout",
+        [
+          6,
+          9,
+          10,
+          12,
+          16,
+          19,
+          20,
+          26,
+          31,
+          36,
+          47,
+          52
+        ]
+      ]
+    ],
+    "game_kwargs": {
+      "mode": "wordle"
+    },
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "b8f1f9de776944d300331ac559bfee240629b5aca09a922d293b330f57deb803"
+  },
+  "results": {
+    "train:0": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:1": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:2": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:3": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:4": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:5": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:7": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:8": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:11": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:13": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:17": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "train:43": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:6": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:9": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:10": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:12": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:16": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:19": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:20": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:26": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:31": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:36": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:47": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    },
+    "heldout:52": {
+      "ok": true,
+      "obs_sha256": "b8dadfbde584a957"
+    }
+  },
+  "refused": [],
+  "warnings": [
+    "held-out seeds start exactly like a training seed: heldout:6, heldout:9, heldout:10, heldout:12, heldout:16, heldout:19, heldout:20, heldout:26, heldout:31, heldout:36, heldout:47, heldout:52",
+    "every training seed starts from the same observation: the seeds may not vary the scenario, so a harness can memorise one episode and the held-out seeds test nothing"
+  ]
+}

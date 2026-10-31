@@ -1,0 +1,74 @@
+- Candidate 0000's `StopIteration` occurred before its first `ctx.act`: model output must be treated as untrusted text and matched against the current legal list.
+- A turn-game harness should keep a deterministic legal fallback; one malformed/slow System-2 response must not end the episode.
+- Exact action names are request-local: switch slots can reorder and hidden trapping can reject a visibly listed switch, so re-observe after an `act` exception.
+- The private request already exposes enough move, HP, ability, item, and Tera data for a useful type/power ranking; model calls can be reserved for uncertainty.
+- `recent_events` is nonempty after normal steps, so using its mere presence as a “new information” trigger would accidentally call Astra every turn.
+- Candidate 0001 traces show the parser repair was necessary but not sufficient: a timeout left a pure base-power fallback, and its subsequent switches did not use revealed threat typing.
+- Candidate 0003's queued plans still produced oscillating switches after active reveals; a short candidate shortlist is a cleaner boundary between code legality and Astra strategy.
+- Large raw ledgers cost roughly 50–80 seconds per Astra call, so checkpoint calls with a bounded state should preserve more accepted game decisions under the 1800-second deadline.
+- A switch slot is only meaningful for the current request; any retry after a hidden trap must re-observe and regenerate the ranking.
+- Candidate 0006 tests line planning plus a two-decision voluntary-switch commitment to address oscillation and model latency.
+- A model line must be validated token-by-token against each fresh legal_actions list; later switch indices can become stale after reordering.
+- Parsing only the `LINE:` field avoids treating explanatory mentions of alternative actions as commands.
+- Coarse checkpoints and a 12-call cap trade some tactical re-planning for substantially more accepted engine decisions before the wall deadline.
+
+- Candidate 0004: leader 0001's timeout recovery permanently disabled Astra; treat a single timeout as a recoverable event and reserve wall time for legal fallback play.
+- Reversing a weakness table does not produce resistances (for example Dragon resists Water); use a full directional type chart. A healthy replacement can still be a bad choice when it is slower and weak to the revealed attack.
+- Named-move matchup policies can survive ordinary damage while remapping current request slots. Revoke on changed foe/Tera/field, enemy setup, binding effects, failure, or an unsafe HP threshold; a flat action queue cannot express this distinction.
+- Protocol-only item evidence matters: Life Orb damage lines can reveal an item absent from the convenience cache. Keep these public facts and compare observed incoming damage against approximate threats.
+- Total ctx.think wait can exceed the trace's generation latency because of queueing. A tracked background call plus a remaining-wall cutoff lets a turn-game harness finish using code; do not submit another call while the first remains pending.
+- Pre-flight may report zero answered System-2 calls when its short virtual budget is below a harness's reserve. Supplement that pass with stand-in tests for garbage, timeouts, structured policies, and queued-call cutoff behavior.
+
+- Candidate 0004's high mean came from strong seeds but its losses show Astra repeatedly selecting early Tera and switches against a revealed threat; per-request model control is not reliably calibrated.
+- A deterministic scorer should own routine attacks and only ask Astra at tactical forks; this also converts the 40-call allowance into more engine decisions before the wall deadline.
+- Model-proposed multi-action lines are especially stale for switch slots because the request team order changes after every switch; validate only the current first token.
+- Keep forced replacement handling separate from voluntary switching; never apply anti-oscillation suppression when no move is legal.
+
+- Candidate 0007: collecting every archived public own-team move_dex still produced only 115 move definitions; several decisive enemy attacks (Eruption, Solar Beam, Gigaton Hammer) were absent. An unknown revealed attack must not silently become zero damage.
+- Ask Astra for bounded, typed public move mechanics only for already revealed missing moves; label these as inferred, let current move_dex override them, and compare their predictions with public damage events.
+- Damage on voluntary switches is valuable evidence. Candidate 0004 discarded it whenever the active identity changed, including the Eruption KO on switched-in Volcanion; replaying protocol events can recover the correct target and pre-hit HP.
+- A KO reports a lower bound on damage, and a critical hit is unsuitable for ordinary calibration. Transfer evidence by matching move and attacker conditions through a type/stat estimate; do not apply one attacker's largest damage multiplier to every move forever.
+- Candidate 0007's offline checks cover 187 archived decision observations, 35 switch-hit samples, malformed typed facts, arbitrary model prose, timeout recovery, and HP-dependent damage. Pre-flight alone exercised no Astra calls because of its short virtual budget.
+
+- Candidate 0009 tests Astra as a threat-hypothesis provider, with code choosing actions through two-turn exchange search; model hypotheses remain separate from observed facts.
+- A costly switch is not necessarily a bad switch: replay still favors Scyther into Lucario in 0004's loss. Compare the subsequent attack/survival sequence rather than imposing a blanket switch penalty.
+- HP-dependent attacks must be recalculated after faster damage. With revealed Eruption mechanics, the replacement search chooses fast Raichu over slower Iron Jugulis in the archived losing position.
+- Legality replay covered 1,105 archived observations, but it cannot establish win rate. Separate stand-in runs are necessary when pre-flight's short budget skips all model calls.
+- Sparse threat calls need an invalidation path for a newly revealed move absent from the reference; an unknown move must not silently become zero threat forever.
+- Candidate 0009's dev win (+1.1579, six survivors) occurred with zero answered Astra calls after a long pending call. This validates fallback completion, not the model-hypothesis contribution; keep those claims separate.
+- Candidate 0012 adds a post-parse model-action firewall: local KO and consecutive-switch invariants can reject a strategically plausible but tactically stale Astra command.
+- In candidate 0007 seed 282617, Astra issued switches on turns 1, 2, 4, and 6; a model answer can bypass a scorer's anti-oscillation penalty unless the guard runs after parsing.
+- Keep the guard narrow and logged: broad anti-switch rules would reject necessary forced replacements and useful double switches.
+- Tera advice needs the same legality and decisiveness check as ordinary moves; spending it for a small modeled gain is hard to recover from.
+- Candidate 0011 tests an empirical opponent-policy prior: repeated public moves by the same revealed active receive a capped search weight, while unseen moves retain generic uncertainty.
+- Parent 0009's seed 181081 trace shows Goodra Earthquake repeated at steps 3, 4, 7, and 8 and Gardevoir Moonblast at steps 10 and 11; this is direct evidence available before the next choice.
+- Keep action counts keyed by the full revealed identity and read them only from `recent_events`; species-wide aggregation would incorrectly transfer behavior between distinct opponents.
+- A capped prior is safer than forcing the last move: heuristic switches and HP-dependent moves can change the best response after our action.
+- Parent search already has a deterministic fallback and catches model failures; preserving that path is essential because pending Astra calls consumed most of the 1800-second episode budget.
+- Candidate 0010 tests arbitration rather than another damage feature: model actions must pass a current-request safety gate before their continuation policy is trusted.
+- A voluntary switch and a forced replacement have different opportunity costs; any anti-switch rule must exempt forced requests or it can deadlock the protocol.
+- Tera preservation is useful only as a narrow comparison against the same move without Tera; a blanket Tera ban would discard emergency defensive turns.
+- Model prose is untrusted even after JSON extraction: parse, validate against the current legal list, then apply local invariants and only then save policy state.
+- Candidate 0014 tests empirical attack models inside 0011's exchange search. Calibration of known moves alone changed zero of 296 archived choices; unknown revealed moves omitted by `replies()` were the larger gap.
+- Fit uncertain type/category estimates from observed damage and effectiveness, then retire them when a move definition arrives. These are mechanics hypotheses about a revealed move, never claims about a hidden set.
+- Protocol actors use `p2a:`/`p1a:` while request identities use `p2:`/`p1:`; replay exact hit-time HP, boosts and Tera before joining evidence. End-of-step HP loss mixes attacks with healing and hazards.
+- Candidate 0015 tests risk-sensitive search: when fewer than four opponent moves are revealed, a low-weight generic STAB branch guards against hidden coverage without asserting a set.
+- The parent 0009 search already handles legal actions and model failures; changing only its reply distribution isolates hidden-action uncertainty from controller arbitration.
+- Synthetic branches must stay out of the public ledger and prompt facts; they are counterfactual search hypotheses, not observations.
+- An uncertainty prior should be small and conditional on incomplete reveals; applying it after all four moves are known would create needless over-switching.
+- Calibration must ignore tagged residual effects and critical hits, sum multi-hit damage once, and treat a KO as a lower bound. A single noisy roll must not rewrite every coverage estimate.
+- 0012's strong mean came from its ledger and short policy continuation, but the worst loss exposed a gap: model-only Tera vetoes do not protect code fallbacks near the deadline.
+- Revealed damage evidence must affect replacement selection immediately; repeatedly switching into a known high-power move is a structural failure even when each local switch is legal.
+- A conservative fallback Tera rule should require a defensive matchup change or a real KO swing; spending Tera on unchanged typing is usually unrecoverable.
+- Keep emergency filters narrow and traceable so they do not replace Astra's role in uncertain strategic choices.
+- Candidate 0017 isolates a terminal-value bug: after an opponent falls below roughly one-fifth HP, fleeing from a modeled finish can feed several replacements to the same fast attacker.
+- A revealed opponent move absent from the private move dex is still usable evidence; adding a small verified public move table lets the existing threat ledger react immediately without claiming hidden set information.
+- Finish bonuses must be applied after generic “slower than lethal” penalties, or the scorer silently cancels its own emergency rule.
+- Pre-flight stand-in models can answer zero Astra calls yet still exercise the full turn-game loop; inspect the resulting ranker with archived observations for tactical regressions.
+- Candidate 0018 tests evidence-triggered uncertainty: a fixed hidden-STAB prior should rise only after a substantial direct hit is observed.
+- Exact p1 HP and untagged `|-damage|` lines provide a cheap calibration signal; residual lines must be ignored to avoid blaming attacks for hazards or status.
+- Calibrate by opponent identity, not species alone, because random battles can reveal multiple distinct instances and sets.
+- Keep the prior bounded and local to reply search; broad defensive reactions to every strong hit would cause needless switching.
+- Candidate 0016: a slow first Astra answer can leave only a few hundred virtual seconds; a second queued call is not worth sacrificing the deterministic controller's remaining decisions.
+- Public opponent moves can be absent from p1's private move dex; a small verified table for revealed high-power attacks makes the existing threat ledger useful immediately without exposing hidden sets.
+- A finish rule must be narrow and applied after generic “slower than lethal” penalties: it is meant for a reliable KO on a nearly fainted foe, not a blanket refusal to switch.

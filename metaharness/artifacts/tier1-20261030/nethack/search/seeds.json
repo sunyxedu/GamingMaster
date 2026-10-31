@@ -1,0 +1,104 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          1101,
+          1102,
+          1103,
+          1104,
+          1105,
+          1106,
+          1107,
+          1108
+        ]
+      ],
+      [
+        "heldout",
+        [
+          2201,
+          2202,
+          2203,
+          2204,
+          2205,
+          2206,
+          2207,
+          2208
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "d6f7c8fa99fca54af85951a2f8ae35aeb0619e2cd5e7d5af3d7f4061722d837e"
+  },
+  "results": {
+    "train:1101": {
+      "ok": true,
+      "obs_sha256": "b05782ee7c4e8847"
+    },
+    "train:1102": {
+      "ok": true,
+      "obs_sha256": "491360dabe1023cb"
+    },
+    "train:1103": {
+      "ok": true,
+      "obs_sha256": "dd1c2c75cbf3687d"
+    },
+    "train:1104": {
+      "ok": true,
+      "obs_sha256": "eda4ee225a4d2b59"
+    },
+    "train:1105": {
+      "ok": true,
+      "obs_sha256": "4c999c14da99c392"
+    },
+    "train:1106": {
+      "ok": true,
+      "obs_sha256": "89988eaa782791a7"
+    },
+    "train:1107": {
+      "ok": true,
+      "obs_sha256": "8d1c5fda21d27d62"
+    },
+    "train:1108": {
+      "ok": true,
+      "obs_sha256": "0295c6cff74e8933"
+    },
+    "heldout:2201": {
+      "ok": true,
+      "obs_sha256": "0030fd1eb651b289"
+    },
+    "heldout:2202": {
+      "ok": true,
+      "obs_sha256": "106d14bcbb61e74e"
+    },
+    "heldout:2203": {
+      "ok": true,
+      "obs_sha256": "0db8a917567086c2"
+    },
+    "heldout:2204": {
+      "ok": true,
+      "obs_sha256": "2b3effa879cb459c"
+    },
+    "heldout:2205": {
+      "ok": true,
+      "obs_sha256": "cdb4c828f9adb17b"
+    },
+    "heldout:2206": {
+      "ok": true,
+      "obs_sha256": "8e31858639a6a7b5"
+    },
+    "heldout:2207": {
+      "ok": true,
+      "obs_sha256": "3912d896874c8e06"
+    },
+    "heldout:2208": {
+      "ok": true,
+      "obs_sha256": "f21301036574b09d"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

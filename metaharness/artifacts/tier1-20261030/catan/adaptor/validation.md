@@ -1,0 +1,24 @@
+# Adaptor validation: PASS
+
+- [x] load game.py and make_game() — name=Settlers of Catan (Catanatron AlphaBeta depth 2) tier=tier1 realtime=False
+- [x] TIER agrees with the game's kind (2 <=> tick()) — TIER=1; the game is turn-based (no tick)
+- [x] tier 1, as the study decided — the game is turn-based (no tick), tier1
+- [x] SEEDS: non-empty, disjoint train / held-out lists of ints — 4 train (101, 102, 103, 104), 4 held-out (201, 202, 203, 204)
+- [x] action_spec is an ActionSpec with >=1 action
+- [x] describe() returns a non-trivial string — 2417 chars
+- [x] seed 101: observe() JSON-serialisable — 15878 bytes
+- [x] seed 101: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 101: applied 12 actions without exception
+- [x] seed 101: done is bool and score is a finite number after the actions — done=False score=0.0
+- [x] seed 101: observations after the actions are strict JSON
+- [x] seed 101: info() is a dict
+- [x] seed 201: observe() JSON-serialisable — 15874 bytes
+- [x] seed 201: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 201: applied 12 actions without exception
+- [x] seed 201: done is bool and score is a finite number after the actions — done=False score=0.0
+- [x] seed 201: observations after the actions are strict JSON
+- [x] seed 201: info() is a dict
+- [x] malformed action '__not_an_action__' does not raise
+- [x] close() releases the instance (called after every episode)
+- [x] DETERMINISTIC: reset(seed) on a fresh instance reproduces the first observation
+- [x] different seeds give different starts (scenario variety)

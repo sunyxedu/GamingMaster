@@ -1,0 +1,1 @@
+Linux x86_64 server without GUI; everything must run offline on this machine with free software. The evaluator's Python is the venv at /home/hemlix/GamingMaster-mh-tier1/runs/venvs/2048 (install there). Tier 1: the agent plays turn by turn. Own implementation is fine; score = the game score and max tile over a fixed number of moves.
