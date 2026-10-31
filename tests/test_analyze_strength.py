@@ -120,7 +120,7 @@ def test_an_engine_that_does_not_start_skips_its_game(tmp_path, capsys):
         def close(self):
             pass
 
-    def fake_make(game, command, go, threads):
+    def fake_make(game, command, go, threads, timeout=600.0):
         if game == "xiangqi":
             raise analyze_strength.EngineError("pikafish: no 'uciok' (exited -4)")
         return FakeEngine()
@@ -226,7 +226,7 @@ def test_cell_budget_and_failed_files_are_recorded_not_retried(tmp_path):
         def close(self):
             pass
 
-    def fake_make(game, command, go, threads):
+    def fake_make(game, command, go, threads, timeout=600.0):
         made.append(game)
         return FakeEngine()
 
@@ -255,3 +255,46 @@ def test_cell_budget_and_failed_files_are_recorded_not_retried(tmp_path):
         analyze_strength.make_engine = orig
     assert sum(1 for _ in open(run / "strength.jsonl")) == 5
     analyze_strength.summary(str(run))
+
+
+def test_opponent_filter_records_other_opponents_as_skipped(tmp_path):
+    """--opponents init: archives against other opponents are recorded as skipped (the sentinel
+    does not queue them again) without starting an engine; the init archives are judged, and the
+    engine gets --engine_timeout."""
+    from scripts import analyze_strength
+
+    run = tmp_path / "run"
+    for opp in ("init", "engine"):
+        archive_eval_wave(str(run / "traces" / f"eval_chess_{opp}_it3_r0_w0.npz"),
+                          _Env(_random_games("chess", 1, 6)), [[True, False]],
+                          {"game": "chess", "opponent": opp, "iteration": 3, "rank": 0, "wave": 0})
+    timeouts = []
+
+    class FakeEngine:
+        name = "fake"
+
+        def judge(self, start, moves, played, go):
+            return 10.0, 0.0, False
+
+        def close(self):
+            pass
+
+    def fake_make(game, command, go, threads, timeout=600.0):
+        timeouts.append(timeout)
+        return FakeEngine()
+
+    orig = analyze_strength.make_engine
+    analyze_strength.make_engine = fake_make
+    try:
+        analyze_strength.sys.argv = ["analyze_strength.py", "--run", str(run), "--engine", "chess=x",
+                                     "--go", "chess=go depth 1", "--opponents", "init",
+                                     "--engine_timeout", "180"]
+        analyze_strength.main()
+    finally:
+        analyze_strength.make_engine = orig
+    rows = {r["file"]: r for r in (json.loads(l) for l in open(run / "strength.jsonl"))}
+    assert set(rows) == {"eval_chess_init_it3_r0_w0.npz", "eval_chess_engine_it3_r0_w0.npz"}
+    assert rows["eval_chess_engine_it3_r0_w0.npz"]["skipped"].startswith("opponent filter: engine")
+    assert not rows["eval_chess_init_it3_r0_w0.npz"].get("skipped")
+    assert rows["eval_chess_init_it3_r0_w0.npz"]["init_positions"] > 0
+    assert timeouts == [180.0]

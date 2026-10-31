@@ -292,7 +292,9 @@ def _judge(z: Any, n_seats: int, todo: List[Tuple[int, int, List[str], str]], en
     return losses, agree
 
 
-def make_engine(game: str, command: str, go: str, threads: int):
+def make_engine(game: str, command: str, go: str, threads: int, timeout: float = 600.0):
+    """``timeout``: seconds one search may take before the engine is killed (the file is then
+    recorded as an engine error)."""
     if game in UCI_GAMES:
         proto = UCI_GAMES[game]
         opts = {"Threads": str(threads)} if threads > 1 else {}
@@ -300,10 +302,10 @@ def make_engine(game: str, command: str, go: str, threads: int):
             opts = {"Threads": str(threads), "USI_Hash": "256"} if threads > 1 else {"USI_Hash": "256"}
         else:
             opts["Hash"] = "256"
-        return ScoringUci(command, proto, opts, timeout=600.0)
+        return ScoringUci(command, proto, opts, timeout=timeout)
     if game == "go":
         m = re.search(r"visits\s+(\d+)", go)
-        return KataGoAnalysis(command, int(m.group(1)) if m else 100)
+        return KataGoAnalysis(command, int(m.group(1)) if m else 100, timeout=timeout)
     raise SystemExit(f"{game}: no engine protocol known")
 
 
@@ -358,6 +360,13 @@ def main() -> None:
                          "number; 0 = every file")
     ap.add_argument("--cell_positions_game", action="append", default=[], metavar="GAME=N",
                     help="a game's own --cell_positions (go's files hold fewer positions)")
+    ap.add_argument("--opponents", default="",
+                    help="comma-separated opponents whose archives are judged (e.g. 'init': the "
+                         "paired learner / start comparison); the others are recorded as skipped, "
+                         "so a job does not wait on them again; empty = every opponent")
+    ap.add_argument("--engine_timeout", type=float, default=600.0,
+                    help="seconds one engine search may take (a search that does not end costs "
+                         "this much before its file is recorded as an engine error)")
     ap.add_argument("--only", default="", help="comma-separated games")
     ap.add_argument("--summary", action="store_true", help="print the trend and exit")
     ap.add_argument("--verbose", action="store_true")
@@ -388,6 +397,7 @@ def main() -> None:
         with open(out_path, "a") as f:
             f.write(json.dumps(rec) + "\n")
     only = set(a.only.split(",")) if a.only else None
+    opponents = {x for x in a.opponents.split(",") if x}
     live: Dict[str, Any] = {}
     dead: Dict[str, str] = {}       # games whose engine does not start (e.g. an AVX2 build on an
     n_new = 0                       # SSE2-only node): skipped, their files stay unjudged
@@ -400,6 +410,10 @@ def main() -> None:
             if game not in engines or game in dead or (only and game not in only):
                 continue
             cell = archive_cell(base)
+            if opponents and cell is not None and cell[1] not in opponents:
+                record({"file": base, "game": game, "positions": 0,
+                        "skipped": f"opponent filter: {cell[1]} not in {sorted(opponents)}"})
+                continue
             limit = cap.get(game, a.cell_positions)
             if limit > 0 and cell_n.get(cell, 0) >= limit:
                 record({"file": base, "game": game, "positions": 0,
@@ -415,7 +429,8 @@ def main() -> None:
                 continue
             if game not in live:
                 try:
-                    live[game] = make_engine(game, engines[game], limits.get(game, ""), a.threads)
+                    live[game] = make_engine(game, engines[game], limits.get(game, ""), a.threads,
+                                             a.engine_timeout)
                 except (EngineError, OSError) as e:
                     dead[game] = f"{type(e).__name__}: {e}"
                     print(f"{game}: the engine does not start ({dead[game][:300]}) — skipped",
