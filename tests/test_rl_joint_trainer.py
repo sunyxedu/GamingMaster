@@ -1141,6 +1141,48 @@ def test_eval_engine_rung_sets_the_referee_once(stage1):
             resumed("--eval_engine_rung", bad)
 
 
+def test_eval_temperature_applies_to_that_games_evaluation_games_only(stage1):
+    """--eval_temperature GAME=T: the networks of GAME's evaluation games draw at T (0 = their top
+    move) — the sampler's temperature during _eval_against's waves — while other games' evaluations
+    and every rollout stay at 1; each evaluated game's record says the temperature it was played at.
+    A negative temperature is refused."""
+    from model.games import base
+    from training import train_rl_joint
+    from training.train_rl_joint import JointRLTrainer, parse_args
+
+    seen = []
+    orig = train_rl_joint.collect_wave
+
+    def spy(env, league, actor, **kw):
+        # an evaluation wave's league never mirrors (its seats are assigned inside the wave)
+        seen.append((env.game if hasattr(env, "game") else type(env).__name__,
+                     float(league.mirror_prob) > 0.0, base._SAMPLE_TEMPERATURE))
+        return orig(env, league, actor, **kw)
+
+    train_rl_joint.collect_wave = spy
+    try:
+        torch.manual_seed(0)
+        tr = JointRLTrainer(parse_args(_args(stage1, "rl_evaltemp", "--iterations", "2",
+                                             "--eval_every", "1", "--eval_episodes", "2",
+                                             "--eval_temperature", "othello=0")))
+        tr.run_iteration()                    # iteration 0: no vs_init for two-seat games
+        rec = tr.run_iteration()
+    finally:
+        train_rl_joint.collect_wave = orig
+    evals = [(g, t) for g, mirror, t in seen if not mirror]
+    rollouts = [t for g, mirror, t in seen if mirror]
+    assert evals and all(t == (0.0 if g == "othello" else 1.0) for g, t in evals), evals
+    assert any(g == "othello" for g, _ in evals) and any(g != "othello" for g, _ in evals)
+    assert rollouts and all(t == 1.0 for t in rollouts)
+    assert base._SAMPLE_TEMPERATURE == 1.0
+    games = rec["games"] if "games" in rec else rec
+    assert games["othello"]["eval_temperature"] == 0.0
+    assert games["generals"]["eval_temperature"] == 1.0
+    with pytest.raises(SystemExit, match="--eval_temperature"):
+        JointRLTrainer(parse_args(_args(stage1, "rl_evaltemp", "--iterations", "1",
+                                        "--eval_temperature", "othello=-1")))
+
+
 def test_stop_file_saves_and_exits_after_the_iteration(stage1):
     """--stop_file: once the file exists the trainer writes rl_latest.pt after the iteration
     and stops — no rl_final.pt (the job's wrapper continues with a handover)."""

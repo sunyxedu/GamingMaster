@@ -205,3 +205,44 @@ def test_qhead_receives_gradient_at_every_act_depth(act_steps, use_autocast):
     assert out["q_halt"].requires_grad
     missing = [n for n, p in net.named_parameters() if p.grad is None]
     assert not missing, f"act_steps={act_steps} autocast={use_autocast}: {missing}"
+
+
+def test_sampling_temperature_greedy_sharpened_and_restored():
+    """masked_sample at temperature 0 is the masked argmax; at 1 (the default, and again after
+    the block) it is bit-identical to the plain softmax draw; a lower temperature sharpens the
+    draw; masked entries are never drawn at any temperature; a negative temperature is refused."""
+    from model.games import base
+
+    torch.manual_seed(0)
+    logits = torch.randn(512, 9)
+    mask = torch.rand(512, 9) > 0.3
+    mask[:, 0] = True
+    masked = logits.masked_fill(~mask, float("-inf"))
+    with base.sampling_temperature(0.0):
+        g = base.masked_sample(logits, mask)
+    assert torch.equal(g, masked.argmax(-1))
+    gen_state = torch.get_rng_state()
+    plain = base.categorical_sample(F.softmax(base.safe_masked_logits(logits, mask), -1))
+    torch.set_rng_state(gen_state)
+    assert torch.equal(base.masked_sample(logits, mask), plain)          # temperature 1: unchanged
+    top = masked.argmax(-1)
+    hits = {}
+    for t in (1.0, 0.25):
+        n = 0
+        with base.sampling_temperature(t):
+            for _ in range(40):
+                s = base.masked_sample(logits, mask)
+                assert bool(mask.gather(1, s.unsqueeze(1)).all())          # never an illegal entry
+                n += int((s == top).sum())
+        hits[t] = n
+    assert hits[0.25] > hits[1.0]
+    assert base._SAMPLE_TEMPERATURE == 1.0                                 # restored after the block
+    with pytest.raises(ValueError):
+        with base.sampling_temperature(-0.5):
+            pass
+    try:
+        with base.sampling_temperature(0.0):
+            raise RuntimeError("inside")
+    except RuntimeError:
+        pass
+    assert base._SAMPLE_TEMPERATURE == 1.0                                 # restored on an error too

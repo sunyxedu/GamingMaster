@@ -152,7 +152,7 @@ from model.components.core import (
 )
 from model.components.heads import HLGaussValueHead
 from model.config import checkpoint_config_dict
-from model.games.base import categorical_entropy, masked_log_prob
+from model.games.base import categorical_entropy, masked_log_prob, sampling_temperature
 from model.games.gmrules import resolve, rules_games
 from model.multi_game import MultiGameNetwork, core_config_overrides, is_core_key
 from model.optim import TRM_BETAS, AdamATan2, ModelEMA
@@ -390,6 +390,12 @@ def parse_args(argv=None) -> argparse.Namespace:
            "separated key=value settings: eps (--eval_engine_eps), go (--eval_engine_go, a + for "
            "a space: go+nodes+10, level+3, plies+1, visits+16 for KataGo), opt.NAME "
            "(--eval_engine_opt); e.g. chess=opt.UCI_Elo=1500;opt.UCI_Elo=1800;opt.UCI_LimitStrength=false")
+    a("--eval_temperature", action="append", default=[], metavar="GAME=T",
+      help="the temperature the networks of GAME's evaluation games (vs the --init network, vs "
+           "the engine) draw their moves at: 1 (default) = the policy as trained, 0 = its top "
+           "move; rollouts always sample at 1.  A perfect-information game's strength is its "
+           "near-greedy play: final-mem's --init network scored 0.21 sampled / 0.81 greedy "
+           "against Stockfish at 1500 Elo (shogi 0.02 / 0.70, xiangqi 0.02 / 0.36)")
     a("--eval_engine_step_up", type=float, default=0.9)
     a("--eval_engine_step_down", type=float, default=0.0,
       help="the ladder's way back: once the learner scores at most this against its referee in "
@@ -2280,6 +2286,12 @@ class JointRLTrainer:
         self.eval_engine_go = _pairs(a.eval_engine_go, str, "LIMIT")
         self.eval_engine_eps = _pairs(a.eval_engine_eps, float, "P")
         self.eval_episodes = _pairs(a.eval_episodes_game, int, "N")
+        self.eval_temperature = _pairs(a.eval_temperature, float, "T")
+        for g, t in self.eval_temperature.items():
+            if not t >= 0.0:
+                raise SystemExit(f"--eval_temperature {g}={t}: must be >= 0")
+        if self.eval_temperature and a.cuda_graph:
+            raise SystemExit("--eval_temperature: a CUDA-graph actor keeps its recorded sampling")
         for g in self.eval_engine_eps:
             if g not in self.eval_engine:
                 raise SystemExit(f"--eval_engine_eps {g}: {g} has no --eval_engine")
@@ -3335,6 +3347,8 @@ class JointRLTrainer:
         group = getattr(r.env, "deal_group", 1)
         if a.eval_duplicate and r.env.n_seats > 1:
             r.env.deal_group = r.env.n_seats
+        temp = sampling_temperature(self.eval_temperature.get(g, 1.0))
+        temp.__enter__()
         try:
             while total.episodes < n_eval:
                 # seats balanced within every wave (env i: the learner in seat (i + wave) mod S),
@@ -3361,6 +3375,7 @@ class JointRLTrainer:
                          "score_n": st.score_n, "deal_group": getattr(r.env, "deal_group", 1)})
                 wave += 1
         finally:
+            temp.__exit__(None, None, None)
             r.env.deal_group = group
         return total
 
@@ -3371,6 +3386,9 @@ class JointRLTrainer:
         a = self.args
         for g in self.rl_games:
             row = rec["games"].get(g, {})
+            if row.get("vs_init_n") or row.get("vs_engine_n"):
+                # how the networks of this evaluation's games drew their moves
+                row["eval_temperature"] = getattr(self, "eval_temperature", {}).get(g, 1.0)
             if g in self.stopped:
                 continue
             few = row.get("episodes", 0) < a.alarm_min_episodes

@@ -19,8 +19,9 @@ is shared by all games and lives in ``model.game_network.GameNetwork``.
 
 from __future__ import annotations
 
+import contextlib
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -94,12 +95,40 @@ def safe_masked_logits(
     return safe.masked_fill(nan_rows, 0.0)
 
 
+#: the temperature :func:`masked_sample` draws at — 1 = the policy itself; 0 = its masked
+#: argmax.  Changed only through :func:`sampling_temperature`, around evaluation games:
+#: rollouts must sample at 1 (PPO's behaviour log-prob is the temperature-1 policy's).
+_SAMPLE_TEMPERATURE = 1.0
+
+
+@contextlib.contextmanager
+def sampling_temperature(temperature: float) -> Iterator[None]:
+    """Within the block every :func:`masked_sample` draws from softmax(logits / temperature)
+    (0: the masked argmax); the previous temperature comes back on exit.  Not for CUDA-graph
+    replays (a captured graph keeps the sampling it was recorded with)."""
+    global _SAMPLE_TEMPERATURE
+    t = float(temperature)
+    if not t >= 0.0:
+        raise ValueError(f"sampling temperature must be >= 0, got {temperature!r}")
+    old, _SAMPLE_TEMPERATURE = _SAMPLE_TEMPERATURE, t
+    try:
+        yield
+    finally:
+        _SAMPLE_TEMPERATURE = old
+
+
 def masked_sample(
     logits: torch.Tensor, mask: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
-    """Sample category indices from (optionally masked) logits.  [B, N] → [B]."""
+    """Sample category indices from (optionally masked) logits.  [B, N] → [B], at the
+    temperature :func:`sampling_temperature` set (default 1; 0 = the masked argmax)."""
     with torch.no_grad():
         safe = safe_masked_logits(logits, mask)
+        t = _SAMPLE_TEMPERATURE
+        if t == 0.0:
+            return safe.argmax(-1)
+        if t != 1.0:
+            safe = safe / t
         probs = F.softmax(safe, dim=-1)
         return categorical_sample(probs)
 
