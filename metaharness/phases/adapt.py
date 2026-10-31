@@ -126,6 +126,8 @@ def _review(model: System2Model, out: Path, session: Optional[str], prompt: str,
 
     try:
         call(REVIEW_PROMPT if session else f"{prompt}\n\n{REVIEW_PROMPT}")
+        if not (out / "review.md").exists() and session:     # ended without reviewing: one finishing round
+            call(f"You ended without writing `review.md`: the review has not been done.\n\n{REVIEW_PROMPT}")
         rep = validate()
         if not rep.ok and session:
             call(f"{rep.to_markdown()}\n\nThe adaptor no longer validates: fix your review changes until it prints PASS.")

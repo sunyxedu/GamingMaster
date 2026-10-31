@@ -224,6 +224,15 @@ def test_adapt_review_resumes_the_session_that_built_the_adaptor(tmp_path):
     assert run_adapt(agent, tmp_path, "countgame", STUDY, review=True, log=lambda *_: None).ok and agent.calls == []
 
 
+def test_adapt_review_that_writes_no_review_gets_a_finishing_round(tmp_path):
+    write_study(tmp_path)
+    write_adaptor(tmp_path / "adaptor", TICK_GAME)
+    agent = ScriptedSystem2(files=[{}, {"review.md": "checked: position field x"}])
+    rep = run_adapt(agent, tmp_path, "countgame", STUDY, review=True, log=lambda *_: None)
+    assert rep.ok and len(agent.calls) == 2 and agent.calls[1].startswith("You ended without writing `review.md`")
+    assert (tmp_path / "adaptor" / "review.md").read_text() == "checked: position field x"
+
+
 def test_adapt_review_that_breaks_validation_is_undone(tmp_path):
     write_study(tmp_path)
     out = tmp_path / "adaptor"
