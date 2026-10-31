@@ -371,3 +371,12 @@ def test_digest_notes_a_child_that_replays_its_parent(tmp_path):
         (c.dir / "directive.json").write_text(json.dumps({"mode": "refine", "parent_dirs": [parent.dir.name]}))
     assert f"same episodes as {parent.dir.name} on every seed" in generation.digest(same)
     assert "same episodes as" not in generation.digest(other) and "same episodes as" not in generation.digest(parent)
+
+
+def test_digest_shows_how_long_each_episode_ran(tmp_path):
+    a = _archive(tmp_path, [(5.0, ())])
+    c = a.candidates()[0]
+    e = json.loads(c.eval_path.read_text())
+    e["episodes"][0].update(steps=900, wall_s=60.2, ended_by="harness_return")
+    c.eval_path.write_text(json.dumps(e))
+    assert "seed 0: 5.0 harness_return (900 steps, 60 s)" in generation.digest(c)

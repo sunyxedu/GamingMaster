@@ -148,6 +148,8 @@ def digest(c: Candidate, limit: int = 1500) -> str:
     same = [p for p in d.get("parent_dirs") or [] if played and played == [
         (ep.get("seed"), ep.get("score"), ep.get("steps")) for ep in _episodes(Candidate(0, c.dir.parent / p).eval() or {})]]
     seeds = " · ".join(f"seed {ep.get('seed')}: {ep.get('score')} {ep.get('ended_by', '')}"
+                       + (f" ({ep['steps']} steps" + (f", {ep['wall_s']:.0f} s)" if isinstance(ep.get('wall_s'), (int, float))
+                                                       else ")") if ep.get("steps") is not None else "")
                        + (f" ✗ {str(ep.get('error'))[-120:]}" if ep.get("error") else "") for ep in eps)
     lines = [f"### candidates/{c.dir.name} — {d.get('mode', 'seed')} of {', '.join(d.get('parent_dirs') or []) or '–'}",
              f"status: {ineligibility(e) or 'ok'}; mean score {e.get('mean_score')}; episodes: {seeds or '–'}",
