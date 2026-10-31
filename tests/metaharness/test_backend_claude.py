@@ -19,6 +19,7 @@ from metaharness.models import claude_cli as claude_mod
 from metaharness.models import make_system2
 from metaharness.models._cli import cancel_scope
 from metaharness.models.base import (
+    AGENT_PREAMBLE,
     PLAYER_PREAMBLE,
     ModelCallCancelled,
     ModelTimeout,
@@ -175,7 +176,7 @@ def test_agentic_calls_keep_tools_but_not_web_unless_asked(fake, tmp_path):
     assert "--strict-mcp-config" in c1["argv"] and "--disable-slash-commands" in c1["argv"]
     assert c1["argv"][c1["argv"].index("--disallowedTools") + 1:][:2] == ["WebSearch", "WebFetch"]
     assert "--disallowedTools" not in c2["argv"]
-    assert _flag(c1["argv"], "--system-prompt") == "SYS" and "--system-prompt" not in c3["argv"]
+    assert _flag(c1["argv"], "--system-prompt") == f"{AGENT_PREAMBLE}\n\nSYS" and "--system-prompt" not in c3["argv"]
     assert c1["cwd"] == str(tmp_path.resolve())
     # agents keep their tools, but neither CLAUDE.md, auto-memory nor hooks may leak into the run directory
     assert c1["env"]["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1" and c1["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
@@ -412,7 +413,7 @@ def test_long_system_prompts_go_through_a_file(fake, tmp_path):
     with pytest.raises(ModelTimeout):
         model.run("slow", system=rules, timeout_s=1.0)
     c1, c2, c3, c4, c5 = fake.calls()
-    for call, text in ((c1, player_text), (c2, player_text), (c3, rules), (c5, player_text)):
+    for call, text in ((c1, player_text), (c2, player_text), (c3, f"{AGENT_PREAMBLE}\n\n{rules}"), (c5, player_text)):
         argv = call["argv"]
         assert "--system-prompt" not in argv and call["system_file"] == text
         assert max(len(a.encode()) for a in argv) < 4096

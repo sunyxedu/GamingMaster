@@ -40,6 +40,7 @@ from typing import Any, Iterator, Optional
 from ._cli import CLITimeout, run_cli
 from .base import (
     CLI_ENV_DROP,
+    AGENT_PREAMBLE,
     PLAYER_PREAMBLE,
     ModelCall,
     ModelTimeout,
@@ -206,7 +207,7 @@ class ClaudeCLI:
             argv += ["--session-id", new_session_id]
         if agentic:
             if system and not session_id:
-                argv += _system_flag(system, system_file)
+                argv += _system_flag(f"{AGENT_PREAMBLE}\n\n{system}", system_file)
             # study / adapt research the game on the web; the proposer must not
             tools = _AGENT_TOOLS + (_WEB_TOOLS if web_search else ())
             argv += ["--tools", ",".join(tools), "--strict-mcp-config", "--disable-slash-commands",
@@ -243,7 +244,7 @@ class ClaudeCLI:
         if not agentic:
             request["system"] = PLAYER_PREAMBLE + (f"\n\n{system}" if system else "")
         elif system and not session_id:
-            request["system"] = system
+            request["system"] = f"{AGENT_PREAMBLE}\n\n{system}"
         try:
             loaded = read_images(images)
             blocks = [_image_block(path, data) for path, data in loaded]
