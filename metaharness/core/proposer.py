@@ -12,10 +12,14 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from typing import Optional
 
+from ..config import REPO_ROOT
 from ..models.base import ModelUnavailable, System2Model, TraceSink
 from .archive import Archive, Candidate
+from .generation import describe as describe_directive
+from .generation import duplicate_of, read_lessons
 
 PROPOSER_SYSTEM = """You are the Meta-Harness proposer. You improve the *harness* — the code that connects
 foundation models to a game — not the models. Work like a researcher: read the archive, form a
@@ -30,22 +34,32 @@ def _fenced_python(text: str) -> Optional[str]:
 
 
 def build_prompt(archive: Archive, candidate: Candidate, contract_doc: str, task_md: str, extra: str = "",
-                 iteration: Optional[tuple[int, int]] = None, timeout_s: Optional[float] = None) -> str:
+                 iteration: Optional[tuple[int, int]] = None, timeout_s: Optional[float] = None,
+                 directive: Optional[dict] = None, siblings: tuple[str, ...] = ()) -> str:
     lb = archive.write_leaderboard()
+    skip = set(siblings) | {candidate.dir.name}
     prior = "\n".join(f"- candidates/{c.dir.name}/ (harness.py, proposal.md, eval.json, trace_seed*.jsonl)"
-                      for c in archive.candidates() if c.idx != candidate.idx)
+                      for c in archive.candidates() if c.dir.name not in skip)
     if (archive.root / "prior").is_dir():
         prior += "\n- prior/ (the full study documents and the adaptor's interface documentation)"
+    lessons = read_lessons(archive.root)
+    if lessons:
+        prior += "\n- lessons.md (the evaluator's record per generation: what each candidate tried, what happened, why)"
     when = ""
     if iteration:
         i, n = iteration
-        when = (f"\nThis is iteration {i} of {n}"
+        when = (f"\nThis is generation {i} of {n}"
                 + (" — the last one: prefer a careful, testable improvement over a risky rewrite" if i == n else "")
                 + ".")
     if timeout_s:
         when += (f" You have {timeout_s / 60:.0f} minutes. Write `harness.py` and `proposal.md` first, then refine: "
                  "a harness written before the deadline is still evaluated, an unwritten one is lost.")
-    return f"""# Meta-Harness iteration -> candidate `{candidate.dir.name}`{when}
+    if siblings:
+        when += (f"\nSibling proposers are writing {', '.join(f'candidates/{s}/' for s in siblings)} right now: those "
+                 "directories are unfinished and unevaluated — ignore them and never write into them.")
+    directive_md = f"\n## Your directive\n{describe_directive(directive)}\n" if directive else ""
+    lessons_md = f"\n## Lessons so far (lessons.md)\n{lessons}\n" if lessons else ""
+    return f"""# Meta-Harness generation -> candidate `{candidate.dir.name}`{when}
 
 Working directory: `{archive.root}` (you have full read/write access here).
 
@@ -56,31 +70,35 @@ Working directory: `{archive.root}` (you have full read/write access here).
 ```
 {contract_doc}
 ```
-{extra}
-
+{extra}{directive_md}
 ## Archive
 {lb}
 Prior candidates (read their code, proposals, eval.json and the JSONL traces — traces contain every
 model call with request/response/latency, every game tick/step, observations at the start and end of each
 episode, on every turn-game step and whenever a real-time score changes, and how each episode ended):
 {prior or '- (none yet)'}
-
+{lessons_md}
 ## What to do
-1. Read the best candidate(s) and the traces of their worst episodes. Diagnose the failure mode
-   concretely (quote evidence from traces).
+1. Read your parent candidate(s), the best candidate and the traces of their worst episodes. Diagnose the
+   failure mode concretely (quote evidence from traces). Check lessons.md so you do not repeat a refuted
+   hypothesis.
 2. Write `candidates/{candidate.dir.name}/harness.py` — a complete module with `build(ctx)`.
-   It must import only the standard library and `metaharness.*`.
-3. Write `candidates/{candidate.dir.name}/proposal.md`: hypothesis, what changed vs. the parent
-   candidate, what evidence would confirm/refute it.
-4. Append 3-6 bullet lessons to `notes.md` at the archive root (a running lab notebook: what
-   generalised, what was a dead end, which contract details bit you). Read it first.
-5. If you cannot use tools, reply with the full harness in ONE ```python fenced block and the
+   It must import only the standard library and `metaharness.*`. A harness whose code repeats an existing
+   candidate's (comments aside) is not evaluated.
+3. Write `candidates/{candidate.dir.name}/proposal.md`: parent(s), hypothesis, what changed, the lesson or
+   evidence it acts on, what evidence would confirm/refute it, and (tier 2) the System-1 state schema,
+   questions, thresholds and fallback policy.
+4. If you cannot use tools, reply with the full harness in ONE ```python fenced block and the
    proposal text after it.
 Before the real evaluation the candidate is *pre-flighted*: one short episode with stand-in models
 that return arbitrary text / first options on a virtual clock. Any exception there (a contract
 misuse, an unhandled parse failure of model output) is sent back to you once for repair; a harness
 must survive garbage model output without crashing.
-Do not modify any other candidate. Do not run long experiments yourself; the evaluator will.
+Do not modify any other candidate. To watch your harness play before the evaluation, run (from `{REPO_ROOT}`)
+`{sys.executable} -m metaharness try {archive.root}/candidates/{candidate.dir.name}/harness.py --seed S`: one
+episode (`--minutes`, default 5) on training seed S with this archive's game and settings, Jev live, Astra off
+unless `--astra`; it prints the score and writes the trace under `candidates/{candidate.dir.name}/tries/`. Only
+training seeds are accepted. Write the harness first: tries play in real time and count against your deadline.
 Read only this archive and the interface documentation above. Do not inspect game implementation
 source, other experiment archives, credentials, or held-out games/results. Infer semantics from the
 public game description and observations supplied through ctx. Do not call model backends directly:
@@ -103,9 +121,14 @@ def propose(
     timeout_s: float = 1800.0,
     candidate: Optional[Candidate] = None,
     iteration: Optional[tuple[int, int]] = None,
+    directive: Optional[dict] = None,
+    siblings: tuple[str, ...] = (),
 ) -> Candidate:
     cand = candidate or archive.new_candidate()
-    prompt = build_prompt(archive, cand, contract_doc, task_md, extra, iteration=iteration, timeout_s=timeout_s)
+    if directive:
+        (cand.dir / "directive.json").write_text(json.dumps(directive, indent=2) + "\n")
+    prompt = build_prompt(archive, cand, contract_doc, task_md, extra, iteration=iteration, timeout_s=timeout_s,
+                          directive=directive, siblings=siblings)
     (cand.dir / "prompt.md").write_text(prompt)
     try:
         res = model.run(prompt, cwd=archive.root, system=PROPOSER_SYSTEM, agentic=agentic,
@@ -114,12 +137,20 @@ def propose(
         # A CLI can finish writing the deliverable and time out during its final checks. Keep
         # whatever harness it wrote as an explicitly incomplete proposal: pre-flight (load errors
         # get a repair round in the same session) and the evaluator establish whether it works.
+        # One that wrote nothing gets its session back once to write it from what it worked out.
         session = getattr(exc, "session_id", None)
         (cand.dir / "proposal_error.json").write_text(json.dumps({
             "error": str(exc), "type": type(exc).__name__, "status": "timed_out", "session_id": session,
         }, indent=2) + "\n")
         if session:
             (cand.dir / "session.json").write_text(json.dumps({"session_id": session}))
+        copy = duplicate_of(archive, cand) if cand.harness_path.exists() else None
+        if session and (not cand.harness_path.exists() or copy):
+            # a proposer typically starts from a copy of its parent: out of time before editing, the copy is all
+            why = "Your time is up." + (f" Your harness.py is still an unmodified copy of candidates/{copy[0].dir.name}/."
+                                        if copy else "")
+            _finish(model, archive, cand, session, why, agentic=agentic, trace=trace,
+                    timeout_s=min(900.0, timeout_s / 2))
         if cand.harness_path.exists():
             if not (cand.dir / "proposal.md").exists():
                 (cand.dir / "proposal.md").write_text("(the proposer timed out before writing proposal.md)\n")
@@ -128,6 +159,15 @@ def propose(
     (cand.dir / "proposer_output.md").write_text(res.text or "")
     if res.session_id:
         (cand.dir / "session.json").write_text(json.dumps({"session_id": res.session_id}))
+    if res.session_id and not cand.harness_path.exists() and not _fenced_python(res.text or ""):
+        # an agent can end its turn after planning without writing the file: once more, same session
+        _finish(model, archive, cand, res.session_id, "You ended without writing the harness.", agentic=agentic,
+                trace=trace, timeout_s=min(900.0, timeout_s / 2))
+    elif res.session_id and cand.harness_path.exists():
+        copy = duplicate_of(archive, cand)
+        if copy:
+            _finish(model, archive, cand, res.session_id, f"Your harness.py is an unmodified copy of "
+                    f"candidates/{copy[0].dir.name}/.", agentic=agentic, trace=trace, timeout_s=min(900.0, timeout_s / 2))
     if isinstance(res.raw, list):
         (cand.dir / "proposer_events.jsonl").write_text(
             "".join(json.dumps(event, default=str) + "\n" for event in res.raw))
@@ -141,6 +181,29 @@ def propose(
     if not (cand.dir / "proposal.md").exists():
         (cand.dir / "proposal.md").write_text("(proposer wrote no proposal.md)\n")
     return cand
+
+
+def _finish(model: System2Model, archive: Archive, cand: Candidate, session: str, why: str, *, agentic: bool,
+            trace: Optional[TraceSink], timeout_s: float) -> None:
+    """Ask a proposer that produced no harness to write it now, from what it worked out (same session)."""
+    from ..models._cli import STOPPING
+    if STOPPING.is_set():
+        return
+    prompt = (f"{why} From what you have already worked out, write `candidates/{cand.dir.name}/harness.py` (a "
+              f"complete module with build(ctx)) and `candidates/{cand.dir.name}/proposal.md` now, then stop. A copy "
+              "of an existing candidate is not evaluated: write your own change, even a partial one.")
+    try:
+        res = model.run(prompt, cwd=archive.root, session_id=session, agentic=agentic, timeout_s=timeout_s,
+                        trace=trace)
+    except ModelUnavailable:
+        raise
+    except Exception:  # noqa: BLE001 — the original outcome is what gets reported
+        return
+    (cand.dir / "proposer_finish_output.md").write_text(res.text or "")
+    if not cand.harness_path.exists():
+        code = _fenced_python(res.text or "")
+        if code:
+            cand.harness_path.write_text(code)
 
 
 def repair(

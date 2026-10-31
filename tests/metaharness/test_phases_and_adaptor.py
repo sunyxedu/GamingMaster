@@ -34,12 +34,13 @@ GOOD_ADAPTOR = textwrap.dedent('''
         def reset(self, seed):
             self.rng = random.Random(seed)
             self.value = self.rng.randrange(-3, 3)
+            self.wind = round(self.rng.random(), 6)      # the seed's scenario: seeds are different episodes
             self._ticks = 0
             self._done = False
             return self.observe()
 
         def observe(self):
-            return {"value": self.value, "target": self.target, "t": self._ticks}
+            return {"value": self.value, "target": self.target, "t": self._ticks, "wind": self.wind}
 
         def tick(self, action):
             if self._done:

@@ -8,19 +8,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..core import contract
-from ..games.base import close_game
-from ..games.registry import make_game
 from ..models.jev import usage_guide
-from .common import GENERALITY, SCOPE, calibration_text, memory_text, seconds
+from .common import GENERALITY, MULTI_GAME, SCOPE, as_lists, calibration_text, games_text, memory_text, seconds
 
 BASELINES = ["tier2_jev_only", "tier2_astra_only", "tier2_idle"]
 
 TASK_TEMPLATE = """Design a harness for a **real-time** game (tier 2).
 
-Game: `{game}` — {describe}
-
-Actions:
-{actions}
+{games}
 
 Models available through `ctx`:
 * `ctx.think(prompt, session_id=...)` — Astra (System-2, slow). Deep reasoning, can plan, can explain
@@ -38,7 +33,7 @@ of its answer. Design timeouts and pipelining from the measured latencies (below
 the leaderboard). Whatever the design, the evaluator reports how many posted actions were preceded by a
 fresh Jev / Astra answer, so the division of labour is visible.
 
-The game ticks every {tick_s}s **on its own clock**; `ctx.act(a)` posts the current action (instant).
+The game ticks {tick} **on its own clock**; `ctx.act(a)` posts the current action (instant).
 A tick with no fresh action re-applies the last one. Each episode has a wall-clock deadline of
 {deadline} (`ctx.budget.remaining()["wall_s"]`); the game's own end, the deadline or a used-up call
 budget end the episode with the score reached. {memory} Clock mode: {clock}.
@@ -76,20 +71,22 @@ held-out game, keep game-specific rules out of hard-coded logic (or gate them on
 """
 
 
-def task_md(game_name: str, budget: contract.Budget, clock_mode: str, game_kwargs: dict,
+def task_md(game_name: Any, budget: contract.Budget, clock_mode: str, game_kwargs: Any,
             study: str = "", *, generality: bool = True, deadline_s: Optional[float] = None,
             memory_mode: str = "episode", calibration: Optional[dict[str, Any]] = None) -> str:
-    """``study``: text of the study phase (rules, interface, strategies) appended as prior knowledge.
+    """``game_name`` / ``game_kwargs``: one game or a list of training games (and their kwargs).
+    ``study``: text of the study phase (rules, interface, strategies) appended as prior knowledge.
     ``generality``: a held-out game will be evaluated (adds the generality requirement)."""
-    g = make_game(game_name, **game_kwargs)
-    try:
-        tick_s = g.tick_s
-        task = TASK_TEMPLATE.format(game=game_name, describe=g.describe(), actions=g.action_spec.describe(),
-                                    s2=budget.max_system2_calls, s1=budget.max_system1_calls,
-                                    tick_s=tick_s, clock=clock_mode, memory=memory_text(memory_mode),
-                                    deadline=seconds(budget.max_wall_s if deadline_s is None else deadline_s))
-    finally:
-        close_game(g)
+    names, kws = as_lists(game_name, game_kwargs)
+    games, ticks = games_text(names, kws)
+    tick_s = ticks[0]
+    task = TASK_TEMPLATE.format(games=games, s2=budget.max_system2_calls, s1=budget.max_system1_calls,
+                                tick=(f"every {tick_s}s" if len(names) == 1 else "at its own pace (each game states its tick)"),
+                                clock=clock_mode, memory=memory_text(memory_mode),
+                                deadline=seconds(budget.max_wall_s if deadline_s is None else deadline_s))
+    if len(names) > 1:
+        task += MULTI_GAME
+        generality = True
     task += GENERALITY if generality else SCOPE
     if study:
         task += (STUDY_SECTION_GENERAL if generality else STUDY_SECTION).format(study=study)

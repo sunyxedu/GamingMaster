@@ -131,6 +131,12 @@ PLAYER_PREAMBLE = ("Inference-only game player: use only the supplied observatio
                    "conversation. Do not use tools, read files, run commands, browse, or "
                    "consult external memories. Return the requested answer directly.")
 
+# Put before an agent's own system prompt (it replaces the CLI's default, which asks for parallel tool calls):
+# agents that kept the default batched 1.7 tool calls per turn, the others 1.2.
+AGENT_PREAMBLE = ("Each of your turns is one slow model call (often a minute under a shared rate limit): do as much "
+                  "as you can per turn. Make independent tool calls together in one turn (several reads, searches or "
+                  "commands at once), chain shell steps into one command, and write each file in few, complete edits.")
+
 # Never inherited by a CLI child: each CLI uses its own login (OPENAI_* would silently switch codex
 # to API-key auth), and an agent's shell has no business with another backend's credentials.
 CLI_ENV_DROP = ("TYPESAFE_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY")

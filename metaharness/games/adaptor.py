@@ -83,6 +83,8 @@ from .base import ActionSpec, close_game
 REQUIRED_FILES = ("game.py", "ADAPTOR.md")
 MALFORMED_ACTION = "__not_an_action__"
 MAX_OBS_CHARS = 200_000
+VARIETY_ACTIONS = 300             # fixed script played on two seeds: identical trajectories fail validation
+                                  # (intros that ignore input took one game ~240 steps to diverge)
 
 # source_sha256 scope (see its docstring): code only — data files are what adaptors write while they play
 # (r6's observations/<sha>.json frames, state.json, eula.txt, package-lock.json), and pinning them refused resumes
@@ -406,6 +408,34 @@ def _seeds_text(seeds: list[int]) -> str:
     return ", ".join(map(str, seeds[:5])) + (", …" if len(seeds) > 5 else "")
 
 
+def episode_state(obs: Any) -> str:
+    """An observation as episode state: top-level fields named after the seed label the episode, they are
+    not its state (two seeds that differ only there play the same game)."""
+    if isinstance(obs, dict):
+        obs = {k: v for k, v in obs.items() if "seed" not in str(k).lower()}
+    return json.dumps(obs, sort_keys=True, default=str)
+
+
+def _trajectory(new_game: Callable[[], Any], release: Callable[..., None], seed: int, actions: list[str]
+                ) -> tuple[str, int]:
+    """(hash of the episode states, actions applied) of a fixed action script from reset(seed) on a fresh instance."""
+    g = new_game()
+    try:
+        g.reset(seed)
+        h = hashlib.sha256(episode_state(g.observe()).encode())
+        step = g.tick if hasattr(g, "tick") else g.step
+        n = 0
+        for i in range(VARIETY_ACTIONS):
+            if g.done:
+                break
+            step(actions[(i // 3) % len(actions)])
+            n += 1
+            h.update(episode_state(g.observe()).encode())
+        return h.hexdigest(), n
+    finally:
+        release(g, check=False)
+
+
 def validate_adaptor(path: Path | str, *, kwargs: dict[str, Any] | None = None,
                      seeds: tuple[int, ...] | None = None, max_actions: int = 12,
                      time_budget_s: float = 120.0, expected_tier: int | None = None) -> ValidationReport:
@@ -509,7 +539,7 @@ def _smoke_test(path: Path, *, kwargs: dict[str, Any] | None, seeds: tuple[int, 
             obs = g.observe()
             ok, detail = _json_ok(obs)
             rep.add(f"seed {seed}: observe() JSON-serialisable", ok, detail)
-            first_obs[seed] = json.dumps(obs, sort_keys=True, default=str)
+            first_obs[seed] = episode_state(obs)
             rep.add(f"seed {seed}: done is bool and score is a number after reset", *_state_ok(g))
             names = list(g.action_spec.names)
             actions = ([g.action_spec.noop] if g.action_spec.noop else []) + names
@@ -571,7 +601,7 @@ def _smoke_test(path: Path, *, kwargs: dict[str, Any] | None, seeds: tuple[int, 
             s0 = next(iter(first_obs))
             g2 = new_game()
             g2.reset(s0)
-            same = json.dumps(g2.observe(), sort_keys=True, default=str) == first_obs[s0]
+            same = episode_state(g2.observe()) == first_obs[s0]
             rep.add("DETERMINISTIC: reset(seed) on a fresh instance reproduces the first observation", same,
                     "" if same else f"seed {s0}: a fresh make_game() + reset({s0}) observed something else")
             release(g2, check=False)
@@ -581,7 +611,17 @@ def _smoke_test(path: Path, *, kwargs: dict[str, Any] | None, seeds: tuple[int, 
                 rep.add("different seeds give different starts (scenario variety)", True, "")
             else:
                 rep.warn(f"seeds {s_a} and {s_b} give identical first observations — fine for a fixed opening "
-                         "position; otherwise vary reset(seed) by scenario")
+                         "position if the seed still changes the episode (checked next)")
+                # A fixed opening is fine, but the seed must still change the episode: with identical
+                # play two seeds must diverge, else held-out seeds replay the training seeds.
+                traj = {s: _trajectory(new_game, release, s, actions) for s in (s_a, s_b)}
+                same = traj[s_a] == traj[s_b]
+                rep.add("different seeds give different episodes (the same actions on two seeds diverge)", not same,
+                        f"seeds {s_a} and {s_b}: identical observations through {traj[s_a][1]} identical actions — "
+                        "held-out seeds would replay the training seeds and a fixed action sequence could be "
+                        "memorised; let the seed drive the game's own randomness (the platform's standard "
+                        "stochasticity, e.g. randomised starts or action noise, or a seeded scenario)"
+                        if same else f"seeds {s_a} and {s_b} start alike and diverge under identical play")
     except Exception:  # noqa: BLE001
         rep.ok = False
         rep.error = traceback.format_exc()

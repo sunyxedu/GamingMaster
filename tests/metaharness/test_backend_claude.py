@@ -19,6 +19,7 @@ from metaharness.models import claude_cli as claude_mod
 from metaharness.models import make_system2
 from metaharness.models._cli import cancel_scope
 from metaharness.models.base import (
+    AGENT_PREAMBLE,
     PLAYER_PREAMBLE,
     ModelCallCancelled,
     ModelTimeout,
@@ -74,6 +75,39 @@ elif mode == "empty":
     print(json.dumps({**result, "result": ""}))
 elif mode == "sleep":
     time.sleep(30)
+elif mode == "error_once":
+    marker = os.environ["FAKE_CLAUDE_LOG"] + ".err"
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        print(json.dumps({**result, "is_error": True, "result": text}))
+        sys.exit(1)
+    print(json.dumps({**result, "result": "up"}))
+elif mode == "toolless_once":
+    marker = os.environ["FAKE_CLAUDE_LOG"] + ".toolless"
+    first = not os.path.exists(marker)
+    open(marker, "w").close()
+    print(json.dumps({**result, "num_turns": 1 if first else 4, "result": "no access" if first else "done"}))
+elif mode == "error_then_answer":
+    # the CLI's transcript: the first answer follows an API error; the resumed turn uses a tool
+    store = os.path.join(os.environ["CLAUDE_CONFIG_DIR"], "projects", "p")
+    os.makedirs(store, exist_ok=True)
+    with open(os.path.join(store, sid + ".jsonl"), "a") as fh:
+        rows = ([{"type": "user", "message": {"content": stdin}}, {"type": "system", "subtype": "api_error"},
+                 {"type": "assistant", "message": {"content": [{"type": "text", "text": "no files here"}]}}]
+                if "--resume" not in argv else
+                [{"type": "user", "message": {"content": stdin}},
+                 {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}},
+                 {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}},
+                 {"type": "assistant", "message": {"content": [{"type": "text", "text": "done"}]}}])
+        fh.write("".join(json.dumps(r) + "\\n" for r in rows))
+    print(json.dumps({**result, "num_turns": 3, "result": "done" if "--resume" in argv else "no files here"}))
+elif mode == "rate_limit_once":
+    marker = os.environ["FAKE_CLAUDE_LOG"] + ".429"
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        print(json.dumps({**result, "is_error": True, "result": "API Error: 429 user rate limit exceeded (rpm)"}))
+        sys.exit(1)
+    print(json.dumps(result))
 """ % {"watched": WATCHED_ENV}
 
 
@@ -84,6 +118,8 @@ def fake(tmp_path, monkeypatch):
     script.chmod(0o755)
     log = tmp_path / "claude-calls.jsonl"
     monkeypatch.setenv("FAKE_CLAUDE_LOG", str(log))
+    monkeypatch.setattr(claude_mod, "_sleep", lambda s: None)          # 429 retries wait for nothing here
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
 
     def mode(name: str, text: str | None = None, rc: int = 1) -> None:
         monkeypatch.setenv("FAKE_CLAUDE_MODE", name)
@@ -133,11 +169,18 @@ def test_agentic_calls_keep_tools_but_not_web_unless_asked(fake, tmp_path):
     model.run("research", cwd=tmp_path, agentic=True, web_search=True)
     model.run("again", cwd=tmp_path, agentic=True, session_id="abc", system="SYS")
     c1, c2, c3 = fake.calls()
-    assert _flag(c1["argv"], "--permission-mode") == "bypassPermissions" and "--tools" not in c1["argv"]
+    assert _flag(c1["argv"], "--permission-mode") == "bypassPermissions"
+    # file / shell tools only: no subagents, skills, MCP servers or cross-session tools; web only when asked
+    assert _flag(c1["argv"], "--tools") == "Bash,Read,Write,Edit,Glob,Grep,NotebookEdit"
+    assert _flag(c2["argv"], "--tools").endswith(",WebSearch,WebFetch")
+    assert "--strict-mcp-config" in c1["argv"] and "--disable-slash-commands" in c1["argv"]
     assert c1["argv"][c1["argv"].index("--disallowedTools") + 1:][:2] == ["WebSearch", "WebFetch"]
     assert "--disallowedTools" not in c2["argv"]
-    assert _flag(c1["argv"], "--system-prompt") == "SYS" and "--system-prompt" not in c3["argv"]
-    assert c1["cwd"] == str(tmp_path.resolve()) and c1["env"]["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] is None
+    assert _flag(c1["argv"], "--system-prompt") == f"{AGENT_PREAMBLE}\n\nSYS" and "--system-prompt" not in c3["argv"]
+    assert c1["cwd"] == str(tmp_path.resolve())
+    # agents keep their tools, but neither CLAUDE.md, auto-memory nor hooks may leak into the run directory
+    assert c1["env"]["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1" and c1["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
+    assert json.loads(_flag(c1["argv"], "--settings")) == {"disableAllHooks": True}
     assert all(_flag(c["argv"], "--effort") == "xhigh" for c in (c1, c2, c3))
     assert _flag(c3["argv"], "--resume") == "abc"
 
@@ -224,6 +267,59 @@ def test_overload_and_server_errors_stay_runtime_errors(fake, mode, message):
     with pytest.raises(RuntimeError) as ei:
         ClaudeCLI(claude_bin=fake.bin).run("hi")
     assert not isinstance(ei.value, ModelUnavailable)
+
+
+def test_an_agent_may_end_without_a_final_message_but_a_player_may_not(fake, tmp_path):
+    fake.mode("empty")
+    assert ClaudeCLI(claude_bin=fake.bin).run("work", cwd=tmp_path, agentic=True).text == ""
+    with pytest.raises(RuntimeError, match="empty result"):
+        ClaudeCLI(claude_bin=fake.bin).run("move?")
+
+
+def test_rate_limits_are_retried_and_agents_resume_their_session(fake, tmp_path):
+    fake.mode("rate_limit_once")
+    model, tr = ClaudeCLI(claude_bin=fake.bin), TraceSink()
+    assert model.run("hi", trace=tr).text == "up"                        # a player repeats the request
+    c1, c2 = fake.calls()
+    assert _flag(c1["argv"], "--session-id") != _flag(c2["argv"], "--session-id") and c2["stdin"] == "hi"
+    assert "transient failure (retry 1" in tr.records[0]["error"] and tr.records[1]["ok"]
+    (tmp_path / "claude-calls.jsonl.429").unlink()
+    store = tmp_path / "claude-config" / "projects" / "some-dir"
+    store.mkdir(parents=True)
+    (store / "abc.jsonl").write_text("{}")                                # the CLI stored the agent's session
+    assert model.run("design", cwd=tmp_path, agentic=True, session_id="abc").text == "up"
+    c3, c4 = fake.calls()[2:]
+    assert _flag(c3["argv"], "--resume") == "abc" and _flag(c4["argv"], "--resume") == "abc"
+    assert c4["stdin"].startswith("The previous turn was interrupted by a transient API error")
+    fake.mode("error", "API Error: 429 user rate limit exceeded (rpm)")
+    with pytest.raises(RuntimeError, match="after 5 retries") as ei:   # never unavailable
+        model.run("hi")
+    assert not isinstance(ei.value, ModelUnavailable)
+
+
+def test_a_new_agent_session_without_tool_use_is_retried_once_in_a_new_session(fake, tmp_path):
+    fake.mode("toolless_once")
+    model, tr = ClaudeCLI(claude_bin=fake.bin), TraceSink()
+    assert model.run("design", cwd=tmp_path, agentic=True, trace=tr).text == "done"
+    c1, c2 = fake.calls()
+    assert _flag(c1["argv"], "--session-id") != _flag(c2["argv"], "--session-id") and c2["stdin"] == "design"
+    assert "without using any tool" in tr.records[0]["error"] and tr.records[1]["ok"]
+    marker = tmp_path / "claude-calls.jsonl.toolless"
+    for kw in ({"agentic": True, "session_id": "abc"}, {}):            # a resumed session, a player: as answered
+        marker.unlink()
+        assert model.run("go", cwd=tmp_path, **kw).text == "no access"
+    assert len(fake.calls()) == 4
+
+
+def test_an_answer_right_after_an_api_error_is_followed_by_a_resume(fake, tmp_path):
+    fake.mode("error_then_answer")
+    model, tr = ClaudeCLI(claude_bin=fake.bin), TraceSink()
+    assert model.run("build it", cwd=tmp_path, agentic=True, trace=tr).text == "done"
+    c1, c2 = fake.calls()
+    assert _flag(c2["argv"], "--resume") == _flag(c1["argv"], "--session-id")
+    assert c2["stdin"].startswith("Your previous answer came right after a transient API error")
+    assert "right after an API error" in tr.records[0]["error"] and tr.records[1]["ok"]
+    assert len(fake.calls()) == 2                                   # the resumed turn used a tool: done
 
 
 def test_a_temporary_line_does_not_hide_an_exhausted_account(fake):
@@ -317,7 +413,7 @@ def test_long_system_prompts_go_through_a_file(fake, tmp_path):
     with pytest.raises(ModelTimeout):
         model.run("slow", system=rules, timeout_s=1.0)
     c1, c2, c3, c4, c5 = fake.calls()
-    for call, text in ((c1, player_text), (c2, player_text), (c3, rules), (c5, player_text)):
+    for call, text in ((c1, player_text), (c2, player_text), (c3, f"{AGENT_PREAMBLE}\n\n{rules}"), (c5, player_text)):
         argv = call["argv"]
         assert "--system-prompt" not in argv and call["system_file"] == text
         assert max(len(a.encode()) for a in argv) < 4096
@@ -366,3 +462,72 @@ def test_unusable_images_are_traced_errors(fake, tmp_path, name, data, match):
     with pytest.raises(RuntimeError, match=match):
         ClaudeCLI(claude_bin=fake.bin).run("look", images=[str(tmp_path / name)], trace=tr)
     assert fake.calls() == [] and tr.records[-1]["ok"] is False
+
+
+@pytest.mark.parametrize("message", ["API Error: Responses stream error: Upstream request failed (upstream_error)",
+                                     'API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}',
+                                     "API Error: 500 Internal server error",
+                                     "API Error: The response stalled before a response was produced. Try again."])
+def test_transient_api_failures_are_retried(fake, message):
+    fake.mode("error_once", message)
+    assert ClaudeCLI(claude_bin=fake.bin).run("hi").text == "up" and len(fake.calls()) == 2
+
+
+def test_quota_failures_are_not_retried(fake):
+    fake.mode("error", "API Error: 503 · You've hit your usage limit")
+    with pytest.raises(ModelUnavailable):
+        ClaudeCLI(claude_bin=fake.bin).run("hi")
+    assert len(fake.calls()) == 1
+
+
+def test_slot_waiters_are_served_in_arrival_order(tmp_path, monkeypatch):
+    import subprocess
+    import threading
+    monkeypatch.setattr(claude_mod, "_SLOT_DIR", tmp_path / "slots")
+    monkeypatch.setenv("METAHARNESS_CLAUDE_AGENT_SLOTS", "1")
+    queue = tmp_path / "slots" / "agent.queue"
+    queue.mkdir(parents=True)
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    (queue / f"{1:020d}-{dead.pid}-deadbeef").touch()          # a ticket left by a process that died
+    order: list[str] = []
+    release = threading.Event()
+
+    def worker(name: str) -> None:
+        with claude_mod._slot("agent"):
+            order.append(name)
+            if name == "first":
+                release.wait(10)
+
+    first = threading.Thread(target=worker, args=("first",))
+    first.start()
+    while not order:
+        time.sleep(0.01)
+    threads = []
+    for name in ("second", "third", "fourth"):                  # queue up in this order behind "first"
+        threads.append(threading.Thread(target=worker, args=(name,)))
+        threads[-1].start()
+        while len(os.listdir(queue)) < len(threads):
+            time.sleep(0.01)
+    release.set()
+    for th in [first, *threads]:
+        th.join(10)
+    assert order == ["first", "second", "third", "fourth"] and os.listdir(queue) == []
+
+
+def test_an_agents_time_starts_when_it_gets_a_slot(fake, tmp_path, monkeypatch):
+    import contextlib as _cl
+    waits = []
+
+    @_cl.contextmanager
+    def slow_slot(pool, since=None):
+        time.sleep(1.5)                     # another process held the slot
+        waits.append(pool)
+        yield
+
+    monkeypatch.setattr(claude_mod, "_slot", slow_slot)
+    fake.mode("ok")
+    assert ClaudeCLI(claude_bin=fake.bin).run("work", cwd=tmp_path, agentic=True, timeout_s=1.0).text == "up"
+    with pytest.raises(ModelTimeout):        # a player's wait is part of its latency: it times out
+        ClaudeCLI(claude_bin=fake.bin).run("move?", timeout_s=1.0)
+    assert waits == ["agent", "player"]

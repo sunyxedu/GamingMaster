@@ -209,6 +209,47 @@ def test_adapt_unset_variable_does_not_block_a_passing_adaptor(tmp_path, monkeyp
     assert any("COUNTGAME_REGION" in m and "validates without them" in m for m in logs)
 
 
+def test_adapt_review_resumes_the_session_that_built_the_adaptor(tmp_path):
+    write_study(tmp_path)
+    agent = ScriptedSystem2(files=[adaptor_files(TICK_GAME),
+                                   {"review.md": "position: field x (checked)", "ADAPTOR.md": "count adaptor, reviewed"}])
+    rep = run_adapt(agent, tmp_path, "countgame", STUDY, review=True, log=lambda *_: None)
+    out = tmp_path / "adaptor"
+    assert rep.ok and len(agent.calls) == 2
+    assert agent.calls[1].startswith("## Observation review")            # same session: no second task text
+    assert (out / "review.md").read_text() == "position: field x (checked)"
+    assert (out / "ADAPTOR.md").read_text() == "count adaptor, reviewed"
+    # reviewed once: a rerun reuses the adaptor without calling the agent
+    agent = ScriptedSystem2(replies=["never"])
+    assert run_adapt(agent, tmp_path, "countgame", STUDY, review=True, log=lambda *_: None).ok and agent.calls == []
+
+
+def test_adapt_review_that_writes_no_review_gets_a_finishing_round(tmp_path):
+    write_study(tmp_path)
+    write_adaptor(tmp_path / "adaptor", TICK_GAME)
+    agent = ScriptedSystem2(files=[{}, {"review.md": "checked: position field x"}])
+    rep = run_adapt(agent, tmp_path, "countgame", STUDY, review=True, log=lambda *_: None)
+    assert rep.ok and len(agent.calls) == 2 and agent.calls[1].startswith("You ended without writing `review.md`")
+    assert (tmp_path / "adaptor" / "review.md").read_text() == "checked: position field x"
+
+
+def test_adapt_review_that_breaks_validation_is_undone(tmp_path):
+    write_study(tmp_path)
+    out = tmp_path / "adaptor"
+    write_adaptor(out, TICK_GAME)
+    before = (out / "game.py").read_text()
+    agent = ScriptedSystem2(files=[{"game.py": BAD_ADAPTOR, "extra.py": "x = 1\n", "review.md": "rewrote it"},
+                                   {"game.py": BAD_ADAPTOR}])
+    rep = run_adapt(agent, tmp_path, "countgame", STUDY, review=True, log=lambda *_: None)
+    assert rep.ok and len(agent.calls) == 2
+    assert "Build the adaptor" in agent.calls[0] and "## Observation review" in agent.calls[0]   # fresh session
+    assert "no longer validates" in agent.calls[1] and "FAIL" in agent.calls[1]
+    assert (out / "game.py").read_text() == before and not (out / "extra.py").exists()
+    text = (out / "review.md").read_text()
+    assert text.startswith("The review's changes failed validation and were undone") and "rewrote it" in text
+    assert (out / "review_trace.jsonl").exists()
+
+
 # ----------------------------------------------------------------------------- prior documents
 
 def _doc(tag: str, n: int) -> str:
@@ -279,7 +320,9 @@ def test_run_searches_the_adaptor_tier_and_passes_notes_and_kwargs(tmp_path, fak
         write_adaptor(run_dir / "adaptor", TICK_GAME)
         return ValidationReport(ok=True)
 
-    def fake_search(a, game, tier_n, prior, exp_dir):
+    def fake_search(a, games, tier_n, prior, exp_dir):
+        (game, adaptor_dir), = games
+        assert adaptor_dir == str((exp_dir.parent / "adaptor").resolve())
         calls["search"] = (game, tier_n, prior, exp_dir)
 
     monkeypatch.setattr(phases, "run_adapt", fake_adapt)
@@ -299,3 +342,39 @@ def test_run_searches_the_adaptor_tier_and_passes_notes_and_kwargs(tmp_path, fak
     with pytest.raises(SystemExit, match="not valid JSON"):
         main(["run", "--game", "Count Game", "--agent", "fake-agent", "--game-kwargs", "{target: 4}",
               "--runs-dir", str(tmp_path)])
+
+
+def test_a_study_that_times_out_resumes_its_session_and_keeps_its_research(tmp_path):
+    from metaharness.models.base import ModelTimeout, System2Result
+    from metaharness.phases.study import FINISH_PROMPT, run_study
+
+    class SlowThenDone:
+        name = "slow"
+
+        def __init__(self):
+            self.calls = []
+
+        def run(self, prompt, *, cwd, session_id=None, timeout_s=0, **kw):
+            self.calls.append((prompt, session_id, timeout_s))
+            if len(self.calls) == 1:
+                raise ModelTimeout("timeout", session_id="s-1")
+            for name, text in STUDY_FILES.items():
+                (cwd / name).write_text(text)
+            return System2Result(text="done", session_id=session_id)
+
+    agent = SlowThenDone()
+    data = run_study(agent, tmp_path, "Count Game", timeout_s=3600, log=lambda m: None)
+    assert data["game"] and len(agent.calls) == 2
+    first, second = agent.calls
+    assert "Write a first complete version of all four files" in first[0] and first[1] is None
+    assert second == (FINISH_PROMPT, "s-1", 1800.0)                       # the same conversation, finishing
+    assert not (tmp_path / "study" / "session.json").exists()            # forgotten once the study validates
+
+    # a process killed after a timeout: the next run resumes the saved session instead of starting over
+    other = tmp_path / "again"
+    (other / "study").mkdir(parents=True)
+    (other / "study" / "session.json").write_text('{"session_id": "s-9"}')
+    agent2 = SlowThenDone()
+    agent2.calls.append(("(already timed out)", None, 0))
+    run_study(agent2, other, "Count Game", timeout_s=3600, log=lambda m: None)
+    assert agent2.calls[1][:2] == (FINISH_PROMPT, "s-9")

@@ -13,14 +13,20 @@ A player (``agentic=False``) is isolated from the user's Claude Code setup: no t
 servers, hooks, skills / slash commands, CLAUDE.md or auto-memory, the inference-only
 instruction as its system prompt (instead of the coding-agent prompt with env and git status),
 and a private empty working directory, created once per instance and reused because sessions
-are stored per directory. Not ``--bare``: it also drops settings-file auth
-(ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL in settings env), which some installs rely on.
+are stored per directory. Agents (study / adapt / proposer) get the file, shell and (when asked)
+web tools only — no subagents, skills, MCP servers or cross-session tools, which multiplied
+requests against a shared rate limit and let an agent see other sessions — and the same CLAUDE.md,
+auto-memory and hook isolation: their run directory is their whole world. Not ``--bare``: it also drops
+settings-file auth (ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL in settings env), which some
+installs rely on.
 """
 from __future__ import annotations
 
 import base64
 import contextlib
 import json
+import os
+import random
 import re
 import shutil
 import tempfile
@@ -29,11 +35,12 @@ import time
 import uuid
 import weakref
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from ._cli import CLITimeout, run_cli
 from .base import (
     CLI_ENV_DROP,
+    AGENT_PREAMBLE,
     PLAYER_PREAMBLE,
     ModelCall,
     ModelTimeout,
@@ -65,8 +72,96 @@ _SYSTEM_ARGV_MAX = 32 * 1024
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
                 ".webp": "image/webp"}
 _ENV_DROP = CLI_ENV_DROP + ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")   # a nested session refuses to start
-_PLAYER_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
-_PLAYER_SETTINGS = json.dumps({"disableAllHooks": True})
+# A requests-per-minute cap at the API (a shared router enforces one per user) is hit by every process on
+# the machine together. Two defences: a cross-process cap on concurrent invocations — agents and players
+# have separate pools (METAHARNESS_CLAUDE_AGENT_SLOTS / METAHARNESS_CLAUDE_PLAYER_SLOTS; 0 = no cap) —
+# and, when the CLI still gives up with 429 after its own retries, our retry with backoff that resumes
+# the same session so an agent's work is not lost. 429 is transient, never ModelUnavailable.
+_SLOT_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "metaharness" / "claude-slots"
+_SLOT_DEFAULTS = {"agent": 4, "player": 8}
+# Retried (agents resume their session): rate limits and transient API / stream failures. Quota and auth
+# failures (_UNAVAILABLE_RE) never are.
+_RETRY_RE = re.compile(r"\b429\b|rate.?limit|too many requests|overloaded|\b5\d\d\b|upstream|stream error|"
+                       r"internal server error|service unavailable|bad gateway|gateway time-?out|temporar|"
+                       r"econnreset|socket hang up|connection (?:reset|refused|error|closed)|request timed out|response stalled", re.I)
+_RETRY_WAITS = (15.0, 30.0, 60.0, 120.0, 240.0)
+_sleep = time.sleep          # module level, so tests can skip the waits
+# a shell command may run up to 15 min by default (a harness try, a build), 30 min when the agent asks
+_ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+                  "BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "1800000"}
+_AGENT_TOOLS = ("Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit")
+_WEB_TOOLS = ("WebSearch", "WebFetch")
+
+
+def _isolation_settings() -> str:
+    """``--settings`` for every call: no hooks; and, with METAHARNESS_CLAUDE_BASE_URL set, the API base URL
+    (a local queueing proxy in front of a shared router) — the flag outranks the user's settings env."""
+    settings: dict[str, Any] = {"disableAllHooks": True}
+    base = os.environ.get("METAHARNESS_CLAUDE_BASE_URL")
+    if base:
+        settings["env"] = {"ANTHROPIC_BASE_URL": base}
+    return json.dumps(settings)
+
+
+@contextlib.contextmanager
+def _slot(pool: str, since: Optional[int] = None) -> Iterator[None]:
+    """Hold one of the pool's slots (lock files shared by every process of this user) for the call.
+    Waiters are served in arrival order (ticket files in ``<pool>.queue/``; ``since``, a call's first
+    arrival in ns, keeps a retry's place): without the queue a waiter could lose every race for hours
+    while its sibling proposers' generation waited for it."""
+    n = int(os.environ.get(f"METAHARNESS_CLAUDE_{pool.upper()}_SLOTS", _SLOT_DEFAULTS[pool]) or 0)
+    try:
+        import fcntl
+    except ImportError:          # not POSIX: no cross-process cap
+        n = 0
+    if n <= 0:
+        yield
+        return
+    queue = _SLOT_DIR / f"{pool}.queue"
+    queue.mkdir(parents=True, exist_ok=True)
+    ticket = queue / f"{since or time.time_ns():020d}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    ticket.touch()
+    handles = [open(_SLOT_DIR / f"{pool}{i}.lock", "a") for i in range(n)]
+    held = None
+    try:
+        while held is None:
+            if _first_in_line(queue, ticket.name):
+                for fh in handles:
+                    try:
+                        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        held = fh
+                        break
+                    except OSError:
+                        continue
+            if held is None:
+                time.sleep(0.1 + random.random() * 0.2)
+        ticket.unlink(missing_ok=True)
+        yield
+    finally:
+        ticket.unlink(missing_ok=True)
+        if held is not None:
+            fcntl.flock(held, fcntl.LOCK_UN)
+        for fh in handles:
+            fh.close()
+
+
+def _first_in_line(queue: Path, name: str) -> bool:
+    """No live ticket older than ``name`` (tickets of processes that died are removed)."""
+    for t in sorted(os.listdir(queue)):
+        if t >= name:
+            return True
+        try:
+            os.kill(int(t.split("-")[1]), 0)
+            return False
+        except ProcessLookupError:
+            with contextlib.suppress(OSError):
+                (queue / t).unlink()
+        except (ValueError, IndexError):
+            with contextlib.suppress(OSError):
+                (queue / t).unlink()
+        except PermissionError:   # alive (another user's process)
+            return False
+    return True
 
 
 class ClaudeCLI:
@@ -112,15 +207,19 @@ class ClaudeCLI:
             argv += ["--session-id", new_session_id]
         if agentic:
             if system and not session_id:
-                argv += _system_flag(system, system_file)
-            argv += ["--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
-            if not web_search:  # study / adapt research the game on the web; the proposer must not
-                argv += ["--disallowedTools", "WebSearch", "WebFetch"]
+                argv += _system_flag(f"{AGENT_PREAMBLE}\n\n{system}", system_file)
+            # study / adapt research the game on the web; the proposer must not
+            tools = _AGENT_TOOLS + (_WEB_TOOLS if web_search else ())
+            argv += ["--tools", ",".join(tools), "--strict-mcp-config", "--disable-slash-commands",
+                     "--permission-mode", "bypassPermissions", "--dangerously-skip-permissions",
+                     "--settings", _isolation_settings()]
+            if not web_search:
+                argv += ["--disallowedTools", *_WEB_TOOLS]
         else:
             # Replaces the coding-agent system prompt. Sent on --resume too: the CLI keeps reusing
             # the prompt it recorded first, and renders this one again after a compaction.
             argv += _system_flag(PLAYER_PREAMBLE + (f"\n\n{system}" if system else ""), system_file)
-            argv += ["--tools", "", "--strict-mcp-config", "--settings", _PLAYER_SETTINGS,
+            argv += ["--tools", "", "--strict-mcp-config", "--settings", _isolation_settings(),
                      "--disable-slash-commands"]
         return argv
 
@@ -145,7 +244,7 @@ class ClaudeCLI:
         if not agentic:
             request["system"] = PLAYER_PREAMBLE + (f"\n\n{system}" if system else "")
         elif system and not session_id:
-            request["system"] = system
+            request["system"] = f"{AGENT_PREAMBLE}\n\n{system}"
         try:
             loaded = read_images(images)
             blocks = [_image_block(path, data) for path, data in loaded]
@@ -160,15 +259,59 @@ class ClaudeCLI:
         stdin = prompt if not stream else json.dumps(
             {"type": "user", "message": {"role": "user", "content": blocks + [{"type": "text", "text": prompt}]}}) + "\n"
         system_file: Optional[Path] = None
+        deadline = time.monotonic() + timeout_s
+        attempt = 0
+        queued_at = time.time_ns()          # a retry keeps its place in the slot queue
+        toolless_retry = False
+        nudges = 0
+        working = False          # an agent's time starts with its slot: queueing is not working time
         try:
             run_dir = (Path(cwd).resolve() if cwd else None) if agentic else self._player_cwd()
             if len(request.get("system", "").encode("utf-8")) > _SYSTEM_ARGV_MAX:
                 # a player's in its private directory; an agent's in the temp dir, never its workspace
                 system_file = _system_file(request["system"], None if agentic else run_dir)
-            argv = self._argv(session_id=session_id, new_session_id=new_session_id, system=system,
-                              agentic=agentic, web_search=web_search, stream=stream, system_file=system_file)
-            proc = run_cli(argv, cwd=run_dir, stdin_text=stdin, timeout_s=timeout_s,
-                           env_overrides=None if agentic else _PLAYER_ENV, env_drop=_ENV_DROP)
+            while True:
+                argv = self._argv(session_id=session_id, new_session_id=new_session_id, system=system,
+                                  agentic=agentic, web_search=web_search, stream=stream, system_file=system_file)
+                with _slot("agent" if agentic else "player", queued_at):
+                    if agentic and not working:
+                        deadline, working = time.monotonic() + timeout_s, True
+                    if deadline - time.monotonic() <= 0:     # a player whose time ran out waiting for a slot
+                        raise CLITimeout(f"no time left after waiting {timeout_s:g}s for a free slot")
+                    proc = run_cli(argv, cwd=run_dir, stdin_text=stdin, timeout_s=max(1.0, deadline - time.monotonic()),
+                                   env_overrides=_ISOLATION_ENV, env_drop=_ENV_DROP)
+                payload = _result_payload(proc.stdout or "", stream)
+                failed = proc.returncode != 0 or (payload is not None and payload.get("is_error"))
+                err = _error_text(payload, proc) if failed else ""
+                if not failed and agentic and new_session_id and not toolless_retry and payload is not None \
+                        and payload.get("num_turns") == 1:
+                    # a new agent session that ended without one tool call: its tools did not reach the model
+                    # (seen behind the router); resuming would keep its "I cannot access files" belief
+                    toolless_retry = True
+                    self._trace(trace, t0, request, None, "the agent ended without using any tool; retrying in a new session")
+                    new_session_id = sid = str(uuid.uuid4())
+                    continue
+                if not failed and agentic and nudges < 2 and _ended_after_api_error(sid):
+                    nudges += 1
+                    self._trace(trace, t0, request, None, "the agent's last answer came right after an API error; "
+                                f"resuming its session (nudge {nudges})")
+                    session_id, new_session_id, stdin = sid, None, _AFTER_ERROR_NUDGE
+                    continue
+                if not failed or attempt >= len(_RETRY_WAITS) or not _RETRY_RE.search(err) \
+                        or _UNAVAILABLE_RE.search(_TRANSIENT_LINE_RE.sub("", err)):
+                    break
+                wait = _RETRY_WAITS[attempt] * (0.75 + random.random() * 0.5)
+                if time.monotonic() + wait >= deadline:
+                    break
+                attempt += 1
+                self._trace(trace, t0, request, None, f"transient failure (retry {attempt} in {wait:.0f}s): {err[-300:]}")
+                _sleep(wait)
+                # an agent resumes its session (its work so far is kept); a player repeats the request
+                if agentic and _session_exists(run_dir, sid):
+                    session_id, new_session_id = sid, None
+                    stdin = "The previous turn was interrupted by a transient API error. Continue where you left off."
+                elif not session_id:
+                    new_session_id = sid = str(uuid.uuid4())
         except CLITimeout as e:
             err = f"timeout: claude -p exceeded {timeout_s:g}s (session {sid})"
             self._trace(trace, t0, request, None, err)
@@ -187,16 +330,19 @@ class ClaudeCLI:
                 with contextlib.suppress(OSError):
                     system_file.unlink()
         latency = time.time() - t0
-        payload = _result_payload(proc.stdout or "", stream)
-        if proc.returncode != 0 or (payload is not None and payload.get("is_error")):
-            err = _error_text(payload, proc)
+        if failed:
             self._trace(trace, t0, request, None, err)
             hit = _UNAVAILABLE_RE.search(_TRANSIENT_LINE_RE.sub("", err))
             if hit:
                 raise ModelUnavailable(f"claude unavailable (matched {hit.group(0)!r}): {err[-800:]}")
+            if _RETRY_RE.search(err):
+                raise RuntimeError(f"claude -p failed after {attempt} retries (transient): {err[-500:]}")
             raise RuntimeError(f"claude -p failed (rc={proc.returncode}): {err}")
         text = payload.get("result") if payload is not None else None
-        if not isinstance(text, str) or not text.strip():
+        if agentic and payload is not None and not isinstance(text, str) or agentic and isinstance(text, str) \
+                and not text.strip():
+            text = ""            # an agent's work is in its files; ending its turn without a final message is fine
+        elif not isinstance(text, str) or not text.strip():
             err = ("claude -p printed no JSON result: " + repr((proc.stdout or "")[-500:]) if payload is None
                    else "claude -p returned an empty result")
             self._trace(trace, t0, request, None, err)
@@ -218,6 +364,50 @@ class ClaudeCLI:
                 "system2", self.name, t0, time.time() - t0, request,
                 {"text": res.text, "session_id": res.session_id} if res else None,
                 ok=err is None, error=err, usage=res.usage if res else {}))
+
+
+_AFTER_ERROR_NUDGE = ("Your previous answer came right after a transient API error and may be wrong about your "
+                      "environment: your tools (shell, file reads and writes) work and your working directory is "
+                      "accessible. Check with a command, then continue the task where you were and finish it.")
+
+
+def _ended_after_api_error(sid: Optional[str]) -> bool:
+    """The session's last answer came right after an API error, with no tool call or result in between.
+    Behind the router such an answer has twice claimed the session had no files or shell (Malody's adapt
+    agent: "the project directory is not mounted") right after its commands had worked."""
+    if not sid:
+        return False
+    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    path = next(projects.glob(f"*/{sid}.jsonl"), None)
+    after_error = ended = False
+    try:
+        for line in open(path, errors="replace") if path else ():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            content = (r.get("message") or {}).get("content") if isinstance(r, dict) else None
+            blocks = content if isinstance(content, list) else []
+            if r.get("type") == "system" and r.get("subtype") == "api_error":
+                after_error = True
+            elif r.get("type") == "user":
+                after_error = ended = False
+            elif r.get("type") == "assistant":
+                if any(isinstance(b, dict) and b.get("type") == "tool_use" for b in blocks):
+                    after_error = ended = False
+                else:
+                    ended = after_error
+    except OSError:
+        return False
+    return ended
+
+
+def _session_exists(run_dir: Optional[Path], sid: Optional[str]) -> bool:
+    """Whether the CLI stored a conversation ``sid`` for ``run_dir`` (sessions live per project directory)."""
+    if not sid or run_dir is None:
+        return False
+    projects = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    return any(p.name == f"{sid}.jsonl" for d in projects.glob("*") if d.is_dir() for p in d.glob(f"{sid}.jsonl"))
 
 
 def _system_file(text: str, directory: Optional[Path]) -> Path:

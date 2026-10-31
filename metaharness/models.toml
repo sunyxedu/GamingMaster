@@ -15,6 +15,18 @@ backend = "codex"
 model = "gpt-5.6-sol"
 reasoning_effort = "high"
 
+# Astra through the claude CLI and its configured router (the codex login may be unavailable):
+# players at high effort, the proposer / study / adapt agents at max.
+[system2.astra-cc]
+backend = "claude"
+model = "gpt-6-astra"
+reasoning_effort = "high"
+
+[system2.astra-cc-max]
+backend = "claude"
+model = "gpt-6-astra"
+reasoning_effort = "max"
+
 [system2.claude]
 backend = "claude"
 model = ""                 # empty = the claude CLI's configured default model
