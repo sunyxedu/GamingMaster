@@ -63,7 +63,8 @@ What ctx calls raise (``from metaharness.core.contract import BudgetExceeded, Ep
 
 How an episode ends — the score reached is always kept:
 
-* the game is over, or ``run_episode`` returns;
+* the game is over, or ``run_episode`` returns (returning while the game still runs forfeits the rest
+  of the episode: play until the game ends or ``ctx.done``, never to a step count of your own);
 * a call budget is used up, or the wall-clock deadline (``ctx.budget.remaining()["wall_s"]``)
   passes: from then on ``ctx.done`` is True for the deadline and ctx calls raise ``BudgetExceeded``
   or ``EpisodeOver``. Letting that exception propagate out of ``run_episode`` is a normal end.
