@@ -98,3 +98,25 @@ class HeuristicSystem1:
                                      {"state": state, "questions": {k: (v.to_json() if hasattr(v, 'to_json') else v) for k, v in questions.items()}},
                                      {k: {"value": a.value, "probabilities": a.probabilities} for k, a in out.items()}))
         return out
+
+
+class SilentModel:
+    """Every call fails as a backend error would (RuntimeError): the no-models ablation. A harness still
+    sees ``ctx.system1`` / ``ctx.system2`` and plays on its own fallbacks."""
+    name = "silent"
+    model = None
+
+    def _fail(self, kind: str, trace: Optional[TraceSink]) -> None:
+        err = "no answer: this evaluation runs without runtime models"
+        if trace:
+            trace.log_call(ModelCall(kind, "silent", time.time(), 0.0, {}, None, ok=False, error=err))
+        raise RuntimeError(err)
+
+    def decide(self, state: Any, questions: Mapping[str, Any], *, timeout_s: float = 5.0,
+               trace: Optional[TraceSink] = None) -> dict[str, System1Answer]:
+        self._fail("system1", trace)
+        return {}
+
+    def run(self, prompt: str, *, trace: Optional[TraceSink] = None, **kw: Any) -> System2Result:
+        self._fail("system2", trace)
+        return System2Result(text="")

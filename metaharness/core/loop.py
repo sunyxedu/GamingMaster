@@ -292,8 +292,8 @@ class MetaHarnessLoop:
              no_models: bool = False) -> evalworker.EvalJob:
         b = self.cfg.budget
         models = dict(self.cfg.eval_spec or {})
-        if no_models:
-            models.update(system1="none", system2="none")
+        if no_models:      # every call fails, as in an outage, with the same budget (tier 1 has no System-1)
+            models.update(system1="silent" if self.system1 is not None else "none", system2="silent")
         return evalworker.EvalJob(
             harness_path=str(cand.harness_path), out_dir=str(out), game=str(game.name), seeds=list(seeds),
             adaptor_dir=game.adaptor_dir, game_kwargs=_jsonish(game.kwargs), models=models,
@@ -334,9 +334,11 @@ class MetaHarnessLoop:
     def _eval_unit(self, cand: Candidate, game: GameSpec, seeds: list[int], out: Path, label: Optional[str],
                    no_models: bool = False) -> dict[str, Any]:
         """One candidate on one game in this process (models given as objects: tests, scripted runs)."""
+        from ..models.mock import SilentModel
+        silent = SilentModel() if no_models else None
         res = evaluate_harness(
-            cand.harness_path, game.factory, seeds, system2=None if no_models else self.system2,
-            system1=None if no_models else self.system1, out_dir=out,
+            cand.harness_path, game.factory, seeds, system2=silent or self.system2,
+            system1=(silent if self.system1 is not None else None) if no_models else self.system1, out_dir=out,
             clock_mode=self.cfg.clock_mode, budget_per_episode=self.cfg.budget,
             latency_override=self.cfg.latency_override, harness_timeout_s=self.cfg.harness_timeout_s,
             game_kwargs=game.kwargs, memory_mode=self.cfg.memory_mode, grace_s=self.cfg.grace_s, game_name=label)
@@ -807,7 +809,7 @@ class MetaHarnessLoop:
                                              game_adaptor=self.cfg.heldout_game_adaptor))
         if best and self.cfg.ablate and not self.interrupted and self._stage_needed(best, ABLATION):
             # what the runtime models add: the pick again on its training seeds, both models switched off
-            self._log(f"ablation of {best.dir.name}: training seeds without runtime System-1 / System-2")
+            self._log(f"ablation of {best.dir.name}: training seeds with every runtime model call failing")
             self._stop_for(self.evaluate_many([(best, self._seeds("train"), ABLATION, self.games)], no_models=True)[0])
         if self.interrupted:
             self._log(f"held-out evaluation interrupted ({self.interrupted[:200]}); rerun the same search on "

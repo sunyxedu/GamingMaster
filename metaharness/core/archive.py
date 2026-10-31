@@ -471,7 +471,7 @@ class Archive:
             if ab.exists():
                 e = json.loads(ab.read_text())
                 ms, base = e.get("mean_score"), c.score
-                text += (f"\nAblation: `{c.dir.name}` without runtime System-1 / System-2 on its training seeds: "
+                text += (f"\nAblation: `{c.dir.name}` with every runtime model call failing, on its training seeds: "
                          f"{'–' if ms is None else f'{ms:.3f}'} (with them: {'–' if base is None else f'{base:.3f}'}"
                          + (f"; {len(e['errors'])} episode errors" if e.get("errors") else "") + ").\n")
         write_atomic(self.root / "leaderboard.md", text)

@@ -50,17 +50,22 @@ def _parse_seeds(s: str) -> list[int]:
 
 def _system2(name: str, effort: str | None):
     """``none`` | a ``[system2.*]`` profile from models.toml (``--effort`` overrides the profile)."""
-    if name == "none":
-        return None
+    if name in ("none", "silent"):
+        return None if name == "none" else _silent()
     if name == "scripted":                      # offline stand-in with game-aware canned replies
         from .baselines._scripted import scripted_system2
         return scripted_system2()
     return make_system2(name, reasoning_effort=effort)
 
 
+def _silent():
+    from .models.mock import SilentModel
+    return SilentModel()
+
+
 def _system1(name: str):
-    if name == "none":
-        return None
+    if name in ("none", "silent"):
+        return None if name == "none" else _silent()
     if name == "heuristic":
         from .baselines._scripted import heuristic_snake_policy
         return make_system1("heuristic", fn=heuristic_snake_policy)

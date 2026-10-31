@@ -118,8 +118,9 @@ def test_parallel_generations_validate_and_pick_a_champion(tmp_runs):
     assert "Validation seeds" in lb and f"Final pick: `{expected}`" in lb and "(refine of 0000-tier2_jev_only)" in lb
     assert (a.root / "lessons.md").exists() and "## Generation 1" in (a.root / "lessons.md").read_text()
     ablation = json.loads((winner.dir / "ablation-no-models" / "eval.json").read_text())   # the pick, models off
-    assert ablation["n_episodes"] == 2 and ablation["system1_calls"] == 0 and ablation["system2_calls"] == 0
-    assert "Ablation: `" + expected + "` without runtime System-1 / System-2" in (a.root / "leaderboard.md").read_text()
+    assert ablation["n_episodes"] == 2 and ablation["failed_s1"] == ablation["system1_calls"]    # every call failed
+    assert ablation["failed_s2"] == ablation["system2_calls"]
+    assert "Ablation: `" + expected + "` with every runtime model call failing" in (a.root / "leaderboard.md").read_text()
     assert json.loads((a.root / "manifest.json").read_text())["run"]["system1"] == "heuristic"
     # the archive is closed: validation / held-out results exist, so no further proposals
     with pytest.raises(ValueError, match="held-out results"):
@@ -380,3 +381,39 @@ def test_digest_shows_how_long_each_episode_ran(tmp_path):
     e["episodes"][0].update(steps=900, wall_s=60.2, ended_by="harness_return")
     c.eval_path.write_text(json.dumps(e))
     assert "seed 0: 5.0 harness_return (900 steps, 60 s)" in generation.digest(c)
+
+
+REFUSES_WITHOUT_SYSTEM1 = '''
+def build(ctx):
+    return P(ctx)
+
+
+class P:
+    def __init__(self, ctx):
+        self.ctx = ctx
+
+    def run_episode(self, game):
+        if self.ctx.system1 is None:
+            return
+        while not self.ctx.done:
+            try:
+                self.ctx.decide({}, {})
+            except RuntimeError:
+                pass
+            self.ctx.act(game.action_spec.noop)
+            self.ctx.wait_for_tick()
+'''
+
+
+def test_the_ablation_keeps_the_models_visible_and_failing(tmp_path):
+    """A harness that refuses to play without ctx.system1 still plays in the ablation; its calls fail."""
+    from metaharness.core.runner import evaluate_harness
+    from metaharness.models.mock import SilentModel
+    h = tmp_path / "h.py"
+    h.write_text(REFUSES_WITHOUT_SYSTEM1)
+    res = evaluate_harness(h, lambda **k: SnakeGame(**k), [0], system2=SilentModel(), system1=SilentModel(),
+                           out_dir=tmp_path / "out", clock_mode="virtual",
+                           budget_per_episode=Budget(max_wall_s=5.0))
+    ep = res.episodes[0]
+    assert ep.steps > 0 and ep.ended_by != "harness_return"
+    assert ep.system1_calls > 0 and ep.failed_s1 == ep.system1_calls
