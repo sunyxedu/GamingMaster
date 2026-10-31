@@ -66,6 +66,11 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
   policy with real lookahead. Never a random or deliberately weakened opponent, and no difficulty ladder
   that a seed can lower. Name the opponent and its measured strength (e.g. its win rate against a simple
   scripted player) in ADAPTOR.md.
+* An episode must fit the evaluation: `step()` (including the opponent's thinking and engine time) must
+  return within a few seconds, and a whole episode played at that pace must finish well inside the
+  per-episode deadline the search uses (default 30 minutes) with time left for the agent's own model
+  calls. Bound the opponent's compute per decision (search time / iterations) and the episode length
+  accordingly, and report the measured step latency and episode duration in ADAPTOR.md.
 * `describe()` tells a model everything it may know a priori: rules, objective, action semantics,
   observation fields. `action_spec` lists every legal action name with a one-line meaning and a `noop`.
   Actions with parameters use a compact string grammar documented in `describe()` (e.g. `"move 3 4"`).
