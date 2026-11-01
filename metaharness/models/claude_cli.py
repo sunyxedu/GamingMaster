@@ -37,6 +37,7 @@ import weakref
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+from ..config import REPO_ROOT
 from ._cli import CLITimeout, run_cli
 from .base import (
     CLI_ENV_DROP,
@@ -91,7 +92,9 @@ _sleep = time.sleep          # module level, so tests can skip the waits
 # replicas (HTTP 500, about half of all 5xx); the effort beta and adaptive thinking are not among them.
 _ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
                   "BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "1800000",
-                  "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"}
+                  "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
+                  # git run in an archive under the repository finds no repository (a proposer once ran git add)
+                  "GIT_CEILING_DIRECTORIES": str(REPO_ROOT)}
 _AGENT_TOOLS = ("Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit")
 _WEB_TOOLS = ("WebSearch", "WebFetch")
 

@@ -29,6 +29,7 @@ from metaharness.models.base import (
 from metaharness.models.claude_cli import EFFORT_LEVELS, ClaudeCLI
 
 WATCHED_ENV = ("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+               "GIT_CEILING_DIRECTORIES",
                "TYPESAFE_API_KEY",
                "OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")
 
@@ -152,6 +153,7 @@ def test_player_is_isolated_from_the_users_claude_setup(fake, monkeypatch):
     assert c1["stdin"] == "what next?"
     assert c1["env"]["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1" and c1["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
     assert c1["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "1"          # behind a router: no context_management
+    assert c1["env"]["GIT_CEILING_DIRECTORIES"] == str(claude_mod.REPO_ROOT)   # no git into the user's repository
     assert all(c1["env"][k] is None for k in ("TYPESAFE_API_KEY", "OPENAI_API_KEY", "CLAUDECODE"))
     player_dir = Path(c1["cwd"])
     assert player_dir.name.startswith("metaharness-claude-player-") and not any(player_dir.iterdir())
@@ -183,6 +185,7 @@ def test_agentic_calls_keep_tools_but_not_web_unless_asked(fake, tmp_path):
     # agents keep their tools, but neither CLAUDE.md, auto-memory nor hooks may leak into the run directory
     assert c1["env"]["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1" and c1["env"]["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
     assert c1["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "1"          # behind a router: no context_management
+    assert c1["env"]["GIT_CEILING_DIRECTORIES"] == str(claude_mod.REPO_ROOT)   # no git into the user's repository
     assert json.loads(_flag(c1["argv"], "--settings")) == {"disableAllHooks": True}
     assert all(_flag(c["argv"], "--effort") == "xhigh" for c in (c1, c2, c3))
     assert _flag(c3["argv"], "--resume") == "abc"
