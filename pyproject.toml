@@ -13,8 +13,6 @@ dependencies = [
     "numpy>=2.1; python_version >= '3.13'",
     "matplotlib>=3.10.8",
     "lzstring>=1.0.4",
-    "python-chess>=1.999",
-    "python-shogi>=1.1.1",
     "zstandard>=0.25.0",
     "tomli>=2.0; python_version < '3.11'",  # model profiles on Python 3.10
     # gmrules simulators / replay (PyO3 extension built from source by maturin on
@@ -40,6 +38,11 @@ prepare-data = "scripts.prepare_data:main"
 dev = [
     "pytest>=7.0.0",
     "ruff>=0.1.0",
+    # rules references for the converter tests (tests/test_chess_converter.py,
+    # test_shogi_converter.py, test_audit_board_causality.py) and scripts/quality_by_rating.py;
+    # the model, envs and trainers play through gmrules (Rust) and never import them
+    "python-chess>=1.999",
+    "python-shogi>=1.1.1",
 ]
 
 [build-system]

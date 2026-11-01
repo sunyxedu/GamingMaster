@@ -13,7 +13,7 @@ import subprocess
 from collections import Counter
 
 import pytest
-import shogi  # python-shogi (project dependency): the rules reference
+import shogi  # python-shogi (dev dependency): the rules reference
 import shogi.CSA
 import torch
 
