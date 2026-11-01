@@ -55,17 +55,49 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: no new ruff findings in the changed Python files
         if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
-          files=$(git diff --name-only --diff-filter=AMR "$base" HEAD -- '*.py' ':!metaharness/artifacts')
-          [ -n "$files" ] || { echo "no Python files changed"; exit 0; }
-          count() { xargs -r uvx ruff check --exit-zero --output-format concise | grep -c . || true; }
-          head_n=$(echo "$files" | count)
-          git worktree add -q /tmp/base "$base"
-          base_n=$(cd /tmp/base && echo "$files" | while read -r f; do [ -f "$f" ] && echo "$f"; done | count)
-          echo "ruff findings in changed files: base $base_n, head $head_n"
-          echo "$files" | xargs -r uvx ruff check --exit-zero --output-format github
-          [ "$head_n" -le "$base_n" ]
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True)
+
+          base = git("merge-base", "origin/" + os.environ["BASE_REF"], "HEAD").strip()
+          changes = iter(git("diff", "--name-status", "-z", "--diff-filter=AMR", base,
+                             "HEAD", "--", "*.py", ":!metaharness/artifacts").split("\0")[:-1])
+          old, new = [], []
+          for status in changes:
+              path = next(changes)
+              old.append(path)
+              new.append(next(changes) if status.startswith("R") else path)
+
+          def count(paths, cwd):
+              paths = [p for p in paths if os.path.isfile(os.path.join(cwd, p))]
+              if not paths:
+                  return 0
+              result = subprocess.check_output(
+                  ["uvx", "ruff", "check", "--exit-zero", "--output-format", "json", "--", *paths],
+                  cwd=cwd, text=True)
+              return len(json.loads(result))
+
+          head_n = count(new, ".")
+          with tempfile.TemporaryDirectory() as tmp:
+              git("worktree", "add", "--detach", tmp + "/base", base)
+              try:
+                  base_n = count(old, tmp + "/base")
+              finally:
+                  git("worktree", "remove", tmp + "/base")
+          print(f"ruff findings in changed files: base {base_n}, head {head_n}")
+          if new:
+              subprocess.run(["uvx", "ruff", "check", "--exit-zero", "--output-format", "github",
+                              "--", *new], check=True)
+          raise SystemExit(head_n > base_n)
+          PY
       - name: ruff on the whole tree (report only)
         continue-on-error: true
         run: uvx ruff check --exclude metaharness/artifacts --statistics .
