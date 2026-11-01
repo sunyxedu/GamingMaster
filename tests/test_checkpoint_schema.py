@@ -2,8 +2,8 @@
 
 Pins (a) what the stamp is and that an unstamped checkpoint reads as legacy, (b) that the
 stamp changes nothing a loader computes — the legacy rules give the same config dict with
-and without it, and are the identity on the complete config dict a stamped checkpoint
-carries — and (c) that the stamped file round-trips through torch.save / torch.load,
+and without it, and are the identity on a complete config dict — and (c) that the stamped
+file round-trips through torch.save / torch.load,
 including weights_only=True, so code that predates the stamp reads it as one more key.
 """
 
@@ -80,8 +80,7 @@ def test_stamp_does_not_change_what_a_loader_computes(ck):
 
 
 def test_legacy_rules_are_identity_on_a_complete_config_dict():
-    """What version 1 promises: the trainers write cfg.__dict__, every field present, so
-    neither upgrade_config_dict nor the memory_vision inference changes it."""
+    """With every field present, neither legacy rule changes the config."""
     for cfg in (ModelConfig(), ModelConfig(memory_vision=True, core_type="transformer")):
         d = dict(cfg.__dict__)
         assert set(LEGACY_CONFIG_DEFAULTS) & set(ModelConfig.__dataclass_fields__) <= set(d)
@@ -109,3 +108,8 @@ def test_multi_game_export_is_stamped():
     out = game_checkpoint(ck, "chess")
     assert schema_version(out) == CHECKPOINT_SCHEMA_VERSION
     assert out["game"] == "chess" and set(out["model_state"]) == {"w", "core.x"}
+    assert out["config"] == ck["configs"]["chess"]
+    assert out["config"] is not ck["configs"]["chess"]
+    assert checkpoint_config_dict(out) == checkpoint_config_dict(ck, "chess")
+    assert "core_type" not in out["config"]
+    assert checkpoint_config_dict(out)["core_type"] == "trm"

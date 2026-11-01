@@ -10,15 +10,14 @@ Versions
        changed (:data:`LEGACY_CONFIG_DEFAULTS`), and a generals config may lack
        ``memory_vision``, which only the whole checkpoint tells
        (:func:`legacy_memory_vision`).
-    1  the first stamped version: no format change.  Each config dict is the complete
-       ``cfg.__dict__`` of its config class at write time (every field present, incl.
-       ``memory_vision``), so the legacy rules below are no-ops on it.
+    1  the first stamped version: no format change.  Trainers write their current config
+       dicts, but exports of older checkpoints can retain incomplete legacy configs.
+       The stamp identifies the writer's schema, not the age or completeness of a config.
 
 Readers apply the legacy rules to every checkpoint whatever its version — they are the
 identity on a complete config dict, and the version is recorded so a later change can be
-keyed on it (and to tell, from the file alone, which code wrote it).  Adding a field with
-a new default still needs a :data:`LEGACY_CONFIG_DEFAULTS` entry: the version says a dict
-was complete when written, not that it has the fields added since.
+keyed on it.  Adding a field with a new default still needs a
+:data:`LEGACY_CONFIG_DEFAULTS` entry; a version stamp must not bypass those rules.
 
 Older code reading a stamped checkpoint: the stamp is one more int-valued key in the
 dict, which every loader ignores (none enumerates the top-level keys).
