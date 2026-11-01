@@ -47,6 +47,7 @@ from data_processing.games.dataset import (
     training_sampler,
 )
 from data_processing.games.generals import GeneralsGioDataset, gio_dataset_advice
+from model.checkpoint_migrations import stamp_schema_version
 from model.components.core import update_moe_balance
 from model.components.encoder import describe_encoder_norm
 from model.config import checkpoint_config_dict, upgrade_config_dict
@@ -1369,7 +1370,7 @@ def main() -> None:
         }
         if ema is not None:
             ckpt["train_model_state"] = net.state_dict()
-        torch.save(ckpt, ckpt_path)
+        torch.save(stamp_schema_version(ckpt), ckpt_path)
         print(f"[e{epoch}] saved {ckpt_path} ({time.time() - t0:.1f}s)")
 
 

@@ -205,6 +205,7 @@ from torch.utils.data import BatchSampler, DataLoader, SequentialSampler
 from data_processing.games.dataset import (WholeRecordBatchSampler, collate_game_sequences,
                                            training_sampler)
 from data_processing.games.generals import GeneralsGioDataset, gio_dataset_advice
+from model.checkpoint_migrations import stamp_schema_version
 from model.components.core import allreduce_moe_loads, update_moe_balance
 from model.components.encoder import describe_encoder_norm
 from model.config import checkpoint_config_dict, legacy_memory_vision, upgrade_config_dict
@@ -639,7 +640,7 @@ def game_checkpoint(ck: Dict, game: str) -> Dict:
            "source": {"multi_game_games": list(ck["games"]), "step": ck.get("step")}}
     if "train_model_state" in ck:
         out["train_model_state"] = part(ck["train_model_state"])
-    return out
+    return stamp_schema_version(out)
 
 
 # ----------------------------------------------------------------------
@@ -1465,7 +1466,7 @@ def main(argv=None) -> Dict[str, object]:
             # what a resume matches the optimizer state by (games may be added)
             ck[OPT_NAMES_KEY] = optimizer_param_names(model, optimizer)
         # atomic: a job killed mid-write never leaves a truncated checkpoint
-        torch.save(ck, f"{path}.tmp")
+        torch.save(stamp_schema_version(ck), f"{path}.tmp")
         os.replace(f"{path}.tmp", path)
         return path
 

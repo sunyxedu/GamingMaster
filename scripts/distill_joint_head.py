@@ -19,6 +19,7 @@ import sys
 import torch
 
 from env.generals_env import GeneralsEnv
+from model.checkpoint_migrations import stamp_schema_version
 from model.config import ModelConfig
 from model.network import GeneralsNetwork
 from model.rl_utils import compute_policy_kl_heads
@@ -258,7 +259,7 @@ def main() -> None:
         "iteration": 2720,
         "distilled_from": args.teacher,
     }
-    torch.save(out, args.out)
+    torch.save(stamp_schema_version(out), args.out)
     print(f"saved joint seed → {args.out}")
 
 

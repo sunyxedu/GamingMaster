@@ -58,6 +58,7 @@ import torch
 import torch.nn.functional as F
 
 from env.board_selfplay_env import BoardSelfPlayEnv
+from model.checkpoint_migrations import stamp_schema_version
 from model.components.core import update_moe_balance
 from model.components.encoder import describe_encoder_norm
 from model.games.base import categorical_entropy, masked_log_prob
@@ -460,14 +461,14 @@ def main() -> None:
                   flush=True)
         if (it + 1) % args.save_interval == 0 or (it + 1) == args.iters:
             path = os.path.join(args.save_dir, f"{args.game}_rl_iter{it + 1}.pt")
-            torch.save({
+            torch.save(stamp_schema_version({
                 "game": args.game,
                 "iter": it + 1,
                 "model_state": net.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
                 "config": cfg.__dict__,
                 "config_overrides": arch,
-            }, path)
+            }), path)
             print(f"[it{it}] saved {path}")
 
 
