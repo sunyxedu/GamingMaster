@@ -1,0 +1,221 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          1001,
+          1002,
+          1003,
+          1004,
+          1005,
+          1006,
+          1007,
+          1008,
+          1009,
+          1010,
+          1011,
+          1012
+        ]
+      ],
+      [
+        "val",
+        [
+          1013,
+          1014,
+          1015,
+          1016
+        ]
+      ],
+      [
+        "heldout",
+        [
+          2001,
+          2002,
+          2003,
+          2004,
+          2005,
+          2006,
+          2007,
+          2008,
+          2009,
+          2010,
+          2011,
+          2012,
+          2013,
+          2014,
+          2015,
+          2016
+        ]
+      ]
+    ],
+    "game_kwargs": {},
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "5550f2671eee4cd3d0d0498ed8aabfce78801adc20e1ec942ea2b0887b25b587"
+  },
+  "results": {
+    "train:1001": {
+      "ok": true,
+      "obs_sha256": "625846a56e9bb36d",
+      "episode_sha256": null
+    },
+    "train:1002": {
+      "ok": true,
+      "obs_sha256": "105a0d30f00761d1",
+      "episode_sha256": null
+    },
+    "train:1003": {
+      "ok": true,
+      "obs_sha256": "06ff1e6df09f88cd",
+      "episode_sha256": null
+    },
+    "train:1004": {
+      "ok": true,
+      "obs_sha256": "93ef3f1fdceb14e8",
+      "episode_sha256": null
+    },
+    "train:1005": {
+      "ok": true,
+      "obs_sha256": "0135a703638d65d5",
+      "episode_sha256": "a0fd16cb74cd4fb2"
+    },
+    "train:1006": {
+      "ok": true,
+      "obs_sha256": "972451e69f18d2b3",
+      "episode_sha256": null
+    },
+    "train:1007": {
+      "ok": true,
+      "obs_sha256": "e02da208fafd769a",
+      "episode_sha256": null
+    },
+    "train:1008": {
+      "ok": true,
+      "obs_sha256": "451a0cd16042fc88",
+      "episode_sha256": null
+    },
+    "train:1009": {
+      "ok": true,
+      "obs_sha256": "d2923c801cb96cd1",
+      "episode_sha256": null
+    },
+    "train:1010": {
+      "ok": true,
+      "obs_sha256": "c3c43b52b8ad685c",
+      "episode_sha256": "e19a4f8f3e587bc3"
+    },
+    "train:1011": {
+      "ok": true,
+      "obs_sha256": "c3155776521b5f6a",
+      "episode_sha256": null
+    },
+    "train:1012": {
+      "ok": true,
+      "obs_sha256": "f9c00c760cb2ea6e",
+      "episode_sha256": null
+    },
+    "val:1013": {
+      "ok": true,
+      "obs_sha256": "46359435083cc07b",
+      "episode_sha256": null
+    },
+    "val:1014": {
+      "ok": true,
+      "obs_sha256": "6c2d79ccde90fe2a",
+      "episode_sha256": null
+    },
+    "val:1015": {
+      "ok": true,
+      "obs_sha256": "eeb9b14e419a5cfc",
+      "episode_sha256": "64d30fc2b10e094f"
+    },
+    "val:1016": {
+      "ok": true,
+      "obs_sha256": "fefa5057c8a899a2",
+      "episode_sha256": null
+    },
+    "heldout:2001": {
+      "ok": true,
+      "obs_sha256": "fb21d6f9653b8d4a",
+      "episode_sha256": null
+    },
+    "heldout:2002": {
+      "ok": true,
+      "obs_sha256": "ff763eded87c7435",
+      "episode_sha256": null
+    },
+    "heldout:2003": {
+      "ok": true,
+      "obs_sha256": "c29157ba4a7a427a",
+      "episode_sha256": null
+    },
+    "heldout:2004": {
+      "ok": true,
+      "obs_sha256": "9894bb27102c0d0a",
+      "episode_sha256": null
+    },
+    "heldout:2005": {
+      "ok": true,
+      "obs_sha256": "1bbf7d8f48c91d1a",
+      "episode_sha256": "ff04909074ca39cc"
+    },
+    "heldout:2006": {
+      "ok": true,
+      "obs_sha256": "c44028f93c9494f1",
+      "episode_sha256": null
+    },
+    "heldout:2007": {
+      "ok": true,
+      "obs_sha256": "7eb82b2132933ec9",
+      "episode_sha256": null
+    },
+    "heldout:2008": {
+      "ok": true,
+      "obs_sha256": "892cbe6c32ee32fd",
+      "episode_sha256": null
+    },
+    "heldout:2009": {
+      "ok": true,
+      "obs_sha256": "302342d08b22aa1c",
+      "episode_sha256": null
+    },
+    "heldout:2010": {
+      "ok": true,
+      "obs_sha256": "bcd6de3c999e4f43",
+      "episode_sha256": "fddd7fc36a193c0e"
+    },
+    "heldout:2011": {
+      "ok": true,
+      "obs_sha256": "4db97e48253ef396",
+      "episode_sha256": null
+    },
+    "heldout:2012": {
+      "ok": true,
+      "obs_sha256": "a204a2843e250efe",
+      "episode_sha256": null
+    },
+    "heldout:2013": {
+      "ok": true,
+      "obs_sha256": "d33758595da5b21b",
+      "episode_sha256": null
+    },
+    "heldout:2014": {
+      "ok": true,
+      "obs_sha256": "2ae3ca243342b86d",
+      "episode_sha256": null
+    },
+    "heldout:2015": {
+      "ok": true,
+      "obs_sha256": "2fd0d69721667033",
+      "episode_sha256": "929fa26620d90139"
+    },
+    "heldout:2016": {
+      "ok": true,
+      "obs_sha256": "380568f7b66c94f6",
+      "episode_sha256": null
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

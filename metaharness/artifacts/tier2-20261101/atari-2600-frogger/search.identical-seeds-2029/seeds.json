@@ -1,0 +1,132 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          101,
+          103,
+          107,
+          109,
+          113,
+          127
+        ]
+      ],
+      [
+        "val",
+        [
+          131,
+          137
+        ]
+      ],
+      [
+        "heldout",
+        [
+          139,
+          149,
+          151,
+          157,
+          163,
+          167,
+          173,
+          179
+        ]
+      ]
+    ],
+    "game_kwargs": {
+      "mode": 0,
+      "difficulty": 0,
+      "frameskip": 1,
+      "sticky_action_probability": 0.0
+    },
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "0f4f388634e441de8417f72273e025151add3df1f6a1ac6a05388c7e36e9c270"
+  },
+  "results": {
+    "train:101": {
+      "ok": true,
+      "obs_sha256": "59cece78cfbcc3e1",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "train:103": {
+      "ok": true,
+      "obs_sha256": "c235709ef30fc339",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "train:107": {
+      "ok": true,
+      "obs_sha256": "f61e320c9a0a3e47",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "train:109": {
+      "ok": true,
+      "obs_sha256": "73fe84ea320a4478",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "train:113": {
+      "ok": true,
+      "obs_sha256": "def676708ddf9df5",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "train:127": {
+      "ok": true,
+      "obs_sha256": "2e4cdcee5a235e24",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "val:131": {
+      "ok": true,
+      "obs_sha256": "656fdafdb2f6687d",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "val:137": {
+      "ok": true,
+      "obs_sha256": "6dcf11b9e4c4e04d",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "heldout:139": {
+      "ok": true,
+      "obs_sha256": "11c7f1dda3721ffb",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "heldout:149": {
+      "ok": true,
+      "obs_sha256": "57d2797e07cb5ca5",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "heldout:151": {
+      "ok": true,
+      "obs_sha256": "10b314aa35f85d15",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "heldout:157": {
+      "ok": true,
+      "obs_sha256": "834e36a8d1329978",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "heldout:163": {
+      "ok": true,
+      "obs_sha256": "c63c97e954e31b2e",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "heldout:167": {
+      "ok": true,
+      "obs_sha256": "981a2a5909b90410",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "heldout:173": {
+      "ok": true,
+      "obs_sha256": "170c370b99f0197e",
+      "episode_sha256": "0810ff603a20c3df"
+    },
+    "heldout:179": {
+      "ok": true,
+      "obs_sha256": "e1ead89dbccabc7f",
+      "episode_sha256": "0810ff603a20c3df"
+    }
+  },
+  "refused": [
+    "seeds train:101, train:103, train:107, train:109, train:113, train:127, val:131, val:137, heldout:139, heldout:149, heldout:151, heldout:157, heldout:163, heldout:167, heldout:173, heldout:179 play the same episode under the same actions (a validation or held-out seed repeating another stage's)"
+  ],
+  "warnings": []
+}

@@ -1,0 +1,63 @@
+{
+  "game": "Doom (1993)",
+  "tier": 2,
+  "tier_rationale": "Classic Doom is a continuous real-time game: the engine advances at 35 tics per second, while monster AI, hitscan attacks, projectiles, weapon cooldowns, and doors continue during deliberation. A practical combat action must refresh within about 0.20 seconds (roughly 7 tics), and a 0.5-second Jev call can already span dangerous attack windows, so Jev must act asynchronously while Astra plans. Use ViZDoom ASYNC_PLAYER in production; retain short PLAYER action repeats only as a deterministic smoke-test fallback.",
+  "decision_latency_s": 0.2,
+  "interface": {
+    "chosen": "api",
+    "why": "The official ViZDoom Python API is maintained, has Linux wheels for the evaluator's Python line, runs headlessly with no account or display, and exposes native button actions plus symbolic game variables and visible-object labels. It is lower latency and more informative than screen capture, more controllable for async tier-2 play than the Gymnasium step wrapper, and avoids the maintenance and licensing risks of emulator memory hooks.",
+    "software": [
+      "vizdoom==1.3.2"
+    ],
+    "env": [
+      {
+        "var": "VIZDOOM_WAD_PATH",
+        "description": "Absolute path to a legally available doom.wad, doom2.wad, or compatible Freedoom IWAD; do not put the value in repository files.",
+        "required": true
+      },
+      {
+        "var": "VIZDOOM_MAP",
+        "description": "Optional map identifier such as E1M1 or MAP01; the scenario generator may select this per reset.",
+        "required": false
+      },
+      {
+        "var": "VIZDOOM_SKILL",
+        "description": "Optional ViZDoom skill integer from 1 through 5; default to 3.",
+        "required": false
+      },
+      {
+        "var": "VIZDOOM_SEED",
+        "description": "Optional unsigned episode RNG seed for reproducible resets.",
+        "required": false
+      },
+      {
+        "var": "VIZDOOM_MODE",
+        "description": "Optional mode name; use ASYNC_PLAYER for production and PLAYER only for deterministic smoke tests.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Install vizdoom==1.3.2 into /home/hemlix/GamingMaster-mh-tier2/runs/doom/.venv using that venv's Python 3.12.3 interpreter.",
+      "Resolve VIZDOOM_WAD_PATH and fail clearly if the IWAD is missing; use a legally obtained original IWAD for exact Doom or Freedoom for the offline no-account fallback.",
+      "Create DoomGame, configure the selected IWAD, map, skill, seed, and timeout, and set Mode.ASYNC_PLAYER before init().",
+      "Hide the window, disable sound, use a small grayscale in-memory screen format, and enable labels_buffer; do not require DISPLAY, Xvfb, or a GPU.",
+      "Request HEALTH, ARMOR, DEAD, ON_GROUND, ATTACK_READY, SELECTED_WEAPON, SELECTED_WEAPON_AMMO, AMMO0-AMMO9, WEAPON0-WEAPON9, KILLCOUNT, ITEMCOUNT, SECRETCOUNT, DAMAGE_TAKEN, POSITION_X/Y/Z, ANGLE, and velocity variables.",
+      "Read get_available_buttons() after loading the config and build the vector index map; use the official Doom button set for movement, turning, attack, use, run/strafe, and weapon selection.",
+      "Poll get_state(), convert named variables and visible labels to JSON, update the held action with set_action every 4-7 tics, and let code-level safety rules cover late Jev responses.",
+      "Use new_episode() for reset, vary map/skill/seed according to the scenario split, detect exit/death/timeout, record counters and terminal reason, and call close() at shutdown."
+    ],
+    "observation": "A compact JSON projection of ViZDoom GameState: tic and state number; map/skill/seed; named health, armor, death, weapon, ammo, kill, item, secret, damage, position, angle, and velocity variables; visible state.labels entries with object_id, object_name, object_category, label value, world position/velocity, and pixel bounding box; optionally an in-memory grayscale screen and explored-only automap. The raw labels_buffer is an 8-bit array and screen output is never rendered to a display. Keep all-object and all-sector buffers disabled for fair play unless explicitly allowed.",
+    "actions": "Translate a typed Jev/Astra intention into the configured ViZDoom button vector. Hold movement, turning, SPEED/STRAFE, and ATTACK as needed; pulse USE and weapon-selection buttons for about one tic; use set_action in ASYNC_PLAYER and refresh every 4-7 tics. For deterministic tests, PLAYER plus make_action(action, 1-4) is acceptable but pauses the world. Read button order from get_available_buttons() rather than assuming indexes."
+  },
+  "scoring": "Make map-exit success the dominant score: report completed-by-exit, death or timeout, map, skill, seed, elapsed tics/seconds, and ViZDoom total reward. Add secondary normalized progress from KILLCOUNT, ITEMCOUNT, and SECRETCOUNT (and percentages when map totals are available), plus final health/armor and remaining ammo; use time as a tie-breaker. Do not reward optional kills or secrets enough to outweigh failing to exit.",
+  "scenarios": "Reset one map per episode and record IWAD, map, skill, and seed. Train or warm up on a small set of early maps at S2-S3, develop on mixed maps at S3, and hold out unseen maps together with unseen RNG seeds and S4; evaluate S5 separately as a stress condition. For Doom 1 use E1M1-E4M9 and for Doom II use MAP01-MAP32 only when the corresponding IWAD is present; do not silently mix Doom and Freedoom results. A campaign harness may chain maps only after saving each map's terminal metrics.",
+  "strategy_summary": "Strong play keeps moving, uses strafe/circle movement and cover, prioritizes immediate hitscan and body-blocking threats, and uses monster infighting to conserve ammunition. Shotgun/chaingun handle routine targets, heavy weapons are reserved for crowds and major threats, and rockets are avoided at close range. The agent should route to required keys and the exit, clear only blockers by default, and treat 100% kills/items/secrets as a declared secondary objective. Code should enforce timing, legal weapon/ammo choices, state bookkeeping, and emergency retreat rules; Jev should make fast typed local choices while Astra maintains map routes and resource plans.",
+  "risks": [
+    "Exact original Doom maps require a legally obtained IWAD that is not distributed by ViZDoom; Freedoom is a compatible but non-identical fallback.",
+    "A 0.5-second model response can span many Doom tics, so blocking the async control loop can cause death; stale-action watchdogs are required.",
+    "Labels and game variables are configured features, and position/angle/velocity may be unavailable with viz_nocheat; validate the observation contract at startup.",
+    "All-object, all-sector, or whole-map automap information can leak hidden geometry and actors and must be treated as an explicit fairness choice.",
+    "The native Python binding should have one synchronized owner; unsynchronized concurrent calls from Astra and Jev workers may corrupt timing or state.",
+    "Screen-capture/input-injection and emulator-hook fallbacks are GUI-dependent, brittle, and unnecessary on the offline headless server."
+  ]
+}

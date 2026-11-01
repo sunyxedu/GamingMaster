@@ -1,0 +1,25 @@
+{
+  "ok": false,
+  "stage": "episode",
+  "repairable": true,
+  "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-ms-pac-man/search/candidates/0009/harness.py\", line 1303, in run_episode\n    fallback = self._fallback_action(obs)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-ms-pac-man/search/candidates/0009/harness.py\", line 895, in _fallback_action\n    base = self._route_action(obs)\n           ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-ms-pac-man/search/candidates/0009/harness.py\", line 740, in _route_action\n    start = self._ensure_route(obs)\n            ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-ms-pac-man/search/candidates/0009/harness.py\", line 734, in _ensure_route\n    path = self._path_to_goals(start, goals, self.current_action)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-ms-pac-man/search/candidates/0009/harness.py\", line 651, in _path_to_goals\n    for _, neighbor in self._ordered_neighbors(node, preferred if node == start else None):\n                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-ms-pac-man/search/candidates/0009/harness.py\", line 630, in _ordered_neighbors\n    order = self._direction_order(preferred or self.current_action)\n            ^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'Harness' object has no attribute '_direction_order'\n",
+  "ended_by": "harness_error",
+  "score": 0.0,
+  "steps": 0,
+  "system1_calls": 0,
+  "system2_calls": 1,
+  "coverage": {
+    "system2_answers": 1,
+    "system1_answers": 0,
+    "failed_calls": 0,
+    "acts": 0,
+    "acts_after_s1": 0,
+    "acts_after_s2": 0,
+    "steps": 0,
+    "harness_events": 0
+  },
+  "warnings": [
+    "no System-1 call was answered during the dry run (the stand-in answers every question)",
+    "the harness never posted an action"
+  ]
+}

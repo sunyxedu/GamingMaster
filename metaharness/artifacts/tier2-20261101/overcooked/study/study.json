@@ -1,0 +1,55 @@
+{
+  "game": "Overcooked-AI",
+  "tier": 2,
+  "tier_rationale": "The selected reference MDP is synchronous by itself, but the requested harness must run it as a tier-2 game: an adaptor-owned worker advances one joint transition every 1/6 second while Astra reasons asynchronously and Jev chooses fast task continuations. Missing a primitive action deadline costs approximately one simulation tick of movement, cooking opportunity, or delivery throughput; the world must not wait for a model response. The official demo uses a 6-Hz tick loop, while the benchmark uses a 400-tick horizon. A synchronous debug mode is useful for replay but is not the tier-2 execution mode.",
+  "decision_latency_s": 0.166667,
+  "interface": {
+    "chosen": "official env",
+    "why": "HumanCompatibleAI/overcooked_ai is the reference open-source symbolic environment: it is local, CPU-capable, account-free, deterministic, exposes the complete OvercookedState and exact sparse reward, and has native MotionPlanner/GreedyHumanModel scripted-agent support. It is safer and more reliable than GUI capture, commercial-game modding, emulator hooks, or a network demo. The adaptor must add a nonblocking 6-Hz ticking worker because the native OvercookedEnv API advances only when step is called.",
+    "software": [
+      "git",
+      "overcooked_ai from https://github.com/HumanCompatibleAI/overcooked_ai at commit 739950a079cdaed5a44fcc662efc40244c205d06",
+      "dill",
+      "gymnasium",
+      "ipywidgets",
+      "numpy<2",
+      "opencv-python-headless",
+      "pygame",
+      "scipy",
+      "setuptools>=77.0.3",
+      "tqdm"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Use /home/hemlix/GamingMaster-mh-tier2/runs/overcooked/.venv/bin/python and its pip, not the system Python.",
+      "Install the pinned GitHub source with an explicit Python-compatibility override because upstream pyproject.toml currently declares >=3.10,<3.11 while the evaluator is Python 3.12.3.",
+      "Install the runtime dependencies: dill, gymnasium, ipywidgets, numpy<2, opencv-python-headless, pygame, scipy, setuptools>=77.0.3, and tqdm; do not install the optional HARL/Ray/TensorFlow extra.",
+      "Set SDL_VIDEODRIVER=dummy if any import path initializes pygame; do not create a display or call rendering in the headless adaptor.",
+      "Construct OvercookedGridworld.from_layout_name(layout_name, old_dynamics=False), then OvercookedEnv.from_mdp(mdp, horizon=400, info_level=0).",
+      "Precompute env.mlam and its MotionPlanner before starting the real-time clock, then construct a separate GreedyHumanModel(env.mlam) or a scenario-specific scripted Agent as partner.",
+      "At reset(seed, scenario), seed all adaptor-owned RNGs, choose the layout/start-state variant, reset env and agents, create a new episode ID, and publish tick-zero state.",
+      "Run an adaptor-owned worker at 6 ticks per second; each tick consumes the newest valid controlled action and partner action, substitutes STAY for a missing/stale action, calls env.step once, and publishes the serialized state.",
+      "Translate Gym integer action indices only at the boundary; native OvercookedEnv.step receives a pair of Action objects from Action.ALL_ACTIONS.",
+      "Serialize observations with state.to_dict() plus terrain_mtx, layout_name, score, events, tick, and deadlines; reject model replies from an old episode or stale tick.",
+      "Stop at done or timestep 400, report cumulative sparse reward and diagnostics, join workers, clear queues, and reset agents before the next episode.",
+      "Run a smoke test under the evaluator interpreter: construct cramped_room, step STAY four times, round-trip OvercookedState JSON, and obtain one valid action from the scripted partner."
+    ],
+    "observation": "Canonical observation is a JSON-safe snapshot containing episode_id, layout_name, terrain_mtx, horizon, state.to_dict(), cumulative sparse score, last sparse reward, sparse_r_by_agent, shaped_r_by_agent, event flags, partner's last action/task, controlled_agent_index, current tick, and wall-clock deadline. state.to_dict() contains players with (x,y) position, orientation, held object, unheld objects including soup ingredients/cooking tick/ready flags, bonus_orders, all_orders, and timestep. Include terrain_mtx because the state dictionary alone does not identify counters, dispensers, pots, or serving tiles. The environment also provides lossless_state_encoding_mdp(state) and featurize_state_mdp(state), but those tensors are optional policy inputs rather than the Astra/Jev canonical representation.",
+    "actions": "The adaptor controls one chef with one primitive per tick and supplies a joint action to OvercookedEnv.step((action0, action1)). Native actions are Direction.NORTH=(0,-1), SOUTH=(0,1), EAST=(1,0), WEST=(-1,0), Action.STAY=(0,0), and Action.INTERACT='interact'; Action.ALL_ACTIONS orders them as north, south, east, west, stay, interact. INTERACT operates the feature immediately ahead. The partner implements Agent.action(state) -> (action, info), normally via GreedyHumanModel(env.mlam) on standard three-onion layouts. Use MotionPlanner/MLAM to turn high-level tasks into safe primitive actions, replan after interactions/collisions, and validate all preconditions in code. A missing model reply becomes STAY rather than blocking the clock."
+  },
+  "scoring": "Report cumulative sparse team reward: sum of env.step's sparse_r_by_agent or env_info episode ep_sparse_r over the 400-tick episode. This counts only accepted soup deliveries and is the true benchmark objective; do not add shaped rewards. Also report deliveries, score by agent, episode length, event counts, collision/stuck ticks, pot idle time, and handoff failures as diagnostics. In this environment an ordinary accepted recipe is commonly worth 20, bonus orders use order_bonus*recipe.value, and layouts may override recipe values/times, so compute values from the active state/layout rather than hardcoding.",
+  "scenarios": "Use seeded scenarios rather than identical resets: train/develop on cramped_room, asymmetric_advantages, and coordination_ring; validate on counter_circuit_o_1order; hold out forced_coordination, counter_circuit, tomato/mixed layouts, controlled-agent index reversal, alternate valid starting positions/orientations, and scripted-partner styles. A seed should control layout selection, valid randomized start state, tie-breaking, partner randomness, and any optional randomized pot/object starts; record the pinned repository commit and layout name. Keep a fixed hidden seed set for evaluation. Exclude forced_coordination from the default GreedyHumanModel baseline because its source warns that the greedy model may not work where unilateral completion is impossible; use an explicit handoff partner for that scenario.",
+  "strategy_summary": "Treat each accepted soup as a pipelined job: reserve a recipe and pot, fetch ingredients, fill it, explicitly start cooking under modern dynamics, stage a dish, pick up the ready soup, and deliver. Code should own exact state bookkeeping, recipe/value arithmetic, reachability, collision-safe shortest paths, interaction preconditions, timers, and stale-action rejection. Astra should allocate roles, choose among near-equal recipes, set circulation and handoff protocols, and adapt when a layout or partner violates the initial plan. Jev should answer small typed recognition/choice questions over legal code-generated task candidates, such as pot phase, delivery urgency, traffic priority, or handoff status; it should not emit raw directions or do arithmetic. Give ready-soup delivery and traffic recovery priority over speculative ingredient work, and use a custom protocol rather than stock greedy behavior on forced-coordination or mixed-recipe layouts.",
+  "risks": [
+    "Upstream pyproject.toml and uv.lock declare Python 3.10 only, while the evaluator is Python 3.12.3; install the pinned source with an explicit compatibility override and test imports before building the adaptor.",
+    "The native OvercookedEnv is synchronous; without an adaptor-owned worker Astra can block the world and accidentally turn the tier-2 design into tier 1.",
+    "The one-tick primitive deadline is about 0.166667 seconds, shorter than Jev's approximately 0.5-second response; use asynchronous prefetch/caching and STAY or a safe continuation fallback.",
+    "GreedyHumanModel is specialized for a single three-onion order and its source warns it may fail on forced_coordination; mixed recipes need a custom scripted partner.",
+    "The official demo's Socket.IO server is optional and adds network/session/tick-queue complexity; it is not needed for the offline symbolic interface.",
+    "Commercial Overcooked GUI/mod/emulator automation would require a game installation and display/input stack and may create EULA, platform, anti-cheat, or online ToS risk; it is not selected.",
+    "No commercial-game order timers, tips, combos, burning, dish washing, or star thresholds should be assumed; the selected benchmark has its own sparse-reward mechanics.",
+    "Stale delayed model decisions can execute after a reset or after a pot/partner state change unless tagged with episode ID and observation timestep.",
+    "Pygame/OpenCV rendering can fail on a headless server; use opencv-python-headless, SDL_VIDEODRIVER=dummy, and symbolic state only.",
+    "Collision resolution cancels both movement attempts on a collision or position swap, so naive independent paths can waste ticks or deadlock narrow layouts."
+  ]
+}

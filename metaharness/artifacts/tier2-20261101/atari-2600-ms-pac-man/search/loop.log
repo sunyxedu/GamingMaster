@@ -1,0 +1,144 @@
+[04:15:50] seed check: held-out / validation seeds start exactly like a training seed: val:6, val:7, heldout:100, heldout:101, heldout:102, heldout:103
+[04:15:50] seed check: 12 seed(s) reset ok
+[04:17:00] eval 0000-tier2_jev_only: mean=275.0 stale=0.6336722488038278 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[04:17:00] eval 0001-tier2_astra_only: mean=60.0 stale=1.0 fatal=None errors=0 failed s1/s2=0/1 ended: game_done 6
+[04:17:00] eval 0002-tier2_idle: mean=60.0 stale=1.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[04:17:00] generation 1/3: proposing 3 candidate(s) with claude:gpt-6-astra
+[04:17:00] 0003: refine of 0000-tier2_jev_only
+[04:17:00] 0004: rewrite of 0002-tier2_idle
+[04:17:00] 0005: crossover of 0000-tier2_jev_only, 0002-tier2_idle
+[04:22:26] 0005: proposer failed: RuntimeError: claude -p failed (rc=1): API Error: Responses stream error: Upstream request failed (upstream_error)
+[05:12:52] preflight 0003: ok; warnings: no System-2 call was answered during the dry run
+[05:12:54] preflight 0004: ok
+[05:13:47] eval 0003: mean=141.66666666666666 stale=0.5431409062693979 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[05:13:47] eval 0004: mean=778.3333333333334 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[05:28:47] reflection failed: ModelTimeout: timeout: claude -p exceeded 900s (session fc7ef3a5-0d1d-4b86-877b-35ba3248b415)
+[05:28:47] generation 2/3: proposing 3 candidate(s) with claude:gpt-6-astra
+[05:28:47] 0006: rewrite of 0001-tier2_astra_only
+[05:28:47] 0007: crossover of 0004, 0003
+[05:28:47] 0008: explore of 0004
+[05:29:09] 0006: left without a harness by a stopped proposer; moved to 0006-1793338149
+[05:29:09] 0007: left without a harness by a stopped proposer; moved to 0007-1793338149
+[05:29:09] 0008: left without a harness by a stopped proposer; moved to 0008-1793338149
+[05:29:13] seed check: held-out / validation seeds start like a training seed (val:6, val:7, val:8, val:9, val:10, val:11, heldout:100, heldout:101, heldout:102, heldout:103, heldout:104, heldout:105, heldout:106, heldout:107); fine when the seed changes the episode later, which adaptor validation checks
+[05:29:13] seed check: 20 seed(s) reset ok
+[05:29:13] the archive already holds 3 proposal(s) = 1 generation(s) of 3; running 2 more to reach 3 (raise --iters for more)
+[05:29:13] generation 1 has no reflection yet; reflecting now
+[05:59:47] reflection after generation 1 recorded in lessons.md
+[05:59:47] generation 2/3: proposing 3 candidate(s) with claude:gpt-6-astra
+[05:59:47] 0006: rewrite of 0001-tier2_astra_only
+[05:59:47] 0007: crossover of 0004, 0003
+[05:59:47] 0008: explore of 0004
+[06:59:50] preflight 0006: FAILED — Traceback (most recent call last):   File "/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py", line 471, in _run     program.run_episode(view)   File "/home/hemlix/GamingMaster-mh-tier2/ru
+[07:00:08] preflight 0007: ok
+[07:00:10] preflight 0008: ok
+[07:14:51] preflight 0006: FAILED — Traceback (most recent call last):   File "/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py", line 471, in _run     program.run_episode(view)   File "/home/hemlix/GamingMaster-mh-tier2/ru
+[07:16:21] eval 0006: mean=0.0 stale=None fatal=None errors=6 failed s1/s2=0/0 ended: harness_error 6
+[07:16:21] eval 0007: mean=1028.3333333333333 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[07:16:21] eval 0008: mean=1608.3333333333333 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[07:47:39] reflection after generation 2 recorded in lessons.md
+[07:47:39] generation 3/3: proposing 3 candidate(s) with claude:gpt-6-astra
+[07:47:39] 0009: crossover of 0008, 0007
+[07:47:39] 0010: explore of 0008
+[07:47:39] 0011: refine of 0008
+[07:47:55] 0009: left without a harness by a stopped proposer; moved to 0009-1793346475
+[07:47:55] 0010: left without a harness by a stopped proposer; moved to 0010-1793346475
+[07:47:55] 0011: left without a harness by a stopped proposer; moved to 0011-1793346475
+[07:47:55] the archive already holds 6 proposal(s) = 2 generation(s) of 3; running 1 more to reach 3 (raise --iters for more)
+[07:47:55] generation 3/3: proposing 3 candidate(s) with claude:gpt-6-astra
+[07:47:55] 0009: crossover of 0008, 0007
+[07:47:55] 0010: explore of 0008
+[07:47:55] 0011: refine of 0008
+[08:47:56] preflight 0009: FAILED — Traceback (most recent call last):   File "/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py", line 471, in _run     program.run_episode(view)   File "/home/hemlix/GamingMaster-mh-tier2/ru
+[08:48:23] preflight 0010: ok
+[08:48:27] preflight 0011: ok
+[09:03:06] preflight 0009: ok after repair
+[09:04:38] eval 0009: mean=1725.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[09:04:38] eval 0010: mean=1861.6666666666667 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[09:04:38] eval 0011: mean=1785.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[09:08:40] the archive already holds 9 proposal(s) = 3 generation(s) of 3; running 5 more to reach 8 (raise --iters for more)
+[09:08:40] generation 3 has no reflection yet; reflecting now
+[09:24:14] reflection after generation 3 recorded in lessons.md
+[09:24:14] generation 4/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[09:24:14] 0012: explore of 0009
+[09:24:14] 0013: refine of 0010
+[09:24:14] 0014: rewrite of 0010
+[10:39:15] 0014: duplicate of 0010 (the same code); not evaluated
+[10:39:42] preflight 0012: ok
+[10:39:43] preflight 0013: ok
+[10:42:24] eval 0012: mean=2141.6666666666665 stale=0.0 fatal=None errors=0 failed s1/s2=0/2 ended: game_done 6
+[10:42:24] eval 0013: mean=1653.3333333333333 stale=0.0 fatal=None errors=0 failed s1/s2=2/2 ended: game_done 6
+[11:14:58] reflection after generation 4 recorded in lessons.md
+[11:14:59] generation 5/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[11:14:59] 0015: refine of 0012
+[11:14:59] 0016: rewrite of 0009
+[11:14:59] 0017: crossover of 0012, 0007
+[11:15:12] 0015: left without a harness by a stopped proposer; moved to 0015-1793358912
+[11:15:12] 0016: left without a harness by a stopped proposer; moved to 0016-1793358912
+[11:15:12] 0017: left without a harness by a stopped proposer; moved to 0017-1793358912
+[11:15:12] the archive already holds 12 proposal(s) = 4 generation(s) of 3; running 4 more to reach 8 (raise --iters for more)
+[11:15:12] generation 5/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[11:15:12] 0015: refine of 0012
+[11:15:12] 0016: rewrite of 0009
+[11:15:12] 0017: crossover of 0012, 0007
+[12:30:13] 0015: duplicate of 0012 (the same code); not evaluated
+[12:30:24] preflight 0017: ok
+[12:30:30] preflight 0016: ok; warnings: no System-2 call was answered during the dry run
+[12:30:37] eval 0016: mean=None stale=None fatal=model unavailable: Jev HTTP 402: {"detail":{"error_type":"billing_error","message":"Your organization has no available TypeSafe API credits. Please add more credits and/or set up auto-reload at https://console.typesafe.ai/settings/billing"}} errors=0 failed s1/s2=0/0 ended: –
+[12:30:37] eval 0017: mean=None stale=None fatal=model unavailable: Jev HTTP 402: {"detail":{"error_type":"billing_error","message":"Your organization has no available TypeSafe API credits. Please add more credits and/or set up auto-reload at https://console.typesafe.ai/settings/billing"}} errors=0 failed s1/s2=0/0 ended: –
+[12:30:38] search interrupted (model unavailable: Jev HTTP 402: {"detail":{"error_type":"billing_error","message":"Your organization has no available TypeSafe API credits. Please add more credits and/or set up auto-reload at https:); validation and held-out evaluation skipped — rerun the same search on /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-ms-pac-man/search to resume
+[14:58:13] preflight 0017: ok
+[14:58:19] preflight 0016: ok; warnings: no System-2 call was answered during the dry run
+[15:02:46] eval 0016: mean=4018.3333333333335 stale=0.00032847914157451 fatal=None errors=0 failed s1/s2=0/5 ended: game_done 6
+[15:02:46] eval 0017: mean=23.333333333333332 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[15:02:46] the archive already holds 15 proposal(s) = 5 generation(s) of 3; running 3 more to reach 8 (raise --iters for more)
+[15:02:46] generation 5 has no reflection yet; reflecting now
+[16:45:01] reflection after generation 5 did not finish; an automatic summary was recorded (ModelTimeout: timeout: claude -p exceeded 600s (session 25a4a0bc-a3f7-4165-90f9-557f7a20fb77))
+[16:45:01] generation 6/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[16:45:01] 0018: rewrite of 0013
+[16:45:01] 0019: crossover of 0016, 0013
+[16:45:01] 0020: explore of 0016
+[16:45:21] 0018: left without a harness by a stopped proposer; moved to 0018-1793378721
+[16:45:21] 0019: left without a harness by a stopped proposer; moved to 0019-1793378721
+[16:45:21] 0020: left without a harness by a stopped proposer; moved to 0020-1793378721
+[16:45:21] the archive already holds 15 proposal(s) = 5 generation(s) of 3; running 3 more to reach 8 (raise --iters for more)
+[16:45:21] generation 6/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[16:45:21] 0018: rewrite of 0013
+[16:45:21] 0019: crossover of 0016, 0013
+[16:45:21] 0020: explore of 0016
+[19:04:03] preflight 0018: ok; warnings: no System-2 call was answered during the dry run
+[19:04:03] preflight 0020: ok; warnings: no System-2 call was answered during the dry run
+[19:04:03] preflight 0019: ok; warnings: no System-2 call was answered during the dry run
+[19:08:59] eval 0018: mean=1556.6666666666667 stale=0.0 fatal=None errors=0 failed s1/s2=0/1 ended: game_done 6
+[19:08:59] eval 0019: mean=3870.0 stale=0.00017899761336515513 fatal=None errors=0 failed s1/s2=0/4 ended: game_done 6
+[19:08:59] eval 0020: mean=2355.0 stale=8.920606601248885e-05 fatal=None errors=0 failed s1/s2=0/1 ended: game_done 6
+[19:54:43] reflection after generation 6 recorded in lessons.md
+[19:54:43] generation 7/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[19:54:43] 0021: crossover of 0016, 0019
+[19:54:43] 0022: explore of 0019
+[19:54:43] 0023: refine of 0016
+[19:55:35] 0021: left without a harness by a stopped proposer; moved to 0021-1793390135
+[19:55:35] 0022: left without a harness by a stopped proposer; moved to 0022-1793390135
+[19:55:35] 0023: left without a harness by a stopped proposer; moved to 0023-1793390135
+[19:55:35] the archive already holds 18 proposal(s) = 6 generation(s) of 3; running 2 more to reach 8 (raise --iters for more)
+[19:55:35] generation 7/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[19:55:35] 0021: crossover of 0016, 0019
+[19:55:35] 0022: explore of 0019
+[19:55:35] 0023: refine of 0016
+[22:25:42] preflight 0023: ok; warnings: no System-2 call was answered during the dry run
+[22:25:47] preflight 0021: ok; warnings: no System-2 call was answered during the dry run
+[22:25:49] preflight 0022: ok; warnings: no System-2 call was answered during the dry run
+[22:30:12] eval 0021: mean=1143.3333333333333 stale=0.0 fatal=None errors=0 failed s1/s2=1/1 ended: game_done 6
+[22:30:12] eval 0022: mean=3865.0 stale=0.00012147716229348882 fatal=None errors=0 failed s1/s2=8/6 ended: game_done 6
+[22:30:12] eval 0023: mean=3945.0 stale=5.720169317011784e-05 fatal=None errors=0 failed s1/s2=9/4 ended: game_done 6
+[23:07:38] reflection after generation 7 recorded in lessons.md
+[23:07:38] no improvement in the last 2 generation(s) (best 0016, patience 2): the search stops after 7 of up to 8
+[23:07:38] validation of 3 finalist(s) on seeds {'Atari_2600_Ms._Pac-Man': [6, 7, 8, 9, 10, 11]}
+[23:12:11] eval 0016/validation: mean=3605.0 stale=0.0001947293262365312 fatal=None errors=0 failed s1/s2=0/4 ended: game_done 6
+[23:12:11] eval 0023/validation: mean=4366.666666666667 stale=0.00022925263640531865 fatal=None errors=0 failed s1/s2=0/4 ended: game_done 6
+[23:12:11] eval 0019/validation: mean=2998.3333333333335 stale=7.933989209774674e-05 fatal=None errors=0 failed s1/s2=0/5 ended: game_done 6
+[23:12:11] final pick: 0023 (train 3945.0, validation 4366.666666666667)
+[23:12:11] held-out seeds evaluation of 0023
+[23:17:55] eval 0023/heldout: mean=3638.75 stale=0.00014325279342947188 fatal=None errors=0 failed s1/s2=0/3 ended: game_done 8
+[23:17:55] ablation of 0023: training seeds without runtime System-1 / System-2
+[23:22:35] eval 0023/ablation-no-models: mean=3341.6666666666665 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6

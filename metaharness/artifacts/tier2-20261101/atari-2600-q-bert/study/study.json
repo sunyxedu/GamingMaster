@@ -1,0 +1,46 @@
+{
+  "game": "Q*bert (Atari 2600)",
+  "tier": 2,
+  "tier_rationale": "Q*bert is a real-time action game: the Atari 2600 advances about 60 frames per second, Q*bert and enemies move continuously, and later rounds accelerate both movement and enemy frequency. ALE/Qbert-v5 normally repeats an action for four frames (about 0.067 seconds), so a hazardous hop may punish a stale choice within roughly 0.10 seconds. Astra must plan asynchronously while Jev selects short-horizon actions and the adaptor keeps a small validated action queue.",
+  "decision_latency_s": 0.1,
+  "interface": {
+    "chosen": "emulator (ALE/ale-py with Gymnasium RAM observations)",
+    "why": "It is a maintained local headless Atari 2600 emulator with the supported Q*bert ROM, standard reset/step/seed semantics, 128-byte RAM observations, extracted reward and lives, and clone/restore state. It avoids X11, screenshots, accounts, servers, and GPU dependencies; native ALE remains available when lower-overhead frame control is needed.",
+    "software": [
+      "ale-py==0.12.1",
+      "gymnasium>=1.1.0,<2",
+      "numpy>1.20"
+    ],
+    "env": [
+      {
+        "var": "ALE_ROMS_DIR",
+        "description": "Optional directory containing a legal checksum-matching qbert.bin; leave unset to use the qbert.bin packaged in ale-py.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Install ale-py and Gymnasium with /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-q-bert/.venv/bin/python.",
+      "Register ale_py with Gymnasium and create ALE/Qbert-v5 using obs_type=ram, frameskip=4, repeat_action_probability=0.25, full_action_space=false, mode=0, difficulty=0, and render_mode=None.",
+      "Verify the packaged qbert ROM and MD5 484b0076816a104875e00467d431c2d2; do not substitute an arcade or unrelated Atari release.",
+      "Call reset(seed=seed), verify a uint8 observation of shape (128,), and retain lives, episode_frame_number, frame_number, terminated, and truncated.",
+      "Calibrate ALE actions 2, 3, 4, and 5 to the four board-diagonal edges from the top cube, then maintain a 21-node Atari-port board model and S/I/D cube phases.",
+      "Decode score/lives and object state from RAM/action traces, using rgb_array only for calibration or fallback; use clone_state(include_rng=true) and restore_state for offline search.",
+      "Use a short validated action queue so Jev latency never blocks emulation; run frameskip=1 and repeat_action_probability=0 only for deterministic decoder calibration, not as the default robust evaluation.",
+      "Reset after terminated or truncated and report cumulative score, lives, completed rounds, cube phases, and the termination reason."
+    ],
+    "observation": "A uint8[128] Atari 2600 RAM array plus Gymnasium info with lives, episode_frame_number, and frame_number; step also returns score-delta reward and terminated/truncated flags. ALE's Q*bert wrapper reads CPU-style $88 for lives and $DB,$DA,$D9 for BCD score, corresponding in the 128-byte view to indices 0x08 and 0x5B,0x5A,0x59. The adaptor must decode named Q*bert/cube/enemy objects itself; optional rgb_array is 210x160x3 for calibration, not the primary channel.",
+    "actions": "Discrete(6): 0=NOOP, 1=FIRE, 2=UP, 3=RIGHT, 4=LEFT, 5=DOWN. Use the four directional actions for hops, NOOP only for deliberate waits, and FIRE only for an intentional reset. Each Gymnasium action is repeated for frameskip frames and may be made sticky by repeat_action_probability; keep a short action macro and replan at hazards. Native ALEInterface.act, getRAM, getScreenRGB, lives, game_over, cloneState, and restoreState are the lower-level fallback."
+  },
+  "scoring": "Report cumulative ALE reward, which tracks the in-game score delta, and cross-check it against the decoded score. The manual awards 25 per cube changed to destination, 300 for Sam, 100 for Green Ball, 500 for luring Coily off, and 3,100 per completed round. Also report lives, completed rounds/levels, cube phases, and whether the episode terminated or was truncated because terminal-step reward is deliberately zero in ALE's Q*bert wrapper.",
+  "scenarios": "Use held-out seeds with the same Level 1 Round 1 start to vary ALE sticky-action realizations; Q*bert has no normal random opponent or board layout, so do not claim that seed changes the puzzle. Evaluate difficulty=0/novice and difficulty=1/expert separately, with expert adding Red Balls. For advanced scenarios, warm-start at later rounds/levels by replaying a recorded safe prefix or restoring a version-matched clone state, and test Level 3-5 reversible colour cycles, Coily/disc events, Sam, Green Ball, life loss, and the repeating Level 5. Keep deterministic no-sticky frameskip=1 calibration separate from the robust default scenario.",
+  "strategy_summary": "Maintain a 21-cube graph and exact per-level S/I/D colour phase, rather than treating each landing as permanent progress. Clear the top region early when safe, preserve at least two escape choices, and prioritize survival and round completion over optional bonuses. Use validated disc exits to lure Coily, intercept Sam or Green Ball only when safe, and shorten action queues as rounds accelerate. Astra plans coverage routes and adaptation; Jev answers typed local danger/next-move questions while code owns legality, bookkeeping, score, seeds, and stale-action rejection.",
+  "risks": [
+    "ALE exposes raw RAM rather than named object-level Q*bert state; a ROM-specific decoder or RGB calibration phase is required.",
+    "The bundled ROM is copyrighted game data even though ALE is GPL-2.0-only; do not redistribute or substitute unverified ROMs.",
+    "Q*bert is real time and a slow model can miss a hop; action buffering and stale-answer rejection are mandatory.",
+    "Default four-frame skipping and 25% sticky actions make exact replay nondeterministic unless seeds and RNG-inclusive clone states are used.",
+    "Arcade Q*bert, MAME, and the Atari 2600 port have different boards, enemies, controls, and scoring; mixing their strategies invalidates the adaptor.",
+    "Standalone Stella and screen/input fallbacks are GUI/debugger-oriented and can require Xvfb; they do not provide a ready symbolic game-state API.",
+    "No normal seed changes the initial Q*bert board, so held-out seed evaluation measures control robustness rather than randomized level generation."
+  ]
+}

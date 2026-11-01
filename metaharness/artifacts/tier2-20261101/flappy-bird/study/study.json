@@ -1,0 +1,43 @@
+{
+  "game": "Flappy Bird",
+  "tier": 2,
+  "tier_rationale": "Flappy Bird is a continuously advancing action game rather than a turn-based puzzle: gravity and pipe motion advance every simulation frame, and the reference environment advertises 30 render frames per second with pipes moving 4 pixels per frame. A flap impulse takes several frames to affect the bird's trajectory, so waiting seconds for Astra would consume the safe correction window. Jev should make fast typed flap/idle judgments while Astra tunes policies between episodes.",
+  "decision_latency_s": 0.15,
+  "interface": {
+    "chosen": "api",
+    "why": "flappy-bird-gymnasium is a local MIT-licensed Gymnasium environment with seeded reset, direct numerical state, discrete actions, score reporting, and no display, account, server, or network dependency. It is substantially more reliable on the stated offline headless Linux host than screen capture, browser automation, Android ADB, or the older Gym package.",
+    "software": [
+      "flappy-bird-gymnasium==0.4.0",
+      "gymnasium",
+      "numpy",
+      "pygame",
+      "matplotlib"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Use /home/hemlix/GamingMaster-mh-tier2/runs/flappy-bird/.venv/bin/python for installation and execution.",
+      "Run /home/hemlix/GamingMaster-mh-tier2/runs/flappy-bird/.venv/bin/python -m pip install flappy-bird-gymnasium.",
+      "Import flappy_bird_gymnasium before gymnasium.make so FlappyBird-v0 is registered.",
+      "Create gymnasium.make(\"FlappyBird-v0\", render_mode=None, use_lidar=False, normalize_obs=False, audio_on=False).",
+      "Call obs, info = env.reset(seed=seed) and use the Gymnasium five-value step result: obs, reward, terminated, truncated, info = env.step(action).",
+      "Convert the 12-value NumPy observation into named JSON fields and add local frame, previous-action, score, phase, and derived gap-margin bookkeeping for Jev.",
+      "Map Jev's validated FLAP or IDLE token to action 1 or 0, end on terminated or truncated, call env.close(), and report info[\"score\"].",
+      "If the package cannot install on the evaluator, fall back to a local symbolic implementation based on the cited MIT source rather than switching to an online GUI."
+    ],
+    "observation": "With use_lidar=False and normalize_obs=False, each observation is a 12-element NumPy float array: [last_pipe_x, last_pipe_top_y, last_pipe_bottom_y, next_pipe_x, next_pipe_top_y, next_pipe_bottom_y, next_next_pipe_x, next_next_pipe_top_y, next_next_pipe_bottom_y, bird_y, bird_vertical_velocity, bird_rotation]. Pipe records are ordered by x; top and bottom values are the open gap boundaries. step additionally returns reward, terminated, truncated, and info containing score. A wrapper should serialize these values as named JSON and compute active-gap center, horizontal phase, vertical margins, and prediction labels locally.",
+    "actions": "Discrete action 0 means do nothing for one simulation frame and action 1 means flap once. Submit one validated action per step; Jev selects the immediate action, while code handles arithmetic, target-pipe bookkeeping, timeout safety, collision/termination checks, and any short action hold. Do not inject keyboard events or wait for a display."
+  },
+  "scoring": "Report info[\"score\"] / the number of pipe pairs passed as the primary score because each successful pipe passage is the game's direct progress measure. Also log final score, maximum score, alive frames, shaped reward, flap count, termination cause, and seed for diagnostics; do not rank policies primarily by the environment's +0.1-per-frame survival shaping.",
+  "scenarios": "Implement reset(seed) by passing held-out integer seeds to the Gymnasium environment. The seeded RNG changes the vertical gap offset of the initial and subsequently recycled pipe pairs while keeping the default screen, physics, and pipe spacing fixed. Develop on one seed subset and evaluate on a disjoint seed subset; report score distributions rather than a single run. Optionally run explicit robustness scenarios with documented fixed variants of pipe_gap, screen_size, bird_color, or background, but do not alter them silently in the main benchmark.",
+  "strategy_summary": "Use the symbolic feature observation to select the first pipe still ahead of or overlapping the bird, compute its gap center and safe interior band, and predict a few frames of ballistic motion using the published gravity, flap impulse, and pipe speed. Flap early and sparsely when the projected bird trajectory is too low or descending toward the lower edge; otherwise idle, using a deadband and short cooldown to avoid panic tapping and ceiling collisions. Put geometry, arithmetic, rollout/search, score bookkeeping, and timeout fallbacks in code; use Jev for the fast typed FLAP/IDLE judgment and Astra for episode-level tuning of margin, horizon, cooldown, and recovery policy. Replan after each frame or short batch and advance the target immediately after a pipe crossing.",
+  "risks": [
+    "The installed environment is a community clone, not an official API for the original commercial game; its physics and default gap may differ from the original binary.",
+    "The package depends on Pygame even in no-render mode; a broken wheel or transitive dependency on Python 3.12 could block installation.",
+    "The package metadata/PyPI release is 0.4.0, while future package updates could change API, constants, or observation ordering; pin and verify the installed version.",
+    "Jev's roughly 0.5-second model latency is too slow for an unbuffered one-call-per-frame loop; use bounded short holds, parallel calls, and a code-side emergency fallback.",
+    "Astra must not block the live control loop; use it for calibration and episode summaries rather than frame-by-frame action.",
+    "Screen, browser, and Android alternatives require a display, pixels, extra software, or an authorized game copy and can introduce ToS/copyright issues; they are not needed for this offline evaluator.",
+    "Do not copy original Flappy Bird branding or proprietary assets into a distributed adaptor merely because the open-source environment code is MIT licensed.",
+    "A single lucky seed or optimization of shaped survival reward can produce a misleading result; use held-out seeded episodes and pipe score as the primary metric."
+  ]
+}

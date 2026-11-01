@@ -1,0 +1,1 @@
+# No third-party dependencies: game.py uses only Python's standard library.

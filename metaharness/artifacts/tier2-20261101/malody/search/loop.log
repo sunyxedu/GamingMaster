@@ -1,0 +1,31 @@
+[08:56:19] seed check: 16 seed(s) reset ok
+[08:56:27] eval 0000-tier2_jev_only: mean=0.16674616654057448 stale=0.7795957651588066 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[08:56:27] eval 0001-tier2_astra_only: mean=0.0 stale=1.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[08:56:27] eval 0002-tier2_idle: mean=0.0 stale=1.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[08:56:28] generation 1/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[08:56:28] 0003: refine of 0000-tier2_jev_only
+[08:56:28] 0004: rewrite of 0002-tier2_idle
+[08:56:28] 0005: crossover of 0000-tier2_jev_only, 0002-tier2_idle
+[08:57:08] 0003: left without a harness by a stopped proposer; moved to 0003-1793437028
+[08:57:08] 0004: left without a harness by a stopped proposer; moved to 0004-1793437028
+[08:57:08] 0005: left without a harness by a stopped proposer; moved to 0005-1793437028
+[08:57:08] generation 1/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[08:57:08] 0003: refine of 0000-tier2_jev_only
+[08:57:08] 0004: rewrite of 0002-tier2_idle
+[08:57:08] 0005: crossover of 0000-tier2_jev_only, 0002-tier2_idle
+[12:19:07] preflight 0005: ok; warnings: no System-2 call was answered during the dry run
+[12:19:07] preflight 0003: ok; warnings: no System-2 call was answered during the dry run
+[12:19:07] preflight 0004: ok; warnings: no System-2 call was answered during the dry run
+[12:19:15] eval 0003: mean=1.0 stale=0.02598652550529355 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[12:19:15] eval 0004: mean=1.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[12:19:15] eval 0005: mean=1.0 stale=0.025024061597690085 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[12:20:22] the archive already holds 3 proposal(s) = 1 generation(s) of 3; running 0 more to reach 1 (raise --iters for more)
+[12:20:23] validation of 3 finalist(s) on seeds {'Malody_Key_offline_native_.mc_emulator': [106, 107]}
+[12:20:29] eval 0004/validation: mean=1.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 2
+[12:20:29] eval 0005/validation: mean=1.0 stale=0.025477707006369428 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 2
+[12:20:29] eval 0003/validation: mean=1.0 stale=0.025477707006369428 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 2
+[12:20:29] final pick: 0004 (train 1.0, validation 1.0)
+[12:20:29] held-out seeds evaluation of 0004
+[12:20:38] eval 0004/heldout: mean=1.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 8
+[12:20:38] ablation of 0004: training seeds without runtime System-1 / System-2
+[12:20:47] eval 0004/ablation-no-models: mean=1.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6

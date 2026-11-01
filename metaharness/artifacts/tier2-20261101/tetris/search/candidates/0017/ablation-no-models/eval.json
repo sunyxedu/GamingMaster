@@ -1,0 +1,379 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/tetris/search/candidates/0017/harness.py",
+ "game": "Tetris (Guideline-compatible marathon)",
+ "fatal": null,
+ "mean_score": 61753.333333333336,
+ "stale_fraction": 0.0,
+ "n_episodes": 6,
+ "system1_calls": 0,
+ "system2_calls": 0,
+ "mean_steps": 899.5,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 6
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 0.0,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 70472.0,
+   "steps": 911,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 911,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 45.62977111712098,
+   "error": null,
+   "info": {
+    "score": 70472.0,
+    "ticks": 911,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 70472.0,
+     "line_clear_points": 58700.0,
+     "drop_points": 6572.0,
+     "combo_points": 5200.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 79.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 45.550000000000004,
+     "holes": 0.0,
+     "aggregate_height": 10.0,
+     "bumpiness": 4.0,
+     "top_out_height": 7.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1111,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1,
+   "score": 64082.0,
+   "steps": 906,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 906,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 45.414626847952604,
+   "error": null,
+   "info": {
+    "score": 64082.0,
+    "ticks": 906,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 64082.0,
+     "line_clear_points": 53800.0,
+     "drop_points": 6182.0,
+     "combo_points": 4100.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 78.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 45.300000000000004,
+     "holes": 0.0,
+     "aggregate_height": 20.0,
+     "bumpiness": 8.0,
+     "top_out_height": 9.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1105,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 2,
+   "score": 51690.0,
+   "steps": 880,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 880,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 44.071162881096825,
+   "error": null,
+   "info": {
+    "score": 51690.0,
+    "ticks": 880,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 51690.0,
+     "line_clear_points": 42600.0,
+     "drop_points": 6540.0,
+     "combo_points": 2550.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 72.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 44.0,
+     "holes": 1.0,
+     "aggregate_height": 81.0,
+     "bumpiness": 46.0,
+     "top_out_height": 13.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1080,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 3,
+   "score": 55770.0,
+   "steps": 901,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 901,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 45.05372661212459,
+   "error": null,
+   "info": {
+    "score": 55770.0,
+    "ticks": 901,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 55770.0,
+     "line_clear_points": 45300.0,
+     "drop_points": 6820.0,
+     "combo_points": 3650.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 78.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 45.050000000000004,
+     "holes": 1.0,
+     "aggregate_height": 21.0,
+     "bumpiness": 6.0,
+     "top_out_height": 5.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1101,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 4,
+   "score": 66512.0,
+   "steps": 894,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 894,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 44.755772214150056,
+   "error": null,
+   "info": {
+    "score": 66512.0,
+    "ticks": 894,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 66512.0,
+     "line_clear_points": 54300.0,
+     "drop_points": 6712.0,
+     "combo_points": 5500.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 79.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 44.7,
+     "holes": 0.0,
+     "aggregate_height": 10.0,
+     "bumpiness": 8.0,
+     "top_out_height": 8.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1093,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 5,
+   "score": 61994.0,
+   "steps": 905,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 905,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 45.25396973080933,
+   "error": null,
+   "info": {
+    "score": 61994.0,
+    "ticks": 905,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 61994.0,
+     "line_clear_points": 51400.0,
+     "drop_points": 6644.0,
+     "combo_points": 3950.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 77.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 45.25,
+     "holes": 2.0,
+     "aggregate_height": 32.0,
+     "bumpiness": 6.0,
+     "top_out_height": 8.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1103,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "expected_episodes": 6,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": null,
+   "system2": null
+  },
+  "harness_sha256": "ca8ca7ff1ccbb3b4ceb394b48a1840c36d2f1659b940573ee8cf6877af30ac36",
+  "game_kind": "realtime",
+  "resolved_models": {}
+ },
+ "score_std": 6945.669461374236
+}

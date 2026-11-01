@@ -1,0 +1,53 @@
+{
+  "game": "Atari 2600 Donkey Kong",
+  "tier": 2,
+  "tier_rationale": "The NTSC cartridge advances at roughly 60 frames per second: Mario moves, barrels/fireballs approach, jumps have finite hang time, and the 5,000-point bonus decrements while play continues. ALE's standard four-frame step is about 66.7 ms, so a fresh hazard decision should be refreshed within about 0.1 s and cannot wait for Astra's seconds-long call; Jev or a safe action policy must act while Astra plans.",
+  "decision_latency_s": 0.1,
+  "interface": {
+    "chosen": "official env (ALE/Stella through Gymnasium) + OCAtari RAM object decoder",
+    "why": "It is local and headless, has no account or server dependency, works on the evaluator's Python 3.12.3, supplies the exact bundled Atari 2600 ROM, raw 128-byte RAM, rewards, lives, terminal flags, seeding and state cloning, and OCAtari 2.2.1 adds named Player, DonkeyKong, Hammer, obstacle, ladder, Life and HUD objects. Keep raw RAM because OCAtari does not label rivets and currently calls rivet-screen obstacles Barrel; also guard its current swapped terminal return flags. This beats screenshots, generic arcade emulators, and Stable-Retro's lack of a ready Atari 2600 Donkey Kong integration. Sources: https://ale.farama.org/environments/donkey_kong/ and https://github.com/k4ntz/OC_Atari",
+    "software": [
+      "ale-py==0.12.1",
+      "gymnasium==1.4.0",
+      "ocatari==2.2.1"
+    ],
+    "env": [
+      {
+        "var": "ALE_ROMS_DIR",
+        "description": "Optional directory containing a legally obtained compatible Atari ROM; normally leave unset because ale-py bundles donkey_kong.bin.",
+        "required": false
+      },
+      {
+        "var": "SDL_VIDEODRIVER",
+        "description": "Optional dummy SDL driver if a future pygame path initializes SDL on the headless host; use dummy only when needed.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Install the listed packages with /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong/.venv/bin/pip.",
+      "Register ale_py with Gymnasium, then create ALE/DonkeyKong-v5 using obs_type=ram, frameskip=4, render_mode=None, and repeat_action_probability=0.0 for deterministic development.",
+      "Create OCAtari for the same environment with mode=ram, hud=true, obs_mode=obj, and no renderer; pass an empty create_buffer_stacks list if RGB stacks are unnecessary.",
+      "Validate that ale_py.roms.get_rom_path(\"donkey_kong\") exists and has the verified 4 KiB NTSC ROM MD5 36b20c427975760cb9cf4a47e41369e4 before play.",
+      "On reset(seed), retain the initial raw RAM and object list, then send action 1 (FIRE) once to leave the idle state; normalize OCAtari's terminal flag order or step its underlying Gymnasium object directly and call the OCAtari RAM detector before serializing objects.",
+      "Serialize objects to JSON primitives and augment them with raw RAM fields: stage index 16, Mario x/y indices 19/27, rivet bytes 31-34, lives index 35, bonus index 36, and obstacle positions indices 0-3 and 65-68.",
+      "Accumulate every ALE reward into score_total/episode_return, and separately report stage completions, current stage, bonus, rivets, lives, terminated and truncated.",
+      "Run acceptance traces with repeat_action_probability=0.0 for reproducibility, then a robustness evaluation at the documented v5 probability 0.25; do not require a display or account."
+    ],
+    "observation": "A JSON state should contain frame, stage (idle/ramp/rivet/transition/game_over), player x/y/dx/dy and visibility, up to four generic hazard objects with positions and velocities, ten fixed ladder objects with visibility, hammer presence/position, four raw rivet-row bytes or a derived remaining-rivets set, BCD bonus, cumulative score, lives, episode return, terminal flags, and optionally the 128 raw RAM bytes. OCAtari objects expose category, xywh, visibility/history and HUD values; its Barrel class is a generic obstacle slot on the rivet screen, so use stage to interpret it as a fireball/hazard.",
+    "actions": "Use ALE indices: 0 NOOP, 1 FIRE, 2 UP, 3 RIGHT, 4 LEFT, 5 DOWN, 6 UPRIGHT, 7 UPLEFT, 8 DOWNRIGHT, 9 DOWNLEFT, 10 UPFIRE, 11 RIGHTFIRE, 12 LEFTFIRE, 13 DOWNFIRE, 14 UPRIGHTFIRE, 15 UPLEFTFIRE, 16 DOWNRIGHTFIRE, 17 DOWNLEFTFIRE. FIRE starts the idle game and jumps during play; UP/DOWN climb only when aligned with a usable ladder; direction-plus-FIRE makes a directional jump. The actor must continue issuing actions every one or two four-frame steps while Astra thinks."
+  },
+  "scoring": "Report cumulative unclipped ALE reward as the primary score because it matches the cartridge's points and screen-completion bonus. Also report screens completed, current bonus, rivets removed, lives remaining, and episode termination; the displayed bonus byte is not the complete accumulated score. The manual awards 5,000 starting bonus per screen, 100 for jumping a barrel/fireball, 100 per rivet, and 800 for a hammer smash: https://atariage.com/manual_html_page.php?SoftwareLabelID=149",
+  "scenarios": "Every normal reset starts the same Atari 2600 cartridge opening; there are no selectable opponents or arcade levels, and Donkey Kong exposes only mode 0 and difficulty 0. Reset(seed) seeds ALE/Gymnasium randomness but with fixed frameskip and repeat_action_probability=0.0 the same ROM/action trace may be identical across seeds, so do not claim seed-dependent level variation. Calibrate deterministically, then evaluate unseen seeds with the standard-v5 sticky-action probability 0.25 so the RNG can change which action is applied; use full episodes rather than memorized traces. Since reset cannot start directly on the rivet screen, use optional local cloneState/restoreState fixtures to test ramp, rivet, gap and transition logic without changing the main evaluation metric.",
+  "strategy_summary": "Start with one FIRE, then climb the fixed ramp/ladder topology while prioritizing survival and retaining the screen bonus. Track current walkway, target ladder, four obstacle slots, relative closing motion and jump cooldown in code; jump early toward a safe landing side and never walk through a cleared rivet gap. On the rivet screen, clear rows in a bottom-to-top serpentine route, reverse direction each row, and use raw rivet bytes to choose targets. Use the hammer only when it is on-route or an almost-free safe smash is available because it expires and blocks climbing. Astra chooses macro routes and risk tradeoffs, while Jev selects the immediate typed action/escape judgment as the emulator continues to tick.",
+  "risks": [
+    "The cartridge ROM is copyrighted; do not redistribute a ROM dump, and verify that any external ROM is legally obtained and matches the expected image.",
+    "OCAtari 2.2.1 is a research wrapper and its step method currently swaps terminated and truncated; normalize it or use the underlying Gymnasium step.",
+    "OCAtari does not expose explicit rivet objects and labels generic rivet-screen obstacles as Barrel; retain and decode raw RAM.",
+    "Stable-Retro has a Stella Atari 2600 core but no ready DonkeyKong-Atari2600 integration, so adopting it would require a custom ROM/game definition.",
+    "Standalone Stella and libretro provide strong emulation/debugging but lack the chosen stack's ready Python symbolic adapter; GUI/debugger or frontend work may be required.",
+    "A slow Astra call can exceed several hazard movement intervals; the harness must keep Jev/default action control running asynchronously.",
+    "The default v5 sticky-action probability is 0.25 and can make a policy tuned only on deterministic traces brittle.",
+    "Generic arcade Donkey Kong guides, MAME, and later-board strategies describe a different game and can produce invalid routes or objectives.",
+    "A future ALE/OCAtari version may change bundled ROM packaging, object slot order, RAM decoder behavior, or Gymnasium terminal semantics; retain version/MD5 acceptance tests."
+  ]
+}

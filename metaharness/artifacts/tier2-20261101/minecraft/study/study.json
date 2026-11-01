@@ -1,0 +1,100 @@
+{
+  "game": "Minecraft: Java Edition",
+  "tier": 2,
+  "tier_rationale": "A dedicated Java Survival server continues simulating at about 20 ticks per second while the agent reasons: mobs move and attack, hunger, fire, lava, falling, projectiles, and mining timers continue, and the player can die without a prompt. Ordinary navigation can tolerate seconds at a safe checkpoint, but a creeper, fall, lava flow, or combat opening can punish a delay of roughly half a second. Astra should plan macro phases while Jev supplies fast typed hazard and combat choices, with code enforcing emergency stops and safety invariants.",
+  "decision_latency_s": 0.5,
+  "interface": {
+    "chosen": "bot library",
+    "why": "A standalone Node.js Mineflayer client is the most practical headless interface: it supplies structured entities, blocks, inventory, health, time, chat, and event state plus direct movement, look, dig, place, inventory, use, and attack actions. It needs no display, GPU, Microsoft account, or client mod on the recommended private offline server. mineflayer-pathfinder adds navigation and mineflayer-pvp can provide a bounded combat primitive; raw minecraft-protocol, RCON, a server plugin, and a renderer remain useful fallbacks or administrative tools. Sources: https://github.com/PrismarineJS/mineflayer, https://github.com/PrismarineJS/mineflayer-pathfinder, https://github.com/PrismarineJS/mineflayer-pvp",
+    "software": [
+      "Java 21",
+      "Mojang Minecraft Java server JAR with one exact Java-21-compatible version pinned",
+      "Node.js 24 and npm",
+      "mineflayer",
+      "mineflayer-pathfinder",
+      "mineflayer-pvp",
+      "minecraft-protocol",
+      "prismarine-viewer (optional debugging only)",
+      "mctools or rconx in /home/hemlix/GamingMaster-mh-tier2/runs/minecraft/.venv/bin/python (optional reset/status control)"
+    ],
+    "env": [
+      {
+        "var": "MC_HOST",
+        "description": "Private Java server DNS name or IP address; use the local loopback address for a same-machine server.",
+        "required": true
+      },
+      {
+        "var": "MC_PORT",
+        "description": "The Java gameplay TCP port configured for the pinned server.",
+        "required": true
+      },
+      {
+        "var": "MC_USERNAME",
+        "description": "A unique bot username accepted by the private offline-mode server; this is not a Microsoft account credential.",
+        "required": true
+      },
+      {
+        "var": "MC_VERSION",
+        "description": "The exact Minecraft Java game/protocol version matching the server JAR, never a floating latest value.",
+        "required": true
+      },
+      {
+        "var": "MC_AUTH",
+        "description": "The Mineflayer authentication mode for this private offline-mode server; configure the offline mode and do not provide Microsoft tokens.",
+        "required": true
+      },
+      {
+        "var": "MC_RCON_HOST",
+        "description": "Loopback or protected private RCON host used only by reset/measurement code, if RCON is enabled.",
+        "required": false
+      },
+      {
+        "var": "MC_RCON_PORT",
+        "description": "The RCON TCP port configured in server.properties, if the reset harness uses RCON.",
+        "required": false
+      },
+      {
+        "var": "MC_RCON_PASSWORD",
+        "description": "A user-provided RCON password; keep it out of files and logs and require it only when RCON is enabled.",
+        "required": false
+      },
+      {
+        "var": "MC_WORLD_DIR",
+        "description": "An isolated world directory used by the reset controller when it creates a fresh world per seed.",
+        "required": false
+      },
+      {
+        "var": "MC_SERVER_JAR",
+        "description": "Local path to the pinned server JAR when the reset controller starts the server process.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Download one exact Mojang Java server JAR compatible with Java 21, create an isolated server directory, run it once with --nogui, and accept the EULA in that server directory.",
+      "Configure a private Survival server with online-mode=false, an explicit normal or selected difficulty, gamemode=survival, hardcore=false, allow-nether=true, generate-structures=true, a local/blank server-ip, and explicitly recorded gamerules; keep gameplay and RCON ports loopback/firewall protected.",
+      "Install and lock mineflayer, mineflayer-pathfinder, mineflayer-pvp, and minecraft-protocol in a clean Node adapter directory; pin the npm lockfile and smoke-test the exact MC_VERSION.",
+      "Start Mineflayer with MC_HOST, MC_PORT, MC_USERNAME, MC_VERSION, and offline authentication; wait for spawn, subscribe to health/move/block/entity/chat/window/dig/death/kick/error events, and normalize state to deterministic JSON.",
+      "Load Pathfinder with conservative movement and hazard settings and optionally load PVP only after Pathfinder; keep a safety arbiter above both libraries that can cancel movement and reject unsafe targets.",
+      "Expose a JSON Lines or localhost TCP bridge from the Node bot process to the Python harness: compact state snapshots at about 5-10 Hz, event messages, and validated action requests with IDs, deadlines, results, and failure reasons.",
+      "Implement reset outside scored play by stopping the bot and server, selecting a fresh isolated world/seed, restarting the pinned server, verifying gamerules and spawn, then reconnecting the offline bot; use RCON or process stdin only for this administrative lifecycle.",
+      "Use the supplied evaluator venv for any Python RCON/status dependency, calibrate local RTT and server TPS/MSPT, and test login, movement stop, block interaction, inventory, death/reconnect, version mismatch, and clean shutdown before evaluation."
+    ],
+    "observation": "The adaptor should emit JSON containing episode and snapshot IDs, server tick estimate, dimension, position/velocity/yaw/pitch/on-ground, health/max health, food/saturation/oxygen/effects/fire, respawn knowledge, selected slot/held item/armor/offhand, full inventory and open window, nearby entities with type/position/health/hostility/visibility, bounded nearby block and fluid/light observations plus block diffs, time/weather, chat, path/action status, damage/death/spawn events, and code-computed milestone/resource facts. Mineflayer provides bot.entity, health, food, foodSaturation, oxygenLevel, inventory, heldItem, quickBarSlot, entities, players, blockAt, findBlock(s), blockAtCursor, nearestEntity, time, and event streams; see https://github.com/PrismarineJS/mineflayer/blob/master/docs/api.md.",
+    "actions": "Expose validated semantic JSON actions with IDs and deadlines: hold/release movement controls, look, safe navigate to a goal, dig, place, activate block/entity, use item, attack, equip, select hotbar slot, craft, smelt/trade/window operations, inventory moves, and ordinary chat. The arbiter must clear controls on timeout/death/kick, reject stale or lethal actions, verify reach/line-of-sight/held item/inventory, cancel paths on hazards or block/entity changes, and record action results. Do not expose RCON, operator commands, teleport, give, gamemode, or gamerule mutation to the game-playing model; see https://github.com/PrismarineJS/mineflayer/blob/master/docs/api.md and https://github.com/PrismarineJS/mineflayer-pathfinder."
+  },
+  "scoring": "For the default dragon scenario, report raw terminal facts and use the Java Free the End advancement or verified dragon-death event as primary success. Rank unsuccessful episodes by deterministic milestone progress: safe opening/bed, iron and shield, Nether portal, fortress/blaze rods, pearls/eyes, stronghold, active End portal, End entry, crystals/dragon damage, and dragon kill; also report elapsed ticks, deaths, inventory loss, damage, and resource state. A transparent optional weighted score is 10% opening, 10% iron/shield, 20% Nether/fortress, 20% eyes/stronghold/portal, 10% End entry, and 30% dragon kill, with raw flags and deaths retained. Do not award commands, creative mode, teleport, item generation, keepInventory assistance, or operator intervention. Sources: https://minecraft.wiki/w/Survival, https://minecraft.wiki/w/Advancement, https://minecraft.wiki/w/Tutorial:Advancement_guide/The_End_tab",
+  "scenarios": "reset(seed) should create an isolated fresh world with the pinned version, explicit difficulty/gamerules, survival mode, and no gameplay assistance, then return a known ordinary-player spawn. Held-out seeds should vary spawn biome, wood/food proximity, villages, exposed lava and ruined portals, terrain and cave access, structure distances, Nether fortress/bastion layout, and stronghold location; include easy calibration seeds but evaluate on unseen random seeds. Specialized scenarios can replace the dragon terminal predicate with a named advancement, structure, resource, or build check while varying target site and time/weather/opponent conditions. Record the seed and configuration for reproducibility without leaking held-out seeds to the planner if that is part of the benchmark.",
+  "strategy_summary": "Strong play is milestone-driven and risk-adjusted: secure logs, food, a bed/shelter, shield, iron, blocks, and a return route before taking the Nether. Use a fortress-first route by default, with a bastion/barter speedrun branch only when the state supports its risk; track portal and dimension coordinates and compute Eye of Ender triangulation in code. Prepare an explicit inventory and escape checklist before the End, destroy healing crystals, avoid the void/endermen, and attack the dragon only during safe windows. Code owns recipes, counts, geometry, path safety, cooldowns, inventory, and scoring; Astra chooses macro routes and adapts; Jev recognizes immediate threats and selects a typed tactical response. The prior and detailed placement rules are in strategies.md, with factual references to https://minecraft.wiki/w/Survival, https://minecraft.wiki/w/Tutorial:Speedrun, https://minecraft.wiki/w/Piglin, https://minecraft.wiki/w/Eye_of_Ender, and https://minecraft.wiki/w/Tutorial:Defeating_the_ender_dragon.",
+  "risks": [
+    "Minecraft has no official bot API or universal numeric score; the evaluator must define and enforce the objective and milestone contract.",
+    "The server continues ticking at about 20 TPS while Astra reasons, so combat, falling, lava, fire, hunger, and projectiles require a fast Jev/code loop.",
+    "Mineflayer and plugins are version-sensitive; pin the exact server version and npm lockfile and run a smoke test before scoring.",
+    "Offline authentication is not identity security: arbitrary clients can claim usernames. Keep the server and RCON on loopback/private firewall and do not expose them publicly.",
+    "RCON is unencrypted and administrative; a leaked password or gameplay access would invalidate the run. Use it only for reset/measurement and never expose it to the model.",
+    "Public-server automation may violate server rules, anti-cheat policy, Mojang usage guidance, or terms; use an authorized private server only.",
+    "Pathfinding is not hazard proof and can become stale after block/entity updates; the safety arbiter must interrupt and replan.",
+    "A full Paper/Fabric telemetry mod, Baritone client, or screen-injection fallback adds version, display, software-rendering, and maintenance risk.",
+    "Death normally drops inventory and experience, with item despawn behavior and a costly recovery trip; reset scenarios must state whether keepInventory is disabled.",
+    "Server lag lowers effective tick rate and can alter action timing; measure TPS/MSPT and include snapshot freshness in every decision."
+  ]
+}

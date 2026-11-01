@@ -1,0 +1,124 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      ],
+      [
+        "val",
+        [
+          6,
+          7
+        ]
+      ],
+      [
+        "heldout",
+        [
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107
+        ]
+      ]
+    ],
+    "game_kwargs": {
+      "rows": 12,
+      "cols": 12,
+      "tick_s": 0.1,
+      "max_ticks": 4000
+    },
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "eb6eeca6ee7ce6184408a35780042199d871e9860c2789f2e8e9f9ece5526047"
+  },
+  "results": {
+    "train:0": {
+      "ok": true,
+      "obs_sha256": "3caa3356789f7ceb",
+      "episode_sha256": "523cc63ae5b2196b"
+    },
+    "train:1": {
+      "ok": true,
+      "obs_sha256": "f2ce04e891043d27",
+      "episode_sha256": "00e2b77834865ca6"
+    },
+    "train:2": {
+      "ok": true,
+      "obs_sha256": "1fe52ba709b8d84f",
+      "episode_sha256": "f4d98ad731d98c28"
+    },
+    "train:3": {
+      "ok": true,
+      "obs_sha256": "d80663f9a3afafb8",
+      "episode_sha256": "1d85c0bae0703cdd"
+    },
+    "train:4": {
+      "ok": true,
+      "obs_sha256": "f6eb986297bfa95c",
+      "episode_sha256": "4abdc50c2a9d771e"
+    },
+    "train:5": {
+      "ok": true,
+      "obs_sha256": "5e885cf5d82f0284",
+      "episode_sha256": "41f3438094cc89ca"
+    },
+    "val:6": {
+      "ok": true,
+      "obs_sha256": "0549dd37cdac31b0",
+      "episode_sha256": "8dcb0b712f109507"
+    },
+    "val:7": {
+      "ok": true,
+      "obs_sha256": "244443e32d5cc85c",
+      "episode_sha256": "031531817e113ca3"
+    },
+    "heldout:101": {
+      "ok": true,
+      "obs_sha256": "433428e49f09a60e",
+      "episode_sha256": "c2dc22901bb42f2b"
+    },
+    "heldout:102": {
+      "ok": true,
+      "obs_sha256": "ea4c79a4a77502cf",
+      "episode_sha256": "9badf42c26581b0a"
+    },
+    "heldout:103": {
+      "ok": true,
+      "obs_sha256": "f051c58421254623",
+      "episode_sha256": "d002890f928317ac"
+    },
+    "heldout:104": {
+      "ok": true,
+      "obs_sha256": "1d53f68ddb58c02e",
+      "episode_sha256": "ae2b054a711b55f0"
+    },
+    "heldout:105": {
+      "ok": true,
+      "obs_sha256": "3b411230d1d9c7f5",
+      "episode_sha256": "25b2e92dc71c63cf"
+    },
+    "heldout:106": {
+      "ok": true,
+      "obs_sha256": "873bd7fc002b0176",
+      "episode_sha256": "de4478b0197200a1"
+    },
+    "heldout:107": {
+      "ok": true,
+      "obs_sha256": "10e80d32a8b87e18",
+      "episode_sha256": "7f325575d66fdab3"
+    }
+  },
+  "refused": [],
+  "warnings": []
+}

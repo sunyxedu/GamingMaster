@@ -1,0 +1,22 @@
+{
+  "ok": false,
+  "stage": "episode",
+  "repairable": true,
+  "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0007/harness.py\", line 1024, in run_episode\n    Kitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0007/harness.py\", line 986, in run\n    jobs = self._jobs(obs)\n           ^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0007/harness.py\", line 497, in _jobs\n    \"dish_cook_%d_%d\" % (x, y), \"fetch_dish\", (x, y),\n    ~~~~~~~~~~~~~~~~~~^~~~~~~~\nTypeError: %d format: a real number is required, not str\n",
+  "ended_by": "harness_error",
+  "score": 0.0,
+  "steps": 22,
+  "system1_calls": 9,
+  "system2_calls": 1,
+  "coverage": {
+    "system2_answers": 1,
+    "system1_answers": 9,
+    "failed_calls": 0,
+    "acts": 22,
+    "acts_after_s1": 8,
+    "acts_after_s2": 1,
+    "steps": 22,
+    "harness_events": 0
+  },
+  "warnings": []
+}

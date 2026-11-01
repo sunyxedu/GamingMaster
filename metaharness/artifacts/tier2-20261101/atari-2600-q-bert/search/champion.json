@@ -1,0 +1,56 @@
+{
+  "candidate": "0016",
+  "train": 21808.333333333332,
+  "val": 23125.0,
+  "combined": 1.0,
+  "seeds_val": {
+    "Atari_2600_Q_bert": [
+      6,
+      7
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0016",
+      "rank": 0,
+      "status": "ok",
+      "train": 21808.333333333332,
+      "val": 23125.0,
+      "per_game": {
+        "Atari 2600 Q*bert": 22137.5
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0015",
+      "rank": 1,
+      "status": "ok",
+      "train": 21391.666666666668,
+      "val": 22662.5,
+      "per_game": {
+        "Atari 2600 Q*bert": 21709.375
+      },
+      "norm": [
+        0.6432291666666666
+      ],
+      "combined": 0.6432291666666666
+    },
+    {
+      "candidate": "0019",
+      "rank": 2,
+      "status": "ok",
+      "train": 20825.0,
+      "val": 21275.0,
+      "per_game": {
+        "Atari 2600 Q*bert": 20937.5
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

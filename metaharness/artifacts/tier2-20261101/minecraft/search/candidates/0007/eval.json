@@ -1,0 +1,296 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/minecraft/search/candidates/0007/harness.py",
+ "game": "Minecraft Java 1.21.1 \u2014 Survival to Free the End",
+ "fatal": null,
+ "mean_score": 1.0,
+ "stale_fraction": 0.0,
+ "n_episodes": 3,
+ "system1_calls": 1004,
+ "system2_calls": 12,
+ "mean_steps": 1799.0,
+ "failed_s1": 0,
+ "failed_s2": 1,
+ "timeouts_s1": 0,
+ "timeouts_s2": 1,
+ "ended_by": {
+  "deadline": 3
+ },
+ "s1_informed_fraction": 0.18574074074074073,
+ "s2_informed_fraction": 0.002037037037037037,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 3.0,
+   "steps": 1799,
+   "system1_calls": 37,
+   "system2_calls": 4,
+   "stale_ticks": 0,
+   "decided_ticks": 1799,
+   "latency_s1": {
+    "n": 37,
+    "mean": 0.175831498326482,
+    "p50": 0.17086577415466309,
+    "p90": 0.20587491989135742,
+    "max": 0.23766374588012695
+   },
+   "latency_s2": {
+    "n": 4,
+    "mean": 15.025153160095215,
+    "p50": 15.43445611000061,
+    "p90": 20.106247186660767,
+    "max": 20.106247186660767
+   },
+   "wall_s": 900.0049225930125,
+   "error": null,
+   "info": {
+    "score": 3.0,
+    "ticks": 1799,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "opening": 3.0,
+     "iron_shield": 0.0,
+     "nether_fortress": 0.0,
+     "eyes_stronghold_portal": 0.0,
+     "end_entry": 0.0,
+     "dragon_kill": 0.0
+    }
+   },
+   "acts": 1800,
+   "acts_after_s1": 37,
+   "acts_after_s2": 4,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     20.106,
+     52
+    ],
+    [
+     15.434,
+     135
+    ],
+    [
+     13.619,
+     47
+    ],
+    [
+     10.941,
+     46
+    ]
+   ]
+  },
+  {
+   "seed": 1,
+   "score": 0.0,
+   "steps": 1799,
+   "system1_calls": 548,
+   "system2_calls": 4,
+   "stale_ticks": 0,
+   "decided_ticks": 1799,
+   "latency_s1": {
+    "n": 548,
+    "mean": 0.1786705381678839,
+    "p50": 0.16820406913757324,
+    "p90": 0.19678497314453125,
+    "max": 2.5717849731445312
+   },
+   "latency_s2": {
+    "n": 4,
+    "mean": 58.70346283912659,
+    "p50": 65.69557476043701,
+    "p90": 112.02757382392883,
+    "max": 112.02757382392883
+   },
+   "wall_s": 900.0085708841216,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 1799,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "opening": 0.0,
+     "iron_shield": 0.0,
+     "nether_fortress": 0.0,
+     "eyes_stronghold_portal": 0.0,
+     "end_entry": 0.0,
+     "dragon_kill": 0.0
+    }
+   },
+   "acts": 1800,
+   "acts_after_s1": 548,
+   "acts_after_s2": 4,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     21.526,
+     12
+    ],
+    [
+     65.696,
+     144
+    ],
+    [
+     112.028,
+     75
+    ],
+    [
+     35.565,
+     41
+    ]
+   ]
+  },
+  {
+   "seed": 2,
+   "score": 0.0,
+   "steps": 1799,
+   "system1_calls": 419,
+   "system2_calls": 4,
+   "stale_ticks": 0,
+   "decided_ticks": 1799,
+   "latency_s1": {
+    "n": 419,
+    "mean": 0.176777116438654,
+    "p50": 0.1685163974761963,
+    "p90": 0.1930100917816162,
+    "max": 2.1872973442077637
+   },
+   "latency_s2": {
+    "n": 3,
+    "mean": 42.924031575520836,
+    "p50": 48.17747664451599,
+    "p90": 50.03147077560425,
+    "max": 50.03147077560425
+   },
+   "wall_s": 900.0093118159566,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 1799,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "opening": 0.0,
+     "iron_shield": 0.0,
+     "nether_fortress": 0.0,
+     "eyes_stronghold_portal": 0.0,
+     "end_entry": 0.0,
+     "dragon_kill": 0.0
+    }
+   },
+   "acts": 1800,
+   "acts_after_s1": 418,
+   "acts_after_s2": 3,
+   "failed_s1": 0,
+   "failed_s2": 1,
+   "timeouts_s1": 0,
+   "timeouts_s2": 1,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     30.563,
+     53
+    ],
+    [
+     50.031,
+     9
+    ],
+    [
+     48.177,
+     33
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0,
+   1,
+   2
+  ],
+  "expected_episodes": 3,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "06bd674d26d3c00c09b461084f8f663d033670029fdd2b6e24bf425b97adeed0",
+  "game_kind": "realtime",
+  "resolved_models": {
+   "system1": [
+    "jev:jev-1.14.0"
+   ],
+   "system2": [
+    "claude:gpt-6-astra"
+   ]
+  }
+ },
+ "score_std": 1.7320508075688772
+}

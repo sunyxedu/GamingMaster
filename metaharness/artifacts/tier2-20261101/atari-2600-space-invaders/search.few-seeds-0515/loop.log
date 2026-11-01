@@ -1,0 +1,9 @@
+[05:10:58] seed check: held-out / validation seeds start exactly like a training seed: val:3, heldout:100, heldout:101
+[05:10:58] seed check: 6 seed(s) reset ok
+[05:11:45] eval 0000-tier2_jev_only: mean=108.33333333333333 stale=0.5736994219653179 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 3
+[05:11:45] eval 0001-tier2_astra_only: mean=86.66666666666667 stale=0.998991935483871 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 3
+[05:11:45] eval 0002-tier2_idle: mean=0.0 stale=1.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 3
+[05:11:45] generation 1/3: proposing 3 candidate(s) with claude:gpt-6-astra
+[05:11:45] 0003: refine of 0000-tier2_jev_only
+[05:11:45] 0004: rewrite of 0001-tier2_astra_only
+[05:11:45] 0005: crossover of 0000-tier2_jev_only, 0001-tier2_astra_only

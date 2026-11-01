@@ -1,0 +1,2 @@
+# No third-party packages are required.
+# The evaluator's metaharness package and Python 3.12 standard library are sufficient.

@@ -1,0 +1,31 @@
+[18:23:30] seed check: 32 seed(s) reset ok
+[18:23:40] eval 0000-tier2_jev_only: mean=7564.804333652056 stale=0.8985038414880712 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 12
+[18:23:40] eval 0001-tier2_astra_only: mean=0.0 stale=1.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 12
+[18:23:40] eval 0002-tier2_idle: mean=0.0 stale=1.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 12
+[18:23:40] generation 1/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[18:23:40] 0003: refine of 0000-tier2_jev_only
+[18:23:40] 0004: rewrite of 0002-tier2_idle
+[18:23:40] 0005: crossover of 0000-tier2_jev_only, 0002-tier2_idle
+[18:24:35] 0003: left without a harness by a stopped proposer; moved to 0003-1793471075
+[18:24:35] 0004: left without a harness by a stopped proposer; moved to 0004-1793471075
+[18:24:35] 0005: left without a harness by a stopped proposer; moved to 0005-1793471075
+[18:24:35] generation 1/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[18:24:35] 0003: refine of 0000-tier2_jev_only
+[18:24:35] 0004: rewrite of 0002-tier2_idle
+[18:24:35] 0005: crossover of 0000-tier2_jev_only, 0002-tier2_idle
+[20:25:28] preflight 0003: ok; warnings: no System-2 call was answered during the dry run
+[20:25:28] preflight 0004: ok; warnings: no System-1 call was answered during the dry run (the stand-in answers every question) | no System-2 call was answered during the dry run
+[20:25:28] preflight 0005: ok; warnings: no System-2 call was answered during the dry run
+[20:25:56] eval 0003: mean=889547.0820464854 stale=0.928695868591339 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 12
+[20:25:56] eval 0004: mean=1000000.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 12
+[20:25:56] eval 0005: mean=1000000.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 12
+[20:26:44] the archive already holds 3 proposal(s) = 1 generation(s) of 3; running 0 more to reach 1 (raise --iters for more)
+[20:26:44] validation of 3 finalist(s) on seeds {'Quaver_Keys_local_.qua_simulator': [1013, 1014, 1015, 1016]}
+[20:27:05] eval 0004/validation: mean=1000000.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[20:27:05] eval 0005/validation: mean=1000000.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[20:27:05] eval 0003/validation: mean=770685.133343196 stale=0.9358398038414385 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 4
+[20:27:05] final pick: 0004 (train 1000000.0, validation 1000000.0)
+[20:27:05] held-out seeds evaluation of 0004
+[20:27:23] eval 0004/heldout: mean=1000000.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 16
+[20:27:23] ablation of 0004: training seeds with every runtime model call failing
+[20:27:41] eval 0004/ablation-no-models: mean=1000000.0 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 12

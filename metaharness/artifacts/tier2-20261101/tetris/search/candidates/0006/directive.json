@@ -1,0 +1,10 @@
+{
+  "mode": "rewrite",
+  "parents": [
+    2
+  ],
+  "parent_dirs": [
+    "0002-tier2_idle"
+  ],
+  "generation": 1
+}

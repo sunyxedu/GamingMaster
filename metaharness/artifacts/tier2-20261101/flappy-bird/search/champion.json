@@ -1,0 +1,56 @@
+{
+  "candidate": "0006",
+  "train": 716.0,
+  "val": 716.0,
+  "combined": 0.0,
+  "seeds_val": {
+    "Flappy_Bird_flappy-bird-gymnasium": [
+      6,
+      7
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0006",
+      "rank": 0,
+      "status": "ok",
+      "train": 716.0,
+      "val": 716.0,
+      "per_game": {
+        "Flappy Bird (flappy-bird-gymnasium)": 716.0
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    },
+    {
+      "candidate": "0008",
+      "rank": 1,
+      "status": "ok",
+      "train": 716.0,
+      "val": 716.0,
+      "per_game": {
+        "Flappy Bird (flappy-bird-gymnasium)": 716.0
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    },
+    {
+      "candidate": "0005",
+      "rank": 2,
+      "status": "ok",
+      "train": 716.0,
+      "val": 716.0,
+      "per_game": {
+        "Flappy Bird (flappy-bird-gymnasium)": 716.0
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

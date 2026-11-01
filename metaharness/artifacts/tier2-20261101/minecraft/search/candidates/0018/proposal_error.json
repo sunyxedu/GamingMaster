@@ -1,0 +1,6 @@
+{
+  "error": "timeout: claude -p exceeded 3600s (session d26b4975-39c2-48c5-a8ec-109813c26b52)",
+  "type": "ModelTimeout",
+  "status": "timed_out",
+  "session_id": "d26b4975-39c2-48c5-a8ec-109813c26b52"
+}

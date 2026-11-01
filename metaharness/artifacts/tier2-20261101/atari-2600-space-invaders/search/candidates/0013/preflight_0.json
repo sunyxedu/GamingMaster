@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "stage": "episode",
+  "repairable": true,
+  "error": "",
+  "ended_by": "deadline",
+  "score": 40.0,
+  "steps": 196,
+  "system1_calls": 34,
+  "system2_calls": 1,
+  "coverage": {
+    "system2_answers": 1,
+    "system1_answers": 33,
+    "failed_calls": 1,
+    "acts": 196,
+    "acts_after_s1": 33,
+    "acts_after_s2": 1,
+    "steps": 196,
+    "harness_events": 24
+  },
+  "warnings": []
+}

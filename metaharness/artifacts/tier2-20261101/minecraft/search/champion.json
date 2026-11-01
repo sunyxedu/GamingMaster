@@ -1,0 +1,56 @@
+{
+  "candidate": "0015",
+  "train": 3.0,
+  "val": 3.0,
+  "combined": 1.0,
+  "seeds_val": {
+    "Minecraft_Java_1.21.1_Survival_to_Free_the_End": [
+      3,
+      4
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0015",
+      "rank": 0,
+      "status": "ok",
+      "train": 3.0,
+      "val": 3.0,
+      "per_game": {
+        "Minecraft Java 1.21.1 \u2014 Survival to Free the End": 3.0
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0019",
+      "rank": 1,
+      "status": "ok",
+      "train": 3.0,
+      "val": 3.0,
+      "per_game": {
+        "Minecraft Java 1.21.1 \u2014 Survival to Free the End": 3.0
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0021",
+      "rank": 2,
+      "status": "ok",
+      "train": 3.0,
+      "val": 1.5,
+      "per_game": {
+        "Minecraft Java 1.21.1 \u2014 Survival to Free the End": 2.4
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "candidate": "0023",
+  "train": 3945.0,
+  "val": 4366.666666666667,
+  "combined": 1.0,
+  "seeds_val": {
+    "Atari_2600_Ms._Pac-Man": [
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0016",
+      "rank": 0,
+      "status": "ok",
+      "train": 4018.3333333333335,
+      "val": 3605.0,
+      "per_game": {
+        "Atari 2600 Ms. Pac-Man": 3811.6666666666665
+      },
+      "norm": [
+        0.5230946882217091
+      ],
+      "combined": 0.5230946882217091
+    },
+    {
+      "candidate": "0023",
+      "rank": 1,
+      "status": "ok",
+      "train": 3945.0,
+      "val": 4366.666666666667,
+      "per_game": {
+        "Atari 2600 Ms. Pac-Man": 4155.833333333333
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0019",
+      "rank": 2,
+      "status": "ok",
+      "train": 3870.0,
+      "val": 2998.3333333333335,
+      "per_game": {
+        "Atari 2600 Ms. Pac-Man": 3434.1666666666665
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

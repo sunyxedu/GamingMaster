@@ -1,0 +1,4 @@
+# Atari 2600 Space Invaders adaptor
+
+gymnasium[atari]>=1.4.0
+numpy>=2.0

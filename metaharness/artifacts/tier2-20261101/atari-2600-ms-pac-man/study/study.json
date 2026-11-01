@@ -1,0 +1,49 @@
+{
+  "game": "Ms. Pac-Man (Atari 2600, Atari CX2675)",
+  "tier": 2,
+  "tier_rationale": "Ms. Pac-Man is a continuously running 60-Hz action game: Ms. Pac-Man and the ghosts move while a model reasons, and a missed junction or nearby collision can be punished within roughly 0.2 seconds. ALE v5 normally advances four Atari frames per action (about 0.067 seconds) and may repeat the prior action, so Astra must plan asynchronously while Jev selects short queued cardinal actions; the emulator must never wait for a model call.",
+  "decision_latency_s": 0.2,
+  "interface": {
+    "chosen": "emulator",
+    "why": "ALE/ale-py is a mature local Atari 2600 emulator with a headless Gymnasium API, bundled Ms. Pac-Man ROM, score rewards, reset seeds, RAM, RGB fallback, mode selection and terminal/lives state. OCAtari REM adds object-level Player, Ghost, Fruit, PowerPill, Pill, Score and Life objects without requiring a display or GPU. This beats raw screenshots, browser automation, Stella debugger scripting and generic RetroArch because it is local, low-latency and already decodes Ms. Pac-Man RAM; raw RAM and optional RGB remain available to repair OCAtari's missing maze geometry and frightened-state limitations.",
+    "software": [
+      "gymnasium==1.4.0",
+      "ale-py==0.12.1",
+      "ocatari==2.2.1",
+      "numpy<2.0.0",
+      "opencv-python",
+      "pygame (installed as an OCAtari dependency; do not use human rendering)"
+    ],
+    "env": [
+      {
+        "var": "SDL_VIDEODRIVER",
+        "description": "Optional: set to dummy only if a Pygame path is initialized on the headless host; render_mode=None requires no display setting.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Use /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-ms-pac-man/.venv/bin/python (Python 3.12.3) for pip and execution.",
+      "Install the pinned packages with the evaluator interpreter; ale-py 0.12.1 supplies the 8-KB ms_pacman.bin ROM, so do not fetch an arbitrary ROM or write ROM bytes into the study directory.",
+      "Import ale_py and register its Gymnasium environments, then construct OCAtari(\"ALE/MsPacman-v5\", mode=\"ram\", hud=true, obs_mode=\"obj\", render_mode=null). Use frameskip=1 and repeat_action_probability=0.0 for calibration, or explicitly record the documented v5 defaults of 4 and 0.25.",
+      "Call reset(seed=seed), retain info and raw 128-byte RAM, and serialize env.objects with stable slot/category/visibility/position/velocity/value fields; filter NoObject slots rather than sending the flattened object stack as the only state.",
+      "Use env.ale.setMode(0), setMode(1), setMode(2) or setMode(3) before reset for four-, one-, two- or three-ghost scenario strata, and verify the selected ghost count from RAM byte 19 or visible objects.",
+      "Calibrate a maze wall/turn/tunnel graph from one-time rgb_array frames or a verified CX2675 map because maze geometry is not encoded in RAM; keep raw RAM and optional RGB for validation.",
+      "Normalize OCAtari 2.2.1's swapped termination/truncation return positions or query env.ale.game_over(); use ALE info['lives'] as total lives because OCAtari Life.value counts spare-life icons.",
+      "Run a nonblocking action queue, send mostly cardinal actions 0 NOOP, 1 UP, 2 RIGHT, 3 LEFT and 4 DOWN, interrupt queued actions on a turn or hazard, and close the environment after each episode."
+    ],
+    "observation": "A local JSON adaptor should expose frame number, reward delta, cumulative score, ALE total lives, game_over, mode, player x/y and direction if available, visible ghosts with x/y/dx/dy, fruit, remaining power pills, visible pills keyed by grid cell, maze-map confidence and raw_ram[128]. OCAtari REM supplies the dynamic object positions and HUD score/life objects; getRAM supplies the original 128 bytes. render_mode=rgb_array optionally supplies a 210x160x3 frame for map calibration or visual frightened-state checks, but normal Jev input should be symbolic JSON.",
+    "actions": "The adaptor sends ALE Discrete(9) actions: 0 NOOP, 1 UP, 2 RIGHT, 3 LEFT, 4 DOWN, plus optional diagonals 5 UPRIGHT, 6 UPLEFT, 7 DOWNRIGHT and 8 DOWNLEFT. Use cardinal actions for the four-direction joystick, batch them for a few frames to hide model latency, and maintain the last direction because the game never waits for a decision."
+  },
+  "scoring": "Report cumulative ALE reward/final decoded HUD score as the primary score because ALE reward is the score delta for dots, pills, fruit, pretzels and ghost chains. Also report mazes cleared, visible pills/dots eaten, lives remaining, deaths, mode and terminal state: score alone can reward risky ghost/fruit hunting while maze completion and survival better measure strong play.",
+  "scenarios": "Use standard four-ghost mode 0 for the main held-out evaluation and call reset(seed) with held-out seeds; the Atari reset start position and first maze are fixed, while the seed controls emulator randomness such as ghost choices, fruit selection and any configured sticky-action draws. Keep frameskip, stickiness and mode fixed within a scored stratum. Add separate curriculum/robustness strata for modes 1, 2 and 3 (one, two and three ghosts), reporting scores separately. Reset alone does not select a later level: obtain later-maze scenarios by running to maze boundaries or restoring verified ALE checkpoints, and test the manual's cherry-to-banana progression and post-banana maze-three/four alternation rather than silently changing the start state by seed.",
+  "strategy_summary": "Strong play clears dots through a maze-specific legal-corridor graph while keeping a tunnel or power pill as an escape, rather than importing an arcade map or chasing every fruit. Code should handle wall legality, pill/life/maze bookkeeping, ghost projection, score arithmetic and a short action queue; Astra should choose the maze-wide risk policy and adapt routes; Jev should make fast typed local choices among already computed legal directions and pill/escape options. Lure clustered normal ghosts toward a power pill when safe to chain 200/400/800/1600 points, but take the pill immediately when it is the only survival route. Use side tunnels as wraparound escapes, learn each layout's different tunnel locations, and clear the reported third-maze inverted-T pocket early while few ghosts roam. Reduce ghost-chain risk as frightened time shortens after repeated maze clears, and evaluate score together with mazes completed and lives preserved.",
+  "risks": [
+    "Atari/Namco ROM assets are copyrighted; use the ROM bundled and licensed through the ALE package or obtain a legally usable CX2675-compatible ROM, and never redistribute ROM bytes.",
+    "OCAtari 2.2.1 has a known swapped termination/truncation return ordering; query ALE game_over or normalize the tuple.",
+    "OCAtari REM does not expose maze walls from RAM, and its released ghost colour does not reliably identify frightened state; retain raw RAM and calibrate with RGB when needed.",
+    "OCAtari Life.value is spare-life icons rather than total lives, and reverse-engineered RAM offsets can change with package versions; cross-check against ALE info and pin versions.",
+    "The default v5 sticky-action probability and frame skip make runs stochastic; set and record them explicitly for reproducibility.",
+    "Pygame/human rendering, browser emulators and screen/input injection are GUI-oriented and can fail or exceed the approximately 0.2-second hazard horizon on a headless host.",
+    "No online API, account, server, API key or anti-cheat bypass is involved; generic arcade Ms. Pac-Man bots target a different ROM and cannot be assumed compatible."
+  ]
+}

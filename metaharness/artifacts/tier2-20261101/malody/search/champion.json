@@ -1,0 +1,56 @@
+{
+  "candidate": "0004",
+  "train": 1.0,
+  "val": 1.0,
+  "combined": 0.0,
+  "seeds_val": {
+    "Malody_Key_offline_native_.mc_emulator": [
+      106,
+      107
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0004",
+      "rank": 0,
+      "status": "ok",
+      "train": 1.0,
+      "val": 1.0,
+      "per_game": {
+        "Malody Key (offline native .mc emulator)": 1.0
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    },
+    {
+      "candidate": "0005",
+      "rank": 1,
+      "status": "ok",
+      "train": 1.0,
+      "val": 1.0,
+      "per_game": {
+        "Malody Key (offline native .mc emulator)": 1.0
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    },
+    {
+      "candidate": "0003",
+      "rank": 2,
+      "status": "ok",
+      "train": 1.0,
+      "val": 1.0,
+      "per_game": {
+        "Malody Key (offline native .mc emulator)": 1.0
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

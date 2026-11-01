@@ -1,0 +1,85 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/osu-mania/search/candidates/0006/harness.py",
+ "game": "osu!mania (stable native ScoreV1 simulator)",
+ "fatal": null,
+ "mean_score": 0.0,
+ "stale_fraction": null,
+ "n_episodes": 1,
+ "system1_calls": 0,
+ "system2_calls": 0,
+ "mean_steps": 0.0,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "construction_failed": 1
+ },
+ "s1_informed_fraction": null,
+ "s2_informed_fraction": null,
+ "errors": [
+  "game construction failed: Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 687, in evaluate_harness\n    game = game_factory(**(game_kwargs or {}))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/cli.py\", line 393, in <lambda>\n    res = evaluate_harness(a.harness, lambda **k: make_game(game, **k), seeds,\n                                                  ^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/games/registry.py\", line 73, in make_game\n    raise KeyError(f\"unknown game {name!r}; known: {sorted(GAMES)}\")\nKeyError: \"unknown game 'osu!mania (stable native ScoreV1 simulator)'; known: ['arc3', 'lanerunner', 'rulepuzzle', 'snake']\"\n"
+ ],
+ "episodes": [
+  {
+   "seed": 100,
+   "score": 0.0,
+   "steps": 0,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 0,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 0.0,
+   "error": "game construction failed: Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 687, in evaluate_harness\n    game = game_factory(**(game_kwargs or {}))\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/cli.py\", line 393, in <lambda>\n    res = evaluate_harness(a.harness, lambda **k: make_game(game, **k), seeds,\n                                                  ^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/games/registry.py\", line 73, in make_game\n    raise KeyError(f\"unknown game {name!r}; known: {sorted(GAMES)}\")\nKeyError: \"unknown game 'osu!mania (stable native ScoreV1 simulator)'; known: ['arc3', 'lanerunner', 'rulepuzzle', 'snake']\"\n",
+   "info": {},
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "construction_failed",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   100
+  ],
+  "expected_episodes": 1,
+  "game_kwargs": {},
+  "clock_mode": "virtual",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "heuristic",
+    "model": null,
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": null
+  },
+  "harness_sha256": "91d614f336d0732d6ec08cc7d8cc879fdb6562d99a9e589e7244ca167189ee69",
+  "resolved_models": {}
+ },
+ "score_std": null
+}

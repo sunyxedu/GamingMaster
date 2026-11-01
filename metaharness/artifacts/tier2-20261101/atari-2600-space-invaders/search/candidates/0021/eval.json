@@ -1,0 +1,6 @@
+{
+ "fatal": "proposer failed: ModelTimeout: timeout: claude -p exceeded 3600s (session f87d7390-9f7c-474c-9f7c-14344c5c73f7)",
+ "mean_score": null,
+ "n_episodes": 0,
+ "game": "Atari 2600 Space Invaders"
+}

@@ -1,0 +1,58 @@
+{
+  "candidate": "0011",
+  "train": 10.958099867724867,
+  "val": 10.961875,
+  "combined": 1.0,
+  "seeds_val": {
+    "Doom_ViZDoom_ASYNC_PLAYER": [
+      1015,
+      1016,
+      1017,
+      1018
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0011",
+      "rank": 0,
+      "status": "ok",
+      "train": 10.958099867724867,
+      "val": 10.961875,
+      "per_game": {
+        "Doom (ViZDoom ASYNC_PLAYER)": 10.95904365079365
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0020",
+      "rank": 1,
+      "status": "ok",
+      "train": 9.714641534391534,
+      "val": 11.319761904761904,
+      "per_game": {
+        "Doom (ViZDoom ASYNC_PLAYER)": 10.115921626984125
+      },
+      "norm": [
+        0.6328558200055336
+      ],
+      "combined": 0.6328558200055336
+    },
+    {
+      "candidate": "0008",
+      "rank": 2,
+      "status": "ok",
+      "train": 9.382394841269841,
+      "val": 6.503257936507937,
+      "per_game": {
+        "Doom (ViZDoom ASYNC_PLAYER)": 8.662610615079364
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

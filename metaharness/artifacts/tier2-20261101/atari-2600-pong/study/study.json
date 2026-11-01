@@ -1,0 +1,41 @@
+{
+  "game": "Atari 2600 Video Olympics: Robot Pong (ALE/Pong-v5)",
+  "tier": 2,
+  "tier_rationale": "The Atari 2600 game advances continuously at roughly 60 NTSC frames per second and paddle position is sampled inside the frame loop, so a missed collision can be decided in about one frame (0.0167 s). ALE/Pong-v5 defaults to four emulated frames per step and sticky actions, but a precise adaptor should use one-frame steps and keep a local controller running while Astra reasons; a roughly 0.5 s Jev call cannot safely control every paddle frame without a projected target or macro.",
+  "decision_latency_s": 0.0167,
+  "interface": {
+    "chosen": "emulator",
+    "why": "ALE/ale-py is a maintained native Atari 2600 emulator with a Gymnasium API, bundled hash-checked Pong ROM, CPython 3.12 Linux wheel, RAM observations, rewards, deterministic configurable frameskip/sticky actions, and no display or account requirement. It is more practical for this headless evaluator than Stella debugger scripts, RetroArch/libretro IPC, MAME, or screen capture.",
+    "software": [
+      "ale-py",
+      "gymnasium",
+      "numpy"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Using /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-pong/.venv/bin/python, install with `-m pip install ale-py gymnasium`.",
+      "Import gymnasium and ale_py, then call `gym.register_envs(ale_py)`.",
+      "Create `gym.make(\"ALE/Pong-v5\", obs_type=\"ram\", frameskip=1, repeat_action_probability=0.0, render_mode=None)`; retain `full_action_space=False`.",
+      "Call `reset(seed=seed)` for each episode and record reward, termination, frame metadata, mode, and difficulty.",
+      "Call `get_action_meanings()` and calibrate ALE actions 2 and 3 against right-paddle screen-Y movement before production control.",
+      "Build and validate a ROM-specific RAM/object parser with RGB observations during development; do not assume RAM bytes are a universal Pong schema.",
+      "Run a frame-level local controller continuously; use Astra for macro policy and Jev for typed recognition/choice rather than blocking the collision loop.",
+      "At episode end, call `close()` and report positive/negative reward counters and final termination state."
+    ],
+    "observation": "With obs_type=ram, each step returns a 128-byte uint8 Atari RAM vector plus reward, terminated, truncated, and info metadata. ALE also supports a 210x160x3 RGB frame for calibration/fallback object detection and exposes native RAM/screen/state methods. The adaptor should derive compact JSON fields such as ball_x, ball_y, ball velocity signs, left/right paddle Y, approach side, score counters, serve_ready, variation, and difficulty; this derived object schema is not supplied by ALE and must be validated against the exact ROM.",
+    "actions": "The minimal action space is Discrete(6): 0 NOOP, 1 FIRE, 2 RIGHT, 3 LEFT, 4 RIGHTFIRE, 5 LEFTFIRE. These are Atari controller labels and must be calibrated to paddle up/down movement. Use FIRE only for a legal serve or the selected variation's button feature; use one-frame direction/NOOP actions from a local controller. Full 18-action input is available but unnecessary."
+  },
+  "scoring": "Report own_points as the number of positive rewards, opponent_points as the number of negative rewards, return as their difference, and win/loss plus final own:opponent score. ALE documents positive score for sending the ball past the opponent paddle and negative score when it passes the controlled paddle; the Video Olympics manual says the first player/team to 21 wins. Reward counters are preferable to OCR and directly measure rally outcomes.",
+  "scenarios": "For reset(seed), keep held-out seeds separate from calibration and vary ALE mode (0 or 1), difficulty (0 through 3), and the selected Robot Pong/Pong variation when the harness supports cartridge selection. Also include full-paddle versus half-paddle Difficulty B/A cases and fixed deterministic resets to test replay. Do not assume a seed alone makes a meaningful random opening: Video Olympics reverse-engineering notes report no internal randomness, so validate whether seeds change the initial state and use explicit mode/difficulty or saved-state variations for scenario diversity.",
+  "strategy_summary": "Track ball position and velocity, project its Y position to the right paddle while reflecting at the top and bottom bounds, and move early toward that intercept; hold or brake when aligned instead of chasing the current ball. Keep a central coverage position while the ball travels away, and use short frame-level actions near contact. The manual documents Speed and WHAMMY button effects at contact, so gate FIRE variants by the selected variation and contact window rather than holding FIRE. Code should do calibration, arithmetic, wall reflection, timing, score bookkeeping, and action control; Astra should select safe versus attacking returns and diagnose drift, while Jev should answer typed approach/alignment/contact/feature questions. Validate center/edge trajectories, RAM fields, difficulty behavior, and exact mode semantics before hard-coding exploits.",
+  "risks": [
+    "ALE RAM is a 128-byte hardware vector, not a ready-made symbolic Pong JSON state; a ROM-specific parser and calibration pass are required.",
+    "Default ALE/Pong-v5 frameskip=4 and repeat_action_probability=0.25 introduce latency and sticky actions; use frameskip=1 and zero repeat probability for precise reproducible control.",
+    "Atari paddle controls are analog and ALE action names are counterintuitive; wrong direction calibration can make the adaptor lose immediately.",
+    "The bundled ROM/manual are copyrighted even though ALE is open source; do not redistribute ROMs or commit them without checking rights.",
+    "Stella, RetroArch/libretro, MAME, and screen capture are viable validation/fallback paths but lack ALE's simple headless Python contract or add GUI/IPC latency.",
+    "No credentials, API key, server, GPU, X server, or online account should be required; accidentally requesting human rendering can break the headless evaluator.",
+    "Astra/Jev calls can take longer than a frame, so they cannot directly choose every low-level action; a local predictive controller must continue acting.",
+    "The exact Atari 2600 cartridge variation, ALE mode/difficulty mapping, and candidate RAM addresses must be verified rather than inferred from generic Pong or another ROM."
+  ]
+}

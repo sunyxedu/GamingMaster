@@ -1,0 +1,29 @@
+# Adaptor validation: PASS
+
+- [x] load game.py and make_game() — name=Quaver Keys (local .qua simulator) tier=tier2 realtime=True
+- [x] TIER agrees with the game's kind (2 <=> tick()) — TIER=2; the game is real-time (has tick)
+- [x] tier 2, as the study decided — the game is real-time (has tick), tier2
+- [x] SEEDS: non-empty, disjoint train / held-out lists of ints — 16 train (1001, 1002, 1003, 1004, 1005, …), 16 held-out (2001, 2002, 2003, 2004, 2005, …)
+- [x] action_spec is an ActionSpec with >=1 action
+- [x] realtime: tick_s > 0 and noop action set — tick_s=0.018 noop=noop
+- [x] describe() returns a non-trivial string — 3022 chars
+- [x] seed 1001: observe() JSON-serialisable — 5709 bytes
+- [x] seed 1001: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 1001: applied 12 actions without exception
+- [x] seed 1001: done is bool and score is a finite number after the actions — done=False score=0.0
+- [x] seed 1001: observations after the actions are strict JSON
+- [x] seed 1001: ticks counter advanced — ticks=12 applied=12
+- [x] seed 1001: tick() keeps the declared pace — median tick() 0.1 ms, tick_s 18 ms
+- [x] seed 1001: info() is a dict
+- [x] seed 2001: observe() JSON-serialisable — 5976 bytes
+- [x] seed 2001: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 2001: applied 12 actions without exception
+- [x] seed 2001: done is bool and score is a finite number after the actions — done=False score=0.0
+- [x] seed 2001: observations after the actions are strict JSON
+- [x] seed 2001: ticks counter advanced — ticks=12 applied=12
+- [x] seed 2001: tick() keeps the declared pace — median tick() 0.1 ms, tick_s 18 ms
+- [x] seed 2001: info() is a dict
+- [x] malformed action '__not_an_action__' does not raise
+- [x] close() releases the instance (called after every episode)
+- [x] DETERMINISTIC: reset(seed) on a fresh instance reproduces the first observation
+- [x] different seeds give different starts (scenario variety)

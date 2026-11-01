@@ -1,0 +1,2 @@
+- 03:39 repaired: 0006-0008 eval.json renamed eval.stopped.json (our stop at 03:35 killed their proposers; not the proposers' failure)
+- 08:16 repaired: 0013 eval.json → eval.false-duplicate.json (old 98% rule; 8 new code lines)

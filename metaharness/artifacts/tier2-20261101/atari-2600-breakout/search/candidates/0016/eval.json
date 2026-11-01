@@ -1,0 +1,474 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-breakout/search/candidates/0016/harness.py",
+ "game": "Atari 2600 Breakout",
+ "fatal": null,
+ "mean_score": 312.3333333333333,
+ "stale_fraction": 0.00024587644708533963,
+ "n_episodes": 6,
+ "system1_calls": 467,
+ "system2_calls": 6,
+ "mean_steps": 8134.166666666667,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 6
+ },
+ "s1_informed_fraction": 0.009571045026950588,
+ "s2_informed_fraction": 0.00012296845859037156,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 417.0,
+   "steps": 9509,
+   "system1_calls": 97,
+   "system2_calls": 1,
+   "stale_ticks": 3,
+   "decided_ticks": 9506,
+   "latency_s1": {
+    "n": 97,
+    "mean": 0.2996492238388848,
+    "p50": 0.27591705322265625,
+    "p90": 0.4612715244293213,
+    "max": 0.7882757186889648
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 37.37623310089111,
+    "p50": 37.37623310089111,
+    "p90": 37.37623310089111,
+    "max": 37.37623310089111
+   },
+   "wall_s": 158.48756191506982,
+   "error": null,
+   "info": {
+    "score": 417.0,
+    "ticks": 9509,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 417.0,
+     "cartridge_score": 417.0,
+     "lives_remaining": 0.0,
+     "bricks_remaining": 3.0,
+     "wall_index": 0.0,
+     "walls_cleared": 0.0,
+     "elapsed_emulated_frames": 9509.0,
+     "both_walls_cleared": 0.0
+    }
+   },
+   "acts": 9506,
+   "acts_after_s1": 97,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     37.376,
+     83
+    ]
+   ]
+  },
+  {
+   "seed": 1,
+   "score": 99.0,
+   "steps": 6089,
+   "system1_calls": 53,
+   "system2_calls": 1,
+   "stale_ticks": 2,
+   "decided_ticks": 6087,
+   "latency_s1": {
+    "n": 53,
+    "mean": 0.348766083987254,
+    "p50": 0.36939501762390137,
+    "p90": 0.47235918045043945,
+    "max": 0.5005214214324951
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 48.43700075149536,
+    "p50": 48.43700075149536,
+    "p90": 48.43700075149536,
+    "max": 48.43700075149536
+   },
+   "wall_s": 101.48991026799195,
+   "error": null,
+   "info": {
+    "score": 99.0,
+    "ticks": 6089,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 99.0,
+     "cartridge_score": 99.0,
+     "lives_remaining": 0.0,
+     "bricks_remaining": 60.0,
+     "wall_index": 0.0,
+     "walls_cleared": 0.0,
+     "elapsed_emulated_frames": 6089.0,
+     "both_walls_cleared": 0.0
+    }
+   },
+   "acts": 6087,
+   "acts_after_s1": 53,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     48.437,
+     283
+    ]
+   ]
+  },
+  {
+   "seed": 2,
+   "score": 371.0,
+   "steps": 8811,
+   "system1_calls": 86,
+   "system2_calls": 1,
+   "stale_ticks": 1,
+   "decided_ticks": 8810,
+   "latency_s1": {
+    "n": 86,
+    "mean": 0.31513015059537663,
+    "p50": 0.3116326332092285,
+    "p90": 0.47313857078552246,
+    "max": 0.5356521606445312
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 26.190998315811157,
+    "p50": 26.190998315811157,
+    "p90": 26.190998315811157,
+    "max": 26.190998315811157
+   },
+   "wall_s": 146.8559943989385,
+   "error": null,
+   "info": {
+    "score": 371.0,
+    "ticks": 8811,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 371.0,
+     "cartridge_score": 371.0,
+     "lives_remaining": 0.0,
+     "bricks_remaining": 16.0,
+     "wall_index": 0.0,
+     "walls_cleared": 0.0,
+     "elapsed_emulated_frames": 8811.0,
+     "both_walls_cleared": 0.0
+    }
+   },
+   "acts": 8810,
+   "acts_after_s1": 86,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     26.191,
+     525
+    ]
+   ]
+  },
+  {
+   "seed": 3,
+   "score": 295.0,
+   "steps": 7565,
+   "system1_calls": 62,
+   "system2_calls": 1,
+   "stale_ticks": 2,
+   "decided_ticks": 7563,
+   "latency_s1": {
+    "n": 62,
+    "mean": 0.3428550074177404,
+    "p50": 0.3606288433074951,
+    "p90": 0.4658536911010742,
+    "max": 0.501035213470459
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 32.808125019073486,
+    "p50": 32.808125019073486,
+    "p90": 32.808125019073486,
+    "max": 32.808125019073486
+   },
+   "wall_s": 126.08982263901271,
+   "error": null,
+   "info": {
+    "score": 295.0,
+    "ticks": 7565,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 295.0,
+     "cartridge_score": 295.0,
+     "lives_remaining": 0.0,
+     "bricks_remaining": 29.0,
+     "wall_index": 0.0,
+     "walls_cleared": 0.0,
+     "elapsed_emulated_frames": 7565.0,
+     "both_walls_cleared": 0.0
+    }
+   },
+   "acts": 7563,
+   "acts_after_s1": 62,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     32.808,
+     264
+    ]
+   ]
+  },
+  {
+   "seed": 4,
+   "score": 355.0,
+   "steps": 9374,
+   "system1_calls": 96,
+   "system2_calls": 1,
+   "stale_ticks": 2,
+   "decided_ticks": 9372,
+   "latency_s1": {
+    "n": 96,
+    "mean": 0.30099737644195557,
+    "p50": 0.2832334041595459,
+    "p90": 0.4697532653808594,
+    "max": 0.5251009464263916
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 23.03533697128296,
+    "p50": 23.03533697128296,
+    "p90": 23.03533697128296,
+    "max": 23.03533697128296
+   },
+   "wall_s": 156.23855476197787,
+   "error": null,
+   "info": {
+    "score": 355.0,
+    "ticks": 9374,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 355.0,
+     "cartridge_score": 355.0,
+     "lives_remaining": 0.0,
+     "bricks_remaining": 11.0,
+     "wall_index": 0.0,
+     "walls_cleared": 0.0,
+     "elapsed_emulated_frames": 9374.0,
+     "both_walls_cleared": 0.0
+    }
+   },
+   "acts": 9372,
+   "acts_after_s1": 96,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     23.035,
+     35
+    ]
+   ]
+  },
+  {
+   "seed": 5,
+   "score": 337.0,
+   "steps": 7457,
+   "system1_calls": 73,
+   "system2_calls": 1,
+   "stale_ticks": 2,
+   "decided_ticks": 7455,
+   "latency_s1": {
+    "n": 73,
+    "mean": 0.3358122355317416,
+    "p50": 0.3222653865814209,
+    "p90": 0.48306798934936523,
+    "max": 0.9058690071105957
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 50.92093372344971,
+    "p50": 50.92093372344971,
+    "p90": 50.92093372344971,
+    "max": 50.92093372344971
+   },
+   "wall_s": 124.28917794092558,
+   "error": null,
+   "info": {
+    "score": 337.0,
+    "ticks": 7457,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 337.0,
+     "cartridge_score": 337.0,
+     "lives_remaining": 0.0,
+     "bricks_remaining": 20.0,
+     "wall_index": 0.0,
+     "walls_cleared": 0.0,
+     "elapsed_emulated_frames": 7457.0,
+     "both_walls_cleared": 0.0
+    }
+   },
+   "acts": 7455,
+   "acts_after_s1": 73,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     50.921,
+     525
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "expected_episodes": 6,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "27ed3a2b9cb5d9ab831023440dadfa168679c8a68600d77fb78c83de0ee5d142",
+  "game_kind": "realtime",
+  "resolved_models": {
+   "system1": [
+    "jev:jev-1.14.0"
+   ],
+   "system2": [
+    "claude:gpt-6-astra"
+   ]
+  }
+ },
+ "score_std": 111.92616613940936
+}

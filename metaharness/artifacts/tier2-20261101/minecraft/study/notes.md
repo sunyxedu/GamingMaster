@@ -1,0 +1,1 @@
+Offline headless Linux server (no display, no GPU). Java 21 and Node 24 are installed; a private vanilla Java server with offline authentication and a bot bridge is acceptable (no Microsoft account). The evaluator's Python is the venv printed in the prompt; pip works there.

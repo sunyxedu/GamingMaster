@@ -1,0 +1,51 @@
+{
+  "game": "Atari 2600 Breakout",
+  "tier": 2,
+  "tier_rationale": "The Atari 2600 world advances at about 60 emulated frames per second while the ball is in flight, and the paddle must be moved before the descending ball reaches its y-position. With the chosen frameskip=1 interface, a control tick represents about 0.0167 seconds; a 0.5-second Jev call spans roughly 30 native frames and Astra is much slower. The emulator API is synchronous, so the adaptor must use a real-time stepping owner with a safe short-horizon fallback while Astra plans and Jev supplies fast typed recognition/choices.",
+  "decision_latency_s": 0.0167,
+  "interface": {
+    "chosen": "emulator",
+    "why": "Use official ale-py/Gymnasium as the stepping, reward, reset, seed, and termination owner, with obs_type=ram and a pinned OCAtari Breakout RAM decoder for symbolic objects. This is headless, fast, local, GPU-free, and exposes exact 128-byte RAM, lives, frame counters, action timing, and optional state cloning. It beats screen capture because the adaptor receives paddle/ball/brick state, beats OCAtari-as-outer-wrapper because OCAtari 2.2.1 reverses terminated and truncated, and beats Stella/Libretro bridges because ALE has the maintained Gymnasium contract and packaged ROM.",
+    "software": [
+      "ale-py==0.12.1",
+      "gymnasium==1.4.0",
+      "ocatari==2.2.1",
+      "numpy==1.26.4",
+      "opencv-python==4.11.0.86"
+    ],
+    "env": [
+      {
+        "var": "ALE_ROMS_DIR",
+        "description": "Optional directory containing the legally supplied ALE ROM files if the packaged ROM is unavailable; ale-py checks the ROM against its expected hash. No account, API key, or server address is required.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Install the pinned packages through /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-breakout/.venv/bin/python -m pip; do not use system Python.",
+      "Import gymnasium and ale_py, then call gym.register_envs(ale_py) before gym.make.",
+      "Create ALE/Breakout-v5 with obs_type=ram, render_mode=None, mode=0, difficulty=0, full_action_space=False, frameskip=1, repeat_action_probability=0.25, and max_num_frames_per_episode=108000.",
+      "Call reset(seed=integer), record lives, episode_frame_number, frame_number, and seeds, and verify the initial score is zero, lives are five, and the ball is absent until FIRE.",
+      "Resolve and assert get_action_meanings() == ['NOOP', 'FIRE', 'RIGHT', 'LEFT']; use Gym indices 0, 1, 2, and 3 rather than raw ALE enum values.",
+      "Decode each 128-byte RAM observation into JSON: six-by-18 brick occupancy, row values, score, lives, paddle geometry, ball geometry and displacement, wall index, reward, and termination flags. Use the OCAtari Breakout decoder source or port its audited logic into the adaptor.",
+      "Keep the emulator in one stepping thread/process at native cadence and give models immutable copied JSON; maintain a latest-action/short-hold fallback for late Jev or Astra responses.",
+      "Use official ALE terminated/truncated values and add a regression test so the OCAtari 2.2.1 flag-order bug cannot enter the adaptor.",
+      "Close the environment on every exit and report package versions, seed, mode, difficulty, frameskip, sticky probability, score, lives, frames, and end reason."
+    ],
+    "observation": "The official observation is a uint8 array of 128 RAM bytes. The adaptor should expose JSON rather than raw bytes: frame number; score from BCD-like RAM bytes 76 and 77; lives from RAM 57; paddle x=RAM[72]-47 with standard y=189, w=16, h=4; ball x=RAM[99]-49 and y=RAM[101]+9 with w=2, h=4 when RAM[101] != 0 and RAM[101]+9 <= 196, otherwise null; dx/dy from consecutive decoded states; and a six-row, 18-column brick bitmap decoded from RAM[0:36], with row values [7,7,4,4,1,1]. Include ball_in_play, wall_index, last_reward, terminated, truncated, lives, and episode/frame counters. OCAtari objects additionally expose category, xy, wh, rgb, dx, and dy, but its current ns_state only contains position-like values, obs_mode=obj returns a four-observation stack by default, and contiguous bricks may be grouped into variable-width blocks.",
+    "actions": "Use the four Gym discrete actions: 0 NOOP, 1 FIRE, 2 RIGHT, 3 LEFT. FIRE serves the initial ball and a replacement after a lost ball; RIGHT/LEFT move the paddle and NOOP removes the directional input but does not guarantee an instantaneous stop of paddle movement. Issue actions at frameskip=1, normally in 1-3 frame holds near a descending ball, and account for v5 repeat_action_probability=0.25. The adaptor\u2014not an LLM\u2014projects the ball's paddle intercept, selects safe pulses, handles stickiness and late-response fallback, and stops only on natural termination or explicit truncation."
+  },
+  "scoring": "Report the unmodified cumulative ALE reward as the primary score because Breakout rewards brick destruction and preserves the 1-, 4-, and 7-point row values; cross-check it against the decoded cartridge score. Also report lives remaining, bricks remaining, wall index, elapsed emulated frames, and whether both walls were cleared. The Atari 2600 manual's maximum for two walls is 864 points.",
+  "scenarios": "Primary evaluation holds mode=0 and difficulty=0 fixed and varies integer reset seeds over held-out values; the fixed wall layout means seeds mainly vary serve/sticky-action randomness, so this limitation must be reported. Repeat selected seeds to test determinism and run latency-stress trials with delayed or missing model calls to measure fallback degradation. Test difficulty=1 and selected other ALE modes only as separately labeled robustness scenarios, because they change paddle/variant rules; there are no opponents in the single-player baseline.",
+  "strategy_summary": "Use code for exact RAM bookkeeping, serve/life state, projected paddle interception with wall reflection, short action holds, speed-change detection, and optional clone-state search. Start with FIRE and a centered safe rally, then have Astra choose whether a reachable left or right side tunnel is worth attempting; the published DQN Breakout result supports digging a side tunnel so the ball can clear bricks behind the wall. Replan after paddle/brick/wall impacts, top-row speed increases, the twelfth consecutive hit, life loss, and wall transitions. Jev should classify flight phase, urgency, speed regime, tunnel status, and a choice among code-generated safe actions, not perform arithmetic. When tunnel construction becomes unsafe, prioritize preserving the remaining ball and use the projected landing rather than chasing the ball's current x. Keep the low-level controller running while Astra thinks and correct any late or malformed model output with a deterministic fallback.",
+  "risks": [
+    "Atari ROM distribution and use may have copyright or licensing restrictions even though ale-py packages ROM files; do not commit ROMs.",
+    "OCAtari 2.2.1 reverses Gymnasium terminated/truncated return positions; use official ALE flags or correct and test the wrapper.",
+    "The emulator is synchronous and will not advance during a blocking LLM call; a real-time tier-2 adaptor needs a separate stepping owner and fallback action.",
+    "Sticky actions at probability 0.25 and action frameskip alter exact control; log them and do not confuse a deterministic diagnostic with v5 baseline.",
+    "RAM offsets and object decoding are ROM-specific; grouped variable-width OCAtari blocks must not replace the exact six-by-18 bitmap.",
+    "The supplied object decoder does not fully model difficulty-dependent paddle width and may drift if package internals change; pin versions and verify against RAM/RGB diagnostics.",
+    "Screen capture/input injection is only a fallback: it needs virtual display/focus handling, adds latency, and loses symbolic state.",
+    "Jev's approximately 0.5-second response and Astra's multi-second response are too slow for sole paddle control; delayed actions can lose a life.",
+    "Mixing Breakthru, Catch, Steerable, Invisible, Timed, or multiplayer modes with ordinary mode-0 scores makes strategy and evaluation incomparable."
+  ]
+}

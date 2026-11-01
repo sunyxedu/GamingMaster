@@ -1,0 +1,1 @@
+Offline headless Linux server (no display, no GPU, no accounts). The evaluator's Python is the venv printed in the prompt; pip works there. Prefer a local emulator interface that exposes symbolic (object-level) game state rather than screenshots.

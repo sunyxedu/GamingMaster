@@ -1,0 +1,17 @@
+{
+  "measured": "2026-10-30 05:15",
+  "system2_short": {
+    "latency_s": 16.13,
+    "output_tokens": 5
+  },
+  "system2_long": {
+    "error": "RuntimeError: claude -p returned an empty result"
+  },
+  "system1": {
+    "latency_s": 0.136,
+    "first_latency_s": 0.19,
+    "p90_s": 0.172,
+    "max_s": 0.182,
+    "n": 12
+  }
+}

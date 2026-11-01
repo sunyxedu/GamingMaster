@@ -1,0 +1,60 @@
+{
+  "candidate": "0017",
+  "train": 63216.666666666664,
+  "val": 66181.33333333333,
+  "combined": 1.0,
+  "seeds_val": {
+    "Tetris_Guideline-compatible_marathon": [
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0017",
+      "rank": 0,
+      "status": "ok",
+      "train": 63216.666666666664,
+      "val": 66181.33333333333,
+      "per_game": {
+        "Tetris (Guideline-compatible marathon)": 64699.0
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0020",
+      "rank": 1,
+      "status": "ok",
+      "train": 61632.0,
+      "val": 66966.33333333333,
+      "per_game": {
+        "Tetris (Guideline-compatible marathon)": 64299.166666666664
+      },
+      "norm": [
+        0.880121926843893
+      ],
+      "combined": 0.880121926843893
+    },
+    {
+      "candidate": "0014",
+      "rank": 2,
+      "status": "ok",
+      "train": 60758.333333333336,
+      "val": 61969.0,
+      "per_game": {
+        "Tetris (Guideline-compatible marathon)": 61363.666666666664
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

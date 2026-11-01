@@ -1,0 +1,58 @@
+{
+  "candidate": "0004",
+  "train": 1000000.0,
+  "val": 1000000.0,
+  "combined": 1.0,
+  "seeds_val": {
+    "Quaver_Keys_local_.qua_simulator": [
+      1013,
+      1014,
+      1015,
+      1016
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0004",
+      "rank": 0,
+      "status": "ok",
+      "train": 1000000.0,
+      "val": 1000000.0,
+      "per_game": {
+        "Quaver Keys (local .qua simulator)": 1000000.0
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0005",
+      "rank": 1,
+      "status": "ok",
+      "train": 1000000.0,
+      "val": 1000000.0,
+      "per_game": {
+        "Quaver Keys (local .qua simulator)": 1000000.0
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0003",
+      "rank": 2,
+      "status": "ok",
+      "train": 889547.0820464854,
+      "val": 770685.133343196,
+      "per_game": {
+        "Quaver Keys (local .qua simulator)": 859831.594870663
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

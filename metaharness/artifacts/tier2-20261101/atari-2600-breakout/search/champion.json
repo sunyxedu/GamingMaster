@@ -1,0 +1,56 @@
+{
+  "candidate": "0026",
+  "train": 792.8333333333334,
+  "val": 647.0,
+  "combined": 1.0,
+  "seeds_val": {
+    "Atari_2600_Breakout": [
+      6,
+      7
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0026",
+      "rank": 0,
+      "status": "ok",
+      "train": 792.8333333333334,
+      "val": 647.0,
+      "per_game": {
+        "Atari 2600 Breakout": 756.375
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0022",
+      "rank": 1,
+      "status": "ok",
+      "train": 763.3333333333334,
+      "val": 631.0,
+      "per_game": {
+        "Atari 2600 Breakout": 730.25
+      },
+      "norm": [
+        0.07111111111111111
+      ],
+      "combined": 0.07111111111111111
+    },
+    {
+      "candidate": "0019",
+      "rank": 2,
+      "status": "ok",
+      "train": 743.5,
+      "val": 682.5,
+      "per_game": {
+        "Atari 2600 Breakout": 728.25
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+[14:30:18] run: game='Doom' dir=/home/hemlix/GamingMaster-mh-tier2/runs/doom agent=claude:gpt-6-astra
+[15:40:59] study: done — tier 2, interface api
+[17:11:00] adapt: the agent ran out of time (attempt 1/4); validating what it wrote
+[17:11:00] adapt: adaptor validated after 1 attempt(s)
+[17:11:00] search: tier 2 on adaptor game 'Doom (ViZDoom ASYNC_PLAYER)'
+[17:11:19] run: game='Doom' dir=/home/hemlix/GamingMaster-mh-tier2/runs/doom agent=claude:gpt-6-astra
+[17:11:19] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/doom/study/study.json (tier 2)
+[17:11:20] adapt: reusing validated adaptor
+[17:11:20] search: tier 2 on adaptor game 'Doom (ViZDoom ASYNC_PLAYER)'
+[21:28:19] run: game='Doom' dir=/home/hemlix/GamingMaster-mh-tier2/runs/doom agent=claude:gpt-6-astra
+[21:28:19] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/doom/study/study.json (tier 2)
+[21:28:20] adapt: reusing validated adaptor
+[21:28:20] search: tier 2 on adaptor game 'Doom (ViZDoom ASYNC_PLAYER)'
+[01:25:42] run: game='Doom' dir=/home/hemlix/GamingMaster-mh-tier2/runs/doom agent=claude:gpt-6-astra
+[01:25:42] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/doom/study/study.json (tier 2)
+[01:25:43] adapt: reusing validated adaptor
+[01:25:43] search: tier 2 on adaptor game 'Doom (ViZDoom ASYNC_PLAYER)'
+[06:08:50] run: game='Doom' dir=/home/hemlix/GamingMaster-mh-tier2/runs/doom agent=claude:gpt-6-astra
+[06:08:50] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/doom/study/study.json (tier 2)
+[06:08:51] adapt: reusing validated adaptor
+[06:08:51] search: tier 2 on adaptor game 'Doom (ViZDoom ASYNC_PLAYER)'
+[08:57:07] run: game='Doom' dir=/home/hemlix/GamingMaster-mh-tier2/runs/doom agent=claude:gpt-6-astra
+[08:57:07] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/doom/study/study.json (tier 2)
+[08:57:08] adapt: reusing validated adaptor
+[08:57:08] search: tier 2 on adaptor game 'Doom (ViZDoom ASYNC_PLAYER)'
+[14:32:33] run: game='Doom' dir=/home/hemlix/GamingMaster-mh-tier2/runs/doom agent=claude:gpt-6-astra
+[14:32:33] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/doom/study/study.json (tier 2)
+[14:32:34] adapt: reusing validated adaptor
+[14:32:34] search: tier 2 on adaptor game 'Doom (ViZDoom ASYNC_PLAYER)'
+[21:07:13] run: done — best 0011

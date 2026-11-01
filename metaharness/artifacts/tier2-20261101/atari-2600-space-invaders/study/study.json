@@ -1,0 +1,45 @@
+{
+  "game": "Atari 2600 Space Invaders",
+  "tier": 2,
+  "tier_rationale": "This is a continuously animated Atari VCS action game: the invader formation moves and descends, bombs fall, the player's single laser travels, and the UFO can cross the screen while control decisions are being made. ALE's standard step advances four NTSC frames (about 0.067 seconds), and late-wave or bomb-dodge situations can punish a stale action within roughly 0.25 seconds. Astra should plan between batches while Jev supplies rapid typed movement/fire choices.",
+  "decision_latency_s": 0.25,
+  "interface": {
+    "chosen": "emulator",
+    "why": "ALE's native Stella emulator runs locally without a display, GPU, account, or server, bundles the target 4 KiB Atari ROM, and provides RAM, pixels for calibration, score rewards, lives, termination, deterministic settings, and clone/restore state. Its raw 128-byte RAM is not itself a documented object API, so the adaptor should decode it into compact object JSON and validate that decoder against RGB frames; this is still more reliable and lower-latency than screenshot capture or GUI input injection.",
+    "software": [
+      "ale-py",
+      "gymnasium[atari]",
+      "numpy",
+      "Python 3.12.3 evaluator venv"
+    ],
+    "env": [
+      {
+        "var": "ALE_ROMS_DIR",
+        "description": "Optional directory containing compatible ALE ROMs if the evaluator deliberately keeps them outside ale-py; omit it for the current bundled-ROM installation.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Use /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-space-invaders/.venv/bin/python and install gymnasium[atari] with that interpreter.",
+      "Import ale_py, call gym.register_envs(ale_py), and construct ALE/SpaceInvaders-v5 with obs_type=ram, mode=0, difficulty=0, and explicit frameskip/repeat_action_probability settings.",
+      "For decoder calibration, run a parallel RGB environment with frameskip=1 and repeat_action_probability=0.0; compare known formation, shield, player, projectile, score, and life transitions against RAM changes.",
+      "Normalize each observation into versioned JSON containing frame, score, lives, terminal state, player, invaders with row/column/alive/position, player shot, bombs, shields, UFO, wave estimate, mode, and difficulty.",
+      "Use the explicit six-action Gym mapping, sum rewards, record terminal reason and diagnostics, and close the environment after each episode.",
+      "Use direct ALEInterface with cloneState(include_rng=true) only when snapshot-based planning or exact replay is needed; do not rely on undocumented RAM addresses without golden fixtures."
+    ],
+    "observation": "Primary Gym observation is a 128-byte uint8 Atari console RAM array. The adaptor must decode it into object-level JSON; ALE has no official Space Invaders object schema. During development, obs_type=rgb provides a 210x160x3 uint8 array for ROM-specific geometry/palette calibration, and info provides lives and frame counters. Reward is the score delta; terminated/truncated report episode completion. Direct ALEInterface additionally exposes raw RAM, RGB/grayscale screens, legal actions, and cloneable emulator state.",
+    "actions": "Gym Discrete(6): 0 NOOP, 1 FIRE, 2 RIGHT, 3 LEFT, 4 RIGHTFIRE, 5 LEFTFIRE. Use short holds and explicit fire-lock handling because only one player beam may be active. Direct ALEInterface should use getMinimalActionSet()/Action enums rather than treating Gym's compressed numeric indices as full ALE enum values."
+  },
+  "scoring": "Report the sum of ALE rewards as the Atari score: invaders award 5, 10, 15, 20, 25, or 30 points by initial row, a complete 36-invader wave is 630, and the normal one-player UFO is 200. Also report lives remaining, waves cleared/inferred, invaders killed, and terminal cause because score alone can reward risky play that ends early.",
+  "scenarios": "Use reset(seed) to vary emulator randomness and bomb/shot trajectories while keeping the canonical mode=0 and difficulty=0 fixed for the main benchmark; set frameskip and sticky-action probability explicitly. Held-out seeds should be unseen RNG seeds, not merely repeated deterministic starts. Add separate scenario suites for difficulty 1 and ALE modes 1-15 only when the evaluator wants cartridge variations, and record mode/difficulty because moving shields, fast or zigzag bombs, invisible invaders, and multiplayer variants change the rules.",
+  "strategy_summary": "Start near the center, preserve an escape route, and usually clear a safe outer column before working inward; treat this as a heuristic rather than a hard rule. Fire only when aligned with a living invader, prefer the lowest surviving threat in a column, and maintain a one-shot/fire lock. Dodge bombs and use shields as temporary cover, prioritizing survival and low invaders over upper-row points or the harmless UFO. As the formation shrinks and speeds up, shorten Jev's action holds and let Astra revise the wave-level risk policy. Put geometry, collision prediction, fire cooldown, boundary clamping, score bookkeeping, and wave inference in code; use Jev for typed near-term choices and Astra for adaptation and tradeoffs.",
+  "risks": [
+    "ALE exposes raw RAM and pixels rather than a supported object-level Space Invaders JSON API; the adaptor must build and validate a ROM-specific decoder.",
+    "The Atari ROM is copyrighted game data even though current ale-py bundles it; do not redistribute it or assume GPL coverage grants independent commercial ROM rights.",
+    "Default ALE v5 sticky actions and frameskip introduce stochastic/repeated actions unless explicitly configured; calibration and evaluation settings must be recorded.",
+    "The ROM has optional modes and difficulty settings whose moving shields, bomb behavior, invisibility, or multiplayer rules can invalidate the normal decoder/strategy.",
+    "Screen parsing fallback is CPU- and latency-sensitive and may suffer sprite flicker; GUI/Stella/RetroArch fallbacks need more setup and may require a virtual display.",
+    "Direct ALE enum values and Gym's compressed action indices differ; an incorrect left/right/fire map can make an otherwise valid policy fail.",
+    "A long Astra call cannot safely control the frame-by-frame loop; Jev or a deterministic low-level controller must continue acting while Astra plans."
+  ]
+}

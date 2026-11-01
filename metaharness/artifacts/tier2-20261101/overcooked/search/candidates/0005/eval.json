@@ -1,0 +1,618 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0005/harness.py",
+ "game": "Overcooked-AI",
+ "fatal": null,
+ "mean_score": 195.55555555555554,
+ "stale_fraction": 0.06111111111111111,
+ "n_episodes": 9,
+ "system1_calls": 1037,
+ "system2_calls": 9,
+ "mean_steps": 400.0,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 9
+ },
+ "s1_informed_fraction": 0.30650887573964497,
+ "s2_informed_fraction": 0.0002958579881656805,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 120.0,
+   "steps": 400,
+   "system1_calls": 84,
+   "system2_calls": 1,
+   "stale_ticks": 34,
+   "decided_ticks": 366,
+   "latency_s1": {
+    "n": 84,
+    "mean": 0.19846054769697644,
+    "p50": 0.14798665046691895,
+    "p90": 0.16783666610717773,
+    "max": 2.5912537574768066
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.87895301403478,
+   "error": null,
+   "info": {
+    "score": 120.0,
+    "ticks": 400,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 120.0,
+     "sparse_agent_0": 100.0,
+     "sparse_agent_1": 20.0,
+     "deliveries": 6.0,
+     "episode_length": 400.0,
+     "shaped_reward_diagnostic": 102.0,
+     "collision_ticks": 34.0,
+     "stuck_ticks": 34.0,
+     "pot_idle_time": 210.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 366,
+   "acts_after_s1": 84,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1,
+   "score": 260.0,
+   "steps": 400,
+   "system1_calls": 138,
+   "system2_calls": 1,
+   "stale_ticks": 21,
+   "decided_ticks": 379,
+   "latency_s1": {
+    "n": 138,
+    "mean": 0.15149449783822763,
+    "p50": 0.14671921730041504,
+    "p90": 0.17208242416381836,
+    "max": 0.24386262893676758
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.88268769090064,
+   "error": null,
+   "info": {
+    "score": 260.0,
+    "ticks": 400,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 260.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 260.0,
+     "deliveries": 14.0,
+     "episode_length": 400.0,
+     "shaped_reward_diagnostic": 241.0,
+     "collision_ticks": 0.0,
+     "stuck_ticks": 50.0,
+     "pot_idle_time": 225.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 379,
+   "acts_after_s1": 137,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 2,
+   "score": 220.0,
+   "steps": 400,
+   "system1_calls": 131,
+   "system2_calls": 1,
+   "stale_ticks": 12,
+   "decided_ticks": 388,
+   "latency_s1": {
+    "n": 131,
+    "mean": 0.14535278764389853,
+    "p50": 0.1391899585723877,
+    "p90": 0.15934300422668457,
+    "max": 0.3241753578186035
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.86552784708329,
+   "error": null,
+   "info": {
+    "score": 220.0,
+    "ticks": 400,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 220.0,
+     "sparse_agent_0": 60.0,
+     "sparse_agent_1": 160.0,
+     "deliveries": 11.0,
+     "episode_length": 400.0,
+     "shaped_reward_diagnostic": 210.0,
+     "collision_ticks": 20.0,
+     "stuck_ticks": 13.0,
+     "pot_idle_time": 302.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 388,
+   "acts_after_s1": 131,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 3,
+   "score": 40.0,
+   "steps": 400,
+   "system1_calls": 55,
+   "system2_calls": 1,
+   "stale_ticks": 14,
+   "decided_ticks": 386,
+   "latency_s1": {
+    "n": 55,
+    "mean": 0.15682408592917702,
+    "p50": 0.14712953567504883,
+    "p90": 0.18598079681396484,
+    "max": 0.27245140075683594
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.88390724197961,
+   "error": null,
+   "info": {
+    "score": 40.0,
+    "ticks": 400,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 40.0,
+     "sparse_agent_0": 40.0,
+     "sparse_agent_1": 0.0,
+     "deliveries": 2.0,
+     "episode_length": 400.0,
+     "shaped_reward_diagnostic": 46.0,
+     "collision_ticks": 26.0,
+     "stuck_ticks": 11.0,
+     "pot_idle_time": 292.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 386,
+   "acts_after_s1": 55,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 4,
+   "score": 220.0,
+   "steps": 400,
+   "system1_calls": 123,
+   "system2_calls": 1,
+   "stale_ticks": 25,
+   "decided_ticks": 375,
+   "latency_s1": {
+    "n": 123,
+    "mean": 0.15703579662291983,
+    "p50": 0.15329742431640625,
+    "p90": 0.17764830589294434,
+    "max": 0.26834869384765625
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 41.91028380393982,
+    "p50": 41.91028380393982,
+    "p90": 41.91028380393982,
+    "max": 41.91028380393982
+   },
+   "wall_s": 66.669454470044,
+   "error": null,
+   "info": {
+    "score": 220.0,
+    "ticks": 400,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "sparse_team_reward": 220.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 220.0,
+     "deliveries": 11.0,
+     "episode_length": 400.0,
+     "shaped_reward_diagnostic": 207.0,
+     "collision_ticks": 0.0,
+     "stuck_ticks": 38.0,
+     "pot_idle_time": 309.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 375,
+   "acts_after_s1": 123,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     41.91,
+     230
+    ]
+   ]
+  },
+  {
+   "seed": 5,
+   "score": 240.0,
+   "steps": 400,
+   "system1_calls": 131,
+   "system2_calls": 1,
+   "stale_ticks": 23,
+   "decided_ticks": 377,
+   "latency_s1": {
+    "n": 131,
+    "mean": 0.15190467397675259,
+    "p50": 0.14737582206726074,
+    "p90": 0.17348718643188477,
+    "max": 0.3351101875305176
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.70092871901579,
+   "error": null,
+   "info": {
+    "score": 240.0,
+    "ticks": 400,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 240.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 240.0,
+     "deliveries": 12.0,
+     "episode_length": 400.0,
+     "shaped_reward_diagnostic": 216.0,
+     "collision_ticks": 16.0,
+     "stuck_ticks": 8.0,
+     "pot_idle_time": 275.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 377,
+   "acts_after_s1": 131,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 6,
+   "score": 180.0,
+   "steps": 400,
+   "system1_calls": 114,
+   "system2_calls": 1,
+   "stale_ticks": 25,
+   "decided_ticks": 375,
+   "latency_s1": {
+    "n": 114,
+    "mean": 0.1652554336347078,
+    "p50": 0.1479506492614746,
+    "p90": 0.17330360412597656,
+    "max": 1.7397239208221436
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.87309723603539,
+   "error": null,
+   "info": {
+    "score": 180.0,
+    "ticks": 400,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 180.0,
+     "sparse_agent_0": 100.0,
+     "sparse_agent_1": 80.0,
+     "deliveries": 9.0,
+     "episode_length": 400.0,
+     "shaped_reward_diagnostic": 153.0,
+     "collision_ticks": 54.0,
+     "stuck_ticks": 44.0,
+     "pot_idle_time": 82.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 375,
+   "acts_after_s1": 114,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 7,
+   "score": 240.0,
+   "steps": 400,
+   "system1_calls": 131,
+   "system2_calls": 1,
+   "stale_ticks": 30,
+   "decided_ticks": 370,
+   "latency_s1": {
+    "n": 131,
+    "mean": 0.16522276310520317,
+    "p50": 0.14519214630126953,
+    "p90": 0.16619563102722168,
+    "max": 2.1134181022644043
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.87857871409506,
+   "error": null,
+   "info": {
+    "score": 240.0,
+    "ticks": 400,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 240.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 240.0,
+     "deliveries": 12.0,
+     "episode_length": 400.0,
+     "shaped_reward_diagnostic": 221.0,
+     "collision_ticks": 0.0,
+     "stuck_ticks": 46.0,
+     "pot_idle_time": 252.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 370,
+   "acts_after_s1": 131,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 8,
+   "score": 240.0,
+   "steps": 400,
+   "system1_calls": 130,
+   "system2_calls": 1,
+   "stale_ticks": 36,
+   "decided_ticks": 364,
+   "latency_s1": {
+    "n": 130,
+    "mean": 0.17129176763387827,
+    "p50": 0.14675331115722656,
+    "p90": 0.1721785068511963,
+    "max": 2.5024938583374023
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.85628693294711,
+   "error": null,
+   "info": {
+    "score": 240.0,
+    "ticks": 400,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 240.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 240.0,
+     "deliveries": 12.0,
+     "episode_length": 400.0,
+     "shaped_reward_diagnostic": 213.0,
+     "collision_ticks": 15.0,
+     "stuck_ticks": 10.0,
+     "pot_idle_time": 252.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 364,
+   "acts_after_s1": 130,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "expected_episodes": 9,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "cbfe5359eb7f19a17cab76d18278c5be506025b4ae98decabd052e447b58b4fd",
+  "game_kind": "realtime",
+  "resolved_models": {
+   "system1": [
+    "jev:jev-1.14.0"
+   ],
+   "system2": [
+    "claude:gpt-6-astra"
+   ]
+  }
+ },
+ "score_std": 71.956777149743
+}

@@ -1,0 +1,129 @@
+{
+ "harness_path": "candidates/0026/harness.py",
+ "game": "Atari 2600 Asteroids",
+ "fatal": null,
+ "mean_score": 11160.0,
+ "stale_fraction": 0.0,
+ "n_episodes": 1,
+ "system1_calls": 19,
+ "system2_calls": 1,
+ "mean_steps": 6910.0,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "deadline": 1
+ },
+ "s1_informed_fraction": 0.0027496382054992764,
+ "s2_informed_fraction": 0.0001447178002894356,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 11160.0,
+   "steps": 6910,
+   "system1_calls": 19,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 6910,
+   "latency_s1": {
+    "n": 19,
+    "mean": 0.3,
+    "p50": 0.3,
+    "p90": 0.3,
+    "max": 0.3
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 2.0,
+    "p50": 2.0,
+    "p90": 2.0,
+    "max": 2.0
+   },
+   "wall_s": 30.00837305583991,
+   "error": null,
+   "info": {
+    "score": 11160.0,
+    "ticks": 6910,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 30.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 11160.0
+    }
+   },
+   "acts": 6910,
+   "acts_after_s1": 19,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "heuristic"
+    ],
+    "system2": [
+     "scripted"
+    ]
+   },
+   "calls_s2": [
+    [
+     2.0,
+     null
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0
+  ],
+  "expected_episodes": 1,
+  "game_kwargs": {
+   "scenario_suite": "bounded-launch-v1"
+  },
+  "clock_mode": "virtual",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 30.0,
+  "deadline_s": 30.0,
+  "grace_s": 5.0,
+  "budget": {
+   "max_system1_calls": 20,
+   "max_system2_calls": 1,
+   "max_wall_s": 30.0
+  },
+  "models": {
+   "system1": {
+    "name": "heuristic",
+    "model": null,
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "scripted",
+    "model": null,
+    "player_tools": null,
+    "reasoning_effort": null
+   }
+  },
+  "harness_sha256": "bfe667a6c97cd345f8abb716a792286c13dad14678a33b2821956843ab765045",
+  "game_kind": "realtime",
+  "resolved_models": {
+   "system1": [
+    "heuristic"
+   ],
+   "system2": [
+    "scripted"
+   ]
+  }
+ },
+ "score_std": null
+}

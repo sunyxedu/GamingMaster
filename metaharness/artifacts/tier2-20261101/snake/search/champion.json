@@ -1,0 +1,56 @@
+{
+  "candidate": "0020",
+  "train": 141.0,
+  "val": 141.0,
+  "combined": 1.0,
+  "seeds_val": {
+    "Snake_local_classic": [
+      6,
+      7
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0020",
+      "rank": 0,
+      "status": "ok",
+      "train": 141.0,
+      "val": 141.0,
+      "per_game": {
+        "Snake (local classic)": 141.0
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0013",
+      "rank": 1,
+      "status": "ok",
+      "train": 125.0,
+      "val": 127.5,
+      "per_game": {
+        "Snake (local classic)": 125.625
+      },
+      "norm": [
+        0.008064516129032258
+      ],
+      "combined": 0.008064516129032258
+    },
+    {
+      "candidate": "0015",
+      "rank": 2,
+      "status": "ok",
+      "train": 124.66666666666667,
+      "val": 128.0,
+      "per_game": {
+        "Snake (local classic)": 125.5
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

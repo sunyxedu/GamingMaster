@@ -1,0 +1,395 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/tetris/search/candidates/0022/harness.py",
+ "game": "Tetris (Guideline-compatible marathon)",
+ "fatal": null,
+ "mean_score": 62594.333333333336,
+ "stale_fraction": 0.03259584529640264,
+ "n_episodes": 6,
+ "system1_calls": 0,
+ "system2_calls": 6,
+ "mean_steps": 986.8333333333334,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 6
+ },
+ "s1_informed_fraction": 0.0,
+ "s2_informed_fraction": 0.0,
+ "errors": [
+  "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)",
+  "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)",
+  "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)",
+  "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)",
+  "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)"
+ ],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 55578.0,
+   "steps": 988,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 36,
+   "decided_ticks": 952,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 67.07819345407188,
+   "error": "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)",
+   "info": {
+    "score": 55578.0,
+    "ticks": 988,
+    "game_done": true,
+    "pending_tasks": 1,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 55578.0,
+     "line_clear_points": 44600.0,
+     "drop_points": 6528.0,
+     "combo_points": 4450.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 78.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 49.400000000000006,
+     "holes": 0.0,
+     "aggregate_height": 20.0,
+     "bumpiness": 10.0,
+     "top_out_height": 7.0,
+     "illegal_actions": 10.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1083,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1,
+   "score": 70896.0,
+   "steps": 996,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 34,
+   "decided_ticks": 962,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.87882725498639,
+   "error": "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)",
+   "info": {
+    "score": 70896.0,
+    "ticks": 996,
+    "game_done": true,
+    "pending_tasks": 1,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 70896.0,
+     "line_clear_points": 53300.0,
+     "drop_points": 6296.0,
+     "combo_points": 11300.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 79.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 49.800000000000004,
+     "holes": 0.0,
+     "aggregate_height": 10.0,
+     "bumpiness": 8.0,
+     "top_out_height": 8.0,
+     "illegal_actions": 6.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1088,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 2,
+   "score": 69114.0,
+   "steps": 985,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 31,
+   "decided_ticks": 954,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 67.02276156493463,
+   "error": "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)",
+   "info": {
+    "score": 69114.0,
+    "ticks": 985,
+    "game_done": true,
+    "pending_tasks": 1,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 69114.0,
+     "line_clear_points": 57300.0,
+     "drop_points": 6664.0,
+     "combo_points": 5150.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 76.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 49.25,
+     "holes": 0.0,
+     "aggregate_height": 40.0,
+     "bumpiness": 7.0,
+     "top_out_height": 6.0,
+     "illegal_actions": 6.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1081,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 3,
+   "score": 60892.0,
+   "steps": 969,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 25,
+   "decided_ticks": 944,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.98381511191837,
+   "error": "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)",
+   "info": {
+    "score": 60892.0,
+    "ticks": 969,
+    "game_done": true,
+    "pending_tasks": 1,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 60892.0,
+     "line_clear_points": 49100.0,
+     "drop_points": 6492.0,
+     "combo_points": 5300.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 79.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 48.45,
+     "holes": 0.0,
+     "aggregate_height": 10.0,
+     "bumpiness": 6.0,
+     "top_out_height": 10.0,
+     "illegal_actions": 4.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1062,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 4,
+   "score": 62896.0,
+   "steps": 974,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 34,
+   "decided_ticks": 940,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 67.05470355786383,
+   "error": "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)",
+   "info": {
+    "score": 62896.0,
+    "ticks": 974,
+    "game_done": true,
+    "pending_tasks": 1,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 62896.0,
+     "line_clear_points": 51700.0,
+     "drop_points": 6746.0,
+     "combo_points": 4450.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 79.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 48.7,
+     "holes": 0.0,
+     "aggregate_height": 10.0,
+     "bumpiness": 10.0,
+     "top_out_height": 6.0,
+     "illegal_actions": 5.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1075,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 5,
+   "score": 56190.0,
+   "steps": 1009,
+   "system1_calls": 0,
+   "system2_calls": 1,
+   "stale_ticks": 33,
+   "decided_ticks": 976,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 58.107656938023865,
+   "error": null,
+   "info": {
+    "score": 56190.0,
+    "ticks": 1009,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "score": 56190.0,
+     "line_clear_points": 45500.0,
+     "drop_points": 6690.0,
+     "combo_points": 4000.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 79.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 50.45,
+     "holes": 0.0,
+     "aggregate_height": 10.0,
+     "bumpiness": 4.0,
+     "top_out_height": 7.0,
+     "illegal_actions": 3.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1091,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "expected_episodes": 6,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "c808e49c1613f9a6b50d19c80b0be96c39ffeebe3b533cadc77b4ed73d9dbcaa",
+  "game_kind": "realtime",
+  "resolved_models": {}
+ },
+ "score_std": 6397.766537368073
+}

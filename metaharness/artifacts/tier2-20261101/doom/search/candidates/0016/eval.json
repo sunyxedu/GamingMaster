@@ -1,0 +1,839 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/doom/search/candidates/0016/harness.py",
+ "game": "Doom (ViZDoom ASYNC_PLAYER)",
+ "fatal": null,
+ "mean_score": 7.920148809523809,
+ "stale_fraction": 0.006457430408097967,
+ "n_episodes": 12,
+ "system1_calls": 2397,
+ "system2_calls": 19,
+ "mean_steps": 8593.916666666666,
+ "failed_s1": 0,
+ "failed_s2": 3,
+ "timeouts_s1": 0,
+ "timeouts_s2": 2,
+ "ended_by": {
+  "game_done": 10,
+  "deadline": 2
+ },
+ "s1_informed_fraction": 0.023372010188049536,
+ "s2_informed_fraction": 7.806934509578132e-05,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 1001,
+   "score": 4.502547619047619,
+   "steps": 2814,
+   "system1_calls": 91,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 2815,
+   "latency_s1": {
+    "n": 91,
+    "mean": 0.176649109347836,
+    "p50": 0.17202115058898926,
+    "p90": 0.19424200057983398,
+    "max": 0.2864494323730469
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 80.57100412994623,
+   "error": null,
+   "info": {
+    "score": 4.502547619047619,
+    "ticks": 2814,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 3.125,
+     "kill_progress": 0.16666666666666666,
+     "item_progress": 0.1,
+     "secret_progress": 0.0,
+     "health": 0.12,
+     "armor": 0.0,
+     "remaining_ammo": 0.28,
+     "time_tiebreak": 0.977547619047619,
+     "vizdoom_reward": 0.0,
+     "total": 4.502547619047619
+    }
+   },
+   "acts": 2815,
+   "acts_after_s1": 91,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1002,
+   "score": 5.169444444444444,
+   "steps": 1947,
+   "system1_calls": 44,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 1948,
+   "latency_s1": {
+    "n": 44,
+    "mean": 0.17320901697332208,
+    "p50": 0.17213201522827148,
+    "p90": 0.19063258171081543,
+    "max": 0.2083139419555664
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 55.79169358103536,
+   "error": null,
+   "info": {
+    "score": 5.169444444444444,
+    "ticks": 1947,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 3.6249999999999996,
+     "kill_progress": 0.03333333333333333,
+     "item_progress": 0.5,
+     "secret_progress": 0.0,
+     "health": 0.03,
+     "armor": 0.0,
+     "remaining_ammo": 0.53,
+     "time_tiebreak": 0.9844444444444445,
+     "vizdoom_reward": 0.0,
+     "total": 5.169444444444444
+    }
+   },
+   "acts": 1948,
+   "acts_after_s1": 44,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1003,
+   "score": 10.279880952380951,
+   "steps": 31499,
+   "system1_calls": 690,
+   "system2_calls": 3,
+   "stale_ticks": 25,
+   "decided_ticks": 31474,
+   "latency_s1": {
+    "n": 690,
+    "mean": 0.1874059013698412,
+    "p50": 0.17468690872192383,
+    "p90": 0.21296024322509766,
+    "max": 0.4880688190460205
+   },
+   "latency_s2": {
+    "n": 3,
+    "mean": 77.97738893826802,
+    "p50": 92.88034701347351,
+    "p90": 116.31523251533508,
+    "max": 116.31523251533508
+   },
+   "wall_s": 900.0056307178456,
+   "error": null,
+   "info": {
+    "score": 10.279880952380951,
+    "ticks": 31499,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 5.499999999999999,
+     "kill_progress": 0.36666666666666664,
+     "item_progress": 0.0,
+     "secret_progress": 0.0,
+     "health": 1.53,
+     "armor": 1.5,
+     "remaining_ammo": 1.0,
+     "time_tiebreak": 0.7498809523809524,
+     "vizdoom_reward": 0.0,
+     "total": 10.279880952380951
+    }
+   },
+   "acts": 31475,
+   "acts_after_s1": 690,
+   "acts_after_s2": 3,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     24.737,
+     573
+    ],
+    [
+     92.88,
+     692
+    ],
+    [
+     116.315,
+     2336
+    ]
+   ]
+  },
+  {
+   "seed": 1004,
+   "score": 6.551523809523809,
+   "steps": 1689,
+   "system1_calls": 39,
+   "system2_calls": 1,
+   "stale_ticks": 157,
+   "decided_ticks": 1533,
+   "latency_s1": {
+    "n": 39,
+    "mean": 0.1795199589851575,
+    "p50": 0.17071986198425293,
+    "p90": 0.21942949295043945,
+    "max": 0.3361177444458008
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 48.498797417851165,
+   "error": null,
+   "info": {
+    "score": 6.551523809523809,
+    "ticks": 1689,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 4.0,
+     "kill_progress": 0.13333333333333333,
+     "item_progress": 0.2,
+     "secret_progress": 0.2,
+     "health": 0.09,
+     "armor": 1.0050000000000001,
+     "remaining_ammo": 0.47,
+     "time_tiebreak": 0.9865238095238096,
+     "vizdoom_reward": 0.0,
+     "total": 6.551523809523809
+    }
+   },
+   "acts": 1533,
+   "acts_after_s1": 38,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1005,
+   "score": 6.8584603174603185,
+   "steps": 2279,
+   "system1_calls": 71,
+   "system2_calls": 1,
+   "stale_ticks": 1,
+   "decided_ticks": 2279,
+   "latency_s1": {
+    "n": 71,
+    "mean": 0.17732115530631912,
+    "p50": 0.17454314231872559,
+    "p90": 0.19949030876159668,
+    "max": 0.2381148338317871
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 65.34673756477423,
+   "error": null,
+   "info": {
+    "score": 6.8584603174603185,
+    "ticks": 2279,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 5.166666666666667,
+     "kill_progress": 0.23333333333333334,
+     "item_progress": 0.26666666666666666,
+     "secret_progress": 0.0,
+     "health": 0.27,
+     "armor": 0.0,
+     "remaining_ammo": 0.44,
+     "time_tiebreak": 0.9817936507936508,
+     "vizdoom_reward": 0.0,
+     "total": 6.8584603174603185
+    }
+   },
+   "acts": 2279,
+   "acts_after_s1": 71,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1006,
+   "score": 14.596539682539682,
+   "steps": 31499,
+   "system1_calls": 693,
+   "system2_calls": 3,
+   "stale_ticks": 281,
+   "decided_ticks": 31218,
+   "latency_s1": {
+    "n": 693,
+    "mean": 0.19331548774741256,
+    "p50": 0.17499279975891113,
+    "p90": 0.2280731201171875,
+    "max": 0.7068991661071777
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 56.546581506729126,
+    "p50": 83.4858193397522,
+    "p90": 83.4858193397522,
+    "max": 83.4858193397522
+   },
+   "wall_s": 900.0046578769106,
+   "error": null,
+   "info": {
+    "score": 14.596539682539682,
+    "ticks": 31499,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 11.166666666666666,
+     "kill_progress": 0.4666666666666667,
+     "item_progress": 0.6666666666666666,
+     "secret_progress": 0.0,
+     "health": 1.6500000000000001,
+     "armor": 0.03,
+     "remaining_ammo": 1.0,
+     "time_tiebreak": 0.7498730158730158,
+     "vizdoom_reward": 0.0,
+     "total": 14.596539682539682
+    }
+   },
+   "acts": 31219,
+   "acts_after_s1": 693,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 1,
+   "timeouts_s1": 0,
+   "timeouts_s2": 1,
+   "ended_by": "deadline",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     83.486,
+     571
+    ],
+    [
+     29.607,
+     363
+    ]
+   ]
+  },
+  {
+   "seed": 1007,
+   "score": 6.7588253968253955,
+   "steps": 2021,
+   "system1_calls": 63,
+   "system2_calls": 1,
+   "stale_ticks": 191,
+   "decided_ticks": 1831,
+   "latency_s1": {
+    "n": 63,
+    "mean": 0.17550673938932873,
+    "p50": 0.17115116119384766,
+    "p90": 0.19595074653625488,
+    "max": 0.22680377960205078
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 57.907135480083525,
+   "error": null,
+   "info": {
+    "score": 6.7588253968253955,
+    "ticks": 2021,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 3.4999999999999996,
+     "kill_progress": 0.23333333333333334,
+     "item_progress": 0.0,
+     "secret_progress": 0.0,
+     "health": 0.09,
+     "armor": 1.4249999999999998,
+     "remaining_ammo": 0.76,
+     "time_tiebreak": 0.9838253968253968,
+     "vizdoom_reward": 0.0,
+     "total": 6.7588253968253955
+    }
+   },
+   "acts": 1831,
+   "acts_after_s1": 63,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1008,
+   "score": 8.359476190476189,
+   "steps": 8661,
+   "system1_calls": 204,
+   "system2_calls": 2,
+   "stale_ticks": 6,
+   "decided_ticks": 8656,
+   "latency_s1": {
+    "n": 204,
+    "mean": 0.18323154542960374,
+    "p50": 0.17586636543273926,
+    "p90": 0.2116076946258545,
+    "max": 0.41066765785217285
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 247.65143470303155,
+   "error": null,
+   "info": {
+    "score": 8.359476190476189,
+    "ticks": 8661,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 6.333333333333332,
+     "kill_progress": 0.23333333333333334,
+     "item_progress": 0.3333333333333333,
+     "secret_progress": 0.2,
+     "health": 0.09,
+     "armor": 0.705,
+     "remaining_ammo": 0.3,
+     "time_tiebreak": 0.9311428571428572,
+     "vizdoom_reward": 0.0,
+     "total": 8.359476190476189
+    }
+   },
+   "acts": 8656,
+   "acts_after_s1": 204,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 1,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1011,
+   "score": 8.804650793650794,
+   "steps": 662,
+   "system1_calls": 23,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 663,
+   "latency_s1": {
+    "n": 23,
+    "mean": 0.17861979940663214,
+    "p50": 0.17821526527404785,
+    "p90": 0.21992182731628418,
+    "max": 0.23851943016052246
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 18.99070825893432,
+   "error": null,
+   "info": {
+    "score": 8.804650793650794,
+    "ticks": 662,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 4.5,
+     "kill_progress": 0.3,
+     "item_progress": 0.0,
+     "secret_progress": 0.0,
+     "health": 1.2000000000000002,
+     "armor": 1.5,
+     "remaining_ammo": 0.61,
+     "time_tiebreak": 0.9946507936507937,
+     "vizdoom_reward": 0.0,
+     "total": 8.804650793650794
+    }
+   },
+   "acts": 663,
+   "acts_after_s1": 23,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1012,
+   "score": 7.767833333333333,
+   "steps": 16216,
+   "system1_calls": 373,
+   "system2_calls": 3,
+   "stale_ticks": 5,
+   "decided_ticks": 16212,
+   "latency_s1": {
+    "n": 373,
+    "mean": 0.18695081846324113,
+    "p50": 0.17291855812072754,
+    "p90": 0.21705365180969238,
+    "max": 0.4506795406341553
+   },
+   "latency_s2": {
+    "n": 2,
+    "mean": 54.0352064371109,
+    "p50": 76.0754725933075,
+    "p90": 76.0754725933075,
+    "max": 76.0754725933075
+   },
+   "wall_s": 463.3487348470371,
+   "error": null,
+   "info": {
+    "score": 7.767833333333333,
+    "ticks": 16216,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 4.916666666666666,
+     "kill_progress": 0.16666666666666666,
+     "item_progress": 0.26666666666666666,
+     "secret_progress": 0.2,
+     "health": 0.24,
+     "armor": 1.17,
+     "remaining_ammo": 0.57,
+     "time_tiebreak": 0.8711666666666666,
+     "vizdoom_reward": 0.0,
+     "total": 7.767833333333333
+    }
+   },
+   "acts": 16212,
+   "acts_after_s1": 373,
+   "acts_after_s2": 2,
+   "failed_s1": 0,
+   "failed_s2": 1,
+   "timeouts_s1": 0,
+   "timeouts_s2": 1,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     76.075,
+     3724
+    ],
+    [
+     31.995,
+     751
+    ]
+   ]
+  },
+  {
+   "seed": 1013,
+   "score": 6.478587301587302,
+   "steps": 1841,
+   "system1_calls": 57,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 1842,
+   "latency_s1": {
+    "n": 57,
+    "mean": 0.18090709887052836,
+    "p50": 0.17566990852355957,
+    "p90": 0.2004389762878418,
+    "max": 0.2749824523925781
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 34.15216135978699,
+    "p50": 34.15216135978699,
+    "p90": 34.15216135978699,
+    "max": 34.15216135978699
+   },
+   "wall_s": 52.63313513901085,
+   "error": null,
+   "info": {
+    "score": 6.478587301587302,
+    "ticks": 1841,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 4.583333333333333,
+     "kill_progress": 0.16666666666666666,
+     "item_progress": 0.3333333333333333,
+     "secret_progress": 0.0,
+     "health": 0.54,
+     "armor": 0.03,
+     "remaining_ammo": 0.34,
+     "time_tiebreak": 0.9852539682539683,
+     "vizdoom_reward": 0.0,
+     "total": 6.478587301587302
+    }
+   },
+   "acts": 1842,
+   "acts_after_s1": 57,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     34.152,
+     436
+    ]
+   ]
+  },
+  {
+   "seed": 1014,
+   "score": 8.914015873015872,
+   "steps": 1999,
+   "system1_calls": 49,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 2000,
+   "latency_s1": {
+    "n": 49,
+    "mean": 0.17838079102185309,
+    "p50": 0.17302322387695312,
+    "p90": 0.20648670196533203,
+    "max": 0.2967402935028076
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 57.33562385686673,
+   "error": null,
+   "info": {
+    "score": 8.914015873015872,
+    "ticks": 1999,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "exit_success": 0.0,
+     "normalized_progress": 6.5,
+     "kill_progress": 0.26666666666666666,
+     "item_progress": 0.4,
+     "secret_progress": 0.0,
+     "health": 0.66,
+     "armor": 0.0,
+     "remaining_ammo": 0.77,
+     "time_tiebreak": 0.984015873015873,
+     "vizdoom_reward": 0.0,
+     "total": 8.914015873015872
+    }
+   },
+   "acts": 2000,
+   "acts_after_s1": 48,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   1001,
+   1002,
+   1003,
+   1004,
+   1005,
+   1006,
+   1007,
+   1008,
+   1011,
+   1012,
+   1013,
+   1014
+  ],
+  "expected_episodes": 12,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "2573154e2b3808ead8820a5d896ed439a623377e74946693ede009f200f71cb9",
+  "game_kind": "realtime",
+  "resolved_models": {
+   "system1": [
+    "jev:jev-1.14.0"
+   ],
+   "system2": [
+    "claude:gpt-6-astra"
+   ]
+  }
+ },
+ "score_std": 2.659499539782643
+}

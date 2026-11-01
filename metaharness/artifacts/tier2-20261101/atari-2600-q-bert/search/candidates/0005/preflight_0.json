@@ -1,0 +1,25 @@
+{
+  "ok": false,
+  "stage": "episode",
+  "repairable": true,
+  "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-q-bert/search/candidates/0005/harness.py\", line 578, in run_episode\n    action = controller.choose(obs)\n             ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-q-bert/search/candidates/0005/harness.py\", line 527, in choose\n    fallback = heuristic_action(\n               ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-q-bert/search/candidates/0005/harness.py\", line 177, in heuristic_action\n    route, target = find_route(obs, preferred_order)\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-q-bert/search/candidates/0005/harness.py\", line 127, in find_route\n    for action, neighbor in graph[current].items():\n                            ~~~~~^^^^^^^^^\nKeyError: -1\n",
+  "ended_by": "harness_error",
+  "score": 0.0,
+  "steps": 1,
+  "system1_calls": 0,
+  "system2_calls": 1,
+  "coverage": {
+    "system2_answers": 1,
+    "system1_answers": 0,
+    "failed_calls": 0,
+    "acts": 0,
+    "acts_after_s1": 0,
+    "acts_after_s2": 0,
+    "steps": 1,
+    "harness_events": 0
+  },
+  "warnings": [
+    "no System-1 call was answered during the dry run (the stand-in answers every question)",
+    "the harness never posted an action"
+  ]
+}

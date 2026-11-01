@@ -1,0 +1,1 @@
+Offline headless Linux server (no display, no GPU, no accounts). The evaluator's Python is the venv printed in the prompt; pip works there. Use a faithful local implementation or environment of the classic falling-blocks game with real-time gravity, exposing the board state symbolically.

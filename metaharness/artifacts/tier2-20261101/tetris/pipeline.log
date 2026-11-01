@@ -1,0 +1,48 @@
+[22:32:20] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[01:42:30] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[01:42:30] study: resuming the session 761d1516-75d0-4c60-af12-99820f03ae75 that ran out of time
+[01:58:03] study: done — tier 2, interface official env
+[02:30:41] adapt: adaptor validated after 1 attempt(s)
+[02:30:41] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[02:38:25] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[02:38:25] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/tetris/study/study.json (tier 2)
+[02:38:25] adapt: reusing validated adaptor
+[02:38:25] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[03:35:34] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[03:35:34] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/tetris/study/study.json (tier 2)
+[03:35:34] adapt: reusing validated adaptor
+[03:35:34] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[03:39:22] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[03:39:22] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/tetris/study/study.json (tier 2)
+[03:39:22] adapt: reusing validated adaptor
+[03:39:22] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[04:57:24] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[04:57:24] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/tetris/study/study.json (tier 2)
+[04:57:24] adapt: reusing validated adaptor
+[04:57:24] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[05:18:36] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[05:18:36] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/tetris/study/study.json (tier 2)
+[05:18:36] adapt: reusing validated adaptor
+[05:18:36] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[06:46:56] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[06:46:56] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/tetris/study/study.json (tier 2)
+[06:46:56] adapt: reusing validated adaptor
+[06:46:56] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[07:14:46] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[07:14:46] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/tetris/study/study.json (tier 2)
+[07:14:46] adapt: reusing validated adaptor
+[07:14:46] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[08:16:08] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[08:16:08] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/tetris/study/study.json (tier 2)
+[08:16:08] adapt: reusing validated adaptor
+[08:16:08] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[10:09:46] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[10:09:46] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/tetris/study/study.json (tier 2)
+[10:09:47] adapt: reusing validated adaptor
+[10:09:47] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[13:30:30] run: search interrupted (model unavailable: Jev HTTP 402: {"detail":{"error_type":"billing_error","message":"Your organization has no available TypeSafe API credits. Please add more credits and/or set up auto-reload at https:); rerun the same command to resume
+[14:57:53] run: game='Tetris' dir=/home/hemlix/GamingMaster-mh-tier2/runs/tetris agent=claude:gpt-6-astra
+[14:57:53] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/tetris/study/study.json (tier 2)
+[14:57:53] adapt: reusing validated adaptor
+[14:57:53] search: tier 2 on adaptor game 'Tetris (Guideline-compatible marathon)'
+[16:07:14] run: done — best 0017

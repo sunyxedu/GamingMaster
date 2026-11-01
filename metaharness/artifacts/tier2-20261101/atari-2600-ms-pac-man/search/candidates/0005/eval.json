@@ -1,0 +1,6 @@
+{
+ "fatal": "proposer failed: RuntimeError: claude -p failed (rc=1): API Error: Responses stream error: Upstream request failed (upstream_error)",
+ "mean_score": null,
+ "n_episodes": 0,
+ "game": "Atari 2600 Ms. Pac-Man"
+}

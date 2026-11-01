@@ -1,0 +1,6 @@
+{
+ "fatal": "proposer failed: ModelTimeout: timeout: claude -p exceeded 3600s (session 0db1563f-8059-4543-ab3d-34fdd849110e)",
+ "mean_score": null,
+ "n_episodes": 0,
+ "game": "Snake (local classic)"
+}

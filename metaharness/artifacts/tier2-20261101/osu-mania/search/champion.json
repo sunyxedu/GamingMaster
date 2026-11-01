@@ -1,0 +1,56 @@
+{
+  "candidate": "0008",
+  "train": 1000000.0,
+  "val": 1000000.0,
+  "combined": 1.0,
+  "seeds_val": {
+    "osu_mania_stable_native_ScoreV1_simulator": [
+      106,
+      107
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0008",
+      "rank": 0,
+      "status": "ok",
+      "train": 1000000.0,
+      "val": 1000000.0,
+      "per_game": {
+        "osu!mania (stable native ScoreV1 simulator)": 1000000.0
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0006",
+      "rank": 1,
+      "status": "ok",
+      "train": 1000000.0,
+      "val": 1000000.0,
+      "per_game": {
+        "osu!mania (stable native ScoreV1 simulator)": 1000000.0
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0007",
+      "rank": 2,
+      "status": "ok",
+      "train": 998898.6666666666,
+      "val": 1000000.0,
+      "per_game": {
+        "osu!mania (stable native ScoreV1 simulator)": 999174.0
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

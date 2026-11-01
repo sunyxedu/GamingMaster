@@ -1,0 +1,443 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/tetris/search/candidates/0021/harness.py",
+ "game": "Tetris (Guideline-compatible marathon)",
+ "fatal": null,
+ "mean_score": 59684.0,
+ "stale_fraction": 0.00011563367252543941,
+ "n_episodes": 6,
+ "system1_calls": 128,
+ "system2_calls": 10,
+ "mean_steps": 1441.3333333333333,
+ "failed_s1": 1,
+ "failed_s2": 5,
+ "timeouts_s1": 1,
+ "timeouts_s2": 5,
+ "ended_by": {
+  "game_done": 6
+ },
+ "s1_informed_fraction": 0.012709710218607015,
+ "s2_informed_fraction": 0.0,
+ "errors": [
+  "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)"
+ ],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 68814.0,
+   "steps": 1867,
+   "system1_calls": 24,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 1867,
+   "latency_s1": {
+    "n": 24,
+    "mean": 0.29310569167137146,
+    "p50": 0.2648952007293701,
+    "p90": 0.5276899337768555,
+    "max": 0.5446407794952393
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 94.44412474799901,
+   "error": null,
+   "info": {
+    "score": 68814.0,
+    "ticks": 1867,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "score": 68814.0,
+     "line_clear_points": 55200.0,
+     "drop_points": 6414.0,
+     "combo_points": 7200.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 79.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 93.35000000000001,
+     "holes": 0.0,
+     "aggregate_height": 10.0,
+     "bumpiness": 8.0,
+     "top_out_height": 6.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 2065,
+   "acts_after_s1": 23,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 1,
+   "timeouts_s1": 0,
+   "timeouts_s2": 1,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1,
+   "score": 52414.0,
+   "steps": 1497,
+   "system1_calls": 22,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 1497,
+   "latency_s1": {
+    "n": 22,
+    "mean": 0.30449120564894244,
+    "p50": 0.2689645290374756,
+    "p90": 0.4799916744232178,
+    "max": 0.5431389808654785
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 75.00688342493959,
+   "error": null,
+   "info": {
+    "score": 52414.0,
+    "ticks": 1497,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "score": 52414.0,
+     "line_clear_points": 43300.0,
+     "drop_points": 5964.0,
+     "combo_points": 3150.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 71.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 74.85000000000001,
+     "holes": 8.0,
+     "aggregate_height": 98.0,
+     "bumpiness": 12.0,
+     "top_out_height": 14.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1697,
+   "acts_after_s1": 22,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 1,
+   "timeouts_s1": 0,
+   "timeouts_s2": 1,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 2,
+   "score": 62954.0,
+   "steps": 1349,
+   "system1_calls": 28,
+   "system2_calls": 1,
+   "stale_ticks": 1,
+   "decided_ticks": 1348,
+   "latency_s1": {
+    "n": 28,
+    "mean": 0.28798494168690275,
+    "p50": 0.2544736862182617,
+    "p90": 0.48604249954223633,
+    "max": 0.5597772598266602
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 67.64363440009765,
+   "error": null,
+   "info": {
+    "score": 62954.0,
+    "ticks": 1349,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 62954.0,
+     "line_clear_points": 46600.0,
+     "drop_points": 6454.0,
+     "combo_points": 9900.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 79.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 67.45,
+     "holes": 0.0,
+     "aggregate_height": 10.0,
+     "bumpiness": 4.0,
+     "top_out_height": 6.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1543,
+   "acts_after_s1": 28,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 1,
+   "timeouts_s1": 0,
+   "timeouts_s2": 1,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 3,
+   "score": 54134.0,
+   "steps": 1416,
+   "system1_calls": 21,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 1416,
+   "latency_s1": {
+    "n": 20,
+    "mean": 0.28592380285263064,
+    "p50": 0.25414037704467773,
+    "p90": 0.4659295082092285,
+    "max": 0.5001120567321777
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 76.69521070295013,
+   "error": null,
+   "info": {
+    "score": 54134.0,
+    "ticks": 1416,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "score": 54134.0,
+     "line_clear_points": 44600.0,
+     "drop_points": 5634.0,
+     "combo_points": 3900.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 67.0,
+     "level": 7.0,
+     "pieces": 200.0,
+     "survival_s": 70.8,
+     "holes": 12.0,
+     "aggregate_height": 142.0,
+     "bumpiness": 26.0,
+     "top_out_height": 19.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1614,
+   "acts_after_s1": 19,
+   "acts_after_s2": 0,
+   "failed_s1": 1,
+   "failed_s2": 1,
+   "timeouts_s1": 1,
+   "timeouts_s2": 1,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 4,
+   "score": 62298.0,
+   "steps": 972,
+   "system1_calls": 15,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 972,
+   "latency_s1": {
+    "n": 15,
+    "mean": 0.28080318768819174,
+    "p50": 0.22973203659057617,
+    "p90": 0.45419812202453613,
+    "max": 0.5217022895812988
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 66.63911041384563,
+   "error": "1 ctx.spawn task(s) still running 10s after run_episode returned (model calls are cancelled or end with their own timeout; other background work must stop when ctx.done)",
+   "info": {
+    "score": 62298.0,
+    "ticks": 972,
+    "game_done": true,
+    "pending_tasks": 1,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 62298.0,
+     "line_clear_points": 52000.0,
+     "drop_points": 6748.0,
+     "combo_points": 3550.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 79.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 48.6,
+     "holes": 0.0,
+     "aggregate_height": 10.0,
+     "bumpiness": 5.0,
+     "top_out_height": 7.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1169,
+   "acts_after_s1": 15,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 5,
+   "score": 57490.0,
+   "steps": 1547,
+   "system1_calls": 18,
+   "system2_calls": 2,
+   "stale_ticks": 0,
+   "decided_ticks": 1547,
+   "latency_s1": {
+    "n": 18,
+    "mean": 0.25299763679504395,
+    "p50": 0.25244951248168945,
+    "p90": 0.43002986907958984,
+    "max": 0.4443991184234619
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 77.52445271704346,
+   "error": null,
+   "info": {
+    "score": 57490.0,
+    "ticks": 1547,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "score": 57490.0,
+     "line_clear_points": 45700.0,
+     "drop_points": 6490.0,
+     "combo_points": 5300.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 77.0,
+     "level": 8.0,
+     "pieces": 200.0,
+     "survival_s": 77.35000000000001,
+     "holes": 2.0,
+     "aggregate_height": 32.0,
+     "bumpiness": 3.0,
+     "top_out_height": 8.0,
+     "illegal_actions": 0.0,
+     "top_out": 0.0
+    }
+   },
+   "acts": 1747,
+   "acts_after_s1": 18,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 1,
+   "timeouts_s1": 0,
+   "timeouts_s2": 1,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "expected_episodes": 6,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "c9e08e84252f47c02fb85a5140ee324d59e8abfc800d4b3fc29d582294a6e5ae",
+  "game_kind": "realtime",
+  "resolved_models": {
+   "system1": [
+    "jev:jev-1.14.0"
+   ]
+  }
+ },
+ "score_std": 6153.890346764395
+}

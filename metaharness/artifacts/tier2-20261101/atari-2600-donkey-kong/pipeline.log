@@ -1,0 +1,25 @@
+[23:22:44] run: game='Atari 2600 Donkey Kong' dir=/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong agent=claude:gpt-6-astra
+[02:19:58] study: done — tier 2, interface official env (ALE/Stella through Gymnasium) + OCAtari RAM object decoder
+[02:55:40] adapt: adaptor validated after 1 attempt(s)
+[02:55:40] search: tier 2 on adaptor game 'Atari 2600 Donkey Kong'
+[05:12:04] run: game='Atari 2600 Donkey Kong' dir=/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong agent=claude:gpt-6-astra
+[05:12:04] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong/study/study.json (tier 2)
+[05:12:07] adapt: reusing validated adaptor
+[05:12:08] search: tier 2 on adaptor game 'Atari 2600 Donkey Kong'
+[08:42:55] run: game='Atari 2600 Donkey Kong' dir=/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong agent=claude:gpt-6-astra
+[08:42:55] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong/study/study.json (tier 2)
+[08:42:58] adapt: reusing validated adaptor
+[08:42:58] search: tier 2 on adaptor game 'Atari 2600 Donkey Kong'
+[14:25:27] run: game='Atari 2600 Donkey Kong' dir=/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong agent=claude:gpt-6-astra
+[14:25:27] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong/study/study.json (tier 2)
+[14:25:30] adapt: reusing validated adaptor
+[14:25:31] search: tier 2 on adaptor game 'Atari 2600 Donkey Kong'
+[18:12:24] run: game='Atari 2600 Donkey Kong' dir=/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong agent=claude:gpt-6-astra
+[18:12:24] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong/study/study.json (tier 2)
+[18:12:27] adapt: reusing validated adaptor
+[18:12:28] search: tier 2 on adaptor game 'Atari 2600 Donkey Kong'
+[21:50:57] run: game='Atari 2600 Donkey Kong' dir=/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong agent=claude:gpt-6-astra
+[21:50:57] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong/study/study.json (tier 2)
+[21:51:00] adapt: reusing validated adaptor
+[21:51:01] search: tier 2 on adaptor game 'Atari 2600 Donkey Kong'
+[02:43:33] run: done — best 0018

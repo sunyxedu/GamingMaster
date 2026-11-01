@@ -1,0 +1,527 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-space-invaders/search/candidates/0024/harness.py",
+ "game": "Atari 2600 Space Invaders",
+ "fatal": null,
+ "mean_score": 274.375,
+ "stale_fraction": 0.0,
+ "n_episodes": 8,
+ "system1_calls": 224,
+ "system2_calls": 8,
+ "mean_steps": 660.25,
+ "failed_s1": 0,
+ "failed_s2": 1,
+ "timeouts_s1": 0,
+ "timeouts_s2": 1,
+ "ended_by": {
+  "game_done": 8
+ },
+ "s1_informed_fraction": 0.04240817872018175,
+ "s2_informed_fraction": 0.0003786444528587656,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 215.0,
+   "steps": 688,
+   "system1_calls": 29,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 688,
+   "latency_s1": {
+    "n": 29,
+    "mean": 0.18615426688358702,
+    "p50": 0.1874542236328125,
+    "p90": 0.21135401725769043,
+    "max": 0.3293600082397461
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 45.93208487890661,
+   "error": null,
+   "info": {
+    "score": 215.0,
+    "ticks": 688,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "atari_score": 215.0,
+     "lives_remaining": 0.0,
+     "waves_cleared": 0.0,
+     "invaders_killed": 20.0,
+     "ufo_hits": 0.0,
+     "survival_ticks": 688.0
+    }
+   },
+   "acts": 688,
+   "acts_after_s1": 29,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1,
+   "score": 215.0,
+   "steps": 426,
+   "system1_calls": 20,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 426,
+   "latency_s1": {
+    "n": 20,
+    "mean": 0.1730732798576355,
+    "p50": 0.17048406600952148,
+    "p90": 0.19285225868225098,
+    "max": 0.19558000564575195
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 28.479287818074226,
+   "error": null,
+   "info": {
+    "score": 215.0,
+    "ticks": 426,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "atari_score": 215.0,
+     "lives_remaining": 0.0,
+     "waves_cleared": 0.0,
+     "invaders_killed": 18.0,
+     "ufo_hits": 0.0,
+     "survival_ticks": 426.0
+    }
+   },
+   "acts": 426,
+   "acts_after_s1": 20,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 2,
+   "score": 215.0,
+   "steps": 609,
+   "system1_calls": 23,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 609,
+   "latency_s1": {
+    "n": 23,
+    "mean": 0.1774299663046132,
+    "p50": 0.1670238971710205,
+    "p90": 0.19801568984985352,
+    "max": 0.21602582931518555
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 27.49483585357666,
+    "p50": 27.49483585357666,
+    "p90": 27.49483585357666,
+    "max": 27.49483585357666
+   },
+   "wall_s": 40.63097457611002,
+   "error": null,
+   "info": {
+    "score": 215.0,
+    "ticks": 609,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "atari_score": 215.0,
+     "lives_remaining": 0.0,
+     "waves_cleared": 0.0,
+     "invaders_killed": 16.0,
+     "ufo_hits": 0.0,
+     "survival_ticks": 609.0
+    }
+   },
+   "acts": 609,
+   "acts_after_s1": 23,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     27.495,
+     97
+    ]
+   ]
+  },
+  {
+   "seed": 3,
+   "score": 225.0,
+   "steps": 769,
+   "system1_calls": 34,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 769,
+   "latency_s1": {
+    "n": 34,
+    "mean": 0.185487803290872,
+    "p50": 0.19124579429626465,
+    "p90": 0.20974493026733398,
+    "max": 0.2656826972961426
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 51.328175727976486,
+   "error": null,
+   "info": {
+    "score": 225.0,
+    "ticks": 769,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "atari_score": 225.0,
+     "lives_remaining": 0.0,
+     "waves_cleared": 0.0,
+     "invaders_killed": 20.0,
+     "ufo_hits": 0.0,
+     "survival_ticks": 769.0
+    }
+   },
+   "acts": 769,
+   "acts_after_s1": 34,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 4,
+   "score": 555.0,
+   "steps": 850,
+   "system1_calls": 36,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 850,
+   "latency_s1": {
+    "n": 36,
+    "mean": 0.1843156549665663,
+    "p50": 0.1881110668182373,
+    "p90": 0.20125150680541992,
+    "max": 0.32607054710388184
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 56.70002849213779,
+   "error": null,
+   "info": {
+    "score": 555.0,
+    "ticks": 850,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "atari_score": 555.0,
+     "lives_remaining": 0.0,
+     "waves_cleared": 0.0,
+     "invaders_killed": 25.0,
+     "ufo_hits": 1.0,
+     "survival_ticks": 850.0
+    }
+   },
+   "acts": 850,
+   "acts_after_s1": 36,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 1,
+   "timeouts_s1": 0,
+   "timeouts_s2": 1,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 5,
+   "score": 340.0,
+   "steps": 722,
+   "system1_calls": 36,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 722,
+   "latency_s1": {
+    "n": 36,
+    "mean": 0.175105525387658,
+    "p50": 0.16620182991027832,
+    "p90": 0.2017378807067871,
+    "max": 0.2282557487487793
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 48.2988109390717,
+   "error": null,
+   "info": {
+    "score": 340.0,
+    "ticks": 722,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "atari_score": 340.0,
+     "lives_remaining": 0.0,
+     "waves_cleared": 0.0,
+     "invaders_killed": 24.0,
+     "ufo_hits": 0.0,
+     "survival_ticks": 722.0
+    }
+   },
+   "acts": 722,
+   "acts_after_s1": 36,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 6,
+   "score": 215.0,
+   "steps": 609,
+   "system1_calls": 23,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 609,
+   "latency_s1": {
+    "n": 23,
+    "mean": 0.1797795710356339,
+    "p50": 0.17769265174865723,
+    "p90": 0.2068021297454834,
+    "max": 0.22488903999328613
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 40.68871346511878,
+   "error": null,
+   "info": {
+    "score": 215.0,
+    "ticks": 609,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "atari_score": 215.0,
+     "lives_remaining": 0.0,
+     "waves_cleared": 0.0,
+     "invaders_killed": 16.0,
+     "ufo_hits": 0.0,
+     "survival_ticks": 609.0
+    }
+   },
+   "acts": 609,
+   "acts_after_s1": 23,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 7,
+   "score": 215.0,
+   "steps": 609,
+   "system1_calls": 23,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 609,
+   "latency_s1": {
+    "n": 23,
+    "mean": 0.17588168641795282,
+    "p50": 0.17073392868041992,
+    "p90": 0.20055174827575684,
+    "max": 0.20267415046691895
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 29.691255569458008,
+    "p50": 29.691255569458008,
+    "p90": 29.691255569458008,
+    "max": 29.691255569458008
+   },
+   "wall_s": 40.62474332982674,
+   "error": null,
+   "info": {
+    "score": 215.0,
+    "ticks": 609,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "atari_score": 215.0,
+     "lives_remaining": 0.0,
+     "waves_cleared": 0.0,
+     "invaders_killed": 16.0,
+     "ufo_hits": 0.0,
+     "survival_ticks": 609.0
+    }
+   },
+   "acts": 609,
+   "acts_after_s1": 23,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     29.691,
+     100
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7
+  ],
+  "expected_episodes": 8,
+  "game_kwargs": {
+   "mode": 0,
+   "difficulty": 0,
+   "frameskip": 4,
+   "repeat_action_probability": 0.25
+  },
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "a5350f245b2ffa52d451e13ca8c8b86ee81dc1c43dc64108da95f7fea5a5cf43",
+  "game_kind": "realtime",
+  "resolved_models": {
+   "system1": [
+    "jev:jev-1.14.0"
+   ],
+   "system2": [
+    "claude:gpt-6-astra"
+   ]
+  }
+ },
+ "score_std": 121.374200012076
+}

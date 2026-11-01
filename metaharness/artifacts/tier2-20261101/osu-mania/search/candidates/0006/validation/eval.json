@@ -1,0 +1,171 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/osu-mania/search/candidates/0006/harness.py",
+ "game": "osu!mania (stable native ScoreV1 simulator)",
+ "fatal": null,
+ "mean_score": 1000000.0,
+ "stale_fraction": 0.20537124802527645,
+ "n_episodes": 2,
+ "system1_calls": 23,
+ "system2_calls": 0,
+ "mean_steps": 633.0,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 2
+ },
+ "s1_informed_fraction": 0.02186878727634195,
+ "s2_informed_fraction": 0.0,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 106,
+   "score": 1000000.0,
+   "steps": 743,
+   "system1_calls": 14,
+   "system2_calls": 0,
+   "stale_ticks": 163,
+   "decided_ticks": 580,
+   "latency_s1": {
+    "n": 14,
+    "mean": 0.19261343138558523,
+    "p50": 0.17188334465026855,
+    "p90": 0.2898995876312256,
+    "max": 0.306896448135376
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 11.91504067205824,
+   "error": null,
+   "info": {
+    "score": 1000000.0,
+    "ticks": 743,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "native_score_v1": 1000000.0,
+     "accuracy": 1.0,
+     "progress": 1.0,
+     "combo_reliability": 1.0,
+     "miss_rate": 0.0,
+     "hold_break_rate": 0.0
+    }
+   },
+   "acts": 580,
+   "acts_after_s1": 13,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 107,
+   "score": 1000000.0,
+   "steps": 523,
+   "system1_calls": 9,
+   "system2_calls": 0,
+   "stale_ticks": 97,
+   "decided_ticks": 426,
+   "latency_s1": {
+    "n": 9,
+    "mean": 0.17622894710964626,
+    "p50": 0.17555546760559082,
+    "p90": 0.25635695457458496,
+    "max": 0.25635695457458496
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 8.37554143089801,
+   "error": null,
+   "info": {
+    "score": 1000000.0,
+    "ticks": 523,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "native_score_v1": 1000000.0,
+     "accuracy": 1.0,
+     "progress": 1.0,
+     "combo_reliability": 1.0,
+     "miss_rate": 0.0,
+     "hold_break_rate": 0.0
+    }
+   },
+   "acts": 426,
+   "acts_after_s1": 9,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   106,
+   107
+  ],
+  "expected_episodes": 2,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "91d614f336d0732d6ec08cc7d8cc879fdb6562d99a9e589e7244ca167189ee69",
+  "game_kind": "realtime",
+  "resolved_models": {
+   "system1": [
+    "jev:jev-1.14.0"
+   ]
+  }
+ },
+ "score_std": 0.0
+}

@@ -1,0 +1,6 @@
+{
+ "fatal": "proposer failed: ModelTimeout: timeout: claude -p exceeded 3600s (session ce52209f-346d-4e12-8d3a-911765c78df0)",
+ "mean_score": null,
+ "n_episodes": 0,
+ "game": "Atari 2600 Breakout"
+}

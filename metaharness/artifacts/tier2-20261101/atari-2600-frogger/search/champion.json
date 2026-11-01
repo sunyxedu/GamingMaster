@@ -1,0 +1,56 @@
+{
+  "candidate": "0017",
+  "train": 4433.0,
+  "val": 4874.0,
+  "combined": 1.0,
+  "seeds_val": {
+    "Atari_2600_Frogger": [
+      131,
+      137
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0023",
+      "rank": 0,
+      "status": "ok",
+      "train": 4634.5,
+      "val": 3822.0,
+      "per_game": {
+        "Atari 2600 Frogger": 4431.375
+      },
+      "norm": [
+        0.12682926829268293
+      ],
+      "combined": 0.12682926829268293
+    },
+    {
+      "candidate": "0017",
+      "rank": 1,
+      "status": "ok",
+      "train": 4433.0,
+      "val": 4874.0,
+      "per_game": {
+        "Atari 2600 Frogger": 4543.25
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0018",
+      "rank": 2,
+      "status": "ok",
+      "train": 4346.666666666667,
+      "val": 4620.5,
+      "per_game": {
+        "Atari 2600 Frogger": 4415.125
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

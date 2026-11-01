@@ -1,0 +1,22 @@
+{
+  "ok": false,
+  "stage": "episode",
+  "repairable": true,
+  "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 790, in options\n    return [self.make_task(\"park_cooking\", park, 8, \"cook\", wait=True,\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'cook'\n",
+  "ended_by": "harness_error",
+  "score": 0.0,
+  "steps": 25,
+  "system1_calls": 2,
+  "system2_calls": 1,
+  "coverage": {
+    "system2_answers": 1,
+    "system1_answers": 2,
+    "failed_calls": 0,
+    "acts": 25,
+    "acts_after_s1": 2,
+    "acts_after_s2": 1,
+    "steps": 25,
+    "harness_events": 9
+  },
+  "warnings": []
+}

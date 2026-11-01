@@ -1,0 +1,2 @@
+# Python 3.12+ standard library only; metaharness is supplied by the evaluator.
+# Node dependencies are fully pinned in bridge/package-lock.json; run ./setup.sh.

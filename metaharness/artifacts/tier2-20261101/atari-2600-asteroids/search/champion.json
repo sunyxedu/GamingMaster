@@ -1,0 +1,56 @@
+{
+  "candidate": "0022",
+  "train": 28303.333333333332,
+  "val": 27040.0,
+  "combined": 1.0,
+  "seeds_val": {
+    "Atari_2600_Asteroids": [
+      12,
+      14
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0022",
+      "rank": 0,
+      "status": "ok",
+      "train": 28303.333333333332,
+      "val": 27040.0,
+      "per_game": {
+        "Atari 2600 Asteroids": 27987.5
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0025",
+      "rank": 1,
+      "status": "ok",
+      "train": 27953.333333333332,
+      "val": 25945.0,
+      "per_game": {
+        "Atari 2600 Asteroids": 27451.25
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    },
+    {
+      "candidate": "0026",
+      "rank": 2,
+      "status": "ok",
+      "train": 27616.666666666668,
+      "val": 27140.0,
+      "per_game": {
+        "Atari 2600 Asteroids": 27497.5
+      },
+      "norm": [
+        0.08624708624708624
+      ],
+      "combined": 0.08624708624708624
+    }
+  ]
+}

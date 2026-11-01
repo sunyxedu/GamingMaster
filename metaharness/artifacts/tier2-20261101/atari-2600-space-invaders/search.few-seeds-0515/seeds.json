@@ -1,0 +1,66 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          0,
+          1,
+          2
+        ]
+      ],
+      [
+        "val",
+        [
+          3
+        ]
+      ],
+      [
+        "heldout",
+        [
+          100,
+          101
+        ]
+      ]
+    ],
+    "game_kwargs": {
+      "mode": 0,
+      "difficulty": 0,
+      "frameskip": 4,
+      "repeat_action_probability": 0.25
+    },
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "5606a44a86c06cd7a558cb22c9ea656d51a7191796eb275a969f11226c85ecd7"
+  },
+  "results": {
+    "train:0": {
+      "ok": true,
+      "obs_sha256": "9052e1814bf13b5d"
+    },
+    "train:1": {
+      "ok": true,
+      "obs_sha256": "9052e1814bf13b5d"
+    },
+    "train:2": {
+      "ok": true,
+      "obs_sha256": "9052e1814bf13b5d"
+    },
+    "val:3": {
+      "ok": true,
+      "obs_sha256": "9052e1814bf13b5d"
+    },
+    "heldout:100": {
+      "ok": true,
+      "obs_sha256": "9052e1814bf13b5d"
+    },
+    "heldout:101": {
+      "ok": true,
+      "obs_sha256": "9052e1814bf13b5d"
+    }
+  },
+  "refused": [],
+  "warnings": [
+    "held-out / validation seeds start exactly like a training seed: val:3, heldout:100, heldout:101"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "ok": false,
+  "stage": "episode",
+  "repairable": true,
+  "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-breakout/search/candidates/0024/harness.py\", line 599, in run_episode\n    if not self._one(game, realtime):\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-breakout/search/candidates/0024/harness.py\", line 1418, in _one\n    action = self._steer_interval(obs, motor_flight, frame)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-breakout/search/candidates/0024/harness.py\", line 1401, in _steer_interval\n    locked = self._impact_action(obs, flight, frame)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-breakout/search/candidates/0024/harness.py\", line 1386, in _impact_action\n    \"paddle_v\": round(raw_v, 2),\n                      ^^^^^\nNameError: name 'raw_v' is not defined\n",
+  "ended_by": "harness_error",
+  "score": 0.0,
+  "steps": 59,
+  "system1_calls": 1,
+  "system2_calls": 0,
+  "coverage": {
+    "system2_answers": 0,
+    "system1_answers": 1,
+    "failed_calls": 0,
+    "acts": 59,
+    "acts_after_s1": 1,
+    "acts_after_s2": 0,
+    "steps": 59,
+    "harness_events": 80
+  },
+  "warnings": [
+    "no System-2 call was answered during the dry run"
+  ]
+}

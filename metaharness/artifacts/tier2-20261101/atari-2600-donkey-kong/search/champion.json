@@ -1,0 +1,56 @@
+{
+  "candidate": "0018",
+  "train": 4133.333333333333,
+  "val": 4150.0,
+  "combined": 1.0,
+  "seeds_val": {
+    "Atari_2600_Donkey_Kong": [
+      6,
+      7
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0018",
+      "rank": 0,
+      "status": "ok",
+      "train": 4133.333333333333,
+      "val": 4150.0,
+      "per_game": {
+        "Atari 2600 Donkey Kong": 4137.5
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0025",
+      "rank": 1,
+      "status": "ok",
+      "train": 4133.333333333333,
+      "val": 4150.0,
+      "per_game": {
+        "Atari 2600 Donkey Kong": 4137.5
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0017",
+      "rank": 2,
+      "status": "ok",
+      "train": 4000.0,
+      "val": 4050.0,
+      "per_game": {
+        "Atari 2600 Donkey Kong": 4012.5
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    }
+  ]
+}

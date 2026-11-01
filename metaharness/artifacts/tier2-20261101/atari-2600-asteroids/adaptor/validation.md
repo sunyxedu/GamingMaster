@@ -1,0 +1,29 @@
+# Adaptor validation: PASS
+
+- [x] load game.py and make_game() — name=Atari 2600 Asteroids tier=tier2 realtime=True
+- [x] TIER agrees with the game's kind (2 <=> tick()) — TIER=2; the game is real-time (has tick)
+- [x] tier 2, as the study decided — the game is real-time (has tick), tier2
+- [x] SEEDS: non-empty, disjoint train / held-out lists of ints — 8 train (0, 2, 4, 6, 8, …), 8 held-out (1, 3, 5, 7, 9, …)
+- [x] action_spec is an ActionSpec with >=1 action
+- [x] realtime: tick_s > 0 and noop action set — tick_s=0.016666666666666666 noop=NOOP
+- [x] describe() returns a non-trivial string — 4278 chars
+- [x] seed 0: observe() JSON-serialisable — 2925 bytes
+- [x] seed 0: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 0: applied 12 actions without exception
+- [x] seed 0: done is bool and score is a finite number after the actions — done=False score=0.0
+- [x] seed 0: observations after the actions are strict JSON
+- [x] seed 0: ticks counter advanced — ticks=12 applied=12
+- [x] seed 0: tick() keeps the declared pace — median tick() 0.3 ms, tick_s 17 ms
+- [x] seed 0: info() is a dict
+- [x] seed 1: observe() JSON-serialisable — 2928 bytes
+- [x] seed 1: done is bool and score is a number after reset — done=False score=0.0
+- [x] seed 1: applied 12 actions without exception
+- [x] seed 1: done is bool and score is a finite number after the actions — done=False score=0.0
+- [x] seed 1: observations after the actions are strict JSON
+- [x] seed 1: ticks counter advanced — ticks=12 applied=12
+- [x] seed 1: tick() keeps the declared pace — median tick() 0.3 ms, tick_s 17 ms
+- [x] seed 1: info() is a dict
+- [x] malformed action '__not_an_action__' does not raise
+- [x] close() releases the instance (called after every episode)
+- [x] DETERMINISTIC: reset(seed) on a fresh instance reproduces the first observation
+- [x] different seeds give different starts (scenario variety)

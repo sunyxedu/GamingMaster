@@ -1,0 +1,22 @@
+{
+  "ok": false,
+  "stage": "episode",
+  "repairable": true,
+  "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0010/harness.py\", line 1293, in run_episode\n    OwnershipKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0010/harness.py\", line 1219, in run\n    action = self._motor(obs)\n             ^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0010/harness.py\", line 1122, in _motor\n    if path and path[0] == current and len(path) > 1 and path[1] != partner_pos:\n       ^^^^\nUnboundLocalError: cannot access local variable 'path' where it is not associated with a value\n",
+  "ended_by": "harness_error",
+  "score": 0.0,
+  "steps": 2,
+  "system1_calls": 1,
+  "system2_calls": 1,
+  "coverage": {
+    "system2_answers": 1,
+    "system1_answers": 1,
+    "failed_calls": 0,
+    "acts": 2,
+    "acts_after_s1": 1,
+    "acts_after_s2": 0,
+    "steps": 2,
+    "harness_events": 3
+  },
+  "warnings": []
+}

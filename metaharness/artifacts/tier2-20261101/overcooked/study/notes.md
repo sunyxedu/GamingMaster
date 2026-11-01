@@ -1,0 +1,1 @@
+Offline headless Linux server (no display, no GPU, no accounts). The evaluator's Python is the venv printed in the prompt; pip works there. Use the open-source Overcooked-AI environment (install from its GitHub repository if the PyPI release is stale), playing with a scripted partner; symbolic state.

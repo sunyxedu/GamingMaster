@@ -1,0 +1,473 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong/search/candidates/0026/harness.py",
+ "game": "Atari 2600 Donkey Kong",
+ "fatal": null,
+ "mean_score": 0.0,
+ "stale_fraction": 0.0,
+ "n_episodes": 6,
+ "system1_calls": 18,
+ "system2_calls": 6,
+ "mean_steps": 527.0,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 6
+ },
+ "s1_informed_fraction": 0.0056925996204933585,
+ "s2_informed_fraction": 0.0018975332068311196,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 0.0,
+   "steps": 526,
+   "system1_calls": 3,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 526,
+   "latency_s1": {
+    "n": 3,
+    "mean": 0.16255712509155273,
+    "p50": 0.16290640830993652,
+    "p90": 0.16934657096862793,
+    "max": 0.16934657096862793
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 13.095652341842651,
+    "p50": 13.095652341842651,
+    "p90": 13.095652341842651,
+    "max": 13.095652341842651
+   },
+   "wall_s": 35.06950415717438,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 526,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 0.0,
+     "screens_completed": 0.0,
+     "current_bonus": 4500.0,
+     "rivets_removed": 0.0,
+     "lives_remaining": 0.0,
+     "terminated": 1.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 526,
+   "acts_after_s1": 3,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     13.096,
+     156
+    ]
+   ]
+  },
+  {
+   "seed": 1,
+   "score": 0.0,
+   "steps": 529,
+   "system1_calls": 3,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 529,
+   "latency_s1": {
+    "n": 3,
+    "mean": 0.15899944305419922,
+    "p50": 0.16264653205871582,
+    "p90": 0.1685178279876709,
+    "max": 0.1685178279876709
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 16.660016775131226,
+    "p50": 16.660016775131226,
+    "p90": 16.660016775131226,
+    "max": 16.660016775131226
+   },
+   "wall_s": 35.269473298219964,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 529,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 0.0,
+     "screens_completed": 0.0,
+     "current_bonus": 4500.0,
+     "rivets_removed": 0.0,
+     "lives_remaining": 0.0,
+     "terminated": 1.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 529,
+   "acts_after_s1": 3,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     16.66,
+     155
+    ]
+   ]
+  },
+  {
+   "seed": 2,
+   "score": 0.0,
+   "steps": 527,
+   "system1_calls": 3,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 527,
+   "latency_s1": {
+    "n": 3,
+    "mean": 0.16398986180623373,
+    "p50": 0.16449522972106934,
+    "p90": 0.16774463653564453,
+    "max": 0.16774463653564453
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 5.571815490722656,
+    "p50": 5.571815490722656,
+    "p90": 5.571815490722656,
+    "max": 5.571815490722656
+   },
+   "wall_s": 35.13686862285249,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 527,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 0.0,
+     "screens_completed": 0.0,
+     "current_bonus": 4500.0,
+     "rivets_removed": 0.0,
+     "lives_remaining": 0.0,
+     "terminated": 1.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 527,
+   "acts_after_s1": 3,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     5.572,
+     85
+    ]
+   ]
+  },
+  {
+   "seed": 3,
+   "score": 0.0,
+   "steps": 528,
+   "system1_calls": 3,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 528,
+   "latency_s1": {
+    "n": 3,
+    "mean": 0.16878286997477213,
+    "p50": 0.16600990295410156,
+    "p90": 0.18460369110107422,
+    "max": 0.18460369110107422
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 17.396153926849365,
+    "p50": 17.396153926849365,
+    "p90": 17.396153926849365,
+    "max": 17.396153926849365
+   },
+   "wall_s": 35.2032212249469,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 528,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 0.0,
+     "screens_completed": 0.0,
+     "current_bonus": 4400.0,
+     "rivets_removed": 0.0,
+     "lives_remaining": 0.0,
+     "terminated": 1.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 528,
+   "acts_after_s1": 3,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     17.396,
+     155
+    ]
+   ]
+  },
+  {
+   "seed": 4,
+   "score": 0.0,
+   "steps": 526,
+   "system1_calls": 3,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 526,
+   "latency_s1": {
+    "n": 3,
+    "mean": 0.17431235313415527,
+    "p50": 0.17528653144836426,
+    "p90": 0.18034982681274414,
+    "max": 0.18034982681274414
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 10.613338708877563,
+    "p50": 10.613338708877563,
+    "p90": 10.613338708877563,
+    "max": 10.613338708877563
+   },
+   "wall_s": 35.07077250815928,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 526,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 0.0,
+     "screens_completed": 0.0,
+     "current_bonus": 4500.0,
+     "rivets_removed": 0.0,
+     "lives_remaining": 0.0,
+     "terminated": 1.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 526,
+   "acts_after_s1": 3,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     10.613,
+     85
+    ]
+   ]
+  },
+  {
+   "seed": 5,
+   "score": 0.0,
+   "steps": 526,
+   "system1_calls": 3,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 526,
+   "latency_s1": {
+    "n": 3,
+    "mean": 0.17502593994140625,
+    "p50": 0.17534852027893066,
+    "p90": 0.19293975830078125,
+    "max": 0.19293975830078125
+   },
+   "latency_s2": {
+    "n": 1,
+    "mean": 10.21628999710083,
+    "p50": 10.21628999710083,
+    "p90": 10.21628999710083,
+    "max": 10.21628999710083
+   },
+   "wall_s": 35.07024560798891,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 526,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "ale_reward": 0.0,
+     "screens_completed": 0.0,
+     "current_bonus": 4500.0,
+     "rivets_removed": 0.0,
+     "lives_remaining": 0.0,
+     "terminated": 1.0,
+     "truncated": 0.0
+    }
+   },
+   "acts": 526,
+   "acts_after_s1": 3,
+   "acts_after_s2": 1,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ],
+    "system2": [
+     "claude:gpt-6-astra"
+    ]
+   },
+   "calls_s2": [
+    [
+     10.216,
+     191
+    ]
+   ]
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "expected_episodes": 6,
+  "game_kwargs": {
+   "frameskip": 4,
+   "repeat_action_probability": 0.25,
+   "difficulty": 0,
+   "full_action_space": true
+  },
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "cd87db1f0447c05cc49f4081a79f7ca41db30f1b275347643372bdbfe450a014",
+  "game_kind": "realtime",
+  "resolved_models": {
+   "system1": [
+    "jev:jev-1.14.0"
+   ],
+   "system2": [
+    "claude:gpt-6-astra"
+   ]
+  }
+ },
+ "score_std": 0.0
+}

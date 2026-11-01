@@ -1,0 +1,44 @@
+{
+  "game": "Atari 2600 Asteroids",
+  "tier": 2,
+  "tier_rationale": "The original Atari 2600 game is continuous real-time action at approximately 60 frames per second, with rotation, thrust, projectiles and collisions requiring sub-second reactions. Keep tier 2: a deterministic fast controller must act while Astra plans and Jev evaluates typed choices. ALE itself is synchronously stepped and does not advance while a model is thinking; the adaptor must explicitly implement a real-time or simulated-time tick contract rather than misclassifying paused emulation as turn-based gameplay.",
+  "decision_latency_s": 0.1,
+  "interface": {
+    "chosen": "emulator",
+    "why": "Native ALE through Gymnasium runs headlessly on the evaluator's Python 3.12.3, exposes authoritative score/lives/termination and 128-byte RAM, and can supply object-level JSON through a small read-only Asteroids decoder based on OCAtari's documented RAM extraction. This avoids GUI input latency and the full OCAtari wrapper's observed flag-order and object-tracking issues while retaining optional RGB validation.",
+    "software": [
+      "Python 3.12.3 (provided evaluator)",
+      "ale-py==0.12.1",
+      "gymnasium==1.3.0",
+      "numpy==1.26.4",
+      "ALE ROM asset bundled with ale-py 0.12.1",
+      "read-only Asteroids RAM object decoder implemented by the adaptor phase"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Use /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-asteroids/.venv/bin/python; the pinned native packages were installed and headless reset/RAM/RGB were smoke-tested during study.",
+      "Import gymnasium and ale_py, call gym.register_envs(ale_py), and create ALE/Asteroids-v5 with obs_type=ram, render_mode=None, frameskip=1, repeat_action_probability=0.0, mode=0, difficulty=0, max_num_frames_per_episode=18000 and reduced actions.",
+      "Read runtime action meanings and record versions, ROM identity and settings; do not confuse reduced Gym indices with raw ALE enumeration values.",
+      "Implement the documented read-only RAM decoder, independently tracked wrap-aware velocities, presence/coverage flags and optional RGB diagnostics; do not use OCAtari HUD objects as numeric score/lives.",
+      "Use reset(seed), verify same-seed reproducibility and cross-seed diversity, and specify any seeded start-phase pre-roll explicitly; do not alter lives or score with RAM writes.",
+      "Implement a single-owner emulator tick loop, bounded input durations, stale-model-answer rejection and deterministic emergency fallback so model calls do not pause tier-2 play.",
+      "Accumulate unclipped native reward; end only at actual game over or a declared 18000-frame budget, reporting termination and truncation separately.",
+      "Validate decoder coverage, actions, score, life loss, rollover, reset and timing before adding hard-difficulty enemy-craft scenarios."
+    ],
+    "observation": "JSON derived from the 128-byte RAM: player presence, position, 16-valued orientation code, tracked velocity/confidence, asteroid source slots/positions/sizes, two player missile slots, native lives, cumulative reward score, displayed score, frame/time, settings and coverage flags. Optional 210x160 RGB diagnostic image. The inspected OCAtari reference lacks explicit saucer/satellite/enemy-shot classes, so default coverage must not claim those absent in hard settings.",
+    "actions": "Fourteen reduced discrete Gym actions: NOOP, FIRE, UP, RIGHT, LEFT, DOWN, UPRIGHT, UPLEFT, UPFIRE, RIGHTFIRE, LEFTFIRE, DOWNFIRE, UPRIGHTFIRE, UPLEFTFIRE. Up thrusts; left/right rotate; down invokes mode-specific defense. Use one-frame native steps with short explicitly bounded repeats; no raw RAM modification or score/life cheats."
+  },
+  "scoring": "Report sum of original unclipped ALE rewards within a fixed 18000-emulated-frame budget or true game over. Asteroids ALE corrects 100000-point display rollover. Report surviving frames/seconds, lives lost, displayed score, settings and termination/truncation reason separately; do not replace score with survival or reward shaping.",
+  "scenarios": "Keep the ROM, one-player mode 0, difficulty 0, frame budget and sticky-action policy fixed for the main score suite. Local fixed-input checks found identical RAM trajectories for reset seeds 0, 1, 2, 3, 42 and 123, so seed alone is not meaningful randomization here. For held-out robustness, define a versioned scenario catalogue before evaluation and map seed to explicit mode/difficulty/speed/defense variants, or to a measured bounded control prelude whose frames, rewards and life losses remain in the reported budget; report variants separately because they change the task. Do not randomize RAM, silently discard prelude outcomes, or memorize seed schedules. Add fast modes, defense groups and difficulty 3 only after mode mapping and enemy-craft observation coverage are validated.",
+  "strategy_summary": "Begin with controlled central firing and short aiming sweeps rather than continuous thrust. Prioritize imminent collision threats, then small fast rocks and clean firing opportunities, while preparing for fragments and fresh waves. Put numerical trajectory tracking, wrap-aware geometry, action timers, score/life bookkeeping and emergency reactions in code. Ask Jev to choose among precomputed safe candidates and classify field danger, not to perform arithmetic or plan long sequences. Let Astra select and adapt the strategic policy from aggregate score and death patterns without blocking the tick loop. Use defense sparingly and according to the selected mode; shield duration must be bounded and hyperspace is not guaranteed safe. Validate firing cadence, orientation mapping and enemy coverage instead of borrowing arcade-version mechanics.",
+  "risks": [
+    "ALE is synchronous; a harness that waits for models can accidentally pause real-time play and invalidate the tier-2 latency contract.",
+    "Jev's approximately 0.5-second latency is too slow for some collisions; Astra must not control the emergency loop.",
+    "OCAtari's inspected Asteroids extractors omit enemy craft/projectiles, contain geometry caveats and recreate some objects, making inherited velocity fields unreliable.",
+    "OCAtari 2.2.1 swaps terminated/truncated in its step return; native Gymnasium is preferred.",
+    "ROM rights and redistribution terms are distinct from emulator software licensing; no arbitrary ROM downloads or accounts are required for the tested ALE-distributed asset.",
+    "Package versions and ROM identity must be pinned; ale-py 0.12.0 had a ROM-packaging issue and legacy AutoROM instructions may be obsolete.",
+    "Different seeds may produce identical initial states; reset diversity must be measured rather than assumed.",
+    "Fire cadence, exact wrap period, collision geometry, mode mapping and harder-setting observation coverage still require calibration in the adaptor phase."
+  ]
+}

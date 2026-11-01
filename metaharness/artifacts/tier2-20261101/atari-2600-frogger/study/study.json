@@ -1,0 +1,44 @@
+{
+  "game": "Frogger (Atari 2600, Parker Brothers, 1982)",
+  "tier": 2,
+  "tier_rationale": "The Atari 2600 world continues to animate at roughly the display-frame rate while the agent thinks: traffic crosses five lanes, river platforms drift, and diving turtles can become unsafe. A run has only 30 seconds, and a stale action can cause a collision or carry the frog off-screen, although the frog can wait safely on the sidewalk, median, or a suitable platform. Use Jev for immediate typed action judgments at sub-second cadence while Astra plans routes and adapts between hazards; configure ALE for one-frame deterministic stepping rather than relying on its default four-frame sticky-action wrapper.",
+  "decision_latency_s": 0.25,
+  "interface": {
+    "chosen": "official env",
+    "why": "Farama's official Arcade Learning Environment uses the Stella Atari 2600 emulator, includes the Frogger ROM and game-specific score/life integration, runs headlessly in-process, exposes 128-byte RAM rather than requiring screenshots, supports deterministic reset seeds and emulator snapshots, and has the exact five-action minimal set. Stable-Retro and Stella debugging are viable fallbacks but need a custom integration or an external control bridge; screen capture and input injection are slower and less reliable.",
+    "software": [
+      "ale-py==0.12.1",
+      "gymnasium==1.4.0",
+      "numpy (installed by ale-py)"
+    ],
+    "env": [
+      {
+        "var": "ALE_ROMS_DIR",
+        "description": "Optional directory containing an ALE-hash-compatible frogger.bin if deployment policy requires an external ROM location; omit it to use the ROM bundled in ale-py.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Install ale-py==0.12.1 and gymnasium==1.4.0 with the evaluator's Python 3.12.3 venv.",
+      "Import ale_py and gymnasium, then call gym.register_envs(ale_py).",
+      "Create ALE/Frogger-v5 with obs_type=ram, frameskip=1, repeat_action_probability=0.0, full_action_space=False, mode=0, difficulty=0, and no render mode.",
+      "Call reset(seed) and retain the returned seeds, frame counters, lives, and raw 128-byte RAM.",
+      "Decode ALE RAM indices as 6502 addresses 0x80 through 0xFF; validate community candidate fields against the exact loaded ROM before exposing them as trusted object state.",
+      "After each one-frame step, emit JSON containing raw RAM, named frog/road/river/home fields, score and score_delta, lives, frame counters, reward, terminal, and truncated.",
+      "Use clone_state(include_rng=True) and restore_state for exact short planning branches, keeping rollouts separate from the live Jev-controlled state."
+    ],
+    "observation": "The adaptor should expose a JSON object with raw_ram (128 uint8 values), episode_frame_number, frame_number, ALE lives, score decoded from the BCD/decimal fields at 0xCC and 0xCE, terminal/life state from 0xD0, and calibrated named frog, road, river-platform, home-bay, timer, hazard, and level fields. ALE itself provides RAM, reward, lives, frame counters, and optional RGB/grayscale; it does not name cars or turtles, so object-level fields must be produced by the adaptor and retain decoder confidence plus raw_ram. Sources: https://ale.farama.org/python-interface/ and https://github.com/Farama-Foundation/Arcade-Learning-Environment/blob/main/src/ale/games/supported/Frogger.cpp",
+    "actions": "Send one of the five minimal ALE actions each step: 0=NOOP, 1=UP, 2=RIGHT, 3=LEFT, 4=DOWN. Use one-frame stepping and debounce intentional hops in games 1-4; NOOP is the safe wait action. Fire is unnecessary. Mode 2/game 5 is Speedy Frogger and requires explicit handling of held/repeated directions. Source: https://ale.farama.org/environments/frogger/"
+  },
+  "scoring": "Report cumulative ALE reward and the decoded on-screen score as the primary score because ALE computes Frogger reward as the change in the BCD/decimal score at RAM 0xCC/0xCE. Also report score_delta, frogs_home, deaths, reserve_frogs, time_bonus, level, and terminal_reason: the manual awards 1 for a forward jump, 5 for a home, 100 for five homes, 20 for a lady frog, 20 for a fly, and 2 per second remaining. Sources: https://github.com/Farama-Foundation/Arcade-Learning-Environment/blob/main/src/ale/games/supported/Frogger.cpp and https://atariage.com/manual_html_page.php?SoftwareLabelID=194",
+  "scenarios": "Call reset(seed) with held-out integer seeds and keep mode=0, difficulty=0 for the primary benchmark; vary seeds so traffic/platform phases and initial object arrangements are unseen at evaluation. Add secondary scenario sets for ALE mode=1 (harder single-player variation), mode=2/Speedy Frogger, and difficulty=1 (floating objects wrap rather than killing the frog) without mixing their scores. Run enough frames to include multiple frogs and the five-home level transition, and record seeds, mode, difficulty, ROM hash, frameskip, and sticky-action probability with every episode.",
+  "strategy_summary": "Strong play alternates short forward hops with deliberate NOOP waits: cross each traffic lane through a predicted gap, pause at the median, then ride broad logs or safe red turtles while compensating for platform drift. Never jump sideways off a platform end, remain on a light-blue diving turtle, enter an occupied or crocodile-threatened home bay, or let a Difficulty-A carrier reach the screen edge. Use code for RAM decoding, score/life bookkeeping, velocity and collision intervals, debounce, and clone/restore; have Astra choose routes and trade bonuses against survival, while Jev answers immediate hazard, safe-wait, platform, bay, and next-action questions. Re-estimate object speeds and become more conservative after each five-home difficulty increase.",
+  "risks": [
+    "ALE exposes bytes rather than a ready-made symbolic object graph; the RAM decoder must be calibrated and tested against the exact ROM hash.",
+    "The ALE package is GPL-2.0 and the bundled Atari cartridge remains subject to ROM copyright/licensing constraints; use only a legally permitted copy in deployment.",
+    "ALE's reset lives value of 4 is a reserve/life field while the manual describes five starting frogs; report these semantics separately.",
+    "Default ALE v5 frameskip=4 and sticky actions=0.25 can hide urgent changes, so the adaptor should pin frameskip=1 and sticky actions=0.0 and record the settings.",
+    "Stella's documented debugger is GUI-oriented and has no documented remote socket or GDB interface; it is not a production control transport.",
+    "A slow Astra call can miss a moving car, drifting platform, or diving-turtle transition; Jev must keep acting at sub-second cadence and use NOOP only when the state is verified safe."
+  ]
+}

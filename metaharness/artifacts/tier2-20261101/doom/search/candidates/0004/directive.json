@@ -1,0 +1,10 @@
+{
+  "mode": "rewrite",
+  "parents": [
+    1
+  ],
+  "parent_dirs": [
+    "0001-tier2_astra_only"
+  ],
+  "generation": 0
+}

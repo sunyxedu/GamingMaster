@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "stage": "episode",
+  "repairable": true,
+  "error": "",
+  "ended_by": "virtual_cap",
+  "score": 4.478674603174603,
+  "steps": 1999,
+  "system1_calls": 8,
+  "system2_calls": 0,
+  "coverage": {
+    "system2_answers": 0,
+    "system1_answers": 8,
+    "failed_calls": 0,
+    "acts": 54,
+    "acts_after_s1": 8,
+    "acts_after_s2": 0,
+    "steps": 1999,
+    "harness_events": 9
+  },
+  "warnings": [
+    "no System-2 call was answered during the dry run"
+  ]
+}

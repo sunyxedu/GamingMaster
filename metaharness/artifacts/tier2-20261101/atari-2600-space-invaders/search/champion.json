@@ -1,0 +1,58 @@
+{
+  "candidate": "0025",
+  "train": 394.375,
+  "val": 433.75,
+  "combined": 1.0,
+  "seeds_val": {
+    "Atari_2600_Space_Invaders": [
+      8,
+      9,
+      10,
+      11
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0023",
+      "rank": 0,
+      "status": "ok",
+      "train": 405.625,
+      "val": 335.0,
+      "per_game": {
+        "Atari 2600 Space Invaders": 382.0833333333333
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    },
+    {
+      "candidate": "0016",
+      "rank": 1,
+      "status": "ok",
+      "train": 405.625,
+      "val": 335.0,
+      "per_game": {
+        "Atari 2600 Space Invaders": 382.0833333333333
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    },
+    {
+      "candidate": "0025",
+      "rank": 2,
+      "status": "ok",
+      "train": 394.375,
+      "val": 433.75,
+      "per_game": {
+        "Atari 2600 Space Invaders": 407.5
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    }
+  ]
+}

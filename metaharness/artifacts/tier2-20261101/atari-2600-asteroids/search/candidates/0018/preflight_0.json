@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "stage": "episode",
+  "repairable": true,
+  "error": "",
+  "ended_by": "virtual_cap",
+  "score": 1640.0,
+  "steps": 1999,
+  "system1_calls": 56,
+  "system2_calls": 1,
+  "coverage": {
+    "system2_answers": 1,
+    "system1_answers": 56,
+    "failed_calls": 0,
+    "acts": 2000,
+    "acts_after_s1": 56,
+    "acts_after_s2": 1,
+    "steps": 1999,
+    "harness_events": 273
+  },
+  "warnings": []
+}

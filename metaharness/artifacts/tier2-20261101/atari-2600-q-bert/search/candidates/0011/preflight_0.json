@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "stage": "episode",
+  "repairable": true,
+  "error": "",
+  "ended_by": "game_done",
+  "score": 11425.0,
+  "steps": 1672,
+  "system1_calls": 306,
+  "system2_calls": 3,
+  "coverage": {
+    "system2_answers": 3,
+    "system1_answers": 306,
+    "failed_calls": 0,
+    "acts": 1672,
+    "acts_after_s1": 306,
+    "acts_after_s2": 3,
+    "steps": 1672,
+    "harness_events": 236
+  },
+  "warnings": []
+}

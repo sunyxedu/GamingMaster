@@ -1,0 +1,26 @@
+{
+  "ok": false,
+  "stage": "episode",
+  "repairable": true,
+  "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0025/harness.py\", line 1300, in run_episode\n    AdaptivePipeline(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0025/harness.py\", line 1249, in run\n    self._update_motion(obs)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0025/harness.py\", line 493, in _update_motion\n    if held != self.partner_held:\n               ^^^^^^^^^^^^^^^^^\nAttributeError: 'AdaptivePipeline' object has no attribute 'partner_held'. Did you mean: '_partner_next'?\n",
+  "ended_by": "harness_error",
+  "score": 0.0,
+  "steps": 0,
+  "system1_calls": 0,
+  "system2_calls": 0,
+  "coverage": {
+    "system2_answers": 0,
+    "system1_answers": 0,
+    "failed_calls": 0,
+    "acts": 0,
+    "acts_after_s1": 0,
+    "acts_after_s2": 0,
+    "steps": 0,
+    "harness_events": 1
+  },
+  "warnings": [
+    "no System-1 call was answered during the dry run (the stand-in answers every question)",
+    "no System-2 call was answered during the dry run",
+    "the harness never posted an action"
+  ]
+}

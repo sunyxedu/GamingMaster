@@ -1,0 +1,23 @@
+{
+  "measured": "2026-10-31 09:17",
+  "system2_short": {
+    "latency_s": 21.1,
+    "output_tokens": 19,
+    "samples_s": [
+      14.85,
+      21.1,
+      49.4
+    ]
+  },
+  "system2_long": {
+    "latency_s": 114.68,
+    "output_tokens": 1292
+  },
+  "system1": {
+    "latency_s": 0.434,
+    "first_latency_s": 0.471,
+    "p90_s": 0.462,
+    "max_s": 0.465,
+    "n": 12
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "candidate": "0024",
+  "train": 257.77777777777777,
+  "val": 236.66666666666666,
+  "combined": 1.0,
+  "seeds_val": {
+    "Overcooked-AI": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0026",
+      "rank": 0,
+      "status": "ok",
+      "train": 260.0,
+      "val": 186.66666666666666,
+      "per_game": {
+        "Overcooked-AI": 230.66666666666666
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    },
+    {
+      "candidate": "0024",
+      "rank": 1,
+      "status": "ok",
+      "train": 257.77777777777777,
+      "val": 236.66666666666666,
+      "per_game": {
+        "Overcooked-AI": 249.33333333333334
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    },
+    {
+      "candidate": "0017",
+      "rank": 2,
+      "status": "ok",
+      "train": 255.55555555555554,
+      "val": 233.33333333333334,
+      "per_game": {
+        "Overcooked-AI": 246.66666666666666
+      },
+      "norm": [
+        0.8571428571428563
+      ],
+      "combined": 0.8571428571428563
+    }
+  ]
+}

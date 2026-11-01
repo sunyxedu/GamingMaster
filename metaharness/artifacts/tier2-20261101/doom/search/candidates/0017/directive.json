@@ -1,0 +1,12 @@
+{
+  "mode": "crossover",
+  "parents": [
+    11,
+    3
+  ],
+  "parent_dirs": [
+    "0011",
+    "0003"
+  ],
+  "generation": 4
+}

@@ -1,0 +1,613 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py",
+ "game": "Overcooked-AI",
+ "fatal": null,
+ "mean_score": 0.0,
+ "stale_fraction": 0.0,
+ "n_episodes": 9,
+ "system1_calls": 12,
+ "system2_calls": 9,
+ "mean_steps": 18.11111111111111,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "harness_error": 9
+ },
+ "s1_informed_fraction": 0.0736196319018405,
+ "s2_informed_fraction": 0.0,
+ "errors": [
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 790, in options\n    return [self.make_task(\"park_cooking\", park, 8, \"cook\", wait=True,\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'cook'\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 790, in options\n    return [self.make_task(\"park_cooking\", park, 8, \"cook\", wait=True,\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'cook'\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+  "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n"
+ ],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 0.0,
+   "steps": 25,
+   "system1_calls": 2,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 25,
+   "latency_s1": {
+    "n": 2,
+    "mean": 0.1571899652481079,
+    "p50": 0.1573634147644043,
+    "p90": 0.1573634147644043,
+    "max": 0.1573634147644043
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 4.235042121028528,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 790, in options\n    return [self.make_task(\"park_cooking\", park, 8, \"cook\", wait=True,\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'cook'\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 25,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 0.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 0.0,
+     "deliveries": 0.0,
+     "episode_length": 25.0,
+     "shaped_reward_diagnostic": 9.0,
+     "collision_ticks": 6.0,
+     "stuck_ticks": 4.0,
+     "pot_idle_time": 4.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 25,
+   "acts_after_s1": 2,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 1,
+   "score": 0.0,
+   "steps": 9,
+   "system1_calls": 1,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 9,
+   "latency_s1": {
+    "n": 1,
+    "mean": 0.17517757415771484,
+    "p50": 0.17517757415771484,
+    "p90": 0.17517757415771484,
+    "max": 0.17517757415771484
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 1.6303392630070448,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 9,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 0.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 0.0,
+     "deliveries": 0.0,
+     "episode_length": 9.0,
+     "shaped_reward_diagnostic": 9.0,
+     "collision_ticks": 0.0,
+     "stuck_ticks": 3.0,
+     "pot_idle_time": 13.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 9,
+   "acts_after_s1": 1,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 2,
+   "score": 0.0,
+   "steps": 20,
+   "system1_calls": 1,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 20,
+   "latency_s1": {
+    "n": 1,
+    "mean": 0.17612934112548828,
+    "p50": 0.17612934112548828,
+    "p90": 0.17612934112548828,
+    "max": 0.17612934112548828
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 3.4359703159425408,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 20,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 0.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 0.0,
+     "deliveries": 0.0,
+     "episode_length": 20.0,
+     "shaped_reward_diagnostic": 9.0,
+     "collision_ticks": 1.0,
+     "stuck_ticks": 0.0,
+     "pot_idle_time": 26.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 20,
+   "acts_after_s1": 1,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 3,
+   "score": 0.0,
+   "steps": 25,
+   "system1_calls": 2,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 25,
+   "latency_s1": {
+    "n": 2,
+    "mean": 0.16208946704864502,
+    "p50": 0.16341137886047363,
+    "p90": 0.16341137886047363,
+    "max": 0.16341137886047363
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 4.233486360870302,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 25,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 0.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 0.0,
+     "deliveries": 0.0,
+     "episode_length": 25.0,
+     "shaped_reward_diagnostic": 9.0,
+     "collision_ticks": 9.0,
+     "stuck_ticks": 2.0,
+     "pot_idle_time": 4.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 25,
+   "acts_after_s1": 2,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 4,
+   "score": 0.0,
+   "steps": 9,
+   "system1_calls": 1,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 9,
+   "latency_s1": {
+    "n": 1,
+    "mean": 0.16385531425476074,
+    "p50": 0.16385531425476074,
+    "p90": 0.16385531425476074,
+    "max": 0.16385531425476074
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 1.6333064620848745,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 9,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 0.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 0.0,
+     "deliveries": 0.0,
+     "episode_length": 9.0,
+     "shaped_reward_diagnostic": 9.0,
+     "collision_ticks": 0.0,
+     "stuck_ticks": 3.0,
+     "pot_idle_time": 13.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 9,
+   "acts_after_s1": 1,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 5,
+   "score": 0.0,
+   "steps": 21,
+   "system1_calls": 1,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 21,
+   "latency_s1": {
+    "n": 1,
+    "mean": 0.17172646522521973,
+    "p50": 0.17172646522521973,
+    "p90": 0.17172646522521973,
+    "max": 0.17172646522521973
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 3.631267874967307,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 21,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 0.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 0.0,
+     "deliveries": 0.0,
+     "episode_length": 21.0,
+     "shaped_reward_diagnostic": 9.0,
+     "collision_ticks": 2.0,
+     "stuck_ticks": 0.0,
+     "pot_idle_time": 29.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 21,
+   "acts_after_s1": 1,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 6,
+   "score": 0.0,
+   "steps": 25,
+   "system1_calls": 2,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 25,
+   "latency_s1": {
+    "n": 2,
+    "mean": 0.17184805870056152,
+    "p50": 0.1827695369720459,
+    "p90": 0.1827695369720459,
+    "max": 0.1827695369720459
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 4.236200240906328,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 790, in options\n    return [self.make_task(\"park_cooking\", park, 8, \"cook\", wait=True,\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'cook'\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 25,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 0.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 0.0,
+     "deliveries": 0.0,
+     "episode_length": 25.0,
+     "shaped_reward_diagnostic": 9.0,
+     "collision_ticks": 6.0,
+     "stuck_ticks": 4.0,
+     "pot_idle_time": 4.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 25,
+   "acts_after_s1": 2,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 7,
+   "score": 0.0,
+   "steps": 9,
+   "system1_calls": 1,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 9,
+   "latency_s1": {
+    "n": 1,
+    "mean": 0.18005776405334473,
+    "p50": 0.18005776405334473,
+    "p90": 0.18005776405334473,
+    "max": 0.18005776405334473
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 1.6697512718383223,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 9,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 0.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 0.0,
+     "deliveries": 0.0,
+     "episode_length": 9.0,
+     "shaped_reward_diagnostic": 9.0,
+     "collision_ticks": 0.0,
+     "stuck_ticks": 3.0,
+     "pot_idle_time": 13.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 9,
+   "acts_after_s1": 1,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  },
+  {
+   "seed": 8,
+   "score": 0.0,
+   "steps": 20,
+   "system1_calls": 1,
+   "system2_calls": 1,
+   "stale_ticks": 0,
+   "decided_ticks": 20,
+   "latency_s1": {
+    "n": 1,
+    "mean": 0.1553208827972412,
+    "p50": 0.1553208827972412,
+    "p90": 0.1553208827972412,
+    "max": 0.1553208827972412
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 3.4396677159238607,
+   "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 471, in _run\n    program.run_episode(view)\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1228, in run_episode\n    BoundedKitchen(self.ctx, game).run()\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 1186, in run\n    options = self.options(obs)\n              ^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 759, in options\n    result.append(self.make_task(\"start\", pot[\"pos\"], 2, \"start\",\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/runs/overcooked/search/candidates/0021/harness.py\", line 602, in make_task\n    \"priority\": int(priority),\n                ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 10: 'start'\n",
+   "info": {
+    "score": 0.0,
+    "ticks": 20,
+    "game_done": false,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 1,
+    "score_breakdown": {
+     "sparse_team_reward": 0.0,
+     "sparse_agent_0": 0.0,
+     "sparse_agent_1": 0.0,
+     "deliveries": 0.0,
+     "episode_length": 20.0,
+     "shaped_reward_diagnostic": 9.0,
+     "collision_ticks": 1.0,
+     "stuck_ticks": 0.0,
+     "pot_idle_time": 26.0,
+     "handoff_attempts": 0.0,
+     "handoff_successes": 0.0,
+     "handoff_failures": 0.0
+    }
+   },
+   "acts": 20,
+   "acts_after_s1": 1,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "harness_error",
+   "invalid": null,
+   "backends": {
+    "system1": [
+     "jev:jev-1.14.0"
+    ]
+   },
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "expected_episodes": 9,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "349f48a581daeb10e044a66946483adf3fd8d8f00a97a3a6d2d6b954ccef04ca",
+  "game_kind": "realtime",
+  "resolved_models": {
+   "system1": [
+    "jev:jev-1.14.0"
+   ]
+  }
+ },
+ "score_std": 0.0
+}

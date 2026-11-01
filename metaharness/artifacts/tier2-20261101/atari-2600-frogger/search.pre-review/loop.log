@@ -1,0 +1,33 @@
+[21:50:33] seed check: 16 seed(s) reset ok
+[21:53:25] eval 0000-tier2_jev_only: mean=6.0 stale=0.8962492294561145 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[21:53:25] eval 0001-tier2_astra_only: mean=1.0 stale=0.999782182531039 fatal=None errors=0 failed s1/s2=0/1 ended: game_done 6
+[21:53:25] eval 0002-tier2_idle: mean=0.0 stale=1.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[21:53:25] generation 1/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[21:53:25] 0003: refine of 0000-tier2_jev_only
+[21:53:25] 0004: rewrite of 0002-tier2_idle
+[21:53:25] 0005: crossover of 0000-tier2_jev_only, 0002-tier2_idle
+[00:08:47] preflight 0005: ok
+[00:08:47] preflight 0003: ok; warnings: no System-2 call was answered during the dry run
+[00:08:48] preflight 0004: ok
+[00:11:30] eval 0003: mean=12.0 stale=0.8694875231348522 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[00:11:30] eval 0004: mean=5.166666666666667 stale=0.0 fatal=None errors=0 failed s1/s2=0/4 ended: game_done 6
+[00:11:30] eval 0005: mean=2.0 stale=0.9021647624774504 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[00:35:12] reflection after generation 1 recorded in lessons.md
+[00:35:12] generation 2/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[00:35:12] 0006: rewrite of 0001-tier2_astra_only
+[00:35:12] 0007: crossover of 0003, 0005
+[00:35:12] 0008: explore of 0004
+[00:36:14] 0006: left without a harness by a stopped proposer; moved to 0006-1793406974
+[00:36:14] 0007: left without a harness by a stopped proposer; moved to 0007-1793406974
+[00:36:14] 0008: left without a harness by a stopped proposer; moved to 0008-1793406974
+[00:36:14] the archive already holds 3 proposal(s) = 1 generation(s) of 3; running 7 more to reach 8 (raise --iters for more)
+[00:36:14] generation 2/8: proposing 3 candidate(s) with claude:gpt-6-astra
+[00:36:14] 0006: rewrite of 0001-tier2_astra_only
+[00:36:14] 0007: crossover of 0003, 0005
+[00:36:14] 0008: explore of 0004
+[03:47:11] preflight 0006: ok
+[03:47:14] preflight 0008: ok
+[03:47:15] preflight 0007: ok
+[03:50:06] eval 0006: mean=7.666666666666667 stale=0.8190838813891773 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6
+[03:50:06] eval 0007: mean=1.3333333333333333 stale=0.0 fatal=None errors=0 failed s1/s2=0/4 ended: game_done 6
+[03:50:06] eval 0008: mean=14.5 stale=0.0 fatal=None errors=0 failed s1/s2=0/0 ended: game_done 6

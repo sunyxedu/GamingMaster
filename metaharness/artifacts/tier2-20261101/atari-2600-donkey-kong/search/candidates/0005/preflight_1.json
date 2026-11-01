@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "stage": "load",
+  "repairable": true,
+  "error": "Traceback (most recent call last):\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/runner.py\", line 770, in preflight_harness\n    module = load_harness_module(harness_path)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/hemlix/GamingMaster-mh-tier2/metaharness/core/contract.py\", line 810, in load_harness_module\n    raise ImportError(f\"harness {path} defines no build(ctx)\")\nImportError: harness /home/hemlix/GamingMaster-mh-tier2/runs/atari-2600-donkey-kong/search/candidates/0005/harness.py defines no build(ctx)\n"
+}

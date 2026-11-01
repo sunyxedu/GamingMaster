@@ -1,0 +1,45 @@
+{
+  "game": "Tetris (Guideline-compatible marathon)",
+  "tier": 2,
+  "tier_rationale": "The active tetromino continues to fall under a real-time gravity clock while Astra reasons and while model requests are in flight. At level 1 a cell takes roughly one second to fall, but the Guideline/Tetris Worlds curve reaches roughly 0.064 seconds per cell around level 10 and much faster at high levels; a landed piece has about 0.5 seconds of lock delay, and hard drop removes that delay. Therefore decisions must be event-driven and Jev or a deterministic fallback must act while Astra plans rather than pausing the world.",
+  "decision_latency_s": 0.5,
+  "interface": {
+    "chosen": "official env",
+    "why": "Use the local tetris-gymnasium Gymnasium environment behind a thin JSONL adaptor. It is free, local, headless, configurable, seedable, and exposes a symbolic board/active-piece/hold/queue observation and logical movement, rotation, hold, hard-drop, and no-op actions. It avoids GUI capture, ROM licensing, accounts, network latency, and online anti-cheat risk. The adaptor must add or verify the monotonic real-time gravity/lock clock, exact Guideline scoring, and a stable JSON contract against the pinned package version.",
+    "software": [
+      "Python 3.12.3 evaluator venv",
+      "tetris-gymnasium",
+      "gymnasium",
+      "numpy"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Install and pin tetris-gymnasium with /home/hemlix/GamingMaster-mh-tier2/runs/tetris/.venv/bin/python -m pip install --upgrade tetris-gymnasium.",
+      "Create the environment with no display rendering, width 10, height 20, standard I/J/L/O/S/T/Z tetrominoes, the seven-bag randomizer, and the standard action mapping; verify defaults against the installed package source.",
+      "Call reset(seed=seed), record the seed and initial queue, and verify that repeated resets with the same seed reproduce the sequence.",
+      "Verify installed action indices for left, right, down/soft drop, clockwise rotation, counter-clockwise rotation, hard drop, hold/swap, and no-op instead of assuming indices from an unpinned release.",
+      "Wrap the environment in a monotonic-clock JSONL adaptor. Advance gravity, lock delay, entry timing, and scoring while model calls are pending; never pause the world for Astra.",
+      "Serialize a complete JSON state: settled 20x10 board, active cells/type/orientation/x/y, ghost cells, hold/can_hold, queue, timers, score, lines, level, combo, back-to-back state, seed, ruleset, and game-over status.",
+      "Use the engine for collision, SRS/kicks, line clearing, T-spin classification, exact score, and legality; expose only named JSON actions to models and reject unknown/illegal actions deterministically.",
+      "Run smoke tests for seed repeatability, all seven pieces, SRS wall/floor kicks, hold-once-per-piece, hard drop, soft drop, line clears, top-out, scoring, and a deliberate model-call stall.",
+      "Log every action and state transition so a seed can be replayed without a display, GPU, server, account, or credential."
+    ],
+    "observation": "JSON state derived from the environment's symbolic dictionary observation: a settled 20x10 board (with any buffer rows represented separately), active tetromino type/orientation/cells and position, ghost landing cells, hold piece and can_hold, next queue, score, cumulative lines, level, combo, back-to-back status, gravity interval, lock timer, elapsed time, seed, ruleset, and game-over flag. The base tetris-gymnasium API documents board, active_tetromino_mask, holder, queue, and lines_cleared; do not use its RGB wrapper for agent decisions.",
+    "actions": "Named JSON actions: left, right, soft_drop, rotate_cw, rotate_ccw, hard_drop, hold, and noop, optionally with dt_s supplied by the adaptor's monotonic clock. Map names to the pinned environment action mapping, execute sequences only after legality checks, verify each resulting state, and return events for movement, lock, line clear, score, hold, illegal action, and top-out. A grouped placement wrapper may enumerate x*4+rotation candidates and an action_mask, but the adaptor must validate that behavior against the installed release."
+  },
+  "scoring": "Report exact Guideline-compatible score, cumulative lines, level, pieces placed, and survival duration. Use 100/300/500/800 times level for single/double/triple/Tetris, 100/200 for mini T-spin with zero/one line, 400/800/1200/1600 for T-spin zero/one/two/three lines, one point per soft-dropped cell, and two per hard-dropped cell; enable and document combo and back-to-back policy (commonly 50*combo*level and a 1.5x difficult-clear back-to-back multiplier). Also report lines, pieces, holes, aggregate height, bumpiness, top-out height, illegal actions, and terminal reason because score conventions vary and drop points alone do not measure quality.",
+  "scenarios": "reset(seed) should start an empty level-1 10x20 board and derive a deterministic seven-bag sequence from the seed. Held-out seeds should sample many bag permutations and spawn states while preserving the same ruleset, gravity, scoring, hold, SRS, and lock policy; do not tune prompts to particular queues. Include evaluation scenarios at low, medium, and high levels (or equivalent prefilled/controlled starts), plus optional fixed-board recovery starts with holes and a side well. For each seed, cap by a fixed piece count or time budget and record score, lines, survival, and top-out. If multiplayer/garbage is later added, make garbage holes and arrival timing explicit scenario parameters rather than hidden randomness.",
+  "strategy_summary": "Keep the stack low, flat, flexible, and hole-free; use a side well for Tetrises only while it does not create dangerous dependencies. Enumerate exact SRS-legal placements and evaluate holes, hole depth, aggregate/max height, bumpiness, wells, lines, landing height, combo/B2B state, and top-out margin in code. Astra should choose conditional openings such as 9-0, 6-3, TKI, or DT only while the queue and board support them, and should switch to downstack/recovery when an opener becomes unsafe. Jev should make fast typed choices among precomputed candidates, recognize buried holes, T-spin/B2B status, opener feasibility, and lowest top-out risk, and never plan long sequences or perform arithmetic. Gravity continues during Astra calls, so code executes short verified finesse sequences and Jev or a deterministic fallback acts before the lock deadline.",
+  "risks": [
+    "Tetris is a family of rulesets; accidentally mixing Guideline assumptions with NES randomizer, rotation, scoring, or controls invalidates results.",
+    "tetris-gymnasium is a third-party environment, not an official Tetris implementation; pin and smoke-test the exact package release because undocumented defaults and API details can change.",
+    "Some Gym Tetris environments are discrete drop simulators rather than true wall-clock games; the adaptor must verify and, if necessary, implement the real-time gravity/lock clock.",
+    "High-level gravity can be faster than an Astra call and hard drop removes the lock-delay grace; a Jev policy or deterministic fallback is mandatory.",
+    "RGB/screen interfaces introduce recognition, focus, display, and latency failures and are unsuitable for the headless server.",
+    "ALE/NES/emulator alternatives require variant-specific RAM decoding and may require legally obtained ROMs; they do not match the selected Guideline rules.",
+    "Online bots, macros, and assistance tools can violate service rules; TETR.IO explicitly prohibits bots and assistance tools. This study uses no online account or service.",
+    "Combo, perfect-clear, T-spin-mini, B2B, line-clear animation, and attack conventions vary by implementation; expose them as explicit ruleset configuration and report them in replays.",
+    "A model-generated action can arrive after the active piece has moved or locked; every action needs a timestamp/version check and deterministic rejection or fallback.",
+    "The evaluator's Python is /home/hemlix/GamingMaster-mh-tier2/runs/tetris/.venv/bin/python (Python 3.12.3); system-Python compatibility is irrelevant."
+  ]
+}

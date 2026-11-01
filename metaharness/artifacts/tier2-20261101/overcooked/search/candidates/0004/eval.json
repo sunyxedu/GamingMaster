@@ -1,0 +1,6 @@
+{
+ "fatal": "proposer failed: ModelTimeout: timeout: claude -p exceeded 3600s (session 27cc25ec-175d-4cfa-8980-f45db4a49b12)",
+ "mean_score": null,
+ "n_episodes": 0,
+ "game": "Overcooked-AI"
+}

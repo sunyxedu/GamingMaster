@@ -1,0 +1,44 @@
+# Candidate 0024 — late activation of the exact colour-cycle ledger
+
+**Mode:** explore, final generation. **Parent:** `candidates/0012/`. **Score and motor baseline:** `candidates/0016/`; `0023` is the most recent endpoint-focused refinement. This is a new controller implementation with the same real-time constraints, not a change to any other candidate.
+
+## Hypothesis
+
+The strongest controller, `0016`, has a useful and robust first-four-board controller, but it does not represent the later board's finite colour cycle. Its `ColourBook` uses one learned colour goal per board; when every cube appears to match that goal it waits 24 ticks and starts another generic pass. That is a serviceable Level-1 policy, but after four clears the game advances to Level 2's `S→I→D` rule. It can consequently spend extra hops sweeping the whole pyramid to discover that a second transition is needed, while its life-loss record shows little margin for that extra exposure.
+
+A concrete 0016 trace makes the timing worth testing, without claiming a cause of death: seed 5 inferred clears at ticks **452, 947, 1282, and 1767**, then did not infer its fifth until tick **2593**. At tick **1722**, during the fourth board, it recorded a life loss while Q*bert was hopping at node 15; the only rendered lethal object was a Purple Ball at estimated node 3, 86 pixels away. On the next board the trace again shows life losses at **2148** (`hazards=[]`, `purple_ball_state=36`), **2548** (`hazards=[]`, state 36), and **2992** (`hazards=[]`, state 36). These observations do not establish that the distant ball or any one action caused those losses.
+
+A first 0024 draft smoke test exposed a target-selection bug rather than evaluating the phase hypothesis. It reached four inferred clears by tick **1750** but ended after 2,580 ticks and **15,350 points**; at tick **1752** on node 0 its target selector chose node 0, which cannot be reached by a hop without first leaving. I corrected target assignment to prefer another demanded cube whenever one exists, then restored the parent's stable cyclic coverage order rather than the draft's nearest-target selection. A corrected 60-second seed-0 smoke reached two clears by tick **858**, ended at **7,800** with four lives and no losses, and made no later-cycle transition; this is below archived `0016` seed-0's **4,600** at tick 899, although the differently timed first-clear tally makes it only an early negative signal. A subsequent three-minute run activated the S/I/D tracker after its fourth inferred clear at tick **1760**, learned `26→214` at tick **1830**, and ended at **15,325** after four life losses and no fifth clear. This confirms phase-mode plumbing, not that it improves progression.
+
+The test is deliberately narrower than another hazard predictor: **keep the stable destination-colour behavior for the first four inferred clears, then combine the best candidate's one-hop motor with exact S/I/D demand from the first inferred Level-2 board onward.** If the 0016-style whole-board pass/probe is costing avoidable hops on the later multi-stage cycle, exact demand should make more useful cube progress per hop and improve fifth/sixth clear frequency without perturbing the opening. This does not claim to fix empty-hazard/state-36 collisions.
+
+The exact-cycle idea was tried in `0012`, but that controller also replaced the motor/planner and scored a lower **17,891.7** mean than `0016`'s **21,808.3**. The two results do not isolate phase tracking. `0024` tests the missing matched combination: preserve the early destination-color mode and a guarded one-hop controller, and enable exact cycle demand only after four inferred clears. This is also more targeted than `0023`'s post-third-clear visible-Coily tip gate; the latest trace's repeated empty-hazard losses are outside that gate's evidence.
+
+## What changed
+
+### Board-local phase ledger
+
+The controller detects a scored global palette epoch using the observed 21-cube palette and score tally, rather than assuming the adaptor's `completed_rounds` counter advances (the archived traces often leave it at zero despite 3,100-point flashes). For the first four inferred clears, the ledger retains the parent's simple learned destination-colour behavior, including the bounded 24-tick pass probe. After clear four it disables that probe and uses the manual's level schedule, inferred from scored local palette transitions:
+
+- Level 2: `S→I→D`, with demand 2 for `S`, 1 for `I`, and 0 for `D`.
+- Levels 3–5 use their specified cycles `S→D→S`, `S→I→D→I`, and `S→I→D→S`; Level 5 remains clamped/repeating.
+
+Raw colour values stay local to each board. The first scored local transition after a palette epoch anchors `S`; the next appropriate scored transition learns `I`/`D`. Sam/Green-only changes do not establish a phase role. While roles are incomplete, unknown palette values are conservatively treated as one remaining landing; code does not let an unverified decoder phase override the scored palette evidence. No seed-specific layout, RAM write, or emulator state is used.
+
+### Retained safety and real-time execution
+
+The planner uses the validated 21-node triangle, fixed coverage-order tie breaks, `safe_moves`, short-lived rendered hazard memory, and a risk-ranked one-hop corridor. A direction is never posted unless it is currently safe and geometrically present. The motor observes an animation, neutralizes while hopping, confirms the landing, resynchronizes on a mismatch, and uses a bounded recovery pause on a life loss. The loop runs until the true game/context terminal, never on a guessed life count. `FIRE` is not a candidate action.
+
+### System-2 / System-1 division
+
+Astra is asynchronous and receives a compact phase/demand summary, lives, recent scored transitions, and semantic visible/recent hazard facts. It may choose only `cycle_mode=pair|sweep`: pair modestly favors cubes partway through their cycle; sweep modestly favors untouched two-landing cubes. One request starts at the opening and a second may revise the choice after four inferred clears. A parsed, supported value is needed; prose, malformed JSON, timeout, or an unsupported value leaves the safe code default unchanged. Astra cannot issue actions or alter legality.
+
+Jev is pipelined during a hop, not awaited on the game's action clock. Its compact state names the expected landing, current cycle/demand buckets, up to four code-generated outgoing directions, their danger/escape/coverage descriptions, and the code fallback. One `ctx.decide` request batches two reordered Choices (`choice_a`, `choice_b`) plus a Noul judgment (`fallback_safe`). The Choices must agree on an offered direction and each selected-option probability must be at least **0.60**. The safety Noul must be at least **0.60**. At the actual landing, code requires a matching expected node, board epoch, life epoch and policy version, an unchanged public lethal-object location signature, age at most **16 ticks**, current membership in `safe_moves`, a non-closed corridor, computed risk no more than **0.35** above fallback, and cost no more than **2.0** above fallback. A late, malformed, low-confidence, contradictory, or newly unsafe answer is discarded; code's freshly recomputed corridor is the fallback. Requests are spaced by at least 12 ticks and use a 0.8-second timeout, comfortably above the archived Jev p90 while remaining off the tick path.
+
+## Evidence and falsification
+
+Support requires that the opening remain comparable to 0016 (first four inferred clears, early score, life-loss timing, and stale ticks) and that Level-2-or-later boards show learned `S→I` and `I→D` transitions, fewer unnecessary generic pass/probe hops, and either a shorter time-to-fifth-clear or more fifth/sixth clears. The precise evidence is the `phase_transition_seen`, `board_epoch`, `phase_route_status`, and hop-confirmation records alongside score and lives.
+
+The phase-efficiency hypothesis is refuted if exact roles are learned but later clears/hops do not improve, if phase errors lead to a board stall, or if enabling the cycle tracker harms the first four clears despite the intended gate. If late empty-hazard/state-36 losses remain at similar times after route efficiency improves, that is evidence that the unresolved bottleneck is hidden collision/survival rather than colour bookkeeping; this candidate does not interpret purple timers as enemy coordinates. If no run reaches the fourth clear, the late-cycle test is inconclusive, but the matched opening is still evaluated.
+
+The result should be compared to both `0016` and `0012`; a score difference alone cannot attribute causality. A particularly strong confirmation would be a trace showing an untouched `S` cube demand of 2, a scored `S→I` transition that changes its demand to 1, and subsequent `I→D` with demand zero before the fifth clear.

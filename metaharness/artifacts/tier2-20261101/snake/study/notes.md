@@ -1,0 +1,1 @@
+Offline headless Linux server (no display, no GPU, no accounts). The evaluator's Python is the venv printed in the prompt; pip works there. A faithful local implementation with symbolic state is fine.

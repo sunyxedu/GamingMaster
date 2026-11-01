@@ -1,0 +1,44 @@
+# Candidate 0009 proposal
+
+## Parents and hypothesis
+
+Parents: `candidates/0006/` and `candidates/0008/` (crossover). Candidate 0006 is the leaderboard leader and supplies the primary mechanism: code-owned committed broad sweeps with FIRE held during movement. Candidate 0008 contributes feedback-based boundary inference, shot/life outcome tracking, conservative model integration, and a latest-only asynchronous Jev request.
+
+**Hypothesis:** 0006's sustained-fire traverse is the strongest demonstrated scoring mechanism, but its large score variance and very low seed-2 result indicate that an unobserved or clipped route can remain uncorrected. 0008's failure was not evidence against travel-limit feedback itself: it never inferred either limit in its traces, and its point-alignment loop discarded the useful continuous-fire traverse. Combining the two should retain high shot throughput while using observed position stalls and life transitions to stop repeatedly commanding into a boundary, and using visible bomb tracks for bounded emergency overrides. Jev can only bias the next broad traverse; it cannot select an action or disable firing.
+
+## Evidence from the archive
+
+- In candidate 0006 `trace_seed2.jsonl`, the terminal observation is tick 349/frame 1395 with score **15**, zero lives, player reset to x=90, and an empty bomb list. Before then, the trace records 17 committed traverses and 58 accepted Jev program judgments, but **zero effective Jev program changes**. The three recorded score/life milestones are frame 596 (5 points, 2 lives), frame 636 (10 points, 2 lives), and frame 1256 (15 points, 1 life). This shows that an accepted judgment stream did not change behavior and that full-rate FIRE alone can still fail badly.
+- The contrasting candidate 0006 `trace_seed4.jsonl` sustained the same full-rate `right_fire`/`left_fire` mechanism to **460 points**, including a score jump from 200 to 400 (UFO plus invader points) and 20 kills, before dying at tick 821. This supports retaining throughput rather than switching to sparse stationary aiming.
+- Candidate 0008 `trace_seed6.jsonl` ends at tick 289/frame 1155 with **10 points** and zero lives. At frame 1152 the trace reports the initial estimated limits unchanged at **32/147**, aim offset only **-0.5**, and one life remaining; no boundary-inference event was produced. Its actions in the losing run were 26 `fire`, 185 `right`, and 78 `left`, so the controlled aiming/bounce mechanism did not reproduce 0006's continuous-fire coverage.
+- The archive lessons also report that candidate 0006 fired on **100%** of its 5,790 ticks and averaged 19.88 invader kills, while every generation's sampled death observations can have `bombs: []`. Therefore this candidate keeps FIRE unconditional and treats decoder silence as uncertainty, not proof of safety.
+
+The specific test is whether usable position feedback can improve the robust committed sweep without lowering the firing rate. It does **not** assume that the inferred boundary is the cause of every blind death.
+
+## What changed
+
+1. **Keep 0006's main actuator structure.** A code-owned route commits to one endpoint and continues laterally until reaching it, a prolonged stall, or a route timeout. It does not alternate from repeated small relocation advice. `right_fire`/`left_fire` are the default actions on every tick, including when the one laser is already in flight; the ROM's one-shot lock makes the busy press harmless and preserves firing throughput.
+2. **Add 0008's observable feedback, not its sparse-fire policy.** The controller measures cannon movement, learns a side limit only after three successive near-limit commands produce almost no movement, and keeps an interior margin. It records shot disappearance/hits, lives, wave changes, formation motion, and recent bomb positions. Life loss invalidates an old route, reverses the next preference, and begins a short recovery period. These observations are diagnostic/fallback inputs; they do not cause an aim-and-wait firing mode.
+3. **Bound visible-bomb overrides.** Recent bomb positions are tracked briefly across decoder gaps. The code checks approximate collision risk against the committed direction and can move away from a visible near threat, with position bounds rechecked. An empty bomb list never clears a threat flag or certifies a lane safe.
+4. **Make Jev advice usable but subordinate.** Jev proposes an ordering hint (`WIDE`, `LOWEST`, `LEFT_EDGE`, `RIGHT_EDGE`, `KEEP`) for a *future* committed traverse. The code maps a hint to geometric route bounds and a preferred starting direction. It cannot choose an action, narrow the route below its minimum useful width, stop FIRE, or override a boundary/bomb rule. Accepted advice is applied at a route boundary, not in the middle of a traverse.
+5. **No Astra calls.** In 0006, 10 Astra calls (three failed) informed zero actions; in 0008, Astra was absent. This candidate isolates the crossover's code/fast-advice hypothesis and avoids spending the few-call budget on a 23+ second model whose control effect was not demonstrated.
+
+## System-1 schema, questions, and thresholds
+
+Every request contains strict JSON `space_invaders_full_sweep_feedback_v1`, with the actual frame/lives/wave, phase, player lane, whether motion is committed or stalled at a margin, shot status and last outcome, bomb evidence (`NEAR_CANNON`, `TRACKED_APPROACH`, or `UNSEEN_OR_EMPTY`), observed/probing boundary status and an escape-margin statement, decoder reliability after any blind death, progress status, current policy and route span/direction, and a compact list of living columns categorized by side and lowest-row band. Coordinates, projections, and numeric comparisons stay in code. `UNSEEN_OR_EMPTY` explicitly means unknown, not safe.
+
+One Jev call batches two independent `Choice` questions on the same state. Both present the same five ordering policies but reverse option order to reduce first-option bias. The prompt says the choice applies only to a future committed traverse and forbids arithmetic, inventing targets, selective fire, or action selection. `WIDE` is the fallback and preserves full-rate firing.
+
+An answer is accepted only when both selected values agree on a known policy; each answer assigns at least **0.52** probability to that value, and each reported confidence (when present) is at least **0.20**. Missing probabilities, malformed answers, disagreement, an unknown label, a response more than **64 frames** old, or a life/wave/policy-version mismatch rejects the result. `KEEP` retains the current hint. Advice is held until the next route boundary and expires after **128 frames**. These are modest thresholds because the consequence is only a future route preference; code remains in control.
+
+## Timing and fallback
+
+The loop posts an action and waits for each real-time tick; it never blocks on Jev. At most one Jev call is in flight. Calls use a **0.65 s** timeout, greater than the archived warm maximum of 0.2 s, and are made initially and then no more often than every 48 emulator frames (or on a life/wave change). Late and ordinary malformed/failed calls are discarded. A System-1 budget reserve is kept. If no usable answer exists, the current or `WIDE` code policy continues.
+
+The per-tick fallback is: continue the committed route, hold FIRE, clamp/reverse before the learned or initial safety bounds, and override direction only for a code-detected visible bomb collision. After a life or wave transition, discard stale advice and route/track state. Actions are checked against `game.action_spec.names`; model text is never parsed into an action. No persistent Python worker runs after `run_episode` returns.
+
+## Confirmation or refutation
+
+Confirmation would be mean score above 280 with no reduction in mean invader kills or firing-action fraction, plus traces showing actual boundary-inference or stall-recovery events followed by reversals before long clipped motion. It would also help if repeated accepted Jev advice changes a *future* route preference while route widths and firing remain broad. The policy is expected to have little benefit on seeds that never reach a margin; that does not itself refute the firing mechanism.
+
+Refutation would include lower kills/score because route widths or the bomb override interrupt useful sweeps, boundary estimates changing from ordinary sticky-action noise, persistent blind losses at similar positions despite verified limit reversals, or a trace showing FIRE is not present on most non-urgent ticks. If boundary inference is again never exercised and results remain close to 0006, the feedback addition is unproven rather than vindicated. If Jev accepts policies but they do not change route direction/bounds, the semantic question is unnecessary; the core test remains score and survival under the same full-rate traverse.

@@ -1,0 +1,5 @@
+flappy-bird-gymnasium==0.4.0
+gymnasium==1.4.0
+numpy==2.5.4
+pygame==2.6.1
+matplotlib==3.11.2

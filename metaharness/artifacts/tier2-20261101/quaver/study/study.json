@@ -1,0 +1,47 @@
+{
+  "game": "Quaver",
+  "tier": 2,
+  "tier_rationale": "Quaver Keys is a real-time vertical-scrolling rhythm game: the song clock advances continuously, dense charts can require simultaneous lane events every few tens of milliseconds, and the best Standard* judgement permits only \u00b118 ms of error. A missed decision is not deferred until the agent responds, so Astra/Jev cannot sit on the critical path; chart parsing and timestamped press/release scheduling must run in code while the models plan, classify patterns, and diagnose completed runs.",
+  "decision_latency_s": 0.018,
+  "interface": {
+    "chosen": "local .qua chart simulator",
+    "why": "The official web API is metadata/download oriented and has no live key-control channel; editor plugins are editor-only; screen capture plus X11/uinput requires a display, graphics/audio path, Steam installation, and an account, and adds jitter that is dangerous against an 18 ms window. A local simulator works offline and headless, runs in the supplied Python 3.12.3 venv, and can faithfully implement the official open .qua format, Standard* timing windows, long-note judgements, accuracy, combo, and scoring while varying deterministic charts by seed.",
+    "software": [
+      "Python 3.12.3 at /home/hemlix/GamingMaster-mh-tier2/runs/quaver/.venv/bin/python",
+      "PyYAML>=6.0,<7"
+    ],
+    "env": [
+      {
+        "var": "QUAVER_CHART_ROOT",
+        "description": "Directory containing the allowed native .qua charts, or generated seed fixtures; no secret or account data.",
+        "required": true
+      },
+      {
+        "var": "QUAVER_RULESET",
+        "description": "Ruleset identifier, normally standard-star-v1; reject unknown values rather than silently changing timing.",
+        "required": true
+      }
+    ],
+    "setup_steps": [
+      "Install PyYAML into the evaluator venv and verify that the adaptor is running under the supplied Python 3.12.3 executable.",
+      "Load and validate .qua YAML using the official field names; sort hit objects, validate lanes and long-note end times, and explicitly reject unsupported mines, timing groups, or future chart versions.",
+      "Implement reset(seed) to choose or deterministically generate a chart, mode, density, pattern mix, BPM, long-note rate, and difficulty; record the seed and chart hash.",
+      "Expose observe(), step(actions), run_until(time_ms), and finish() through the harness using JSON state and timestamped lane press/release events.",
+      "Use Standard* press windows of 18, 43, 76, 106, 127, and 164 ms; count each long note as a press plus release, preserve held-lane state, and implement the official accuracy/combo/score rules.",
+      "Return per-event judgement/error, counts, score, accuracy, grade, combo, max combo, health, terminal state, seed, modifier, ruleset version, and local_sim fidelity.",
+      "Add boundary tests for all timing thresholds, chords, overlapping holds, early release, missed release, duplicate events, and deterministic held-out seeds; do not use network, Steam, display, GPU, audio, or credentials."
+    ],
+    "observation": "JSON containing interface version, virtual clock_ms, mode and lane count, Standard* or selected judgement windows, fair visible/upcoming notes with id/lane/start_ms/end_ms/state, held_lanes, recent judgements and signed errors, judgement counts, score, accuracy_percent, combo, max_combo, health, terminal status, seed, and fidelity. Default visible lookahead should be about 2000 ms rather than the whole hidden chart; an explicit offline chart-planning mode may expose the full chart to deterministic scheduling code.",
+    "actions": "JSON batches of timestamped lane events such as {type: press|release, lane: 1..4/7, time_ms: integer}. A press hits the earliest pending object in that lane; a release resolves the earliest held long note. Process simultaneous events together, keep other lanes independent, reject/report impossible duplicate state transitions, and advance the virtual clock until finish assigns expired misses and default Good missed-LN releases. The real-client fallback, if ever used, maps lanes to configured keys and sends key-down/up events, but is not the chosen backend."
+  },
+  "scoring": "Report final normalized score out of 1,000,000, accuracy_percent, grade, full judgement counts, miss count, max_combo, final combo, and performance_rating when a map difficulty is available. Accuracy is the principal measure because the official weighted judgements count Marvelous 100, Perfect 98.25, Great 65, Good 25, Okay -100, and Miss -50, long notes count twice, and performance rating uses DifficultyRating * (Accuracy / 98)^6; score and combo remain useful secondary diagnostics.",
+  "scenarios": "reset(seed) must deterministically vary mode (4K/7K), chart length, BPM/rate, density, chord/stream/jack/chordjack/LN pattern mix, timing offset, and difficulty while preserving valid .qua semantics. Include easy calibration charts, mixed charts, LN-heavy charts, dense chord/stream charts, and held-out seeds with unseen lane arrangements; record seed, chart hash, ruleset, and modifiers. Apply mirror/rate/custom-window modifiers only when explicitly requested and report them. Do not reveal the entire hidden chart in the normal visible observation, and reject unsupported mines/timing groups instead of silently scoring them incorrectly.",
+  "strategy_summary": "Strong Quaver players optimize timing accuracy rather than raw combo, use a comfortable lane layout/readable skin, and practice charts at or slightly above their reliable skill level. They recognize streams, chords, jacks, chordjacks, and long notes, with deliberate practice targeted at the weakest pattern and careful LN press/hold/release state. The adaptor should parse the chart and schedule exact lane events in code, grouping chords and preserving holds; Jev may classify a partial upcoming pattern or timing bias, while Astra chooses difficulty, modifiers, and between-run calibration. Report per-judgement errors and adjust a global offset only between runs; never put a model call on the \u00b118 ms event path.",
+  "risks": [
+    "The local simulator omits real audio, rendering, Steam, OS input, GPU, and network latency; compare its results with the official client only as an explicitly labeled fidelity check.",
+    "The official web API has no live gameplay-control API and downloads/personal data may require authentication; no credentials are needed or written for the chosen backend.",
+    "Quaver rules prohibit third-party tools, edited clients, and unintended exploits for server connections; never use screen/input automation, DLL injection, generated replays, or a custom client for online/ranked play.",
+    "The official .qua format has mines, timing groups, scroll velocities, version changes, and custom judgement settings; unsupported features must fail loudly or be implemented and versioned.",
+    "A 0.5 s Jev response and multi-second Astra response are too slow for individual notes; deterministic code must own scheduling, LN state, and arithmetic."
+  ]
+}

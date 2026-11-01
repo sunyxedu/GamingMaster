@@ -1,0 +1,6 @@
+{
+ "fatal": "proposer produced no harness.py",
+ "mean_score": null,
+ "n_episodes": 0,
+ "game": "Tetris (Guideline-compatible marathon)"
+}

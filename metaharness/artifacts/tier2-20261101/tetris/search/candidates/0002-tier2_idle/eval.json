@@ -1,0 +1,389 @@
+{
+ "harness_path": "/home/hemlix/GamingMaster-mh-tier2/runs/tetris/search/candidates/0002-tier2_idle/harness.py",
+ "game": "Tetris (Guideline-compatible marathon)",
+ "fatal": null,
+ "mean_score": 0.0,
+ "stale_fraction": 1.0,
+ "n_episodes": 6,
+ "system1_calls": 0,
+ "system2_calls": 0,
+ "mean_steps": 2130.0,
+ "failed_s1": 0,
+ "failed_s2": 0,
+ "timeouts_s1": 0,
+ "timeouts_s2": 0,
+ "ended_by": {
+  "game_done": 6
+ },
+ "s1_informed_fraction": null,
+ "s2_informed_fraction": null,
+ "errors": [],
+ "episodes": [
+  {
+   "seed": 0,
+   "score": 0.0,
+   "steps": 2130,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 2130,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 106.50218237610534,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 2130,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.0,
+     "line_clear_points": 0.0,
+     "drop_points": 0.0,
+     "combo_points": 0.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 0.0,
+     "level": 1.0,
+     "pieces": 11.0,
+     "survival_s": 106.5,
+     "holes": 21.0,
+     "aggregate_height": 65.0,
+     "bumpiness": 40.0,
+     "top_out_height": 20.0,
+     "illegal_actions": 0.0,
+     "top_out": 1.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 1,
+   "score": 0.0,
+   "steps": 2060,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 2060,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 103.00203325599432,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 2060,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.0,
+     "line_clear_points": 0.0,
+     "drop_points": 0.0,
+     "combo_points": 0.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 0.0,
+     "level": 1.0,
+     "pieces": 10.0,
+     "survival_s": 103.0,
+     "holes": 20.0,
+     "aggregate_height": 60.0,
+     "bumpiness": 38.0,
+     "top_out_height": 19.0,
+     "illegal_actions": 0.0,
+     "top_out": 1.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 2,
+   "score": 0.0,
+   "steps": 2210,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 2210,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 110.50221018190496,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 2210,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.0,
+     "line_clear_points": 0.0,
+     "drop_points": 0.0,
+     "combo_points": 0.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 0.0,
+     "level": 1.0,
+     "pieces": 11.0,
+     "survival_s": 110.5,
+     "holes": 15.0,
+     "aggregate_height": 59.0,
+     "bumpiness": 38.0,
+     "top_out_height": 19.0,
+     "illegal_actions": 0.0,
+     "top_out": 1.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 3,
+   "score": 0.0,
+   "steps": 2010,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 2010,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 100.50210777716711,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 2010,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.0,
+     "line_clear_points": 0.0,
+     "drop_points": 0.0,
+     "combo_points": 0.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 0.0,
+     "level": 1.0,
+     "pieces": 11.0,
+     "survival_s": 100.5,
+     "holes": 33.0,
+     "aggregate_height": 77.0,
+     "bumpiness": 40.0,
+     "top_out_height": 20.0,
+     "illegal_actions": 0.0,
+     "top_out": 1.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 4,
+   "score": 0.0,
+   "steps": 2130,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 2130,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 106.50227508600801,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 2130,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.0,
+     "line_clear_points": 0.0,
+     "drop_points": 0.0,
+     "combo_points": 0.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 0.0,
+     "level": 1.0,
+     "pieces": 11.0,
+     "survival_s": 106.5,
+     "holes": 27.0,
+     "aggregate_height": 71.0,
+     "bumpiness": 40.0,
+     "top_out_height": 20.0,
+     "illegal_actions": 0.0,
+     "top_out": 1.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  },
+  {
+   "seed": 5,
+   "score": 0.0,
+   "steps": 2240,
+   "system1_calls": 0,
+   "system2_calls": 0,
+   "stale_ticks": 2240,
+   "decided_ticks": 0,
+   "latency_s1": {
+    "n": 0
+   },
+   "latency_s2": {
+    "n": 0
+   },
+   "wall_s": 112.00233614700846,
+   "error": null,
+   "info": {
+    "score": 0.0,
+    "ticks": 2240,
+    "game_done": true,
+    "pending_tasks": 0,
+    "deadline_s": 900.0,
+    "harness_alive": false,
+    "cancelled_calls": 0,
+    "score_breakdown": {
+     "score": 0.0,
+     "line_clear_points": 0.0,
+     "drop_points": 0.0,
+     "combo_points": 0.0,
+     "back_to_back_bonus": 0.0,
+     "lines": 0.0,
+     "level": 1.0,
+     "pieces": 12.0,
+     "survival_s": 112.0,
+     "holes": 26.0,
+     "aggregate_height": 74.0,
+     "bumpiness": 40.0,
+     "top_out_height": 20.0,
+     "illegal_actions": 0.0,
+     "top_out": 1.0
+    }
+   },
+   "acts": 0,
+   "acts_after_s1": 0,
+   "acts_after_s2": 0,
+   "failed_s1": 0,
+   "failed_s2": 0,
+   "timeouts_s1": 0,
+   "timeouts_s2": 0,
+   "ended_by": "game_done",
+   "invalid": null,
+   "backends": {},
+   "calls_s2": []
+  }
+ ],
+ "metadata": {
+  "protocol_version": 3,
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5
+  ],
+  "expected_episodes": 6,
+  "game_kwargs": {},
+  "clock_mode": "wall",
+  "latency_override": null,
+  "memory_mode": "episode",
+  "harness_timeout_s": 900.0,
+  "deadline_s": 900.0,
+  "grace_s": 10.0,
+  "budget": {
+   "max_system1_calls": 4000,
+   "max_system2_calls": 40,
+   "max_wall_s": 900.0
+  },
+  "models": {
+   "system1": {
+    "name": "jev",
+    "model": "jev-latest",
+    "player_tools": null,
+    "reasoning_effort": null
+   },
+   "system2": {
+    "name": "claude:gpt-6-astra",
+    "model": "gpt-6-astra",
+    "player_tools": "disabled",
+    "reasoning_effort": "high"
+   }
+  },
+  "harness_sha256": "1b2dfa5a949c5369ccfba50fc69b7bfd153ff35170605933dbf47079f6853d7f",
+  "game_kind": "realtime",
+  "resolved_models": {}
+ },
+ "score_std": 0.0
+}

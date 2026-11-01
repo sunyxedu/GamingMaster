@@ -1,0 +1,51 @@
+{
+  "game": "osu!mania",
+  "tier": 2,
+  "tier_rationale": "The chart clock advances continuously and each tap or hold is judged within millisecond-scale windows; at the strictest stable native judgement, a MAX is only about 16 ms wide on either side of the target. Astra's seconds-to-a-minute reasoning and Jev's roughly 0.5 s response cannot be placed directly on every object, so the harness must expose a moving lookahead, batch Jev recognition questions, and execute timestamped events while the world keeps ticking.",
+  "decision_latency_s": 0.016,
+  "interface": {
+    "chosen": "open-chart local simulator",
+    "why": "It is the only practical route that is offline, headless, deterministic, account-free, and structured for timestamped actions on this server. It uses the official native .osu chart format and documented stable ScoreV1 judgement/scoring rules, while avoiding GUI capture jitter, missing audio/GPU, fragile process-memory offsets, online ToS risk, and the absence of an official real-time control API.",
+    "software": [
+      "/home/hemlix/GamingMaster-mh-tier2/runs/osu-mania/.venv/bin/python (Python 3.12.3)",
+      "Python standard library only; no additional package or client required"
+    ],
+    "env": [
+      {
+        "var": "OSU_MANIA_CHART_ROOT",
+        "description": "Optional directory of local native .osu charts; omit it to use deterministic seed-generated charts.",
+        "required": false
+      },
+      {
+        "var": "OSU_MANIA_RULESET",
+        "description": "Explicit ruleset profile, default stable-scorev1-native-mania; reject unknown values instead of silently mixing lazer rules.",
+        "required": false
+      },
+      {
+        "var": "OSU_MANIA_LOOKAHEAD_MS",
+        "description": "Fixed visible planning horizon in milliseconds, default 2000; keep it fixed within an evaluation split.",
+        "required": false
+      }
+    ],
+    "setup_steps": [
+      "Use the supplied Python 3.12.3 evaluator venv and the standard library; do not install or launch the graphical osu! client.",
+      "On reset(seed), derive a stable scenario from the seed and either load a valid Mode 3 native .osu chart or generate one with varied key count, OD, density, patterns, and holds.",
+      "Parse CircleSize as the column count, OverallDifficulty, timing points, and hit objects; map each x coordinate with floor(x * key_count / 512) and clamp it.",
+      "Initialize a deterministic event-driven clock, per-lane key state, active holds, stable ScoreV1 counters, combo, and a fixed lookahead; expose only the current horizon unless full-chart planning is explicitly selected.",
+      "Expose observe() as JSON and accept act(events) plus advance(to_time_ms), where events are timestamped lane down/up transitions and future events are not silently retimed.",
+      "Implement and test stable native judgement windows, one-judgement ScoreV1 holds, combined head/tail error, score/accuracy/combo bookkeeping, and seeded reset reproducibility.",
+      "Run validation cases for boundary timings, early presses, misses, chords, jacks, overlapping lanes, and early hold releases before connecting Astra or Jev."
+    ],
+    "observation": "Structured JSON containing current_time_ms, key_count, OD, fixed lookahead_ms, per-lane key state, upcoming object IDs with lane/start/end/kind, active holds, recent result/error records, judgement windows, score, accuracy, combo, maximum combo, and remaining object count. No screenshot, display, audio, account, or network state is required.",
+    "actions": "Submit batches of future events of the form {time_ms, lane, down}; a tap is a down/up pair, a hold remains down until its tail, and simultaneous lane events represent a chord. advance(to_time_ms) processes queued transitions and deadlines in timestamp order. The adaptor translates model-approved policies into exact events but must not auto-generate perfect events for objects the model did not select."
+  },
+  "scoring": "Report stable native ScoreV1 score out of 1,000,000, stable mania accuracy, MAX/GREAT/GOOD/OK/MEH/MISS counts, final and maximum combo, signed head/tail timing errors, miss rate, and hold-break rate. Score and accuracy reflect timing quality; combo and hold-break statistics expose reliability that a single aggregate score can hide.",
+  "scenarios": "reset(seed) should deterministically vary native charts across key counts, OD, BPM/interval grid, density, chart length, tap/chord/stream/jack/anchor mix, hold fraction, hold duration, and cross-lane release overlap. Use seed-disjoint held-out charts and vary difficulty independently of pattern family; there are no opponents in osu!mania. Keep generated charts valid with no same-lane overlap and report per-seed metrics.",
+  "strategy_summary": "Strong play reads a lookahead in chunks, distinguishes chords, streams, jacks/anchors, and holds, and schedules lane transitions near the centre of each judgement window. Holds require a correct head, continuous key-down state, and accurately timed tail release; stable ScoreV1 gives the hold one combined judgement. Deterministic code should parse, schedule, judge, and score, while Astra selects horizon policies and adapts to recent errors and Jev rapidly labels visible patterns and hold risks. Do not call either model per note: batch Jev questions and let the event scheduler run while the models think.",
+  "risks": [
+    "This is a stable ScoreV1 simulator profile, not an exact current osu!lazer client; lazer changes MAX timing and hold judgement structure.",
+    "The real client has rendering, audio, input polling, health, notelock, mods, and platform-specific behavior that the headless profile intentionally omits unless separately implemented.",
+    "GUI/input injection and memory readers are fragile on a displayless Linux server and carry anti-cheat and osu! fair-play risk; do not use them for online play.",
+    "Community parsers and bot projects vary in maintenance, license, and rule fidelity; the selected path avoids making them runtime dependencies."
+  ]
+}

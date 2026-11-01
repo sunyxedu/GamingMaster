@@ -1,0 +1,60 @@
+{
+  "candidate": "0009",
+  "train": 20.333333333333332,
+  "val": 19.0,
+  "combined": 1.0,
+  "seeds_val": {
+    "Atari_2600_Pong_ALE_Robot_Pong": [
+      3,
+      8,
+      9,
+      10,
+      11,
+      12
+    ]
+  },
+  "finalists": [
+    {
+      "candidate": "0006",
+      "rank": 0,
+      "status": "ok",
+      "train": 20.333333333333332,
+      "val": 17.833333333333332,
+      "per_game": {
+        "Atari 2600 Pong (ALE Robot Pong)": 18.666666666666668
+      },
+      "norm": [
+        0.7666666666666674
+      ],
+      "combined": 0.7666666666666674
+    },
+    {
+      "candidate": "0010",
+      "rank": 1,
+      "status": "ok",
+      "train": 20.333333333333332,
+      "val": 14.0,
+      "per_game": {
+        "Atari 2600 Pong (ALE Robot Pong)": 16.11111111111111
+      },
+      "norm": [
+        0.0
+      ],
+      "combined": 0.0
+    },
+    {
+      "candidate": "0009",
+      "rank": 2,
+      "status": "ok",
+      "train": 20.333333333333332,
+      "val": 19.0,
+      "per_game": {
+        "Atari 2600 Pong (ALE Robot Pong)": 19.444444444444443
+      },
+      "norm": [
+        1.0
+      ],
+      "combined": 1.0
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "key": {
+    "groups": [
+      [
+        "train",
+        [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      ],
+      [
+        "val",
+        [
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ]
+      ],
+      [
+        "heldout",
+        [
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107
+        ]
+      ]
+    ],
+    "game_kwargs": {
+      "ghost_mode": 0,
+      "frameskip": 4,
+      "repeat_action_probability": 0.25
+    },
+    "heldout_game": null,
+    "heldout_game_kwargs": {},
+    "game_source": "16babd39b5f76580854c18c5ad6cd6db88501e26dd3654ff5d3f29f7c9b91adb"
+  },
+  "results": {
+    "train:0": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "train:1": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "train:2": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "train:3": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "train:4": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "train:5": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "val:6": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "val:7": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "val:8": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "val:9": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "val:10": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "val:11": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "heldout:100": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "heldout:101": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "heldout:102": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "heldout:103": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "heldout:104": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "heldout:105": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "heldout:106": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    },
+    "heldout:107": {
+      "ok": true,
+      "obs_sha256": "7b8847e13840507b"
+    }
+  },
+  "refused": [],
+  "warnings": [
+    "held-out / validation seeds start like a training seed (val:6, val:7, val:8, val:9, val:10, val:11, heldout:100, heldout:101, heldout:102, heldout:103, heldout:104, heldout:105, heldout:106, heldout:107); fine when the seed changes the episode later, which adaptor validation checks"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "game": "Snake",
+  "tier": 2,
+  "tier_rationale": "Classic Snake advances one grid cell on its own every tick, so the world continues while Astra reasons and a late steering update can cause a wall or self collision. Implementations have no universal speed, but representative classic variants run at roughly 80\u2013167 ms per move; the reference local runner uses 0.10 s ticks. Jev's nominal ~0.5 s response time spans about five reference ticks, so it must choose ahead of junctions while code executes a queued safe route and holds the current direction between turns; Astra supplies slower high-level mode and risk decisions without blocking the clock.",
+  "decision_latency_s": 0.1,
+  "interface": {
+    "chosen": "api",
+    "why": "Use a local Gymnasium-shaped symbolic JSON API with an independent real-time tick scheduler. It is the only option that gives exact head-first body state, food, collision/tail semantics, seeded reset, and measurable deadlines without a display, network, browser, ROM, account, or third-party terms. Jumanji Snake is a good headless reference but adds JAX and exposes a synchronous JAX state API; GUI, browser, and pixel alternatives are slower and less reliable.",
+    "software": [],
+    "env": [],
+    "setup_steps": [
+      "Use the supplied /home/hemlix/GamingMaster-mh-tier2/runs/snake/.venv/bin/python 3.12.3; do not require additional packages or a DISPLAY.",
+      "Implement the bounded-grid classic rules in brief.md: zero-based coordinates, no wrap, one food, no immediate reverse, tail vacates on non-food moves, and food grows the body by one.",
+      "Expose reset(seed, options), observe, set_direction(direction, state_tick), deterministic one-tick step, and close; return fresh JSON state and Gymnasium-shaped reward/termination diagnostics.",
+      "Run a background or virtual-clock scheduler at tick_s=0.10 independently of model calls; retain the previous direction when no on-time action arrives and reject stale state_tick values.",
+      "Publish a head-first snake list, food, direction, score, legal/safe directions, tick/deadline metadata, terminal reason, and seed in every observation.",
+      "Test seeded replay, wall collision, self collision, moving into the vacating tail, eating/growth collision, reverse rejection, full-board completion, and time-limit truncation before connecting Astra or Jev."
+    ],
+    "observation": "Fresh JSON containing game/version, seed and scenario, rows/cols, tick/sim_time_s/tick_s/deadline_in_s, head-first snake coordinates, head and tail, current direction, food or null, score, length, free_cells, nonreverse_directions, one-step safe_directions_now, terminated/truncated/terminal_reason, last_reward, input age, and action tick. Keep the complete body ordering; a screenshot or head-only image is insufficient for safe late-game play.",
+    "actions": "Absolute UP, RIGHT, DOWN, LEFT strings, optionally aliases 0=UP, 1=RIGHT, 2=DOWN, 3=LEFT. A same-direction request is harmless; an immediate reverse is ignored and logged; malformed or stale actions are rejected. set_direction queues the next tick without blocking, while deterministic step(action) advances exactly one tick for replay tests. The scheduler continues moving during model calls."
+  },
+  "scoring": "Report cumulative food count as score (one point per food), final length, ticks survived, terminal_reason, and filled_board success. Primary performance is final score/cumulative reward because it measures actual food eaten; survival ticks and completion are diagnostics, and survival without food must not be rewarded as strong play.",
+  "scenarios": "Use a documented reference scenario of a 12x12 bounded grid, initial length 3 near the centre, one uniformly sampled food cell, tick_s=0.10, and a fixed maximum tick limit. reset(seed) must deterministically vary the valid initial placement and complete food sequence while keeping rules fixed; held-out seeds should therefore produce unfamiliar food routes. Add evaluation cases with other fixed rectangular sizes and tick rates (including at least one odd-by-odd board where a simple Hamiltonian cycle is unavailable) only as declared options, and use a time limit to prevent infinite tail loops. Do not silently change wall wrapping, growth, or scoring across seeds.",
+  "strategy_summary": "Use deterministic code for legality, collision/tail-vacating simulation, seeded RNG, BFS/A*, flood-fill area, head-to-tail reachability, score bookkeeping, and tick deadlines. Pursue food with a short route only after simulating the post-growth state and passing a tail-access/reachable-area safety filter; this is not an indefinite-survival proof unless the full route and invariant are checked. Otherwise chase the tail or maximize connected free space. On boards with a validated Hamiltonian cycle, follow it as the late-game safety fallback and permit shortcuts only when cycle ordering, growth reserve, and tail reachability remain valid; disable shortcuts as occupancy becomes high. Because Jev's response can span several ticks, it should choose among a small set of code-validated directions or FOOD/TAIL/CYCLE modes at upcoming turns, while Astra sets conservative thresholds, handles unusual boards, and reviews failures without blocking the clock. Cite [John Flux's cycle algorithm](https://johnflux.com/2015/05/02/nokia-6110-part-3-algorithms/) and the [Safe A*/Hamiltonian comparison](https://github.com/shashank11yadav/Snake-game) in the implementation notes.",
+  "risks": [
+    "Snake is a genre with no single canonical board size, tick rate, reverse behavior, or wrap rule; the adaptor must make the selected local contract explicit.",
+    "The 0.10 s game tick means the per-tick action deadline is 0.10 s, but Jev's typical 0.5 s call takes about five ticks and Astra takes much longer; the controller must preplan several moves and execute safe queued actions in code instead of waiting for model responses.",
+    "A simple Hamiltonian cycle is not available for every board shape and can become invalid after an unsafe shortcut; validate cycle adjacency/order and fall back to dynamic safe search.",
+    "A food path can be geometrically shortest yet trap the snake after growth; post-eating simulation and tail reachability are mandatory.",
+    "Optional Jumanji or community Gym packages add JAX/Pygame/version and synchronous-vs-realtime integration risk; they are not required for the chosen interface.",
+    "Browser, X11, screen-capture, emulator, and network alternatives introduce GUI focus, latency, ROM licensing, account, anti-bot, or third-party ToS risks and should not be used for this offline run."
+  ]
+}

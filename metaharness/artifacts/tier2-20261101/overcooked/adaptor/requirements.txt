@@ -1,0 +1,12 @@
+# The evaluator supplies overcooked_ai at the pinned commit documented in
+# ADAPTOR.md.  If installing it manually, use:
+# pip install --ignore-requires-python "git+https://github.com/HumanCompatibleAI/overcooked_ai.git@739950a079cdaed5a44fcc662efc40244c205d06"
+dill
+gymnasium
+ipywidgets
+numpy<2
+opencv-python-headless
+pygame
+scipy
+setuptools>=77.0.3
+tqdm

@@ -1,0 +1,43 @@
+[11:57:37] run: game='Overcooked' dir=/home/hemlix/GamingMaster-mh-tier2/runs/overcooked agent=claude:gpt-6-astra
+[13:27:37] study: the agent ran out of time (90 min); resuming its session to write the deliverables
+[13:27:37] study: done — tier 2, interface official env
+[14:57:37] adapt: the agent ran out of time (attempt 1/4); validating what it wrote
+[14:57:44] adapt: adaptor validated after 1 attempt(s)
+[14:57:44] search: tier 2 on adaptor game 'Overcooked-AI'
+[14:58:25] run: game='Overcooked' dir=/home/hemlix/GamingMaster-mh-tier2/runs/overcooked agent=claude:gpt-6-astra
+[14:58:25] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/overcooked/study/study.json (tier 2)
+[14:58:33] adapt: reusing validated adaptor
+[14:58:33] search: tier 2 on adaptor game 'Overcooked-AI'
+[15:00:22] run: game='Overcooked' dir=/home/hemlix/GamingMaster-mh-tier2/runs/overcooked agent=claude:gpt-6-astra
+[15:00:22] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/overcooked/study/study.json (tier 2)
+[15:00:30] adapt: reusing validated adaptor
+[15:00:30] search: tier 2 on adaptor game 'Overcooked-AI'
+[17:11:47] run: game='Overcooked' dir=/home/hemlix/GamingMaster-mh-tier2/runs/overcooked agent=claude:gpt-6-astra
+[17:11:47] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/overcooked/study/study.json (tier 2)
+[17:11:54] adapt: reusing validated adaptor
+[17:11:54] search: tier 2 on adaptor game 'Overcooked-AI'
+[21:45:29] run: game='Overcooked' dir=/home/hemlix/GamingMaster-mh-tier2/runs/overcooked agent=claude:gpt-6-astra
+[21:45:29] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/overcooked/study/study.json (tier 2)
+[21:45:36] adapt: reusing validated adaptor
+[21:45:36] search: tier 2 on adaptor game 'Overcooked-AI'
+[01:29:45] run: game='Overcooked' dir=/home/hemlix/GamingMaster-mh-tier2/runs/overcooked agent=claude:gpt-6-astra
+[01:29:45] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/overcooked/study/study.json (tier 2)
+[01:29:52] adapt: reusing validated adaptor
+[01:29:52] search: tier 2 on adaptor game 'Overcooked-AI'
+[04:14:19] run: game='Overcooked' dir=/home/hemlix/GamingMaster-mh-tier2/runs/overcooked agent=claude:gpt-6-astra
+[04:14:19] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/overcooked/study/study.json (tier 2)
+[04:14:26] adapt: reusing validated adaptor
+[04:14:26] search: tier 2 on adaptor game 'Overcooked-AI'
+[08:03:23] run: game='Overcooked' dir=/home/hemlix/GamingMaster-mh-tier2/runs/overcooked agent=claude:gpt-6-astra
+[08:03:23] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/overcooked/study/study.json (tier 2)
+[08:03:29] adapt: reusing validated adaptor
+[08:03:29] search: tier 2 on adaptor game 'Overcooked-AI'
+[13:21:37] run: game='Overcooked' dir=/home/hemlix/GamingMaster-mh-tier2/runs/overcooked agent=claude:gpt-6-astra
+[13:21:37] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/overcooked/study/study.json (tier 2)
+[13:21:43] adapt: reusing validated adaptor
+[13:21:43] search: tier 2 on adaptor game 'Overcooked-AI'
+[20:46:32] run: game='Overcooked' dir=/home/hemlix/GamingMaster-mh-tier2/runs/overcooked agent=claude:gpt-6-astra
+[20:46:32] study: reusing /home/hemlix/GamingMaster-mh-tier2/runs/overcooked/study/study.json (tier 2)
+[20:46:38] adapt: reusing validated adaptor
+[20:46:38] search: tier 2 on adaptor game 'Overcooked-AI'
+[00:09:18] run: done — best 0024

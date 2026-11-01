@@ -1,0 +1,12 @@
+{
+  "mode": "crossover",
+  "parents": [
+    1,
+    2
+  ],
+  "parent_dirs": [
+    "0001-tier2_astra_only",
+    "0002-tier2_idle"
+  ],
+  "generation": 0
+}

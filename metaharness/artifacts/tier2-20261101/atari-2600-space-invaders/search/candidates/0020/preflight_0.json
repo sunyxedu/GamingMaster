@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "stage": "episode",
+  "repairable": true,
+  "error": "",
+  "ended_by": "game_done",
+  "score": 230.0,
+  "steps": 663,
+  "system1_calls": 74,
+  "system2_calls": 0,
+  "coverage": {
+    "system2_answers": 0,
+    "system1_answers": 74,
+    "failed_calls": 0,
+    "acts": 663,
+    "acts_after_s1": 74,
+    "acts_after_s2": 0,
+    "steps": 663,
+    "harness_events": 100
+  },
+  "warnings": [
+    "no System-2 call was answered during the dry run"
+  ]
+}

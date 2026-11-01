@@ -1,0 +1,5 @@
+ale-py==0.12.1
+gymnasium==1.4.0
+ocatari==2.2.1
+numpy==1.26.4
+opencv-python==4.11.0.86

@@ -1,0 +1,38 @@
+{
+  "game": "Malody",
+  "tier": 2,
+  "tier_rationale": "Malody Key mode is a continuous falling-note rhythm game: notes, chords, jacks, and hold heads/tails arrive on a clock while the player is deciding. The documented standard-C Big-P window is only about 40 ms and the G/miss boundary is about 200 ms, so an Astra call taking seconds cannot be in the per-note control loop and even a roughly 0.5-second Jev call is too slow for dense charts. The adaptor must schedule known chart events in code and use Astra for planning/adaptation and Jev for bounded fast recognition.",
+  "decision_latency_s": 0.04,
+  "interface": {
+    "chosen": "emulator",
+    "why": "A local deterministic Key-mode emulator is the only practical route under the supplied offline headless Linux, no-display, no-GPU, no-audio, and no-account constraints. It can parse native .mc charts, expose structured JSON, accept timestamped press/release actions, and vary charts and difficulty by seed without client login or render latency. The public RM timing/score article supplies a documented proxy, while the files must label score fidelity limits because it is not a complete official Key scoring specification.",
+    "software": [
+      "/home/hemlix/GamingMaster-mh-tier2/runs/malody/.venv/bin/python (Python 3.12.3)",
+      "Python standard library: json, math, random, dataclasses, hashlib"
+    ],
+    "env": [],
+    "setup_steps": [
+      "Implement an in-process Python API or line-delimited JSON process in the supplied evaluator venv; do not require wall-clock sleep, audio, a display, a GPU, or network access.",
+      "Parse and validate native .mc JSON: require meta.mode == 0, read meta.mode_ext.column, validate note columns and endbeat holds, and preserve fractional beats until piecewise BPM conversion.",
+      "Build cumulative beat-to-millisecond timing segments from time[].bpm and apply the chart/audio offset exactly once; produce stable note IDs, start_ms, end_ms, columns, and tap/hold kinds.",
+      "Implement reset(seed, options) so held-out seeds deterministically vary key count, BPM, offset, density, patterns, holds, and configured judge/mod without using online charts.",
+      "Expose observations with upcoming structured notes, held columns, current logical time, judgments, signed offsets, combo, misses, broken holds, weighted accuracy, score proxy, and done status.",
+      "Accept press(column, at_ms), release(column, at_ms), advance(to_ms), and timestamp-sorted event batches; resolve chords at one timestamp and auto-miss overdue notes after the configured deadline.",
+      "Use the documented C/A-E timing table and accuracy weights; label the 200/332/466/600 combo score and multipliers as rm_proxy_2025 rather than official Key scoring.",
+      "Optionally use the Malody V replay renderer only for post-hoc validation if an authorized .mrv and chart package are supplied; it is not required for the evaluator."
+    ],
+    "observation": "Structured JSON, not pixels: episode seed/mode/key count/judge/mod/logical time, chart BPM segments and offset, at least the next 1-2 seconds or 64 notes grouped by start time with column/start/end/kind, held columns, last judgments with signed offsets, and score/accuracy/combo/miss/broken-hold statistics.",
+    "actions": "Timestamped JSON actions: press(column, at_ms) for tap/hold heads, release(column, at_ms) for hold tails, advance(to_ms) to progress and resolve misses, or a sorted batch of these events. Chords require simultaneous presses in their columns; the adaptor schedules exact chart timestamps rather than waiting in real time."
+  },
+  "scoring": "Report weighted judgment accuracy as the primary score: Big P=1.00, p1=0.90, p2=0.85, p3=0.80, G=0.40, M=0.00, plus judgment histogram, misses, broken holds, max combo, and completion. Also report the documented D/no-mod RM-compatible score proxy using 200/332/466/600 Big-P combo bases and judge/mod multipliers, explicitly labelled rm_proxy_2025; the source is https://m.mugzone.net/wiki/2443?lang=sc and applies to RM mode, so it must not be presented as verified native Key scoring.",
+  "scenarios": "reset(seed) must generate or select deterministic native-mode-0 charts while holding out whole pattern families. Vary 4K-7K key counts, constant and changing BPM, positive/negative offsets, snap resolution, isolated taps, alternation/streams, same-lane jacks, chords, anchors, holds and final releases, density/difficulty, and no-mod/Flip/Const options. Use perfect scripted actions for parser/scorer checks and controlled early/late/noisy actions for timing-window checks. Do not depend on network chart downloads or user accounts; the native chart schema is described at https://prefixaut.github.io/rconv/rconv/malody.html and https://github.com/Jakads/malody2osu/blob/master/convert.py.",
+  "strategy_summary": "Preprocess the complete chart in code, convert fractional beats through every BPM segment, and schedule timestamped lane presses/releases; do not ask Astra or Jev to react to individual notes. Group equal-time notes into chords, alternate/pace streams and jacks, and keep holds down through endbeat, with C judge/no mod as the calibration baseline. Astra should select difficulty/judge/mod and diagnose signed timing, chord, jack, or hold-specific errors from structured summaries; Jev should only answer fast typed pattern/risk choices over a JSON horizon. Evaluate accuracy and combo across seeded charts, while treating the documented RM score formula as a labelled proxy rather than verified Key scoring.",
+  "risks": [
+    "The official Steam client is a Windows GUI build with a Mugzone account requirement; no supported Linux headless gameplay API was found.",
+    "Public timing and score documentation is for RM mode, while the requested target is Key mode; the emulator must expose this fidelity limitation and calibrate against an authorized real client if exact Key scores matter.",
+    "Real-client screen/input automation has GUI timing jitter, audio/GPU/display dependencies, account and possible anti-cheat/ToS exposure, and is not selected.",
+    "Native .mc format references are community parsers rather than one complete official specification; unusual time signatures, negative snaps, effects, and modern chart versions require validation.",
+    "Replay rendering is post-hoc and does not control a live game; chart APIs and local servers provide files/data, not gameplay actions.",
+    "Astra/Jev model latency is longer than the strict judgment window, so a model-per-note design will fail unless the code layer schedules the known chart."
+  ]
+}
