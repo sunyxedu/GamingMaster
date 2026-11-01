@@ -31,7 +31,9 @@ also `validation/`, `heldout/` and `ablation-no-models/`). REPAIRS.md records op
 | Tetris | 0017 | 63,217 | 66,181 | 62,259 (7) | 61,753 | 21 |
 
 "models failing" is the ablation: the champion on its training seeds with every Jev and Astra call failing after
-the models' calibrated latency (pure code if it holds). Notes:
+the models' calibrated latency (pure code if it holds). Pong, Tetris, Ms. Pac-Man, Flappy Bird, Space Invaders,
+Malody, Snake and Doom ran the earlier ablation with the models set to None; both agree for a harness that does not
+test for a missing model (osu!mania's does, and was re-run). Notes:
 - Scores are each game's own: Malody is weighted accuracy (1 = every note perfect); Quaver and osu!mania 1,000,000 =
   the maximum; Snake 141 = the 12x12 board filled; Breakout 864 = both walls; Flappy Bird is capped by the deadline.
 - Doom's held-out is transfer (unseen maps E1M5-E1M8 at skill 4; training E1M1-E1M4). Overcooked's held-out uses
