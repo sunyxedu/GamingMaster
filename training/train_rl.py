@@ -36,6 +36,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
 from env.generals_env import GeneralsEnv
+from model.checkpoint_migrations import stamp_schema_version
 from model.components.core import allreduce_moe_loads, moe_layers, update_moe_balance
 from model.components.encoder import describe_encoder_norm
 from model.config import ModelConfig, checkpoint_config
@@ -2663,7 +2664,7 @@ def main():
                 ckpt_data["capture_optim_state"] = capture_optimizer.state_dict()
             if ema_state is not None:
                 ckpt_data["ema_state"] = ema_state
-            torch.save(ckpt_data, ckpt_path + ".tmp")
+            torch.save(stamp_schema_version(ckpt_data), ckpt_path + ".tmp")
             # Atomic publish: a reader (or a resume glob) must never see a
             # half-written checkpoint.
             os.replace(ckpt_path + ".tmp", ckpt_path)
@@ -2675,12 +2676,12 @@ def main():
                 # (rl_checkpoint_iter*.pt) can never pick it up.
                 ema_path = os.path.join(
                     args.output_dir, f"rl_ema_iter{iteration}.pt")
-                torch.save({
+                torch.save(stamp_schema_version({
                     "iteration": iteration,
                     "model_state": ema_state,
                     "config": cfg.__dict__,
                     "ema": True,
-                }, ema_path + ".tmp")
+                }), ema_path + ".tmp")
                 os.replace(ema_path + ".tmp", ema_path)
 
     if rank0:

@@ -423,8 +423,8 @@ def test_opponent_needs_a_free_seat():
 
 def test_main_one_iteration(tmp_path, monkeypatch, capsys):
     """CLI smoke: one iteration against a frozen opponent checkpoint; the
-    log counts games (not per-seat trajectories) and the save format is
-    unchanged."""
+    log counts games (not per-seat trajectories) and the checkpoint carries
+    the schema version alongside the existing fields."""
     net = _net()
     ck = tmp_path / "othello_il.pt"
     torch.save({"game": "othello", "config": net.cfg.__dict__,
@@ -443,7 +443,8 @@ def test_main_one_iteration(tmp_path, monkeypatch, capsys):
     assert p1 in (0.0, 0.5, 1.0) and lw in (0.0, 0.5, 1.0)
     saved = torch.load(tmp_path / "rl" / "othello_rl_iter1.pt", weights_only=False)
     assert set(saved) == {"game", "iter", "model_state", "optimizer_state",
-                          "config", "config_overrides"}
+                          "config", "config_overrides", "schema_version"}
+    assert saved["schema_version"] == 1
 
     monkeypatch.setattr(sys, "argv", [
         "train_rl_game", "--game", "othello", "--il_checkpoint", str(ck),
