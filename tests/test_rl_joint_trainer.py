@@ -1156,7 +1156,7 @@ def test_eval_temperature_applies_to_that_games_evaluation_games_only(stage1):
     def spy(env, league, actor, **kw):
         # an evaluation wave's league never mirrors (its seats are assigned inside the wave)
         seen.append((env.game if hasattr(env, "game") else type(env).__name__,
-                     float(league.mirror_prob) > 0.0, base._SAMPLE_TEMPERATURE))
+                     float(league.mirror_prob) > 0.0, base.current_sampling_temperature()))
         return orig(env, league, actor, **kw)
 
     train_rl_joint.collect_wave = spy
@@ -1174,7 +1174,7 @@ def test_eval_temperature_applies_to_that_games_evaluation_games_only(stage1):
     assert evals and all(t == (0.0 if g == "othello" else 1.0) for g, t in evals), evals
     assert any(g == "othello" for g, _ in evals) and any(g != "othello" for g, _ in evals)
     assert rollouts and all(t == 1.0 for t in rollouts)
-    assert base._SAMPLE_TEMPERATURE == 1.0
+    assert base.current_sampling_temperature() == 1.0
     games = rec["games"] if "games" in rec else rec
     assert games["othello"]["eval_temperature"] == 0.0
     assert games["generals"]["eval_temperature"] == 1.0

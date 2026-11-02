@@ -236,7 +236,7 @@ def test_sampling_temperature_greedy_sharpened_and_restored():
                 n += int((s == top).sum())
         hits[t] = n
     assert hits[0.25] > hits[1.0]
-    assert base._SAMPLE_TEMPERATURE == 1.0                                 # restored after the block
+    assert base.current_sampling_temperature() == 1.0                    # restored after the block
     with pytest.raises(ValueError):
         with base.sampling_temperature(-0.5):
             pass
@@ -245,4 +245,30 @@ def test_sampling_temperature_greedy_sharpened_and_restored():
             raise RuntimeError("inside")
     except RuntimeError:
         pass
-    assert base._SAMPLE_TEMPERATURE == 1.0                                 # restored on an error too
+    assert base.current_sampling_temperature() == 1.0                    # restored on an error too
+
+
+def test_sampling_temperature_is_thread_local():
+    """A sampling_temperature block does not leak into another thread: an evaluation game
+    drawn greedily on one thread leaves a concurrent rollout thread sampling at 1."""
+    import threading
+
+    from model.games import base
+
+    entered, release = threading.Event(), threading.Event()
+    seen = {}
+
+    def evaluator():
+        with base.sampling_temperature(0.0):
+            seen["inside"] = base.current_sampling_temperature()
+            entered.set()
+            release.wait(5.0)
+        seen["after"] = base.current_sampling_temperature()
+
+    t = threading.Thread(target=evaluator)
+    t.start()
+    assert entered.wait(5.0)
+    seen["other_thread"] = base.current_sampling_temperature()
+    release.set()
+    t.join(5.0)
+    assert seen == {"inside": 0.0, "other_thread": 1.0, "after": 1.0}
