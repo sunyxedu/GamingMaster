@@ -150,6 +150,7 @@ from model.components.core import (
     moe_load_counting,
     update_moe_balance,
 )
+from model.checkpoint_migrations import stamp_schema_version
 from model.components.heads import HLGaussValueHead
 from model.config import checkpoint_config_dict
 from model.games.base import categorical_entropy, masked_log_prob, sampling_temperature
@@ -3709,7 +3710,7 @@ class JointRLTrainer:
                 "ref_state": self.ref.state_dict() if self.ref_resets > 0 else None,
             }
             path = os.path.join(self.args.save_dir, name)
-            torch.save(ck, f"{path}.tmp")
+            torch.save(stamp_schema_version(ck), f"{path}.tmp")
             os.replace(f"{path}.tmp", path)
             if name == CKPT_LATEST:
                 self.pool.flush_deletes()

@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from data_processing.dataset_seq import SeqReplayDataset, collate_variable_length_sequences
+from model.checkpoint_migrations import stamp_schema_version
 from model.config import ModelConfig, checkpoint_config
 from model.games.generals import apply_memory_vision
 from model.losses import ImitationLoss, next_obs_loss
@@ -556,7 +557,7 @@ def main():
             path = os.path.join(args.output_dir, f"checkpoint_epoch{epoch}_step{step}.pt")
         else:
             path = os.path.join(args.output_dir, f"checkpoint_epoch{epoch}.pt")
-        torch.save(ckpt, path)
+        torch.save(stamp_schema_version(ckpt), path)
         print(f"  Saved {path}")
 
     # Reference train_state.carry: one per accumulation slot, persisting
