@@ -5,10 +5,12 @@ import atexit
 import contextlib
 import contextvars
 import os
+import random
 import signal
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Callable, Iterator, Optional, Sequence
 
@@ -39,6 +41,72 @@ def cancel_scope(check: Callable[[], Optional[str]]) -> Iterator[None]:
         yield
     finally:
         _CANCEL.reset(token)
+
+
+@contextlib.contextmanager
+def slot(directory: Optional[Path], pool: str, n: int, since: Optional[int] = None) -> Iterator[None]:
+    """Hold one of ``n`` slots of ``pool`` (lock files in ``directory`` shared by every process of this
+    user) for the block; ``n <= 0``: no cap. A shared per-user request limit makes the CLI processes of
+    every search on the machine compete, so agents and players get separate pools, and waiters are
+    served in arrival order (ticket files in ``<pool>.queue/``; ``since``, a call's first arrival in ns,
+    keeps a retry's place): without the queue a waiter could lose every race for hours. Waiting
+    honours the calling episode's cancel scope."""
+    try:
+        import fcntl
+    except ImportError:          # not POSIX: no cross-process cap
+        n = 0
+    if n <= 0 or directory is None:
+        yield
+        return
+    queue = directory / f"{pool}.queue"
+    queue.mkdir(parents=True, exist_ok=True)
+    ticket = queue / f"{since or time.time_ns():020d}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    ticket.touch()
+    handles = [open(directory / f"{pool}{i}.lock", "a") for i in range(n)]
+    held = None
+    try:
+        while held is None:
+            if _first_in_line(queue, ticket.name):
+                for fh in handles:
+                    try:
+                        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        held = fh
+                        break
+                    except OSError:
+                        continue
+            if held is None:
+                check = _CANCEL.get()
+                reason = check() if check else None
+                if reason:
+                    raise ModelCallCancelled(f"model call cancelled while waiting for a slot: {reason}")
+                time.sleep(0.1 + random.random() * 0.2)
+        ticket.unlink(missing_ok=True)
+        yield
+    finally:
+        ticket.unlink(missing_ok=True)
+        if held is not None:
+            fcntl.flock(held, fcntl.LOCK_UN)
+        for fh in handles:
+            fh.close()
+
+
+def _first_in_line(queue: Path, name: str) -> bool:
+    """No live ticket older than ``name`` (tickets of processes that died are removed)."""
+    for t in sorted(os.listdir(queue)):
+        if t >= name:
+            return True
+        try:
+            os.kill(int(t.split("-")[1]), 0)
+            return False
+        except ProcessLookupError:
+            with contextlib.suppress(OSError):
+                (queue / t).unlink()
+        except (ValueError, IndexError):
+            with contextlib.suppress(OSError):
+                (queue / t).unlink()
+        except PermissionError:   # alive (another user's process)
+            return False
+    return True
 
 
 class CLITimeout(TimeoutError):

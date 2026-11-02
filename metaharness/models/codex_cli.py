@@ -19,11 +19,12 @@ endpoint such as the local model router Claude Code is configured with, reached 
 read from the environment variable the provider names (``.env``). The CLI then runs with
 ``model_provider`` / ``model_providers.<id>.*`` overrides and its own ``CODEX_HOME`` (sessions,
 state; no login, plugins or hooks of the user's codex), and an agentic run's shell never sees the
-key (``shell_environment_policy.exclude``).
+key (``shell_environment_policy.exclude``). Agents and players then hold separate pools of
+cross-process slots (``agent_slots`` / ``player_slots`` of the provider), served in arrival order.
+An agent's shell never finds the repository with git (``GIT_CEILING_DIRECTORIES``).
 """
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import random
@@ -32,14 +33,14 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Optional
 
-from ._cli import _CANCEL, CLITimeout, run_cli
+from ..config import REPO_ROOT
+from ._cli import CLITimeout, run_cli, slot
 from .base import (
     CLI_ENV_DROP,
     PLAYER_PREAMBLE,
     ModelCall,
-    ModelCallCancelled,
     ModelTimeout,
     ModelUnavailable,
     System2Result,
@@ -61,17 +62,19 @@ _AUTH_RE = re.compile(r"\b401\b|unauthorized|refresh token|sign in again|log ?in
 # reads image files by path, plugins bring MCP servers / skills, hooks run per session (and may add
 # context), memories are external context. Attached screenshots (-i) are input, not view_image.
 _PLAYER_OFF_FEATURES = ("view_image", "image_generation", "plugins", "hooks", "memories")
-# An agent (proposer, study, adapt) is one agent: no sub-agents (they multiply requests on a
-# rate-limited endpoint and work outside the archive), and no plugins / hooks / memories either.
+# An agent (proposer, study, adapt): no plugins / hooks / memories, and no v1 sub-agents. A model whose
+# catalog entry sets multi_agent_version v2 (gpt-6-astra) keeps its native sub-agents whatever the
+# features say (`codex debug models`; tier-1 proposers spawned 17): they run inside the agent's codex
+# process, in its sandbox, and their requests go through the same endpoint (a queueing proxy serves
+# players first). A player that used them would fail the external-tool audit below.
 _AGENT_OFF_FEATURES = ("multi_agent", "plugins", "hooks", "memories")
 
 
 DEFAULT_CODEX_HOME = "~/.cache/metaharness/codex-home"
 # A shared endpoint's per-user request rate: codex gives up after its own retries ("exceeded retry
 # limit, last status: 429 Too Many Requests"); the call is then retried here, with backoff, resuming
-# the thread it had started.
+# the thread it had started, while the call's time lasts. (5xx and stream errors: codex's own retries.)
 _RATE_LIMIT_RE = re.compile(r"\b429\b|rate.?limit|too many requests", re.I)
-RATE_LIMIT_WAIT_S = 1800.0        # how long one call may wait for the rate limit in total
 _RETRIES_DEFAULT = {"request_max_retries": 8, "stream_max_retries": 8}
 
 
@@ -83,33 +86,6 @@ class _CodexFailed(RuntimeError):
         self.thread_id = thread_id
 
 
-@contextlib.contextmanager
-def concurrency_slot(directory: Path, n: int, poll_s: float = 0.5) -> Iterator[int]:
-    """One of ``n`` slots shared by every process using ``directory`` (lock files): a cap on the
-    codex processes talking to one endpoint at a time. Waiting honours the episode's cancel scope."""
-    import fcntl
-    directory.mkdir(parents=True, exist_ok=True)
-    handles = [open(directory / f"{i}.lock", "a") for i in range(n)]
-    try:
-        while True:
-            for i, fh in enumerate(handles):
-                try:
-                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError:
-                    continue
-                try:
-                    yield i
-                finally:
-                    fcntl.flock(fh, fcntl.LOCK_UN)
-                return
-            check = _CANCEL.get()
-            reason = check() if check else None
-            if reason:
-                raise ModelCallCancelled(f"model call cancelled while waiting for a slot: {reason}")
-            time.sleep(poll_s)
-    finally:
-        for fh in handles:
-            fh.close()
 _PROVIDER_KEYS = ("name", "base_url", "env_key", "wire_api", "query_params", "http_headers",
                   "env_http_headers", "request_max_retries", "stream_max_retries", "stream_idle_timeout_ms",
                   "requires_openai_auth")
@@ -149,8 +125,7 @@ class CodexCLI:
         self.extra_config = dict(extra_config or {})
         self.provider = dict(provider) if provider else None
         self.codex_home: Optional[Path] = None
-        self.max_concurrent = 0
-        self.rate_limit_wait_s = RATE_LIMIT_WAIT_S
+        self.slots = {"agent": 0, "player": 0}       # cross-process caps per pool (0: none)
         if self.provider:
             pid = str(self.provider.get("id") or "router")
             if not re.fullmatch(r"[A-Za-z0-9_-]+", pid):
@@ -166,8 +141,8 @@ class CodexCLI:
             self.name = f"codex:{model}@{pid}"
             for k, v in _RETRIES_DEFAULT.items():
                 self.provider.setdefault(k, v)
-            self.max_concurrent = int(self.provider.get("max_concurrent") or 0)
-            self.rate_limit_wait_s = float(self.provider.get("rate_limit_wait_s") or RATE_LIMIT_WAIT_S)
+            both = int(self.provider.get("max_concurrent") or 0)      # older configs: one cap for both
+            self.slots = {pool: int(self.provider.get(f"{pool}_slots", both) or 0) for pool in self.slots}
         self.n_calls = 0
         self.total_usage: dict[str, int] = {}     # sum of per-call deltas
         self.player_tools = "disabled-and-audited"
@@ -262,32 +237,42 @@ class CodexCLI:
         Running out of time raises ``ModelTimeout`` whose ``session_id`` is the thread the
         call started or resumed, so a caller can resume it.
 
-        A call the endpoint rate-limits is retried with backoff (up to ``rate_limit_wait_s`` in
-        total): an agentic turn resumes its thread with a continuation prompt, a player call is
-        sent again. ``max_concurrent`` codex processes per provider run at a time (all processes)."""
-        kw = dict(cwd=cwd, system=system, agentic=agentic, timeout_s=timeout_s, trace=trace, images=images,
+        A call the endpoint rate-limits is retried with backoff while the call's time lasts: an agentic
+        turn resumes its thread with a continuation prompt, a player call is sent again. With slots
+        (provider ``agent_slots`` / ``player_slots``), an agent's time starts when it gets its slot (a
+        queue is not working time) and a player's wait is part of its latency, as in the claude backend."""
+        kw = dict(cwd=cwd, system=system, agentic=agentic, trace=trace, images=images,
                   full_access=full_access, web_search=web_search)
-        deadline = time.monotonic() + self.rate_limit_wait_s
+        pool = "agent" if agentic else "player"
+        slots_dir = self.codex_home / "slots" if self.codex_home else None
+        deadline = None if agentic else time.monotonic() + timeout_s
+        queued_at = time.time_ns()              # a retry keeps its place in the queue
         delay, sid, text = 5.0, session_id, prompt
         while True:
-            slot = (concurrency_slot(self.codex_home / "slots", self.max_concurrent)
-                    if self.provider and self.max_concurrent and self.codex_home else contextlib.nullcontext())
-            try:
-                with slot:
-                    return self._run_once(text, session_id=sid, **kw)
-            except _CodexFailed as e:
-                if not _RATE_LIMIT_RE.search(str(e)) or time.monotonic() + delay > deadline:
-                    raise RuntimeError(str(e)) from None
-                wait = delay * (0.5 + random.random())
-                if trace:
-                    trace.write({"type": "rate_limited", "backend": self.name, "wait_s": round(wait, 1),
-                                 "thread_id": e.thread_id, "error": str(e)[:300]})
-                time.sleep(wait)
-                delay = min(delay * 2, 120.0)
-                if agentic and (e.thread_id or sid):
-                    sid = e.thread_id or sid
-                    text = ("The previous request was rate-limited by the API and that turn was aborted. "
-                            "Continue the task from where you left off.")
+            with slot(slots_dir, pool, self.slots[pool], queued_at):
+                if deadline is None:
+                    deadline = time.monotonic() + timeout_s
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    err = f"timeout: no time left after waiting {timeout_s:g}s for a free slot"
+                    self._trace(trace, time.time(), {"prompt": text}, None, err)
+                    raise ModelTimeout(err, session_id=sid)
+                try:
+                    return self._run_once(text, session_id=sid, timeout_s=left, **kw)
+                except _CodexFailed as e:
+                    failed = e
+            wait = delay * (0.5 + random.random())
+            if not _RATE_LIMIT_RE.search(str(failed)) or time.monotonic() + wait > deadline:
+                raise RuntimeError(str(failed)) from None
+            if trace:
+                trace.write({"type": "rate_limited", "backend": self.name, "wait_s": round(wait, 1),
+                             "thread_id": failed.thread_id, "error": str(failed)[:300]})
+            time.sleep(wait)
+            delay = min(delay * 2, 120.0)
+            if agentic and (failed.thread_id or sid):
+                sid = failed.thread_id or sid
+                text = ("The previous request was rate-limited by the API and that turn was aborted. "
+                        "Continue the task from where you left off.")
 
     def _run_once(
         self,
@@ -380,12 +365,15 @@ class CodexCLI:
         self._trace(trace, t0, request, res, None, warnings=errors)
         return res
 
-    def _env_overrides(self) -> Optional[dict[str, str]]:
-        """A provider run uses its own CODEX_HOME: the user's login, plugins, hooks and MCP servers stay
-        out of the players and proposers, and a dead ChatGPT login cannot fail a call. The directory
-        gets a config.toml naming the provider, so ``CODEX_HOME=<dir> codex`` reproduces a call by hand."""
+    def _env_overrides(self) -> dict[str, str]:
+        """git in an agent's shell never finds the repository its archive sits in (tier-1 proposers ran git
+        status / diff there hundreds of times; a tier-2 one ran git add). A provider run also uses its own
+        CODEX_HOME: the user's login, plugins, hooks and MCP servers stay out of the players and
+        proposers, and a dead ChatGPT login cannot fail a call. The directory gets a config.toml naming
+        the provider, so ``CODEX_HOME=<dir> codex`` reproduces a call by hand."""
+        env = {"GIT_CEILING_DIRECTORIES": str(REPO_ROOT)}
         if not self.provider or self.codex_home is None:
-            return None
+            return env
         home = self.codex_home
         with self._lock:
             if not (home / "config.toml").exists():
@@ -395,7 +383,7 @@ class CodexCLI:
                          f"[model_providers.{pid}]"]
                 lines += [f"{k} = {_toml(self.provider[k])}" for k in _PROVIDER_KEYS if k in self.provider]
                 (home / "config.toml").write_text("\n".join(lines) + "\n")
-        return {"CODEX_HOME": str(home)}
+        return {**env, "CODEX_HOME": str(home)}
 
     def _account(self, thread_id: Optional[str], session_id: Optional[str],
                  baseline: Optional[dict[str, int]], cumulative: dict[str, Any]) -> dict[str, Any]:

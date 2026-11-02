@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from metaharness.config import REPO_ROOT
 from metaharness.models import codex_cli as codex_mod
 from metaharness.models.base import PLAYER_PREAMBLE, ModelTimeout, ModelUnavailable, TraceSink
 from metaharness.models.codex_cli import CodexCLI
@@ -238,12 +239,12 @@ def test_player_turns_off_file_and_hook_features(tmp_path):
     a = CodexCLI(model="m")
     player = a._argv(cwd=None, session_id=None, agentic=False, last_msg_path=tmp_path / "l")
     agent = a._argv(cwd=tmp_path, session_id=None, agentic=True, last_msg_path=tmp_path / "l")
-    for feature in ("view_image", "image_generation", "plugins", "hooks", "memories"):
+    for feature in ("view_image", "image_generation", "plugins", "hooks", "memories", "multi_agent"):
         assert f"features.{feature}=false" in player
     for feature in ("view_image", "image_generation"):
         assert f"features.{feature}=false" not in agent                 # an agent may look at screenshots
     for feature in ("multi_agent", "plugins", "hooks", "memories"):
-        assert f"features.{feature}=false" in agent                     # but is one agent, without plugins
+        assert f"features.{feature}=false" in agent                     # but has no plugins / hooks
 
 
 def test_player_prompt_and_env(monkeypatch):
@@ -281,7 +282,7 @@ def test_provider_profile_runs_with_overrides_and_its_own_codex_home(tmp_path, m
     assert cfg["model_providers.router.env_key"] == '"MH_ROUTER_API_KEY"'
     assert cfg["model_providers.router.wire_api"] == '"responses"'
     assert "shell_environment_policy.exclude" not in cfg          # a player has no shell
-    assert seen[0]["env_overrides"] == {"CODEX_HOME": str(home)}
+    assert seen[0]["env_overrides"] == {"CODEX_HOME": str(home), "GIT_CEILING_DIRECTORIES": str(REPO_ROOT)}
     toml = (home / "config.toml").read_text()                     # reproducible by hand: CODEX_HOME=<dir> codex
     assert 'model_provider = "router"' in toml and "[model_providers.router]" in toml and "secret" not in toml
     assert "MH_ROUTER_API_KEY" not in seen[0]["env_drop"]         # codex itself must see the key
@@ -348,32 +349,64 @@ def test_rate_limited_call_is_retried_and_resumes_its_thread(monkeypatch):
     assert CodexCLI(model="m").run("state").text == "up" and seen[1]["stdin"] == seen[0]["stdin"]
 
 
-def test_rate_limit_retries_give_up_after_the_wait_budget(monkeypatch):
+def test_rate_limit_retries_stop_when_the_call_time_is_spent(monkeypatch):
     limited = _events({"type": "turn.failed", "error": {"message": "429 Too Many Requests"}})
-    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(limited, rc=1))
+    seen: list = []
+    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(limited, rc=1, seen=seen))
     monkeypatch.setattr(codex_mod.time, "sleep", lambda s: None)
-    model = CodexCLI(model="m")
-    model.rate_limit_wait_s = 12.0            # 5 s + 10 s backoff: one retry fits, the second does not
+    monkeypatch.setattr(codex_mod.random, "random", lambda: 0.5)      # waits of 5, 10, 20 s
     with pytest.raises(RuntimeError, match="429") as ei:
-        model.run("hi")
-    assert not isinstance(ei.value, ModelUnavailable) and type(ei.value) is RuntimeError
+        CodexCLI(model="m").run("hi", timeout_s=12.0)                 # 5 and 10 s fit in 12 s, 20 s does not
+    assert type(ei.value) is RuntimeError and len(seen) == 3
 
 
-def test_concurrency_slots_are_shared_through_lock_files(tmp_path):
-    from metaharness.models.codex_cli import concurrency_slot
-    active, peak, lock = [0], [0], threading.Lock()
+def test_git_finds_no_repository_from_a_codex_shell(monkeypatch):
+    seen: list = []
+    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(_answer("done"), seen=seen))
+    CodexCLI(model="m").run("work", agentic=True)
+    assert seen[0]["env_overrides"] == {"GIT_CEILING_DIRECTORIES": str(REPO_ROOT)}
 
-    def worker():
-        with concurrency_slot(tmp_path / "slots", 2, poll_s=0.01):
-            with lock:
-                active[0] += 1
-                peak[0] = max(peak[0], active[0])
-            time.sleep(0.05)
-            with lock:
-                active[0] -= 1
-    ts = [threading.Thread(target=worker) for _ in range(6)]
-    for t in ts:
-        t.start()
-    for t in ts:
-        t.join()
-    assert peak[0] == 2 and sorted(p.name for p in (tmp_path / "slots").iterdir()) == ["0.lock", "1.lock"]
+
+def test_agent_and_player_slot_pools_are_separate(tmp_path, monkeypatch):
+    """Proposers holding every agent slot (each waiting on a dev evaluation) must not starve that
+    evaluation's players: the pools are separate lock files, and older configs' max_concurrent caps both."""
+    from metaharness.models._cli import slot
+    monkeypatch.setenv("MH_ROUTER_API_KEY", "secret")
+    model = CodexCLI(model="m", provider={**ROUTER, "codex_home": str(tmp_path), "agent_slots": 1, "player_slots": 2})
+    assert model.slots == {"agent": 1, "player": 2}
+    assert CodexCLI(model="m", provider={**ROUTER, "codex_home": str(tmp_path), "max_concurrent": 3}).slots == \
+        {"agent": 3, "player": 3}
+    with slot(tmp_path / "slots", "agent", 1):
+        t0 = time.monotonic()
+        with slot(tmp_path / "slots", "player", 1):
+            assert time.monotonic() - t0 < 1.0
+    assert sorted(p.name for p in (tmp_path / "slots").iterdir()) == ["agent.queue", "agent0.lock", "player.queue",
+                                                                      "player0.lock"]
+
+
+def test_an_agents_time_starts_when_it_gets_a_slot(monkeypatch):
+    import contextlib as _cl
+    waits: list = []
+
+    @_cl.contextmanager
+    def slow_slot(directory, pool, n, since=None):
+        time.sleep(1.5)                     # another process held the slot
+        waits.append(pool)
+        yield
+
+    monkeypatch.setattr(codex_mod, "slot", slow_slot)
+    monkeypatch.setattr(codex_mod, "run_cli", _fake_run_cli(_answer("up")))
+    assert CodexCLI(model="m").run("work", agentic=True, timeout_s=1.0).text == "up"
+    with pytest.raises(ModelTimeout):        # a player's wait is part of its latency: it times out
+        CodexCLI(model="m").run("move?", timeout_s=1.0)
+    assert waits == ["agent", "player"]
+
+
+def test_waiting_for_a_slot_ends_with_the_episode(tmp_path):
+    from metaharness.models._cli import cancel_scope, slot
+    from metaharness.models.base import ModelCallCancelled
+    with slot(tmp_path, "player", 1):
+        with cancel_scope(lambda: "episode over"), pytest.raises(ModelCallCancelled, match="waiting for a slot"):
+            with slot(tmp_path, "player", 1):
+                pass
+    assert list((tmp_path / "player.queue").iterdir()) == []
