@@ -38,6 +38,81 @@ jobs:
           uv pip install --no-deps --reinstall dist/*.whl
           project_python="$PWD/.venv/bin/python"
           cd "$(mktemp -d)"
-          for entrypoint in training.train_il training.train_rl training.train_il_game training.train_rl_game training.eval_il metaharness scripts.prepare_data; do
+          for entrypoint in training.train_multi_game training.train_rl_joint training.arena training.train_il training.train_rl training.train_il_game training.train_rl_game training.eval_il metaharness scripts.prepare_data; do
             "$project_python" -I -m "$entrypoint" --help > /dev/null
           done
+
+  # ruff: a PR may not add findings to the Python files it touches (blocking: the count
+  # on those files at HEAD vs at the merge base), and the whole tree is reported — not
+  # gated, it carries ~2400 pre-existing findings, mostly E501.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: no new ruff findings in the changed Python files
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import tempfile
+
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True)
+
+          base = git("merge-base", "origin/" + os.environ["BASE_REF"], "HEAD").strip()
+          changes = iter(git("diff", "--name-status", "-z", "--diff-filter=AMR", base,
+                             "HEAD", "--", "*.py", ":!metaharness/artifacts").split("\0")[:-1])
+          old, new = [], []
+          for status in changes:
+              path = next(changes)
+              old.append(path)
+              new.append(next(changes) if status.startswith("R") else path)
+
+          def count(paths, cwd):
+              paths = [p for p in paths if os.path.isfile(os.path.join(cwd, p))]
+              if not paths:
+                  return 0
+              result = subprocess.check_output(
+                  ["uvx", "ruff", "check", "--exit-zero", "--output-format", "json", "--", *paths],
+                  cwd=cwd, text=True)
+              return len(json.loads(result))
+
+          head_n = count(new, ".")
+          with tempfile.TemporaryDirectory() as tmp:
+              git("worktree", "add", "--detach", tmp + "/base", base)
+              try:
+                  base_n = count(old, tmp + "/base")
+              finally:
+                  git("worktree", "remove", tmp + "/base")
+          print(f"ruff findings in changed files: base {base_n}, head {head_n}")
+          if new:
+              subprocess.run(["uvx", "ruff", "check", "--exit-zero", "--output-format", "github",
+                              "--", *new], check=True)
+          raise SystemExit(head_n > base_n)
+          PY
+      - name: ruff on the whole tree (report only)
+        continue-on-error: true
+        run: uvx ruff check --exclude metaharness/artifacts --statistics .
+
+  # the Rust side: gmrules / gmdata / gmshard / ... unit tests (the workspace's default
+  # members; gmsim is the PyO3 extension, built and exercised by the test job).  gmrules'
+  # golden tests alone take ~7 min in debug on 8 cores.
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: data_processing
+      - name: cargo test
+        working-directory: data_processing
+        run: cargo test --locked
