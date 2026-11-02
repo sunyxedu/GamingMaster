@@ -41,6 +41,19 @@ default).
 A GAME_OVER frame is shown to the policy with RESET as its only legal action (the
 env applies it: ``forced``); the SDK then restarts the current level.
 
+Frontier starts (``frontier`` > 0; 0 = off, the default): Go-Explore's "return, then
+explore" for these deterministic games.  The env archives, per game, the shortest action
+sequence (from a fresh game) that reached each number of completed levels — its own
+episodes' level-ups, plus ``frontier_seed`` (arc3_solve.py's solutions: a JSON file or its
+``<out>.partial`` directory; the solved levels' actions joined) — and a new episode starts,
+with probability ``frontier``, from an archived level chosen uniformly: the sequence is
+replayed out of sight, the episode begins at that level's first frame (``new_episode``, no
+delta, the full ``max_actions`` budget) and pays only the levels it completes from there.
+A replay that does not reproduce its level count drops the entry (a fresh start instead).
+Without it the policy reaches a later level only after re-solving every earlier one within
+the same ``max_actions``, so the later levels' rewards never come (problem 146).
+The archive is part of :meth:`state_dict` (a resume keeps it).
+
 RESET is always a level reset, as in the ARC-AGI-3 competition mode ("Game Resets are not
 allowed and become Level Resets") and in ARC Prize's human baseline recordings (arcengine's
 ``ONLY_RESET_LEVELS``): by default the engine restarts the whole game on a RESET at a fresh
@@ -52,9 +65,10 @@ reset; a reused SDK wrapper otherwise kept the level an earlier, truncated episo
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -107,9 +121,15 @@ class Arc3VecEnv(VecEnvBase):
     ACTION_KEYS = {"action_type": "type_idx", "action_click": "click_idx"}
 
     def __init__(self, n_envs: int = 1, *, games: Sequence[str] = DEV_GAMES,
-                 max_actions: int = 400, novelty: float = 0.0,
+                 max_actions: int = 400, novelty: float = 0.0, frontier: float = 0.0,
+                 frontier_seed: Optional[str] = None,
                  environments_dir: Optional[str] = None, autoreset: bool = False,
                  seed: Optional[int] = 0):
+        if not 0.0 <= float(frontier) <= 1.0:
+            raise ValueError(f"frontier is a probability, got {frontier}")
+        self.frontier = float(frontier)
+        # game -> levels completed -> the shortest (type, click) sequence from a fresh game
+        self._archive: Dict[str, Dict[int, List[Tuple[int, int]]]] = {}
         super().__init__(n_envs, autoreset, seed)
         if isinstance(games, str):
             # "all": every game cached under the environments dir (a directory per game —
@@ -128,6 +148,8 @@ class Arc3VecEnv(VecEnvBase):
         self.max_actions = int(max_actions)
         self.novelty = float(novelty)
         self._arc, self._Action, self._State = _sdk(environments_dir)
+        if frontier_seed:
+            self.seed_frontier(frontier_seed)
         self._arcade = self._arc.Arcade()
         self._wrappers: Dict[Tuple[int, str], Any] = {}
         self._resets = np.zeros(n_envs, dtype=np.int64)
@@ -152,6 +174,7 @@ class Arc3VecEnv(VecEnvBase):
         self.new_episode = np.zeros(n, dtype=bool)
         self.game_of = [""] * n
         self._seen: list = [dict() for _ in range(n)]
+        self._trace: List[List[Tuple[int, int]]] = [[] for _ in range(n)]
         if self._resets.shape[0] != n:
             self._resets = np.zeros(n, dtype=np.int64)
 
@@ -200,6 +223,8 @@ class Arc3VecEnv(VecEnvBase):
             fd = w.reset()
             self.grid[i] = 0
             self._load(i, fd)
+            self._trace[i] = []
+            self._frontier_start(i, game, w)
             self.delta[i] = False
             self.actions_used[i] = 0
             self.last_type[i] = -1
@@ -208,6 +233,82 @@ class Arc3VecEnv(VecEnvBase):
             self.done[i] = False
             self.new_episode[i] = True
             self._seen[i] = {self._grid_key(i): 1}
+
+    def _seed_rngs(self, seed: Optional[int]) -> None:
+        super()._seed_rngs(seed)
+        # the frontier choice: its own stream (it never shifts the base RNGs' draws)
+        self._frontier_rng = np.random.default_rng(None if seed is None else [int(seed), 0xF0E])
+
+    def _archive_level(self, game: str, levels: int, trace: Sequence[Tuple[int, int]]) -> bool:
+        """Keep ``trace`` as ``game``'s way to ``levels`` completed levels if it is the first
+        or a shorter one; True when ``levels`` is beyond every archived level of the game."""
+        arch = self._archive.setdefault(game, {})
+        new_best = levels > max(arch, default=0)
+        old = arch.get(levels)
+        if old is None or len(trace) < len(old):
+            arch[levels] = [(int(a), int(c)) for a, c in trace]
+        return new_best
+
+    def seed_frontier(self, path: str) -> Dict[str, List[int]]:
+        """Archive arc3_solve.py's solutions (a JSON file, or its ``<out>.partial`` directory
+        of per-game files): for each of this env's games, the solved levels' actions joined
+        up to every level they reach.  Returns {game: archived level counts}."""
+        if os.path.isdir(path):
+            sol = {}
+            for name in sorted(os.listdir(path)):
+                if name.endswith(".json") and not name.startswith("."):
+                    with open(os.path.join(path, name)) as fh:
+                        sol[name[:-5]] = json.load(fh)
+        else:
+            with open(path) as fh:
+                sol = json.load(fh)
+        out: Dict[str, List[int]] = {}
+        for game in self.games:
+            prefix: List[Tuple[int, int]] = []
+            for k, lv in enumerate((sol.get(game) or {}).get("levels") or []):
+                if not lv.get("actions") or int(lv.get("level", k)) != k:
+                    break                          # the archive needs every earlier level
+                for typ, x, y in lv["actions"]:
+                    prefix.append((int(typ), int(y) * GRID + int(x) if int(typ) == CLICK else 0))
+                self._archive_level(game, k + 1, prefix)
+                out.setdefault(game, []).append(k + 1)
+        return out
+
+    def frontier_levels(self) -> Dict[str, int]:
+        """{game: the furthest archived level count}."""
+        return {g: max(a) for g, a in self._archive.items() if a}
+
+    def _replay(self, w, prefix: Sequence[Tuple[int, int]]):
+        fd = None
+        for a, c in prefix:
+            data = {"x": c % GRID, "y": c // GRID} if a == CLICK else None
+            fd = w.step(self._Action.from_id(int(a)), data=data)
+            if fd is None:
+                return None
+        return fd
+
+    def _frontier_start(self, i: int, game: str, w) -> int:
+        """With probability ``frontier``: replay an archived level of ``game`` into env ``i``
+        (uniform over its archived levels); the level count it starts at (0: a fresh game)."""
+        arch = self._archive.get(game)
+        if self.frontier <= 0.0 or not arch or self._frontier_rng.random() >= self.frontier:
+            return 0
+        levels = sorted(arch)
+        target = levels[int(self._frontier_rng.integers(len(levels)))]
+        prefix = arch[target]
+        fd = self._replay(w, prefix)
+        if (fd is None or int(fd.levels_completed) != target or fd.state == self._State.WIN
+                or fd.state == self._State.GAME_OVER):
+            # the replay did not reproduce the archived level: drop it, start the game afresh
+            del arch[target]
+            w._game.full_reset()
+            fd = w.reset()
+            self.grid[i] = 0
+            self._load(i, fd)
+            return 0
+        self._load(i, fd)
+        self._trace[i] = list(prefix)
+        return target
 
     @property
     def finished(self) -> torch.Tensor:
@@ -315,6 +416,15 @@ class Arc3VecEnv(VecEnvBase):
             gained = int(self.levels[i]) - prev_levels
             self.just_leveled[i] = gained > 0
             rewards[i, 0] += max(gained, 0) / float(self.win_levels[i])
+            if self.frontier > 0.0:
+                self._trace[i].append((a, int(clicks[i]) if a == CLICK else 0))
+                if gained > 0 and fd.state != self._State.WIN:
+                    lv = int(self.levels[i])
+                    if self._archive_level(self.game_of[i], lv, self._trace[i]):
+                        print(f"[arc3] {self.game_of[i]}: level {lv}/{int(self.win_levels[i])} "
+                              f"reached ({len(self._trace[i])} actions from a fresh game); "
+                              f"{self.frontier:.0%} of its episodes start from an archived "
+                              f"level", flush=True)
             if self.novelty > 0:
                 k = self._grid_key(i)
                 cnt = self._seen[i].get(k, 0) + 1
@@ -356,6 +466,25 @@ class Arc3VecEnv(VecEnvBase):
         t = torch.multinomial(legal, 1, generator=gen).squeeze(1)
         c = torch.randint(0, N_CELLS, (obs.n_rows,), generator=gen)
         return {"type_idx": t, "click_idx": c}
+
+    def state_dict(self) -> Dict[str, Any]:
+        """The env RNGs and the frontier archive (episodes restart: every wave starts its
+        games afresh)."""
+        st = super().state_dict()
+        st["frontier_rng"] = self._frontier_rng.bit_generator.state
+        st["frontier_archive"] = {
+            g: {int(k): np.asarray(p, dtype=np.int64).reshape(-1, 2) for k, p in a.items()}
+            for g, a in self._archive.items()}
+        return st
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        super().load_state_dict(state)
+        if "frontier_rng" in state:
+            self._frontier_rng.bit_generator.state = state["frontier_rng"]
+        for g, a in (state.get("frontier_archive") or {}).items():
+            for k, p in a.items():        # merged: the shorter of a seed's and the saved way
+                self._archive_level(str(g), int(k),
+                                    [(int(t), int(c)) for t, c in np.asarray(p).reshape(-1, 2)])
 
     def close(self) -> None:
         self._wrappers.clear()

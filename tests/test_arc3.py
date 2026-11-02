@@ -286,3 +286,151 @@ def test_solver_shards_il_and_rl(tmp_path, monkeypatch):
     assert abs(row["canary_log_old_mu"]) < 1e-4 and abs(row["canary_log_ratio"]) < 1e-4
     assert np.isfinite(row["entropy"]) and np.isfinite(row["value_loss"])
     json.dumps(res["history"][-1])
+
+
+# ---------------------------------------------------------------------------
+# frontier starts (a fake SDK: a corridor game of 3 levels)
+# ---------------------------------------------------------------------------
+
+class _LevelsGame:
+    def __init__(self):
+        self.full_reset()
+
+    def full_reset(self):
+        self.level, self.pos = 0, 0
+
+
+class _LevelsWrapper:
+    """3 levels: ACTION1 steps right and the 3rd step completes the level (the next one
+    starts at cell 0); any other action is a no-op; RESET restarts the level."""
+
+    def __init__(self):
+        self._game = _LevelsGame()
+
+    def _fd(self):
+        import numpy as np
+        g = self._game
+        grid = np.zeros((64, 64), dtype=np.uint8)
+        grid[min(g.level, 63), g.pos] = 1
+        return type("FD", (), {"frame": [grid], "available_actions": [1, 2],
+                               "levels_completed": g.level, "win_levels": 3,
+                               "state": "WIN" if g.level >= 3 else "PLAY"})()
+
+    def reset(self):
+        self._game.pos = 0
+        return self._fd()
+
+    def step(self, action, data=None):
+        g = self._game
+        if action == 0:
+            g.pos = 0
+        elif action == 1:
+            g.pos += 1
+            if g.pos == 3:
+                g.level, g.pos = g.level + 1, 0
+        return self._fd()
+
+
+@pytest.fixture
+def levels_sdk(monkeypatch):
+    import env.vec_arc3 as va
+
+    arcade = type("Arcade", (), {"make": lambda self, game, seed=0: _LevelsWrapper()})
+    arc = type("Arc", (), {"Arcade": arcade})
+    action = type("GA", (), {"from_id": staticmethod(lambda t: t)})
+    state = type("GS", (), {"GAME_OVER": "OVER", "WIN": "WIN"})
+    monkeypatch.setattr(va, "_sdk", lambda environments_dir: (arc, action, state))
+    return va
+
+
+def _right():
+    return {"type_idx": torch.tensor([1]), "click_idx": torch.tensor([0])}
+
+
+def test_frontier_off_keeps_fresh_starts(levels_sdk):
+    env = levels_sdk.Arc3VecEnv(1, games=("g",), max_actions=20)
+    for _ in range(6):
+        obs, rew, done, info = env.step(_right())
+    assert int(info["levels"][0]) == 2 and env.frontier_levels() == {}
+    env.reset(seed=1)
+    assert int(env.levels[0]) == 0
+
+
+def test_frontier_archives_level_ups_and_starts_episodes_there(levels_sdk):
+    env = levels_sdk.Arc3VecEnv(1, games=("g",), max_actions=8, frontier=1.0)
+    env._archive["g"] = {1: [(2, 0), (2, 0), (1, 0), (1, 0), (1, 0)]}   # a longer way to level 1
+    rewards = []
+    for _ in range(6):
+        obs, rew, done, info = env.step(_right())
+        rewards.append(float(rew[0, 0]))
+    assert rewards == pytest.approx([0, 0, 1 / 3, 0, 0, 1 / 3])
+    # the shortest ways: level 1's replaced by the episode's 3 steps, level 2 added
+    assert env._archive["g"] == {1: [(1, 0)] * 3, 2: [(1, 0)] * 6}
+    assert env.frontier_levels() == {"g": 2}
+    starts = set()
+    for s in range(16):
+        obs = env.reset(seed=s)
+        lv = int(env.levels[0])
+        starts.add(lv)
+        assert int(env.actions_used[0]) == 0 and bool(obs.new_episode[0])
+        assert not obs.obs["delta"][0].any()
+        assert float(obs.obs["globals"][0, 8]) == pytest.approx(lv / 3)
+        assert int(obs.obs["grid"][0, lv, 0]) == 1                # the level's first cell
+    assert starts == {1, 2}                                       # uniform over archived levels
+    # an episode from level 2 is paid for the level it completes only; a WIN is not archived
+    del env._archive["g"][1]
+    env.reset(seed=0)
+    assert int(env.levels[0]) == 2
+    total = 0.0
+    for _ in range(3):
+        obs, rew, done, info = env.step(_right())
+        total += float(rew[0, 0])
+    assert total == pytest.approx(1 / 3) and bool(info["terminated"][0])
+    assert sorted(env._archive["g"]) == [2]
+
+
+def test_frontier_drops_an_entry_that_does_not_replay(levels_sdk):
+    env = levels_sdk.Arc3VecEnv(1, games=("g",), max_actions=8, frontier=1.0)
+    env._archive["g"] = {2: [(2, 0)] * 3}                # no-ops: the replay stays at level 0
+    obs = env.reset(seed=0)
+    assert int(env.levels[0]) == 0 and env._archive["g"] == {}
+    assert int(obs.obs["grid"][0, 0, 0]) == 1 and int(env.actions_used[0]) == 0
+
+
+def test_frontier_seed_from_solutions_and_state_dict(levels_sdk, tmp_path):
+    import json
+
+    sol = {"g": {"win_levels": 3, "unsolved_at": 2,
+                 "levels": [{"level": 0, "actions": [[1, 0, 0]] * 3},
+                            {"level": 1, "actions": [[6, 5, 7], [1, 0, 0], [1, 0, 0], [1, 0, 0]]},
+                            {"level": 2, "actions": None}]},
+           "h": {"win_levels": 3, "levels": [{"level": 0, "actions": [[1, 0, 0]] * 3}]}}
+    d = tmp_path / "solutions.json.partial"
+    d.mkdir()
+    for g, v in sol.items():
+        (d / f"{g}.json").write_text(json.dumps(v))
+    env = levels_sdk.Arc3VecEnv(1, games=("g",), max_actions=8, frontier=1.0, frontier_seed=str(d))
+    # the click keeps its cell (y * 64 + x); only this env's games are archived
+    assert env._archive == {"g": {1: [(1, 0)] * 3, 2: [(1, 0)] * 3 + [(6, 7 * 64 + 5)] + [(1, 0)] * 3}}
+    assert int(env.levels[0]) in (1, 2)                  # the first episode starts from one
+    fresh = levels_sdk.Arc3VecEnv(1, games=("g",), max_actions=8, frontier=0.5)
+    assert fresh.frontier_levels() == {}
+    fresh.load_state_dict(env.state_dict())
+    assert fresh._archive == env._archive
+
+
+@needs_sdk
+def test_frontier_start_replays_a_real_level():
+    """vc33: the solver's 3 clicks complete level 1; the next episode starts at level 2's
+    first frame (the frame the third click showed), with a fresh action budget."""
+    from env.vec_arc3 import Arc3VecEnv
+
+    env = Arc3VecEnv(1, games=("vc33",), max_actions=50, frontier=1.0, environments_dir=ENV_DIR)
+    click = {"type_idx": torch.tensor([6]), "click_idx": torch.tensor([34 * 64 + 62])}
+    for _ in range(3):
+        obs, rew, done, info = env.step(click)
+    assert int(info["levels"][0]) == 1 and env.frontier_levels() == {"vc33": 1}
+    level2 = obs.obs["grid"][0].clone()
+    obs = env.reset(seed=0)
+    assert int(env.levels[0]) == 1 and torch.equal(obs.obs["grid"][0], level2)
+    assert int(env.actions_used[0]) == 0 and not obs.obs["delta"][0].any()
