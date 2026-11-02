@@ -14,8 +14,8 @@ def test_turn_offline_loop(tmp_runs):
     assert rc == 0
     a = Archive(tmp_runs / "t1")
     cands = a.candidates()
-    assert len(cands) == 2
-    e = cands[1].eval()
+    assert [c.dir.name for c in cands] == ["0000-jev_only", "0001-astra_naive", "0002"]
+    e = cands[2].eval()
     assert e["fatal"] is None and e["system2_calls"] == 5      # rejected requests are not backend calls
     assert e["errors"] == []                                   # reference harness handles the budget cleanly
 

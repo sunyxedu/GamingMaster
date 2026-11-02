@@ -166,7 +166,7 @@ def test_default_seed_blocks_carve_validation_from_declared_train_seeds(tmp_path
 
 
 def test_task_text_for_several_games_lists_each_tick():
-    text = task.task_md(["snake", "lanerunner"], Budget(), "wall", [{}, {}], system1=True)
+    text = task.task_md(["snake", "lanerunner"], Budget(), "wall", [{}, {}])
     assert "Tick: every 0.25s." in text and "Tick: every 0.5s." in text and "at its own pace" in text
     single = task.task_md("snake", Budget(), "wall", {})
     assert "ticks every 0.25s" in single and "Training game" not in single

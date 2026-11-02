@@ -7,7 +7,7 @@ The general entry point takes only a game name (plus your notes / credentials in
 
 It runs the phases study -> adapt -> search under runs/<slug>/ and resumes where it
 left off. Whether a game is turn-based or real-time is the adaptor's (the game's) kind; the
-models are the same for every game (Astra, and Jev when --system1 provides it). Lower-level commands:
+models are the same for every game (Astra and Jev). Lower-level commands:
 
     # search only, on an offline test bed (no network): scripted proposer, heuristic Jev
     python -m metaharness loop --game snake --system1 heuristic --system2 scripted \\
@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import signal
 import sys
@@ -73,16 +72,6 @@ def _system1(name: str):
         from .baselines._scripted import heuristic_snake_policy
         return make_system1("heuristic", fn=heuristic_snake_policy)
     return make_system1(name)
-
-
-def _system1_name(name: str | None) -> str:
-    """``auto`` (the default): Jev when its key is configured, else no System-1. The task text tells the
-    proposer when a decision belongs to Jev; a game that needs none is played by code and Astra."""
-    if name and name != "auto":
-        return name
-    name = "jev" if os.environ.get("TYPESAFE_API_KEY") else "none"
-    print(f"system1: auto -> {name}" + ("" if name == "jev" else " (TYPESAFE_API_KEY unset: no Jev)"), file=sys.stderr)
-    return name
 
 
 def _system1_of_run(run: dict) -> str:
@@ -235,10 +224,9 @@ def _run_search(a: argparse.Namespace, games: list[tuple[str, str | None]], stud
     heldout_game, heldout_kwargs, heldout_seeds = _resolve_heldout_game(a)
     heldout_adaptor = str(Path(a.heldout_game).resolve()) if a.heldout_game and Path(a.heldout_game).is_dir() else None
     archive = Archive(exp_dir)
-    a.system1 = _system1_name(a.system1)
     system1 = _system1(a.system1)
     system2 = _system2(a.system2, a.effort)
-    for p in task_mod.baseline_paths(realtime, system1 is not None):
+    for p in task_mod.baseline_paths(realtime):
         if not any(c.dir.name.endswith(p.stem) for c in archive.candidates()):
             archive.add_seed(p, label=p.stem, note=(p.read_text().split('"""')[1].strip() + "\n") if '"""' in p.read_text() else "")
     sources = [s for s in (getattr(_adaptor_spec(g.name), "source_sha256", None) for g in specs) if s]
@@ -278,8 +266,7 @@ def _run_search(a: argparse.Namespace, games: list[tuple[str, str | None]], stud
     kws = [g.kwargs for g in specs]
     task = task_mod.task_md(names if len(names) > 1 else names[0], budget, a.clock, kws if len(kws) > 1 else kws[0],
                             study=study, generality=heldout_game is not None or len(names) > 1,
-                            deadline_s=budget.max_wall_s, memory_mode=a.memory_mode, calibration=calibration,
-                            system1=system1 is not None)
+                            deadline_s=budget.max_wall_s, memory_mode=a.memory_mode, calibration=calibration)
     loop = MetaHarnessLoop(
         archive=archive, game_factory=first.factory, game_kwargs=first.kwargs, task_md=task,
         contract_doc=task_mod.contract_doc(),
@@ -402,7 +389,7 @@ def cmd_eval(a: argparse.Namespace) -> int:
     seeds = _parse_seeds(a.seeds) if a.seeds is not None else list(declared.get("train") or [0, 1, 2])
     out = Path(a.out) if a.out else Path(a.runs_dir) / f"eval-{Path(a.harness).stem}-{time.strftime('%Y%m%d-%H%M%S')}"
     res = evaluate_harness(a.harness, lambda **k: make_game(game, **k), seeds,
-                           system2=_system2(a.system2, a.effort), system1=_system1(_system1_name(a.system1)),
+                           system2=_system2(a.system2, a.effort), system1=_system1(a.system1),
                            out_dir=out, clock_mode=a.clock, budget_per_episode=budget,
                            harness_timeout_s=budget.max_wall_s,
                            latency_override=json.loads(a.latency_override) if a.latency_override else None,
@@ -496,9 +483,9 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--game-kwargs", default="", help="JSON kwargs for the game constructor")
         sp.add_argument("--system2", default="astra",
                         help="System-2 profile from metaharness/models.toml (astra, sol, claude, ...) | scripted | none")
-        sp.add_argument("--system1", default="auto",
-                        help="System-1 profile from metaharness/models.toml (jev) | heuristic | none | "
-                             "auto (jev when TYPESAFE_API_KEY is set, else none)")
+        sp.add_argument("--system1", default="jev",
+                        help="System-1 profile from metaharness/models.toml (jev) | heuristic | none (stand-ins "
+                             "for offline runs; the task always describes Jev)")
         sp.add_argument("--effort", default=None, help="override the profile's reasoning effort (low|medium|high|xhigh|max)")
         sp.add_argument("--clock", default="wall", choices=["wall", "virtual"])
         sp.add_argument("--memory-mode", default="episode", choices=["episode", "shared"],

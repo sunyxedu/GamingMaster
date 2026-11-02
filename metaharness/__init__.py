@@ -1,12 +1,11 @@
 """Meta-Harness: an outer loop that *designs* the harness gluing foundation
 models to a game, instead of hand-writing a per-game adapter.
 
-One Meta-Harness for every game that is not latency-critical (see docs/meta-harness.md):
-the task spec states the game's pace (turn-based: the world waits; real-time: it ticks on its
-own clock) and the models the evaluation provides — Astra (System-2) always, Jev (System-1,
-fast typed judgments) when configured, for decisions that must be fast, are not rule-based
-and are not very hard. Latency-critical games (StarCraft, Clash Royale) are the trained
-network in ``model/`` (not handled here).
+Two ways to play a game (see docs/meta-harness.md): this package — one Meta-Harness for every
+game that is not latency-critical, with the same models for every game, Astra (System-2, slow
+reasoning) and Jev (System-1, fast typed judgments), and a task spec that states the game's pace
+(turn-based: the world waits; real-time: it ticks on its own clock) — or the trained network in
+``model/`` for latency-critical games (StarCraft, Clash Royale; not handled here).
 
 The harness for a game is an ordinary Python module obeying a small contract
 (``metaharness.core.contract``). The meta-harness (``metaharness.core.loop``)

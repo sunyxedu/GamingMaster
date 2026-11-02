@@ -1,9 +1,9 @@
 """The task specification the proposer gets: one text for every game.
 
-What differs between games is stated, not assumed: the game's pace (turn-based — the world
-waits; real-time — it ticks on its own clock), the models the evaluation provides (Astra always;
-Jev when a System-1 is configured, with the rule for when a decision belongs to it), the budgets
-and the measured latencies. Nothing here is specific to a game."""
+The models are the same for every game — Astra (System-2) and Jev (System-1); the task says what
+each is for. What differs between games is stated, not assumed: the game's pace (turn-based — the
+world waits; real-time — it ticks on its own clock), the budgets and the measured latencies.
+Nothing here is specific to a game."""
 from __future__ import annotations
 
 import inspect
@@ -22,11 +22,21 @@ the game to the models, turns their answers into actions and decides when to cal
 {pace}
 
 Models available through `ctx` (the contract has the exact signatures):
-* `ctx.think(prompt, session_id=...)` — Astra (System-2): slow, strong reasoning; plans, explains rules,
-  writes code; one call may return a plan of several actions. Returns `.text` and `.session_id` (pass it
-  back to keep conversation context). Budget: {s2} calls per episode. Astra never sees the game unless
-  you show it.
-{jev}* `ctx.spawn(fn)` — a background thread, so a slow call can run while the game is kept alive.
+* `ctx.think(prompt, session_id=...)` — Astra (System-2): slow (seconds to a minute, growing with the
+  length of the answer), strong reasoning; plans, explains rules, writes code; one call may return a
+  plan of several actions. Returns `.text` and `.session_id` (pass it back to keep conversation
+  context). Budget: {s2} calls per episode. Astra never sees the game unless you show it.
+* `ctx.decide(state, questions)` — Jev (System-1): fast (hundreds of milliseconds) typed judgments about
+  a JSON state — a Choice among options, a Score on a scale, a yes/no with a probability — with
+  calibrated probabilities and a confidence back; one request answers *many independent questions
+  about one state in parallel* for the price and latency of one, and its budget ({s1} calls per
+  episode) is two orders of magnitude larger than Astra's. What it is good at: recognising a situation
+  and picking among concrete options under time pressure — which of these moves, is this state
+  dangerous, how close is this to the goal, does this plan still apply. What it does not do: plan,
+  do arithmetic, or follow long chains of inference (those are Astra's or code's). Read the complete
+  Jev model context and local usage contract at the end before designing its state, questions and
+  answer-to-action bridge. Actual latency must be measured.
+* `ctx.spawn(fn)` — a background thread, so a slow call can run while the game is kept alive.
 
 Each episode has a wall-clock deadline of {deadline}, including model latency
 (`ctx.budget.remaining()["wall_s"]`); when it passes, or a call budget is used up, the episode ends with
@@ -42,7 +52,11 @@ with a legend, only what changed), what to remember between calls (rules learned
 plans), how to parse Astra's reply into actions robustly, how many actions to commit per call, when
 cheap scripted search or bookkeeping replaces a model call, and how to notice that a plan or belief was
 wrong. If the description says that rules or action effects are not given, discovering them by
-experiment is part of the task.{jev_design}
+experiment is part of the task. Where Jev is used: how Astra's slow output (a plan, a rule summary, a
+policy sketch, a subgoal) is turned into *state + questions* for Jev, how Jev's typed answer is turned
+into a game action, when to go back to Astra, and what to do when a decision is late. The evaluator
+reports how many posted actions were preceded by a fresh Jev / Astra answer, so the division of labour
+is visible.
 
 A plan must be able to fail and recover. Whatever executes without the model (a compiled build order, a
 convention policy, a solver) must check its own effects after each step — `ctx.progress()` counts the
@@ -58,22 +72,6 @@ the next observation."""
 PACE_REALTIME = """**Pace: real-time** — the game ticks {tick} **on its own clock**; `ctx.act(a)` posts the current action
 (instant), a tick with no fresh action re-applies the last one, `ctx.wait_for_tick()` blocks until the
 next tick. Clock mode: {clock}. The idle baseline (never acts) shows what doing nothing scores."""
-
-JEV = """* `ctx.decide(state, questions)` — Jev (System-1): fast typed judgments (choice / score / yes-no) about a
-  JSON state; one request answers *many independent questions about one state in parallel* for the
-  price and latency of one. Budget: {s1} calls per episode. Use Jev for a decision that meets all three
-  conditions: it has to be made in real time (faster than Astra answers — the measured latencies are
-  below), it is not rule-based (a rule you can write down is code: cheaper and faster still), and it
-  is not very hard (no planning, arithmetic or long chains of inference — those go to Astra). A decision
-  that fails any condition goes to code or to Astra; a harness that needs no such decisions does not
-  call Jev. Before designing its state, questions and answer-to-action bridge, read the complete Jev
-  model context and local usage contract at the end. Actual latency must be measured.
-"""
-
-JEV_DESIGN = """ When Jev is used: how Astra's slow output (a plan, a rule summary, a policy sketch, a subgoal) is
-turned into *state + questions* for Jev, how Jev's typed answer is turned into a game action, when to go
-back to Astra, and what to do when a decision is late. The evaluator reports how many posted actions were
-preceded by a fresh Jev / Astra answer, so the division of labour is visible."""
 
 GENERALITY = """
 
@@ -100,7 +98,8 @@ STUDY_SECTION = """
 
 ## Prior knowledge from the study phase
 The study phase researched this game (rules, interface, community strategies). Use it: implement exact
-rules, bookkeeping and search as code, put planning and adaptation into Astra prompts{jev} — but verify
+rules, bookkeeping and search as code, put planning and adaptation into Astra prompts, and fast
+recognition into Jev questions — but verify
 every claim against observations, because sources can be wrong or outdated for this build of the game.
 
 {study}
@@ -110,7 +109,7 @@ STUDY_SECTION_GENERAL = """
 
 ## Prior knowledge from the study phase
 The study phase researched this game (rules, interface, community strategies). Use it for Astra
-prompts{jev} and checks against observations; because the harness is also scored on a held-out game,
+prompts, Jev questions and checks against observations; because the harness is also scored on a held-out game,
 keep game-specific rules out of hard-coded logic (or gate them on recognising this game).
 
 {study}
@@ -187,11 +186,10 @@ def calibration_text(cal: Optional[dict[str, Any]], tick_s: Optional[float] = No
 
 def task_md(game_name: Any, budget: contract.Budget, clock_mode: str, game_kwargs: Any, study: str = "", *,
             generality: bool = True, deadline_s: Optional[float] = None, memory_mode: str = "episode",
-            calibration: Optional[dict[str, Any]] = None, system1: bool = False) -> str:
+            calibration: Optional[dict[str, Any]] = None) -> str:
     """``game_name`` / ``game_kwargs``: one game or a list of training games (and their kwargs); the
     games' kind (turn-based / real-time) comes from the games themselves. ``study``: text of the study
-    phase appended as prior knowledge. ``generality``: a held-out game will be evaluated. ``system1``:
-    the evaluation provides Jev (the task then states when a decision belongs to it)."""
+    phase appended as prior knowledge. ``generality``: a held-out game will be evaluated."""
     names, kws = as_lists(game_name, game_kwargs)
     games, ticks = games_text(names, kws)
     tick_s, realtime = ticks[0], any(t is not None for t in ticks)
@@ -201,10 +199,8 @@ def task_md(game_name: Any, budget: contract.Budget, clock_mode: str, game_kwarg
     else:
         pace = PACE_TURN
     task = TASK_TEMPLATE.format(
-        games=games, pace=pace, s2=budget.max_system2_calls, memory=memory_text(memory_mode),
-        deadline=seconds(budget.max_wall_s if deadline_s is None else deadline_s),
-        jev=JEV.format(s1=budget.max_system1_calls) if system1 else "",
-        jev_design=JEV_DESIGN if system1 else "",
+        games=games, pace=pace, s2=budget.max_system2_calls, s1=budget.max_system1_calls,
+        memory=memory_text(memory_mode), deadline=seconds(budget.max_wall_s if deadline_s is None else deadline_s),
         tie=", then fraction of stale ticks (lower is better)" if realtime else "",
         steps="longer survival" if realtime else "fewer actions")
     if len(names) > 1:
@@ -212,25 +208,20 @@ def task_md(game_name: Any, budget: contract.Budget, clock_mode: str, game_kwarg
         generality = True
     task += GENERALITY if generality else SCOPE
     if study:
-        jev = ", and fast recognition into Jev questions" if system1 else ""
-        task += (STUDY_SECTION_GENERAL if generality else STUDY_SECTION).format(
-            study=study, jev=(", Jev questions" if system1 else "") if generality else jev)
-    task += calibration_text(calibration, tick_s)
-    if system1:
-        # Inline the snapshot: proposers are restricted to the archive and cannot rely on following web
-        # links or reading the installed model source. It becomes part of task.md and the manifest.
-        from .models.jev import usage_guide
-        task += "\n\n" + usage_guide()
-    return task
+        task += (STUDY_SECTION_GENERAL if generality else STUDY_SECTION).format(study=study)
+    # Inline the Jev snapshot: proposers are restricted to the archive and cannot rely on following web
+    # links or reading the installed model source. It becomes part of task.md and the manifest.
+    from .models.jev import usage_guide
+    return task + calibration_text(calibration, tick_s) + "\n\n" + usage_guide()
 
 
 def contract_doc() -> str:
     return inspect.getdoc(contract) or ""
 
 
-def baseline_paths(realtime: bool, system1: bool) -> list[Path]:
-    """The seed harnesses an archive starts with: Jev alone (when the evaluation has a System-1), naive
-    Astra, and — for a real-time game — doing nothing."""
+def baseline_paths(realtime: bool) -> list[Path]:
+    """The seed harnesses an archive starts with: Jev alone, naive Astra, and — for a real-time game —
+    doing nothing."""
     root = Path(__file__).resolve().parent / "baselines"
-    names = (["jev_only"] if system1 else []) + ["astra_naive"] + (["idle"] if realtime else [])
+    names = ["jev_only", "astra_naive"] + (["idle"] if realtime else [])
     return [root / f"{n}.py" for n in names]

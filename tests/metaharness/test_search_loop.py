@@ -98,19 +98,17 @@ def test_heldout_results_are_written_once(tmp_path):
 
 def test_task_states_the_evaluation_that_runs():
     b = Budget(max_system2_calls=7, max_system1_calls=70, max_wall_s=300)
-    no_heldout = task.task_md("snake", b, "wall", {}, study="RULES", generality=False, system1=True)
+    no_heldout = task.task_md("snake", b, "wall", {}, study="RULES", generality=False)
     assert "Evaluation scope" in no_heldout and "Generality requirement" not in no_heldout
     assert "implement exact" in no_heldout and "300 s" in no_heldout and "70 calls" in no_heldout
     assert "Pace: real-time" in no_heldout and "stale ticks" in no_heldout and "longer survival" in no_heldout
-    assert "Jev questions" in no_heldout and "not rule-based" in no_heldout and usage_guide() in no_heldout
-    with_heldout = task.task_md("snake", b, "wall", {}, study="RULES", generality=True, system1=True)
+    assert "Jev questions" in no_heldout and "ctx.decide" in no_heldout and usage_guide() in no_heldout
+    with_heldout = task.task_md("snake", b, "wall", {}, study="RULES", generality=True)
     assert "Generality requirement" in with_heldout and "implement exact" not in with_heldout
-    t1 = task.task_md("rulepuzzle", b, "virtual", {}, generality=False)        # no System-1: Jev is not offered
-    assert "mean levels completed over seeds" not in t1 and "re-drawn" not in t1 and "Jev" not in t1
+    t1 = task.task_md("rulepuzzle", b, "virtual", {}, generality=False)        # a turn game: the same models
+    assert "mean levels completed over seeds" not in t1 and "re-drawn" not in t1
     assert "mean score over the training seeds" in t1 and "fewer actions" in t1 and "Pace: turn-based" in t1
-    assert "stale ticks" not in t1 and "ctx.decide" not in t1
-    t1j = task.task_md("rulepuzzle", b, "virtual", {}, generality=False, system1=True)   # a turn game may use Jev
-    assert "ctx.decide" in t1j and "Pace: turn-based" in t1j and "fewer actions" in t1j
+    assert "stale ticks" not in t1 and "ctx.decide" in t1 and usage_guide() in t1
 
 
 def test_calibration_is_measured_once_and_rendered(tmp_path):
@@ -132,7 +130,7 @@ def test_calibration_is_measured_once_and_rendered(tmp_path):
     assert calibrate(tmp_path, system2=s2, system1=Fake1(), game_factory=SnakeGame, game_kwargs={}, seed=0,
                      log=lambda m: None) == cal and len(s2.calls) == 4           # cached, not re-measured
     assert cal["system2_short"]["samples_s"] == [3.0, 3.0, 3.0]                       # short: median of three
-    text = task.task_md("snake", Budget(), "wall", {}, calibration=cal, system1=True)
+    text = task.task_md("snake", Budget(), "wall", {}, calibration=cal)
     assert "Measured model latency" in text and "~800 output tokens: 12 s" in text
     assert calibrate(tmp_path / "x", system2=ScriptedSystem2(), system1=HeuristicSystem1(), game_factory=SnakeGame,
                      game_kwargs={}, seed=0) is None                              # offline stand-ins

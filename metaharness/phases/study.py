@@ -45,7 +45,7 @@ STUDY_JSON_SCHEMA = """{
 }"""
 
 STUDY_SYSTEM = """You are the Meta-Harness *study* agent. Your job is to learn everything needed to let a
-slow reasoning model (Astra) — and, for decisions that must be fast, a fast typed-judgment model (Jev) — play a game
+slow reasoning model (Astra) and a fast typed-judgment model (Jev) play a game
 you are given only by name. Research on the web, read documentation and community knowledge, and write
 your findings into files. Be concrete and cite URLs. Do not write any game-playing code yet."""
 
@@ -69,9 +69,8 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
 We are building an agent for this game out of two foundation models plus a generated harness:
 * Astra — a slow, strong reasoning model (seconds to a minute per call). Plans, explains rules, writes code.
 * Jev — a fast (~0.5 s), cheap model that answers *typed* questions (choice / score / yes-no) about a
-  JSON state, many independent questions per call. Recognises situations; does not plan or do arithmetic.
-  It is for decisions that must be made in real time, are not rule-based (a rule is code) and are not
-  very hard (those go to Astra); a game without such decisions is played by code and Astra alone.
+  JSON state, many independent questions per call, with calibrated probabilities. Good at recognising
+  a situation and picking among concrete options under time pressure; does not plan or do arithmetic.
 The pace decides the adaptor's interface: **turn-based** — the world waits for the agent (puzzles, most
 card and board games); **real-time** — it keeps moving while we think (action games, real-time strategy
 with seconds of slack), so the adaptor ticks on its own clock. {pace_txt}

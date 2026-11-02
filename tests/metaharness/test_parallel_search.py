@@ -135,13 +135,13 @@ def test_preflight_and_dev_eval_commands_read_the_archive_manifest(tmp_runs, cap
     root = tmp_runs / "t"
     manifest = json.loads((root / "manifest.json").read_text())
     assert manifest["run"]["game"] == "rulepuzzle" and manifest["seeds_dev"] == [9]
-    harness = str(root / "candidates" / "0001" / "harness.py")
+    harness = str(root / "candidates" / "0002" / "harness.py")
     assert main(["preflight", harness, "--archive", str(root)]) == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
     assert main(["dev-eval", harness, "--archive", str(root)]) == 0
     out = capsys.readouterr().out
     assert "seed 9:" in out and "mean score:" in out
-    dev = list((root / "candidates" / "0001" / "dev").iterdir())
+    dev = list((root / "candidates" / "0002" / "dev").iterdir())
     assert len(dev) == 1 and (dev[0] / "digest.md").exists() and (dev[0] / "trace_seed9.jsonl").exists()
     with pytest.raises(SystemExit, match="not dev seeds"):
         main(["dev-eval", harness, "--archive", str(root), "--seeds", "0"])
@@ -151,8 +151,8 @@ def test_preflight_and_dev_eval_commands_read_the_archive_manifest(tmp_runs, cap
         mp.setattr(cli, "evaluate_harness", lambda *x, **k: seen.append(k) or real(*x, **k))
         assert main(["dev-eval", harness, "--archive", str(root), "--minutes", "0.5"]) == 0
     assert seen[0]["budget_per_episode"].max_wall_s == 30.0 and seen[0]["harness_timeout_s"] <= 30.0
-    assert len(list((root / "candidates" / "0001" / "dev").iterdir())) == 2      # both dev evaluations kept
-    prompt = (root / "candidates" / "0001" / "prompt.md").read_text()
+    assert len(list((root / "candidates" / "0002" / "dev").iterdir())) == 2      # both dev evaluations kept
+    prompt = (root / "candidates" / "0002" / "prompt.md").read_text()
     assert "metaharness preflight" in prompt and "dev-eval" in prompt and "metaharness try" not in prompt
 
 
