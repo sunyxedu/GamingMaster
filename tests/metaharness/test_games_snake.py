@@ -44,7 +44,7 @@ def test_loop_heldout_game_is_reported(tmp_path):
     from metaharness.cli import main
     from metaharness.core.archive import Archive
     runs = tmp_path / "runs"
-    rc = main(["loop", "--tier", "2", "--game", "snake", "--system1", "heuristic", "--system2", "scripted",
+    rc = main(["loop", "--game", "snake", "--system1", "heuristic", "--system2", "scripted",
                "--proposer", "scripted", "--clock", "virtual", "--iters", "0", "--seeds", "0", "--heldout", "100",
                "--heldout-game", "lanerunner", "--heldout-game-kwargs", '{"max_ticks": 30}',
                "--name", "hg", "--runs-dir", str(runs)])

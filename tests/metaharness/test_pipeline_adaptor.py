@@ -1,5 +1,5 @@
 """Generated-adaptor plumbing: fresh loading (sibling helpers, declarations, probe close, source
-hash of the code only), the stricter validator (tier, post-action types, tick pace, malformed actions,
+hash of the code only), the stricter validator (kind, post-action types, tick pace, malformed actions,
 fresh-instance determinism, SEEDS, close, code changed by running) and a registry that never lets a
 test bed replace an adaptor and keeps each adaptor on its own helper modules."""
 from __future__ import annotations
@@ -169,7 +169,7 @@ def test_load_adaptor_closes_probe_and_reads_declarations(tmp_path):
     a = write_adaptor(tmp_path / "a", body)
     spec = load_adaptor(a, kwargs={"events": str(log)})
     assert events(log) == ["make", "close"]                 # the probe instance was released
-    assert spec.name == "count-l2" and spec.tier == "tier2" and spec.realtime
+    assert spec.name == "count-l2" and spec.realtime
     assert spec.seeds == {"train": [10, 11, 12], "heldout": [20, 21]} and spec.eval_kwargs == {"level": 2}
     assert load_adaptor(a, kwargs={"level": 3}).name == "count-l3"     # the user's kwargs win
     assert len(spec.source_sha256) == 64
@@ -311,7 +311,7 @@ def test_validator_warnings_never_fail(tmp_path):
                 self.value += self.drift
                 return super().step(action)
     """
-    rep = validate_adaptor(write_adaptor(tmp_path / "a", body, kind="TurnCount"), expected_tier=1)
+    rep = validate_adaptor(write_adaptor(tmp_path / "a", body, kind="TurnCount"), expected_realtime=False)
     assert rep.ok, rep.to_markdown()
     md = rep.to_markdown()
     assert "- [!] step('__not_an_action__') raised ValueError" in md
@@ -319,18 +319,17 @@ def test_validator_warnings_never_fail(tmp_path):
     assert rep.to_json()["warnings"] == rep.warnings and len(rep.warnings) == 2
 
 
-def test_validator_tier_checks(tmp_path):
+def test_validator_kind_checks(tmp_path):
     tick = write_adaptor(tmp_path / "tick", TICK_GAME)
     turn = write_adaptor(tmp_path / "turn", TURN_GAME, kind="TurnCount")
-    assert validate_adaptor(tick, expected_tier=2).ok and validate_adaptor(turn, expected_tier=1).ok
-    rep = validate_adaptor(tick, expected_tier=1)
-    assert not rep.ok and checks(rep)["tier 1, as the study decided"] is False
-    assert "tier 1 needs a TurnGame" in rep.to_markdown()
-    rep = validate_adaptor(turn, expected_tier=2)
-    assert not rep.ok and "tier 2 needs a RealtimeGame" in rep.to_markdown()
-    lying = write_adaptor(tmp_path / "lying", "TIER = 1\n\nclass Game(TickCount):\n    pass\n")
-    rep = validate_adaptor(lying)
-    assert not rep.ok and checks(rep)["TIER agrees with the game's kind (2 <=> tick())"] is False
+    assert validate_adaptor(tick, expected_realtime=True).ok and validate_adaptor(turn, expected_realtime=False).ok
+    rep = validate_adaptor(tick, expected_realtime=False)
+    assert not rep.ok and checks(rep)["turn-based, as the study decided"] is False
+    assert "a turn-based game needs a TurnGame" in rep.to_markdown()
+    rep = validate_adaptor(turn, expected_realtime=True)
+    assert not rep.ok and "a real-time game needs a RealtimeGame" in rep.to_markdown()
+    legacy = write_adaptor(tmp_path / "legacy", "TIER = 2\n\nclass Game(TickCount):\n    pass\n")
+    assert validate_adaptor(legacy).ok                     # an older adaptor's TIER declaration is ignored
 
 
 @pytest.mark.parametrize("override, failing", [
@@ -472,7 +471,7 @@ def test_register_adaptor_is_never_replaced_by_a_test_bed(tmp_path, clean_regist
     other = write_adaptor(tmp_path / "other", "TIER = 2\n\nclass Game(TickCount):\n    name = 'snake'\n")
     assert reg.register_adaptor(other) == "adaptor:snake:2"
     assert reg.adaptor_spec("adaptor:snake").path == snake.resolve()
-    assert reg.game_tier(key) == "tier2"
+    assert reg.game_realtime(key) is True
 
 
 def test_register_adaptor_in_a_fresh_process(tmp_path):
@@ -497,8 +496,8 @@ def test_register_adaptor_keeps_its_own_name(tmp_path, clean_registry):
     key = reg.register_adaptor(a)
     assert key == name and reg.adaptor_spec(key).eval_kwargs == {"target": 3}
     reg.make_game("snake")                                           # _populate() must not touch it
-    reg.register(name, "tier2")(SnakeGame)                           # nor a late test-bed registration
-    assert reg.GAMES[key][1] is reg.adaptor_spec(key).make_game and reg.game_tier(key) == "tier1"
+    reg.register(name, realtime=True)(SnakeGame)                     # nor a late test-bed registration
+    assert reg.GAMES[key][1] is reg.adaptor_spec(key).make_game and reg.game_realtime(key) is False
     assert os.path.isdir(reg.adaptor_spec(key).path)
 
 

@@ -1,4 +1,4 @@
-"""Hidden-rule grid puzzles — the tier-1 test bed (ARC-AGI-3 in spirit).
+"""Hidden-rule grid puzzles — the turn-based test bed (ARC-AGI-3 in spirit).
 
 The agent sees a coloured grid and 6 abstract actions (like ARC-AGI-3's
 ACTION1..6) but is *not told the rules*: which tiles are keys, which are
@@ -217,4 +217,4 @@ class RulePuzzleGame:
 
 from ..games.registry import register  # noqa: E402
 
-register("rulepuzzle", "tier1")(RulePuzzleGame)
+register("rulepuzzle", realtime=False)(RulePuzzleGame)

@@ -319,7 +319,7 @@ def test_virtual_background_calls_are_not_starved_and_deterministic(tmp_path):
 def test_preflight_of_the_reference_harness_is_deterministic(tmp_path):
     # the reference harness keeps a background Astra replan in flight: verdicts used to flip
     for seed in range(4):
-        runs = [preflight_harness(BASELINES / "tier2_reference.py", lambda **k: SnakeGame(**k), seed=seed)
+        runs = [preflight_harness(BASELINES / "reference_realtime.py", lambda **k: SnakeGame(**k), seed=seed)
                 for _ in range(3)]
         assert all(v["ok"] for v in runs), [v["error"] for v in runs if not v["ok"]]
         keys = {(v["score"], v["steps"], v["system1_calls"], v["system2_calls"], v["coverage"]["acts"])
@@ -353,7 +353,7 @@ def test_preflight_caps_ticks_and_reports_coverage(tmp_path):
     p = _write(tmp_path, "h.py", "def build(ctx):\n    class H:\n        def run_episode(self, game):\n"
                                  "            while not ctx.done: ctx.wait_for_tick()\n    return H()\n")
     t0 = time.monotonic()
-    rep = preflight_harness(p, EndlessGame, tier2=True, max_ticks=500)
+    rep = preflight_harness(p, EndlessGame, system1=True, max_ticks=500)
     assert rep["ok"] and rep["ended_by"] == "virtual_cap" and rep["steps"] <= 500
     assert time.monotonic() - t0 < 20   # deadline + grace to return + grace for the hang check
     assert any("never posted an action" in w for w in rep["warnings"])
@@ -484,7 +484,7 @@ def build(ctx):
             ctx.decide({"obs": object()}, {"m": {"type": "choice", "instructions": "q", "criteria": {"a": ""}}})
     return H()
 ''')
-    rep = preflight_harness(p, lambda **k: SnakeGame(**k), tier2=True)
+    rep = preflight_harness(p, lambda **k: SnakeGame(**k), system1=True)
     assert not rep["ok"] and "strict-JSON" in rep["error"] and rep["system1_calls"] == 0
 
 

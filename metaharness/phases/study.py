@@ -1,7 +1,7 @@
 """Phase 1 — study the game.
 
 Input: the game's name (plus whatever the user told us: platform, account
-notes, a tier override). Output: ``study/`` with
+notes, a pace override). Output: ``study/`` with
 
     brief.md        rules, objective, scoring, controls, pace / latency profile
     interfaces.md   every way to drive the game programmatically that was found,
@@ -26,8 +26,8 @@ from ..models.base import ModelTimeout, ModelUnavailable, System2Model, TraceSin
 
 STUDY_JSON_SCHEMA = """{
   "game": "<canonical game name>",
-  "tier": 1 | 2,                       // 1: the world waits for the agent; 2: it ticks while we think
-  "tier_rationale": "<one paragraph: how fast decisions must be and why>",
+  "realtime": true | false,            // true: the world keeps moving while we think; false: it waits
+  "pace_rationale": "<one paragraph: how fast decisions must be and why>",
   "decision_latency_s": <float>,       // how long a decision may take before the game punishes it
   "interface": {
     "chosen": "<api | mod | bot library | emulator | screen+input | official env ...>",
@@ -45,7 +45,7 @@ STUDY_JSON_SCHEMA = """{
 }"""
 
 STUDY_SYSTEM = """You are the Meta-Harness *study* agent. Your job is to learn everything needed to let a
-slow reasoning model (Astra) — and, for fast games, a fast typed-judgment model (Jev) — play a game
+slow reasoning model (Astra) — and, for decisions that must be fast, a fast typed-judgment model (Jev) — play a game
 you are given only by name. Research on the web, read documentation and community knowledge, and write
 your findings into files. Be concrete and cite URLs. Do not write any game-playing code yet."""
 
@@ -55,10 +55,11 @@ FINISH_PROMPT = ("Your time is up. Do not start new research: from what you have
                  "specified in the first message — then stop.")
 
 
-def study_prompt(game: str, notes: str, tier_hint: Optional[int], out_dir: Path,
+def study_prompt(game: str, notes: str, realtime_hint: Optional[bool], out_dir: Path,
                  timeout_s: Optional[float] = None) -> str:
-    tier_txt = (f"The user says the game is tier {tier_hint}; verify and keep it unless clearly wrong."
-                if tier_hint else "Decide the tier yourself and justify it.")
+    pace_txt = ("Decide the pace yourself and justify it." if realtime_hint is None else
+                f"The user says the game is {'real-time' if realtime_hint else 'turn-based'}; verify and keep it "
+                "unless clearly wrong.")
     return f"""# Study the game: **{game}**
 
 Working directory: `{out_dir}` (write everything here). The evaluator's Python is `{sys.executable}`
@@ -69,9 +70,11 @@ We are building an agent for this game out of two foundation models plus a gener
 * Astra — a slow, strong reasoning model (seconds to a minute per call). Plans, explains rules, writes code.
 * Jev — a fast (~0.5 s), cheap model that answers *typed* questions (choice / score / yes-no) about a
   JSON state, many independent questions per call. Recognises situations; does not plan or do arithmetic.
-Games split into tiers: **tier 1** — the world waits (turn-based, puzzles, most card games): Astra plays
-through a harness. **tier 2** — the world keeps moving (action, real-time strategy with seconds of slack):
-Astra thinks while Jev acts. {tier_txt}
+  It is for decisions that must be made in real time, are not rule-based (a rule is code) and are not
+  very hard (those go to Astra); a game without such decisions is played by code and Astra alone.
+The pace decides the adaptor's interface: **turn-based** — the world waits for the agent (puzzles, most
+card and board games); **real-time** — it keeps moving while we think (action games, real-time strategy
+with seconds of slack), so the adaptor ticks on its own clock. {pace_txt}
 
 ## Deliverables (all in this directory)
 1. `brief.md` — rules, objective, how score/progress is measured, controls/actions, pace: how often the
@@ -100,6 +103,10 @@ def _budget(timeout_s: Optional[float]) -> str:
             "first third of it, then deepen them: the files on disk are what the next phase gets.")
 
 
+def _pace(realtime: bool) -> str:
+    return "real-time" if realtime else "turn-based"
+
+
 def _session_file(out: Path) -> Path:
     return out / "session.json"
 
@@ -111,17 +118,25 @@ def _saved_session(out: Path) -> Optional[str]:
         return None
 
 
-REQUIRED_KEYS = ("game", "tier", "tier_rationale", "decision_latency_s", "interface", "scoring",
+REQUIRED_KEYS = ("game", "realtime", "pace_rationale", "decision_latency_s", "interface", "scoring",
                  "scenarios", "strategy_summary")
+
+
+def study_realtime(study: dict[str, Any]) -> bool:
+    """Whether the study decided on a real-time adaptor (older studies recorded a tier: 2 = real-time)."""
+    return bool(study["realtime"]) if "realtime" in study else int(study.get("tier") or 1) == 2
 
 
 def load_study(study_dir: Path) -> dict[str, Any]:
     data = json.loads((study_dir / "study.json").read_text())
+    if "tier" in data and "realtime" not in data:          # the schema before pace replaced tiers
+        data["realtime"] = int(data["tier"]) == 2
+        data.setdefault("pace_rationale", data.get("tier_rationale", ""))
     missing = [k for k in REQUIRED_KEYS if k not in data]
     if missing:
         raise ValueError(f"study.json missing keys {missing}")
-    if int(data["tier"]) not in (1, 2):
-        raise ValueError("study.json: tier must be 1 or 2")
+    if not isinstance(data["realtime"], bool):
+        raise ValueError("study.json: realtime must be true or false")
     for f in ("brief.md", "interfaces.md", "strategies.md"):
         if not (study_dir / f).exists() or len((study_dir / f).read_text()) < 200:
             raise ValueError(f"study/{f} missing or too short")
@@ -241,8 +256,9 @@ def prior_documents(study_dir: Optional[Path], adaptor_dir: Optional[Path], arch
 
 
 def run_study(model: System2Model, run_dir: Path, game: str, *, notes: str = "",
-              tier_hint: Optional[int] = None, timeout_s: float = 2400.0, max_repairs: int = 2,
+              realtime_hint: Optional[bool] = None, timeout_s: float = 2400.0, max_repairs: int = 2,
               log=print) -> dict[str, Any]:
+    """``realtime_hint``: the user's pace override (True real-time, False turn-based, None: the study decides)."""
     out = run_dir / "study"
     out.mkdir(parents=True, exist_ok=True)
     notes_md = out / "notes.md"                    # the notes this study was made with
@@ -255,15 +271,15 @@ def run_study(model: System2Model, run_dir: Path, game: str, *, notes: str = "",
             if notes_md.exists() and notes_md.read_text().strip() != notes.strip():
                 log("study: WARNING — --notes differ from the notes this study was made with (study/notes.md); "
                     "reusing it anyway — delete study/study.json to redo the study with the new notes")
-            if tier_hint and int(data["tier"]) != int(tier_hint):   # the same override a fresh study gets
-                log(f"study: --tier {tier_hint} overrides the study's tier {data['tier']}")
-                data["tier"] = int(tier_hint)
+            if realtime_hint is not None and data["realtime"] != realtime_hint:   # the override a fresh study gets
+                log(f"study: --pace {_pace(realtime_hint)} overrides the study's {_pace(data['realtime'])}")
+                data["realtime"] = realtime_hint
                 (out / "study.json").write_text(json.dumps(data, indent=2))
-            log(f"study: reusing {out / 'study.json'} (tier {data['tier']})")
+            log(f"study: reusing {out / 'study.json'} ({_pace(data['realtime'])})")
             return data
     notes_md.write_text(notes)
     trace = TraceSink(out / "study_trace.jsonl")
-    prompt = study_prompt(game, notes, tier_hint, out, timeout_s)
+    prompt = study_prompt(game, notes, realtime_hint, out, timeout_s)
     (out / "prompt.md").write_text(prompt)
     # A study cut off by its timeout (in this run or an earlier one) continues that conversation: its
     # research is in the session, and starting over would repeat it.
@@ -294,11 +310,11 @@ def run_study(model: System2Model, run_dir: Path, game: str, *, notes: str = "",
                 _session_file(out).write_text(json.dumps({"session_id": session}))
             try:
                 data = load_study(out)
-                if tier_hint:
-                    data["tier"] = int(tier_hint)
+                if realtime_hint is not None:
+                    data["realtime"] = realtime_hint
                     (out / "study.json").write_text(json.dumps(data, indent=2))
                 _session_file(out).unlink(missing_ok=True)
-                log(f"study: done — tier {data['tier']}, interface {data['interface'].get('chosen')}")
+                log(f"study: done — {_pace(data['realtime'])}, interface {data['interface'].get('chosen')}")
                 return data
             except Exception as e:  # noqa: BLE001
                 if timed_out:

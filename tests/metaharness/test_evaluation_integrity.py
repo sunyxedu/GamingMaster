@@ -166,7 +166,7 @@ def test_action_efficiency_does_not_reward_early_realtime_death(tmp_path):
 
 def test_manifest_prevents_reusing_incomparable_scores(tmp_path):
     from metaharness.cli import main
-    args = ["loop", "--tier", "1", "--game", "rulepuzzle", "--system1", "none",
+    args = ["loop", "--game", "rulepuzzle", "--system1", "none",
             "--system2", "scripted", "--proposer", "scripted", "--clock", "virtual",
             "--iters", "0", "--seeds", "0", "--heldout", "", "--s2-budget", "2",
             "--name", "test", "--runs-dir", str(tmp_path)]

@@ -1,4 +1,4 @@
-"""Real-time Snake — the tier-2 test bed.
+"""Real-time Snake — the real-time test bed.
 
 Classic rules on a W×H grid: eat food (+1), die on wall / self. The snake
 keeps moving in its current direction every tick whether or not the agent
@@ -153,4 +153,4 @@ class SnakeGame:
 
 from ..games.registry import register  # noqa: E402
 
-register("snake", "tier2")(SnakeGame)
+register("snake", realtime=True)(SnakeGame)

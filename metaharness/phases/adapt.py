@@ -23,6 +23,7 @@ from ..config import load_dotenv
 from ..games import adaptor as adaptor_mod
 from ..games import base as base_mod
 from ..models.base import ModelTimeout, ModelUnavailable, System2Model, TraceSink
+from .study import study_realtime
 
 ADAPT_SYSTEM = """You are the Meta-Harness *adapt* agent: you write the code that connects a real game to a
 fixed Python interface so that model-driven harnesses can observe and act. You may install packages,
@@ -35,8 +36,8 @@ def adapt_prompt(game: str, study: dict[str, Any], study_dir: Path, out_dir: Pat
                  notes: str = "", kwargs: Optional[dict[str, Any]] = None, timeout_s: Optional[float] = None) -> str:
     contract = inspect.getdoc(adaptor_mod) or ""
     base_src = Path(base_mod.__file__).read_text()
-    tier = int(study["tier"])
-    check = f"validate_adaptor('{out_dir}', expected_tier={tier}" + (f", kwargs={kwargs!r})" if kwargs else ")")
+    realtime = study_realtime(study)
+    check = f"validate_adaptor('{out_dir}', expected_realtime={realtime}" + (f", kwargs={kwargs!r})" if kwargs else ")")
     return f"""# Build the adaptor for **{game}**
 
 Working directory: `{out_dir}`. Study documents from the previous phase are in `{study_dir}`
@@ -52,7 +53,7 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
 ```
 
 ## Requirements
-* Tier {tier}: {'real-time — implement RealtimeGame: tick(action) applies the *current* action, tick_s = the real cadence, ticks counts applied ticks; the runner calls tick on its own clock' if tier == 2 else 'turn-based — implement TurnGame: step(action) blocks until the game has applied the action and returns the next observation'}.
+* Pace (study.json "realtime"): {'real-time — implement RealtimeGame: tick(action) applies the *current* action, tick_s = the real cadence, ticks counts applied ticks; the runner calls tick on its own clock' if realtime else 'turn-based — implement TurnGame: step(action) blocks until the game has applied the action and returns the next observation'}.
 * `reset(seed)` must start a fresh episode and vary it by seed as described in study.json "scenarios":
   {study.get('scenarios', '')}
   Declare `SEEDS = {{"train": [...], "heldout": [...], "dev": [...], "validation": [...]}}` (disjoint; 1-2 dev
@@ -203,12 +204,12 @@ def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, An
     out = run_dir / "adaptor"
     study_dir = run_dir / "study"
     out.mkdir(parents=True, exist_ok=True)
-    tier = int(study["tier"])
+    realtime = study_realtime(study)
     needs = out / "NEEDS.md"
     needs_at_start = _fingerprint(needs)
 
     def validate() -> adaptor_mod.ValidationReport:
-        rep = adaptor_mod.validate_adaptor(out, kwargs=kwargs, expected_tier=tier)
+        rep = adaptor_mod.validate_adaptor(out, kwargs=kwargs, expected_realtime=realtime)
         (out / "validation.md").write_text(rep.to_markdown())
         (out / "validation.json").write_text(json.dumps(rep.to_json(), indent=2))
         if rep.ok:

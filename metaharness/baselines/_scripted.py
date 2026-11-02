@@ -5,7 +5,7 @@
 * ``scripted_system2`` — fake Astra that answers snake prompts with a greedy
   move and puzzle prompts with ACTION1.
 * ``scripted_proposer`` — fake proposer that "proposes" the bundled reference
-  harness for the tier, so the whole loop can be exercised offline.
+  harness for the game's kind, so the whole loop can be exercised offline.
 """
 from __future__ import annotations
 
@@ -67,8 +67,8 @@ def scripted_system2() -> ScriptedSystem2:
     return ScriptedSystem2(fn=fn, latency_s=2.0)
 
 
-def scripted_proposer(tier_mod) -> ScriptedSystem2:
-    ref = Path(__file__).resolve().parent / ("tier2_reference.py" if "tier2" in tier_mod.__name__ else "tier1_reference.py")
+def scripted_proposer(realtime: bool) -> ScriptedSystem2:
+    ref = Path(__file__).resolve().parent / ("reference_realtime.py" if realtime else "reference_turn.py")
     code = ref.read_text()
     reply = f"Hypothesis: see module docstring.\n\n```python\n{code}\n```\nProposal: the reference two-timescale harness."
     return ScriptedSystem2(replies=[reply], latency_s=5.0)

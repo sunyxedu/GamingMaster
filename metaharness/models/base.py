@@ -1,6 +1,6 @@
 """Model interfaces.
 
-Two kinds of model, mirroring the fast/slow split of the tier-2 design:
+Two kinds of model, the fast/slow split of the harness design:
 
 * ``System2Model`` — a slow, reasoning, *agentic* model (Astra through the
   codex CLI). Text in, text out, optionally resuming a session so the model's

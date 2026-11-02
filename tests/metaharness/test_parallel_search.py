@@ -20,7 +20,7 @@ from metaharness.core.proposer import build_prompt, recent_latency_text, tools_t
 from metaharness.core.runner import evaluate_harness
 from metaharness.models.mock import ScriptedSystem2
 from metaharness.testbeds.rulepuzzle import RulePuzzleGame
-from metaharness.tiers import tier1
+from metaharness import task
 
 BASE = Path(__file__).resolve().parents[2] / "metaharness" / "baselines"
 SLOW = '''
@@ -37,7 +37,7 @@ def build(ctx): return H(ctx)
 def _loop(root, *, proposer, iters=1, **cfg):
     archive = Archive(root)
     if not archive.candidates():
-        archive.add_seed(BASE / "tier1_astra_naive.py", label="naive")
+        archive.add_seed(BASE / "astra_naive.py", label="naive")
     config = LoopConfig(n_iterations=iters, seeds_train=[0, 1], seeds_heldout=[100], clock_mode="virtual",
                         budget=Budget(max_system2_calls=3, max_wall_s=20), harness_timeout_s=20, reflect=False,
                         ablate=False, **cfg)
@@ -62,7 +62,7 @@ def test_parallel_seeds_play_at_once_and_report_in_seed_order(tmp_path):
 
 
 def test_digest_indexes_steps_and_model_calls(tmp_path):
-    res = evaluate_harness(BASE / "tier1_astra_naive.py", lambda **k: RulePuzzleGame(**k), [0],
+    res = evaluate_harness(BASE / "astra_naive.py", lambda **k: RulePuzzleGame(**k), [0],
                            system2=ScriptedSystem2(replies=["ACTION1"]), system1=None, out_dir=tmp_path,
                            clock_mode="virtual", budget_per_episode=Budget(max_system2_calls=3), harness_timeout_s=10)
     d = (tmp_path / "digest.md").read_text()
@@ -127,7 +127,7 @@ def test_prompt_reports_recent_system2_latency(tmp_path):
 
 
 def test_preflight_and_dev_eval_commands_read_the_archive_manifest(tmp_runs, capsys):
-    rc = main(["loop", "--tier", "1", "--game", "rulepuzzle", "--system1", "none", "--system2", "scripted",
+    rc = main(["loop", "--game", "rulepuzzle", "--system1", "none", "--system2", "scripted",
                "--proposer", "scripted", "--clock", "virtual", "--iters", "1", "--seeds", "0", "--heldout", "",
                "--dev-seeds", "9", "--s2-budget", "4", "--no-reflect", "--name", "t", "--runs-dir", str(tmp_runs)])
     assert rc == 0
@@ -158,15 +158,15 @@ def test_preflight_and_dev_eval_commands_read_the_archive_manifest(tmp_runs, cap
 
 def test_dev_seeds_must_not_overlap_the_scored_seeds(tmp_path):
     with pytest.raises(ValueError, match="dev seeds overlap"):
-        _loop(tmp_path / "o", proposer=scripted_proposer(tier1), seeds_dev=[1])
+        _loop(tmp_path / "o", proposer=scripted_proposer(False), seeds_dev=[1])
 
 
 def test_resume_accepts_a_changed_task_text_but_not_changed_budgets(tmp_path):
     root = tmp_path / "res"
-    _loop(root, proposer=scripted_proposer(tier1), iters=1).run()
+    _loop(root, proposer=scripted_proposer(False), iters=1).run()
     again = MetaHarnessLoop(archive=Archive(root), game_factory=lambda **k: RulePuzzleGame(**k), game_kwargs={},
                             task_md="a different task text", contract_doc="contract",
-                            proposer=scripted_proposer(tier1), system2=ScriptedSystem2(replies=["ACTION1"]),
+                            proposer=scripted_proposer(False), system2=ScriptedSystem2(replies=["ACTION1"]),
                             system1=None, game_name="rulepuzzle",
                             config=LoopConfig(n_iterations=1, seeds_train=[0, 1], seeds_heldout=[100],
                                               clock_mode="virtual", budget=Budget(max_system2_calls=3, max_wall_s=20),
@@ -176,7 +176,7 @@ def test_resume_accepts_a_changed_task_text_but_not_changed_budgets(tmp_path):
     assert "task text differs" in (root / "loop.log").read_text()
     with pytest.raises(ValueError, match="Search configuration changed \\(budget\\)"):
         MetaHarnessLoop(archive=Archive(root), game_factory=lambda **k: RulePuzzleGame(**k), game_kwargs={},
-                        task_md="task", contract_doc="contract", proposer=scripted_proposer(tier1),
+                        task_md="task", contract_doc="contract", proposer=scripted_proposer(False),
                         system2=ScriptedSystem2(replies=["ACTION1"]), system1=None, game_name="rulepuzzle",
                         config=LoopConfig(n_iterations=1, seeds_train=[0, 1], seeds_heldout=[100], clock_mode="virtual",
                                           budget=Budget(max_system2_calls=9, max_wall_s=20), harness_timeout_s=20,
@@ -185,7 +185,7 @@ def test_resume_accepts_a_changed_task_text_but_not_changed_budgets(tmp_path):
 
 def test_validation_finalists_include_ties_on_the_training_mean(tmp_path, monkeypatch):
     root = tmp_path / "ties"
-    loop = _loop(root, proposer=scripted_proposer(tier1), iters=0, seeds_val=[7], finalists=2)
+    loop = _loop(root, proposer=scripted_proposer(False), iters=0, seeds_val=[7], finalists=2)
     archive = loop.archive
     for score in (3.0, 3.0, 3.0, 3.0, 1.0):              # after the loop exists: a scored archive needs a manifest
         c = archive.new_candidate()

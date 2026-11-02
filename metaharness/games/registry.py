@@ -7,7 +7,7 @@ Two sources of games:
   Register one with ``register_adaptor(path)``; the CLI does this for ``--adaptor``.
   A registered adaptor is never replaced: a name that is already taken gets
   ``adaptor:<name>`` (the key ``register_adaptor`` returns), and ``adaptor_spec(key)``
-  gives its seeds, eval kwargs, tier and source hash.
+  gives its seeds, eval kwargs, kind and source hash.
 """
 from __future__ import annotations
 
@@ -17,14 +17,14 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from .adaptor import AdaptorSpec
 
-GAMES: dict[str, tuple[str, Callable[..., Any]]] = {}
+GAMES: dict[str, tuple[bool, Callable[..., Any]]] = {}      # name -> (realtime?, factory)
 _ADAPTORS: dict[str, AdaptorSpec] = {}          # registry key -> spec of a generated adaptor
 
 
-def register(name: str, tier: str):
+def register(name: str, *, realtime: bool):
     def deco(factory):
         if name not in _ADAPTORS:               # a late test-bed import never replaces an adaptor
-            GAMES[name] = (tier, factory)
+            GAMES[name] = (realtime, factory)
         return factory
     return deco
 
@@ -56,13 +56,13 @@ def register_adaptor(path: Path | str, name: str | None = None, *, kwargs: dict[
     while key in GAMES and not (key in _ADAPTORS and _ADAPTORS[key].path == spec.path):
         n += 1
         key = f"adaptor:{base}" if n == 2 else f"adaptor:{base}:{n - 1}"
-    GAMES[key] = (spec.tier, spec.make_game)
+    GAMES[key] = (spec.realtime, spec.make_game)
     _ADAPTORS[key] = spec
     return key
 
 
 def adaptor_spec(key: str) -> AdaptorSpec | None:
-    """The ``AdaptorSpec`` registered under ``key`` (seeds, eval_kwargs, tier, source_sha256), or
+    """The ``AdaptorSpec`` registered under ``key`` (seeds, eval_kwargs, realtime, source_sha256), or
     None for a test bed / unknown name."""
     return _ADAPTORS.get(key)
 
@@ -74,6 +74,7 @@ def make_game(name: str, **kw: Any) -> Any:
     return GAMES[name][1](**kw)
 
 
-def game_tier(name: str) -> str:
+def game_realtime(name: str) -> bool:
+    """Whether the game ticks on its own clock (RealtimeGame) or waits for the agent (TurnGame)."""
     _populate()
     return GAMES[name][0]

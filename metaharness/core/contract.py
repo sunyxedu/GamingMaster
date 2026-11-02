@@ -13,7 +13,7 @@ use comes through ``ctx``:
 
 * ``ctx.think(prompt, session_id=...)`` — System-2 (Astra: slow, reasoning), traced and budgeted.
 * ``ctx.decide(state, questions)``      — System-1 (Jev: fast typed judgments), traced and budgeted.
-                                          Tier-1 tasks have no System-1 (``ctx.system1`` is None).
+                                          ``ctx.system1`` is None when the evaluation provides none.
 * ``ctx.spawn(fn)`` — run ``fn`` on a background thread (e.g. an Astra call while Jev keeps the
                       game alive). Returns a ``concurrent.futures.Future``.
 * ``ctx.clock``     — the game clock. In *virtual* mode model latency is charged to the clock
@@ -23,13 +23,13 @@ use comes through ``ctx``:
 * ``ctx.log(...)``  — free-form events into the trace.
 * ``ctx.budget``    — what is left of this episode's call budgets and wall-clock deadline.
 
-Real-time games (tier 2) expose ``game.tick_s`` and tick on their own clock: in wall mode a thread
+Real-time games expose ``game.tick_s`` and tick on their own clock: in wall mode a thread
 applies a tick every ``tick_s``; in virtual mode a model call's latency advances the game by
 ``latency / tick_s`` ticks. ``ctx.act(action)`` posts the current action (instant; virtual mode
 charges 1 ms so a loop that never calls a model still lets time pass). Ticks apply the noop until
 the first action is posted; afterwards a tick without a fresh action repeats the last posted
 action. ``ctx.wait_for_tick()`` blocks until the game has applied its next tick — use it instead
-of spinning. Turn games (tier 1) are stepped by ``ctx.act(action)``, which returns the next
+of spinning. Turn games are stepped by ``ctx.act(action)``, which returns the next
 observation.
 
 Exact signatures (use these; anything else is a contract error caught in pre-flight)::

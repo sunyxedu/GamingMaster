@@ -14,9 +14,10 @@ from metaharness.core.calibrate import calibrate
 from metaharness.core.contract import Budget
 from metaharness.core.loop import LoopConfig, MetaHarnessLoop, SeedRefused, _archive_lock
 from metaharness.models.base import ModelUnavailable, System2Result
+from metaharness.models.jev import usage_guide
 from metaharness.models.mock import HeuristicSystem1, ScriptedSystem2
 from metaharness.testbeds.snake import SnakeGame
-from metaharness.tiers import tier1, tier2
+from metaharness import task
 
 BASE = Path(__file__).resolve().parents[2] / "metaharness" / "baselines"
 
@@ -31,7 +32,7 @@ class Quota(ScriptedSystem2):
 def _loop(root, *, proposer, system2=None, iters=1, factory=None, heldout=(100,), **cfg):
     archive = Archive(root)
     if not archive.candidates():
-        archive.add_seed(BASE / "tier2_jev_only.py", label="tier2_jev_only")
+        archive.add_seed(BASE / "jev_only.py", label="jev_only")
     config = LoopConfig(n_iterations=iters, seeds_train=[0, 1], seeds_heldout=list(heldout), clock_mode="virtual",
                         budget=Budget(max_system2_calls=4, max_system1_calls=200, max_wall_s=30),
                         harness_timeout_s=30, **cfg)
@@ -46,18 +47,18 @@ def test_model_outage_skips_heldout_and_the_search_resumes(tmp_path):
     loop.run()
     assert loop.interrupted and "model unavailable" in loop.interrupted
     assert not list((tmp_path / "a" / "candidates").glob("*/heldout*"))       # archive stays resumable
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2))
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True))
     best = loop.run()
     assert loop.interrupted is None and best is not None and (best.dir / "heldout" / "eval.json").exists()
 
 
 def test_evaluation_cut_by_an_outage_is_redone_on_resume(tmp_path):
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), system2=Quota(), iters=0, heldout=())
-    loop.archive.add_seed(BASE / "tier2_astra_only.py", label="tier2_astra_only")
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), system2=Quota(), iters=0, heldout=())
+    loop.archive.add_seed(BASE / "astra_naive.py", label="astra_naive")
     loop.run()
     astra = loop.archive.candidates()[1]
     assert loop.interrupted and astra.eval()["fatal"].startswith("model unavailable")
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=())
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0, heldout=())
     loop.run()
     assert astra.eval()["fatal"] is None and astra.eval()["n_episodes"] == 2
     assert list(astra.dir.glob("eval.interrupted-*.json"))
@@ -70,7 +71,7 @@ def test_refused_seed_stops_the_search_before_any_evaluation(tmp_path):
                 raise RuntimeError("seed 100 is not admissible")
             return super().reset(seed)
 
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), factory=lambda **k: Picky(max_ticks=30, **k))
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), factory=lambda **k: Picky(max_ticks=30, **k))
     with pytest.raises(SeedRefused, match="heldout seed 100"):
         loop.run()
     assert all(c.eval() is None for c in loop.archive.candidates())
@@ -87,24 +88,29 @@ def test_archive_lock_admits_one_process(tmp_path):
 
 
 def test_heldout_results_are_written_once(tmp_path):
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0)
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0)
     best = loop.run()
     p = best.dir / "heldout" / "eval.json"
     first = p.read_text()
-    _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0).run()
+    _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0).run()
     assert p.read_text() == first
 
 
 def test_task_states_the_evaluation_that_runs():
     b = Budget(max_system2_calls=7, max_system1_calls=70, max_wall_s=300)
-    no_heldout = tier2.task_md("snake", b, "wall", {}, study="RULES", generality=False)
+    no_heldout = task.task_md("snake", b, "wall", {}, study="RULES", generality=False, system1=True)
     assert "Evaluation scope" in no_heldout and "Generality requirement" not in no_heldout
     assert "implement exact" in no_heldout and "300 s" in no_heldout and "70 calls" in no_heldout
-    with_heldout = tier2.task_md("snake", b, "wall", {}, study="RULES", generality=True)
+    assert "Pace: real-time" in no_heldout and "stale ticks" in no_heldout and "longer survival" in no_heldout
+    assert "Jev questions" in no_heldout and "not rule-based" in no_heldout and usage_guide() in no_heldout
+    with_heldout = task.task_md("snake", b, "wall", {}, study="RULES", generality=True, system1=True)
     assert "Generality requirement" in with_heldout and "implement exact" not in with_heldout
-    t1 = tier1.task_md("rulepuzzle", b, "virtual", {}, generality=False)
+    t1 = task.task_md("rulepuzzle", b, "virtual", {}, generality=False)        # no System-1: Jev is not offered
     assert "mean levels completed over seeds" not in t1 and "re-drawn" not in t1 and "Jev" not in t1
-    assert "mean score over the training seeds" in t1 and "fewer actions" in t1
+    assert "mean score over the training seeds" in t1 and "fewer actions" in t1 and "Pace: turn-based" in t1
+    assert "stale ticks" not in t1 and "ctx.decide" not in t1
+    t1j = task.task_md("rulepuzzle", b, "virtual", {}, generality=False, system1=True)   # a turn game may use Jev
+    assert "ctx.decide" in t1j and "Pace: turn-based" in t1j and "fewer actions" in t1j
 
 
 def test_calibration_is_measured_once_and_rendered(tmp_path):
@@ -126,7 +132,7 @@ def test_calibration_is_measured_once_and_rendered(tmp_path):
     assert calibrate(tmp_path, system2=s2, system1=Fake1(), game_factory=SnakeGame, game_kwargs={}, seed=0,
                      log=lambda m: None) == cal and len(s2.calls) == 4           # cached, not re-measured
     assert cal["system2_short"]["samples_s"] == [3.0, 3.0, 3.0]                       # short: median of three
-    text = tier2.task_md("snake", Budget(), "wall", {}, calibration=cal)
+    text = task.task_md("snake", Budget(), "wall", {}, calibration=cal, system1=True)
     assert "Measured model latency" in text and "~800 output tokens: 12 s" in text
     assert calibrate(tmp_path / "x", system2=ScriptedSystem2(), system1=HeuristicSystem1(), game_factory=SnakeGame,
                      game_kwargs={}, seed=0) is None                              # offline stand-ins
@@ -173,12 +179,12 @@ def test_an_evaluation_cut_by_a_dead_game_is_redone_on_resume(tmp_path):
             return super().reset(seed)
 
     factory = lambda **k: Flaky(max_ticks=30, **k)          # noqa: E731
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(), factory=factory,
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0, heldout=(), factory=factory,
                  qualify_seeds=False)
     loop.run()
     assert loop.interrupted and "game failed in every episode" in loop.interrupted
     down["on"] = False
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(), factory=factory,
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0, heldout=(), factory=factory,
                  qualify_seeds=False)
     loop.run()
     e = loop.archive.candidates()[0].eval()
@@ -186,8 +192,8 @@ def test_an_evaluation_cut_by_a_dead_game_is_redone_on_resume(tmp_path):
 
 
 def test_heldout_outage_is_completed_on_the_same_candidate(tmp_path):
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, system2=Quota(), heldout=(100, 101))
-    loop.archive.add_seed(BASE / "tier2_jev_only.py", label="tier2_jev_only_b")
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0, system2=Quota(), heldout=(100, 101))
+    loop.archive.add_seed(BASE / "jev_only.py", label="jev_only_b")
     best = loop.run()
     assert loop.interrupted is None and best is not None
     # the held-out stage of the selected candidate ran with a working player; now break it mid-way
@@ -196,34 +202,34 @@ def test_heldout_outage_is_completed_on_the_same_candidate(tmp_path):
     e["fatal"], e["n_episodes"], e["episodes"] = "model unavailable: usage limit", 1, e["episodes"][:1]
     held.write_text(json.dumps(e))
     with pytest.raises(ValueError, match="held-out results"):           # exposed: no new proposals
-        _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=(100, 101))
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(100, 101))
+        _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=1, heldout=(100, 101))
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0, heldout=(100, 101))
     assert loop.heldout_best().dir == best.dir
     loop.run()
     assert json.loads(held.read_text())["n_episodes"] == 2                # completed, same candidate
 
 
 def test_interrupted_heldout_resumes_with_the_same_iters(tmp_path):
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=(100, 101))
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=1, heldout=(100, 101))
     best = loop.run()
     held = best.dir / "heldout" / "eval.json"
     e = json.loads(held.read_text())
     e["fatal"], e["n_episodes"], e["episodes"] = "model unavailable: usage limit", 1, e["episodes"][:1]
     held.write_text(json.dumps(e))
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=(100, 101))   # same command
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=1, heldout=(100, 101))   # same command
     loop.run()
     assert json.loads(held.read_text())["n_episodes"] == 2
     assert loop.proposals_done() == 1
 
 
 def test_an_empty_proposal_directory_does_not_count(tmp_path):
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=())
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0, heldout=())
     killed = loop.archive.new_candidate()   # a proposer killed before writing anything
     (killed.dir / "prompt.md").write_text("p")
     assert loop.proposals_done() == 0
     loop.run()                              # moved aside, so the next generation reuses the index
     assert not killed.dir.exists() and list((tmp_path / "a" / "abandoned").glob("0001-*/prompt.md"))
-    assert [c.dir.name for c in loop.archive.candidates()] == ["0000-tier2_jev_only"]
+    assert [c.dir.name for c in loop.archive.candidates()] == ["0000-jev_only"]
 
 
 def test_a_candidate_that_breaks_the_game_is_retried_once_then_kept(tmp_path):
@@ -234,27 +240,27 @@ def test_a_candidate_that_breaks_the_game_is_retried_once_then_kept(tmp_path):
             return super().reset(seed)
     Fragile.broken = True
     factory = lambda **k: Fragile(max_ticks=30, **k)          # noqa: E731
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(), factory=factory,
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0, heldout=(), factory=factory,
                  qualify_seeds=False)
     loop.run()
     assert loop.interrupted                                   # first time: the game looks down
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(), factory=factory,
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0, heldout=(), factory=factory,
                  qualify_seeds=False)
     loop.run()
     assert loop.interrupted is None                           # redone once, failed the same way: kept
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=0, heldout=(), factory=factory,
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=0, heldout=(), factory=factory,
                  qualify_seeds=False)
     loop.run()
     assert loop.interrupted is None and len(list(loop.archive.candidates()[0].dir.glob("eval.interrupted-*"))) == 1
 
 
 def test_iters_counts_the_archive_proposals(tmp_path):
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=())
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=1, heldout=())
     loop.run()
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=())
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=1, heldout=())
     loop.run()
     assert sum("-" not in c.dir.name for c in loop.archive.candidates()) == 1      # resumed: nothing left
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=2, heldout=())
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=2, heldout=())
     loop.run()
     assert sum("-" not in c.dir.name for c in loop.archive.candidates()) == 2
 
@@ -269,11 +275,11 @@ def test_refused_seed_does_not_pin_the_archive(tmp_path):
     def make(seeds):
         archive = Archive(tmp_path / "a")
         if not archive.candidates():
-            archive.add_seed(BASE / "tier2_jev_only.py", label="tier2_jev_only")
+            archive.add_seed(BASE / "jev_only.py", label="jev_only")
         cfg = LoopConfig(n_iterations=0, seeds_train=seeds, seeds_heldout=[], clock_mode="virtual",
                          budget=Budget(max_system2_calls=2, max_system1_calls=50, max_wall_s=30), harness_timeout_s=30)
         return MetaHarnessLoop(archive=archive, game_factory=lambda **k: Picky(max_ticks=20, **k), game_kwargs={},
-                               task_md="task", contract_doc="c", proposer=scripted_proposer(tier2),
+                               task_md="task", contract_doc="c", proposer=scripted_proposer(True),
                                system2=ScriptedSystem2(latency_s=0.5), system1=HeuristicSystem1(), config=cfg)
 
     with pytest.raises(SeedRefused):
@@ -286,7 +292,7 @@ def test_tuple_game_kwargs_do_not_break_resume(tmp_path):
     def make():
         archive = Archive(tmp_path / "a")
         if not archive.candidates():
-            archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+            archive.add_seed(BASE / "idle.py", label="idle")
         cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[], clock_mode="virtual",
                          budget=Budget(max_wall_s=30), harness_timeout_s=30)
         def factory(**k):
@@ -294,7 +300,7 @@ def test_tuple_game_kwargs_do_not_break_resume(tmp_path):
             return SnakeGame(max_ticks=10)
         return MetaHarnessLoop(archive=archive, game_factory=factory,
                                game_kwargs={"size": (12, 12)}, task_md="task", contract_doc="c",
-                               proposer=scripted_proposer(tier2), system2=None, system1=HeuristicSystem1(),
+                               proposer=scripted_proposer(True), system2=None, system1=HeuristicSystem1(),
                                config=cfg)
 
     make().run()
@@ -323,7 +329,7 @@ def make_game(**kw):
 
 def test_heldout_results_on_several_candidates_leave_the_training_selection(tmp_path):
     # the audit's test phase evaluates the incumbent, a challenger and a baseline on held-out seeds
-    loop = _loop(tmp_path / "a", proposer=scripted_proposer(tier2), iters=1, heldout=())
+    loop = _loop(tmp_path / "a", proposer=scripted_proposer(True), iters=1, heldout=())
     loop.run()
     best = loop.archive.best()
     for c in loop.archive.candidates()[:1] + [best]:
@@ -421,7 +427,7 @@ class _Walker:
 def test_seeds_that_alias_another_stage_are_refused(tmp_path):
     def make(val, heldout):
         archive = Archive(tmp_path / f"a{val}{heldout}")
-        archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+        archive.add_seed(BASE / "idle.py", label="idle")
         cfg = LoopConfig(n_iterations=0, seeds_train=[0, 1], seeds_val=val, seeds_heldout=heldout, clock_mode="virtual",
                          budget=Budget(max_wall_s=30), harness_timeout_s=30)
         return MetaHarnessLoop(archive=archive, game_factory=lambda **k: _Walker(**k), game_kwargs={},

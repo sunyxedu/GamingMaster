@@ -20,7 +20,6 @@ the adaptor directory. The object returned by ``make_game`` must implement ``Tur
 (``step``) or ``RealtimeGame`` (``tick`` + ``tick_s`` + ``ticks``) from ``games/base.py`` and
 additionally ``name`` (str). Optional module-level declarations:
 
-    TIER = 1 | 2           must agree with the kind: 2 <=> the game has tick()
     DETERMINISTIC = True   reset(seed) on a fresh instance reproduces the first observation
     SEEDS = {"train": [...], "heldout": [...]}   non-empty, disjoint lists of ints: the
                            scenarios the search trains on and is judged on (declare them when
@@ -53,7 +52,7 @@ the search manifest (``source_sha256``): one written or changed while the adapto
 resumed search refuse to continue.
 
 ``validate_adaptor`` is the generic smoke test the orchestrator runs (and shows the model when it
-fails): load, construct, the tier the study chose, reset two seeds (the first train and held-out
+fails): load, construct, the kind the study chose (turn-based / real-time), reset two seeds (the first train and held-out
 seed when SEEDS is declared), observe, describe, action spec, apply the noop and every action
 once, done/score/observation types after them, tick() time against tick_s, one malformed action,
 determinism of reset(seed) on a fresh instance (``DETERMINISTIC``), close(), and that running
@@ -110,9 +109,8 @@ class DeclarationError(ValueError):
 class AdaptorSpec:
     path: Path
     name: str
-    tier: str                         # "tier1" | "tier2"
     make_game: Callable[..., Any]
-    realtime: bool
+    realtime: bool                    # has tick(): ticks on its own clock
     deterministic: bool = False
     module: Any = None
     seeds: dict[str, list[int]] | None = None                  # SEEDS {"train": [...], "heldout": [...]}
@@ -359,9 +357,7 @@ def load_adaptor(path: Path | str, *, kwargs: dict[str, Any] | None = None) -> A
         name = str(getattr(probe, "name", path.name))
     finally:
         close_game(probe)                              # it may own a server / emulator / connection
-    tier = getattr(module, "TIER", 2 if realtime else 1)
-    return AdaptorSpec(path=path, name=name, tier=f"tier{int(tier)}", make_game=make,
-                       realtime=realtime, deterministic=bool(getattr(module, "DETERMINISTIC", False)),
+    return AdaptorSpec(path=path, name=name, make_game=make, realtime=realtime, deterministic=bool(getattr(module, "DETERMINISTIC", False)),
                        module=module, seeds=seeds, eval_kwargs=eval_kwargs, source_sha256=source_sha256(path))
 
 
@@ -446,16 +442,16 @@ def _trajectory(new_game: Callable[[], Any], release: Callable[..., None], seed:
 
 def validate_adaptor(path: Path | str, *, kwargs: dict[str, Any] | None = None,
                      seeds: tuple[int, ...] | None = None, max_actions: int = 12,
-                     time_budget_s: float = 120.0, expected_tier: int | None = None) -> ValidationReport:
+                     time_budget_s: float = 120.0, expected_realtime: bool | None = None) -> ValidationReport:
     """The generic smoke test (module docstring). ``kwargs`` update the adaptor's EVAL_KWARGS for
     every instance; ``seeds`` default to the first train and held-out seed of SEEDS, else (0, 1);
-    ``expected_tier`` is the tier the study chose. Every instance it creates is closed. The code
+    ``expected_realtime`` is the kind the study chose. Every instance it creates is closed. The code
     files are hashed before and after: one the run wrote or changed is a warning, since the search
     manifest pins them (``source_sha256``) and code written while playing would break a resume."""
     path = Path(path).resolve()                        # an adaptor that chdirs: still this directory
     before = _source_digests(path)[1]
     rep = _smoke_test(path, kwargs=kwargs, seeds=seeds, max_actions=max_actions, time_budget_s=time_budget_s,
-                      expected_tier=expected_tier)
+                      expected_realtime=expected_realtime)
     after = _source_digests(path)[1]
     changed = [f"{rel} ({'added' if rel not in before else 'removed' if rel not in after else 'modified'})"
                for rel in sorted(before.keys() | after.keys()) if before.get(rel) != after.get(rel)]
@@ -468,12 +464,12 @@ def validate_adaptor(path: Path | str, *, kwargs: dict[str, Any] | None = None,
 
 
 def _smoke_test(path: Path, *, kwargs: dict[str, Any] | None, seeds: tuple[int, ...] | None, max_actions: int,
-                time_budget_s: float, expected_tier: int | None) -> ValidationReport:
+                time_budget_s: float, expected_realtime: bool | None) -> ValidationReport:
     rep = ValidationReport(ok=True)
     t0 = time.time()
     try:
         spec = load_adaptor(path, kwargs=kwargs)
-        rep.add("load game.py and make_game()", True, f"name={spec.name} tier={spec.tier} realtime={spec.realtime}")
+        rep.add("load game.py and make_game()", True, f"name={spec.name} realtime={spec.realtime}")
     except DeclarationError as e:
         rep.add("SEEDS / EVAL_KWARGS declarations are well-formed", False, str(e))
         return rep
@@ -482,17 +478,12 @@ def _smoke_test(path: Path, *, kwargs: dict[str, Any] | None, seeds: tuple[int, 
         rep.error = traceback.format_exc()
         return rep
     kind = "real-time (has tick)" if spec.realtime else "turn-based (no tick)"
-    declared = getattr(spec.module, "TIER", None)
-    if declared is not None:
-        rep.add("TIER agrees with the game's kind (2 <=> tick())",
-                declared in (1, 2) and not isinstance(declared, bool) and (declared == 2) == spec.realtime,
-                f"TIER={declared!r}; the game is {kind}")
-    if expected_tier is not None:
-        want = int(expected_tier)
-        ok = spec.realtime == (want == 2) and spec.tier == f"tier{want}"
-        rep.add(f"tier {want}, as the study decided", ok, f"the game is {kind}, {spec.tier}" + ("" if ok else (
-            "; tier 2 needs a RealtimeGame (tick / tick_s / ticks)" if want == 2 else
-            "; tier 1 needs a TurnGame (step, no tick)")))
+    if expected_realtime is not None:
+        want = bool(expected_realtime)
+        rep.add(f"{'real-time' if want else 'turn-based'}, as the study decided", spec.realtime == want,
+                f"the game is {kind}" + ("" if spec.realtime == want else (
+                    "; a real-time game needs a RealtimeGame (tick / tick_s / ticks)" if want else
+                    "; a turn-based game needs a TurnGame (step, no tick)")))
     if spec.seeds:
         tr, ho = spec.seeds["train"], spec.seeds["heldout"]
         rep.add("SEEDS: non-empty, disjoint train / held-out lists of ints", True,

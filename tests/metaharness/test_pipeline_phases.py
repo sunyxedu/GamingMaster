@@ -1,5 +1,5 @@
 """The game-name pipeline around the adaptor: run directories (Unicode slugs, run.json ownership),
-study reuse (tier override, notes), the adapt loop (resume validates first, NEEDS.md, tier and
+study reuse (pace override, notes), the adapt loop (resume validates first, NEEDS.md, kind and
 kwargs) and the prior documents the search proposer gets (budgeted digest + prior/ copies)."""
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from metaharness.phases import prior_documents, run_adapt, run_study
 from tests.metaharness.test_phases_and_adaptor import BAD_ADAPTOR, GOOD_ADAPTOR, STUDY_FILES
 from tests.metaharness.test_pipeline_adaptor import COUNTBASE, TICK_GAME, TURN_GAME, write_adaptor
 
-STUDY = json.loads(STUDY_FILES["study.json"])          # tier 2
+STUDY = json.loads(STUDY_FILES["study.json"])          # real-time
 
 
 def adaptor_files(body: str, kind: str = "TickCount", **extra: str) -> dict[str, str]:
@@ -109,18 +109,18 @@ def test_run_dir_belongs_to_its_game(tmp_path, fake_agent):
 
 # ----------------------------------------------------------------------------- study
 
-def test_study_reuse_applies_tier_override_and_tracks_notes(tmp_path):
+def test_study_reuse_applies_pace_override_and_tracks_notes(tmp_path):
     logs: list[str] = []
     agent = ScriptedSystem2(replies=["done"], files=[STUDY_FILES])
     run_study(agent, tmp_path, "countgame", notes="server at localhost:1234", log=logs.append)
     assert (tmp_path / "study" / "notes.md").read_text() == "server at localhost:1234"
     study = run_study(ScriptedSystem2(replies=["never"]), tmp_path, "countgame", notes="server at localhost:1234",
-                      tier_hint=1, log=logs.append)
-    assert study["tier"] == 1 and json.loads((tmp_path / "study" / "study.json").read_text())["tier"] == 1
+                      realtime_hint=False, log=logs.append)
+    assert study["realtime"] is False and json.loads((tmp_path / "study" / "study.json").read_text())["realtime"] is False
     assert not any("WARNING" in m for m in logs)
     study = run_study(ScriptedSystem2(replies=["never"]), tmp_path, "countgame", notes="another server",
                       log=logs.append)
-    assert study["tier"] == 1                                   # the override persisted
+    assert study["realtime"] is False                           # the override persisted
     assert any("--notes differ" in m for m in logs)
     assert (tmp_path / "study" / "notes.md").read_text() == "server at localhost:1234"   # what it was made with
 
@@ -140,7 +140,7 @@ def test_adapt_prompt_carries_notes_contract_and_kwargs(tmp_path):
                     log=lambda *_: None)
     assert rep.ok, rep.to_markdown()                            # make_game needs the kwargs: they were used
     prompt = agent.calls[0]
-    assert "use the EU server" in prompt and "expected_tier=2, kwargs={'level': 2}" in prompt
+    assert "use the EU server" in prompt and "expected_realtime=True, kwargs={'level': 2}" in prompt
     for term in ("close()", "SEEDS", "EVAL_KWARGS", "valid_trial", "invalid_reason", "never overlap",
                  "game error", "MUST", "env.example", "runtime/", "pinned by"):
         assert term in prompt, term
@@ -165,14 +165,14 @@ def test_adapt_resume_validates_before_calling_the_agent(tmp_path):
     assert "Validation feedback" in agent.calls[0] and "FAIL" in agent.calls[0]
 
 
-def test_adapt_feeds_back_a_tier_mismatch(tmp_path):
-    study = {**STUDY, "tier": 1}
+def test_adapt_feeds_back_a_kind_mismatch(tmp_path):
+    study = {**STUDY, "realtime": False}
     write_study(tmp_path, **{"study.json": json.dumps(study)})
     agent = ScriptedSystem2(replies=["done"], files=[adaptor_files(TICK_GAME),
                                                      adaptor_files(TURN_GAME, kind="TurnCount")])
     rep = run_adapt(agent, tmp_path, "countgame", study, log=lambda *_: None)
     assert rep.ok and len(agent.calls) == 2
-    assert "tier 1, as the study decided" in agent.calls[1] and "tier 1 needs a TurnGame" in agent.calls[1]
+    assert "turn-based, as the study decided" in agent.calls[1] and "a turn-based game needs a TurnGame" in agent.calls[1]
 
 
 def test_adapt_stale_needs_md_is_feedback_not_a_stop(tmp_path):
@@ -302,7 +302,7 @@ def test_loop_with_adaptor_and_study_gets_prior_documents(tmp_path):
     adaptor = write_adaptor(tmp_path / "adaptor", TICK_GAME)
     (adaptor / "ADAPTOR.md").write_text("ADAPTOR-MARKER: observation fields value / target / n\n")
     write_study(tmp_path)
-    rc = main(["loop", "--tier", "2", "--adaptor", str(adaptor), "--study", str(tmp_path / "study"),
+    rc = main(["loop", "--adaptor", str(adaptor), "--study", str(tmp_path / "study"),
                "--system1", "heuristic", "--system2", "scripted", "--proposer", "scripted", "--clock", "virtual",
                "--iters", "0", "--seeds", "0", "--heldout", "", "--name", "lp", "--runs-dir", str(tmp_path / "runs")])
     assert rc == 0
@@ -312,7 +312,7 @@ def test_loop_with_adaptor_and_study_gets_prior_documents(tmp_path):
     assert (arch.root / "prior" / "ADAPTOR.md").exists() and (arch.root / "prior" / "strategies.md").exists()
 
 
-def test_run_searches_the_adaptor_tier_and_passes_notes_and_kwargs(tmp_path, fake_agent, monkeypatch):
+def test_run_searches_the_adaptor_kind_and_passes_notes_and_kwargs(tmp_path, fake_agent, monkeypatch):
     calls: dict[str, object] = {}
 
     def fake_adapt(model, run_dir, game, study, **kw):           # passes whatever the agent builds
@@ -320,24 +320,25 @@ def test_run_searches_the_adaptor_tier_and_passes_notes_and_kwargs(tmp_path, fak
         write_adaptor(run_dir / "adaptor", TICK_GAME)
         return ValidationReport(ok=True)
 
-    def fake_search(a, games, tier_n, prior, exp_dir):
+    def fake_search(a, games, prior, exp_dir):
         (game, adaptor_dir), = games
         assert adaptor_dir == str((exp_dir.parent / "adaptor").resolve())
-        calls["search"] = (game, tier_n, prior, exp_dir)
+        calls["search"] = (game, prior, exp_dir)
 
     monkeypatch.setattr(phases, "run_adapt", fake_adapt)
     monkeypatch.setattr(cli, "_run_search", fake_search)
     fake_agent["agent"] = ScriptedSystem2(replies=["done"], files=[STUDY_FILES])
-    rc = main(["run", "--game", "Count Game", "--agent", "fake-agent", "--tier", "1", "--notes", "EU server",
+    rc = main(["run", "--game", "Count Game", "--agent", "fake-agent", "--pace", "turn", "--notes", "EU server",
                "--game-kwargs", '{"target": 4}', "--runs-dir", str(tmp_path)])
     assert rc == 0
     run_dir = tmp_path / "count-game"
     assert calls["adapt"]["notes"] == "EU server" and calls["adapt"]["kwargs"] == {"target": 4}
-    game, tier_n, prior, exp_dir = calls["search"]
-    assert tier_n == 2 and exp_dir == run_dir / "search"         # the real-time adaptor decides, not study.json
-    assert "the adaptor is tier 2 (real-time) but study.json says tier 1" in (run_dir / "pipeline.log").read_text()
-    assert "### adaptor/ADAPTOR.md" in prior and (exp_dir / "prior" / "ADAPTOR.md").exists()
+    game, prior, exp_dir = calls["search"]
+    assert exp_dir == run_dir / "search"
     from metaharness.games.registry import adaptor_spec
+    assert adaptor_spec(game).realtime                            # the real-time adaptor decides, not study.json
+    assert "the adaptor is real-time but study.json says turn-based" in (run_dir / "pipeline.log").read_text()
+    assert "### adaptor/ADAPTOR.md" in prior and (exp_dir / "prior" / "ADAPTOR.md").exists()
     assert adaptor_spec(game).path == (run_dir / "adaptor").resolve()
     with pytest.raises(SystemExit, match="not valid JSON"):
         main(["run", "--game", "Count Game", "--agent", "fake-agent", "--game-kwargs", "{target: 4}",

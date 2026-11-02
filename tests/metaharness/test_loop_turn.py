@@ -7,8 +7,8 @@ from metaharness.cli import main
 from metaharness.core.archive import Archive
 
 
-def test_tier1_offline_loop(tmp_runs):
-    rc = main(["loop", "--tier", "1", "--game", "rulepuzzle", "--system1", "none", "--system2", "scripted",
+def test_turn_offline_loop(tmp_runs):
+    rc = main(["loop", "--game", "rulepuzzle", "--system1", "none", "--system2", "scripted",
                "--proposer", "scripted", "--clock", "virtual", "--iters", "1", "--seeds", "0", "--heldout", "",
                "--s2-budget", "5", "--name", "t1", "--runs-dir", str(tmp_runs)])
     assert rc == 0

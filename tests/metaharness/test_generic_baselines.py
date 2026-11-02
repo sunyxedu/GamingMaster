@@ -27,16 +27,16 @@ def test_obs_text_generic():
 
 
 @pytest.mark.parametrize("game,kw", [("rulepuzzle", {"size": 6, "n_levels": 1, "budget_per_level": 6})])
-def test_tier1_baseline_runs_on_any_turn_game(game, kw, tmp_path):
-    r = evaluate_harness(BASE / "tier1_astra_naive.py", lambda **k: make_game(game, **k), [0],
+def test_astra_baseline_runs_on_any_turn_game(game, kw, tmp_path):
+    r = evaluate_harness(BASE / "astra_naive.py", lambda **k: make_game(game, **k), [0],
                          system2=ScriptedSystem2(replies=["ACTION3"], latency_s=0.01), system1=None,
                          clock_mode="virtual", game_kwargs=kw)
     assert r.fatal is None and r.episodes[0].error is None and r.episodes[0].system2_calls >= 1
 
 
 @pytest.mark.parametrize("game,kw", [("snake", {"max_ticks": 20}), ("lanerunner", {"max_ticks": 20})])
-def test_tier2_baselines_run_on_any_realtime_game(game, kw, tmp_path):
-    for name in ("tier2_jev_only.py", "tier2_astra_only.py", "tier2_idle.py"):
+def test_baselines_run_on_any_realtime_game(game, kw, tmp_path):
+    for name in ("jev_only.py", "astra_naive.py", "idle.py"):
         r = evaluate_harness(BASE / name, lambda **k: make_game(game, **k), [0],
                              system2=ScriptedSystem2(replies=["stay"], latency_s=0.3),
                              system1=HeuristicSystem1(latency_s=0.2), clock_mode="virtual", game_kwargs=kw)

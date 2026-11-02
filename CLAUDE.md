@@ -1,6 +1,6 @@
 # GamingMaster — project instructions
 
-## Meta-Harness (tiers 1/2)
+## Meta-Harness
 - `metaharness/` is the Meta-Harness for non-latency-critical games; design doc `docs/meta-harness.md`.
 - Model *backends* live in `metaharness/models/` (codex CLI, claude CLI, TypeSafe HTTP); which model runs on a
   backend is configuration in `metaharness/models.toml` (profiles: astra, sol, claude, jev, ...). Never hard-code

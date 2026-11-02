@@ -3,20 +3,21 @@
 The general entry point takes only a game name (plus your notes / credentials in .env):
 
     python -m metaharness run --game "Minecraft" --notes "Java 1.21 server at localhost:25565"
-    python -m metaharness run --game "ARC-AGI-3" --tier 1
+    python -m metaharness run --game "ARC-AGI-3" --pace turn
 
 It runs the phases study -> adapt -> search under runs/<slug>/ and resumes where it
-left off. Lower-level commands:
+left off. Whether a game is turn-based or real-time is the adaptor's (the game's) kind; the
+models are the same for every game (Astra, and Jev when --system1 provides it). Lower-level commands:
 
     # search only, on an offline test bed (no network): scripted proposer, heuristic Jev
-    python -m metaharness loop --tier 2 --game snake --system1 heuristic --system2 scripted \\
+    python -m metaharness loop --game snake --system1 heuristic --system2 scripted \\
         --proposer scripted --clock virtual --iters 1
 
     # search on a generated adaptor
-    python -m metaharness loop --adaptor runs/minecraft/adaptor --tier 2 --study runs/minecraft/study
+    python -m metaharness loop --adaptor runs/minecraft/adaptor --study runs/minecraft/study
 
     # evaluate one harness file on 3 seeds
-    python -m metaharness eval --tier 2 --game snake --harness metaharness/baselines/tier2_jev_only.py \\
+    python -m metaharness eval --game snake --harness metaharness/baselines/jev_only.py \\
         --system1 jev --system2 none --seeds 0,1,2
 
     # validate an adaptor directory against the contract
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import signal
 import sys
@@ -73,13 +75,21 @@ def _system1(name: str):
     return make_system1(name)
 
 
-def _system1_for(name: str | None, tier_n: int):
-    """``auto``: Jev for tier 2, no System-1 for tier 1 (a tier-1 task never has one)."""
-    if not name or name == "auto":
-        name = "jev" if tier_n == 2 else "none"
-    if tier_n == 1 and name in ("jev", "heuristic"):
-        return None
-    return _system1(name)
+def _system1_name(name: str | None) -> str:
+    """``auto`` (the default): Jev when its key is configured, else no System-1. The task text tells the
+    proposer when a decision belongs to Jev; a game that needs none is played by code and Astra."""
+    if name and name != "auto":
+        return name
+    name = "jev" if os.environ.get("TYPESAFE_API_KEY") else "none"
+    print(f"system1: auto -> {name}" + ("" if name == "jev" else " (TYPESAFE_API_KEY unset: no Jev)"), file=sys.stderr)
+    return name
+
+
+def _system1_of_run(run: dict) -> str:
+    """The System-1 profile an archive's manifest recorded (older manifests recorded ``auto`` plus the
+    tier it resolved by: 2 = Jev)."""
+    name = run.get("system1") or "none"
+    return name if name != "auto" else ("jev" if int(run.get("tier") or 1) == 2 else "none")
 
 
 def _adaptor_spec(game: str):
@@ -141,21 +151,15 @@ def _resolve_games(a: argparse.Namespace) -> list[tuple[str, str | None]]:
     return out
 
 
-def _proposer(name: str, effort: str | None, tier_mod):
+def _proposer(name: str, effort: str | None, realtime: bool):
     if name == "scripted":
         from .baselines._scripted import scripted_proposer
-        return scripted_proposer(tier_mod)
+        return scripted_proposer(realtime)
     return _system2(name, effort)
 
 
-def _tier(n: int):
-    if n == 1:
-        from .tiers import tier1 as t
-    elif n == 2:
-        from .tiers import tier2 as t
-    else:
-        raise SystemExit("tier 3 is the trained network in model/ — not handled by metaharness")
-    return t
+def _kind(realtime: bool) -> str:
+    return "real-time" if realtime else "turn-based"
 
 
 def _slug(s: str) -> str:
@@ -222,19 +226,21 @@ def _game_specs(a: argparse.Namespace, games: list[tuple[str, str | None]]) -> l
     return specs
 
 
-def _run_search(a: argparse.Namespace, games: list[tuple[str, str | None]], tier_n: int, study: str, exp_dir: Path):
-    tier = _tier(tier_n)
+def _run_search(a: argparse.Namespace, games: list[tuple[str, str | None]], study: str, exp_dir: Path):
+    from . import task as task_mod
     budget = _episode_budget(a)
     specs = _game_specs(a, games)
     first = specs[0]
+    realtime = _registry.game_realtime(first.name)
     heldout_game, heldout_kwargs, heldout_seeds = _resolve_heldout_game(a)
     heldout_adaptor = str(Path(a.heldout_game).resolve()) if a.heldout_game and Path(a.heldout_game).is_dir() else None
     archive = Archive(exp_dir)
-    for p in tier.baseline_paths():
+    a.system1 = _system1_name(a.system1)
+    system1 = _system1(a.system1)
+    system2 = _system2(a.system2, a.effort)
+    for p in task_mod.baseline_paths(realtime, system1 is not None):
         if not any(c.dir.name.endswith(p.stem) for c in archive.candidates()):
             archive.add_seed(p, label=p.stem, note=(p.read_text().split('"""')[1].strip() + "\n") if '"""' in p.read_text() else "")
-    system1 = _system1_for(a.system1, tier_n)
-    system2 = _system2(a.system2, a.effort)
     sources = [s for s in (getattr(_adaptor_spec(g.name), "source_sha256", None) for g in specs) if s]
     declared = _game_setup(a, first.name)[1]
     dev_arg = getattr(a, "dev_seeds", None)
@@ -254,7 +260,7 @@ def _run_search(a: argparse.Namespace, games: list[tuple[str, str | None]], tier
                      finalists=getattr(a, "finalists", 3), reflect=not getattr(a, "no_reflect", False),
                      patience=getattr(a, "patience", 0),
                      more_games=specs[1:],
-                     eval_spec={"system1": a.system1, "system2": a.system2, "effort": a.effort, "tier": tier_n,
+                     eval_spec={"system1": a.system1, "system2": a.system2, "effort": a.effort,
                                 "proposer": a.proposer, "proposer_effort": getattr(a, "proposer_effort", None)})
     # A calibration already measured for this archive is part of its task text: always reuse it (also
     # with --no-calibrate), measure only for a new archive.
@@ -270,12 +276,14 @@ def _run_search(a: argparse.Namespace, games: list[tuple[str, str | None]], tier
             return None
     names = [g.name for g in specs]
     kws = [g.kwargs for g in specs]
-    task = tier.task_md(names if len(names) > 1 else names[0], budget, a.clock, kws if len(kws) > 1 else kws[0],
-                        study=study, generality=heldout_game is not None or len(names) > 1,
-                        deadline_s=budget.max_wall_s, memory_mode=a.memory_mode, calibration=calibration)
+    task = task_mod.task_md(names if len(names) > 1 else names[0], budget, a.clock, kws if len(kws) > 1 else kws[0],
+                            study=study, generality=heldout_game is not None or len(names) > 1,
+                            deadline_s=budget.max_wall_s, memory_mode=a.memory_mode, calibration=calibration,
+                            system1=system1 is not None)
     loop = MetaHarnessLoop(
         archive=archive, game_factory=first.factory, game_kwargs=first.kwargs, task_md=task,
-        contract_doc=tier.contract_doc(), proposer=_proposer(a.proposer, getattr(a, "proposer_effort", None) or a.effort, tier),
+        contract_doc=task_mod.contract_doc(),
+        proposer=_proposer(a.proposer, getattr(a, "proposer_effort", None) or a.effort, realtime),
         system2=system2, system1=system1, config=cfg, game_name=first.name, game_adaptor=first.adaptor_dir,
     )
     print(f"archive: {archive.root}")
@@ -292,16 +300,10 @@ def _run_search(a: argparse.Namespace, games: list[tuple[str, str | None]], tier
 
 def cmd_loop(a: argparse.Namespace) -> int:
     load_dotenv()
-    from .games.registry import adaptor_spec
     games = _resolve_games(a)
-    for game, _ in games:
-        spec = adaptor_spec(game)
-        if spec is not None and spec.tier != f"tier{a.tier}":
-            print(f"warning: adaptor {game!r} is {spec.tier} ({'real-time' if spec.realtime else 'turn-based'}) "
-                  f"but the search runs --tier {a.tier}", file=sys.stderr)
     label = "+".join(_slug(g) for g, _ in games)
-    exp_dir = Path(a.runs_dir) / (a.name or f"tier{a.tier}-{label}-{time.strftime('%Y%m%d-%H%M%S')}")
-    _run_search(a, games, a.tier, _study_text(a, exp_dir, games), exp_dir)
+    exp_dir = Path(a.runs_dir) / (a.name or f"{label}-{time.strftime('%Y%m%d-%H%M%S')}")
+    _run_search(a, games, _study_text(a, exp_dir, games), exp_dir)
     if getattr(a, "interrupted", None):
         print(f"interrupted: rerun with --name {exp_dir.name} --runs-dir {exp_dir.parent} (and the same "
               "settings) to resume", file=sys.stderr)
@@ -316,6 +318,7 @@ def cmd_run(a: argparse.Namespace) -> int:
     load_dotenv()
     from .games.registry import adaptor_spec
     from .phases import prior_documents, run_adapt, run_study
+    from .phases.study import study_realtime
     try:
         game_kwargs = json.loads(a.game_kwargs) if a.game_kwargs else None
     except ValueError as e:
@@ -362,7 +365,8 @@ def cmd_run(a: argparse.Namespace) -> int:
     if agent is None:
         raise SystemExit("--agent must be a System-2 profile (e.g. astra)")
     log(f"run: game={a.game!r} dir={run_dir} agent={agent.name}")
-    study = run_study(agent, run_dir, a.game, notes=a.notes, tier_hint=a.tier, timeout_s=a.phase_timeout, log=log)
+    pace = {"turn": False, "realtime": True}.get(a.pace or "")
+    study = run_study(agent, run_dir, a.game, notes=a.notes, realtime_hint=pace, timeout_s=a.phase_timeout, log=log)
     if a.stop_after == "study":
         return 0
     rep = run_adapt(agent, run_dir, a.game, study, notes=a.notes, kwargs=game_kwargs, timeout_s=a.phase_timeout,
@@ -376,16 +380,13 @@ def cmd_run(a: argparse.Namespace) -> int:
     if a.stop_after == "adapt":
         return 0
     game = register_adaptor(run_dir / "adaptor", kwargs=game_kwargs)
-    spec = adaptor_spec(game)
-    tier_n = int(spec.tier.removeprefix("tier"))   # the adaptor's kind decides what the search can drive
-    if tier_n != int(study["tier"]):
-        log(f"search: the adaptor is tier {tier_n} ({'real-time' if spec.realtime else 'turn-based'}) but "
-            f"study.json says tier {study['tier']}; searching tier {tier_n}")
-    log(f"search: tier {tier_n} on adaptor game {game!r}")
-    if not a.system1 or a.system1 == "auto":
-        a.system1 = "jev" if tier_n == 2 else "none"
+    spec = adaptor_spec(game)                      # the adaptor's kind decides what the search can drive
+    if spec.realtime != study_realtime(study):
+        log(f"search: the adaptor is {_kind(spec.realtime)} but study.json says {_kind(not spec.realtime)}; "
+            f"searching as the adaptor is")
+    log(f"search: {_kind(spec.realtime)} adaptor game {game!r}")
     prior = prior_documents(run_dir / "study", run_dir / "adaptor", run_dir / "search")
-    best = _run_search(a, [(game, str((run_dir / "adaptor").resolve()))], tier_n, prior, run_dir / "search")
+    best = _run_search(a, [(game, str((run_dir / "adaptor").resolve()))], prior, run_dir / "search")
     if getattr(a, "interrupted", None):
         log(f"run: search interrupted ({a.interrupted[:200]}); rerun the same command to resume")
         return 3
@@ -395,14 +396,13 @@ def cmd_run(a: argparse.Namespace) -> int:
 
 def cmd_eval(a: argparse.Namespace) -> int:
     load_dotenv()
-    _tier(a.tier)
     game = _resolve_game(a)
     budget = _episode_budget(a)
     game_kwargs, declared = _game_setup(a, game)
     seeds = _parse_seeds(a.seeds) if a.seeds is not None else list(declared.get("train") or [0, 1, 2])
     out = Path(a.out) if a.out else Path(a.runs_dir) / f"eval-{Path(a.harness).stem}-{time.strftime('%Y%m%d-%H%M%S')}"
     res = evaluate_harness(a.harness, lambda **k: make_game(game, **k), seeds,
-                           system2=_system2(a.system2, a.effort), system1=_system1_for(a.system1, a.tier),
+                           system2=_system2(a.system2, a.effort), system1=_system1(_system1_name(a.system1)),
                            out_dir=out, clock_mode=a.clock, budget_per_episode=budget,
                            harness_timeout_s=budget.max_wall_s,
                            latency_override=json.loads(a.latency_override) if a.latency_override else None,
@@ -441,7 +441,7 @@ def cmd_preflight(a: argparse.Namespace) -> int:
                     max_wall_s=b.get("max_wall_s", 900.0))
     seeds = manifest.get("seeds_train") or [0]
     rep = preflight_harness(Path(a.harness), lambda **k: make_game(game, **k), game_kwargs=kwargs,
-                            tier2=manifest.get("models", {}).get("system1") is not None, budget=budget, seed=seeds[0])
+                            system1=manifest.get("models", {}).get("system1") is not None, budget=budget, seed=seeds[0])
     print(json.dumps(rep, indent=2, default=str))
     return 0 if rep["ok"] else 1
 
@@ -465,10 +465,9 @@ def cmd_dev_eval(a: argparse.Namespace) -> int:
     n = 2
     while not a.out and out.exists():              # two dev evaluations within a second keep both results
         out, n = out.with_name(f"{time.strftime('%Y%m%d-%H%M%S')}-{n}"), n + 1
-    tier_n = int(run.get("tier") or 1)
     res = evaluate_harness(harness, lambda **k: make_game(game, **k), seeds,
                            system2=_system2(run["system2"], run.get("effort")),
-                           system1=_system1_for(run.get("system1"), tier_n), out_dir=out,
+                           system1=_system1(_system1_of_run(run)), out_dir=out,
                            clock_mode=manifest.get("clock_mode", "wall"), budget_per_episode=budget,
                            harness_timeout_s=min(manifest.get("harness_timeout_s", wall), wall),
                            latency_override=manifest.get("latency_override"), game_kwargs=kwargs,
@@ -484,8 +483,7 @@ def cmd_dev_eval(a: argparse.Namespace) -> int:
 def cmd_validate_adaptor(a: argparse.Namespace) -> int:
     load_dotenv()
     from .games.adaptor import validate_adaptor
-    rep = validate_adaptor(Path(a.path), kwargs=json.loads(a.game_kwargs) if a.game_kwargs else None,
-                           expected_tier=getattr(a, "tier", None))   # if the subcommand defines --tier
+    rep = validate_adaptor(Path(a.path), kwargs=json.loads(a.game_kwargs) if a.game_kwargs else None)
     print(rep.to_markdown())
     return 0 if rep.ok else 1
 
@@ -494,15 +492,13 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="metaharness")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    def search_opts(sp, tier_required: bool):
-        if tier_required:
-            sp.add_argument("--tier", type=int, required=True, choices=[1, 2])
+    def search_opts(sp):
         sp.add_argument("--game-kwargs", default="", help="JSON kwargs for the game constructor")
         sp.add_argument("--system2", default="astra",
                         help="System-2 profile from metaharness/models.toml (astra, sol, claude, ...) | scripted | none")
         sp.add_argument("--system1", default="auto",
                         help="System-1 profile from metaharness/models.toml (jev) | heuristic | none | "
-                             "auto (jev for tier 2, none for tier 1)")
+                             "auto (jev when TYPESAFE_API_KEY is set, else none)")
         sp.add_argument("--effort", default=None, help="override the profile's reasoning effort (low|medium|high|xhigh|max)")
         sp.add_argument("--clock", default="wall", choices=["wall", "virtual"])
         sp.add_argument("--memory-mode", default="episode", choices=["episode", "shared"],
@@ -562,13 +558,14 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("run", help="general pipeline: study -> adapt -> search from a game name")
     rp.add_argument("--game", required=True, help='game name, e.g. "Minecraft", "ARC-AGI-3", "Snake"')
     rp.add_argument("--notes", default="", help="platform / account / constraints for the study & adapt agents")
-    rp.add_argument("--tier", type=int, default=None, choices=[1, 2], help="override the tier the study decides")
+    rp.add_argument("--pace", default=None, choices=["turn", "realtime"],
+                    help="override the pace the study decides (turn-based / real-time adaptor)")
     rp.add_argument("--agent", default="astra", help="System-2 profile for study/adapt agents")
     rp.add_argument("--phase-timeout", type=float, default=3600.0)
     rp.add_argument("--stop-after", default="", choices=["", "study", "adapt"])
-    search_opts(rp, tier_required=False)
+    search_opts(rp)
     loop_opts(rp)
-    rp.set_defaults(fn=cmd_run, system1="auto")
+    rp.set_defaults(fn=cmd_run)
 
     lp = sub.add_parser("loop", help="run the harness search on registered games and/or adaptors")
     lp.add_argument("--game", default="", help="registered game name(s), comma-separated for several training "
@@ -576,14 +573,14 @@ def main(argv: list[str] | None = None) -> int:
     lp.add_argument("--adaptor", action="append", default=[],
                     help="generated adaptor directory (runs/<game>/adaptor); repeat for several training games")
     lp.add_argument("--study", default="", help="study directory whose documents become prior knowledge")
-    search_opts(lp, tier_required=True)
+    search_opts(lp)
     loop_opts(lp)
     lp.set_defaults(fn=cmd_loop)
 
     ep = sub.add_parser("eval", help="evaluate one harness file")
     ep.add_argument("--game", default="")
     ep.add_argument("--adaptor", action="append", default=[])
-    search_opts(ep, tier_required=True)
+    search_opts(ep)
     ep.add_argument("--harness", required=True)
     ep.add_argument("--out", default="")
     ep.set_defaults(fn=cmd_eval)

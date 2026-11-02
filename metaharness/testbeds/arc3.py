@@ -1,4 +1,4 @@
-"""ARC-AGI-3 as a tier-1 TurnGame (optional dependency: ``pip install arc-agi``).
+"""ARC-AGI-3 as a TurnGame (optional dependency: ``pip install arc-agi``).
 
 Uses ``arc_agi.Arcade`` in OFFLINE mode with locally cached game files
 (``ENVIRONMENTS_DIR``, default ``environment_files``; the arc3-wm project on
@@ -8,7 +8,7 @@ this machine has a cached set). Set ``OPERATION_MODE=offline`` and
 Observation: the last frame layer as a 64x64 list of palette indices plus
 ``available_actions``. Actions: ``ACTION1``..``ACTION5``, ``ACTION7`` and
 ``ACTION6 x y`` (click). Score = levels completed. This mirrors the official
-harness surface (no rules given), so tier-1 harnesses can transfer directly.
+harness surface (no rules given), so turn-based harnesses can transfer directly.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from ..games.registry import register
 ARC_ACTIONS = ["ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5", "ACTION6", "ACTION7"]
 
 
-@register("arc3", "tier1")
+@register("arc3", realtime=False)
 class ARC3Game:
     name = "arc3"
     action_spec = ActionSpec(

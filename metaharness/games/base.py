@@ -1,7 +1,7 @@
 """Game interfaces the harness talks to.
 
 The harness never sees engine internals — only what a real game client would
-expose: an observation, an action vocabulary, a score, and (tier 2) a clock
+expose: an observation, an action vocabulary, a score, and (real-time games) a clock
 that keeps running whether or not the agent has decided.
 """
 from __future__ import annotations

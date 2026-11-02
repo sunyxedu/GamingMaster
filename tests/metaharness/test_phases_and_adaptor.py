@@ -80,7 +80,7 @@ BAD_ADAPTOR = "def make_game(**kw):\n    return object()\n"
 
 STUDY_FILES = {
     "brief.md": "x" * 300, "interfaces.md": "y" * 300, "strategies.md": "z" * 300,
-    "study.json": json.dumps({"game": "countgame", "tier": 2, "tier_rationale": "ticks", "decision_latency_s": 0.1,
+    "study.json": json.dumps({"game": "countgame", "realtime": True, "pace_rationale": "ticks", "decision_latency_s": 0.1,
                               "interface": {"chosen": "local simulator", "env": []}, "scoring": "distance",
                               "scenarios": "random start", "strategy_summary": "move toward the target"}),
 }
@@ -109,7 +109,7 @@ def test_study_phase_validates_and_repairs(tmp_path):
     incomplete = {k: v for k, v in STUDY_FILES.items() if k != "study.json"}
     agent = ScriptedSystem2(replies=["done"], files=[incomplete, STUDY_FILES])
     study = run_study(agent, tmp_path, "countgame", log=lambda *_: None)
-    assert study["tier"] == 2 and len(agent.calls) == 2
+    assert study["realtime"] is True and len(agent.calls) == 2
     assert "Study the game" in agent.calls[0] and "incomplete" in agent.calls[1]
     # resumable: a valid study is reused without calling the agent
     study2 = run_study(ScriptedSystem2(replies=["never"]), tmp_path, "countgame", log=lambda *_: None)
@@ -165,7 +165,7 @@ def test_full_run_pipeline_offline(tmp_path):
     assert (run_dir / "study" / "study.json").exists() and (run_dir / "adaptor" / "validation.json").exists()
     a = Archive(run_dir / "search")
     names = [c.dir.name for c in a.candidates()]
-    assert names[:3] == ["0000-tier2_jev_only", "0001-tier2_astra_only", "0002-tier2_idle"] and len(names) == 4
+    assert names[:3] == ["0000-jev_only", "0001-astra_naive", "0002-idle"] and len(names) == 4
     assert "study/strategies.md" in (a.root / "task.md").read_text()
     for c in a.candidates():
         assert (c.eval() or {}).get("game") == "countgame"

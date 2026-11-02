@@ -1,6 +1,6 @@
 """Evaluate one harness candidate on one game over several seeds.
 
-Produces per-episode scores plus the *latency accounting* that makes tier-2
+Produces per-episode scores plus the *latency accounting* that makes real-time
 harness comparisons honest: how many ticks ran on a stale action, model
 latency distribution, and how many System-1/2 calls were spent.
 
@@ -857,12 +857,12 @@ class _CountingSink(TraceSink):
 
 
 def preflight_harness(harness_path: Path | str, game_factory: Any, *, game_kwargs: Optional[dict[str, Any]] = None,
-                      tier2: bool = True, timeout_s: float = 60.0, seed: int = 0,
+                      system1: bool = True, timeout_s: float = 60.0, seed: int = 0,
                       budget: Optional[Budget] = None, max_ticks: int = 2000) -> dict[str, Any]:
     """Cheap contract check before spending real model budget.
 
     One episode on the *virtual* clock with stand-in models (System-2 returns arbitrary text,
-    System-1 the first option of every question), the evaluation's call budgets and a real-time
+    System-1 — when the evaluation has one — the first option of every question), the evaluation's call budgets and a real-time
     guard of ``timeout_s``. Real-time games stop after ``max_ticks`` ticks, so a live game server
     is not flooded. Harness exceptions, unfinished background work and game failures fail the
     check; budget and deadline ends and a low score are fine. ``coverage`` tells how much of the
@@ -875,7 +875,7 @@ def preflight_harness(harness_path: Path | str, game_factory: Any, *, game_kwarg
         return {"ok": False, "stage": "load", "repairable": True, "error": _tb(e, 4000)}
     s2 = ScriptedSystem2(fn=lambda prompt: "I am not sure. Let us try something: maybe ACTION or {\"plan\": []}",
                          latency_s=1.0)
-    s1 = HeuristicSystem1(latency_s=0.1) if tier2 else None
+    s1 = HeuristicSystem1(latency_s=0.1) if system1 else None
     try:
         game = game_factory(**(game_kwargs or {}))
     except Exception as e:  # noqa: BLE001 — an adaptor problem the proposer cannot repair
@@ -900,7 +900,7 @@ def preflight_harness(harness_path: Path | str, game_factory: Any, *, game_kwarg
                 "acts": ep.acts, "acts_after_s1": ep.acts_after_s1, "acts_after_s2": ep.acts_after_s2,
                 "steps": ep.steps, "harness_events": c["harness"]}
     warnings = []
-    if tier2 and coverage["system1_answers"] == 0:
+    if system1 and coverage["system1_answers"] == 0:
         warnings.append("no System-1 call was answered during the dry run (the stand-in answers every question)")
     if coverage["system2_answers"] == 0:
         warnings.append("no System-2 call was answered during the dry run")

@@ -34,7 +34,7 @@ class EvalJob:
     seeds: list[int]
     adaptor_dir: Optional[str] = None           # register_adaptor(adaptor_dir) first
     game_kwargs: dict[str, Any] = field(default_factory=dict)
-    models: dict[str, Any] = field(default_factory=dict)   # system1 / system2 profile names, effort, tier
+    models: dict[str, Any] = field(default_factory=dict)   # system1 / system2 profile names, effort
     clock_mode: str = "wall"
     budget: dict[str, Any] = field(default_factory=dict)   # Budget fields
     harness_timeout_s: float = 600.0
@@ -50,7 +50,7 @@ class EvalJob:
 
 def run_job(job: EvalJob) -> dict[str, Any]:
     """Evaluate in this process; returns the eval dict (also written to ``out_dir/eval.json``)."""
-    from ..cli import _system1_for, _system2
+    from ..cli import _system1, _system1_of_run, _system2
     from ..config import load_dotenv
     from ..games.registry import make_game, register_adaptor
     from .contract import Budget
@@ -61,7 +61,7 @@ def run_job(job: EvalJob) -> dict[str, Any]:
     res = evaluate_harness(
         job.harness_path, lambda **k: make_game(key, **k), list(job.seeds),
         system2=_system2(m.get("system2") or "none", m.get("effort")),
-        system1=_system1_for(m.get("system1") or "none", int(m.get("tier") or 2)),
+        system1=_system1(_system1_of_run(m)),
         out_dir=Path(job.out_dir), clock_mode=job.clock_mode,
         budget_per_episode=Budget(**job.budget) if job.budget else None,
         latency_override=job.latency_override, harness_timeout_s=job.harness_timeout_s,

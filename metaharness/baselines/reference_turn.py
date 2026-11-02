@@ -1,4 +1,4 @@
-"""Reference tier-1 harness (test fixture): hypothesis-tracking exploration.
+"""Reference turn-based harness (test fixture): hypothesis-tracking exploration.
 
   * Phase A (scripted, no model calls): try each of ACTION1..6 once from the
     start position, record (action -> displacement) to learn the movement map.

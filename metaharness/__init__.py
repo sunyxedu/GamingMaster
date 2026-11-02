@@ -1,15 +1,12 @@
 """Meta-Harness: an outer loop that *designs* the harness gluing foundation
 models to a game, instead of hand-writing a per-game adapter.
 
-Three game tiers (see docs/meta-harness.md):
-
-* Tier 1 — no latency pressure (ARC-AGI-3 style). Astra (System-2) plays
-  directly; the harness decides what to store / retrieve / present.
-* Tier 2 — some latency pressure (Minecraft, Genshin, snake). Astra thinks
-  at the slow timescale, Jev (System-1) decides at the fast timescale; the
-  harness designs the bridge between them and the game's action interface.
-* Tier 3 — latency-critical (StarCraft, Clash Royale): the trained network in
-  ``model/`` (not handled here).
+One Meta-Harness for every game that is not latency-critical (see docs/meta-harness.md):
+the task spec states the game's pace (turn-based: the world waits; real-time: it ticks on its
+own clock) and the models the evaluation provides — Astra (System-2) always, Jev (System-1,
+fast typed judgments) when configured, for decisions that must be fast, are not rule-based
+and are not very hard. Latency-critical games (StarCraft, Clash Royale) are the trained
+network in ``model/`` (not handled here).
 
 The harness for a game is an ordinary Python module obeying a small contract
 (``metaharness.core.contract``). The meta-harness (``metaharness.core.loop``)

@@ -88,7 +88,7 @@ episode, on every turn-game step and whenever a real-time score changes, and how
    It must import only the standard library and `metaharness.*`. A harness whose code repeats an existing
    candidate's (comments aside) is not evaluated.
 3. Write `candidates/{candidate.dir.name}/proposal.md`: parent(s), hypothesis, what changed, the lesson or
-   evidence it acts on, what evidence would confirm/refute it, and (tier 2) the System-1 state schema,
+   evidence it acts on, what evidence would confirm/refute it, and (with Jev) the System-1 state schema,
    questions, thresholds and fallback policy.
 4. If you cannot use tools, reply with the full harness in ONE ```python fenced block and the
    proposal text after it.

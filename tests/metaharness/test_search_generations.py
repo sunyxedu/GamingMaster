@@ -16,11 +16,11 @@ from metaharness.core.loop import GameSpec, LoopConfig, MetaHarnessLoop
 from metaharness.models.mock import HeuristicSystem1, ScriptedSystem2
 from metaharness.testbeds.lanerunner import LaneRunnerGame
 from metaharness.testbeds.snake import SnakeGame
-from metaharness.tiers import tier2
+from metaharness import task
 
 BASE = Path(__file__).resolve().parents[2] / "metaharness" / "baselines"
-REF = (BASE / "tier2_reference.py").read_text()
-IDLE = (BASE / "tier2_idle.py").read_text()
+REF = (BASE / "reference_realtime.py").read_text()
+IDLE = (BASE / "idle.py").read_text()
 
 
 def _eval(score, errors=(), n=2, game="snake"):
@@ -90,14 +90,14 @@ def test_near_duplicates_are_detected_but_edits_are_not(tmp_path):
 def test_parallel_generations_validate_and_pick_a_champion(tmp_runs):
     # two proposals per generation with a scripted proposer: the second is a duplicate of the first and is not
     # evaluated; evaluations run in child processes; the finalists are re-evaluated on the validation seeds
-    rc = main(["loop", "--tier", "2", "--game", "snake", "--system1", "heuristic", "--system2", "scripted",
+    rc = main(["loop", "--game", "snake", "--system1", "heuristic", "--system2", "scripted",
                "--proposer", "scripted", "--clock", "virtual", "--iters", "1", "--proposals", "2", "--parallel", "3",
                "--seeds", "0,1", "--val-seeds", "7", "--heldout", "100", "--finalists", "2",
                "--name", "gen", "--runs-dir", str(tmp_runs)])
     assert rc == 0
     a = Archive(tmp_runs / "gen")
     names = [c.dir.name for c in a.candidates()]
-    assert names == ["0000-tier2_jev_only", "0001-tier2_astra_only", "0002-tier2_idle", "0003", "0004"]
+    assert names == ["0000-jev_only", "0001-astra_naive", "0002-idle", "0003", "0004"]
     c3, c4 = a.candidates()[3], a.candidates()[4]
     assert c3.directive()["mode"] == "refine" and c3.directive()["parents"] == [c3.parent()]
     assert c3.eval()["n_episodes"] == 2 and [ep["seed"] for ep in c3.eval()["episodes"]] == [0, 1]
@@ -115,7 +115,7 @@ def test_parallel_generations_validate_and_pick_a_champion(tmp_runs):
     assert (winner.dir / "heldout" / "eval.json").exists()                            # only the champion
     assert not any((c.dir / "heldout").exists() for c in a.candidates() if c.dir != winner.dir)
     lb = (a.root / "leaderboard.md").read_text()
-    assert "Validation seeds" in lb and f"Final pick: `{expected}`" in lb and "(refine of 0000-tier2_jev_only)" in lb
+    assert "Validation seeds" in lb and f"Final pick: `{expected}`" in lb and "(refine of 0000-jev_only)" in lb
     assert (a.root / "lessons.md").exists() and "## Generation 1" in (a.root / "lessons.md").read_text()
     ablation = json.loads((winner.dir / "ablation-no-models" / "eval.json").read_text())   # the pick, models off
     assert ablation["n_episodes"] == 2 and ablation["failed_s1"] == ablation["system1_calls"]    # every call failed
@@ -124,14 +124,14 @@ def test_parallel_generations_validate_and_pick_a_champion(tmp_runs):
     assert json.loads((a.root / "manifest.json").read_text())["run"]["system1"] == "heuristic"
     # the archive is closed: validation / held-out results exist, so no further proposals
     with pytest.raises(ValueError, match="held-out results"):
-        main(["loop", "--tier", "2", "--game", "snake", "--system1", "heuristic", "--system2", "scripted",
+        main(["loop", "--game", "snake", "--system1", "heuristic", "--system2", "scripted",
               "--proposer", "scripted", "--clock", "virtual", "--iters", "2", "--proposals", "2", "--parallel", "3",
               "--seeds", "0,1", "--val-seeds", "7", "--heldout", "100", "--finalists", "2",
               "--name", "gen", "--runs-dir", str(tmp_runs)])
 
 
 def test_multi_game_training_combines_per_game_scores(tmp_runs):
-    rc = main(["loop", "--tier", "2", "--game", "snake,lanerunner", "--system1", "heuristic", "--system2", "scripted",
+    rc = main(["loop", "--game", "snake,lanerunner", "--system1", "heuristic", "--system2", "scripted",
                "--proposer", "scripted", "--clock", "virtual", "--iters", "1", "--parallel", "2", "--seeds", "0",
                "--heldout", "", "--name", "mg", "--runs-dir", str(tmp_runs)])
     assert rc == 0
@@ -166,15 +166,15 @@ def test_default_seed_blocks_carve_validation_from_declared_train_seeds(tmp_path
 
 
 def test_task_text_for_several_games_lists_each_tick():
-    text = tier2.task_md(["snake", "lanerunner"], Budget(), "wall", [{}, {}])
+    text = task.task_md(["snake", "lanerunner"], Budget(), "wall", [{}, {}], system1=True)
     assert "Tick: every 0.25s." in text and "Tick: every 0.5s." in text and "at its own pace" in text
-    single = tier2.task_md("snake", Budget(), "wall", {})
+    single = task.task_md("snake", Budget(), "wall", {})
     assert "ticks every 0.25s" in single and "Training game" not in single
 
 
 def test_reflection_text_is_kept_when_the_model_has_no_tools(tmp_path):
     archive = Archive(tmp_path / "a")
-    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    archive.add_seed(BASE / "idle.py", label="idle")
     notes = ScriptedSystem2(replies=["- idle scored 0 on both seeds (game_done at tick 30): nothing acts\n"], latency_s=0.1)
     cfg = LoopConfig(n_iterations=0, seeds_train=[0, 1], seeds_heldout=[], clock_mode="virtual",
                      budget=Budget(max_wall_s=30), harness_timeout_s=30)
@@ -186,12 +186,12 @@ def test_reflection_text_is_kept_when_the_model_has_no_tools(tmp_path):
     text = (archive.root / "lessons.md").read_text()
     assert text.startswith("## Generation 3") and "idle scored 0" in text
     assert (archive.root / "reflections" / "gen_003_prompt.md").exists()
-    assert "candidates/0000-tier2_idle — seed" in (archive.root / "reflections" / "gen_003_prompt.md").read_text()
+    assert "candidates/0000-idle — seed" in (archive.root / "reflections" / "gen_003_prompt.md").read_text()
 
 
 def test_in_process_multi_game_loop_with_game_specs(tmp_path):
     archive = Archive(tmp_path / "a")
-    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    archive.add_seed(BASE / "idle.py", label="idle")
     extra = GameSpec("lanerunner", lambda **k: LaneRunnerGame(max_ticks=20, **k), {}, seeds_train=[3])
     cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[9], clock_mode="virtual",
                      budget=Budget(max_wall_s=30), harness_timeout_s=30, more_games=[extra])
@@ -212,7 +212,7 @@ def test_per_seed_evaluations_merge_into_the_joint_result(tmp_path):
     from metaharness.core.runner import evaluate_harness
 
     def run(seeds, out):
-        return evaluate_harness(BASE / "tier2_reference.py", lambda **k: SnakeGame(max_ticks=40, **k), seeds,
+        return evaluate_harness(BASE / "reference_realtime.py", lambda **k: SnakeGame(max_ticks=40, **k), seeds,
                                 system2=ScriptedSystem2(latency_s=0.5), system1=HeuristicSystem1(latency_s=0.1),
                                 out_dir=out, clock_mode="virtual", budget_per_episode=Budget(max_wall_s=60),
                                 harness_timeout_s=60, game_name="snake").to_json()
@@ -245,7 +245,7 @@ def test_a_missing_reflection_is_caught_up_and_a_timed_out_one_finishes(tmp_path
             return System2Result(text=f"- note {len(self.calls)}", session_id="r-1")
 
     archive = Archive(tmp_path / "a")
-    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    archive.add_seed(BASE / "idle.py", label="idle")
     done = archive.new_candidate()                              # a generation-1 proposal, evaluated, no lessons
     done.harness_path.write_text(IDLE + "\n# v1\n")
     (done.dir / "directive.json").write_text(json.dumps({"mode": "explore", "parents": [], "generation": 0}))
@@ -265,7 +265,7 @@ def test_a_missing_reflection_is_caught_up_and_a_timed_out_one_finishes(tmp_path
 
 def test_an_archive_that_pinned_validation_seeds_still_resumes(tmp_path):
     archive = Archive(tmp_path / "a")
-    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    archive.add_seed(BASE / "idle.py", label="idle")
 
     def make(val):
         cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[], seeds_val=val, clock_mode="virtual",
@@ -306,7 +306,7 @@ def test_a_reflection_that_writes_nothing_leaves_a_numeric_summary(tmp_path):
             raise RuntimeError("upstream error")
 
     archive = Archive(tmp_path / "a")
-    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    archive.add_seed(BASE / "idle.py", label="idle")
     cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[], clock_mode="virtual",
                      budget=Budget(max_wall_s=30), harness_timeout_s=30)
     loop = MetaHarnessLoop(archive=archive, game_factory=lambda **k: SnakeGame(max_ticks=10, **k), game_kwargs={},
@@ -315,7 +315,7 @@ def test_a_reflection_that_writes_nothing_leaves_a_numeric_summary(tmp_path):
     loop.run()
     loop.reflect(2, archive.candidates())
     text = (archive.root / "lessons.md").read_text()
-    assert "## Generation 2 (automatic summary" in text and "candidates/0000-tier2_idle" in text and "mean score" in text
+    assert "## Generation 2 (automatic summary" in text and "candidates/0000-idle" in text and "mean score" in text
 
 
 def test_a_reflection_that_rewrites_lessons_keeps_the_earlier_sections(tmp_path):
@@ -326,7 +326,7 @@ def test_a_reflection_that_rewrites_lessons_keeps_the_earlier_sections(tmp_path)
 
     from metaharness.models.base import System2Result
     archive = Archive(tmp_path / "a")
-    archive.add_seed(BASE / "tier2_idle.py", label="tier2_idle")
+    archive.add_seed(BASE / "idle.py", label="idle")
     (archive.root / "lessons.md").write_text("## Generation 3\n- an earlier lesson\n")
     cfg = LoopConfig(n_iterations=0, seeds_train=[0], seeds_heldout=[], clock_mode="virtual",
                      budget=Budget(max_wall_s=30), harness_timeout_s=30)

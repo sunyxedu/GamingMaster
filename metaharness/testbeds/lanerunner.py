@@ -1,5 +1,5 @@
-"""Lane Runner — a second tier-2 game (Subway-Surfers-like), used as the
-*held-out game* for tier-2 harness generality.
+"""Lane Runner — a second real-time game (Subway-Surfers-like), used as the
+*held-out game* for real-time harness generality.
 
 Three lanes; obstacles scroll toward the runner one row per tick. Actions:
 ``left`` / ``right`` (change lane), ``jump`` (clears a *low* obstacle in the
@@ -19,7 +19,7 @@ from ..games.registry import register
 LANES = 3
 
 
-@register("lanerunner", "tier2")
+@register("lanerunner", realtime=True)
 class LaneRunnerGame:
     name = "lanerunner"
     action_spec = ActionSpec(

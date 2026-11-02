@@ -1,4 +1,4 @@
-"""End-to-end offline tier-2 loop on the virtual clock."""
+"""End-to-end offline real-time loop (Jev stand-in) on the virtual clock."""
 from __future__ import annotations
 
 import json
@@ -8,14 +8,14 @@ from metaharness.core.archive import Archive
 from metaharness.models.jev import usage_guide
 
 
-def test_tier2_offline_loop(tmp_runs):
-    rc = main(["loop", "--tier", "2", "--game", "snake", "--system1", "heuristic", "--system2", "scripted",
+def test_realtime_offline_loop(tmp_runs):
+    rc = main(["loop", "--game", "snake", "--system1", "heuristic", "--system2", "scripted",
                "--proposer", "scripted", "--clock", "virtual", "--iters", "1", "--seeds", "0,1", "--heldout", "100",
                "--name", "t2", "--runs-dir", str(tmp_runs)])
     assert rc == 0
     a = Archive(tmp_runs / "t2")
     cands = a.candidates()
-    assert [c.dir.name for c in cands] == ["0000-tier2_jev_only", "0001-tier2_astra_only", "0002-tier2_idle", "0003"]
+    assert [c.dir.name for c in cands] == ["0000-jev_only", "0001-astra_naive", "0002-idle", "0003"]
     for c in cands:
         e = c.eval()
         assert e and e["fatal"] is None and e["n_episodes"] == 2

@@ -78,7 +78,7 @@ class LoopConfig:
     seeds_val: list[int] = field(default_factory=list)       # validation block for the final pick
     finalists: int = 3                                       # candidates re-evaluated on the validation seeds
     reflect: bool = True                                     # lessons.md after every generation
-    eval_spec: Optional[dict[str, Any]] = None               # model profiles + tier: evaluate in child processes
+    eval_spec: Optional[dict[str, Any]] = None               # model profiles: evaluate in child processes
     more_games: list[GameSpec] = field(default_factory=list)  # training games besides the primary one
     heldout_game_adaptor: Optional[str] = None               # its directory, for child processes
     patience: int = 0                                        # stop once the best is this many generations old
@@ -318,7 +318,7 @@ class MetaHarnessLoop:
              no_models: bool = False) -> evalworker.EvalJob:
         b = self.cfg.budget
         models = dict(self.cfg.eval_spec or {})
-        if no_models:      # every call fails, as in an outage, with the same budget (tier 1 has no System-1)
+        if no_models:      # every call fails, as in an outage, with the same budget (System-1 only if the loop has one)
             s1, s2 = self._silent_latency()
             models.update(system1=f"silent:{s1:g}" if self.system1 is not None else "none", system2=f"silent:{s2:g}")
         return evalworker.EvalJob(
@@ -469,7 +469,7 @@ class MetaHarnessLoop:
             if STOPPING.is_set():
                 return False
             rep = preflight_harness(cand.harness_path, self.game_factory, game_kwargs=self.game_kwargs,
-                                    tier2=self.system1 is not None, timeout_s=self.cfg.preflight_timeout_s,
+                                    system1=self.system1 is not None, timeout_s=self.cfg.preflight_timeout_s,
                                     budget=self.cfg.budget, seed=self._seeds("train")[_slug(self.games[0].name)][0])
             (cand.dir / f"preflight_{attempt}.json").write_text(json.dumps(rep, indent=2, default=str))
             if rep["ok"]:
