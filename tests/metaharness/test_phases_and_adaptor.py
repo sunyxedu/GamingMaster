@@ -156,7 +156,7 @@ def test_full_run_pipeline_offline(tmp_path):
     cli._system2 = fake_system2
     try:
         rc = main(["run", "--game", "Count Game", "--agent", "fake-agent", "--system2", "scripted",
-                   "--system1", "heuristic", "--proposer", "scripted", "--clock", "virtual", "--iters", "1",
+                   "--system1", "heuristic", "--proposer", "scripted", "--clock", "virtual", "--iters", "1", "--proposals", "1",
                    "--seeds", "0,1", "--heldout", "100", "--runs-dir", str(tmp_path)])
     finally:
         cli._system2 = orig

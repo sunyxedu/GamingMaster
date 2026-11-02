@@ -141,6 +141,7 @@ def test_adapt_prompt_carries_notes_contract_and_kwargs(tmp_path):
     assert rep.ok, rep.to_markdown()                            # make_game needs the kwargs: they were used
     prompt = agent.calls[0]
     assert "use the EU server" in prompt and "expected_realtime=True, kwargs={'level': 2}" in prompt
+    assert "per-episode deadline the search uses (30 minutes)" in prompt
     for term in ("close()", "SEEDS", "EVAL_KWARGS", "valid_trial", "invalid_reason", "never overlap",
                  "game error", "MUST", "env.example", "runtime/", "pinned by"):
         assert term in prompt, term
@@ -333,6 +334,7 @@ def test_run_searches_the_adaptor_kind_and_passes_notes_and_kwargs(tmp_path, fak
     assert rc == 0
     run_dir = tmp_path / "count-game"
     assert calls["adapt"]["notes"] == "EU server" and calls["adapt"]["kwargs"] == {"target": 4}
+    assert calls["adapt"]["episode_s"] == 1800.0                   # the deadline the search will use
     game, prior, exp_dir = calls["search"]
     assert exp_dir == run_dir / "search"
     from metaharness.games.registry import adaptor_spec
@@ -379,3 +381,18 @@ def test_a_study_that_times_out_resumes_its_session_and_keeps_its_research(tmp_p
     agent2.calls.append(("(already timed out)", None, 0))
     run_study(agent2, other, "Count Game", timeout_s=3600, log=lambda m: None)
     assert agent2.calls[1][:2] == (FINISH_PROMPT, "s-9")
+
+
+def test_run_defaults_are_the_search_the_reworks_validated(monkeypatch):
+    seen: list = []
+    monkeypatch.setattr(cli, "cmd_run", lambda a: seen.append(a) or 0)
+    monkeypatch.setattr(cli, "cmd_loop", lambda a: seen.append(a) or 0)
+    assert main(["run", "--game", "Count Game"]) == 0
+    a = seen[0]
+    assert (a.iters, a.patience, a.proposals, a.parallel) == (8, 3, 3, 8)
+    assert (a.wall_budget, a.proposer_timeout, a.phase_timeout, cli._episode_budget(a).max_wall_s) == \
+        (1800.0, 3600.0, 5400.0, 1800.0)
+    assert main(["run", "--game", "Count Game", "--iters", "2", "--proposals", "1"]) == 0
+    assert (seen[1].iters, seen[1].proposals) == (2, 1)            # flags still win
+    assert main(["loop", "--game", "snake"]) == 0
+    assert (seen[2].iters, seen[2].proposals, seen[2].parallel) == (3, 1, 1)   # the low-level command keeps its own

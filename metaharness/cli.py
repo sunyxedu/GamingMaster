@@ -357,7 +357,8 @@ def cmd_run(a: argparse.Namespace) -> int:
     if a.stop_after == "study":
         return 0
     rep = run_adapt(agent, run_dir, a.game, study, notes=a.notes, kwargs=game_kwargs, timeout_s=a.phase_timeout,
-                    review=not (run_dir / "search").exists(), log=log)   # never under a running search
+                    review=not (run_dir / "search").exists(),      # never under a running search
+                    episode_s=_episode_budget(a).max_wall_s, log=log)
     if not rep.ok:
         log("run: adaptor not ready — " + (rep.error or "see adaptor/validation.md")[:500])
         needs = run_dir / "adaptor" / "NEEDS.md"
@@ -548,11 +549,14 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--pace", default=None, choices=["turn", "realtime"],
                     help="override the pace the study decides (turn-based / real-time adaptor)")
     rp.add_argument("--agent", default="astra", help="System-2 profile for study/adapt agents")
-    rp.add_argument("--phase-timeout", type=float, default=3600.0)
+    rp.add_argument("--phase-timeout", type=float, default=5400.0)
     rp.add_argument("--stop-after", default="", choices=["", "study", "adapt"])
     search_opts(rp)
     loop_opts(rp)
-    rp.set_defaults(fn=cmd_run)
+    # The general pipeline runs the search both 2026-10 reworks validated on 35 games: generations of 3
+    # proposals, at most 8, stopping after 3 without a new best; 30-minute episodes; an hour per proposer.
+    rp.set_defaults(fn=cmd_run, iters=8, patience=3, proposals=3, parallel=8, wall_budget=1800.0,
+                    proposer_timeout=3600.0)
 
     lp = sub.add_parser("loop", help="run the harness search on registered games and/or adaptors")
     lp.add_argument("--game", default="", help="registered game name(s), comma-separated for several training "

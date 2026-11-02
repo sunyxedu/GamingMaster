@@ -33,7 +33,8 @@ real game (or a faithful local instance) before declaring it done."""
 
 
 def adapt_prompt(game: str, study: dict[str, Any], study_dir: Path, out_dir: Path, feedback: str = "",
-                 notes: str = "", kwargs: Optional[dict[str, Any]] = None, timeout_s: Optional[float] = None) -> str:
+                 notes: str = "", kwargs: Optional[dict[str, Any]] = None, timeout_s: Optional[float] = None,
+                 episode_s: float = 1800.0) -> str:
     contract = inspect.getdoc(adaptor_mod) or ""
     base_src = Path(base_mod.__file__).read_text()
     realtime = study_realtime(study)
@@ -75,7 +76,7 @@ User notes (platform, account, constraints — may be empty): {notes or '(none)'
   scripted player) in ADAPTOR.md.
 * An episode must fit the evaluation: `step()` (including the opponent's thinking and engine time) must
   return within a few seconds, and a whole episode played at that pace must finish well inside the
-  per-episode deadline the search uses (default 30 minutes) with time left for the agent's own model
+  per-episode deadline the search uses ({episode_s / 60:.0f} minutes) with time left for the agent's own model
   calls. Bound the opponent's compute per decision (search time / iterations) and the episode length
   accordingly, and report the measured step latency and episode duration in ADAPTOR.md.
 * `describe()` tells a model everything it may know a priori: rules, objective, action semantics,
@@ -194,7 +195,7 @@ def _fingerprint(p: Path) -> Optional[tuple[int, bytes]]:
 
 def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, Any], *, notes: str = "",
               timeout_s: float = 3600.0, max_attempts: int = 4, kwargs: Optional[dict[str, Any]] = None,
-              review: bool = False, log=print) -> adaptor_mod.ValidationReport:
+              review: bool = False, episode_s: float = 1800.0, log=print) -> adaptor_mod.ValidationReport:
     """Build / repair ``run_dir/adaptor`` until it validates (``kwargs``: the user's game kwargs).
 
     An existing ``game.py`` is validated first; the agent is only called with the failing report.
@@ -242,7 +243,8 @@ def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, An
     def reviewed(rep: adaptor_mod.ValidationReport, session: Optional[str]) -> adaptor_mod.ValidationReport:
         if not (review and rep.ok) or (out / "review.md").exists():
             return rep
-        prompt = adapt_prompt(game, study, study_dir, out, notes=notes, kwargs=kwargs, timeout_s=timeout_s)
+        prompt = adapt_prompt(game, study, study_dir, out, notes=notes, kwargs=kwargs, timeout_s=timeout_s,
+                              episode_s=episode_s)
         return _review(model, out, session, prompt, timeout_s, validate, log)
 
     feedback = ""
@@ -261,7 +263,8 @@ def run_adapt(model: System2Model, run_dir: Path, game: str, study: dict[str, An
     rep = adaptor_mod.ValidationReport(ok=False, error="not run")
     try:
         for attempt in range(max_attempts):
-            prompt = adapt_prompt(game, study, study_dir, out, feedback, notes=notes, kwargs=kwargs, timeout_s=timeout_s)
+            prompt = adapt_prompt(game, study, study_dir, out, feedback, notes=notes, kwargs=kwargs, timeout_s=timeout_s,
+                                  episode_s=episode_s)
             (out / f"prompt_{attempt}.md").write_text(prompt)
             urgent = ("Your time ran out and there is no working adaptor yet. Write the simplest adaptor that "
                       "validates now, inside this directory, from what you have learned; improve fidelity only "
