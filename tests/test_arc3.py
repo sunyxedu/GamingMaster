@@ -434,3 +434,41 @@ def test_frontier_start_replays_a_real_level():
     obs = env.reset(seed=0)
     assert int(env.levels[0]) == 1 and torch.equal(obs.obs["grid"][0], level2)
     assert int(env.actions_used[0]) == 0 and not obs.obs["delta"][0].any()
+
+
+def test_frontier_archive_persists_on_disk(levels_sdk, tmp_path):
+    import glob
+    import json
+
+    prefix = str(tmp_path / "arch" / "arc3")
+    env = levels_sdk.Arc3VecEnv(1, games=("g",), max_actions=8, frontier=1.0, frontier_archive=prefix)
+    for _ in range(6):
+        env.step(_right())
+    files = sorted(glob.glob(prefix + ".*.jsonl"))
+    assert len(files) == 1
+    rows = [json.loads(line) for line in open(files[0])]
+    assert [(r["game"], r["levels"], len(r["actions"])) for r in rows] == [("g", 1, 3), ("g", 2, 6)]
+    # another env (another process, env count or world size) starts from the archive on disk
+    other = levels_sdk.Arc3VecEnv(2, games=("g",), max_actions=8, frontier=1.0, frontier_archive=prefix)
+    assert other._archive == {"g": {1: [(1, 0)] * 3, 2: [(1, 0)] * 6}}
+    assert {int(x) for x in other.levels} <= {1, 2}
+    # loading writes nothing back; a torn last line (a killed process) is skipped
+    with open(files[0], "a") as fh:
+        fh.write('{"game": "g", "levels": 3, "act')
+    third = levels_sdk.Arc3VecEnv(1, games=("g",), max_actions=8, frontier=0.0, frontier_archive=prefix)
+    assert sorted(third._archive["g"]) == [1, 2]
+    assert len(open(files[0]).read().splitlines()) == 3
+
+
+def test_frontier_archive_takes_in_a_checkpoints_entries(levels_sdk, tmp_path):
+    import glob
+    import json
+
+    env = levels_sdk.Arc3VecEnv(1, games=("g",), max_actions=8, frontier=1.0)
+    for _ in range(3):
+        env.step(_right())
+    prefix = str(tmp_path / "arc3")
+    fresh = levels_sdk.Arc3VecEnv(1, games=("g",), max_actions=8, frontier=1.0, frontier_archive=prefix)
+    fresh.load_state_dict(env.state_dict())
+    rows = [json.loads(line) for f in glob.glob(prefix + ".*.jsonl") for line in open(f)]
+    assert [(r["levels"], len(r["actions"])) for r in rows] == [(1, 3)]

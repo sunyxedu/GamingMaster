@@ -52,7 +52,10 @@ delta, the full ``max_actions`` budget) and pays only the levels it completes fr
 A replay that does not reproduce its level count drops the entry (a fresh start instead).
 Without it the policy reaches a later level only after re-solving every earlier one within
 the same ``max_actions``, so the later levels' rewards never come (problem 146).
-The archive is part of :meth:`state_dict` (a resume keeps it).
+The archive is part of :meth:`state_dict` (a resume of the same world size keeps it); with
+``frontier_archive=<path prefix>`` it also lives on disk: every process appends each new or
+shorter way to ``<prefix>.<pid>.jsonl`` and loads every ``<prefix>.*.jsonl`` at its start, so it
+survives restarts with other env counts or world sizes and is shared by all ranks then.
 
 RESET is always a level reset, as in the ARC-AGI-3 competition mode ("Game Resets are not
 allowed and become Level Resets") and in ARC Prize's human baseline recordings (arcengine's
@@ -64,6 +67,7 @@ reset; a reused SDK wrapper otherwise kept the level an earlier, truncated episo
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import logging
@@ -122,7 +126,7 @@ class Arc3VecEnv(VecEnvBase):
 
     def __init__(self, n_envs: int = 1, *, games: Sequence[str] = DEV_GAMES,
                  max_actions: int = 400, novelty: float = 0.0, frontier: float = 0.0,
-                 frontier_seed: Optional[str] = None,
+                 frontier_seed: Optional[str] = None, frontier_archive: Optional[str] = None,
                  environments_dir: Optional[str] = None, autoreset: bool = False,
                  seed: Optional[int] = 0):
         if not 0.0 <= float(frontier) <= 1.0:
@@ -130,6 +134,7 @@ class Arc3VecEnv(VecEnvBase):
         self.frontier = float(frontier)
         # game -> levels completed -> the shortest (type, click) sequence from a fresh game
         self._archive: Dict[str, Dict[int, List[Tuple[int, int]]]] = {}
+        self._archive_path: Optional[str] = None       # this process's on-disk archive file
         super().__init__(n_envs, autoreset, seed)
         if isinstance(games, str):
             # "all": every game cached under the environments dir (a directory per game —
@@ -150,6 +155,10 @@ class Arc3VecEnv(VecEnvBase):
         self._arc, self._Action, self._State = _sdk(environments_dir)
         if frontier_seed:
             self.seed_frontier(frontier_seed)
+        if frontier_archive:
+            self.load_frontier_archive(frontier_archive)
+            os.makedirs(os.path.dirname(os.path.abspath(frontier_archive)), exist_ok=True)
+            self._archive_path = f"{frontier_archive}.{os.getpid()}.jsonl"
         self._arcade = self._arc.Arcade()
         self._wrappers: Dict[Tuple[int, str], Any] = {}
         self._resets = np.zeros(n_envs, dtype=np.int64)
@@ -239,15 +248,49 @@ class Arc3VecEnv(VecEnvBase):
         # the frontier choice: its own stream (it never shifts the base RNGs' draws)
         self._frontier_rng = np.random.default_rng(None if seed is None else [int(seed), 0xF0E])
 
-    def _archive_level(self, game: str, levels: int, trace: Sequence[Tuple[int, int]]) -> bool:
+    def _archive_level(self, game: str, levels: int, trace: Sequence[Tuple[int, int]],
+                       persist: bool = True) -> bool:
         """Keep ``trace`` as ``game``'s way to ``levels`` completed levels if it is the first
-        or a shorter one; True when ``levels`` is beyond every archived level of the game."""
+        or a shorter one (and, with ``persist`` and a ``frontier_archive``, append it to this
+        process's archive file); True when ``levels`` is beyond every archived level of the game."""
         arch = self._archive.setdefault(game, {})
         new_best = levels > max(arch, default=0)
         old = arch.get(levels)
         if old is None or len(trace) < len(old):
             arch[levels] = [(int(a), int(c)) for a, c in trace]
+            if persist and self._archive_path:
+                self._write_archive_entry(game, levels, arch[levels])
         return new_best
+
+    def _write_archive_entry(self, game: str, levels: int, trace: Sequence[Tuple[int, int]]) -> None:
+        try:
+            with open(self._archive_path, "a") as fh:
+                fh.write(json.dumps({"game": game, "levels": int(levels),
+                                     "actions": [[int(a), int(c)] for a, c in trace]}) + "\n")
+        except OSError as e:          # the archive is an aid: never stop training over it
+            print(f"[arc3] archive {self._archive_path} not written: {e}", flush=True)
+            self._archive_path = None
+
+    def load_frontier_archive(self, prefix: str) -> int:
+        """Merge every ``<prefix>.*.jsonl`` (the on-disk archive, see the module docs) into the
+        archive, for this env's games; returns the number of entries read."""
+        n = 0
+        for path in sorted(glob.glob(f"{prefix}.*.jsonl")):
+            try:
+                lines = open(path).read().splitlines()
+            except OSError:
+                continue
+            for line in lines:
+                try:
+                    r = json.loads(line)
+                    game, levels, actions = str(r["game"]), int(r["levels"]), r["actions"]
+                except (ValueError, KeyError, TypeError):
+                    continue                    # a torn last line of a killed process
+                if game in self.games and levels > 0:
+                    self._archive_level(game, levels, [(int(a), int(c)) for a, c in actions],
+                                        persist=False)
+                    n += 1
+        return n
 
     def seed_frontier(self, path: str) -> Dict[str, List[int]]:
         """Archive arc3_solve.py's solutions (a JSON file, or its ``<out>.partial`` directory
@@ -270,7 +313,7 @@ class Arc3VecEnv(VecEnvBase):
                     break                          # the archive needs every earlier level
                 for typ, x, y in lv["actions"]:
                     prefix.append((int(typ), int(y) * GRID + int(x) if int(typ) == CLICK else 0))
-                self._archive_level(game, k + 1, prefix)
+                self._archive_level(game, k + 1, prefix, persist=False)
                 out.setdefault(game, []).append(k + 1)
         return out
 
