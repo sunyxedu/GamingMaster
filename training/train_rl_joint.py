@@ -32,10 +32,13 @@ rollout step to the last minibatch of the iteration):
                  League: mirror
                  self-play (--mirror_prob) or learner vs a snapshot-pool
                  opponent (PoolPolicy; one snapshot every --snapshot_every
-                 iterations, the Stage-1 policy first).  Board games are ONE
-                 interleaved stream per game with both movers; the loss goes
-                 on learner seats (League.learner_policy_mask; forced frames
-                 keep only the value loss).
+                 iterations, the Stage-1 policy first).  Streams are the IL
+                 streams: the board games IL trains as per-seat streams are
+                 rolled out per seat too (env/per_seat.py; one stream = one
+                 player's own decision frames), backgammon as one interleaved
+                 stream with both movers.  The loss goes on learner seats
+                 (League.learner_policy_mask; forced frames keep only the
+                 value loss).
   3. π_old       the learner recomputes log π_old and V on every stored frame
                  with the SAME weights and frozen routing (sparse MoE path,
                  exactly the training forward), before epoch 1.  With routing
@@ -2142,6 +2145,8 @@ class JointRLTrainer:
             defer_delete=a.ckpt_minutes > 0 or a.ckpt_every > 0)
         self.templates: Dict[str, torch.nn.Module] = {}
         self.rl: Dict[str, GameRL] = {}
+        #: each RL game's stream layout ("per_seat" | "interleaved"), kept in the checkpoints
+        self.layouts: Dict[str, str] = {}
         for gi, g in enumerate(self.rl_games):
             net = model[g]
             spec = game_spec(g)
@@ -2158,6 +2163,7 @@ class JointRLTrainer:
                                  f"this env's per-seat streams advance separately (seats act "
                                  f"on different turns); use --actor stream")
             spec.check_env(env, net)
+            self.layouts[g] = "interleaved" if getattr(env, "interleaved", False) else "per_seat"
             if g in shaping and not hasattr(env, "shaping"):
                 raise SystemExit(f"--shaping {g}: its env has no shaped reward")
             actor = LearnerActor(net, spec, self.depth, device, bf16=a.bf16, mode=a.actor,
@@ -3616,6 +3622,7 @@ class JointRLTrainer:
                 "engine_rung": dict(self.engine_rung), "engine_high": dict(self.engine_high),
                 "engine_low": dict(self.engine_low), "engine_forced": dict(self.engine_forced),
                 "rl_games": list(self.rl_games), "replay_games": list(self.replay),
+                "layouts": dict(self.layouts),
                 "init": self.args.init, "init_hash": self.init_hash}
 
     def _env_states(self) -> Optional[List[Dict[str, Any]]]:
@@ -3797,6 +3804,20 @@ class JointRLTrainer:
                 self.advnorm.reset(g)
                 diff = "; ".join(f"{k} {old[k]} -> {new[k]}" for k in new if old[k] != new[k])
                 self.log(f"[resume] {g}: {diff} — its advantage statistics restart")
+        # the stream layout: a checkpoint written before the board games' simulators were
+        # served per seat (env/per_seat.py; it has no "layouts") rolled them out as one
+        # interleaved stream per game — other frames in the temporal state, other values
+        saved_layouts = st.get("layouts")
+        for g in self.rl_games:
+            if saved_layouts is not None:
+                old = saved_layouts.get(g)
+            else:
+                old = ("interleaved" if getattr(self.rl[g].env, "per_seat", False)
+                       else self.layouts[g])
+            if old is not None and old != self.layouts[g]:
+                self.advnorm.reset(g)
+                self.log(f"[resume] {g}: stream layout {old} -> {self.layouts[g]} — its "
+                         f"advantage statistics restart")
         self.entc.load_state_dict(st["entc"])
         self.klb.load_state_dict(st["klb"])
         self.sched.load_state_dict(st["sched"])

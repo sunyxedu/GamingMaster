@@ -7,9 +7,11 @@ A :class:`Policy` is called with the current :class:`~env.vec_game.VecObs` and
 the rows it must process, and returns one action per row (the decoder's
 ``sample()`` output or the replay format — :meth:`VecGameEnv.replay_actions`
 normalises both).  A stateful (network) policy must see EVERY frame of the
-streams it plays on, also the frames where the other side moves (othello's
-interleaved stream): the league therefore calls it on all rows of its streams
-and only uses its actions where it is to play.  ``reset_streams`` tells it a
+streams it plays on, also the frames where the other side moves (an
+interleaved stream, e.g. backgammon's; the board games IL trains per seat are
+served per seat, env/per_seat.py, and have no such frames): the league
+therefore calls it on all rows of its streams and only uses its actions where
+it is to play.  ``reset_streams`` tells it a
 stream starts a new episode (rows with ``new_episode`` also imply it);
 ``release_streams`` that it no longer plays a stream (episode over, env
 handed to another controller): it drops the stream's state.  Actions come

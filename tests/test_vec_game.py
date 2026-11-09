@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from data_processing.games.othello import rules
+from env import vec_game as _vec_game
 from env.generals_env import _MOUNTAIN
 from env.league import (
     CallablePolicy,
@@ -30,13 +31,21 @@ from env.vec_game import (
     VecGameEnv,
     VecObs,
     has_simulator,
-    make_vec_env,
     register_vec_env,
 )
 from env.vec_generals import GeneralsVecEnv, full_state_grids, replay_tiebreak_by_step
 from env.vec_gomoku import GomokuVecEnv
 from env.vec_othello import OthelloVecEnv
 from model.games import build_game_network
+
+
+def make_vec_env(game, *args, **kw):
+    """The simulator's own rows: this module pins the simulator's frames (and the league's
+    routing of interleaved streams); the per-seat serving of the board games is
+    tests/test_per_seat_streams.py."""
+    kw.setdefault("per_seat", False)
+    return _vec_game.make_vec_env(game, *args, **kw)
+
 
 TINY = dict(d_model=32, n_heads=4, d_ff=64, n_st_layers=1, encoder_channels=16,
             dropout=0.0, rd_prelude_layers=1, rd_recurrent_layers=1, rd_coda_layers=1,

@@ -37,11 +37,21 @@ import pytest
 import torch
 
 from data_processing.games.dataset import GameShardDataset, load_gm_samples
-from env.vec_game import has_simulator, make_vec_env
+from env import vec_game as _vec_game
+from env.vec_game import has_simulator
 from env.vec_gmsim import GmSimVecEnv
 from model.games import build_game_network
 from model.games.gmrules import rules_games
 from tests import invariance
+
+
+def make_vec_env(game, *args, **kw):
+    """The simulator's own rows: this module pins the simulator's frames (and the league's
+    routing of interleaved streams); the per-seat serving of the board games is
+    tests/test_per_seat_streams.py."""
+    kw.setdefault("per_seat", False)
+    return _vec_game.make_vec_env(game, *args, **kw)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WS = ROOT / "data_processing"
@@ -359,12 +369,13 @@ def test_engine_teacher_labels_the_learners_decisions(shards, tmp_path):
     assert row["teacher_n"] == n_lab and math.isfinite(row["teacher_ce"]) and row["teacher_ce"] > 0
     assert 0.0 <= row["teacher_agree"] <= 1.0
     # every label is a legal move of the side to move in the position of its frame — the
-    # episode's trajectory up to the frame's decision: an interleaved stream holds a frame of
-    # every decision (the opponent's too, not acting: the env applied the opponent's move
-    # there); the stream's env is the one whose trajectory holds the stream's own acting
-    # moves — and mostly a depth-3 Stockfish move there (a fresh engine's search can differ:
-    # the teacher's hash holds earlier searches)
+    # episode's trajectory up to the frame's decision: a per-seat stream (env/per_seat.py,
+    # the IL streams) holds one player's own decisions, frame k = that seat's k-th move of
+    # the episode; the stream's env is the one whose trajectory holds the stream's moves —
+    # and mostly a depth-3 Stockfish move there (a fresh engine's search can differ: the
+    # teacher's hash holds earlier searches)
     env = tr.rl["chess"].env
+    assert not env.interleaved
 
     def keys_of(st, seat, a, names):
         tgt = st.target(seat, a)
@@ -373,15 +384,15 @@ def test_engine_teacher_labels_the_learners_decisions(shards, tmp_path):
 
     def positions(e, s0):
         traj = np.asarray(env.trajectory(e)).reshape(-1, 2)
-        if len(traj) < s0.length:
+        seat = int(s0.seat[0])
+        assert bool((s0.seat == seat).all())                # one player's own frames
+        own = [i for i in range(len(traj)) if int(traj[i, 0]) == seat]
+        if len(own) < s0.length:
             return None
         out = []
-        for k in range(s0.length):
-            st, moves = replay_state("chess", traj[:k])
-            seat = int(s0.seat[k])
-            if int(traj[k, 0]) != seat:
-                return None
-            if bool(s0.vmask[k]) and keys_of(st, seat, int(traj[k, 1]), s0.actions) != \
+        for k, i in enumerate(own[:s0.length]):
+            st, moves = replay_state("chess", traj[:i])
+            if bool(s0.vmask[k]) and keys_of(st, seat, int(traj[i, 1]), s0.actions) != \
                     {key: int(v[k]) for key, v in s0.actions.items()}:
                 return None
             out.append((st, moves, seat))
@@ -390,21 +401,27 @@ def test_engine_teacher_labels_the_learners_decisions(shards, tmp_path):
     eng = UciEngine(STOCKFISH, "uci", {"Threads": "1"})
     start, to, back = start_string("chess"), TO_ENGINE.get("chess"), FROM_ENGINE.get("chess")
     checked = same = 0
-    last = streams[-env.num_envs:]          # the env's trajectories are its last wave's
+    # the env's trajectories are its last wave's: that wave's streams (every env has the
+    # learner on one seat or, in a mirror episode, on both) are the ones found in them
+    last = []
+    for s0 in streams:
+        pos = next((p for p in (positions(e, s0) for e in range(env.num_envs)) if p), None)
+        if pos is not None:
+            last.append((s0, pos))
+    assert env.num_envs <= len(last) <= 2 * env.num_envs, len(last)
     try:
-        for s0 in last:
-            pos = next((p for p in (positions(e, s0) for e in range(env.num_envs)) if p), None)
-            assert pos is not None, "no env's trajectory holds the stream's actions"
+        for s0, pos in last:
             for k in torch.nonzero(s0.tmask).flatten().tolist():
                 st, moves, seat = pos[k]
                 want = {key: int(v[k]) for key, v in s0.teacher.items()}
                 got = [a for a in st.legal_actions(seat) if keys_of(st, seat, a, want) == want]
                 assert len(got) == 1, (k, want)                 # a legal move there
-                if checked < 4:
-                    mv = eng.best_move(start, [to(m) for m in moves] if to else moves, "go depth 3")
-                    same += int(st.action_string(seat, got[0]) == (back(mv) if back else mv))
+                mv = eng.best_move(start, [to(m) for m in moves] if to else moves, "go depth 3")
+                same += int(st.action_string(seat, got[0]) == (back(mv) if back else mv))
                 checked += 1
-        assert checked == sum(int(s.tmask.sum()) for s in last) and checked and same >= 2
+        # (measured: 19 of 26 labels are the fresh engine's move; 20 of 29 on interleaved rows)
+        assert checked == sum(int(s.tmask.sum()) for s, _ in last) and checked
+        assert 2 * same >= checked, (same, checked)
     finally:
         eng.close()
     moved = {k: v.detach() - p0[k] for k, v in tr.model.named_parameters() if ".chess." in k}

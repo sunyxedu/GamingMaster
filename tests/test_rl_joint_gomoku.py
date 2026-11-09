@@ -14,9 +14,9 @@ Then:
 - end to end: 2 iterations of joint gomoku + othello RL (mirror + snapshot
   pool) with an IL replay stream of both games, gomoku truncated by
   max_moves — finite metrics, exact canaries, adaptive controllers moving;
-- rollout streams: ONE interleaved stream per game, strictly alternating
-  movers, no forced frames (pmask == vmask), learner-seat masks against a
-  pool opponent, zero-sum ±1 / 0 outcomes on the last frame only;
+- rollout streams: per-seat streams (one player's own frames, the IL
+  streams), no forced frames (pmask == vmask), the learner's seat alone
+  against a pool opponent, zero-sum ±1 / 0 outcomes on the last frame only;
 - PPO exactness on 9x9 (games end by five / full board): the first
   minibatch's ratio is 1 within 1e-5 and the actor's μ is the learner's
   π_old, for the stream and the fixed-batch actor — and for a network WITH a
@@ -150,7 +150,7 @@ def test_end_to_end_gomoku_and_othello_two_iterations(stage1):
     assert model["gomoku"].cfg.board_h == 20
 
 
-def test_rollout_streams_are_interleaved_games(stage1):
+def test_rollout_streams_are_per_seat_games(stage1):
     from env.league import League
     from training.train_rl_joint import collect_wave
 
@@ -161,17 +161,15 @@ def test_rollout_streams_are_interleaved_games(stage1):
         r.pool_policy.refresh()
         league = League(r.env, {"pool": r.pool_policy}, mirror_prob=mirror, seed=3)
         streams, st = collect_wave(r.env, league, r.actor, seed=11, max_steps=10_000)
-        assert len(streams) == r.env.num_envs == st.episodes
+        assert st.episodes == r.env.num_envs
+        # per-seat streams (env/per_seat.py), the IL streams: both seats' in a mirror
+        # episode, the learner's alone against the pool
+        assert len(streams) == r.env.num_envs * (2 if mirror == 1.0 else 1)
         for s in streams:
             T = s.length
             assert s.done[-1] and not s.done[:-1].any()               # one episode per stream
-            assert torch.equal(s.seat, torch.arange(T) % 2)           # strictly alternating
-            assert not s.forced.any() and torch.equal(s.pmask, s.vmask)
-            if mirror == 1.0:
-                assert s.vmask.all()                                   # both movers learn
-            else:
-                seat = int(s.seat[s.vmask][0])
-                assert torch.equal(s.vmask, s.seat == seat) and not s.vmask.all()
+            assert (s.seat == s.seat[0]).all()                        # one player's own frames
+            assert not s.forced.any() and torch.equal(s.pmask, s.vmask) and s.vmask.all()
             assert s.obs["board_seq"].shape == (T, 3, 9, 9)
             assert s.legal["place"].shape == (T, 81) and not s.legal["pass"].any()
             played = s.actions["place_idx"][s.vmask]
@@ -186,7 +184,9 @@ def test_rollout_streams_are_interleaved_games(stage1):
 
 @pytest.mark.parametrize("actor", ["stream", "fixed"])
 def test_first_minibatch_ratio_is_one(stage1, actor):
-    tr = _trainer9(stage1, f"rl_exact_{actor}", "ck9", "--actor", actor)
+    # the fixed-batch actor steps every row at one frame index: interleaved rows
+    extra = ("--env_kw", "gomoku:per_seat=False") if actor == "fixed" else ()
+    tr = _trainer9(stage1, f"rl_exact_{actor}", "ck9", "--actor", actor, *extra)
     res, canary = _first_minibatch_ratio(tr)
     ratio_dev, old_mu = res["gomoku"]
     assert ratio_dev < 1e-5, ratio_dev                  # π / π_old == 1 within 1e-5
@@ -210,8 +210,9 @@ def test_pass_head_network_keeps_placement_only_logprob(stage1):
     streams = tr.rl["gomoku"].streams
     passed = torch.cat([s.actions["passed"] for s in streams])
     assert passed.any()                                  # the pass head did fire ...
-    for s in streams:                                    # ... and the moves were placed anyway
-        assert torch.equal(s.seat, torch.arange(s.length) % 2)
+    for s in streams:                                    # ... and the moves were placed anyway:
+        # every frame of a seat's stream is that seat's own placement
+        assert (s.seat == s.seat[0]).all() and s.vmask.all() and not s.forced.any()
     from training.train_rl_joint import build_batch, learner_forward
     r = tr.rl["gomoku"]
     b = build_batch(streams[:1], torch.device("cpu"), ("forced", "vmask"))

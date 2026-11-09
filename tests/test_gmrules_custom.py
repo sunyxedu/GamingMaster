@@ -29,11 +29,21 @@ import pytest
 import torch
 
 from data_processing.games.dataset import GameShardDataset, load_gm_samples
-from env.vec_game import has_simulator, make_vec_env
+from env import vec_game as _vec_game
+from env.vec_game import has_simulator
 from env.vec_gmsim import GmSimVecEnv
 from model.games import build_game_network
 from model.games.gmrules import rules_games
 from tests import invariance
+
+
+def make_vec_env(game, *args, **kw):
+    """The simulator's own rows: this module pins the simulator's frames (and the league's
+    routing of interleaved streams); the per-seat serving of the board games is
+    tests/test_per_seat_streams.py."""
+    kw.setdefault("per_seat", False)
+    return _vec_game.make_vec_env(game, *args, **kw)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WS = ROOT / "data_processing"

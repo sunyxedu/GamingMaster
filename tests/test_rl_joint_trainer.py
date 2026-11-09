@@ -8,7 +8,7 @@ A tiny Stage-1 checkpoint is trained with the real train_multi_game (generals
   IL-only third game); the checkpoint is a train_multi_game checkpoint with
   the PopArt statistics folded into the value heads, the frozen reference
   never moves, the MoE balance bias moves only between iterations;
-- rollout streams: interleaved othello streams / per-seat generals streams,
+- rollout streams: per-seat othello streams / per-seat generals streams,
   learner-seat and forced-frame masks, in mirror and opponent episodes;
 - PPO exactness: with μ = π_old the first minibatch's ratio is 1 within
   1e-5 (eval mode, frozen routing), and the actor's μ matches π_old — for
@@ -252,7 +252,7 @@ def test_rollout_streams_masks_and_seats(stage1):
 
     tr = _trainer(stage1, "rl_streams", "--iterations", "1")
     tr._add_snapshot(tag="test")
-    for g, n_rows in (("othello", 1), ("generals", 2)):
+    for g, n_rows in (("othello", 2), ("generals", 2)):
         r = tr.rl[g]
         for mirror in (1.0, 0.0):
             opps = {"pool": r.pool_policy}
@@ -267,13 +267,10 @@ def test_rollout_streams_masks_and_seats(stage1):
                 assert s.done[-1] and not s.done[:-1].any()           # one episode per stream
                 assert torch.equal(s.pmask, s.vmask & ~s.forced)      # forced: value only
                 if g == "othello":
-                    if mirror == 1.0:
-                        assert s.vmask.all()                            # both movers learn
-                    else:
-                        seat = int(s.seat[s.vmask][0])
-                        assert torch.equal(s.vmask, s.seat == seat)     # learner seat only
-                        assert not s.vmask.all()
-                    # interleaved: the mover alternates except after forced passes
+                    # per-seat streams (env/per_seat.py), the IL streams: one player's own
+                    # frames — both seats' streams in a mirror episode, the learner's alone
+                    # against the pool
+                    assert s.vmask.all() and (s.seat == s.seat[0]).all()
                     assert s.obs["board_seq"].shape == (T, 3, 8, 8)
                 else:
                     assert s.vmask.all() and (s.seat == s.seat[0]).all()  # per-seat stream
@@ -502,6 +499,8 @@ def test_first_minibatch_ratio_is_one(stage1, actor):
         tr = JointRLTrainer(parse_args([
             "--init", str(stage1 / "ck_rec" / "multi_final.pt"), "--rl", "othello",
             "--envs", "othello=3", "--actor", "fixed", "--mirror_prob", "othello=0.5",
+            # the fixed-batch actor steps every row at one frame index: interleaved rows
+            "--env_kw", "othello:per_seat=False",
             "--snapshot_dir", "memory", "--device", "cpu",
             "--save_dir", str(stage1 / "rl_fixed")]))
         games = ("othello",)

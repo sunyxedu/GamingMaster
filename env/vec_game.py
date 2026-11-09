@@ -31,11 +31,17 @@ the sequence of frames whose Stage-1 state carries over:
     ``(env, seat)`` holds only that seat's own decision frames; a row is
     ``active`` only on its seat's turns (alternating: one row per env and step),
     so rows advance at different frame indices (``lockstep = False``).
-  * alternating games (othello, gomoku, ``interleaved = True``): ``rows_per_env = 1``;
-    the row is ONE interleaved stream holding both movers' frames, each from
-    the side-to-move perspective, forced pass frames included — exactly the
-    IL sample of a whole game.  ``to_play`` says whose frame it is (the loss
-    goes on learner seats only; see env/league.py).
+  * alternating perfect-information games (othello, gomoku, the gmrules board
+    games): their simulators emit ONE interleaved row per game holding both
+    movers' frames, each from the side-to-move perspective, forced pass frames
+    included (``interleaved = True``, ``rows_per_env = 1``) — a whole game
+    RECORD.  IL serves those records as two streams, one per mover
+    (``dataset.SEAT_SPLIT_GAMES``), so :func:`make_vec_env` wraps these envs in
+    env/per_seat.py's ``PerSeatStreams``: ``rows_per_env = n_seats``, row
+    ``(env, seat)`` = that seat's own decision frames, the gmrules per-seat
+    conventions above (``lockstep = False``).  ``per_seat=False`` gives the
+    simulator's interleaved rows (backgammon keeps them: its IL records are
+    not split, its movers do not strictly alternate).
 
 ``VecObs.stream_seats`` [R, n_seats] marks the seats acting on a row's stream:
 a controller of any of them must run its network on EVERY frame of that stream
@@ -417,13 +423,33 @@ def has_simulator(game: str) -> bool:
     return game in VEC_ENV_REGISTRY
 
 
-def make_vec_env(game: str, n_envs: int = 1, **kwargs) -> VecGameEnv:
-    """``n_envs`` games of ``game`` (kwargs go to the adapter)."""
+def il_streams_per_seat(game: str) -> bool:
+    """Whether IL serves ``game``'s records as per-seat streams (the two-player
+    perfect-information board games, ``dataset.SEAT_SPLIT_GAMES``)."""
+    from data_processing.games.dataset import SEAT_SPLIT_GAMES
+    return game in SEAT_SPLIT_GAMES
+
+
+def make_vec_env(game: str, n_envs: int = 1, *, per_seat: Optional[bool] = None,
+                 **kwargs) -> VecGameEnv:
+    """``n_envs`` games of ``game`` (kwargs go to the adapter).
+
+    ``per_seat``: serve an interleaved alternating env as per-seat streams
+    (env/per_seat.py) — None (default) = whenever IL trains the game's records as
+    per-seat streams (:func:`il_streams_per_seat`), so that a network sees in the
+    simulator the streams it was trained on; False = the simulator's own rows.  An
+    env that is not interleaved is returned as it is."""
     try:
         builder = VEC_ENV_REGISTRY[game]
     except KeyError:
         raise KeyError(f"no simulator for {game!r}; have {sorted(VEC_ENV_REGISTRY)}") from None
-    return builder(n_envs, **kwargs)
+    env = builder(n_envs, **kwargs)
+    if per_seat is None:
+        per_seat = il_streams_per_seat(game)
+    if per_seat and getattr(env, "interleaved", False):
+        from env.per_seat import PerSeatStreams
+        env = PerSeatStreams(env)
+    return env
 
 
 def __getattr__(name: str):
@@ -447,4 +473,4 @@ def __getattr__(name: str):
 
 
 __all__ = ["VecObs", "VecGameEnv", "VecEnvBase", "StepResult", "VEC_ENV_REGISTRY",
-           "register_vec_env", "has_simulator", "make_vec_env"]
+           "register_vec_env", "has_simulator", "make_vec_env", "il_streams_per_seat"]
