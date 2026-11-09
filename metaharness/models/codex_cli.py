@@ -64,7 +64,7 @@ _AUTH_RE = re.compile(r"\b401\b|unauthorized|refresh token|sign in again|log ?in
 _PLAYER_OFF_FEATURES = ("view_image", "image_generation", "plugins", "hooks", "memories")
 # An agent (proposer, study, adapt): no plugins / hooks / memories, and no v1 sub-agents. A model whose
 # catalog entry sets multi_agent_version v2 (gpt-6-astra) keeps its native sub-agents whatever the
-# features say (`codex debug models`; tier-1 proposers spawned 17): they run inside the agent's codex
+# features say (`codex debug models`; the proposers of one run spawned 17): they run inside the agent's codex
 # process, in its sandbox, and their requests go through the same endpoint (a queueing proxy serves
 # players first). A player that used them would fail the external-tool audit below.
 _AGENT_OFF_FEATURES = ("multi_agent", "plugins", "hooks", "memories")
@@ -366,8 +366,8 @@ class CodexCLI:
         return res
 
     def _env_overrides(self) -> dict[str, str]:
-        """git in an agent's shell never finds the repository its archive sits in (tier-1 proposers ran git
-        status / diff there hundreds of times; a tier-2 one ran git add). A provider run also uses its own
+        """git in an agent's shell never finds the repository its archive sits in (proposers ran git
+        status / diff there hundreds of times; one ran git add). A provider run also uses its own
         CODEX_HOME: the user's login, plugins, hooks and MCP servers stay out of the players and
         proposers, and a dead ChatGPT login cannot fail a call. The directory gets a config.toml naming
         the provider, so ``CODEX_HOME=<dir> codex`` reproduces a call by hand."""

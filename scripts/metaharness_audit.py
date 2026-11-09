@@ -1,8 +1,10 @@
 """Reproducible live Astra/Jev audit. Search and held-out evaluation are separate.
 
-python -m scripts.metaharness_audit search --tier 2 --root /tmp/mh-tier2-audit
-python -m scripts.metaharness_audit test --tier 2 --root /tmp/mh-tier2-audit
-All requests use the configured Astra/Jev profiles; no mocked latency.
+python -m scripts.metaharness_audit search --game snake --root /tmp/mh-snake-audit
+python -m scripts.metaharness_audit test --game snake --root /tmp/mh-snake-audit
+All requests use the configured Astra/Jev profiles; no mocked latency. The two audit games are
+the test beds: snake (real-time) and rulepuzzle (turn-based). Both get Astra and Jev; the pace
+comes from the game.
 """
 from __future__ import annotations
 
@@ -18,38 +20,39 @@ from metaharness.core.archive import Archive
 from metaharness.core.contract import Budget
 from metaharness.core.loop import LoopConfig, MetaHarnessLoop
 from metaharness.core.runner import evaluate_harness
-from metaharness.games.registry import make_game
+from metaharness import task
+from metaharness.games.registry import game_realtime, make_game
 from metaharness.models import make_system1, make_system2
 
 
-def setup(tier):
-    if tier == 2:
-        from metaharness.tiers import tier2 as task
-        game, kw = "snake", {"tick_s": 0.5, "max_ticks": 120}
+def setup(game):
+    """(game kwargs, the frozen prior winner, the per-episode budget) of an audit game."""
+    if game == "snake":
+        kw = {"tick_s": 0.5, "max_ticks": 120}
         prior = "astra-tier2-snake-heldout-lanerunner/0004/harness.py"
         budget = Budget(max_system2_calls=4, max_system1_calls=240, max_wall_s=240)
     else:
-        from metaharness.tiers import tier1 as task
-        game, kw = "rulepuzzle", {"n_levels": 2, "budget_per_level": 50}
+        kw = {"n_levels": 2, "budget_per_level": 50}
         prior = "astra-tier1-rulepuzzle-heldout-arc3/0002/harness.py"
-        budget = Budget(max_system2_calls=12, max_system1_calls=0, max_wall_s=900)
-    return task, game, kw, REPO_ROOT / "metaharness/artifacts" / prior, budget
+        budget = Budget(max_system2_calls=12, max_system1_calls=240, max_wall_s=900)
+    return kw, REPO_ROOT / "metaharness/artifacts" / prior, budget
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("phase", choices=["search", "validate", "test"])
-    p.add_argument("--tier", type=int, choices=[1, 2], required=True)
+    p.add_argument("--game", choices=["snake", "rulepuzzle"], required=True)
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--iterations", type=int, default=2)
     p.add_argument("--source", type=Path, help="validate: discovery archive to re-evaluate with final code")
     p.add_argument("--jobs", type=int, default=1, choices=[1, 2],
-                   help="test only: independent tier-1 episodes may run concurrently")
+                   help="test only: independent turn-based episodes may run concurrently")
     a = p.parse_args()
-    if a.tier == 2 and a.jobs != 1:
-        p.error("wall-clock tier-2 comparisons run serially")
+    game, realtime = a.game, game_realtime(a.game)
+    if realtime and a.jobs != 1:
+        p.error("wall-clock real-time comparisons run serially")
     load_dotenv()
-    task, game, kw, prior, budget = setup(a.tier)
+    kw, prior, budget = setup(game)
     archive = Archive(a.root.resolve())
     if a.phase == "validate":
         if a.source is None or a.source.resolve() == archive.root:
@@ -69,18 +72,18 @@ def main():
                 }, indent=2) + "\n")
         a.iterations = 0
     s2 = make_system2("astra", reasoning_effort="high")
-    s1 = make_system1("jev") if a.tier == 2 else None
+    s1 = make_system1("jev")
     if a.phase in ("search", "validate"):
         if not archive.candidates():
-            for baseline in task.baseline_paths():
+            for baseline in task.baseline_paths(realtime):
                 archive.add_seed(baseline, label=baseline.stem)
             archive.add_seed(prior, label="previous_astra_winner",
                              note="Frozen prior Astra-generated winner. Re-evaluated under the new protocol.\n")
         extra = (
             "This is a COLD-START experiment: every episode starts without a cached policy. "
-            "At tier 2 Astra must compile/adapt while the world keeps ticking. Jev must have a "
-            "meaningful measurable role. Use public observations and rules only, and log when "
-            "each model's output actually changes control. Design a generic discovery/compilation "
+            "In a real-time game Astra must compile/adapt while the world keeps ticking. Jev must "
+            "have a meaningful measurable role. Use public observations and rules only, and log "
+            "when each model's output actually changes control. Design a generic discovery/compilation "
             "procedure, not a hand-written game solver. Prefer a compact bridge that Astra can "
             "produce quickly. Join all outstanding futures even if the game ends. "
             "Do not inspect files outside this experiment archive or run your own model calls. "
@@ -90,7 +93,8 @@ def main():
             archive=archive, game_factory=lambda **k: make_game(game, **k), game_kwargs=kw,
             task_md=task.task_md(game, budget, "wall", kw), contract_doc=task.contract_doc(),
             proposer=make_system2("astra", reasoning_effort="high"), system2=s2, system1=s1,
-            config=LoopConfig(n_iterations=a.iterations, seeds_train=[0, 1, 2] if a.tier == 2 else [0, 1],
+            config=LoopConfig(n_iterations=a.iterations,
+                              seeds_train=[0, 1, 2] if realtime else [0, 1],
                               seeds_heldout=[], budget=budget, clock_mode="wall",
                               harness_timeout_s=budget.max_wall_s, proposer_timeout_s=600,
                               # validate re-evaluates frozen programs as discovered: no dry run
@@ -99,7 +103,7 @@ def main():
             proposer_extra=extra)
         provenance = {"git_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip(),
-            "command": a.phase, "tier": a.tier}
+            "command": a.phase, "game": game}
         with (archive.root / "provenance.jsonl").open("a") as fh:
             fh.write(json.dumps(provenance) + "\n")
         loop.run()
@@ -123,9 +127,9 @@ def main():
         if challenger not in selected:
             selected.append(challenger)
         selected += [c for c in archive.candidates()
-                     if c.dir.name.endswith("tier2_jev_only") or c.dir.name.endswith("tier1_astra_naive")]
-        cases = [("heldout-cold", game, kw, [700, 701, 702] if a.tier == 2 else [700, 701], "episode")]
-        if a.tier == 2:
+                     if c.dir.name.endswith("jev_only") or c.dir.name.endswith("astra_naive")]
+        cases = [("heldout-cold", game, kw, [700, 701, 702] if realtime else [700, 701], "episode")]
+        if realtime:
             cases += [("heldout-shared", game, kw, [700, 701, 702], "shared"),
                       ("heldout-lanerunner", "lanerunner", {"tick_s": .5, "max_ticks": 120},
                        [700, 701, 702], "episode")]
@@ -152,7 +156,7 @@ def main():
                 return None
             result = evaluate_harness(cand.harness_path, lambda **k: make_game(name, **k), seeds,
                                       system2=make_system2("astra", reasoning_effort="high"),
-                                      system1=make_system1("jev") if a.tier == 2 else None,
+                                      system1=make_system1("jev"),
                                       out_dir=out, clock_mode="wall", game_kwargs=game_kw,
                                       budget_per_episode=budget, harness_timeout_s=budget.max_wall_s,
                                       memory_mode=memory_mode)
@@ -166,7 +170,7 @@ def main():
         archive.write_leaderboard()
         if failures:
             raise SystemExit("; ".join(failures))
-        if a.tier == 2:
+        if realtime:
             for label, slow, fast in (("heldout-no-astra", None, s1),
                                       ("heldout-no-jev", s2, None)):
                 out = best.dir / label

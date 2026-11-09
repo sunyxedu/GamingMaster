@@ -1,9 +1,24 @@
 # Published Meta-Harness experiments
 
 These are immutable research records, distinct from editable source in
-`metaharness/core/`, `models/`, `games/` and `tiers/`. New runs belong in the
+`metaharness/core/`, `models/`, `games/` and `phases/`. New runs belong in the
 ignored `runs/` directory until their results are checked and deliberately
 published. Keep failed candidates and timeout records alongside successes.
+
+The Meta-Harness has been one pipeline with one task spec and one model set
+(Astra and Jev for every game) since 2026-11-02. Every archive here is older
+and was run while a game's pace also chose its task text and its models: "tier 1"
+meant a turn-based game played by Astra alone, "tier 2" a real-time game played
+by Astra and Jev. Archive names, task.md files and manifests keep those words
+as recorded.
+
+## Games built from their names (evaluation protocol 3, 2026-10-29 … 11-01)
+
+[`games-20261101/`](games-20261101/README.md) holds one directory per game for
+the 35 games the pipeline has taken from a name to a searched, validated and
+held-out-evaluated harness: 18 turn-based and 17 real-time ones, with the
+generated adaptor, every proposal and the scores. Its README has the results
+table.
 
 ## Audited evidence (evaluation protocol 2, 2026-09-19)
 
@@ -36,9 +51,9 @@ need not exist when reading a published archive.
 
 Historical runs used different protocols, including cross-seed memory sharing.
 Their leaderboards are preserved as measured and should not be combined into
-one ranking with the independent-episode audit. Every archive here, the audit
-included, predates evaluation protocol 3 (`protocol_version` in the manifests):
+one ranking with the independent-episode audit. The audit and the historical
+runs predate evaluation protocol 3 (`protocol_version` in the manifests):
 before it, a used-up call budget or the episode deadline made an episode an error
 and its candidate ineligible; protocol 3 ends such an episode with the score
-reached. Do not rank new runs together with these archives. See the
+reached. Do not rank protocol-3 runs together with these archives. See the
 [historical experiment notes](../../docs/meta-harness.md#historical-experiments-2026-09-19-shared-memory-protocol).

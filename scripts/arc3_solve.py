@@ -1,4 +1,4 @@
-"""Offline breadth-first solver of the ARC-AGI-3 games — demonstrations for the tier-3
+"""Offline breadth-first solver of the ARC-AGI-3 games — demonstrations for the multi-game
 network's imitation data (the network itself never searches: this only makes targets,
 like the engine labels of the board games).
 

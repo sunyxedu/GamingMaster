@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# ARC-AGI-3 offline SDK: the tier-1 adapter (metaharness/testbeds/arc3.py) and the tier-3
+# ARC-AGI-3 offline SDK: the Meta-Harness test bed (metaharness/testbeds/arc3.py) and the network's
 # env (env/vec_arc3.py) + solver (scripts/arc3_solve.py); pinned to the cached games' SDK
 arc3 = ["arc-agi==0.9.9; python_version >= '3.12'", "arcengine==0.9.3; python_version >= '3.12'"]
 # Lux AI S3 simulator (env/vec_lux.py): the official JAX env, pinned to the rules

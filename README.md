@@ -14,15 +14,16 @@ one trained multi-game network where there is not.
 </p>
 
 <p align="center">
-  <a href="#three-layers-ordered-by-decision-latency">Three layers</a> ·
+  <a href="#two-agents-split-by-decision-latency">Two agents</a> ·
   <a href="#installation">Installation</a> ·
   <a href="#quickstart">Quickstart</a> ·
-  <a href="#the-meta-harness-layers-1-and-2">Meta-Harness</a> ·
-  <a href="#the-multi-game-network-layer-3">Multi-game network</a>
+  <a href="#the-meta-harness">Meta-Harness</a> ·
+  <a href="#the-multi-game-network">Multi-game network</a> ·
+  <a href="#supported-games">Supported games</a>
 </p>
 
 <p align="center">
-  <img src="assets/overview.svg" width="100%" alt="GamingMaster routes a game by its decision latency into one of three layers: a reasoning model through a generated harness, a slow planner plus a fast System-1 model through a generated harness, or a trained multi-game network with a shared core.">
+  <img src="assets/overview.svg" width="100%" alt="GamingMaster routes a game by its decision latency to one of two agents: the Meta-Harness, where a reasoning model and a fast System-1 model play through a generated harness on turn-based and real-time games, or a trained multi-game network with a shared core.">
 </p>
 
 GamingMaster is a research framework for building game-playing agents across very different
@@ -41,38 +42,43 @@ starts from nothing but the game's name. When there is no time, one neural netwo
 Its core is shared by every game, and it is trained jointly on all of them: imitation
 learning from strong play first, then mixed-game reinforcement learning.
 
-## Three layers, ordered by decision latency
+## Two agents, split by decision latency
 
-**Layer 1: the world waits.** In turn-based games, puzzles and most card games nothing
-happens until the agent acts, so every decision can go to a strong reasoning model (System 2;
-*Astra* in the default configuration). Speed is not the limit here. The limits are memory
-and budget: the model has to discover rules nobody told it from a handful of observations,
-remember what each action did, and spend a few dozen calls well. The harness for such a game
-decides what to store, what to show the model on each turn (a diff, a map with a legend,
-the hypotheses still standing), how many actions to commit per call, and when a cheap
-scripted probe is better than asking. ARC-AGI-3 is the reference testbed.
-
-**Layer 2: the world keeps ticking.** Once the game runs on its own clock, as in Minecraft,
-Snake or action games with 0.1–1 s of slack, a minute of reasoning means the game plays
-itself in the meantime. The moment-to-moment choices move to a fast model: *Jev*,
-[TypeSafe](https://docs.typesafe.ai)'s System-1 model, which answers typed questions
+**The Meta-Harness: foundation models through a generated harness.** Where a game leaves
+time to think, two fixed models play, and every game gets both. *Astra* (System 2 in the
+default configuration) is a strong reasoning model that needs tens of seconds per call.
+*Jev*, [TypeSafe](https://docs.typesafe.ai)'s System-1 model, answers typed questions
 (choice, score, yes/no) about a JSON state with calibrated probabilities in about half a
-second and many questions per request. The slow model keeps thinking in the background and
-sets goals. The harness now has to design the bridge in both directions: how a plan becomes
-a state and a set of questions Jev can answer, how Jev's answer becomes a legal action,
-when to ask the slow model again, and what to do when a decision arrives late.
+second and many questions per request. It is there for the judgments that cannot wait for
+Astra. What differs from game to game is the harness: what to store, what to show Astra on
+each call (a diff, a map with a legend, the hypotheses still standing), how many actions to
+commit per call, when a cheap scripted probe is better than asking, and which decisions go
+to Jev or stay in plain code.
 
-**Layer 3: every millisecond counts.** When a match holds hundreds of decisions, each due
-within tens of milliseconds (Clash Royale, StarCraft-style RTS, generals.io), no language
-model fits in the loop. The agent is a trained network that maps each frame to an action in
-one forward pass and carries a fixed-size memory of the match so far. GamingMaster does not
-train one network per game. It trains one shared core, a *game brain*, with thin per-game
-encoders and decoders around it, so that what the core learns in chess or mahjong is
-available to the next game.
+There is one task and one search for every game. The only thing the Meta-Harness takes
+from the game is its *pace*, which the game's adaptor implements. A turn-based game
+(puzzles, board games, most card games) waits until the agent acts. Speed is not the limit
+there. The limits are memory and budget: the agent has to discover rules nobody told it
+from a handful of observations, remember what each action did, and spend a few dozen
+reasoning calls well. ARC-AGI-3 is the reference testbed. A real-time game (Minecraft,
+Snake, Atari, rhythm games) runs on its own clock, and a minute of reasoning means the game
+plays itself in the meantime. Its moment-to-moment decisions need low latency, so they go
+to Jev or to code while Astra thinks in the background and sets goals. The harness then has
+to design the bridge in both directions: how a plan becomes a state and a set of questions
+Jev can answer, how Jev's answer becomes a legal action, when to ask Astra again, and what
+to do when a decision arrives late.
 
-The layer is a property of the game rather than a choice of the user. For layers 1 and 2,
-the Meta-Harness's study phase estimates a new game's decision latency and assigns the
-layer itself (`"tier"` in `study.json`).
+**The multi-game network: every millisecond counts.** When a match holds hundreds of
+decisions, each due within tens of milliseconds (Clash Royale, StarCraft II, generals.io),
+no language model fits in the loop. The agent is a trained network that maps each frame to
+an action in one forward pass and carries a fixed-size memory of the match so far.
+GamingMaster does not train one network per game. It trains one shared core, a *game
+brain*, with thin per-game encoders and decoders around it, so that what the core learns in
+chess or mahjong is available to the next game.
+
+Which agent plays is a property of the game rather than a choice of the user. Inside the
+Meta-Harness there is nothing further to choose: the study phase estimates a new game's
+decision latency and records whether the game is real-time (`"realtime"` in `study.json`).
 
 ## Installation
 
@@ -103,17 +109,18 @@ exercise proposal, pre-flight, evaluation, archiving and held-out evaluation in 
 without network access or keys:
 
 ```bash
-uv run python -m metaharness loop --tier 2 --game snake \
+uv run python -m metaharness loop --game snake \
     --system1 heuristic --system2 scripted --proposer scripted --clock virtual --iters 1
 ```
 
 **Build an agent from a game's name.** The `run` command studies the game on the web,
 writes and validates an adaptor for it, and then searches for a harness. Everything it
-produces lands in `runs/<game>/`, and a rerun resumes where the last one stopped:
+produces lands in `runs/<game>/`, and a rerun resumes where the last one stopped. The study
+decides whether the game is turn-based or real-time, and `--pace` overrides it:
 
 ```bash
 uv run python -m metaharness run --game "Minecraft" --notes "Java 1.21 server on localhost"
-uv run python -m metaharness run --game "ARC-AGI-3" --tier 1
+uv run python -m metaharness run --game "ARC-AGI-3" --pace turn
 ```
 
 If the game needs something only you can provide, such as an account login or a missing
@@ -121,8 +128,8 @@ environment variable, the adapt phase stops and lists it in `runs/<game>/adaptor
 A single harness file can also be scored on its own:
 
 ```bash
-uv run python -m metaharness eval --tier 2 --game snake \
-    --harness metaharness/baselines/tier2_jev_only.py --system1 jev --system2 none --seeds 0,1,2
+uv run python -m metaharness eval --game snake \
+    --harness metaharness/baselines/jev_only.py --system1 jev --system2 none --seeds 0,1,2
 ```
 
 **Train the multi-game network.** Data comes from the Rust converters as memory-mapped
@@ -153,15 +160,14 @@ Every trainer runs data-parallel under `torchrun --standalone --nproc_per_node=N
 scripts are in [`scripts/slurm/`](scripts/slurm/README.md), and the fetch/convert recipe for
 every game is in [`data_processing/README.md`](data_processing/README.md).
 
-## The Meta-Harness (layers 1 and 2)
+## The Meta-Harness
 
 <p align="center">
   <img src="assets/metaharness.svg" width="100%" alt="Meta-Harness pipeline: game name, study (web research), adapt (generated game adaptor validated by a smoke test), harness search (proposer, pre-flight, evaluation on the game clock, archive, leaderboard), held-out evaluation.">
 </p>
 
-For layers 1 and 2 the models are fixed, and what decides the score is the code around
-them: what the reasoning model sees, how its reply becomes actions, how the fast model is
-questioned. That code is different for every game and tedious to write by hand, so the
+The two models are fixed, and what decides the score is the code around them: what the
+reasoning model sees, how its reply becomes actions, how the fast model is questioned. That code is different for every game and tedious to write by hand, so the
 Meta-Harness writes it. It follows *Meta-Harness: End-to-End Optimization of Model Harnesses*
 ([arXiv 2603.28052](https://arxiv.org/abs/2603.28052)) and extends it in two directions:
 the search starts from a bare game name, and it runs on real-time games where model latency
@@ -171,8 +177,8 @@ is part of the score.
 
 A harness is one Python file with `build(ctx)` returning a program with
 `run_episode(game)`. It owns the whole control loop of an episode, and everything it may use
-comes through `ctx` ([`metaharness/core/contract.py`](metaharness/core/contract.py)). A
-layer-2 harness has roughly this shape:
+comes through `ctx` ([`metaharness/core/contract.py`](metaharness/core/contract.py)). On a
+real-time game it has roughly this shape:
 
 ```python
 def build(ctx):
@@ -192,8 +198,11 @@ class Harness:
             ctx.wait_for_tick()
 ```
 
-`ctx.think` and `ctx.decide` are the only way to reach a model, so the evaluator accounts for
-every call against a per-episode budget. `ctx.memory` is reset per episode unless an
+On a turn-based game the contract is the same without the clock: `ctx.act` steps the game
+and returns the next observation. `ctx.think` (Astra) and `ctx.decide` (Jev) are available
+in every game and are the only way to reach a model, so the evaluator accounts for every
+call against a per-episode budget. How the work is divided between Astra, Jev and plain
+code is the proposer's decision, and candidates are selected on score alone. `ctx.memory` is reset per episode unless an
 experiment explicitly declares shared memory, and the game view exposes only what a real
 client would: `describe()`, an action spec, JSON observations and the score.
 
@@ -204,7 +213,7 @@ phase an agentic Astra researches the game with live web search and writes the r
 pace (`brief.md`), every way to drive the game programmatically together with the chosen
 one (`interfaces.md`), what strong players do and whether it belongs in code, in Astra's
 prompts or in Jev's questions (`strategies.md`), and a machine-readable summary that
-includes the layer and the decision latency (`study.json`). In the **adapt** phase Astra
+includes the pace and the decision latency (`study.json`). In the **adapt** phase Astra
 builds `adaptor/game.py` against that interface. It may install software and start servers:
 for Minecraft it set up a vanilla 1.21.1 server with a Mineflayer bridge. A generic smoke
 test (`validate_adaptor`) then loads the adaptor, resets two seeds, applies every action and
@@ -244,11 +253,11 @@ hold every proposal, harness, score and generated adaptor. They were measured un
 evaluation protocol 2; the current evaluator (protocol 3) no longer counts a used-up call
 budget or the deadline as an episode error, so new runs are not directly comparable.
 
-| Input | Layer | Baselines (train seeds) | Best found harness | Held-out |
+| Input | Pace | Baselines (train seeds) | Best found harness | Held-out |
 |---|---|---|---|---|
-| `"Snake"` | 2 | Jev only 0.00 · Astra only 0.00 | **0.77** (0% stale ticks) | 0.65 on unseen seeds |
-| `"ARC-AGI-3"` (offline) | 1 | Astra, one action per call: 0.33 levels | **4.33** levels | 2.5 levels on unseen games |
-| `"Minecraft"` (Java 1.21.1) | 2 | Jev only 15.3 · Astra only 6.3 (93% stale) | **26.7**, 31% of actions Jev-informed | – |
+| `"Snake"` | real-time | Jev only 0.00 · Astra only 0.00 | **0.77** (0% stale ticks) | 0.65 on unseen seeds |
+| `"ARC-AGI-3"` (offline) | turn-based | Astra, one action per call: 0.33 levels | **4.33** levels | 2.5 levels on unseen games |
+| `"Minecraft"` (Java 1.21.1) | real-time | Jev only 15.3 · Astra only 6.3 (93% stale) | **26.7**, 31% of actions Jev-informed | – |
 
 In Minecraft the proposals show why the harness matters. The first one asked Astra to
 compile a complete guarded policy, which never arrived in time, so the agent only survived
@@ -257,7 +266,13 @@ let Jev choose among them every tick, and let Astra set goals asynchronously. Th
 first harness in which the score comes from progress (gathered resources, crafted tools)
 rather than from survival.
 
-## The multi-game network (layer 3)
+Under protocol 3 the pipeline has since taken 35 games from their names to a searched,
+validated and held-out-evaluated harness. They are listed under
+[Supported games](#supported-games), and
+[`metaharness/artifacts/games-20261101/`](metaharness/artifacts/games-20261101/README.md)
+has the table of scores with each game's adaptor and every candidate.
+
+## The multi-game network
 
 <p align="center">
   <img src="assets/architecture.svg" width="100%" alt="Network architecture: per-game observation encoders produce fixed token slots, two decision tokens are appended, a shared core of Stage-1 spatiotemporal blocks and a Stage-2 recurrent-depth core processes them, and per-game action decoders and value heads read the result.">
@@ -294,7 +309,7 @@ shared core. The strength has to come from what the network learns from: strong 
 engine teacher distributions where engines exist (`gmdata label` adds Stockfish, KataGo,
 Egaroucid, YaneuraOu or Pikafish soft targets to the shards), and reinforcement learning.
 
-**Acting must be fast and exactly replayable.** A layer-3 agent acts every few tens of
+**Acting must be fast and exactly replayable.** The network acts every few tens of
 milliseconds, so `net.step` carries a fixed-size memory instead of a key-value cache that
 grows with the match, has static shapes and can be captured as a CUDA graph. For PPO the
 learner must see the same distribution the actor sampled from, so the inference depth is
@@ -329,27 +344,62 @@ coefficients have per-game controllers. A token-quota scheduler keeps any single
 crowding out the others. There is no per-game post-training: the result is one network for
 every game.
 
-### Supported games
+## Supported games
+
+### Meta-Harness
+
+The Meta-Harness has no per-game code, so a game counts as supported once `metaharness run`
+has taken its name to a validated adaptor and a searched harness. That is 36 games so far:
+
+| Family | Games |
+|---|---|
+| Puzzles and hidden rules | ARC-AGI-3, 2048, Minesweeper, Wordle / Mastermind, Sokoban, Baba Is AI, MiniGrid / BabyAI |
+| Worlds to explore and build in | Minecraft: Java Edition †, Factorio, Crafter, NetHack |
+| Arcade and action | Atari 2600 Ms. Pac-Man †, Space Invaders †, Pong †, Donkey Kong †, Breakout †, Asteroids †, Frogger † and Q*bert †; Doom †, Snake †, Flappy Bird †, Tetris (Guideline marathon) †, Overcooked-AI † |
+| Rhythm | osu!mania †, Quaver †, Malody † |
+| Cards and board games | Pokémon Showdown (Gen 9 Random Battle), heads-up no-limit Texas Hold'em, Settlers of Catan, Yu-Gi-Oh! TCG (EDOPro), Dominion, Hanabi |
+| Text | Jericho (Zork and other classic text adventures), TextWorld, TextArena |
+
+† Real-time: the game runs on its own clock, so its moment-to-moment decisions need low
+latency. Every game gets both models; in these 17 the harness can hand such decisions to
+Jev, which answers in about half a second where Astra needs tens of seconds.
+
+ARC-AGI-3 runs on the official offline SDK through the built-in `arc3` testbed (the other
+testbeds, `snake`, `lanerunner` and `rulepuzzle`, exist only to test the pipeline). Each of
+the other 35 games has an adaptor the pipeline generated, and
+[`metaharness/artifacts/games-20261101/`](metaharness/artifacts/games-20261101/README.md)
+holds it with the harnesses and the scores. Supported does not mean solved: the results
+range from a filled Snake board and full-score rhythm charts to Pokémon Showdown, where the
+agent still loses to an MCTS bot.
+
+### Multi-game network
+
+One network trains on 21 games at once:
 
 | Family | Games | Training data |
 |---|---|---|
-| Board, perfect information | chess, chess variants (Chess960, crazyhouse, atomic, …), shogi, xiangqi, Go, Othello, Gomoku, Breakthrough | Lichess, KGS, floodgate, WTHOR, Gomocup, CCPD; engine labels |
-| Cards and bidding, hidden information | riichi mahjong, contract bridge, heads-up no-limit hold'em, Skat, Dou Dizhu, Kuhn poker; a Hearthstone-style adapter | Tenhou Houou, WBridge5 / Ben, ACPC, ISS, DouZero self-play |
-| Chance and simultaneous moves | backgammon, Pokémon Showdown singles, Goofspiel, Pig | gnubg self-play, Showdown ladder replays |
-| Real-time strategy | generals.io, Lux AI Season 3, Clash Royale; a StarCraft-style adapter | generals.io ladder, top-team Kaggle episodes, ranked replays |
+| Board, perfect information | chess, chess variants (Chess960, crazyhouse, atomic, …), shogi, xiangqi, Go, Othello, Gomoku (freestyle) | Lichess, KGS, floodgate, WTHOR, Gomocup, CCPD; engine labels |
+| Cards and bidding, hidden information | riichi mahjong, contract bridge, heads-up no-limit Texas Hold'em, Skat, Dou Dizhu | Tenhou Houou, WBridge5 / Ben, ACPC, ISS, DouZero self-play |
+| Chance and simultaneous moves | backgammon, Pokémon Showdown singles (Gen 9 Random Battle and team formats), Tetris (1v1 versus) | gnubg self-play, Showdown ladder replays, Cold Clear self-play |
+| Real-time strategy and MOBA | generals.io, Lux AI Season 3, Clash Royale, StarCraft II, Honor of Kings 1v1 | generals.io ladder, top-team Kaggle episodes, ranked replays, Blizzard's ladder replay packs, the Hokoff datasets |
 | Visual puzzles | ARC-AGI-3 | the official offline SDK |
 
-All 24 games have network adapters (`model.games.build_game_network(name)`), and 19 have RL
-environments. The Meta-Harness side needs no per-game code at all: its testbeds (`snake`,
-`lanerunner`, `rulepuzzle`, `arc3`) exist only to test the pipeline.
+Two of them need software this repository cannot ship: StarCraft II runs on Blizzard's
+headless Linux client, and Honor of Kings 1v1 on Tencent's Honor of Kings AI Open Research
+Environment with its licensed gamecore.
+
+`model.games.build_game_network(name)` knows 27 adapters, and 25 of them have RL
+environments. The six beyond the list above are four small games on the same rule engine
+(Breakthrough, Kuhn poker, Goofspiel, Pig) and two adapters without data or an environment
+(a Hearthstone-style card game and a StarCraft-style RTS).
 
 ## Repository layout
 
 ```text
 GamingMaster/
-├── metaharness/        layers 1–2: CLI, study/adapt phases, harness contract, runner, archive, model backends
+├── metaharness/        the Meta-Harness: CLI, study/adapt phases, task spec, harness contract, runner, archive, model backends
 │   └── artifacts/      published experiment archives (harnesses, proposals, scores, generated adaptors)
-├── model/              layer 3: shared core (model/components), per-game adapters (model/games)
+├── model/              the multi-game network: shared core (model/components), per-game adapters (model/games)
 ├── env/                vectorised RL environments and seat/opponent control (league)
 ├── training/           single-game and joint IL, single-game and mixed-game RL, arena evaluation
 ├── data_processing/    Rust workspace: gmrules (rules), gmdata / crdata (pipelines), gmsim (simulators), gmshard

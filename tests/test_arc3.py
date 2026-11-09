@@ -1,4 +1,4 @@
-"""ARC-AGI-3 in the tier-3 pipeline: the adapter (model/games/arc3.py), the env
+"""ARC-AGI-3 in the network pipeline: the adapter (model/games/arc3.py), the env
 (env/vec_arc3.py, the offline SDK), the solver's demonstrations (scripts/arc3_solve.py
 → scripts/arc3_shards.py) and IL → RL end to end.
 

@@ -55,7 +55,7 @@ def close_game(game: Any, timeout_s: float = 120.0) -> str | None:
 
 
 class TurnGame(Protocol):
-    """Tier 1: the world waits for the agent. Unknown rules are part of the task."""
+    """Turn-based: the world waits for the agent. Unknown rules are part of the task."""
     name: str
     action_spec: ActionSpec
 
@@ -73,7 +73,7 @@ class TurnGame(Protocol):
 
 
 class RealtimeGame(Protocol):
-    """Tier 2: the world ticks every ``tick_s`` seconds. The controller sets
+    """Real-time: the world ticks every ``tick_s`` seconds. The controller sets
     the *current* action through a mailbox; each tick applies the latest one
     (or ``action_spec.noop`` if none). Late decisions act on a later state."""
     name: str

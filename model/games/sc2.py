@@ -1,4 +1,4 @@
-"""StarCraft II adapter of the tier-3 network: gmsc2's frames and window decisions
+"""StarCraft II adapter of the multi-game network: gmsc2's frames and window decisions
 (data_processing/rs/gmsc2/src/lib.rs module docs; ``gmdata sc2 convert`` shards, the
 env/vec_sc2.py simulator).  The game is seen once per 8-loop window; each decision on a
 window's frame is one raw unit command, or "done" (end the window).

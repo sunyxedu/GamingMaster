@@ -1,4 +1,4 @@
-"""ARC-AGI-3 adapter of the tier-3 network (env/vec_arc3.py is its environment).
+"""ARC-AGI-3 adapter of the multi-game network (env/vec_arc3.py is its environment).
 
 Frame (the env's obs): ``grid`` [B, T, 64, 64] uint8 palette indices (0..15), ``delta``
 [B, T, 64, 64] bool (cells changed since the previous frame), ``globals`` [B, T, 22]

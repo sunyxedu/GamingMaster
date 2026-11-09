@@ -1,4 +1,4 @@
-"""Honor of Kings (王者荣耀) 1v1 adapter of the tier-3 network (env/vec_hok.py is its
+"""Honor of Kings (王者荣耀) 1v1 adapter of the multi-game network (env/vec_hok.py is its
 environment: Tencent's Honor of Kings AI Open Research Environment, hok_env ``hok1v1``).
 
 Frame: ``features`` [B, T, 705] float32 — the research environment's per-player feature

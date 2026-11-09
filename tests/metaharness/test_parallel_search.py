@@ -1,4 +1,4 @@
-"""Tier-1 search additions on top of the generation loop: seeds of one evaluation play at once, every
+"""Search additions on top of the generation loop: seeds of one evaluation play at once, every
 evaluation leaves a digest, the proposer's own tools (preflight / dev-eval) evaluate what the search
 evaluates, the prompt reports recent latency, ctx.progress() detects plan failure, the leaderboard shows
 the per-seed spread, validation finalists include ties, and a resumed search may carry a new task text."""

@@ -1,4 +1,4 @@
-"""Honor of Kings 1v1 in the tier-3 pipeline: the adapter (model/games/hok.py).
+"""Honor of Kings 1v1 in the network pipeline: the adapter (model/games/hok.py).
 
 Adapter (no gamecore needed): the encoder's 16 entity tokens; the rollout's
 μ = sample()'s log-prob equals the replay's log π of the stored action (the stored

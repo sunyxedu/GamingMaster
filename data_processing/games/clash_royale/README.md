@@ -1,6 +1,6 @@
 # Clash Royale data
 
-Tier-3 game: the trained network plays it (`model/games/clash_royale.py`), no
+The trained network plays this game (`model/games/clash_royale.py`), not the
 Meta-Harness. This directory turns public **action replays** into training
 shards for that adapter.
 

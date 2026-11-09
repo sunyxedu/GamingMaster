@@ -1,4 +1,4 @@
-//! StarCraft II frames for the tier-3 network, shared by the replay converter (gmdata `sc2
+//! StarCraft II frames for the multi-game network, shared by the replay converter (gmdata `sc2
 //! convert`) and the simulator (gmsim, env/vec_sc2.py), so an RL frame is the IL frame of the
 //! same game state: one player's raw interface (units, map, player), seen every [`STEP_MUL`]
 //! game loops, and its raw unit commands as actions.

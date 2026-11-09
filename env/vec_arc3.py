@@ -1,5 +1,5 @@
 """ARC-AGI-3 as a :class:`~env.vec_game.VecGameEnv`: N offline games stepped together
-— the tier-3 network's environment (the tier-1 Meta-Harness plays the same games through
+— the multi-game network's environment (the Meta-Harness plays the same games through
 metaharness/testbeds/arc3.py).
 
 Engine: the official SDK (``arc-agi`` + ``arcengine``, the ``arc3`` extra) in OFFLINE
