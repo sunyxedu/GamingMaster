@@ -92,6 +92,14 @@ def env_streams(obs: VecObs, envs) -> List[int]:
     return obs.stream_id[torch.isin(obs.env_id, envs.to(obs.env_id.device))].tolist()
 
 
+def episode_winner(info: Mapping[str, Any]) -> torch.Tensor:
+    """[N] winner seat of the episodes a step ended (−1: none).  An env whose episode is
+    a game of several matches reports the game's winner as ``info["game_winner"]`` and
+    keeps ``info["winner"]`` for the match the step ended (Lux: five matches a game) —
+    the episode's result is the game's; every other env has ``info["winner"]`` only."""
+    return info["game_winner"] if "game_winner" in info else info["winner"]
+
+
 def live_envs(obs: VecObs) -> set:
     """Envs whose episode is still running (some row has a frame)."""
     return set(obs.env_id[obs.active].tolist())
@@ -659,7 +667,7 @@ class League:
     ``update`` of that step's VecObs: its finished episode's assignment is
     in ``ended`` ({env: {"learner_seats", "opponent", "snapshot"}}, rebuilt
     by every update) and ``prev_learner_seats`` — score it with
-    ``learner_score(info["winner"], league.prev_learner_seats)``.
+    ``learner_score(episode_winner(info), league.prev_learner_seats)``.
     """
 
     def __init__(self, env: VecGameEnv, opponents: Optional[Mapping[str, Policy]] = None, *,
@@ -915,7 +923,7 @@ def play_episodes(env: VecGameEnv, league: League, learner: Policy, *,
             la = scatter_rows(learner(obs, rows), rows, obs.n_rows) if rows.numel() else {}
             was_live = live_envs(obs)
             obs, _, done, info = env.step(league.act(obs, la))
-            winner = torch.where(done, info["winner"], winner)
+            winner = torch.where(done, episode_winner(info), winner)
             if "returns" in info:
                 ret = info["returns"].double()
                 returns = torch.where(done.unsqueeze(-1), ret,

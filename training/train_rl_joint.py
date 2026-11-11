@@ -142,6 +142,7 @@ from env.league import (
     PoolPolicy,
     SnapshotPool,
     StreamStepper,
+    episode_winner,
     restart_streams,
     scatter_rows,
 )
@@ -1729,7 +1730,7 @@ def collect_wave(env: VecGameEnv, league: League, actor: LearnerActor, *, seed: 
                         e = int(obs.env_id[r])
                         recs[k]["rewards"][pos] += rew[e].float()
                         recs[k]["done"][pos] |= bool(done[e])
-            winner = torch.where(done, info["winner"].long(), winner)
+            winner = torch.where(done, episode_winner(info).long(), winner)
             if "returns" in info:           # shared wins (teammates) in learner_score
                 ret = info["returns"].double()
                 final_ret = torch.where(done.unsqueeze(-1), ret,
